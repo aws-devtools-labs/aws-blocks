@@ -48,9 +48,9 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * The agent does inference + tools only — no conversation history.
 	 */
 	inferenceOnly?: boolean;
-	model: {
-		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. */
-		deployed: ModelConfig | ModelConfig[];
+	model?: {
+		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. Defaults to BedrockModels.BALANCED. */
+		deployed?: ModelConfig | ModelConfig[];
 		/** Model(s) for local development. Tries candidates in order; canned is implicit last fallback. */
 		local?: ModelConfig | ModelConfig[];
 	};

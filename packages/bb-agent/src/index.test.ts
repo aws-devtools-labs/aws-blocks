@@ -980,6 +980,14 @@ describe('checkModelHealth', () => {
 
 // ── Model Presets ─────────────────────────────────────────────────────────────
 
+describe('default model', () => {
+	test('agent can be created without model config', () => {
+		const s = new Scope('test-default-model');
+		const agent = new Agent(s, 'no-model', { systemPrompt: 'test' });
+		assert.ok(agent);
+	});
+});
+
 describe('BedrockModels presets', () => {
 	test('DEFAULT resolves to a bedrock provider', async () => {
 		assert.strictEqual(BedrockModels.DEFAULT.provider, 'bedrock');

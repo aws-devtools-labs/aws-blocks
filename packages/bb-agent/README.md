@@ -10,12 +10,11 @@ AI agent with streaming, tool calling, and conversation persistence. Powered by 
 
 ```typescript
 import { Scope } from '@aws-blocks/core';
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { Agent } from '@aws-blocks/bb-agent';
 
 const scope = new Scope('my-app');
 
 const agent = new Agent(scope, 'support-agent', {
-  model: { deployed: BedrockModels.DEFAULT },
   systemPrompt: 'You are a helpful support agent.',
 });
 
@@ -28,7 +27,7 @@ const result = await agent.stream('Until when are you open tomorrow?', { convers
 const done = await result.complete();
 console.log(done.text); // "We're open until 6pm tomorrow."
 ```
-See [Tools](#tools) for adding capabilities, [Model Configuration](#model-configuration) for provider setup, and [Local Development](#local-development) for running without AWS Bedrock.
+Uses [`BedrockModels.BALANCED`](#bedrock-presets) (Claude Sonnet 4.6) by default. See [Model Configuration](#model-configuration) for other presets, [Tools](#tools) for adding capabilities, and [Local Development](#local-development) for running without AWS Bedrock.
 
 ## API
 
@@ -110,7 +109,7 @@ Returned by `stream()`. Provides the Realtime channel and convenience methods:
 
 ### Model Configuration
 
-Only `deployed` is required. Local development works out of the box — the canned provider (keyword-based mock) is used automatically when no local model is specified.
+Model configuration is optional. When omitted, the agent defaults to `BedrockModels.BALANCED` (Claude Sonnet 4.6) for deployment. Local development works out of the box — the canned provider (keyword-based mock) is used automatically when no local model is specified.
 
 | Option | Type | Description |
 |--------|------|-------------|
