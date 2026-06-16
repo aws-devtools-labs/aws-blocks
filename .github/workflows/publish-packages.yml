@@ -1,26 +1,23 @@
 name: Publish Packages
 
+# Real npm release, automated on push to main. Manual/canary publishes live in
+# publish-npm.yml and publish-canary.yml.
+
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Generate artifacts without uploading to S3
-        type: boolean
-        default: false
 
 concurrency:
   group: publish-packages
   cancel-in-progress: false
 
 permissions:
-  id-token: write
+  id-token: write # npm provenance
   contents: write
 
 jobs:
   publish:
-    name: Version & Publish
+    name: Version & Publish (npm)
     runs-on: ubuntu-latest
     environment: publish
     env:
@@ -40,19 +37,13 @@ jobs:
 
       - run: npm ci
 
-      # ── Version bump ──────────────────────────────────────────
       - name: Run changeset version
         id: version
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx changeset version
-
-          # Refresh package-lock.json so its mirrored workspace versions
-          # match the bumps changeset just made. Skips network fetches.
           npm install --package-lock-only
-
-          # Check if changeset version produced any changes
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version bumps — skipping publish"
@@ -60,7 +51,6 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── Build & Test ──────────────────────────────────────────
       - name: Build
         if: steps.version.outputs.changed == 'true'
         run: npm run build
@@ -69,14 +59,6 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         run: npm run test:e2e:local
 
-      - name: Configure AWS credentials
-        if: steps.version.outputs.changed == 'true'
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      # ── Commit version bumps ──────────────────────────────────
       - name: Commit version bumps
         if: steps.version.outputs.changed == 'true'
         run: |
@@ -85,85 +67,29 @@ jobs:
           git add -A
           git commit -m "chore: version packages [skip ci]"
 
-          # Create a tag for each bumped package (with input sanitization)
-          for pkg in packages/*/package.json; do
-            name=$(node -p "require('./$pkg').name")
-            version=$(node -p "require('./$pkg').version")
-
-            # Validate name and version contain only safe characters
-            if [[ ! "$name" =~ ^@?[a-zA-Z0-9/_.-]+$ ]] || [[ ! "$version" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-              echo "::warning::Skipping tag for $pkg — unexpected characters in name or version"
-              continue
-            fi
-
-            if [[ "$name" == @aws-blocks/* ]]; then
-              tag="${name}@${version}"
-              git tag "$tag" 2>/dev/null || true
-            fi
-          done
-
-      # ── Publish ───────────────────────────────────────────────
-      - name: Publish to S3
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run != true
-        env:
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          CLOUDFRONT_DOMAIN: ${{ vars.CLOUDFRONT_DOMAIN }}
-          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-        run: npm run publish:s3
-
-      - name: Publish to npm (dry-run)
+      - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
-        run: npm run publish:npm -- --dry-run
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: npx changeset publish
 
-      - name: Publish dry-run (local)
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run == true
-        run: npm run publish:dry-run
-
-      # ── Post-publish ──────────────────────────────────────────
       - name: Push version commit and tags
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run != true
+        if: steps.version.outputs.changed == 'true'
         run: |
           git pull --rebase origin main
           git push --follow-tags
 
-      - name: Upload publish manifest
-        if: steps.version.outputs.changed == 'true'
-        uses: actions/upload-artifact@v5
-        with:
-          name: publish-manifest
-          path: |
-            publish-manifest.json
-            dist-registry/publish-manifest.json
-
       - name: Summary
-        if: steps.version.outputs.changed == 'true'
+        if: always()
         run: |
-          MANIFEST=""
-          if [ -f publish-manifest.json ]; then
-            MANIFEST="publish-manifest.json"
-          elif [ -f dist-registry/publish-manifest.json ]; then
-            MANIFEST="dist-registry/publish-manifest.json"
+          echo "## Publish Packages" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.version.outputs.changed }}" != "true" ]; then
+            echo "_No version bumps detected — nothing to publish._" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
-
-          if [ -n "$MANIFEST" ]; then
-            echo "## Published Packages" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            PUBLISHED=$(jq -r '.packages[] | "- `\(.name)@\(.version)`"' "$MANIFEST")
-            if [ -n "$PUBLISHED" ]; then
-              echo "$PUBLISHED" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "_No new versions to publish (all unchanged)._" >> "$GITHUB_STEP_SUMMARY"
-            fi
-
-            SKIPPED=$(jq -r '.skipped[]? | "- `\(.name)@\(.version)` (unchanged)"' "$MANIFEST")
-            if [ -n "$SKIPPED" ]; then
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "### Skipped (unchanged)" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "$SKIPPED" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          fi
-
-      - name: No changes
-        if: steps.version.outputs.changed != 'true'
-        run: echo "No version bumps detected — nothing to publish." >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Mode:** LIVE publish to npm" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Published tags:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          git tag --points-at HEAD | sed 's/^/- `/; s/$/`/' >> "$GITHUB_STEP_SUMMARY" || true
