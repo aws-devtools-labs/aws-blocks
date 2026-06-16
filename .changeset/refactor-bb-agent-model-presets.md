@@ -2,12 +2,13 @@
 "@aws-blocks/bb-agent": minor
 ---
 
-refactor(bb-agent): rename model presets — drop DEFAULT, add SMART/BALANCED, replace Nova with Llama
+refactor(bb-agent): rename model presets — drop DEFAULT/BUDGET/MICRO, add SMART/BALANCED, use global. prefix
 
-- `BALANCED` (Sonnet 4.6): recommended default for most workloads
-- `SMART` (Opus 4.8): highest capability for hardest tasks
-- `FAST` (Haiku 4.5): lowest latency
-- `BUDGET` (Llama 4 Scout 17B): low cost with tool support
-- `MICRO` (Llama 3.2 3B): ultra-cheap for simple tasks
+- `BALANCED` (Claude Sonnet 4.6): recommended default for most workloads
+- `SMART` (Claude Opus 4.8): highest capability for hardest tasks
+- `FAST` (Claude Haiku 4.5): lowest latency
 
-BREAKING: `BedrockModels.DEFAULT` removed — use `BedrockModels.BALANCED` instead.
+All presets use `global.` inference profiles for region-agnostic deployment.
+
+BREAKING: `BedrockModels.DEFAULT`, `BedrockModels.BUDGET`, `BedrockModels.MICRO` removed.
+Use `BedrockModels.BALANCED` as the default.

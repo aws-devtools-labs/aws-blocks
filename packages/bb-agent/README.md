@@ -177,11 +177,9 @@ const agent = new Agent(scope, 'agent', {
 
 | Preset | Current Model | Notes |
 |--------|---------------|-------|
-| `BedrockModels.BALANCED` | `us.anthropic.claude-sonnet-4-6-20250514-v1:0` | Great tool use, balanced cost. Recommended default for most workloads. |
-| `BedrockModels.SMART` | `us.anthropic.claude-opus-4-8-20250610-v1:0` | Highest capability for the hardest tasks. |
-| `BedrockModels.FAST` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
-| `BedrockModels.BUDGET` | `us.meta.llama4-scout-17b-instruct-v1:0` | Low cost per token with tool support. |
-| `BedrockModels.MICRO` | `us.meta.llama3-2-3b-instruct-v1:0` | Ultra-cheap for simple tasks. |
+| `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Great tool use, balanced cost. Recommended default for most workloads. |
+| `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
+| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5` | Lowest latency, still strong capabilities. |
 
 Override inference settings with spread:
 ```typescript

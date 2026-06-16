@@ -4,34 +4,24 @@
 import type { ModelConfig } from './types.js';
 
 /**
- * Pre-configured Bedrock model presets using cross-region inference profiles.
+ * Pre-configured Bedrock model presets using global inference profiles.
  * Names are capability-based so the underlying model can be upgraded without breaking user code.
  */
 export const BedrockModels = {
 	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
 	BALANCED: {
 		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-sonnet-4-6-20250514-v1:0',
+		modelId: 'global.anthropic.claude-sonnet-4-6',
 	},
 	/** Highest capability for the hardest tasks. Currently: Claude Opus 4.8. */
 	SMART: {
 		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-opus-4-8-20250610-v1:0',
+		modelId: 'global.anthropic.claude-opus-4-8',
 	},
 	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
 		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
-	},
-	/** Low cost per token with tool support. Currently: Llama 4 Scout 17B (MoE). */
-	BUDGET: {
-		provider: 'bedrock',
-		modelId: 'us.meta.llama4-scout-17b-instruct-v1:0',
-	},
-	/** Ultra-cheap for simple tasks. Currently: Llama 3.2 3B. */
-	MICRO: {
-		provider: 'bedrock',
-		modelId: 'us.meta.llama3-2-3b-instruct-v1:0',
+		modelId: 'global.anthropic.claude-haiku-4-5',
 	},
 } as const satisfies Record<string, ModelConfig>;
 
