@@ -96,6 +96,34 @@ Returned by `stream()`. Provides the Realtime channel and convenience methods:
 | `channel` | `Promise<RealtimeChannel>` | Realtime channel handle — `await` it, then call `.subscribe(handler)`. |
 | `complete()` | `Promise<AgentStreamChunk>` | Wait for the done chunk (full text + token usage). |
 
+### AgentStreamChunk
+
+Each chunk published to the Realtime channel has a `type` and type-specific fields:
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `text-delta` | `text: string` | Incremental text token (in `'token'` streaming mode) or full block (in `'block'` mode). |
+| `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. |
+| `tool-result` | `toolName: string`, `text: string` | Tool returned a result. |
+| `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
+| `error` | `error: string` | Agent encountered an error. |
+| `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
+
+### Message Roles
+
+Messages stored in conversation history use these roles:
+
+| Role | Description |
+|------|-------------|
+| `user` | User message. |
+| `assistant` | Agent response text. |
+| `tool-call` | Record of a tool invocation (stored for audit). |
+| `tool-result` | Record of a tool's return value. |
+| `approval` | User's approval/denial response to an interrupt. |
+| `interrupt` | Agent paused — snapshot of pending interrupts. |
+
+The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to the UI. Use `agent.getConversation()` directly to access the full history including tool-call/tool-result records.
+
 ### AgentConfig
 
 | Option | Type | Description |
@@ -182,6 +210,8 @@ const agent = new Agent(scope, 'agent', {
 | `BedrockModels.FAST` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Fastest, lowest latency. |
 | `BedrockModels.BUDGET` | `us.amazon.nova-pro-v1:0` | Low cost per token with acceptable quality. |
 | `BedrockModels.MICRO` | `us.amazon.nova-lite-v1:0` | Ultra-cheap for simple tasks. |
+
+**Cross-region inference profiles:** The presets use `us.` prefixed model IDs, which are [cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html). These route to the nearest available region automatically. Bedrock also supports `global.` prefixed IDs (e.g., `global.anthropic.claude-opus-4-8-20250610-v1:0`) which route across all regions. Both work with the `bedrock` provider — use `global.` if you want the widest availability.
 
 Override inference settings with spread:
 ```typescript
@@ -630,7 +660,7 @@ const chat = useChat({
     resume: (chId, responses, convId) => api.resume(chId, responses, convId),
   },
   subscribe: async (channelId, handler) => {
-    const { channel } = await api.getChannel(channelId);
+    const channel = await api.getChannel(channelId);
     return channel.subscribe(handler);
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
