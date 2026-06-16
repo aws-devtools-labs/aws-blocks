@@ -8,30 +8,30 @@ import type { ModelConfig } from './types.js';
  * Names are capability-based so the underlying model can be upgraded without breaking user code.
  */
 export const BedrockModels = {
-	/** Highest capability and best performance. Recommended default. Currently: Claude Opus 4.8. */
-	DEFAULT: {
+	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
+	BALANCED: {
+		provider: 'bedrock',
+		modelId: 'us.anthropic.claude-sonnet-4-6-20250514-v1:0',
+	},
+	/** Highest capability for the hardest tasks. Currently: Claude Opus 4.8. */
+	SMART: {
 		provider: 'bedrock',
 		modelId: 'us.anthropic.claude-opus-4-8-20250610-v1:0',
 	},
-	/** Strong quality/cost balance. Currently: Claude Sonnet 4. */
-	BALANCED: {
-		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
-	},
-	/** Fastest and lowest latency. Currently: Claude Haiku 4.5. */
+	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
 		provider: 'bedrock',
 		modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
 	},
-	/** Low cost per token with acceptable quality. Currently: Amazon Nova Pro. */
+	/** Low cost per token with tool support. Currently: Llama 4 Scout 17B (MoE). */
 	BUDGET: {
 		provider: 'bedrock',
-		modelId: 'us.amazon.nova-pro-v1:0',
+		modelId: 'us.meta.llama4-scout-17b-instruct-v1:0',
 	},
-	/** Ultra-cheap for simple tasks. Currently: Amazon Nova Lite. */
+	/** Ultra-cheap for simple tasks. Currently: Llama 3.2 3B. */
 	MICRO: {
 		provider: 'bedrock',
-		modelId: 'us.amazon.nova-lite-v1:0',
+		modelId: 'us.meta.llama3-2-3b-instruct-v1:0',
 	},
 } as const satisfies Record<string, ModelConfig>;
 

@@ -15,7 +15,7 @@ import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 const scope = new Scope('my-app');
 
 const agent = new Agent(scope, 'support-agent', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a helpful support agent.',
 });
 
@@ -169,7 +169,7 @@ import { Agent, BedrockModels} from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
-    deployed: BedrockModels.DEFAULT,
+    deployed: BedrockModels.BALANCED,
   },
   systemPrompt: '...',
 });
@@ -177,15 +177,15 @@ const agent = new Agent(scope, 'agent', {
 
 | Preset | Current Model | Notes |
 |--------|---------------|-------|
-| `BedrockModels.DEFAULT` | `us.anthropic.claude-opus-4-8-20250610-v1:0` | Highest capability. Recommended default. |
-| `BedrockModels.BALANCED` | `us.anthropic.claude-sonnet-4-20250514-v1:0` | Strong quality/cost balance. |
-| `BedrockModels.FAST` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Fastest, lowest latency. |
-| `BedrockModels.BUDGET` | `us.amazon.nova-pro-v1:0` | Low cost per token with acceptable quality. |
-| `BedrockModels.MICRO` | `us.amazon.nova-lite-v1:0` | Ultra-cheap for simple tasks. |
+| `BedrockModels.BALANCED` | `us.anthropic.claude-sonnet-4-6-20250514-v1:0` | Great tool use, balanced cost. Recommended default for most workloads. |
+| `BedrockModels.SMART` | `us.anthropic.claude-opus-4-8-20250610-v1:0` | Highest capability for the hardest tasks. |
+| `BedrockModels.FAST` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
+| `BedrockModels.BUDGET` | `us.meta.llama4-scout-17b-instruct-v1:0` | Low cost per token with tool support. |
+| `BedrockModels.MICRO` | `us.meta.llama3-2-3b-instruct-v1:0` | Ultra-cheap for simple tasks. |
 
 Override inference settings with spread:
 ```typescript
-model: { deployed: { ...BedrockModels.DEFAULT, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
+model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
 ```
 
 #### Ollama Presets
@@ -197,7 +197,7 @@ import { Agent, BedrockModels, OllamaModels} from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
-    deployed: BedrockModels.DEFAULT, 
+    deployed: BedrockModels.BALANCED, 
     local: OllamaModels.SMALL,
   },
   systemPrompt: '...',
@@ -234,7 +234,7 @@ To see detailed health check logs, pass a logger with `info` level:
 import { Logger } from '@aws-blocks/bb-logger';
 
 const agent = new Agent(scope, 'agent', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: '...',
   logger: new Logger(scope, 'agent-log', { level: 'info' }),
 });
@@ -513,7 +513,7 @@ The Agent BB works without a frontend — for scripts, background jobs, or serve
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'summarizer', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'Summarize the input concisely.',
 });
 
@@ -532,7 +532,7 @@ import { Agent, BedrockModels, InterruptError } from '@aws-blocks/bb-agent';
 import { z } from 'zod';
 
 const refundBot = new Agent(scope, 'refunds', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You process customer refund requests.',
   tools: (tool) => ({
     issueRefund: tool({
@@ -659,7 +659,7 @@ import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 const scope = new Scope('my-app');
 
 const agent = new Agent(scope, 'chat', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a helpful assistant.',
 });
 
@@ -723,7 +723,7 @@ const scope = new Scope('my-app');
 const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 const agent = new Agent(scope, 'support', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a customer support agent. Look up orders and search documentation to help the user.',
   toolContextSchema: z.object({ userId: z.string() }),
   tools: (tool) => ({
