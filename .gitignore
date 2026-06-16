@@ -48,7 +48,6 @@ CLAUDE.md
 conversation.md
 **/error_e2e_*.txt
 **/error_hosting.txt
-test-apps/comprehensive/aws-blocks/
 
 # Kiro CLI
 .kiro/

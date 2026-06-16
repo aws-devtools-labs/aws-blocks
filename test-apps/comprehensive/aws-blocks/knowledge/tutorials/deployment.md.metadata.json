@@ -1,0 +1,10 @@
+{
+  "metadataAttributes": {
+    "category": {
+      "value": {
+        "type": "STRING",
+        "stringValue": "deployment"
+      }
+    }
+  }
+}
