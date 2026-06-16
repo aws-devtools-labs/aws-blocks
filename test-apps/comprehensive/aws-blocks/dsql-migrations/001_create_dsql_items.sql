@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS dsql_items (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  value INTEGER NOT NULL DEFAULT 0,
+  category TEXT DEFAULT 'general'
+);
