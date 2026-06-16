@@ -876,6 +876,16 @@ describe('checkModelHealth', () => {
 		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-6-v1' }, log, mockClient), true);
 	});
 
+	test('bedrock au. prefix routes to GetInferenceProfile', async () => {
+		const mockClient = { send: async () => ({ inferenceProfileName: 'AU Claude Sonnet' }) };
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'au.anthropic.claude-sonnet-4-5-v1' }, log, mockClient), true);
+	});
+
+	test('bedrock jp. prefix routes to GetInferenceProfile', async () => {
+		const mockClient = { send: async () => ({ inferenceProfileName: 'JP Claude Sonnet' }) };
+		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'jp.anthropic.claude-sonnet-4-5-v1' }, log, mockClient), true);
+	});
+
 	test('openai-api with unreachable endpoint returns false', async () => {
 		assert.strictEqual(await checkModelHealth({ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://localhost:19999/v1' }, log), false);
 	});

@@ -36,7 +36,7 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const isCrossRegionProfile = config.modelId && /^(us-gov|us|eu|apac|global)\./.test(config.modelId);
+		const isCrossRegionProfile = config.modelId && /^(us|eu|apac|au|jp|global)\./.test(config.modelId);
 
 		const getClient = async (): Promise<BedrockHealthClient> => {
 			if (_testClient) return _testClient;
