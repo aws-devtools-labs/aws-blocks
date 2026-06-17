@@ -34,9 +34,11 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     environment: publish
     env:
-      # Windows-specific suffix so this stack never collides with the Linux
-      # production E2E stack for the same PR.
-      BLOCKS_STACK_SUFFIX: win-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      # Short, PR-unique suffix. The Windows runner's username (`runneradmin`)
+      # is longer than Linux's (`runner`), and FileBucket names derive from the
+      # stack name — keep this short so the derived name stays under S3's
+      # 63-char limit.
+      BLOCKS_STACK_SUFFIX: w${{ github.event.pull_request.number }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
       - uses: actions/checkout@v5
