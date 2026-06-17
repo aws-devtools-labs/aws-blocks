@@ -1,48 +1,29 @@
 /**
- * Per-cell bench orchestrator.
+ * Per-cell bench orchestrator. Runs one (template, task) pair inside an
+ * AgentCore Harness microVM and writes a single result envelope JSON.
  *
- * Reads one (template, task) from CLI flags, runs the bench inside an AgentCore
- * Harness microVM, and writes a single result envelope JSON.
+ * Heavy lifting lives in microvm/*.sh; this file is just glue. Bytes between
+ * runner and microVM go through S3 under `bench-uploads/<runId>/<cellId>/`.
  *
- * Bytes between the runner and microVM go through S3 (bench-uploads/* prefix).
- * Bytes between the agent and the model are the harness's responsibility.
- * Shell commands and agent turns go through agentcore.ts.
- *
- * Required env:
- *   BENCH_HARNESS_ARN        the harness ARN
- *   BENCH_TRANSPORT_BUCKET   bucket the runner uploads tarballs/specs to
- *   AWS_REGION               defaults to us-east-1
+ * Required env: BENCH_HARNESS_ARN, BENCH_TRANSPORT_BUCKET (AWS_REGION optional).
  *
  * Usage:
- *   tsx scripts/agent-bench/run-bench.ts \
- *     --template default \
- *     --task realtime-todos \
- *     --output bench-results/result-default-realtime-todos.json
+ *   tsx run-bench.ts --template default --task realtime-todos --output result.json
  */
 import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { load as parseYaml } from 'js-yaml';
-import {
-	exec,
-	invokeAgent,
-	putToTransport,
-	sessionId,
-	stopSession,
-	type ExecResult,
-} from './agentcore.js';
+import { exec, invokeAgent, putToTransport, sessionId, stopSession } from './agentcore.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..');
+const MICROVM_DIR = resolve(import.meta.dirname, 'microvm');
 const SCHEMA_VERSION = 1;
-const SCRIPT_VERSION = 3; // bump when the orchestrator changes shape
+const SCRIPT_VERSION = 4;
 
 const HARNESS_ARN = required('BENCH_HARNESS_ARN');
 const TRANSPORT_BUCKET = required('BENCH_TRANSPORT_BUCKET');
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface TaskConfig {
 	id: string;
@@ -85,31 +66,24 @@ interface Result {
 	notes: string[];
 }
 
-// ---------------------------------------------------------------------------
-// System prompts
-// ---------------------------------------------------------------------------
-
+// Builder system prompt — kept short. Anthropic's guidance ("If your CLAUDE.md
+// is too long, Claude ignores half of it") was confirmed empirically: a longer
+// prompt with anti-pattern lists, structured workflow, and the embedded test
+// spec made the agent more aggressive (5-10x token usage, workspace deletion).
+// The minimal prompt below — orient, implement, verify, end — performs better.
 const BUILDER_SYSTEM_PROMPT = `You are a senior frontend+backend engineer working in /workspace/bench-app inside a fresh AWS Blocks app.
 
-The dist-registry has already been pushed into /workspace/dist-registry; the project is scaffolded and dev server is running on http://localhost:3000.
+The project is scaffolded and the dev server is running on the port in /tmp/dev.port. Stay inside /workspace/bench-app/; don't move or delete it (the orchestrator reads from this exact path after you stop). Don't modify node_modules.
 
-Tools available to you:
-  - shell: bash inside this microVM. State persists across calls.
-  - file_operations: read/write/edit files.
+Tools available:
+  - shell: bash inside this microVM (state persists)
+  - file_operations: view/create/edit files
 
-Workflow:
-  1. Read AGENTS.md, package.json, and aws-blocks/index.ts to orient yourself.
-  2. Read the relevant @aws-blocks package READMEs under node_modules/@aws-blocks/* to learn which blocks fit the task.
-  3. Edit files under /workspace/bench-app/ to implement the task. Don't modify node_modules.
-  4. Verify against the running dev server (curl, etc.).
-  5. Before stopping, run \`npm run build\` from /workspace/bench-app. The dev server uses tsx and is permissive about types; the real build is strict. Fix any errors until build exits 0.
-
-Don't \`npm install\` extra packages — everything you need is already in node_modules. Be concise between tool calls; the work is in the tools, not the prose.`;
+Workflow: read AGENTS.md, package.json, and aws-blocks/index.ts to orient. Read the @aws-blocks package READMEs under node_modules/@aws-blocks/* to learn which blocks fit. Edit files under /workspace/bench-app/ to implement the task. Verify against the dev server (curl http://localhost:$(cat /tmp/dev.port)). Before stopping, run \`npm run build\` and fix until it exits 0. Don't \`npm install\` extra packages — node_modules has what you need. End with end_turn.`;
 
 const JUDGE_SYSTEM_PROMPT = `You are an impartial grader scoring an AI agent's implementation of a coding task.
 
-You have file_operations tool access against the agent's workspace at /workspace/bench-app/.
-The workspace is filesystem read-only — any write attempts will fail.
+You have file_operations tool access against the agent's workspace at /workspace/bench-app/. The workspace is filesystem read-only — any write attempts will fail.
 Useful files to inspect when grading: aws-blocks/index.ts, src/index.ts (or src/main.tsx), index.html, package.json.
 
 Grade against the rubric below. Cite specific files when you do — the audit trail is the point.
@@ -145,10 +119,6 @@ Return JSON exactly like:
   "explanation": "<2-4 sentences citing specific evidence>"
 }`;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function required(name: string): string {
 	const v = process.env[name];
 	if (!v) {
@@ -162,7 +132,7 @@ function log(msg: string) {
 	process.stderr.write(`[bench] ${msg}\n`);
 }
 
-function loadTask(taskId: string): { cfg: TaskConfig; prompt: string; specPath: string } {
+function loadTask(taskId: string) {
 	const taskDir = resolve(REPO_ROOT, 'tasks', taskId);
 	const cfg = parseYaml(readFileSync(resolve(taskDir, 'config.yaml'), 'utf-8')) as TaskConfig;
 	const prompt = readFileSync(resolve(taskDir, 'PROMPT.md'), 'utf-8');
@@ -170,26 +140,13 @@ function loadTask(taskId: string): { cfg: TaskConfig; prompt: string; specPath: 
 	return { cfg, prompt, specPath };
 }
 
-function packDistRegistry(): { tarballPath: string; sizeBytes: number } {
-	const tarballPath = '/tmp/dist-registry.tgz';
-	// Packument tarball URLs stay as `http://localhost:4873/registry/...`. We
-	// run the existing serve-local-registry.ts script inside the microVM to
-	// serve them on that same address. npm refuses `file://` tarball URLs.
-	execSync(`tar -czf ${tarballPath} -C ${resolve(REPO_ROOT, 'dist-registry')} .`);
-	return { tarballPath, sizeBytes: statSync(tarballPath).size };
+function packDistRegistry(): string {
+	const path = '/tmp/dist-registry.tgz';
+	execSync(`tar -czf ${path} -C ${resolve(REPO_ROOT, 'dist-registry')} .`);
+	return path;
 }
 
-function walk(dir: string, basename: string): string[] {
-	const out: string[] = [];
-	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		const full = resolve(dir, entry.name);
-		if (entry.isDirectory()) out.push(...walk(full, basename));
-		else if (entry.name === basename) out.push(full);
-	}
-	return out;
-}
-
-function parsePlaywrightJson(stdout: string): { passed: number; failed: number; total: number } {
+function parsePlaywrightJson(stdout: string) {
 	const start = stdout.indexOf('{');
 	const end = stdout.lastIndexOf('}');
 	if (start === -1 || end === -1) return { passed: 0, failed: 0, total: 0 };
@@ -199,48 +156,28 @@ function parsePlaywrightJson(stdout: string): { passed: number; failed: number; 
 	} catch {
 		return { passed: 0, failed: 0, total: 0 };
 	}
-	const stats = data.stats ?? {};
-	const expected = stats.expected ?? 0;
-	const unexpected = stats.unexpected ?? 0;
-	const skipped = stats.skipped ?? 0;
-	const flaky = stats.flaky ?? 0;
-	return {
-		passed: expected + flaky,
-		failed: unexpected,
-		total: expected + unexpected + skipped + flaky,
-	};
+	const s = data.stats ?? {};
+	const expected = s.expected ?? 0;
+	const unexpected = s.unexpected ?? 0;
+	const skipped = s.skipped ?? 0;
+	const flaky = s.flaky ?? 0;
+	return { passed: expected + flaky, failed: unexpected, total: expected + unexpected + skipped + flaky };
 }
 
 function extractJson(text: string): string {
 	const cleaned = text.replace(/^```(?:json)?\s*|```\s*$/g, '').trim();
 	const start = cleaned.indexOf('{');
 	const end = cleaned.lastIndexOf('}');
-	if (start === -1 || end === -1) return cleaned;
-	return cleaned.slice(start, end + 1);
-}
-
-function assertOk(r: ExecResult, what: string, result: Result): void {
-	if (r.exitCode !== 0) {
-		result.notes.push(`${what} failed (exit ${r.exitCode}):\n${tail(r.stdout + r.stderr, 1500)}`);
-		throw new Error(what);
-	}
+	return start === -1 || end === -1 ? cleaned : cleaned.slice(start, end + 1);
 }
 
 function tail(s: string, n: number): string {
 	return s.length <= n ? s : `...[truncated]...\n${s.slice(-n)}`;
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 async function main() {
 	const { values: args } = parseArgs({
-		options: {
-			template: { type: 'string' },
-			task: { type: 'string' },
-			output: { type: 'string' },
-		},
+		options: { template: { type: 'string' }, task: { type: 'string' }, output: { type: 'string' } },
 		strict: true,
 	});
 	if (!args.template || !args.task || !args.output) {
@@ -252,14 +189,10 @@ async function main() {
 	log(`task=${cfg.id} template=${args.template}`);
 
 	const started = Date.now();
-	// Builder and judge share one session so the judge sees the workspace the
-	// builder wrote. Read-only enforcement comes from `chmod -R a-w` against
-	// /workspace/bench-app/ before the judge turn, plus allowedTools restricted
-	// to file_operations (no shell). The harness toolset is monolithic — there
-	// is no separate read-only file tool — so OS-level permissions are the only
-	// real boundary.
 	const benchSession = sessionId(`bench-${args.template}-${args.task}`);
 	const cellId = `${args.template}-${args.task}`;
+	const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+	const transportPrefix = `s3://${TRANSPORT_BUCKET}/bench-uploads/${runId}/${cellId}`;
 
 	const result: Result = {
 		schema_version: SCHEMA_VERSION,
@@ -267,7 +200,7 @@ async function main() {
 		timestamp_utc: new Date().toISOString(),
 		git_sha: process.env.GITHUB_SHA ?? '',
 		pr_number: process.env.PR_NUMBER ?? 'local',
-		run_id: process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`,
+		run_id: runId,
 		template: args.template,
 		task: cfg.id,
 		model: 'us.anthropic.claude-sonnet-4-6',
@@ -293,143 +226,61 @@ async function main() {
 		notes: [],
 	};
 
-	const transport = (name: string, body: Buffer | string, contentType?: string) =>
-		putToTransport({
-			bucket: TRANSPORT_BUCKET,
-			runId: result.run_id,
-			cellId,
-			name,
-			body,
-			contentType,
-		});
+	const upload = (name: string, body: Buffer | string, contentType?: string) =>
+		putToTransport({ bucket: TRANSPORT_BUCKET, runId, cellId, name, body, contentType });
 
 	try {
-		// 1a. Install the microVM toolchain. AL2023 ships awscli + curl + bash;
-		// we need tar/gzip + Node 22 (the dev server uses process.loadEnvFile, a
-		// Node 20.6+ API; AL2023's default nodejs package is 18). NodeSource for
-		// arm64 / RPM gives us a current node.
-		log('installing toolchain in microVM (Node 22)');
-		const toolchain = await exec(
-			HARNESS_ARN,
-			benchSession,
-			`set -e
-dnf install -y tar gzip 2>&1 | tail -5
-# NodeSource is the canonical path to a current node on AL2023.
-curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - >/tmp/nodesource.log 2>&1
-dnf install -y nodejs 2>&1 | tail -5
-node --version
-npm --version`,
-			420,
-		);
-		assertOk(toolchain, 'toolchain install', result);
+		// 1. Push everything the microVM needs to S3 (registry tarball, registry
+		// server script, the three bootstrap shell scripts, the playwright spec).
+		log('uploading microVM scripts and dist-registry');
+		const tarballPath = packDistRegistry();
+		await upload('dist-registry.tgz', readFileSync(tarballPath), 'application/gzip');
 
-		// 1b. Pack the local dist-registry, upload to S3, pull down in the microVM.
-		log('packing dist-registry');
-		const { tarballPath, sizeBytes } = packDistRegistry();
-		log(`dist-registry: ${(sizeBytes / 1024 / 1024).toFixed(1)}MB`);
-		const tarballUri = await transport('dist-registry.tgz', readFileSync(tarballPath), 'application/gzip');
+		const serveScript = readFileSync(resolve(REPO_ROOT, 'scripts/publish/serve-local-registry.ts'), 'utf-8')
+			.replace('const ROOT = resolve(import.meta.dirname, "../..");', 'const ROOT = "/workspace";')
+			.replace('const REGISTRY_DIR = join(ROOT, "dist-registry");', 'const REGISTRY_DIR = "/workspace/dist-registry";');
+		await upload('serve-local-registry.ts', serveScript, 'text/x-typescript');
 
-		// 1c. Upload the registry-server script too. We run it inside the microVM
-		// because npm's packuments reference http://localhost:4873/... and npm
-		// rejects file:// tarball URLs.
-		const serveScript = readFileSync(
-			resolve(REPO_ROOT, 'scripts/publish/serve-local-registry.ts'),
-			'utf-8',
-		);
-		// Adjust the registry-root path to /workspace/dist-registry inside the microVM.
-		const serveAdapted = serveScript
-			.replace(
-				'const ROOT = resolve(import.meta.dirname, "../..");',
-				'const ROOT = "/workspace";',
-			)
-			.replace(
-				'const REGISTRY_DIR = join(ROOT, "dist-registry");',
-				'const REGISTRY_DIR = "/workspace/dist-registry";',
-			);
-		const serveUri = await transport(
-			'serve-local-registry.ts',
-			serveAdapted,
-			'text/x-typescript',
-		);
-		log(`uploaded ${tarballUri}`);
+		for (const sh of ['bootstrap.sh', 'setup-app.sh', 'capture-files.sh']) {
+			await upload(sh, readFileSync(resolve(MICROVM_DIR, sh)));
+		}
 
-		const extract = await exec(
-			HARNESS_ARN,
-			benchSession,
-			`set -e
-mkdir -p /workspace/dist-registry
-aws s3 cp '${tarballUri}' /tmp/dist-registry.tgz
-aws s3 cp '${serveUri}' /tmp/serve-local-registry.ts
-tar -xzf /tmp/dist-registry.tgz -C /workspace/dist-registry
-ls /workspace/dist-registry/registry/@aws-blocks | head -5`,
-		);
-		assertOk(extract, 'dist-registry extract', result);
+		// 2. Bootstrap microVM (Node 22, dist-registry, registry server).
+		log('bootstrapping microVM');
+		const env = `export TRANSPORT_PREFIX='${transportPrefix}'`;
+		const fetchScripts = `aws s3 cp '${transportPrefix}/bootstrap.sh' /tmp/bootstrap.sh && aws s3 cp '${transportPrefix}/setup-app.sh' /tmp/setup-app.sh && aws s3 cp '${transportPrefix}/capture-files.sh' /tmp/capture-files.sh && chmod +x /tmp/*.sh`;
+		const bootstrap = await exec(HARNESS_ARN, benchSession, `${env}; ${fetchScripts} && bash /tmp/bootstrap.sh`, 420);
+		if (bootstrap.exitCode !== 0) {
+			result.notes.push(`bootstrap failed (exit ${bootstrap.exitCode}): ${tail(bootstrap.stdout + bootstrap.stderr, 1500)}`);
+			throw new Error('bootstrap failed');
+		}
 
-		// 1d. Start the local registry server inside the microVM and wait for it.
-		log('starting in-microVM registry server');
-		const startRegistry = await exec(
-			HARNESS_ARN,
-			benchSession,
-			`set -e
-# Install tsx globally so we can run the .ts directly without project setup.
-npm install -g tsx 2>&1 | tail -3
-nohup tsx /tmp/serve-local-registry.ts > /tmp/registry.log 2>&1 &
-echo $! > /tmp/registry.pid
-for i in $(seq 1 30); do
-  if curl -sf http://localhost:4873/registry/@aws-blocks/blocks > /dev/null; then
-    echo "registry-up"; exit 0
-  fi
-  sleep 1
-done
-echo '>>> registry server failed to start; tail of log:'
-tail -50 /tmp/registry.log
-exit 1`,
-			300,
-		);
-		assertOk(startRegistry, 'in-microVM registry start', result);
-
-		// 2. Scaffold the app, start dev server.
+		// 3. Scaffold app and start dev server.
 		log('scaffolding bench-app');
-		const setup = await exec(
-			HARNESS_ARN,
-			benchSession,
-			`set -eo pipefail
-cd /workspace
-cat > .npmrc <<'EOF'
-@aws-blocks:registry=http://localhost:4873/registry/
-EOF
-echo '>>> installing @aws-blocks/create-blocks-app from local registry'
-npm install --no-save @aws-blocks/create-blocks-app 2>&1 | tail -10
-echo '>>> scaffolding bench-app'
-./node_modules/.bin/create-blocks-app bench-app${args.template === 'default' ? '' : ` --template ${args.template}`} 2>&1 | tail -20
-echo '>>> starting dev server'
-cd bench-app
-nohup npm run dev > /tmp/dev.log 2>&1 &
-echo $! > /tmp/dev.pid
-for i in $(seq 1 60); do
-  if curl -sf http://localhost:3000 > /dev/null; then
-    echo "dev-server-up"; exit 0
-  fi
-  sleep 1
-done
-echo '>>> dev server timed out; tail of /tmp/dev.log:'
-tail -50 /tmp/dev.log
-exit 1
-`,
-			600,
-		);
+		const setup = await exec(HARNESS_ARN, benchSession, `bash /tmp/setup-app.sh '${args.template}'`, 600);
 		result.scaffolded = setup.exitCode === 0;
-		result.dev_server_started = setup.stdout.includes('dev-server-up');
+		const portMatch = setup.stdout.match(/dev-server-up:(\d+)/);
+		const devPort = portMatch ? Number.parseInt(portMatch[1], 10) : 3000;
+		result.dev_server_started = portMatch != null;
 		if (!result.scaffolded || !result.dev_server_started) {
 			result.notes.push(`setup failed (exit ${setup.exitCode}): ${tail(setup.stdout + setup.stderr, 2000)}`);
 			throw new Error('setup failed');
 		}
 
-		// 3. Builder agent.
+		// 4. Builder agent. Pass the task prompt as-is — embedding the
+		// Playwright spec was tested and tripled token usage without improving
+		// scores (the agent over-iterated trying to match selectors that the
+		// AGENTS.md guide already documents). The grader still gets the spec.
 		log('invoking builder agent');
 		const builder = await invokeAgent(HARNESS_ARN, benchSession, {
 			systemPrompt: BUILDER_SYSTEM_PROMPT,
 			userText: taskPrompt,
+			// Explicit stopping conditions per Anthropic's "Building effective
+			// agents" guidance. 100 iterations suits our task shape (typical
+			// runs use 30-60); 20min covers slow npm builds. Higher caps caused
+			// pathological loops that nuked the workspace.
+			maxIterations: 100,
+			timeoutSeconds: 1200,
 		});
 		result.tokens_in = builder.tokensIn;
 		result.tokens_out = builder.tokensOut;
@@ -440,8 +291,22 @@ exit 1
 		if (result.budget_exceeded) {
 			result.notes.push(`token budget exceeded: ${result.tokens_total} > ${cfg.token_budget}`);
 		}
+		if (builder.stopReason && builder.stopReason !== 'end_turn') {
+			result.notes.push(`builder stop_reason=${builder.stopReason}`);
+		}
 
-		// 4. Build sanity check.
+		// 5. Build sanity check (skipped if the agent trashed its workspace).
+		const integrity = await exec(
+			HARNESS_ARN,
+			benchSession,
+			`[ -d /workspace/bench-app ] && [ -f /workspace/bench-app/package.json ] && echo workspace-ok || { echo workspace-missing; ls /workspace; exit 1; }`,
+			60,
+		);
+		if (!integrity.stdout.includes('workspace-ok')) {
+			result.notes.push(`workspace missing after builder turn: ${tail(integrity.stdout, 500)}`);
+			result.status = 'error';
+			return;
+		}
 		log('npm run build');
 		const build = await exec(HARNESS_ARN, benchSession, `cd /workspace/bench-app && npm run build`, 600);
 		result.build_succeeded = build.exitCode === 0;
@@ -449,30 +314,29 @@ exit 1
 			result.notes.push(`build failed:\n${tail(build.stdout + build.stderr, 2000)}`);
 		}
 
-		// 5. Playwright. Spec + config land in the microVM through S3 too.
-		log('uploading Playwright spec + config');
-		const specUri = await transport('task.spec.ts', readFileSync(specPath), 'text/x-typescript');
-		const configUri = await transport(
+		// 6. Playwright.
+		log('uploading Playwright spec + config and running tests');
+		await upload('task.spec.ts', readFileSync(specPath), 'text/x-typescript');
+		await upload(
 			'playwright.config.ts',
 			`import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './bench-tests',
   timeout: 60_000,
   reporter: [['json']],
-  use: { baseURL: 'http://localhost:3000' },
+  use: { baseURL: 'http://localhost:${devPort}' },
 });
 `,
 			'text/x-typescript',
 		);
-		log('running Playwright');
 		const test = await exec(
 			HARNESS_ARN,
 			benchSession,
 			`set -e
 cd /workspace/bench-app
 mkdir -p bench-tests
-aws s3 cp '${specUri}' bench-tests/task.spec.ts
-aws s3 cp '${configUri}' playwright.config.ts
+aws s3 cp '${transportPrefix}/task.spec.ts' bench-tests/task.spec.ts
+aws s3 cp '${transportPrefix}/playwright.config.ts' playwright.config.ts
 npm install --no-save --silent @playwright/test >/dev/null
 npx playwright install chromium >/tmp/pw-install.log 2>&1 || true
 npx playwright test --reporter=json 2>&1 || true`,
@@ -484,19 +348,11 @@ npx playwright test --reporter=json 2>&1 || true`,
 		result.tests_total = tests.total;
 		result.test_pass_rate = tests.total > 0 ? tests.passed / tests.total : 0;
 
-		// 6. Judge — same session as the builder so the workspace files are
-		// already there, but with the workspace chmod'd read-only and shell
-		// access removed. The harness's file_operations tool is monolithic
-		// (view+create+edit), so OS permissions are the only real read-only
-		// boundary. Both file_operations writes and shell are out of reach
-		// for the judge: the former by chmod, the latter by allowedTools.
-		log('locking workspace read-only');
-		await exec(
-			HARNESS_ARN,
-			benchSession,
-			`chmod -R a-w /workspace/bench-app && find /workspace/bench-app -maxdepth 1 -type d -ls | head -5`,
-		);
-		log('invoking judge agent');
+		// 7. Judge — same session, workspace chmod'd read-only, no shell.
+		// Tight caps keep it focused on inspect → JSON; 50 iterations is plenty
+		// for read-only file inspection, 4K tokens forces concise output.
+		log('locking workspace read-only and invoking judge');
+		await exec(HARNESS_ARN, benchSession, `chmod -R a-w /workspace/bench-app`);
 		const judge = await invokeAgent(HARNESS_ARN, benchSession, {
 			systemPrompt: JUDGE_SYSTEM_PROMPT,
 			userText:
@@ -505,58 +361,58 @@ npx playwright test --reporter=json 2>&1 || true`,
 				`<evidence>\nscaffolded: ${result.scaffolded}\nbuild_succeeded: ${result.build_succeeded}\ndev_server_started: ${result.dev_server_started}\ntests_total: ${result.tests_total}\ntests_passed: ${result.tests_passed}\ntests_failed: ${result.tests_failed}\n</evidence>\n\n` +
 				`Inspect /workspace/bench-app/ then return the JSON object.`,
 			allowedTools: ['file_operations'],
+			maxIterations: 50,
+			maxTokens: 4096,
+			timeoutSeconds: 300,
 		});
 		result.tokens_in += judge.tokensIn;
 		result.tokens_out += judge.tokensOut;
 		result.tokens_total = result.tokens_in + result.tokens_out;
 		try {
-			const parsed: { scores?: Record<string, number>; overall?: number; explanation?: string } = JSON.parse(
-				extractJson(judge.text),
-			);
+			const parsed = JSON.parse(extractJson(judge.text)) as {
+				scores?: Record<string, number>;
+				overall?: number;
+				explanation?: string;
+			};
 			result.judge_score = parsed.overall ?? null;
 			result.judge_dimensions = parsed.scores ?? {};
 			result.judge_explanation = parsed.explanation ?? '';
 		} catch (err) {
-			result.notes.push(
-				`judge JSON parse failed: ${(err as Error).message}; raw=${judge.text.slice(0, 500)}`,
-			);
+			result.notes.push(`judge JSON parse failed: ${(err as Error).message}; raw=${judge.text.slice(0, 500)}`);
 		}
 
-		// 7. Capture the files the agent wrote — for inspection in the envelope.
-		// Tar them into one upload to keep this O(1) rather than O(N) round trips.
-		const captureUri = `s3://${TRANSPORT_BUCKET}/bench-uploads/${result.run_id}/${cellId}/agent-files.tgz`;
-		const capture = await exec(
-			HARNESS_ARN,
-			benchSession,
-			`set -e
-cd /workspace/bench-app
-tar -czf /tmp/agent-files.tgz \
-  --ignore-failed-read \
-  aws-blocks/index.ts aws-blocks/index.cdk.ts aws-blocks/index.handler.ts \
-  src/index.ts src/main.tsx src/App.tsx index.html package.json 2>/dev/null || true
-aws s3 cp /tmp/agent-files.tgz '${captureUri}'`,
-		);
+		// 8. Capture agent files via S3 round-trip.
+		log('capturing agent files');
+		const capture = await exec(HARNESS_ARN, benchSession, `${env} && bash /tmp/capture-files.sh`, 120);
 		if (capture.exitCode === 0) {
-			// Pull the tarball, extract, read each file into the envelope.
-			execSync(`aws s3 cp ${captureUri} /tmp/agent-files-${cellId}.tgz --only-show-errors`);
+			const tmpTgz = `/tmp/agent-files-${cellId}.tgz`;
 			const tmpDir = `/tmp/agent-files-${cellId}`;
-			execSync(`rm -rf ${tmpDir} && mkdir -p ${tmpDir} && tar -xzf /tmp/agent-files-${cellId}.tgz -C ${tmpDir}`);
-			for (const path of walkAll(tmpDir)) {
+			execSync(`aws s3 cp ${transportPrefix}/agent-files.tgz ${tmpTgz} --only-show-errors`);
+			execSync(`rm -rf ${tmpDir} && mkdir -p ${tmpDir} && tar -xzf ${tmpTgz} -C ${tmpDir}`);
+			const MAX_FILES = 200;
+			const MAX_BYTES = 64 * 1024;
+			let captured = 0;
+			for (const path of walk(tmpDir)) {
+				if (captured >= MAX_FILES) break;
 				const rel = path.slice(tmpDir.length + 1);
 				try {
-					result.agent_files[rel] = readFileSync(path, 'utf-8');
+					const size = statSync(path).size;
+					result.agent_files[rel] =
+						size > MAX_BYTES ? `[truncated: ${size} bytes > ${MAX_BYTES}]` : readFileSync(path, 'utf-8');
+					captured++;
 				} catch {
-					// non-utf8 file — skip silently
+					// non-utf8 / unreadable
 				}
 			}
+			if (captured >= MAX_FILES) result.notes.push(`agent_files capped at ${MAX_FILES} entries`);
+		} else {
+			result.notes.push(`agent_files capture failed (exit ${capture.exitCode}): ${tail(capture.stdout + capture.stderr, 500)}`);
 		}
 
 		result.status = result.budget_exceeded ? 'budget_exceeded' : 'scored';
 	} catch (err) {
 		result.notes.push(`orchestrator error: ${(err as Error).message}`);
 	} finally {
-		// Release the microVM promptly so the per-account session quota isn't
-		// tied up. Best-effort; the harness's idle timeout is the backstop.
 		await stopSession(HARNESS_ARN, benchSession);
 		result.duration_sec = Math.round((Date.now() - started) / 100) / 10;
 		mkdirSync(dirname(args.output), { recursive: true });
@@ -566,11 +422,11 @@ aws s3 cp /tmp/agent-files.tgz '${captureUri}'`,
 	}
 }
 
-function walkAll(dir: string): string[] {
+function walk(dir: string): string[] {
 	const out: string[] = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const full = resolve(dir, entry.name);
-		if (entry.isDirectory()) out.push(...walkAll(full));
+		if (entry.isDirectory()) out.push(...walk(full));
 		else out.push(full);
 	}
 	return out;

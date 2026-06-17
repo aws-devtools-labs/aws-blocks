@@ -33,7 +33,10 @@ GitHub Actions matrix              AgentCore Harness microVM (per cell)
 |------|---------|
 | `agentcore.ts` | Thin SDK wrappers: `exec`, `invokeAgent`, `putToTransport`, `sessionId`, `stopSession` |
 | `preflight.ts` | Idempotent pre-run probes (env, harness, exec, S3) |
-| `run-bench.ts` | Per-cell orchestrator |
+| `run-bench.ts` | Per-cell orchestrator (TS glue; all microVM work runs from `microvm/*.sh`) |
+| `microvm/bootstrap.sh` | Install Node 22, pull dist-registry from S3, start local registry server |
+| `microvm/setup-app.sh` | Scaffold bench-app from create-blocks-app, start dev server, detect port |
+| `microvm/capture-files.sh` | Tar agent's workspace and push to S3 for the runner to read back |
 | `summarize.mjs` | Renders `result-*.json` files into a markdown table for the GitHub step summary |
 | `package.json` | Workspace metadata + bench-only dev dependencies (`@aws-blocks/agent-bench`, `private: true`) |
 | `tsconfig.json` | TypeScript config for this directory |
