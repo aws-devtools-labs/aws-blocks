@@ -1,0 +1,180 @@
+name: PR Agent Bench
+
+# Spawns an AgentCore Harness agent (Sonnet 4.6) per (template, task) cell.
+# The harness runs in AWS — the GitHub runner only orchestrates the calls and
+# uploads/downloads bytes to S3. No node/playwright installed on the runner;
+# everything happens inside the harness microVM.
+#
+# Non-blocking by design: this workflow is a signal generator, not a gate.
+# Same-repo PRs only — fork PRs can't access the OIDC role.
+
+on:
+  pull_request:
+    branches: ['*']
+  workflow_dispatch:
+
+concurrency:
+  group: agent-bench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NODE_OPTIONS: '--test-reporter=spec'
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      run-bench: ${{ steps.check.outputs.run-bench }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run-bench=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only origin/main...HEAD | grep -qE '^(packages|tasks|scripts/agent-bench)/|^\.github/workflows/pr-agent-bench\.yml$'; then
+            echo "run-bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run-bench=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  preflight:
+    name: Preflight
+    needs: [detect-changes]
+    if: >-
+      needs.detect-changes.outputs.run-bench == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: publish
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Preflight checks
+        env:
+          BENCH_HARNESS_ARN: ${{ vars.BENCH_HARNESS_ARN }}
+          BENCH_TRANSPORT_BUCKET: ${{ vars.S3_BUCKET }}
+        run: npx tsx scripts/agent-bench/preflight.ts
+
+  bench:
+    name: Bench (${{ matrix.template }} / ${{ matrix.task }})
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7 of 8 shipped templates. `amplify` is an overlay applied to an
+        # existing Amplify Gen2 app, exercised separately by
+        # e2e-amplify-interop.yml.
+        include:
+          - { template: default, task: realtime-todos }
+          - { template: demo, task: realtime-todos }
+          - { template: bare, task: realtime-todos }
+          - { template: backend, task: realtime-todos }
+          - { template: react, task: realtime-todos }
+          - { template: nextjs, task: realtime-todos }
+          - { template: auth-cognito, task: realtime-todos }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - name: Build + pack to local registry
+        run: |
+          npm run build
+          npm run publish:dry-run
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Run bench
+        env:
+          BENCH_HARNESS_ARN: ${{ vars.BENCH_HARNESS_ARN }}
+          BENCH_TRANSPORT_BUCKET: ${{ vars.S3_BUCKET }}
+          AWS_REGION: us-east-1
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p bench-results
+          OUT="bench-results/result-${{ matrix.template }}-${{ matrix.task }}.json"
+          npx tsx scripts/agent-bench/run-bench.ts \
+            --template ${{ matrix.template }} \
+            --task ${{ matrix.task }} \
+            --output "$OUT"
+      - name: Upload result (90-day artifact)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: bench-result-${{ matrix.template }}-${{ matrix.task }}
+          path: bench-results/
+          retention-days: 90
+      - name: Persist to S3 (best-effort)
+        if: always() && vars.S3_BUCKET != ''
+        continue-on-error: true
+        env:
+          S3_BUCKET: ${{ vars.S3_BUCKET }}
+          PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+        run: |
+          DATE=$(date -u +%Y/%m/%d)
+          KEY="bench/${DATE}/pr-${PR_NUMBER}-run-${GITHUB_RUN_ID}-${{ matrix.template }}-${{ matrix.task }}.jsonl"
+          JSONL="bench-results/result-${{ matrix.template }}-${{ matrix.task }}.jsonl"
+          if [ -f "$JSONL" ]; then
+            aws s3 cp "$JSONL" "s3://${S3_BUCKET}/${KEY}" --content-type application/x-ndjson
+            echo "::notice::persisted to s3://${S3_BUCKET}/${KEY}"
+          fi
+
+  summarize:
+    name: Summarize
+    needs: [bench]
+    if: always() && needs.bench.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+      - name: Download all bench results
+        uses: actions/download-artifact@v5
+        with:
+          pattern: bench-result-*
+          merge-multiple: true
+          path: bench-results/
+      - name: Render summary
+        run: |
+          if ls bench-results/result-*.json >/dev/null 2>&1; then
+            node scripts/agent-bench/summarize.mjs bench-results/ >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Agent Bench" >> "$GITHUB_STEP_SUMMARY"
+            echo "_No results to summarize._" >> "$GITHUB_STEP_SUMMARY"
+          fi

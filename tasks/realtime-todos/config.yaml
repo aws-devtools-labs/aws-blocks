@@ -1,0 +1,9 @@
+id: realtime-todos
+name: Realtime To-Do List
+tier: medium
+test_file: test.spec.ts
+time_limit_sec: 1800
+# Generous budget: discovery alone (reading @aws-blocks READMEs/API.md) burns
+# ~400K input tokens before any code is written. 1.5M lets the builder finish;
+# raise if observed runs consistently exceed it on real PRs.
+token_budget: 1500000
