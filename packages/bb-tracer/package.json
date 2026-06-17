@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "tsc --build",
-    "test": "node --test dist/*.test.js"
+    "test": "node --test --test-concurrency=1 dist/*.test.js"
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.1",

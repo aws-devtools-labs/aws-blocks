@@ -28,7 +28,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs AuthCognito",
     "build": "tsc --build",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test --test-concurrency=1 dist/**/*.test.js",
     "deploy:manual-pools": "node scripts/deploy-manual-test-pools.mjs",
     "teardown:manual-pools": "node scripts/teardown-manual-test-pools.mjs"
   },
