@@ -3,6 +3,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   check:
     name: Require changeset
@@ -19,3 +23,47 @@ jobs:
       - run: npx @changesets/cli status --since=origin/main
       - name: Verify changeset covers all changed packages
         run: npx tsx scripts/verify-changeset-coverage.ts
+      - name: Block major version bumps (pre-release)
+        run: npx tsx scripts/changeset-guard.ts block-major
+
+      # Surface (do not block) pre-release breaking changes as a sticky PR comment.
+      - name: Detect breaking (minor) changesets
+        id: breaking
+        if: always()
+        env:
+          COMMENT_BODY_FILE: ${{ runner.temp }}/breaking-comment.md
+        run: npx tsx scripts/changeset-guard.ts report-breaking
+
+      - name: Upsert breaking-change PR comment
+        # Skip on fork PRs — their GITHUB_TOKEN is read-only and cannot comment.
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- changeset-breaking-changes -->';
+            const bodyPath = `${process.env.RUNNER_TEMP}/breaking-comment.md`;
+            if (!fs.existsSync(bodyPath)) {
+              core.info('No comment body produced; skipping.');
+              return;
+            }
+            const body = fs.readFileSync(bodyPath, 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+              core.info(`Updated comment ${existing.id}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+              core.info('Created breaking-change comment.');
+            }
