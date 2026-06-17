@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { spaAdapter } from './spa.js';
+import { getAdapter } from './index.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 
 void describe('spaAdapter', () => {
@@ -36,21 +37,48 @@ void describe('spaAdapter', () => {
     assert.deepStrictEqual(manifest.compute, {});
   });
 
-  void it('sets spaFallback:true for a single-page app (only root index.html)', () => {
-    // The default fixture has only a top-level index.html — a true SPA.
-    const manifest = spaAdapter(tmpDir);
+  // ── spaFallback comes from the framework contract, NOT filesystem sniffing ──
+  // (Addresses Josh's review: sniffing misclassified both a SPA shipping a
+  // nested index.html and a flat-file SSG. The routing model is now declared
+  // by the `framework` string via getAdapter: 'spa' → true, 'static' → false.)
+
+  void it('framework "spa" → spaFallback:true (single-page contract)', () => {
+    const adapter = getAdapter('spa');
+    const manifest = adapter(tmpDir);
     assert.strictEqual(manifest.staticAssets.spaFallback, true);
   });
 
-  void it('sets spaFallback:false when nested index.html files exist (multi-page SSG)', () => {
-    // Simulate a multi-page static site: about/index.html.
-    fs.mkdirSync(path.join(buildDir, 'about'), { recursive: true });
-    fs.writeFileSync(
-      path.join(buildDir, 'about', 'index.html'),
-      '<html></html>',
-    );
-    const manifest = spaAdapter(tmpDir);
+  void it('framework "static" → spaFallback:false (multi-page contract)', () => {
+    const adapter = getAdapter('static');
+    const manifest = adapter(tmpDir);
     assert.strictEqual(manifest.staticAssets.spaFallback, false);
+  });
+
+  void it('SPA shipping a nested index.html STAYS spaFallback:true (no misclassification)', () => {
+    // Josh case 1: a real SPA with a nested static page (e.g. public/legal/
+    // index.html). Old sniffing flipped this to false and broke client-side
+    // deep-linking. The framework contract keeps it true.
+    fs.mkdirSync(path.join(buildDir, 'legal'), { recursive: true });
+    fs.writeFileSync(path.join(buildDir, 'legal', 'index.html'), '<html></html>');
+    const manifest = getAdapter('spa')(tmpDir);
+    assert.strictEqual(manifest.staticAssets.spaFallback, true);
+  });
+
+  void it('flat-file SSG (about.html, no nested index) → spaFallback:false (no misclassification)', () => {
+    // Josh case 2: a flat-file SSG (Astro build.format 'file', Hugo
+    // uglyURLs) emits about.html, not about/index.html. Old sniffing found
+    // no nested index.html and wrongly chose SPA fallback — the exact bug
+    // this change fixes. The framework contract keeps it false.
+    fs.writeFileSync(path.join(buildDir, 'about.html'), '<html>about</html>');
+    const manifest = getAdapter('static')(tmpDir);
+    assert.strictEqual(manifest.staticAssets.spaFallback, false);
+  });
+
+  void it('default (no framework signal, direct spaAdapter) → spaFallback:true', () => {
+    // Back-compat: a caller invoking spaAdapter directly without declaring a
+    // model keeps the historical SPA behavior.
+    const manifest = spaAdapter(tmpDir);
+    assert.strictEqual(manifest.staticAssets.spaFallback, true);
   });
 
   void it('copies files to .hosting/static/', () => {

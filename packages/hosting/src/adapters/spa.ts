@@ -18,6 +18,22 @@ const STATIC_EXCLUDE_NAMES = ['.ds_store', 'thumbs.db'];
 export type SpaAdapterOptions = {
   /** Explicit build output directory relative to project root. Overrides auto-detection. */
   buildOutputDir?: string;
+  /**
+   * Routing model declared by the caller from the framework's build
+   * contract — NOT inferred from the filesystem.
+   *
+   *   - `true`  → single-page app (`framework: 'spa'`): extensionless
+   *     paths fall back to `/index.html` for client-side routing.
+   *   - `false` → multi-page static site (`framework: 'static'`): each
+   *     route resolves to its own `<path>/index.html` (directory-index).
+   *
+   * Sourced by {@link getAdapter} from the framework string. When
+   * omitted, defaults to `true` (the historical SPA behavior) so callers
+   * that don't declare a model keep working. The L3 still applies its own
+   * fallback heuristic when the manifest omits `spaFallback` entirely;
+   * here we always set it because the framework is known.
+   */
+  spaFallback?: boolean;
 };
 
 /**
@@ -108,15 +124,16 @@ export const spaAdapter = (
     errorPages[500] = '/500.html';
   }
 
-  // Determine the routing model. A true single-page app ships exactly one
-  // top-level `index.html` and routes client-side, so extensionless paths
-  // must fall back to it (`spaFallback: true`). A multi-page static-site
-  // generator (Astro static, Hugo, Eleventy routed through this generic
-  // adapter) prerenders each route to its own `<dir>/index.html`; those
-  // need directory-index resolution (`spaFallback: false`) or every route
-  // collapses onto the home page. Detect by looking for any nested
-  // `index.html` below the output root.
-  const spaFallback = !hasNestedIndexHtml(staticDir);
+  // Routing model comes from the caller's framework contract (see
+  // SpaAdapterOptions.spaFallback), NOT from sniffing the output tree.
+  // Filesystem sniffing misclassifies both ways: a real SPA that ships a
+  // nested index.html (e.g. public/legal/index.html) would lose
+  // client-side deep-linking, and a flat-file SSG (about.html, no
+  // about/index.html) would wrongly get SPA fallback and hit the routing
+  // bug this whole change fixes. `framework: 'spa'` → true (single-page);
+  // `framework: 'static'` → false (multi-page). Defaults to true when the
+  // caller doesn't declare one (historical SPA behavior).
+  const spaFallback = options?.spaFallback ?? true;
 
   const manifest: DeployManifest = {
     version: 1,
@@ -135,36 +152,6 @@ export const spaAdapter = (
   };
 
   return manifest;
-};
-
-/**
- * Detect whether the static output contains nested `index.html` files
- * (e.g. `about/index.html`), which signals a multi-page site rather than
- * a single-page app. Walks the tree but stops at the first match for
- * efficiency. The root `index.html` is ignored — only nested ones count.
- * @param staticDir - absolute path to the static output directory
- */
-const hasNestedIndexHtml = (staticDir: string): boolean => {
-  const walk = (dir: string, depth: number): boolean => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return false;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        // Skip the hashed-asset / framework dirs; routes never live there.
-        if (entry.name.startsWith('_') || entry.name === 'assets') continue;
-        if (walk(full, depth + 1)) return true;
-      } else if (entry.name === 'index.html' && depth > 0) {
-        return true;
-      }
-    }
-    return false;
-  };
-  return walk(staticDir, 0);
 };
 
 /**
