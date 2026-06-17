@@ -2,21 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Publish the publishable packages to the npm registry.
+ * Publish the @aws-blocks/* packages to npm.
  *
- * Performs a real publish by default; that path adds --provenance and requires
- * NODE_AUTH_TOKEN to be set (and, for provenance, an OIDC-enabled CI such as
- * GitHub Actions with `id-token: write`).
+ *   tsx scripts/publish/publish-npm.ts            # live: changeset publish (skips versions already on npm)
+ *   tsx scripts/publish/publish-npm.ts --dry-run  # pack & validate workspaces locally, no registry contact
  *
- * Pass --dry-run to only pack and validate without contacting the registry.
- *
- * Relies on npm workspaces: private workspaces (all test-apps and template
- * `aws-blocks` dirs) are skipped automatically, leaving only the
- * @aws-blocks/* packages under packages/.
- *
- * Usage:
- *   tsx scripts/publish/publish-npm.ts              # real publish
- *   tsx scripts/publish/publish-npm.ts --dry-run    # dry-run
+ * Private workspaces (test-apps, template `aws-blocks` dirs) are skipped by npm automatically.
  */
 
 import { execFileSync } from "node:child_process";
@@ -31,15 +22,14 @@ if (!dryRun && !process.env.NODE_AUTH_TOKEN) {
 	process.exit(1);
 }
 
-const args = ["publish", "--workspaces", "--access=public"];
-if (dryRun) {
-	args.push("--dry-run");
-} 
-// re-enable when repo is public
-// else {
-// 	args.push("--provenance");
-// }
-
 console.log(`AWS Blocks Publish — npm (${dryRun ? "dry-run" : "LIVE"})\n`);
 
-execFileSync("npm", args, { cwd: ROOT, stdio: "inherit" });
+if (dryRun) {
+	execFileSync("npm", ["publish", "--workspaces", "--access=public", "--dry-run"], {
+		cwd: ROOT,
+		stdio: "inherit",
+	});
+} else {
+	// access comes from .changeset/config.json; provenance via NPM_CONFIG_PROVENANCE in CI.
+	execFileSync("npx", ["changeset", "publish"], { cwd: ROOT, stdio: "inherit" });
+}
