@@ -30,8 +30,8 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     inferenceOnly?: boolean;
     logger?: ChildLogger;
     // (undocumented)
-    model?: {
-        deployed?: ModelConfig | ModelConfig[];
+    model: {
+        deployed: ModelConfig | ModelConfig[];
         local?: ModelConfig | ModelConfig[];
     };
     // (undocumented)
@@ -102,13 +102,13 @@ export type AgentTool<TContext = DefaultToolContext> = ToolDefinition<TContext, 
 
 // @public
 export const BedrockModels: {
-    readonly BALANCED: {
-        readonly provider: "bedrock";
-        readonly modelId: "us.anthropic.claude-sonnet-4-6-20250514-v1:0";
-    };
-    readonly SMART: {
+    readonly DEFAULT: {
         readonly provider: "bedrock";
         readonly modelId: "us.anthropic.claude-opus-4-8-20250610-v1:0";
+    };
+    readonly BALANCED: {
+        readonly provider: "bedrock";
+        readonly modelId: "us.anthropic.claude-sonnet-4-20250514-v1:0";
     };
     readonly FAST: {
         readonly provider: "bedrock";
@@ -116,11 +116,11 @@ export const BedrockModels: {
     };
     readonly BUDGET: {
         readonly provider: "bedrock";
-        readonly modelId: "us.meta.llama4-scout-17b-instruct-v1:0";
+        readonly modelId: "us.amazon.nova-pro-v1:0";
     };
     readonly MICRO: {
         readonly provider: "bedrock";
-        readonly modelId: "us.meta.llama3-2-3b-instruct-v1:0";
+        readonly modelId: "us.amazon.nova-lite-v1:0";
     };
 };
 
