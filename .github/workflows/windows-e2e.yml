@@ -1,0 +1,70 @@
+name: Windows E2E
+
+# Real end-to-end deploy on Windows, mirroring the production E2E job from
+# pr-checks.yml but on a windows-latest runner. This is the high-fidelity
+# regression check for issue #19 (Windows deploy failing at `spawnSync npx
+# ENOENT`): it runs an actual `cdk deploy`/`destroy` through the same code
+# path a Windows user hits via `npm run deploy`.
+#
+# Kept in its own workflow (not pr-checks.yml) and intentionally NOT added to
+# the required "Build and Test" gate, so it is OPTIONAL for now — it runs on
+# every PR for visibility but does not block merges.
+
+on:
+  pull_request:
+    branches: ['*']
+
+# One run per PR; cancel superseded runs so two real cdk deploys never race on
+# the same PR-scoped stack.
+concurrency:
+  group: windows-e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  windows-e2e-production:
+    name: Windows E2E Production
+    runs-on: windows-latest
+    timeout-minutes: 90
+    # Skip for fork PRs — they don't get secrets/OIDC (defense in depth;
+    # pull_request already withholds secrets from forks).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    environment: publish
+    env:
+      # Windows-specific suffix so this stack never collides with the Linux
+      # production E2E stack for the same PR.
+      BLOCKS_STACK_SUFFIX: win-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: E2E Test Production (Windows)
+        run: npm run test:e2e:production
+
+      # Backstop teardown: the test harness destroys the stack in test.after,
+      # but ensure a mid-suite failure on Windows can't leak a stack. Safe to
+      # run even if the stack is already gone.
+      - name: Destroy stack (always)
+        if: always()
+        working-directory: test-apps/comprehensive
+        run: npx tsx test/production-destroy.ts aws-blocks/index.cdk.ts
