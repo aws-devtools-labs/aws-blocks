@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { runSync } from './run-command.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -15,7 +15,7 @@ export async function destroy(options: DestroyOptions) {
     console.log('🗑️  Destroying production stack...');
 
     try {
-      execFileSync(
+      runSync(
         "npx",
         [
           "cdk", "destroy",
