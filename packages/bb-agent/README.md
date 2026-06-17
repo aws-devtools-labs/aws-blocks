@@ -179,7 +179,7 @@ const agent = new Agent(scope, 'agent', {
 |--------|---------------|-------|
 | `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Great tool use, balanced cost. Recommended default for most workloads. |
 | `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
-| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5` | Lowest latency, still strong capabilities. |
+| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
 
 Override inference settings with spread:
 ```typescript

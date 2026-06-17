@@ -21,7 +21,7 @@ export const BedrockModels = {
 	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
 		provider: 'bedrock',
-		modelId: 'global.anthropic.claude-haiku-4-5',
+		modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
 	},
 } as const satisfies Record<string, ModelConfig>;
 
