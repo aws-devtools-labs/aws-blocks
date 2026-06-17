@@ -33,6 +33,7 @@ import {
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { IBucket } from 'aws-cdk-lib/aws-s3';
+import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
   IFunction,
@@ -198,6 +199,15 @@ export class CdnConstruct extends Construct {
    * See {@link addBuildAssetDependency}.
    */
   private readonly buildIdFunctions: CloudFrontFunction[] = [];
+
+  /**
+   * Count of asset deployments registered via {@link addBuildAssetDependency}.
+   * The synth-time validation added in the constructor uses this to detect a
+   * regression where the build-id cutover is left ungated (every build-id
+   * function would publish before the new build's assets are uploaded,
+   * re-opening the 403 deploy window).
+   */
+  private buildAssetDependencyCount = 0;
 
   /**
    * Creates the CDN distribution with routes mapped to origins.
@@ -1189,6 +1199,43 @@ export class CdnConstruct extends Construct {
         description: 'Custom domain name for the hosted site',
       });
     }
+
+    // ---- Self-enforcing atomic-deploy guard ----
+    // The build-id CloudFront functions rewrite every request to
+    // `/builds/<buildId>/...`. If they publish before that build's assets are
+    // uploaded to the OAC-protected bucket, new/cookieless visitors get 403
+    // for the whole deploy window. `addBuildAssetDependency` wires each asset
+    // BucketDeployment as a dependency so CloudFormation uploads first. This
+    // validation fails synth if build-id functions exist alongside asset
+    // deployments but NONE were registered - i.e. the wiring loop in the
+    // hosting construct was removed/broken, silently re-opening the 403
+    // window. It runs at synth, after all `addBuildAssetDependency` calls.
+    this.node.addValidation({
+      validate: (): string[] => {
+        // No build-id functions -> nothing to gate.
+        if (this.buildIdFunctions.length === 0) return [];
+        // At least one asset deployment was wired -> invariant holds.
+        if (this.buildAssetDependencyCount > 0) return [];
+        // Nothing was wired. Only fail if asset BucketDeployments actually
+        // exist in this stack; a standalone CdnConstruct with no assets (or a
+        // hypothetical asset-less deploy) is legitimate and must not
+        // false-positive.
+        const hasAssetDeployments = Stack.of(this)
+          .node.findAll()
+          .some((c) => c instanceof BucketDeployment);
+        if (!hasAssetDeployments) return [];
+        return [
+          `CdnConstruct '${this.node.path}' has ${this.buildIdFunctions.length} ` +
+            'build-id CloudFront function(s) that rewrite requests to ' +
+            "'/builds/<buildId>/...', but no asset BucketDeployment was " +
+            'registered via addBuildAssetDependency(). The build-id cutover ' +
+            'would publish before the new build assets are uploaded, ' +
+            'returning 403 Access Denied to new/cookieless visitors for the ' +
+            'entire deploy window. An asset BucketDeployment was likely added ' +
+            'without calling cdn.addBuildAssetDependency(deployment).',
+        ];
+      },
+    });
   }
 
   /**
@@ -1211,6 +1258,7 @@ export class CdnConstruct extends Construct {
     for (const fn of this.buildIdFunctions) {
       fn.node.addDependency(dependency);
     }
+    this.buildAssetDependencyCount += 1;
   }
 
   /**

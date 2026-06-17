@@ -5,7 +5,11 @@ import * as path from 'path';
 import * as os from 'os';
 import { App, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
+import { Bucket } from 'aws-cdk-lib/aws-s3';
+import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { HostingConstruct } from './hosting_construct.js';
+import { CdnConstruct } from './cdn_construct.js';
+import { createSecurityHeadersPolicy } from './security_headers.js';
 import { DeployManifest } from '../manifest/types.js';
 import { SkewProtectionConfig } from './skew_protection.js';
 
@@ -76,6 +80,19 @@ const resourceIdsOfType = (tpl: CfnTemplate, type: string): string[] =>
     .map(([id]) => id);
 
 /**
+ * Logical ids of the asset BucketDeployments that write the new build's
+ * `builds/<id>/` prefix. Excludes `IsrCacheSeed`: that deployment targets the
+ * separate ISR cache bucket (NOT the build prefix) and is intentionally not a
+ * dependency of the build-id functions, so a future ISR test that adds a
+ * `cache.seedDirectory` must not make these "DependsOn every deployment"
+ * assertions fail.
+ */
+const assetDeploymentIds = (tpl: CfnTemplate): string[] =>
+  resourceIdsOfType(tpl, 'Custom::CDKBucketDeployment').filter(
+    (id) => !/IsrCacheSeed/.test(id),
+  );
+
+/**
  * Logical ids of the CloudFront Functions that bake the buildId into the
  * request rewrite (the ones that flip routing to the new build). Excludes the
  * viewer-RESPONSE skew function and the compute forwarded-host function, which
@@ -132,7 +149,7 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       buildId: 'atomic-skew-1',
     });
 
-    const deployments = resourceIdsOfType(tpl, 'Custom::CDKBucketDeployment');
+    const deployments = assetDeploymentIds(tpl);
     assert.ok(
       deployments.length >= 2,
       `expected multiple asset deployments, got ${deployments.length}`,
@@ -169,11 +186,7 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       rewriteFns.length >= 1,
       'expected a BuildIdRewriteFunction when skew protection is disabled',
     );
-    assertFunctionsWaitForDeployments(
-      tpl,
-      rewriteFns,
-      resourceIdsOfType(tpl, 'Custom::CDKBucketDeployment'),
-    );
+    assertFunctionsWaitForDeployments(tpl, rewriteFns, assetDeploymentIds(tpl));
   });
 
   void it('does NOT emit a /* CloudFront invalidation on any BucketDeployment', () => {
@@ -235,7 +248,7 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       buildId: 'atomic-ssr-1',
     });
 
-    const deployments = resourceIdsOfType(tpl, 'Custom::CDKBucketDeployment');
+    const deployments = assetDeploymentIds(tpl);
     // SSR mode ships the built-in error page under builds/<id>/ as well, and
     // it must also land before the cutover.
     assert.ok(
@@ -247,5 +260,127 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       buildIdFunctionIds(tpl),
       deployments,
     );
+  });
+
+  void it('assetPrefix strip function DependsOn every asset BucketDeployment (Next.js)', () => {
+    const staticDir = createStaticDir();
+    const tpl = synth({
+      version: 1,
+      compute: {},
+      assetPrefix: '/cdn-static',
+      staticAssets: {
+        directory: staticDir,
+        immutablePaths: ['*.abcd1234.js'],
+      },
+      routes: [{ pattern: '/*', target: 'static' }],
+      buildId: 'atomic-prefix-1',
+    });
+
+    // When the manifest carries `assetPrefix` (Next.js), the CDN adds an
+    // AssetPrefixStripFunction that ALSO bakes in the `/builds/<buildId>/`
+    // prefix, so it is a build-id cutover function and must wait for the asset
+    // uploads exactly like the viewer-request function.
+    const stripFns = Object.keys(tpl.Resources).filter((id) =>
+      /AssetPrefixStripFunction/.test(id),
+    );
+    assert.ok(
+      stripFns.length >= 1,
+      'expected an AssetPrefixStripFunction when assetPrefix is set',
+    );
+    assertFunctionsWaitForDeployments(tpl, stripFns, assetDeploymentIds(tpl));
+  });
+});
+
+// ============================================================================
+// Self-enforcing guard (synth-time validation in CdnConstruct)
+// ============================================================================
+//
+// The wiring that gates the build-id cutover on the asset uploads lives in the
+// hosting construct (a loop calling `cdn.addBuildAssetDependency(dep)`). If a
+// future change removes that loop - or adds a new asset BucketDeployment
+// without registering it - the build-id functions would publish before the
+// assets land and the 403 window silently re-opens. CdnConstruct carries a
+// node validation that fails synth in that case, scoped so it never
+// false-positives on a CdnConstruct that genuinely has no asset deployments.
+
+void describe('Atomic deploy - CdnConstruct self-enforcing dependency guard', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const guardManifest = (
+    buildId: string,
+    directory: string,
+  ): DeployManifest => ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory },
+    routes: [{ pattern: '/*', target: 'static' }],
+    buildId,
+  });
+
+  void it('synth fails when an asset BucketDeployment is left unregistered', () => {
+    const staticDir = createStaticDir();
+    const app = new App();
+    const stack = new Stack(app, 'TestStack');
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    // CdnConstruct creates the build-id CloudFront function(s)...
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: guardManifest('guard-violate-1', staticDir),
+      securityHeadersPolicy: policy,
+    });
+    // ...and an asset BucketDeployment writes the build prefix, but we
+    // deliberately DON'T call cdn.addBuildAssetDependency(dep). This is the
+    // exact regression that re-opens the 403 deploy window, so synth must fail.
+    new BucketDeployment(stack, 'OrphanAssetDeployment', {
+      sources: [Source.asset(staticDir)],
+      destinationBucket: bucket,
+      destinationKeyPrefix: 'builds/guard-violate-1/',
+      prune: false,
+    });
+    assert.throws(
+      () => Template.fromStack(stack),
+      /addBuildAssetDependency/,
+      'expected synth to fail when an asset deployment is left unregistered',
+    );
+  });
+
+  void it('synth succeeds when the asset BucketDeployment IS registered', () => {
+    const staticDir = createStaticDir();
+    const app = new App();
+    const stack = new Stack(app, 'TestStack');
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const cdn = new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: guardManifest('guard-ok-1', staticDir),
+      securityHeadersPolicy: policy,
+    });
+    const dep = new BucketDeployment(stack, 'AssetDeployment', {
+      sources: [Source.asset(staticDir)],
+      destinationBucket: bucket,
+      destinationKeyPrefix: 'builds/guard-ok-1/',
+      prune: false,
+    });
+    cdn.addBuildAssetDependency(dep);
+    assert.doesNotThrow(() => Template.fromStack(stack));
+  });
+
+  void it('synth succeeds for a standalone CdnConstruct with no asset deployments', () => {
+    const staticDir = createStaticDir();
+    const app = new App();
+    const stack = new Stack(app, 'TestStack');
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    // No BucketDeployment in the stack at all -> the guard must not fire
+    // (mirrors the 50 standalone CdnConstruct unit tests).
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: guardManifest('guard-noassets-1', staticDir),
+      securityHeadersPolicy: policy,
+    });
+    assert.doesNotThrow(() => Template.fromStack(stack));
   });
 });
