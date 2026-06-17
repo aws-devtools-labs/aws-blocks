@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Construct } from 'constructs';
+import { Construct, IDependable } from 'constructs';
 import { CfnOutput, Duration, Fn, Stack } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
@@ -191,6 +191,15 @@ export class CdnConstruct extends Construct {
   readonly errorPageHtml: string;
 
   /**
+   * CloudFront Functions that bake the deploy's buildId into the request
+   * rewrite (`/builds/<buildId>/...`). Publishing one of these is the moment
+   * the distribution starts routing new/cookieless traffic at the new build,
+   * so they must not update until that build's assets have been uploaded.
+   * See {@link addBuildAssetDependency}.
+   */
+  private readonly buildIdFunctions: CloudFrontFunction[] = [];
+
+  /**
    * Creates the CDN distribution with routes mapped to origins.
    */
   constructor(scope: Construct, id: string, props: CdnConstructProps) {
@@ -276,6 +285,10 @@ export class CdnConstruct extends Construct {
       manifest.basePath,
       { spaFallback: isSpaFallback, wwwRedirect: props.wwwRedirect },
     );
+    // The viewer-request function rewrites every request to the new
+    // build's `/builds/<buildId>/` prefix - gate its publish on the asset
+    // uploads (see addBuildAssetDependency).
+    this.buildIdFunctions.push(viewerRequestFunction);
 
     // ---- Skew protection viewer-response function ----
     const viewerResponseFunction = this.createViewerResponseFunction(
@@ -752,6 +765,10 @@ export class CdnConstruct extends Construct {
           forwardedHostFunction ??
           viewerRequestFunction,
       );
+      // Also bakes in the buildId (`/builds/<buildId>/`), so it must wait
+      // for the asset uploads before publishing - same as the viewer-request
+      // function above.
+      this.buildIdFunctions.push(stripFunction);
       const prefixedStaticBehavior: BehaviorOptions = {
         origin: s3Origin,
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -1171,6 +1188,28 @@ export class CdnConstruct extends Construct {
         value: primaryDomain,
         description: 'Custom domain name for the hosted site',
       });
+    }
+  }
+
+  /**
+   * Register a dependency that must finish before the build-id cutover.
+   *
+   * The viewer-request (and Next.js assetPrefix-strip) CloudFront Functions
+   * bake the deploy's buildId into the request rewrite, sending traffic to
+   * `/builds/<buildId>/...` in the OAC-protected S3 bucket. If those
+   * functions publish before the new build's assets land at that prefix,
+   * new/cookieless visitors get 403 Access Denied for the duration of the
+   * deploy window (returning visitors with a `__dpl` skew cookie keep hitting
+   * the previous build and are unaffected).
+   *
+   * The hosting construct calls this with every asset `BucketDeployment` for
+   * the new build, so CloudFormation uploads the assets first and only then
+   * publishes the functions (and the distribution that references them).
+   * This makes redeploys atomic from a new visitor's perspective.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    for (const fn of this.buildIdFunctions) {
+      fn.node.addDependency(dependency);
     }
   }
 
