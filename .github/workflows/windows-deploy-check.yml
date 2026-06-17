@@ -1,0 +1,84 @@
+# ⚠️ TEMPORARY — delete before/after merging the fix for issue #19.
+#
+# Verifies the Windows fix for "Deployment failing in Windows" (#19), where
+# `npm run deploy` crashed with `spawnSync npx ENOENT`. The root cause is purely
+# how child processes are spawned (npm/npx are `.cmd` shims on Windows), which
+# happens BEFORE any AWS call — so this needs no AWS credentials or real deploy.
+#
+# Two checks:
+#   1. (informational) the original bug still reproduces with a raw
+#      `execFileSync('npx', ...)` on the Windows runner.
+#   2. (gate) the shipped `runSync`/`spawnCommand` helper spawns the npx/npm
+#      shims on Windows without ENOENT.
+name: TEMP Windows deploy check (#19)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['ci/win']
+
+permissions:
+  contents: read
+
+jobs:
+  windows-spawn-check:
+    name: Windows npx/npm spawn (#19)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Only the packages the verification imports — core and its hosting dep.
+      - name: Build @aws-blocks/core
+        shell: bash
+        run: |
+          npm run build --workspace=@aws-blocks/hosting
+          npm run build --workspace=@aws-blocks/core
+
+      - name: Reproduce issue #19 (informational)
+        shell: bash
+        run: |
+          cat > repro-19.mjs <<'EOF'
+          import { execFileSync } from 'node:child_process';
+          try {
+            const out = execFileSync('npx', ['--version'], { encoding: 'utf-8' });
+            console.log(`::warning::Could not reproduce #19 — raw execFileSync('npx') succeeded (${out.trim()})`);
+          } catch (e) {
+            if (e.code === 'ENOENT') {
+              console.log("Reproduced #19: raw execFileSync('npx') threw ENOENT on Windows.");
+            } else {
+              console.log(`raw execFileSync('npx') failed with: ${e.code || e.message}`);
+            }
+          }
+          EOF
+          node repro-19.mjs
+
+      - name: Verify fix — runSync/spawnCommand spawn shims on Windows
+        shell: bash
+        run: |
+          cat > verify-19.mjs <<'EOF'
+          import { runSync, spawnCommand } from './packages/core/dist/scripts/run-command.js';
+          console.log('platform:', process.platform);
+
+          // These are the exact shim invocations that broke deploy/sandbox/destroy.
+          // A regression would throw ENOENT here and fail the job.
+          runSync('npx', ['--version'], { stdio: 'inherit' });
+          runSync('npm', ['--version'], { stdio: 'inherit' });
+
+          await new Promise((resolve, reject) => {
+            const cp = spawnCommand('npm', ['--version'], { stdio: 'ignore' });
+            cp.on('error', reject);
+            cp.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+          });
+
+          console.log('OK: npx/npm shims spawned on Windows without ENOENT — #19 fixed.');
+          EOF
+          node verify-19.mjs
