@@ -59,7 +59,13 @@ jobs:
           aws-region: us-east-1
 
       - name: E2E Test Production (Windows)
-        run: npm run test:e2e:production
+        working-directory: test-apps/comprehensive
+        # The `test:production` npm script uses a bash-only `VAR=value cmd`
+        # prefix that cmd.exe can't parse, so set the env var here and invoke
+        # the test directly.
+        env:
+          BLOCKS_TEST_ENV: production
+        run: npx tsx -C browser test/e2e.test.ts
 
       # Backstop teardown: the test harness destroys the stack in test.after,
       # but ensure a mid-suite failure on Windows can't leak a stack. Safe to
