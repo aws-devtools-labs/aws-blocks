@@ -82,3 +82,33 @@ jobs:
           console.log('OK: npx/npm shims spawned on Windows without ENOENT — #19 fixed.');
           EOF
           node verify-19.mjs
+
+  # Broader smoke: a real Windows developer loop with no AWS. Scaffolds the
+  # `default` template from a local registry (built from this branch's source),
+  # then `npm run build` + `npm run dev`. Confirms Windows users can build and
+  # run a Blocks app end to end. NOTE: the default template is a managed app, so
+  # this exercises the dev/build DX rather than the #19 deploy-spawn path itself
+  # (the job above is the targeted #19 check).
+  windows-template-dev:
+    name: Windows template build + dev
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build publishable packages
+        run: npm run build:packages
+
+      - name: Pack to local registry
+        run: npm run publish:dry-run
+
+      - name: Scaffold + build + dev smoke
+        run: node scripts/ci/windows-template-smoke.mjs
