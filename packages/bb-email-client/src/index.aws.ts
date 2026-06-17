@@ -1,21 +1,22 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { SESv2Client, SendEmailCommand, SendBulkEmailCommand } from '@aws-sdk/client-sesv2';
-import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-blocks/core';
+import { SESv2Client, SendBulkEmailCommand, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors
 export { EmailErrors } from './errors.js';
-export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
+export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from './types.js';
 
-import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
-import { EmailErrors } from './errors.js';
-import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { Logger } from '@aws-blocks/bb-logger';
+import { EmailErrors } from './errors.js';
+import type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from './types.js';
 
 const BATCH_CHUNK_SIZE = 50;
+const BATCH_MAX_ATTEMPTS = 3;
 
 function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
@@ -51,6 +52,21 @@ function mapSesError(err: any): Error {
 	}
 
 	return blocksError(EmailErrors.SendFailed, message);
+}
+
+function isTransientSesError(err: any): boolean {
+	if (err?.$retryable) return true;
+	if (typeof err?.$metadata?.httpStatusCode === 'number' && err.$metadata.httpStatusCode >= 500) return true;
+
+	return [
+		'TooManyRequestsException',
+		'ThrottlingException',
+		'RequestTimeout',
+		'RequestTimeoutException',
+		'ServiceUnavailableException',
+		'InternalFailure',
+		'InternalServerException',
+	].includes(err?.name);
 }
 
 /**
@@ -143,21 +159,20 @@ export class EmailClient extends Scope {
 	 *
 	 * Messages are chunked into groups of 50 destinations per API call (SES limit).
 	 *
-	 * TODO: Add retry logic for transient failures (throttling, 5xx).
-	 *
 	 * @param messages - Array of email messages to send.
 	 * @returns Result with per-message status in the same order as the input array.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
-		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> =
-			new Array(messages.length);
+		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> = new Array(
+			messages.length,
+		);
 
 		// Process in chunks of BATCH_CHUNK_SIZE
 		for (let chunkStart = 0; chunkStart < messages.length; chunkStart += BATCH_CHUNK_SIZE) {
 			const chunkIndices = messages
 				.slice(chunkStart, chunkStart + BATCH_CHUNK_SIZE)
 				.map((_, i) => chunkStart + i);
-			const chunk = chunkIndices.map(idx => messages[idx]);
+			const chunk = chunkIndices.map((idx) => messages[idx]);
 
 			const command = new SendBulkEmailCommand({
 				FromEmailAddress: this.fromAddress,
@@ -173,7 +188,7 @@ export class EmailClient extends Scope {
 						TemplateData: JSON.stringify({ subject: '', body: '', html: '' }),
 					},
 				},
-				BulkEmailEntries: chunk.map(msg => ({
+				BulkEmailEntries: chunk.map((msg) => ({
 					Destination: {
 						ToAddresses: Array.isArray(msg.to) ? msg.to : [msg.to],
 						CcAddresses: msg.cc || [],
@@ -192,7 +207,7 @@ export class EmailClient extends Scope {
 			});
 
 			try {
-				const response = await this.client.send(command);
+				const response = await this.sendBulkWithRetry(command);
 				const bulkResults = response.BulkEmailEntryResults ?? [];
 
 				for (let i = 0; i < chunkIndices.length; i++) {
@@ -216,5 +231,22 @@ export class EmailClient extends Scope {
 		}
 
 		return { results };
+	}
+
+	private async sendBulkWithRetry(command: SendBulkEmailCommand) {
+		let lastError: unknown;
+
+		for (let attempt = 1; attempt <= BATCH_MAX_ATTEMPTS; attempt++) {
+			try {
+				return await this.client.send(command);
+			} catch (err: any) {
+				lastError = err;
+				if (attempt >= BATCH_MAX_ATTEMPTS || !isTransientSesError(err)) {
+					throw err;
+				}
+			}
+		}
+
+		throw lastError;
 	}
 }

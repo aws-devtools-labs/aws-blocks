@@ -65,6 +65,9 @@ Returns `{ results: Array<{ status, messageId?, error? }> }`.
 Never throws on send failures. Both partial and total failures are reported per-entry in the
 `results` array (with `status: 'failed'`).
 
+In the AWS runtime, chunk-level transient SES failures such as throttling or 5xx responses
+are retried up to three total attempts before the affected entries are reported as failed.
+
 Each message in the array is an `EmailMessage` (same type as `send()`):
 
 | Field | Type | Description |
@@ -141,5 +144,4 @@ This package uses a custom `"cdk"` export condition:
 > sending (limit violations are recorded as failed entries). In the AWS runtime, these limits are
 > enforced by SES itself, so the failure surfaces in the SES response rather than locally — the
 > failure point differs between runtimes, but in both cases failures appear per-entry in `results`.
-
 
