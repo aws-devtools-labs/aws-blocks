@@ -108,11 +108,22 @@ export const spaAdapter = (
     errorPages[500] = '/500.html';
   }
 
+  // Determine the routing model. A true single-page app ships exactly one
+  // top-level `index.html` and routes client-side, so extensionless paths
+  // must fall back to it (`spaFallback: true`). A multi-page static-site
+  // generator (Astro static, Hugo, Eleventy routed through this generic
+  // adapter) prerenders each route to its own `<dir>/index.html`; those
+  // need directory-index resolution (`spaFallback: false`) or every route
+  // collapses onto the home page. Detect by looking for any nested
+  // `index.html` below the output root.
+  const spaFallback = !hasNestedIndexHtml(staticDir);
+
   const manifest: DeployManifest = {
     version: 1,
     compute: {},
     staticAssets: {
       directory: staticDir,
+      spaFallback,
     },
     routes: [
       {
@@ -124,6 +135,36 @@ export const spaAdapter = (
   };
 
   return manifest;
+};
+
+/**
+ * Detect whether the static output contains nested `index.html` files
+ * (e.g. `about/index.html`), which signals a multi-page site rather than
+ * a single-page app. Walks the tree but stops at the first match for
+ * efficiency. The root `index.html` is ignored — only nested ones count.
+ * @param staticDir - absolute path to the static output directory
+ */
+const hasNestedIndexHtml = (staticDir: string): boolean => {
+  const walk = (dir: string, depth: number): boolean => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Skip the hashed-asset / framework dirs; routes never live there.
+        if (entry.name.startsWith('_') || entry.name === 'assets') continue;
+        if (walk(full, depth + 1)) return true;
+      } else if (entry.name === 'index.html' && depth > 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return walk(staticDir, 0);
 };
 
 /**

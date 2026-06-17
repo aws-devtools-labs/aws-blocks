@@ -5,3 +5,8 @@
 222222222222
 333333333333
 123456789012
+
+# Public npm package whose name trips the internal-tooling "[aA]pollo" guard
+# (false positive in package-lock.json — not an Amazon-internal reference)
+@graphql-tools/apollo-engine-loader
+apollo-engine-loader

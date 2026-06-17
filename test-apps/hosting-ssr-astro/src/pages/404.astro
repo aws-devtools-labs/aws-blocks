@@ -1,0 +1,22 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Custom 404 page. Astro emits this as `dist/404.html`; the Blocks Astro
+// adapter detects it and sets `manifest.errorPages = { 404: '/404.html' }`,
+// which the L3 wires as a CloudFront CustomErrorResponse (403/404 →
+// /404.html at status 404). Exercises matrix M7.1 / AS-error coverage.
+//
+// Note: multi-page routing does NOT depend on this file — the Astro
+// adapter sets `staticAssets.spaFallback: false` explicitly. Shipping a
+// 404 is best practice (a branded not-found page); without it the L3
+// falls back to a built-in default 404.
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Astro on Blocks — 404 Not Found">
+  <h1 data-testid="page-id">404 — Page Not Found</h1>
+  <p data-testid="notfound-marker">
+    Custom Astro 404 served by CloudFront for unknown paths.
+  </p>
+</Layout>

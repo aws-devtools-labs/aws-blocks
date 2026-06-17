@@ -49,6 +49,33 @@ export type DeployManifest = {
      * must never serve stale content even briefly.
      */
     noCachePaths?: string[];
+    /**
+     * Whether this static deploy is a single-page app (SPA) that relies
+     * on client-side routing, versus a multi-page site where each route
+     * is its own prerendered HTML file.
+     *
+     * Controls how the CloudFront viewer-request function resolves
+     * extensionless URLs:
+     *
+     *   - `true`  (SPA): every navigation request (no file extension) is
+     *     rewritten to `/index.html` so the client-side router can handle
+     *     deep links. Missing paths serve `index.html` at HTTP 200.
+     *     Correct for Vite/React-Router/Vue-Router single-page apps.
+     *   - `false` (multi-page): each request resolves to its own
+     *     `<path>/index.html` (directory-index resolution). A request for
+     *     `/about` serves `about/index.html`, NOT the home page. Correct
+     *     for static-site generators (Astro static, Hugo, Eleventy) that
+     *     prerender every route to a separate HTML file.
+     *
+     * Set by the adapter, which is the only layer that knows the
+     * framework's routing model (the L3 is framework-blind). When
+     * omitted, the L3 falls back to a heuristic: SPA mode when the deploy
+     * has no compute AND no `errorPages` (preserved for back-compat with
+     * adapters that don't yet declare this). Ignored when the manifest
+     * has compute resources (SSR), since routing then flows through the
+     * compute origin rather than static index resolution.
+     */
+    spaFallback?: boolean;
   };
 
   /** Route behaviors (maps URL patterns to compute/static) */

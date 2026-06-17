@@ -36,6 +36,23 @@ void describe('spaAdapter', () => {
     assert.deepStrictEqual(manifest.compute, {});
   });
 
+  void it('sets spaFallback:true for a single-page app (only root index.html)', () => {
+    // The default fixture has only a top-level index.html — a true SPA.
+    const manifest = spaAdapter(tmpDir);
+    assert.strictEqual(manifest.staticAssets.spaFallback, true);
+  });
+
+  void it('sets spaFallback:false when nested index.html files exist (multi-page SSG)', () => {
+    // Simulate a multi-page static site: about/index.html.
+    fs.mkdirSync(path.join(buildDir, 'about'), { recursive: true });
+    fs.writeFileSync(
+      path.join(buildDir, 'about', 'index.html'),
+      '<html></html>',
+    );
+    const manifest = spaAdapter(tmpDir);
+    assert.strictEqual(manifest.staticAssets.spaFallback, false);
+  });
+
   void it('copies files to .hosting/static/', () => {
     spaAdapter(tmpDir);
 

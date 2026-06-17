@@ -52,6 +52,7 @@ import { prependBasePath } from '../adapters/shared/basepath.js';
 import { DeployManifest, Redirect } from '../manifest/types.js';
 import {
   ERROR_PAGE_KEY,
+  NOT_FOUND_PAGE_KEY,
   generateAssetPrefixStripFunctionCode,
   generateBuildIdAndRedirectFunctionCode,
   generateForwardedHostAndRedirectFunctionCode,
@@ -95,6 +96,17 @@ const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
 .c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
 <body><div class="c"><h1>Service Temporarily Unavailable</h1><p>We're working on it. Please try again in a few moments.</p></div></body></html>`;
+
+// Built-in default 404 page for multi-page static sites that ship no
+// 404.html of their own. Returned at HTTP 404 (not the SPA 200 fallback)
+// so crawlers and clients see a correct not-found status.
+const DEFAULT_NOT_FOUND_PAGE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>404 — Page Not Found</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
+.c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
+<body><div class="c"><h1>404 — Page Not Found</h1><p>The page you're looking for doesn't exist.</p></div></body></html>`;
 
 // ---- Public types ----
 
@@ -189,6 +201,14 @@ export class CdnConstruct extends Construct {
   readonly distribution: Distribution;
   readonly distributionUrl: string;
   readonly errorPageHtml: string;
+  /**
+   * Built-in default 404 page HTML, set ONLY when this is a multi-page
+   * static deploy (`spaFallback === false`) that has no framework-emitted
+   * or user-supplied 404 page. `undefined` otherwise. When set, the L3
+   * deploys it to `builds/<id>/_not_found.html` and CloudFront serves it
+   * (at HTTP 404) for missing paths. See {@link NOT_FOUND_PAGE_KEY}.
+   */
+  readonly defaultNotFoundPageHtml?: string;
 
   /**
    * Creates the CDN distribution with routes mapped to origins.
@@ -261,14 +281,43 @@ export class CdnConstruct extends Construct {
       : rawRedirects;
 
     // ---- Build ID rewrite function ----
-    // SPA fallback: when the distribution is static-only with no custom
-    // error pages, navigation requests (no file extension) should serve
-    // /index.html directly. Asset requests (.js, .css) pass through
-    // unchanged so missing assets correctly 403/404 instead of serving HTML.
+    // SPA fallback: when true, navigation requests (no file extension) are
+    // rewritten to /index.html so a client-side router can deep-link any
+    // path. When false, each path resolves to its own <path>/index.html
+    // (directory-index) — correct for multi-page static sites. Asset
+    // requests (.js, .css) pass through unchanged either way so missing
+    // assets correctly 403/404 instead of serving HTML.
+    //
+    // Prefer the adapter's explicit `staticAssets.spaFallback` signal (the
+    // adapter is the only layer that knows the framework's routing model).
+    // Fall back to the legacy heuristic — static-only AND no errorPages —
+    // for adapters that don't yet declare it. This coupling of "has error
+    // pages" to "is a SPA" was the original misclassification: a multi-page
+    // static site with no custom 404 was wrongly treated as a SPA.
     const isSpaFallback =
+      manifest.staticAssets.spaFallback ??
+      (!hasCompute &&
+        (manifest.errorPages === undefined ||
+          Object.keys(manifest.errorPages).length === 0));
+
+    // Multi-page static site (not SPA) that emitted no 404.html of its
+    // own AND whose user supplied no custom notFound page → fill the gap
+    // with a built-in default 404 so missing paths render a branded page
+    // (at HTTP 404) instead of CloudFront's raw S3-OAC 403 XML. SPA sites
+    // are excluded (their miss correctly serves index.html at 200); SSR
+    // sites already have SSR_ERROR_PAGE_HTML. Precedence:
+    // user errorPages.notFound > framework errorPages[404] > this default.
+    const hasFrameworkNotFound = !!manifest.errorPages?.[404];
+    const hasUserNotFound = !!props.customErrorPages?.notFound;
+    const needsDefaultNotFound =
       !hasCompute &&
-      (manifest.errorPages === undefined ||
-        Object.keys(manifest.errorPages).length === 0);
+      !isSpaFallback &&
+      !hasFrameworkNotFound &&
+      !hasUserNotFound;
+    this.defaultNotFoundPageHtml = needsDefaultNotFound
+      ? DEFAULT_NOT_FOUND_PAGE_HTML
+      : undefined;
+
     const viewerRequestFunction = this.createViewerRequestFunction(
       buildId,
       skewEnabled,
@@ -915,21 +964,43 @@ export class CdnConstruct extends Construct {
     }
 
     // ---- Error responses ----
-    // Three modes:
+    // Four modes:
     //  1. Compute origin → 502/503/504 → custom error page (preserves status).
     //  2. Static deploy WITH `manifest.errorPages` (Next.js `output: 'export'`,
     //     Astro static, etc.) → 403/404 → /404.html with status 404. S3
     //     with OAC returns 403 (not 404) for missing keys, so both must
     //     be handled.
-    //  3. Static deploy WITHOUT `manifest.errorPages` (single-page app
-    //     with client-side routing) → 403/404 → /index.html with status 200
-    //     so the SPA can deep-link any path.
+    //  3. Static SPA (`spaFallback === true`) → 403/404 → /index.html with
+    //     status 200 so the client-side router can deep-link any path.
+    //     (Wired via the SPA-fallback viewer-request rewrite, not here.)
+    //  4. Static multi-page (`spaFallback === false`) WITHOUT its own
+    //     404.html and WITHOUT a user-supplied notFound → 403/404 → the
+    //     built-in default 404 page at status 404 (see needsDefaultNotFound).
     const isSpaOnly = !hasCompute;
     const hasErrorPages =
       manifest.errorPages !== undefined &&
       Object.keys(manifest.errorPages).length > 0;
 
     const errorResponses: ErrorResponse[] = [
+      ...(needsDefaultNotFound
+        ? [
+            // Multi-page static site with no framework/user 404 → map the
+            // S3-OAC 403 (and any 404) onto the built-in default page,
+            // surfacing a correct 404 status with a branded body.
+            {
+              httpStatus: 403,
+              responseHttpStatus: 404,
+              responsePagePath: `/builds/${buildId}/${NOT_FOUND_PAGE_KEY}`,
+              ttl: Duration.seconds(0),
+            },
+            {
+              httpStatus: 404,
+              responseHttpStatus: 404,
+              responsePagePath: `/builds/${buildId}/${NOT_FOUND_PAGE_KEY}`,
+              ttl: Duration.seconds(0),
+            },
+          ]
+        : []),
       ...(isSpaOnly && hasErrorPages
         ? [
             // S3 with OAC returns 403 for missing keys — map to the
