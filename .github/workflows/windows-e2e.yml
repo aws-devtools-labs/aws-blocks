@@ -1,21 +1,27 @@
 name: Windows E2E
 
-# Real end-to-end deploy on Windows, mirroring the production E2E job from
-# pr-checks.yml but on a windows-latest runner. This is the high-fidelity
-# regression check for issue #19 (Windows deploy failing at `spawnSync npx
-# ENOENT`): it runs an actual `cdk deploy`/`destroy` through the same code
-# path a Windows user hits via `npm run deploy`.
+# Verifies the Windows-specific client tooling end to end, in one job that
+# shares a single npm ci + build. The bug (#19) lives entirely in the tooling
+# (process spawning, CDK synth, path handling, deploy/destroy orchestration);
+# once deployed, app logic runs in Lambda on Linux and is OS-independent, so we
+# do NOT re-run the behavioral test suites here — those stay on Linux. This job
+# only confirms each environment's tooling works on Windows:
 #
-# Kept in its own workflow (not pr-checks.yml) and intentionally NOT added to
-# the required "Build and Test" gate, so it is OPTIONAL for now — it runs on
-# every PR for visibility but does not block merges.
+#   1. local dev — dev server boots and serves :3000 (no AWS)
+#   2. sandbox   — deploy then destroy
+#   3. production — deploy then destroy
+#
+# Fail-fast: a failure in one environment skips the later ones. Each destroy is
+# best-effort cleanup (continue-on-error) and only runs if its deploy started;
+# the scheduled cleanup-stacks workflow is the backstop for any leak.
+#
+# Standalone (not pr-checks.yml) and not wired into the required gate, so it is
+# OPTIONAL for now — runs on every PR for visibility, does not block merges.
 
 on:
   pull_request:
     branches: ['*']
 
-# One run per PR; cancel superseded runs so two real cdk deploys never race on
-# the same PR-scoped stack.
 concurrency:
   group: windows-e2e-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -25,19 +31,19 @@ permissions:
   contents: read
 
 jobs:
-  windows-e2e-production:
-    name: Windows E2E Production
+  windows-e2e:
+    name: Windows E2E (dev + sandbox + production)
     runs-on: windows-latest
-    timeout-minutes: 90
-    # Skip for fork PRs — they don't get secrets/OIDC (defense in depth;
-    # pull_request already withholds secrets from forks).
+    timeout-minutes: 120
+    # Skip for fork PRs — they don't get secrets/OIDC.
     if: github.event.pull_request.head.repo.full_name == github.repository
     environment: publish
     env:
-      # Short, PR-unique suffix. The Windows runner's username (`runneradmin`)
-      # is longer than Linux's (`runner`), and FileBucket names derive from the
+      # Short, PR-unique suffix. The Windows runner username (`runneradmin`) is
+      # longer than Linux's (`runner`), and FileBucket names derive from the
       # stack name — keep this short so the derived name stays under S3's
-      # 63-char limit.
+      # 63-char limit. Sandbox and production use different name prefixes, so a
+      # single suffix is safe for both.
       BLOCKS_STACK_SUFFIX: w${{ github.event.pull_request.number }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
@@ -60,19 +66,30 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: E2E Test Production (Windows)
-        working-directory: test-apps/comprehensive
-        # The `test:production` npm script uses a bash-only `VAR=value cmd`
-        # prefix that cmd.exe can't parse, so set the env var here and invoke
-        # the test directly.
-        env:
-          BLOCKS_TEST_ENV: production
-        run: npx tsx -C browser test/e2e.test.ts
+      # ── 1. Local dev (no AWS) ────────────────────────────────────────────
+      - name: Local dev boot smoke
+        run: node scripts/ci/windows-dev-smoke.mjs
 
-      # Backstop teardown: the test harness destroys the stack in test.after,
-      # but ensure a mid-suite failure on Windows can't leak a stack. Safe to
-      # run even if the stack is already gone.
-      - name: Destroy stack (always)
-        if: always()
+      # ── 2. Sandbox (deploy + destroy only) ───────────────────────────────
+      - name: Sandbox deploy
+        id: sandbox_deploy
         working-directory: test-apps/comprehensive
-        run: npx tsx test/production-destroy.ts aws-blocks/index.cdk.ts
+        run: node --import tsx test/sandbox-deploy.ts aws-blocks/index.cdk.ts
+
+      - name: Sandbox destroy
+        if: always() && steps.sandbox_deploy.conclusion != 'skipped'
+        continue-on-error: true
+        working-directory: test-apps/comprehensive
+        run: node --import tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
+
+      # ── 3. Production (deploy + destroy only) ────────────────────────────
+      - name: Production deploy
+        id: prod_deploy
+        working-directory: test-apps/comprehensive
+        run: node --import tsx test/production-deploy.ts aws-blocks/index.cdk.ts
+
+      - name: Production destroy
+        if: always() && steps.prod_deploy.conclusion != 'skipped'
+        continue-on-error: true
+        working-directory: test-apps/comprehensive
+        run: node --import tsx test/production-destroy.ts aws-blocks/index.cdk.ts
