@@ -10,7 +10,7 @@ name: PR Agent Bench
 
 on:
   pull_request:
-    branches: ['*']
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
