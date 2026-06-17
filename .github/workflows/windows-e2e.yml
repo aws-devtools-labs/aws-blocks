@@ -1,22 +1,20 @@
 name: Windows E2E
 
-# Verifies the Windows-specific client tooling end to end, in one job that
-# shares a single npm ci + build. The bug (#19) lives entirely in the tooling
-# (process spawning, CDK synth, path handling, deploy/destroy orchestration);
-# once deployed, app logic runs in Lambda on Linux and is OS-independent, so we
-# do NOT re-run the behavioral test suites here — those stay on Linux. This job
-# only confirms each environment's tooling works on Windows:
+# Verifies the Windows client tooling against the LITERAL user commands.
 #
-#   1. local dev — dev server boots and serves :3000 (no AWS)
-#   2. sandbox   — deploy then destroy
-#   3. production — deploy then destroy
+# Packs this branch to a local registry, scaffolds a default-template app
+# exactly as a customer would (`create-blocks-app`, installed packages with
+# their own .cmd bin shims), then runs the real `npm run build` / `npm run dev`
+# / `npm run sandbox` / `npm run deploy` (+ teardown). The bug (#19) lives in the
+# client tooling — process spawning, CDK synth, path handling; deployed app
+# logic runs in Lambda (Linux) and is OS-independent, so the behavioral test
+# suites stay on Linux and are NOT re-run here.
 #
-# Fail-fast: a failure in one environment skips the later ones. Each destroy is
-# best-effort cleanup (continue-on-error) and only runs if its deploy started;
+# Fail-fast across phases; the driver always tears down anything it deployed and
 # the scheduled cleanup-stacks workflow is the backstop for any leak.
 #
-# Standalone (not pr-checks.yml) and not wired into the required gate, so it is
-# OPTIONAL for now — runs on every PR for visibility, does not block merges.
+# Standalone (not pr-checks.yml) and not in the required gate, so it is OPTIONAL
+# for now — runs on every PR for visibility, does not block merges.
 
 on:
   pull_request:
@@ -32,18 +30,15 @@ permissions:
 
 jobs:
   windows-e2e:
-    name: Windows E2E (dev + sandbox + production)
+    name: Windows E2E (build + dev + sandbox + deploy)
     runs-on: windows-latest
     timeout-minutes: 120
-    # Skip for fork PRs — they don't get secrets/OIDC.
     if: github.event.pull_request.head.repo.full_name == github.repository
     environment: publish
     env:
-      # Short, PR-unique suffix. The Windows runner username (`runneradmin`) is
-      # longer than Linux's (`runner`), and FileBucket names derive from the
-      # stack name — keep this short so the derived name stays under S3's
-      # 63-char limit. Sandbox and production use different name prefixes, so a
-      # single suffix is safe for both.
+      # Short, PR-unique stack suffix — the Windows runner username
+      # (`runneradmin`) is longer than Linux's, and FileBucket names derive from
+      # the stack name, so keep this short to stay under S3's 63-char limit.
       BLOCKS_STACK_SUFFIX: w${{ github.event.pull_request.number }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
     steps:
@@ -60,36 +55,17 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # Pack this branch's packages to ./dist-registry so the scaffolded app
+      # installs branch code in its real, published form.
+      - name: Pack to local registry
+        run: npm run publish:dry-run
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      # ── 1. Local dev (no AWS) ────────────────────────────────────────────
-      - name: Local dev boot smoke
-        run: node scripts/ci/windows-dev-smoke.mjs
-
-      # ── 2. Sandbox (deploy + destroy only) ───────────────────────────────
-      - name: Sandbox deploy
-        id: sandbox_deploy
-        working-directory: test-apps/comprehensive
-        run: node --import tsx test/sandbox-deploy.ts aws-blocks/index.cdk.ts
-
-      - name: Sandbox destroy
-        if: always() && steps.sandbox_deploy.conclusion != 'skipped'
-        continue-on-error: true
-        working-directory: test-apps/comprehensive
-        run: node --import tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
-
-      # ── 3. Production (deploy + destroy only) ────────────────────────────
-      - name: Production deploy
-        id: prod_deploy
-        working-directory: test-apps/comprehensive
-        run: node --import tsx test/production-deploy.ts aws-blocks/index.cdk.ts
-
-      - name: Production destroy
-        if: always() && steps.prod_deploy.conclusion != 'skipped'
-        continue-on-error: true
-        working-directory: test-apps/comprehensive
-        run: node --import tsx test/production-destroy.ts aws-blocks/index.cdk.ts
+      # Scaffold + real npm run build / dev / sandbox / deploy (+ teardown).
+      - name: Scaffold template and run user commands
+        run: node scripts/ci/windows-template-e2e.mjs
