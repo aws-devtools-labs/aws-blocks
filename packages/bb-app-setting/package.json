@@ -27,7 +27,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs AppSetting",
     "build": "tsc --build",
-    "test": "node --test dist/**/*.test.js"
+    "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.1.1",

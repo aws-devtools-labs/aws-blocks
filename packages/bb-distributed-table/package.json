@@ -27,7 +27,7 @@
     "prebuild": "node ../../scripts/generate-version.mjs DistributedTable",
     "build": "tsc --build && npm run build:lambda",
     "build:lambda": "esbuild src/gsi-manager-lambda.ts --bundle --platform=node --target=node24 --outfile=dist/gsi-manager-lambda/index.js --format=cjs --external:@aws-sdk/*",
-    "test": "node --test dist/index.test.js dist/parity.test.js dist/index.cdk.test.js"
+    "test": "node --test --test-concurrency=1 dist/index.test.js dist/parity.test.js dist/index.cdk.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.1.1",
