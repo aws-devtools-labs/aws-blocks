@@ -104,6 +104,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # build:packages lists workspaces in a non-topological order, so on a
+      # clean checkout a referenced package's generated version.ts may not exist
+      # yet when a dependent compiles. Generate all version/bb-name files first.
+      - name: Generate version files
+        run: npm run prebuild --workspaces --if-present
+
       - name: Build publishable packages
         run: npm run build:packages
 
