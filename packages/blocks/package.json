@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "src",
     "README.md",
     "LICENSE"
@@ -47,6 +48,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/sync-block-docs.mjs",
     "build": "tsc --build",
     "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js"
   },

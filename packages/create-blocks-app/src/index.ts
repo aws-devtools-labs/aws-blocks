@@ -74,6 +74,14 @@ async function isAmplifyGen2Project(dir: string): Promise<boolean> {
   return exists(join(dir, 'amplify', 'backend.ts'));
 }
 
+/**
+ * Copies shared resources (maintained once in `resources/`) into the scaffolded project.
+ */
+async function copySharedResources(targetDir: string): Promise<void> {
+  const resourcesDir = join(__dirname, '../resources');
+  await cp(join(resourcesDir, 'AGENTS.md'), join(targetDir, 'AGENTS.md'));
+}
+
 // ─── Shared workspace helper ─────────────────────────────────────────────────
 
 /**
@@ -199,7 +207,10 @@ async function createFreshProject(targetDir: string, templateName: string) {
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
-  
+
+  // Overlay shared resources (AGENTS.md — maintained once, not per-template)
+  await copySharedResources(targetDir);
+
   // Rename gitignore to .gitignore
   await rename(join(targetDir, 'gitignore'), join(targetDir, '.gitignore'));
   
