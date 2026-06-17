@@ -75,7 +75,12 @@ async function main() {
   console.log('Local registry is up.');
 
   // 2. Isolated npm config pointing the @aws-blocks scope at the local registry.
-  const work = mkdtempSync(join(tmpdir(), 'blocks-win-smoke-'));
+  // Use RUNNER_TEMP when available: os.tmpdir() on Windows runners is the 8.3
+  // short path (C:\Users\RUNNER~1\...), and Vite's html-inline-proxy fails to
+  // match modules when the short/long path forms differ. RUNNER_TEMP (D:\a\_temp)
+  // is a clean long path, matching what a real user's project dir looks like.
+  const baseTmp = process.env.RUNNER_TEMP || tmpdir();
+  const work = mkdtempSync(join(baseTmp, 'blocks-win-smoke-'));
   const userNpmrc = join(work, '.npmrc');
   writeFileSync(userNpmrc, `@aws-blocks:registry=${REGISTRY}\n`);
   const env = {
