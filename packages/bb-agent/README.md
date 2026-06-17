@@ -211,8 +211,6 @@ const agent = new Agent(scope, 'agent', {
 | `BedrockModels.BUDGET` | `us.amazon.nova-pro-v1:0` | Low cost per token with acceptable quality. |
 | `BedrockModels.MICRO` | `us.amazon.nova-lite-v1:0` | Ultra-cheap for simple tasks. |
 
-**Cross-region inference profiles:** The presets use `us.` prefixed model IDs, which are [cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html). These route to the nearest available region automatically. Bedrock also supports `global.` prefixed IDs (e.g., `global.anthropic.claude-opus-4-8-20250610-v1:0`) which route across all regions. Both work with the `bedrock` provider — use `global.` if you want the widest availability.
-
 Override inference settings with spread:
 ```typescript
 model: { deployed: { ...BedrockModels.DEFAULT, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
