@@ -117,14 +117,14 @@ describe('MFA_SETUP TOTP (real Cognito)', { skip: !ENABLED }, () => {
 			const ctx = freshCtx();
 
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected MFA_SETUP challenge on first login');
+			if (r1.status === 'signedIn') throw new Error('expected MFA_SETUP challenge on first login');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
 			assert.ok(r1.nextStep.sharedSecret.length > 0, 'secret from AssociateSoftwareToken');
 
 			const code = totpNow(r1.nextStep.sharedSecret);
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx);
-			assert.strictEqual(r2.isSignedIn, true, 'VerifySoftwareToken + RespondToAuthChallenge succeed');
+			assert.strictEqual(r2.status, 'signedIn', 'VerifySoftwareToken + RespondToAuthChallenge succeed');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -159,7 +159,7 @@ describe('enrolled TOTP MFA (real Cognito)', { skip: !ENABLED }, () => {
 			// with TOTP enabled), completing the ceremony, then signing back
 			// out and signing in again to test the enrolled path.
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected MFA_SETUP on first login');
+			if (r1.status === 'signedIn') throw new Error('expected MFA_SETUP on first login');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') {
 				throw new Error(`unexpected step: ${r1.nextStep.name}`);
 			}
@@ -178,11 +178,11 @@ describe('enrolled TOTP MFA (real Cognito)', { skip: !ENABLED }, () => {
 			// Second sign-in: TOTP challenge this time (not setup).
 			const ctx2 = freshCtx();
 			const r2 = await auth.signIn(username, password, ctx2);
-			if (r2.isSignedIn) throw new Error('expected TOTP challenge');
+			if (r2.status === 'signedIn') throw new Error('expected TOTP challenge');
 			assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 			if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 			const r3 = await auth.confirmSignIn(r2.nextStep.session, { code: totpNow(sharedSecret) }, ctx2);
-			assert.strictEqual(r3.isSignedIn, true);
+			assert.strictEqual(r3.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -221,7 +221,7 @@ describe('enrolled SMS MFA (real Cognito, capture sender)', { skip: !ENABLED }, 
 			const ctx = freshCtx();
 
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected SMS_MFA challenge');
+			if (r1.status === 'signedIn') throw new Error('expected SMS_MFA challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_SMS_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_SMS_CODE') return;
 			const smsStep = r1.nextStep;
@@ -231,7 +231,7 @@ describe('enrolled SMS MFA (real Cognito, capture sender)', { skip: !ENABLED }, 
 			assert.match(code, /^\d{6}$/, 'Cognito delivered a 6-digit SMS code');
 
 			const r2 = await auth.confirmSignIn(smsStep.session, { code }, ctx);
-			assert.strictEqual(r2.isSignedIn, true);
+			assert.strictEqual(r2.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -268,7 +268,7 @@ describe('enrolled EMAIL MFA (real Cognito, capture sender)', { skip: !ENABLED }
 			const ctx = freshCtx();
 
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected EMAIL_OTP challenge');
+			if (r1.status === 'signedIn') throw new Error('expected EMAIL_OTP challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 			const emailStep = r1.nextStep;
@@ -278,7 +278,7 @@ describe('enrolled EMAIL MFA (real Cognito, capture sender)', { skip: !ENABLED }
 			assert.match(code, /^\d{6}$/, 'Cognito delivered a 6-digit email code');
 
 			const r2 = await auth.confirmSignIn(emailStep.session, { code }, ctx);
-			assert.strictEqual(r2.isSignedIn, true);
+			assert.strictEqual(r2.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -320,7 +320,7 @@ describe('SELECT_MFA_TYPE (real Cognito)', { skip: !ENABLED }, () => {
 			const auth = authFor(pool, `select-${Math.random().toString(36).slice(2, 6)}`);
 			const ctxEnroll = freshCtx();
 			const signIn = await auth.signIn(username, password, ctxEnroll);
-			if (!signIn.isSignedIn) {
+			if (signIn.status === 'continueSignIn') {
 				throw new Error(`expected signed-in; got ${signIn.nextStep.name}`);
 			}
 
@@ -356,18 +356,18 @@ describe('SELECT_MFA_TYPE (real Cognito)', { skip: !ENABLED }, () => {
 
 			const ctx = freshCtx();
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected SELECT_MFA_TYPE');
+			if (r1.status === 'signedIn') throw new Error('expected SELECT_MFA_TYPE');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION') return;
 			assert.ok(r1.nextStep.allowedMFATypes.includes('TOTP'));
 			assert.ok(r1.nextStep.allowedMFATypes.includes('SMS'));
 
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'TOTP' as 'TOTP' }, ctx);
-			if (r2.isSignedIn) throw new Error('expected TOTP challenge after pick');
+			if (r2.status === 'signedIn') throw new Error('expected TOTP challenge after pick');
 			assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 			if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 			const r3 = await auth.confirmSignIn(r2.nextStep.session, { code: totpNow(sharedSecret) }, ctx);
-			assert.strictEqual(r3.isSignedIn, true);
+			assert.strictEqual(r3.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -399,11 +399,11 @@ describe('NEW_PASSWORD_REQUIRED (real Cognito)', { skip: !ENABLED }, () => {
 			const auth = authFor(pool, `newpw-${Math.random().toString(36).slice(2, 6)}`);
 			const ctx = freshCtx();
 			const r1 = await auth.signIn(username, tempPassword, ctx);
-			if (r1.isSignedIn) throw new Error('expected NEW_PASSWORD_REQUIRED');
+			if (r1.status === 'signedIn') throw new Error('expected NEW_PASSWORD_REQUIRED');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { newPassword: 'FinalPass!1234' }, ctx);
-			assert.strictEqual(r2.isSignedIn, true);
+			assert.strictEqual(r2.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -435,7 +435,7 @@ describe('USER_AUTH flow (real Cognito)', { skip: !ENABLED }, () => {
 			// intermediate CONFIRM_SIGN_IN_WITH_PASSWORD step. This matches
 			// Amplify-JS v6's bundled wire shape.
 			const r1 = await auth.signIn(username, password, ctx);
-			assert.strictEqual(r1.isSignedIn, true);
+			assert.strictEqual(r1.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -450,15 +450,15 @@ describe('USER_AUTH flow (real Cognito)', { skip: !ENABLED }, () => {
 			const ctx = freshCtx();
 
 			const r1 = await auth.signIn(username, '', ctx);
-			if (r1.isSignedIn) throw new Error('expected SELECT_CHALLENGE');
+			if (r1.status === 'signedIn') throw new Error('expected SELECT_CHALLENGE');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'PASSWORD' }, ctx);
-			if (r2.isSignedIn) throw new Error('expected password challenge');
+			if (r2.status === 'signedIn') throw new Error('expected password challenge');
 			assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_PASSWORD');
 			if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
 			const r3 = await auth.confirmSignIn(r2.nextStep.session, { password }, ctx);
-			assert.strictEqual(r3.isSignedIn, true);
+			assert.strictEqual(r3.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -509,7 +509,7 @@ describe('customer-SES regression (shape-only)', { skip: !CUSTOMER_SES_ENABLED }
 			const ctx = freshCtx();
 
 			const r1 = await auth.signIn(username, password, ctx);
-			if (r1.isSignedIn) throw new Error('expected EMAIL_OTP challenge');
+			if (r1.status === 'signedIn') throw new Error('expected EMAIL_OTP challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 			const emailStep = r1.nextStep;

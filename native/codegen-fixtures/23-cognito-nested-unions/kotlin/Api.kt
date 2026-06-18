@@ -9,18 +9,12 @@ import com.aws.blocks.kotlin.json.BlocksJson
 import kotlin.OptIn
 import kotlin.String
 import kotlin.collections.List
-import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
-import kotlinx.serialization.json.JsonContentPolymorphicSerializer
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.decodeFromJsonElement
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 public class Api(
   private val server: BlocksServer = Servers.local,
@@ -40,23 +34,13 @@ public class Api(
   }
 
   public object CognitoConfirmSignIn {
-    @Serializable(with = ResultSerializer::class)
+    @Serializable
+    @JsonClassDiscriminator("status")
     public sealed class Result {
-      public object ResultSerializer : JsonContentPolymorphicSerializer<Result>(Result::class) {
-        override fun selectDeserializer(element: JsonElement): DeserializationStrategy<Result> {
-          val disc = element.jsonObject["isSignedIn"]?.jsonPrimitive?.boolean
-          return when (disc) {
-            false -> Result.IsSignedInFalse.serializer()
-            true -> Result.IsSignedInTrue.serializer()
-            else -> error("Unknown isSignedIn value: ${'$'}disc")
-          }
-        }
-      }
-
       @Serializable
-      @SerialName("false")
-      public data class IsSignedInFalse(
-        public val nextStep: IsSignedInFalse.NextStep,
+      @SerialName("continueSignIn")
+      public data class ContinueSignIn(
+        public val nextStep: ContinueSignIn.NextStep,
       ) : Result() {
         @Serializable
         @JsonClassDiscriminator("name")
@@ -193,31 +177,21 @@ public class Api(
       }
 
       @Serializable
-      @SerialName("true")
-      public data class IsSignedInTrue(
+      @SerialName("signedIn")
+      public data class SignedIn(
         public val user: CognitoUser,
       ) : Result()
     }
   }
 
   public object CognitoSignIn {
-    @Serializable(with = ResultSerializer::class)
+    @Serializable
+    @JsonClassDiscriminator("status")
     public sealed class Result {
-      public object ResultSerializer : JsonContentPolymorphicSerializer<Result>(Result::class) {
-        override fun selectDeserializer(element: JsonElement): DeserializationStrategy<Result> {
-          val disc = element.jsonObject["isSignedIn"]?.jsonPrimitive?.boolean
-          return when (disc) {
-            false -> Result.IsSignedInFalse.serializer()
-            true -> Result.IsSignedInTrue.serializer()
-            else -> error("Unknown isSignedIn value: ${'$'}disc")
-          }
-        }
-      }
-
       @Serializable
-      @SerialName("false")
-      public data class IsSignedInFalse(
-        public val nextStep: IsSignedInFalse.NextStep,
+      @SerialName("continueSignIn")
+      public data class ContinueSignIn(
+        public val nextStep: ContinueSignIn.NextStep,
       ) : Result() {
         @Serializable
         @JsonClassDiscriminator("name")
@@ -354,8 +328,8 @@ public class Api(
       }
 
       @Serializable
-      @SerialName("true")
-      public data class IsSignedInTrue(
+      @SerialName("signedIn")
+      public data class SignedIn(
         public val user: CognitoUser,
       ) : Result()
     }

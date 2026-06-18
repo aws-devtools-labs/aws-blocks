@@ -1005,11 +1005,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // project to strings + narrowed claims for the RPC boundary.
   async authCFetchAuthSession() {
     const session = await authC.fetchAuthSession(context);
-    if (!session.tokens) return { signedIn: false as const };
+    if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
     return {
-      signedIn: true as const,
+      status: 'signedIn' as const,
       userSub: session.userSub ?? null,
       idToken: session.tokens.idToken.toString(),
       accessToken: session.tokens.accessToken.toString(),
@@ -1021,11 +1021,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async authCFetchAuthSessionForceRefresh() {
     const session = await authC.fetchAuthSession(context, { forceRefresh: true });
-    if (!session.tokens) return { signedIn: false as const };
+    if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
     return {
-      signedIn: true as const,
+      status: 'signedIn' as const,
       userSub: session.userSub ?? null,
       idToken: session.tokens.idToken.toString(),
       accessToken: session.tokens.accessToken.toString(),

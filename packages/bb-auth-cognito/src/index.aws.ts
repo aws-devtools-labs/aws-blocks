@@ -902,7 +902,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			if (resp.ChallengeName) {
 				const secret = await this.getSessionSecret();
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: await this.buildNextStep(
 						secret,
 						resp.ChallengeName,
@@ -915,7 +915,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			}
 
 			const user = await this.issueSession(context, resp.AuthenticationResult);
-			return { isSignedIn: true, user };
+			return { status: 'signedIn', user };
 		} catch (e) {
 			throw asApiError(e);
 		}
@@ -1013,10 +1013,10 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			const mfaSetupResp = await this.dispatchMfaSetup(envelope, challengeResponse, secret, options);
 			if (mfaSetupResp) {
 				if (mfaSetupResp.nextStep) {
-					return { isSignedIn: false, nextStep: mfaSetupResp.nextStep };
+					return { status: 'continueSignIn', nextStep: mfaSetupResp.nextStep };
 				}
 				const user = await this.issueSession(context, mfaSetupResp.authResult);
-				return { isSignedIn: true, user };
+				return { status: 'signedIn', user };
 			}
 
 			// USER_AUTH SELECT_CHALLENGE → PASSWORD is a two-step flow on our
@@ -1039,7 +1039,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					awaitingPassword: true,
 				});
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: { name: 'CONFIRM_SIGN_IN_WITH_PASSWORD', session: nextEnvelope },
 				};
 			}
@@ -1063,7 +1063,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 
 			if (resp.ChallengeName) {
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: await this.buildNextStep(
 						secret,
 						resp.ChallengeName,
@@ -1076,7 +1076,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			}
 
 			const user = await this.issueSession(context, resp.AuthenticationResult);
-			return { isSignedIn: true, user };
+			return { status: 'signedIn', user };
 		} catch (e) {
 			throw asApiError(e);
 		}
@@ -1793,7 +1793,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					switch (input.action) {
 						case 'signIn': {
 							const r = await this.signIn(input.username, input.password, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signInWithPasskey': {
@@ -1806,7 +1806,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 								context,
 								{ preferredChallenge: 'WEB_AUTHN' },
 							);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signUp': {
@@ -1851,7 +1851,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 						}
 						case 'autoSignIn': {
 							const r = await this.autoSignIn(context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'resendSignUpCode': {
@@ -1877,7 +1877,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 								default: response = '';
 							}
 							const r = await this.confirmSignIn(input.session, response, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'startPasskeyRegistration': {
