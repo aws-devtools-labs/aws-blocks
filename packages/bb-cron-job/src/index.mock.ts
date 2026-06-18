@@ -176,10 +176,24 @@ function expandField(field: string, min: number, max: number, original: string):
 	for (const part of field.split(',')) {
 		if (part.includes('/')) {
 			const [base, stepStr] = part.split('/');
-			const start = base === '*' ? min : parseInt(base, 10);
 			const step = parseInt(stepStr, 10);
+			// `base` may be `*` (whole field), a single value (`15` → from 15 to
+			// max), or a range (`0-30` → bounded by the range's upper end). A
+			// stepped range must stop at the range's `hi`, not run to `max`.
+			let start: number;
+			let end = max;
+			if (base === '*') {
+				start = min;
+			} else if (base.includes('-')) {
+				const [lo, hi] = base.split('-').map(Number);
+				if (isNaN(lo) || isNaN(hi)) throw scheduleError(original);
+				start = lo;
+				end = hi;
+			} else {
+				start = parseInt(base, 10);
+			}
 			if (isNaN(start) || isNaN(step) || step <= 0) throw scheduleError(original);
-			for (let i = start; i <= max; i += step) values.push(i);
+			for (let i = start; i <= end; i += step) values.push(i);
 		} else if (part.includes('-')) {
 			const [lo, hi] = part.split('-').map(Number);
 			if (isNaN(lo) || isNaN(hi)) throw scheduleError(original);
