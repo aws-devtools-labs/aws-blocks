@@ -1,0 +1,53 @@
+name: PR Agent Bench
+
+# Thin CALLER for the per-PR LLM-agent benchmark. This workflow owns the
+# triggers and the same-repo/label gate; the bench matrix + summary live in
+# the reusable workflow .github/workflows/agent-bench.yml, invoked below so
+# GitHub renders a nested check hierarchy: PR Agent Bench / bench / Bench (<cell>).
+#
+# Required configuration (publish environment, consumed inside agent-bench.yml):
+#   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
+#                           on the bench model, plus s3:PutObject on bench/* in
+#                           the registry bucket (for the result archive).
+#   S3_BUCKET     variable  Registry bucket (existing).
+
+on:
+  # Label-gated ONLY: the bench runs when the `ready-for-pr-benchmark` label is
+  # applied (or via manual workflow_dispatch). We deliberately do NOT trigger on
+  # `synchronize`/`ready_for_review` — a label-less push would otherwise create a
+  # second, fully-skipped run (every matrix cell gated off), cluttering the PR's
+  # Checks tab with a duplicate "PR Agent Bench" entry and a placeholder
+  # `${{ matrix.task }}` check. Pushing to a labelled PR still won't re-run here;
+  # re-apply the label (or use workflow_dispatch) to re-run.
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-agent-bench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # Same-repo + label gate (and manual dispatch) lives HERE, on the calling
+    # job -- a `uses:` job may carry `if:`/`permissions`. The OIDC step and
+    # `environment: publish` stay inside the reusable workflow (a calling job
+    # cannot set `environment`). Fork PRs get no secrets/OIDC under
+    # `pull_request`, but defense-in-depth: also gate on same-repo. Mirrors
+    # pr-checks.yml.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'ready-for-pr-benchmark'))
+    # Union token so the reusable workflow's per-job permissions resolve:
+    # bench narrows to id-token:write + contents:read; summary to
+    # contents:read + pull-requests:write.
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/agent-bench.yml
+    secrets: inherit

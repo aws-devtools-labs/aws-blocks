@@ -1,0 +1,1 @@
+realtime_quality — Does the implementation broadcast presence changes over a realtime channel block so other connected clients update live (within ~2s, no reload), and persist the shared board in a structured-data table block so it survives a reload?

@@ -1,0 +1,1 @@
+auth_correctness — Does the implementation gate access behind a real OIDC sign-in flow (AuthOIDC + stubIdp client-initiated PKCE, completing the redirect callback to establish a session), expose the signed-in subject id, and persist per-user notes in a DistributedDatabase table (migration + scoped INSERT/SELECT) that survive a reload?

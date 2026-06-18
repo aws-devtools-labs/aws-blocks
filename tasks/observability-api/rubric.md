@@ -1,0 +1,1 @@
+observability_correctness — Does the ping operation genuinely instrument its work with all four blocks — write a log line (Logger), emit a metric (Metrics), and run inside a tracer segment (Tracer.startSegment) — while the displayed app name is read at runtime from an AppSetting block (not hard-coded)?

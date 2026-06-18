@@ -1,0 +1,266 @@
+name: Agent Bench
+
+# Per-PR LLM-agent benchmark. Each cell scaffolds one template, hands the
+# scaffolded app to a builder agent, runs the build + Playwright spec, then a
+# judge agent grades. Runs entirely on the GitHub runner — no microVM, no S3
+# round-trip. Bedrock provides the model; the runner provides the sandbox.
+#
+# Required configuration (publish environment):
+#   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
+#                           on the bench model, plus s3:PutObject on bench/* in
+#                           the registry bucket (for the result archive).
+#   S3_BUCKET     variable  Registry bucket (existing).
+#
+# Invoked by the thin caller .github/workflows/pr-agent-bench.yml, which owns
+# the triggers and the same-repo/label gate. `environment: publish` and the
+# OIDC step stay on the bench job HERE because a calling (`uses:`) job cannot
+# set `environment`.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: ${{ matrix.task }} · ${{ matrix.template }}
+    runs-on: ubuntu-latest
+    # Must hold the full sum of the step budgets so no step is starved by the
+    # job cap (the judge now retries throttled Bedrock calls and can use its
+    # whole 20-min budget). Capped steps: agent 35 + build/test 12 + judge 20 =
+    # 67; plus ~13 for the uncapped ones (checkout + setup-node + npm ci + init +
+    # OIDC + scaffold, then finalize + artifact upload + S3) ≈ 80. 85 leaves a
+    # ~5-min buffer.
+    timeout-minutes: 85
+    permissions:
+      id-token: write
+      contents: read
+    environment: publish
+    strategy:
+      fail-fast: false
+      # One cell per (task, template) pair via an explicit include list.
+      # Each task runs on the SINGLE template that pre-ships (or best exercises)
+      # its Building Blocks. Together these 9 cells cover all 17 Building Blocks
+      # across 7 templates without a task x template cross-product, keeping the
+      # cell count — and Bedrock spend — bounded.
+      matrix:
+        include:
+          - { task: auth-notes, template: demo } # AuthBasic + KVStore
+          - { task: file-gallery, template: bare } # FileBucket
+          - { task: async-word-counter, template: bare } # AsyncJob + KVStore
+          - { task: collab-cursor-board, template: default } # Realtime + DistributedTable
+          - { task: cognito-profile, template: auth-cognito } # AuthCognito (email-OTP)
+          - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
+          - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase
+          - { task: oidc-dsql-notes, template: react } # AuthOIDC + DistributedDatabase
+          - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
+    env:
+      WORKSPACE: ${{ github.workspace }}/bench-app
+      TASK: ${{ matrix.task }}
+      # Current Bedrock geo (cross-Region) inference-profile IDs actually in use —
+      # both resolve in us-east-1 today (verified by live, scored bench runs):
+      #   Sonnet 4.6: docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
+      #   Opus 4.8:   docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
+      BENCH_MODEL: us.anthropic.claude-sonnet-4-6
+      # Different model from the builder, on purpose — limits same-model
+      # self-evaluation bias.
+      BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
+      AWS_REGION: us-east-1
+      TEMPLATE: ${{ matrix.template }}
+      PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with: { node-version-file: '.nvmrc' }
+
+      - run: npm ci
+
+      # Write a baseline result.json BEFORE OIDC/AWS so even an OIDC failure
+      # produces a cell row in the summary table. Every later step augments
+      # this; finalize-result stamps the final status.
+      - name: 0. Init result
+        run: node scripts/agent-bench/steps/0-init-result.mjs
+        env:
+          RESULT_PATH: /tmp/result.json
+
+      - name: Configure AWS credentials (OIDC)
+        id: oidc
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 1. Init bench-app
+        id: init
+        run: bash scripts/agent-bench/steps/1-init-bench-app.sh "$TEMPLATE"
+
+      # SECURITY: this step runs an LLM-driven agent (shell tool) with the LIVE
+      # OIDC/AWS session in its environment, so a prompt-injected/malicious task
+      # could in principle reach any AWS API in the role's scope (Bedrock + the
+      # bench/* S3 prefix), not just the build. Bounded by the same-repo +
+      # member-only `ready-for-pr-benchmark` label gate in pr-agent-bench.yml
+      # (no fork/external triggering). Future hardening (not done): give the
+      # builder a minimal Bedrock-invoke-only role. See README "Security".
+      - name: 2. Agent run
+        id: agent
+        timeout-minutes: 35
+        run: npx tsx scripts/agent-bench/steps/2-agent-run.ts
+        env:
+          TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
+          OUTPUT: /tmp/builder-result.json
+
+      - name: 3. Build and test
+        id: tests
+        timeout-minutes: 12
+        run: bash scripts/agent-bench/steps/3-build-and-test.sh
+        env:
+          TASK_DIR: ${{ github.workspace }}/tasks/${{ env.TASK }}
+
+      - name: 4. Judge
+        id: judge
+        # 20-min cap (was 8): the judge's own Bedrock calls now retry with
+        # exponential backoff on throttling/transient failures (4-judge.ts), so
+        # the step needs room for a few escalating retries (~5s+15s+40s+90s of
+        # backoff plus the re-invokes) on top of a single grade.
+        timeout-minutes: 20
+        run: |
+          chmod -R a-w "$WORKSPACE"
+          npx tsx scripts/agent-bench/steps/4-judge.ts
+        env:
+          BUILDER_RESULT: /tmp/builder-result.json
+          TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
+          OUTPUT: /tmp/result.json
+          # EVIDENCE = objective signals for the judge's hard caps (consumed by
+          # 4-judge.ts, then spread onto result.json for the summary). The BOOLEAN
+          # flags are QUOTED so a step output that is ever not exactly true/false
+          # can't turn this into an invalid JSON literal; 4-judge.ts coerces them
+          # with truthy() and summary.mjs does the same before rendering. The
+          # numeric counts are left as BARE JSON numbers on purpose — the shared
+          # scoring module (lib/scoring.mjs `num()`) reads them as raw numbers and
+          # the `|| '0'` default already guarantees a valid numeric literal.
+          EVIDENCE: |
+            {
+              "build_succeeded": "${{ steps.tests.outputs.build_succeeded || 'false' }}",
+              "dev_server_started": "${{ steps.tests.outputs.dev_server_started || 'false' }}",
+              "playwright_installed": "${{ steps.tests.outputs.playwright_installed || 'false' }}",
+              "tests_passed": ${{ steps.tests.outputs.tests_passed || '0' }},
+              "tests_failed": ${{ steps.tests.outputs.tests_failed || '0' }},
+              "tests_total": ${{ steps.tests.outputs.tests_total || '0' }}
+            }
+
+      # Stamp final status on result.json — always runs so the summary table
+      # gets a row for failed cells too.
+      - name: Finalize result
+        if: always()
+        run: node scripts/agent-bench/steps/finalize-result.mjs
+        env:
+          RESULT_PATH: /tmp/result.json
+          # On a wall-clock agent timeout, steps 3-4 are SKIPPED and this
+          # if:always() step is the only survivor, so it must fold the builder's
+          # partial envelope (the judge does it on the normal path). Path matches
+          # step 2's OUTPUT.
+          BUILDER_RESULT: /tmp/builder-result.json
+          OUTCOME_OIDC: ${{ steps.oidc.outcome }}
+          OUTCOME_INIT: ${{ steps.init.outcome }}
+          OUTCOME_AGENT: ${{ steps.agent.outcome }}
+          OUTCOME_TESTS: ${{ steps.tests.outcome }}
+          OUTCOME_JUDGE: ${{ steps.judge.outcome }}
+
+      - name: 5. Upload result
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: bench-result-${{ matrix.task }}-${{ matrix.template }}
+          path: /tmp/result.json
+          retention-days: 90
+          overwrite: true
+
+      - name: Persist to S3 (best-effort)
+        if: always()
+        run: |
+          KEY="bench/pr/${PR_NUMBER}/run-${{ github.run_id }}-attempt-${{ github.run_attempt }}/${TASK}-${TEMPLATE}.json"
+          aws s3 cp /tmp/result.json "s3://${{ vars.S3_BUCKET }}/$KEY" || echo "::warning::S3 archive failed for $KEY"
+
+  summary:
+    needs: bench
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    # Defense-in-depth same-repo gate (the caller already gates same-repo +
+    # label). Keep always() so the table still renders when bench cells fail.
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      # Checkout first — it would wipe the workspace if it ran after the
+      # artifact download.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/agent-bench
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with: { node-version-file: '.nvmrc' }
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with: { path: results, pattern: bench-result-* }
+      - name: Render summary table
+        run: node scripts/agent-bench/steps/summary.mjs
+        env:
+          RESULTS_DIR: results
+          # Persist the rendered markdown so the "Post PR comment" step below
+          # can post the identical table to the PR (each step gets its own
+          # $GITHUB_STEP_SUMMARY file, so it can't be read back across steps).
+          SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
+          # Observational by default: when this repo/org variable is unset the
+          # summary only reports the mean judge score. Set BENCH_MIN_SCORE to a
+          # number to turn it into a merge gate (job fails if the mean across
+          # scored cells is below it). Enabling it later is this one variable.
+          BENCH_MIN_SCORE: ${{ vars.BENCH_MIN_SCORE }}
+
+      # Post the summary table as a NEW PR comment on every run — each run adds
+      # a fresh comment instead of editing a single sticky one, so the history
+      # of bench runs is preserved chronologically (the body's timestamp + run
+      # link tell them apart). The hidden marker is kept in the body only so
+      # humans/greppers can identify bench comments; it is no longer used to
+      # find-and-edit a prior comment. Skipped on workflow_dispatch, which has
+      # no PR to comment on.
+      - name: Post PR comment
+        if: github.event.pull_request
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- agent-bench-summary -->';
+            let table;
+            try {
+              table = fs.readFileSync(process.env.SUMMARY_MD_PATH, 'utf8');
+            } catch (err) {
+              // No summary markdown is the EXPECTED state when the bench matrix
+              // was skipped (gating label absent) or produced no results:
+              // summary.mjs deliberately does not write the file, so there is
+              // nothing new to post. Post NOTHING rather than an empty
+              // "no results" comment (any prior bench comments stay untouched).
+              if (err.code === 'ENOENT') {
+                core.info('No bench summary to post (matrix skipped or no results) — posting nothing.');
+                return;
+              }
+              core.warning(`Could not read summary markdown at ${process.env.SUMMARY_MD_PATH}: ${err.message}`);
+              return;
+            }
+            // Always post a NEW comment on each run. The marker is kept in the
+            // body purely so humans/greppers can identify bench comments — it is
+            // no longer used to find-and-edit a prior comment.
+            const body = `${marker}\n${table}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            core.info('Created bench comment');

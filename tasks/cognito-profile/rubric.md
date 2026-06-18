@@ -1,0 +1,1 @@
+auth_correctness — Does the implementation run a real passwordless email-OTP flow on the Cognito auth block (sign-up/sign-in sends a one-time code, confirming it establishes a session), surface the signed-in user's identity on a profile view, and support sign-out — without ever using a password?

@@ -1,0 +1,1 @@
+async_correctness — Does the implementation declare a real cron-job block on a schedule whose handler shares one digest function with a manual trigger, send the digest through the email-client block (mock-persisted locally), and cache the last-sent recipient/timestamp in the key/value store block for the UI to display?
