@@ -321,6 +321,23 @@ export function agentTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('Bedrock Model Presets', () => {
+      for (const presetName of ['BALANCED', 'SMART', 'FAST']) {
+        test(`preset ${presetName} returns a response`, { timeout: 30_000 }, async () => {
+          const api = getApi();
+          const { channel } = await api.agentPresetStream(presetName, 'hi');
+          const done = await new Promise<any>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(`${presetName}: no done chunk within 25s`)), 25_000);
+            channel.subscribe((chunk: any) => {
+              if (chunk.type === 'done') { clearTimeout(timer); resolve(chunk); }
+              if (chunk.type === 'error') { clearTimeout(timer); reject(new Error(chunk.error)); }
+            });
+          });
+          assert.ok(done.text && done.text.length > 0, `${presetName} should return a non-empty response`);
+        });
+      }
+    });
+
     describe('HITL — Tool Approval (deterministic)', () => {
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();

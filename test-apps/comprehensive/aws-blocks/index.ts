@@ -378,6 +378,21 @@ const cannedAgent = new Agent(scope, 'canned', {
 });
 
 
+// Preset agents — one per BedrockModels preset, used to verify presets work e2e
+import { BedrockModels } from '@aws-blocks/bb-agent';
+
+const presetAgents = Object.fromEntries(
+	Object.entries(BedrockModels).map(([name, config]) => [
+		name,
+		new Agent(scope, `preset-${name.toLowerCase()}`, {
+			removalPolicy: 'destroy',
+			inferenceOnly: true,
+			model: { deployed: config, local: { provider: 'canned' } },
+			systemPrompt: 'Reply with exactly one word.',
+		}),
+	]),
+);
+
 // Agent with model fallback — first candidate is unreachable, should fall through to canned
 const fallbackAgent = new Agent(scope, 'fallback', {
   removalPolicy: 'destroy',
@@ -1661,6 +1676,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const channelId = crypto.randomUUID();
     const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
     return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+  },
+
+  async agentPresetStream(presetName: string, message: string) {
+    const presetAgent = presetAgents[presetName];
+    if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
+    const result = await presetAgent.stream(message);
+    return { channelId: result.channelId, channel: await presetAgent.getChannel(result.channelId) };
   },
 
   async agentTestApiKeyResolver() {
