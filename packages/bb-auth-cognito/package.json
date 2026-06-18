@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-cognito",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,15 +28,15 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs AuthCognito",
     "build": "tsc --build",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test --test-concurrency=1 dist/**/*.test.js",
     "deploy:manual-pools": "node scripts/deploy-manual-test-pools.mjs",
     "teardown:manual-pools": "node scripts/teardown-manual-test-pools.mjs"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.1.1",
-    "@aws-blocks/bb-app-setting": "^0.1.1",
+    "@aws-blocks/core": "^0.1.2",
+    "@aws-blocks/bb-app-setting": "^0.1.2",
     "@aws-blocks/auth-common": "^0.1.1",
-    "@aws-blocks/bb-kv-store": "^0.1.1",
+    "@aws-blocks/bb-kv-store": "^0.1.2",
     "@aws-blocks/bb-logger": "^0.1.1",
     "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
     "aws-jwt-verify": "^5.0.0"

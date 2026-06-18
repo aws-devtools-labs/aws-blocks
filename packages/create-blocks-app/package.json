@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/create-blocks-app",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -19,6 +19,7 @@
   "files": [
     "dist",
     "templates",
+    "resources",
     "LICENSE"
   ]
 }
