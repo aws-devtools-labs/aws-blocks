@@ -1,0 +1,1 @@
+realtime_quality — Does the implementation broadcast presence changes over a realtime channel block so other connected clients update live (within ~2s, no reload), persist the full shared roster in a structured-data table block so every visitor survives a reload, and render visitor-supplied names as escaped text?
