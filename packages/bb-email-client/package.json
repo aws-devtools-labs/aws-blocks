@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-email-client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -29,7 +29,7 @@
     "test": "node --test --test-concurrency=1 dist/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/core": "^0.1.2",
     "@aws-blocks/bb-logger": "^0.1.1",
     "@aws-sdk/client-sesv2": "^3.0.0"
   },

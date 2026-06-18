@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-oidc",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -38,10 +38,10 @@
   },
   "dependencies": {
     "@aws-blocks/auth-common": "^0.1.1",
-    "@aws-blocks/bb-app-setting": "^0.1.1",
-    "@aws-blocks/bb-kv-store": "^0.1.1",
+    "@aws-blocks/bb-app-setting": "^0.1.2",
+    "@aws-blocks/bb-kv-store": "^0.1.2",
     "@aws-blocks/bb-logger": "^0.1.1",
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/core": "^0.1.2",
     "@aws-sdk/client-ssm": "^3.0.0",
     "jose": "^6.2.3",
     "openid-client": "^6.8.4"
