@@ -14,7 +14,6 @@ jobs:
   check-kotlin:
     name: Require Kotlin changeset
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.changed_files_url, 'native/kotlin') || true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,7 +46,6 @@ jobs:
   check-dart:
     name: Require Dart changeset
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.changed_files_url, 'native/dart') || true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -78,7 +76,6 @@ jobs:
   check-swift:
     name: Require Swift changeset
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.changed_files_url, 'native/swift') || true
     steps:
       - uses: actions/checkout@v5
         with:
