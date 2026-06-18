@@ -1244,13 +1244,21 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 11. Error page deployment (SSR only) ----
+    // Every BucketDeployment that writes to the new build's
+    // `builds/${buildId}/` prefix is collected here. After they are all
+    // declared, the CloudFront build-id functions are made to depend on
+    // them (see `cdn.addBuildAssetDependency` at the end of this method) so
+    // the buildId cutover never races ahead of the asset uploads.
+    const buildAssetDeployments: BucketDeployment[] = [];
     if (hasCompute) {
-      new BucketDeployment(this, 'ErrorPageDeployment', {
-        sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'ErrorPageDeployment', {
+          sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
 
     // ---- 11a. Custom error pages ----
@@ -1282,12 +1290,14 @@ export class HostingConstruct extends Construct {
             'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
-      new BucketDeployment(this, 'Custom404Deployment', {
-        sources: [Source.data('404.html', notFoundContent)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'Custom404Deployment', {
+          sources: [Source.data('404.html', notFoundContent)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
     if (props.errorPages?.serverError) {
       if (!fs.existsSync(props.errorPages.serverError)) {
@@ -1317,12 +1327,14 @@ export class HostingConstruct extends Construct {
             'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
-      new BucketDeployment(this, 'Custom500Deployment', {
-        sources: [Source.data('500.html', serverErrorContent)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'Custom500Deployment', {
+          sources: [Source.data('500.html', serverErrorContent)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
 
     // ---- 11b. Build cache bucket ----
@@ -1357,6 +1369,21 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 12. Atomic Deployment (static assets) ----
+    // Atomicity: every object below is written under a brand-new, immutable
+    // `builds/${buildId}/` prefix that was never requested before, so there
+    // is nothing stale to invalidate. The CloudFront build-id functions are
+    // gated on these uploads (`cdn.addBuildAssetDependency`, end of method)
+    // so the distribution only starts routing at the new buildId AFTER the
+    // assets land - closing the window where new/cookieless visitors would
+    // otherwise hit 403 Access Denied on the not-yet-uploaded prefix.
+    //
+    // This is also why these deployments deliberately carry NO
+    // `distribution` / `distributionPaths: ['/*']` invalidation: with
+    // immutable build-id prefixes a `/*` invalidation is useless (the new
+    // prefix was never cached) AND it would force the uploads to run AFTER
+    // the distribution update, which is the exact ordering that re-opens
+    // the 403 window.
+    //
     // Cache-Control split (3 tiers):
     //
     //   1. Hashed assets (`immutablePaths`): `max-age=31536000, immutable`
@@ -1364,8 +1391,10 @@ export class HostingConstruct extends Construct {
     //      must always revalidate so new deploys propagate immediately.
     //   3. Other mutable assets (images, JSON, etc.):
     //      `s-maxage=31536000, max-age=0, must-revalidate` — CloudFront
-    //      edge caches for 1y (flushed via `/*` invalidation on deploy);
-    //      browsers always revalidate.
+    //      edge caches for 1y. Each deploy writes them under a fresh
+    //      `builds/<id>/` prefix (the path is part of the cache key), so the
+    //      new objects are cold-fetched on first request with no
+    //      invalidation needed; browsers always revalidate.
     //
     // Font MIME pass (12b below): aws s3 sync (driver inside
     // BucketDeployment) infers Content-Type via Python's mimetypes which
@@ -1423,8 +1452,6 @@ export class HostingConstruct extends Construct {
             CacheControl.fromString('public, max-age=31536000, immutable'),
           ],
           prune: false,
-          distribution: this.distribution,
-          distributionPaths: ['/*'],
         }),
       );
       assetDeployments.push(
@@ -1458,8 +1485,6 @@ export class HostingConstruct extends Construct {
           include: htmlGlobs,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
-          distribution: this.distribution,
-          distributionPaths: ['/*'],
         }),
       );
       assetDeployments.push(
@@ -1473,6 +1498,7 @@ export class HostingConstruct extends Construct {
         }),
       );
     }
+    buildAssetDeployments.push(...assetDeployments);
 
     // ---- 12b. Font Content-Type pass ----
     // S3's `binary/octet-stream` default for font extensions makes
@@ -1542,6 +1568,19 @@ export class HostingConstruct extends Construct {
       for (const dep of assetDeployments) {
         fontDeployment.node.addDependency(dep);
       }
+      buildAssetDeployments.push(fontDeployment);
+    }
+
+    // ---- 12c. Gate the build-id cutover on the asset uploads ----
+    // Make the CloudFront build-id functions (viewer-request, and the
+    // Next.js assetPrefix strip function) depend on every BucketDeployment
+    // that writes the new build's `builds/${buildId}/` prefix. CloudFormation
+    // therefore uploads all assets FIRST and only then publishes the
+    // functions / updates the distribution to route at the new buildId.
+    // Without this, the buildId could propagate globally before the assets
+    // landed, 403-ing new/cookieless visitors for the deploy window.
+    for (const dep of buildAssetDeployments) {
+      cdn.addBuildAssetDependency(dep);
     }
   }
 
