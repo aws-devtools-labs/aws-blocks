@@ -113,14 +113,14 @@ async function main() {
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
   const app = join(work, 'my-app');
-  run(createBin, [app], { cwd: work, env });
+  // `backend` template: backend-only (Lambda + API Gateway), no DynamoDB/GSI/
+  // Aurora — fastest deploy/destroy and no frontend build. It exercises the
+  // same Windows tooling (spawn -> synth -> cdk deploy/destroy) we care about.
+  run(createBin, [app, '--template', 'backend'], { cwd: work, env });
 
   const inApp = { cwd: app, env };
 
-  // ── Phase 1: build (no AWS) ──────────────────────────────────────────────
-  run('npm', ['run', 'build'], inApp);
-
-  // ── Phase 2: dev server boot (no AWS) ────────────────────────────────────
+  // ── Phase 1: dev server boot (no AWS) ────────────────────────────────────
   {
     const dev = spawn('npm', ['run', 'dev'], { shell: isWin, detached: !isWin, stdio: 'inherit', ...inApp });
     children.push(dev);
@@ -131,7 +131,7 @@ async function main() {
     console.log('OK: npm run dev booted and served :3000');
   }
 
-  // ── Phase 3: sandbox deploy (watch mode) → destroy ───────────────────────
+  // ── Phase 2: sandbox deploy (watch mode) → destroy ───────────────────────
   try {
     const sb = await startUntilLine('npm', ['run', 'sandbox'], { shell: isWin, detached: !isWin, ...inApp }, 'Sandbox deployed', 30 * 60_000);
     killTree(sb.pid);
@@ -140,7 +140,7 @@ async function main() {
     runBestEffort('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
-  // ── Phase 4: production deploy → destroy ─────────────────────────────────
+  // ── Phase 3: production deploy → destroy ─────────────────────────────────
   try {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
@@ -148,7 +148,7 @@ async function main() {
     runBestEffort('npm', ['run', 'destroy'], inApp);
   }
 
-  console.log(`\nOK: scaffolded template build + dev + sandbox + deploy all work on ${process.platform}.`);
+  console.log(`\nOK: scaffolded backend template dev + sandbox + deploy all work on ${process.platform}.`);
 }
 
 main()

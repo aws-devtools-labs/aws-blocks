@@ -2,13 +2,15 @@ name: Windows E2E
 
 # Verifies the Windows client tooling against the LITERAL user commands.
 #
-# Packs this branch to a local registry, scaffolds a default-template app
-# exactly as a customer would (`create-blocks-app`, installed packages with
-# their own .cmd bin shims), then runs the real `npm run build` / `npm run dev`
-# / `npm run sandbox` / `npm run deploy` (+ teardown). The bug (#19) lives in the
-# client tooling — process spawning, CDK synth, path handling; deployed app
-# logic runs in Lambda (Linux) and is OS-independent, so the behavioral test
-# suites stay on Linux and are NOT re-run here.
+# Packs this branch to a local registry, scaffolds the `backend` template app
+# exactly as a customer would (`create-blocks-app --template backend`, installed
+# packages with their own .cmd bin shims), then runs the real `npm run dev` /
+# `npm run sandbox` / `npm run deploy` (+ teardown). The `backend` template is
+# backend-only (Lambda + API Gateway, no DynamoDB/GSI/Aurora), so deploy/destroy
+# are fast. The bug (#19) lives in the client tooling — process spawning, CDK
+# synth, path handling; deployed app logic runs in Lambda (Linux) and is
+# OS-independent, so the behavioral test suites stay on Linux and are NOT re-run
+# here.
 #
 # Fail-fast across phases; the driver always tears down anything it deployed and
 # the scheduled cleanup-stacks workflow is the backstop for any leak.
@@ -30,7 +32,7 @@ permissions:
 
 jobs:
   windows-e2e:
-    name: Windows E2E (build + dev + sandbox + deploy)
+    name: Windows E2E (dev + sandbox + deploy)
     runs-on: windows-latest
     timeout-minutes: 120
     if: github.event.pull_request.head.repo.full_name == github.repository
