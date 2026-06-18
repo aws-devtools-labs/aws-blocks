@@ -2,9 +2,9 @@
 "@aws-blocks/bb-agent": patch
 ---
 
-fix(bb-agent): support all Bedrock inference profile prefixes in health check
+fix(bb-agent): simplify Bedrock health check to support all inference profile formats
 
-Added `global.`, `au.`, and `jp.` to the health-check regex and removed
-the non-existent `us-gov.` prefix. Model IDs with these prefixes were
-incorrectly routed to `GetFoundationModel` instead of `GetInferenceProfile`,
-causing health checks to fail and the model to be marked unavailable.
+Removed the prefix regex that determined whether to call `GetInferenceProfile`
+or `GetFoundationModel`. The health check now tries both APIs sequentially —
+any model ID format (cross-region, global, or foundation model) works without
+maintaining a prefix allowlist.
