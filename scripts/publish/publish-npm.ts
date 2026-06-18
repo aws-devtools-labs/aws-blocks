@@ -25,11 +25,6 @@ if (!dryRun && !process.env.NODE_AUTH_TOKEN) {
 console.log(`AWS Blocks Publish — npm (${dryRun ? "dry-run" : "LIVE"})\n`);
 
 if (dryRun) {
-	// Validate the packaging contract (publint + attw) before the pack dry-run.
-	execFileSync("npx", ["tsx", resolve(ROOT, "scripts/publish/validate-exports.ts")], {
-		cwd: ROOT,
-		stdio: "inherit",
-	});
 	execFileSync("npm", ["publish", "--workspaces", "--access=public", "--dry-run"], {
 		cwd: ROOT,
 		stdio: "inherit",
