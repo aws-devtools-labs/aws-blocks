@@ -38,9 +38,9 @@ void describe('spaAdapter', () => {
   });
 
   // ── spaFallback comes from the framework contract, NOT filesystem sniffing ──
-  // (Addresses Josh's review: sniffing misclassified both a SPA shipping a
-  // nested index.html and a flat-file SSG. The routing model is now declared
-  // by the `framework` string via getAdapter: 'spa' → true, 'static' → false.)
+  // Sniffing misclassified both a SPA shipping a nested index.html and a
+  // flat-file SSG. The routing model is now declared by the `framework`
+  // string via getAdapter: 'spa' → true, 'static' → false.
 
   void it('framework "spa" → spaFallback:true (single-page contract)', () => {
     const adapter = getAdapter('spa');
@@ -55,7 +55,7 @@ void describe('spaAdapter', () => {
   });
 
   void it('SPA shipping a nested index.html STAYS spaFallback:true (no misclassification)', () => {
-    // Josh case 1: a real SPA with a nested static page (e.g. public/legal/
+    // Scenario: a real SPA with a nested static page (e.g. public/legal/
     // index.html). Old sniffing flipped this to false and broke client-side
     // deep-linking. The framework contract keeps it true.
     fs.mkdirSync(path.join(buildDir, 'legal'), { recursive: true });
@@ -65,10 +65,10 @@ void describe('spaAdapter', () => {
   });
 
   void it('flat-file SSG (about.html, no nested index) → spaFallback:false (no misclassification)', () => {
-    // Josh case 2: a flat-file SSG (Astro build.format 'file', Hugo
-    // uglyURLs) emits about.html, not about/index.html. Old sniffing found
-    // no nested index.html and wrongly chose SPA fallback — the exact bug
-    // this change fixes. The framework contract keeps it false.
+    // Scenario: a flat-file SSG (Astro build.format 'file', Hugo uglyURLs)
+    // emits about.html, not about/index.html. Old sniffing found no nested
+    // index.html and wrongly chose SPA fallback — the exact bug this change
+    // fixes. The framework contract keeps it false.
     fs.writeFileSync(path.join(buildDir, 'about.html'), '<html>about</html>');
     const manifest = getAdapter('static')(tmpDir);
     assert.strictEqual(manifest.staticAssets.spaFallback, false);

@@ -27,11 +27,13 @@ export type SpaAdapterOptions = {
    *   - `false` → multi-page static site (`framework: 'static'`): each
    *     route resolves to its own `<path>/index.html` (directory-index).
    *
-   * Sourced by {@link getAdapter} from the framework string. When
-   * omitted, defaults to `true` (the historical SPA behavior) so callers
-   * that don't declare a model keep working. The L3 still applies its own
-   * fallback heuristic when the manifest omits `spaFallback` entirely;
-   * here we always set it because the framework is known.
+   * Sourced by {@link getAdapter} from the framework string. When omitted,
+   * keeps the historical SPA behavior so callers that don't declare a model
+   * keep working. The L3 still applies its own fallback heuristic when the
+   * manifest omits `spaFallback` entirely; here we always set it because the
+   * framework is known.
+   *
+   * @default true
    */
   spaFallback?: boolean;
 };

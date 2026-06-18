@@ -181,12 +181,11 @@ export const getAdapter = (
     });
   }
 
-  // For SPA/static, declare the routing model from the framework string
-  // (the build contract) rather than letting the adapter sniff the output
-  // tree: `spa` → single-page (client-side routing, /index.html fallback);
-  // `static` → multi-page (directory-index resolution). This is the signal
-  // Josh asked for — it can't misclassify a SPA-with-nested-index or a
-  // flat-file SSG the way filesystem sniffing did.
+  // Sources the routing model from the framework's build contract rather
+  // than sniffing the output tree, which misclassified both a SPA shipping a
+  // nested index.html and a flat-file SSG. `spa` → single-page (client-side
+  // routing, /index.html fallback); `static` → multi-page (directory-index
+  // resolution).
   if (framework === 'spa' || framework === 'static') {
     const spaFallback = framework === 'spa';
     return (projectDir: string) =>

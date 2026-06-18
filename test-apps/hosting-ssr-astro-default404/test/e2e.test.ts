@@ -9,7 +9,7 @@
 // 404) for an unknown key onto `/builds/<id>/_not_found.html` at HTTP 404.
 // hosting-ssr-astro covers the framework-emitted 404; this app gives the
 // previously unit-only DEFAULT_NOT_FOUND_PAGE_HTML path real end-to-end
-// coverage against live S3-OAC + CloudFront (Josh's review comment).
+// coverage against live S3-OAC + CloudFront.
 //
 // Each test is annotated with the Report-1 test-matrix ID it covers.
 
@@ -28,7 +28,7 @@ let hostingUrl: string;
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr-astro sandbox...\n');
+    console.log('🚀 Deploying hosting-ssr-astro-default404 sandbox...\n');
     execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
       cwd: projectRoot,
       stdio: 'inherit',
@@ -147,8 +147,11 @@ test.describe('Astro static multi-page — routing', () => {
     // Astro ships a default favicon.svg in public/. If absent the build
     // still 404s cleanly; we assert the extension path is NOT rewritten to
     // HTML (which would indicate SPA fallback swallowing it).
+    // Only 200 or 404 are reachable here: this app's built-in default-404
+    // wires a CloudFront 403→404 remap, so a missing key can never surface
+    // as a raw S3-OAC 403.
     const resp = await request.get(`${hostingUrl}/favicon.svg`);
-    expect([200, 403, 404]).toContain(resp.status());
+    expect([200, 404]).toContain(resp.status());
     if (resp.status() === 200) {
       expect(resp.headers()['content-type']).toContain('image/svg');
     }
