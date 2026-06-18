@@ -162,7 +162,7 @@ model: {
 
 #### Bedrock Presets
 
-Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use cross-region inference profiles — work across all AWS regions:
+Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
 
 ```typescript
 import { Agent, BedrockModels} from '@aws-blocks/bb-agent';

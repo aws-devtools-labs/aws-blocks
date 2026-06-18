@@ -6,6 +6,11 @@ import type { ModelConfig } from './types.js';
 /**
  * Pre-configured Bedrock model presets using global inference profiles.
  * Names are capability-based so the underlying model can be upgraded without breaking user code.
+ *
+ * **Note:** Global inference profiles route requests to any supported AWS region for
+ * optimal throughput. If your workload has data residency requirements, specify a
+ * region-scoped inference profile explicitly.
+ * @see https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
  */
 export const BedrockModels = {
 	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
