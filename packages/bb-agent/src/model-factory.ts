@@ -36,15 +36,10 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const getClient = async (): Promise<BedrockHealthClient> => {
-			if (_testClient) return _testClient;
-			const { BedrockClient } = await import('@aws-sdk/client-bedrock');
-			return new BedrockClient({});
-		};
+		const client: BedrockHealthClient = _testClient ?? new (await import('@aws-sdk/client-bedrock')).BedrockClient({});
 
 		// Try GetInferenceProfile first (covers cross-region and global profiles).
 		try {
-			const client = await getClient();
 			const command = _testClient
 				? { inferenceProfileIdentifier: config.modelId }
 				: new (await import('@aws-sdk/client-bedrock')).GetInferenceProfileCommand({ inferenceProfileIdentifier: config.modelId });
@@ -60,7 +55,6 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 
 		// Try GetFoundationModel (covers base model IDs).
 		try {
-			const client = await getClient();
 			const command = _testClient
 				? { modelIdentifier: config.modelId }
 				: new (await import('@aws-sdk/client-bedrock')).GetFoundationModelCommand({ modelIdentifier: config.modelId });
