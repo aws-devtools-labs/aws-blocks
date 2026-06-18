@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/blocks",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "src",
     "README.md",
     "LICENSE"
@@ -47,6 +48,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/sync-block-docs.mjs",
     "build": "tsc --build",
     "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js"
   },

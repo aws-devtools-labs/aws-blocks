@@ -3,9 +3,11 @@
 ## Quick Reference
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
-- **Frontend:** `src/index.ts` — UI (imports backend via `aws-blocks`)
+- **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **Block catalog:** `node_modules/@aws-blocks/blocks/README.md` (always matches installed version)
+- **Full guide:** `node_modules/@aws-blocks/blocks/README.md` — architecture, workflow, best practices, common mistakes
+- **Block catalog + decision tree:** `node_modules/@aws-blocks/blocks/docs/index.md`
+- **Per-block docs:** `node_modules/@aws-blocks/blocks/docs/<package-name>.md`
 
 ## Workflow
 
@@ -16,8 +18,8 @@
 
 ## Rules
 
-- **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases. Check the block catalog in `node_modules/@aws-blocks/blocks/README.md` for available options.
-- **Per-block docs** live at `node_modules/@aws-blocks/<package-name>/README.md` — always read these before using a block.
+- **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
+- **Read block docs** at `node_modules/@aws-blocks/blocks/docs/<package-name>.md` before using a block.
 - **The JSON-RPC transport is invisible** — do not construct RPC payloads manually. Import and call the typed API directly.
 
 ## Deploying (requires AWS credentials)

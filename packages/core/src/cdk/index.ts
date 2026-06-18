@@ -3,6 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
+import { pathToFileURL } from 'node:url';
 import {
   type BlocksStackProps,
   type BlocksStack as BaseBlocksStack,
@@ -51,8 +52,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     const actualScope = pipelineScope || scope;
 
     const stack = new BlocksStack(actualScope, id, props);
-    // ESM caches modules by URL — append a unique query string so each stage re-executes the module body
-    const mod = await import(`${props.backendCDKPath}?stack=${id}`);
+    // file:// URL (not a raw path) so the cache-busting query works on Windows,
+    // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
+    const backendUrl = pathToFileURL(props.backendCDKPath);
+    backendUrl.searchParams.set('stack', id);
+    const mod = await import(backendUrl.href);
     if (typeof mod.default === 'function') {
       try {
         await mod.default(stack);
