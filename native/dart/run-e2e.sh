@@ -84,6 +84,38 @@ if [ -z "$BLOCKS_URL" ]; then
 else
   echo ""
   echo "🌐 Step 4: Using provided endpoint: $BLOCKS_URL"
+  echo "   ℹ️  Against a deployed pool, the AuthCognito suite skips the dev-only"
+  echo "       emailed-code leg and signs in a PRE-PROVISIONED user. Seed it first:"
+  echo "         (cd \"$BACKEND\" && BLOCKS_STACK_NAME=<stack> AWS_REGION=<region> npm run seed:cognito)"
+
+  # Readiness gate (warm-up). A freshly-deployed stack's Lambda/API Gateway can
+  # cold-start: the very first request against a brand-new sandbox can fail
+  # before the function is warm. Poll the JSON-RPC endpoint until it answers
+  # HTTP 200 (it returns 200 with a JSON-RPC error body for any payload, which
+  # proves the Lambda is up and serving) so no suite eats the cold-start on its
+  # first call. Hits the same Lambda that serves /auth/* (OIDC), so it protects
+  # the OIDC suite's first POST too. Bounded backoff; fails loudly if never ready.
+  echo ""
+  echo "♨️  Step 4b: Warm up endpoint (poll until HTTP 200)"
+  WARMUP_ATTEMPTS="${WARMUP_ATTEMPTS:-24}"
+  warmup_delay=2
+  warmed=0
+  for i in $(seq 1 "$WARMUP_ATTEMPTS"); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+      -X POST -H 'content-type: application/json' -d '{}' "$BLOCKS_URL" 2>/dev/null || echo 000)
+    if [ "$code" = "200" ]; then
+      echo "   ✅ Endpoint warm after attempt $i (http=200)"
+      warmed=1
+      break
+    fi
+    echo "   ⏳ attempt $i/$WARMUP_ATTEMPTS: not ready (http=$code); retry in ${warmup_delay}s"
+    sleep "$warmup_delay"
+    if [ "$warmup_delay" -lt 10 ]; then warmup_delay=$((warmup_delay + 2)); fi
+  done
+  if [ "$warmed" -ne 1 ]; then
+    echo "   ❌ Endpoint did not return HTTP 200 after $WARMUP_ATTEMPTS attempts."
+    exit 1
+  fi
 fi
 
 echo ""
