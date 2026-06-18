@@ -57,6 +57,9 @@ replay_pid*
 **/.cxx
 **/build/
 
+# Node (changeset tooling)
+node_modules/
+
 # Blocks local caches
 **/.bb-data
 **/.blocks-sandbox

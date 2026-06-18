@@ -12,3 +12,6 @@
 !.swiftpm/xcode/package.xcworkspace
 
 *blocks.spec.json
+
+# Node (changeset tooling)
+node_modules/
