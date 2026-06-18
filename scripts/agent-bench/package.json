@@ -8,7 +8,8 @@
 		"preflight": "tsx preflight.ts",
 		"bench": "tsx run-bench.ts",
 		"summarize": "node summarize.mjs",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "tsc --noEmit"
 	},
 	"devDependencies": {
 		"@aws-sdk/client-bedrock-agentcore": "^3.1070.0",
