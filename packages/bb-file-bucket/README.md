@@ -6,6 +6,8 @@ File storage backed by Amazon S3.
 
 **When NOT to use:** If you need structured key-value data with conditional writes, use `KVStore`. If you need queryable records with indexes, use `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript

@@ -2,6 +2,8 @@
 
 Background job processing backed by SQS and Lambda.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Reference
 
 **Common Operations → Methods**

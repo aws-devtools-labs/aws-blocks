@@ -6,6 +6,8 @@ Simple username/password authentication with JWT sessions, password policy, and 
 
 **When NOT to use:** For social sign-in (Google, GitHub), use `AuthOIDC`. For MFA, user groups, or custom user attributes, use `AuthCognito`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript

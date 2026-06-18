@@ -6,6 +6,8 @@ Authentication backed by Amazon Cognito User Pools. Ships with username/password
 
 **When NOT to use:** Prototypes or internal tools that just need username/password without Cognito — use `AuthBasic`. Direct OIDC federation without Cognito in the middle — use `AuthOIDC`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
