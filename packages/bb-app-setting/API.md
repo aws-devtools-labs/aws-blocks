@@ -15,7 +15,7 @@ export class AppSetting<T = string> extends Scope {
     // (undocumented)
     readonly bbName = "AppSetting";
     static fromExisting<T = string>(scope: ScopeParent, id: string, options: {
-        name: string;
+        name?: string;
         secret?: boolean;
     }): AppSetting<T>;
     get(): Promise<T>;
