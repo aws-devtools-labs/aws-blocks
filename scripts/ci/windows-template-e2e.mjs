@@ -1,18 +1,9 @@
-// Windows E2E driver: scaffold a default-template app from a local registry
-// (packed from THIS branch) and exercise the real user commands a Windows
-// developer runs — `npm run build`, `npm run dev`, `npm run deploy`/`destroy`,
-// `npm run sandbox`/`sandbox:destroy`.
-//
-// This tests the literal entrypoints (npm -> tsx bin shim -> node) and the
-// installed-package shape (node_modules with .cmd shims), which the monorepo
-// workspace doesn't reproduce. No behavioral assertions — deployed app logic
-// runs in Lambda (Linux) and is OS-independent; this only confirms the Windows
-// client tooling works.
-//
-// Assumes `npm ci`, `npm run build`, and `npm run publish:dry-run` already ran
-// (so ./dist-registry exists) and AWS creds are configured in the env.
-// Run from the repo root. Fail-fast: stops at the first failing phase, but
-// always tears down anything it deployed and the local registry.
+// Windows E2E driver: scaffold the `backend` template from a local registry
+// (packed off this repo) and run the real user commands — `npm run dev`,
+// `npm run sandbox` (+destroy), `npm run deploy` (+destroy). Readiness is keyed
+// off product artifacts (config/outputs files), not log strings. Run from the
+// repo root after `npm ci`, `npm run build`, and `npm run publish:dry-run`,
+// with AWS creds in the env. Fail-fast; always tears down what it deployed.
 
 import { spawn, spawnSync, execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
@@ -109,9 +100,8 @@ async function main() {
   }
   console.log('Local registry is up.');
 
-  // ── Scaffold the default template from the registry ──────────────────────
-  // RUNNER_TEMP is a clean long path; os.tmpdir() on Windows runners is the 8.3
-  // short path (C:\Users\RUNNER~1\...) which breaks Vite's html-inline-proxy.
+  // Scaffold under RUNNER_TEMP (a long path) — os.tmpdir() on Windows runners
+  // is the 8.3 short path (C:\Users\RUNNER~1\...), which breaks some tooling.
   const baseTmp = process.env.RUNNER_TEMP || tmpdir();
   const work = mkdtempSync(join(baseTmp, 'bb-win-e2e-'));
   const userNpmrc = join(work, '.npmrc');
@@ -121,16 +111,12 @@ async function main() {
   run('npm', ['install', '@aws-blocks/create-blocks-app@latest'], { cwd: work, env });
   const createBin = join(work, 'node_modules', '.bin', isWin ? 'create-blocks-app.cmd' : 'create-blocks-app');
   const app = join(work, 'my-app');
-  // `backend` template: backend-only (Lambda + API Gateway), no DynamoDB/GSI/
-  // Aurora — fastest deploy/destroy and no frontend build. It exercises the
-  // same Windows tooling (spawn -> synth -> cdk deploy/destroy) we care about.
+  // `backend` template is backend-only (no DynamoDB/GSI/Aurora) → fast deploy.
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
 
   const inApp = { cwd: app, env };
 
-  // ── Phase 1: dev server boot (no AWS) ────────────────────────────────────
-  // Ready when the dev server has written its config (with the bound port) and
-  // that port answers HTTP — no port assumption, no log-string matching.
+  // Phase 1: dev — ready when config.json's bound port answers HTTP.
   {
     const dev = await startUntilReady('npm', ['run', 'dev'], inApp, async () => {
       const origin = devOrigin(app);
@@ -140,9 +126,7 @@ async function main() {
     console.log('OK: npm run dev booted and is reachable');
   }
 
-  // ── Phase 2: sandbox deploy (watch mode) → destroy ───────────────────────
-  // Ready when CDK has written the deploy outputs file (sandbox deploy finishes
-  // and writes it before entering watch mode). Clear any stale copy first.
+  // Phase 2: sandbox — ready when CDK writes the outputs file (before watch).
   const sandboxOutputs = join(app, '.blocks-sandbox', 'outputs.json');
   rmSync(sandboxOutputs, { force: true });
   try {
@@ -153,7 +137,7 @@ async function main() {
     runBestEffort('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
-  // ── Phase 3: production deploy → destroy ─────────────────────────────────
+  // Phase 3: production deploy → destroy.
   try {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');

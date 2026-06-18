@@ -103,9 +103,7 @@ test.before(async () => {
     
     // Run startSandbox in a clean subprocess (no -C browser) so that
     // codegen imports resolve to server-side modules correctly.
-    // Invoke via `node --import tsx` (not `npx`) so it works on Windows, where
-    // npx is a .cmd shim that execFileSync can't resolve (spawnSync npx ENOENT).
-    execFileSync('node', ['--import', 'tsx', 'test/sandbox-deploy.ts', backendPath], {
+    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
       cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
     });
     
@@ -113,7 +111,7 @@ test.before(async () => {
   } else if (ENV === 'production') {
     console.log('🚀 Deploying production (no sandboxMode)...\n');
     
-    execFileSync('node', ['--import', 'tsx', 'test/production-deploy.ts', backendPath], {
+    execFileSync('npx', ['tsx', 'test/production-deploy.ts', backendPath], {
       cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
     });
     
@@ -145,7 +143,7 @@ test.after(async (t) => {
   if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
     const destroyScript = ENV === 'sandbox' ? 'test/sandbox-destroy.ts' : 'test/production-destroy.ts';
     console.log(`\n🗑️  Destroying ${ENV} stack...`);
-    execFileSync('node', ['--import', 'tsx', destroyScript, backendPath], {
+    execFileSync('npx', ['tsx', destroyScript, backendPath], {
       cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
     });
     console.log(`✅ ${ENV} stack destroyed`);

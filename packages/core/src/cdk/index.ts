@@ -52,10 +52,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     const actualScope = pipelineScope || scope;
 
     const stack = new BlocksStack(actualScope, id, props);
-    // ESM caches modules by URL — append a unique query string so each stage
-    // re-executes the module body. Build a file:// URL (not a raw path) so this
-    // works on Windows, where an absolute path like `D:\...` is otherwise read
-    // as a URL with scheme `d:` and rejected (ERR_UNSUPPORTED_ESM_URL_SCHEME).
+    // file:// URL (not a raw path) so the cache-busting query works on Windows,
+    // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
     const backendUrl = pathToFileURL(props.backendCDKPath);
     backendUrl.searchParams.set('stack', id);
     const mod = await import(backendUrl.href);
