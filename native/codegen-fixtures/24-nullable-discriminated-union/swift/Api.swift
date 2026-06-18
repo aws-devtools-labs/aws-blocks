@@ -9,18 +9,18 @@ public class Api {
     }
 
     /// Calls `api.updateAttributes`.
-    public func updateAttributes(attributes: [String: String]) async throws -> [String: UpdateAttributes.ResultValue] {
+    public func updateAttributes(attributes: [String: String]) async throws -> [String: UpdateAttributes.ResultValue?] {
         let request = BlocksRequest(method: "api.updateAttributes", params: [attributes], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
         guard let result else { throw RPCError(message: "Unexpected null result for api.updateAttributes") }
-        return try JSONDecoder().decode([String: UpdateAttributes.ResultValue].self, from: result)
+        return try JSONDecoder().decode([String: UpdateAttributes.ResultValue?].self, from: result)
     }
 
     /// Calls `api.getNotification`.
-    public func getNotification(id: String) async throws -> GetNotification.Result {
+    public func getNotification(id: String) async throws -> GetNotification.Result? {
         let request = BlocksRequest(method: "api.getNotification", params: [id], id: BlocksRequest.nextId())
         let result = try await client.execute(request)
-        guard let result else { throw RPCError(message: "Unexpected null result for api.getNotification") }
+        guard let result else { return nil }
         return try JSONDecoder().decode(GetNotification.Result.self, from: result)
     }
 

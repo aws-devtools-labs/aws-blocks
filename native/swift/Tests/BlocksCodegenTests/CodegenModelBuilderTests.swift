@@ -192,4 +192,81 @@ final class CodegenModelBuilderTests: XCTestCase {
             XCTFail("Expected union type")
         }
     }
+
+    // MARK: - Nullable Discriminated Unions
+
+    func testNullableDiscriminatedUnionWrapsInNullable() throws {
+        let model = try buildModel(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getNotification",
+                "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }],
+                "result": { "name": "GetNotificationResult", "schema": {
+                    "oneOf": [
+                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["email"] }, "subject": { "type": "string" }, "body": { "type": "string" } }, "required": ["type", "subject", "body"] },
+                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["sms"] }, "message": { "type": "string" } }, "required": ["type", "message"] },
+                        { "type": "null" }
+                    ]
+                }}
+            }]
+        }
+        """)
+
+        let op = model.apiNamespaces[0].operations[0]
+        if case .nullable(let inner) = op.result.type {
+            if case .union(_, let variants, let discriminator) = inner {
+                XCTAssertNotNil(discriminator)
+                XCTAssertEqual(discriminator?.fieldName, "type")
+                XCTAssertEqual(variants.count, 2)
+                XCTAssertEqual(variants[0].discriminatorValue, "email")
+                XCTAssertEqual(variants[1].discriminatorValue, "sms")
+            } else {
+                XCTFail("Expected union inside nullable")
+            }
+        } else {
+            XCTFail("Expected nullable type, got \(op.result.type)")
+        }
+    }
+
+    func testNullableDiscriminatedUnionWithBooleanDiscriminator() throws {
+        let model = try buildModel(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.updateAttributes",
+                "params": [{ "name": "attributes", "required": true, "schema": { "type": "object", "additionalProperties": { "type": "string" } } }],
+                "result": { "name": "UpdateAttributesResult", "schema": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "oneOf": [
+                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [true] } }, "required": ["isUpdated"] },
+                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [false] }, "nextStep": { "type": "object", "properties": { "name": { "type": "string" }, "destination": { "type": "string" } }, "required": ["name", "destination"] } }, "required": ["isUpdated", "nextStep"] },
+                            { "type": "null" }
+                        ]
+                    }
+                }}
+            }]
+        }
+        """)
+
+        let op = model.apiNamespaces[0].operations[0]
+        if case .map(let valueType) = op.result.type {
+            if case .nullable(let inner) = valueType {
+                if case .union(_, let variants, let discriminator) = inner {
+                    XCTAssertNotNil(discriminator)
+                    XCTAssertEqual(discriminator?.fieldName, "isUpdated")
+                    XCTAssertEqual(variants.count, 2)
+                } else {
+                    XCTFail("Expected union inside nullable, got \(inner)")
+                }
+            } else {
+                XCTFail("Expected nullable map value type, got \(valueType)")
+            }
+        } else {
+            XCTFail("Expected map type, got \(op.result.type)")
+        }
+    }
 }
