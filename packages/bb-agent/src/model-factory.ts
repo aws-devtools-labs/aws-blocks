@@ -36,34 +36,29 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 	}
 	log.info(`Checking model health: ${config.provider}${config.modelId ? ` (${config.modelId})` : ''}`);
 	if (config.provider === 'bedrock') {
-		const isCrossRegionProfile = config.modelId && /^(us|eu|apac|au|jp|global)\./.test(config.modelId);
-
 		const getClient = async (): Promise<BedrockHealthClient> => {
 			if (_testClient) return _testClient;
 			const { BedrockClient } = await import('@aws-sdk/client-bedrock');
 			return new BedrockClient({});
 		};
 
-		// Cross-region inference profiles use GetInferenceProfile instead of GetFoundationModel.
-		if (isCrossRegionProfile) {
-			try {
-				const client = await getClient();
-				const command = _testClient
-					? { inferenceProfileIdentifier: config.modelId }
-					: new (await import('@aws-sdk/client-bedrock')).GetInferenceProfileCommand({ inferenceProfileIdentifier: config.modelId });
-				const res = await client.send(command);
-				if (res.inferenceProfileName) {
-					log.info(`Inference profile '${config.modelId}' available`);
-					return true;
-				}
-				return false;
-			} catch (err: unknown) {
-				const e = err as { name?: string; message?: string };
-				log.warn(`Inference profile health check failed for '${config.modelId}': ${e.name ?? e.message}`, { provider: config.provider, modelId: config.modelId });
-				return false;
+		// Try GetInferenceProfile first (covers cross-region and global profiles).
+		try {
+			const client = await getClient();
+			const command = _testClient
+				? { inferenceProfileIdentifier: config.modelId }
+				: new (await import('@aws-sdk/client-bedrock')).GetInferenceProfileCommand({ inferenceProfileIdentifier: config.modelId });
+			const res = await client.send(command);
+			if (res.inferenceProfileName) {
+				log.info(`Inference profile '${config.modelId}' available`);
+				return true;
 			}
+		} catch (err: unknown) {
+			const e = err as { name?: string; message?: string };
+			log.debug?.(`Not an inference profile: ${e.name ?? e.message}`, { modelId: config.modelId });
 		}
 
+		// Try GetFoundationModel (covers base model IDs).
 		try {
 			const client = await getClient();
 			const command = _testClient
@@ -74,27 +69,14 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
 				log.info(`Bedrock model '${config.modelId}' exists in catalog`);
 				return true;
 			}
-			return false;
 		} catch (err: unknown) {
 			const e = err as { name?: string; message?: string };
-			// GetFoundationModel throws for unknown models (ValidationException / ResourceNotFoundException).
-			if (e.name === 'ValidationException' || e.name === 'ResourceNotFoundException') {
-				try {
-					const client = await getClient();
-					const listCommand = _testClient
-						? {}
-						: new (await import('@aws-sdk/client-bedrock')).ListFoundationModelsCommand({});
-					const list = await client.send(listCommand);
-					const available = list.modelSummaries?.map((m: { modelId?: string }) => m.modelId).filter(Boolean) ?? [];
-					log.warn(`Bedrock model '${config.modelId}' not found. Available: ${available.slice(0, 10).join(', ')}${available.length > 10 ? ` (+${available.length - 10} more)` : ''}`);
-				} catch {
-					log.warn(`Bedrock model '${config.modelId}' not found. Could not list available models.`);
-				}
-				return false;
-			}
-			log.warn(`Bedrock health check failed: ${e.name ?? e.message}. Verify AWS credentials are configured.`, { provider: config.provider, modelId: config.modelId });
-			return false;
+			log.debug?.(`Not a foundation model: ${e.name ?? e.message}`, { modelId: config.modelId });
 		}
+
+		// Both failed — model not found.
+		log.warn(`Bedrock model '${config.modelId}' not found as inference profile or foundation model. Verify the model ID and AWS credentials.`, { provider: config.provider, modelId: config.modelId });
+		return false;
 	}
 
 	if (config.provider === 'openai-api') {
