@@ -15,7 +15,7 @@
 // always tears down anything it deployed and the local registry.
 
 import { spawn, spawnSync, execSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -23,7 +23,6 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const isWin = process.platform === 'win32';
 const ROOT = process.cwd();
 const REGISTRY = 'http://localhost:4873/registry/';
-const DEV_URL = 'http://localhost:3000/';
 
 if (!existsSync(join(ROOT, 'dist-registry'))) {
   console.error('dist-registry not found — run `npm run publish:dry-run` first.');
@@ -69,23 +68,32 @@ async function httpUp(url) {
   } catch { return false; }
 }
 
-/** Spawn a long-running command; resolve when stdout/err contains `marker`. */
-function startUntilLine(cmd, args, opts, marker, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    console.log(`\n$ ${cmd} ${args.join(' ')}  (waiting for: "${marker}")`);
-    const child = spawn(cmd, args, { shell: isWin, detached: !isWin, stdio: ['ignore', 'pipe', 'pipe'], ...opts });
-    children.push(child);
-    let done = false;
-    const onData = (buf) => {
-      const s = buf.toString();
-      process.stdout.write(s);
-      if (!done && s.includes(marker)) { done = true; clearTimeout(timer); resolve(child); }
-    };
-    child.stdout.on('data', onData);
-    child.stderr.on('data', onData);
-    child.on('exit', (code) => { if (!done) { done = true; clearTimeout(timer); reject(new Error(`${cmd} exited (${code}) before "${marker}"`)); } });
-    const timer = setTimeout(() => { if (!done) { done = true; reject(new Error(`Timed out waiting for "${marker}"`)); } }, timeoutMs);
-  });
+/**
+ * Spawn a long-running command and poll `ready()` until it returns true.
+ * Readiness is based on product artifacts (config/outputs files, ports), NOT
+ * console log strings, so it doesn't break when log wording changes. Rejects if
+ * the child exits early or the timeout elapses. Returns the child to kill.
+ */
+async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
+  console.log(`\n$ ${cmd} ${args.join(' ')}`);
+  const child = spawn(cmd, args, { shell: isWin, detached: !isWin, stdio: 'inherit', ...opts });
+  children.push(child);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`${cmd} ${args.join(' ')} exited (${child.exitCode}) before becoming ready`);
+    if (await ready()) return child;
+    await sleep(2000);
+  }
+  throw new Error(`${cmd} ${args.join(' ')} did not become ready within ${timeoutMs / 1000}s`);
+}
+
+/** Origin (scheme://host:port) the dev server bound, read from the config file
+ * it writes (`.blocks-sandbox/config.json` -> apiUrl). null until present. */
+function devOrigin(appDir) {
+  try {
+    const cfg = JSON.parse(readFileSync(join(appDir, '.blocks-sandbox', 'config.json'), 'utf-8'));
+    return cfg.apiUrl ? new URL(cfg.apiUrl).origin : null;
+  } catch { return null; }
 }
 
 async function main() {
@@ -121,19 +129,24 @@ async function main() {
   const inApp = { cwd: app, env };
 
   // ── Phase 1: dev server boot (no AWS) ────────────────────────────────────
+  // Ready when the dev server has written its config (with the bound port) and
+  // that port answers HTTP — no port assumption, no log-string matching.
   {
-    const dev = spawn('npm', ['run', 'dev'], { shell: isWin, detached: !isWin, stdio: 'inherit', ...inApp });
-    children.push(dev);
-    let up = false;
-    for (let i = 0; i < 90; i++) { if (await httpUp(DEV_URL)) { up = true; break; } await sleep(2000); }
+    const dev = await startUntilReady('npm', ['run', 'dev'], inApp, async () => {
+      const origin = devOrigin(app);
+      return origin ? await httpUp(origin) : false;
+    }, 3 * 60_000);
     killTree(dev.pid);
-    if (!up) throw new Error(`npm run dev did not serve ${DEV_URL}`);
-    console.log('OK: npm run dev booted and served :3000');
+    console.log('OK: npm run dev booted and is reachable');
   }
 
   // ── Phase 2: sandbox deploy (watch mode) → destroy ───────────────────────
+  // Ready when CDK has written the deploy outputs file (sandbox deploy finishes
+  // and writes it before entering watch mode). Clear any stale copy first.
+  const sandboxOutputs = join(app, '.blocks-sandbox', 'outputs.json');
+  rmSync(sandboxOutputs, { force: true });
   try {
-    const sb = await startUntilLine('npm', ['run', 'sandbox'], { shell: isWin, detached: !isWin, ...inApp }, 'Sandbox deployed', 30 * 60_000);
+    const sb = await startUntilReady('npm', ['run', 'sandbox'], inApp, () => existsSync(sandboxOutputs), 30 * 60_000);
     killTree(sb.pid);
     console.log('OK: npm run sandbox deployed');
   } finally {
