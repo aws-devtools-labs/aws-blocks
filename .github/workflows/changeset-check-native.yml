@@ -7,6 +7,9 @@ on:
       - 'native/dart/**'
       - 'native/swift/**'
 
+permissions:
+  contents: read
+
 jobs:
   check-kotlin:
     name: Require Kotlin changeset
