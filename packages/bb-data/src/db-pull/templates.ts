@@ -38,7 +38,6 @@ import { Database, fromExisting } from '@aws-blocks/bb-data';
 import { tableMeta, type TableMeta } from './database.meta.js';
 import { Scope } from '@aws-blocks/core';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { dbConnectionParameterName } from '@aws-blocks/core/db-naming';
 
 const scope = new Scope('${SUPABASE.scopeName}');
 

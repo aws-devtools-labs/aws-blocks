@@ -125,20 +125,20 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
   const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';
 
   // Parameter name resolution differs by phase:
-  //  - At deploy/synth, BLOCKS_STAGE is set, so compute the stage-scoped name
-  //    (/blocks/{stage}/db-connection-string). The parameter itself is created+seeded
-  //    out-of-band by `ensureSecrets` before deploy (it's the real connection string),
-  //    so we use `AppSetting.fromExisting` — CDK does NOT create/seed/tag/delete it,
-  //    it only grants the Lambda read access and stamps the name into blocks-config as
-  //    BLOCKS_SSM_PARAM_DB_URL (the key is derived from this AppSetting's id 'db-url').
-  //  - At Lambda runtime, BLOCKS_STAGE is NOT injected, so recomputing would
-  //    wrongly default to 'sandbox' and request a parameter the Lambda has no
-  //    grant for (AccessDenied). Instead, read the name CDK already stamped —
-  //    loadConfigToProcessEnv() places it in process.env before this module imports.
+  //  - At synth (no BLOCKS_SSM_PARAM_DB_URL yet): pass NO name, so the AppSetting
+  //    uses the framework default `/${fullId}` — a stack-scoped name that can't
+  //    collide with other apps in the same account/region. Synth grants the
+  //    Lambda, stamps that name into blocks-config as BLOCKS_SSM_PARAM_DB_URL,
+  //    and emits it as a CfnOutput. `ensureSecrets` reads that output AFTER
+  //    deploy and writes the connection string to the exact same name.
+  //  - At Lambda runtime: BLOCKS_SSM_PARAM_DB_URL is loaded from blocks-config
+  //    into process.env. Pass it explicitly as `name` so the Lambda reads the
+  //    exact name synth stamped — never recomputing `/${fullId}` from the
+  //    runtime construct tree (which would not match).
   const paramBlock =
-    `const dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL\n` +
-    `  ?? dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox');\n` +
-    `const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });\n\n`;
+    `const dbUrl = process.env.BLOCKS_SSM_PARAM_DB_URL\n` +
+    `  ? AppSetting.fromExisting(scope, 'db-url', { name: process.env.BLOCKS_SSM_PARAM_DB_URL, secret: true })\n` +
+    `  : AppSetting.fromExisting(scope, 'db-url', { secret: true });\n\n`;
 
   const dbBlock =
     `/**\n` +

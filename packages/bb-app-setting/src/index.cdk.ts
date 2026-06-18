@@ -34,13 +34,21 @@ export class AppSetting<T = string> extends Scope {
 	 * The parameter MUST already exist at deploy time, otherwise the app fails at
 	 * runtime with `ParameterNotFound`.
 	 *
+	 * `name` is optional. When omitted, the parameter is named with the
+	 * framework default `/${fullId}` (stack-scoped, so it never collides across
+	 * apps in one account/region). The resolved name is exposed as a `CfnOutput`
+	 * so an out-of-band writer (`ensureSecrets`, post-deploy) can discover and
+	 * seed it. Pass `name` only when referencing a parameter whose name is fixed
+	 * by something outside this stack.
+	 *
 	 * @example
-	 * const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });
+	 * // self-named, stack-scoped (preferred for app-owned external secrets):
+	 * const dbUrl = AppSetting.fromExisting(scope, 'db-url', { secret: true });
 	 */
 	static fromExisting<T = string>(
 		scope: ScopeParent,
 		id: string,
-		options: { name: string; secret?: boolean },
+		options: { name?: string; secret?: boolean },
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);
@@ -86,14 +94,6 @@ export class AppSetting<T = string> extends Scope {
 			const err = new Error(
 				`AppSetting '${id}': 'external' settings are owned elsewhere and must not have a value. ` +
 				`Remove the value — the parameter is created and seeded outside this stack.`
-			);
-			err.name = AppSettingErrors.ValidationFailed;
-			throw err;
-		}
-
-		if (external && !options.name) {
-			const err = new Error(
-				`AppSetting '${id}': 'external' requires an explicit 'name' referencing the existing parameter.`
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -167,6 +167,21 @@ export class AppSetting<T = string> extends Scope {
 		// Pass the parameter name to the runtime via config registry
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerConfig(this, envKey, parameterName);
+
+		// External secrets are seeded out-of-band AFTER deploy (e.g. the DB
+		// connection string written by `ensureSecrets`). Expose the resolved,
+		// synth-time name as a CfnOutput so the deploy script can read it back
+		// from the stack outputs and write to the exact same name — making the
+		// written name == the stamped name == the name the Lambda reads, with no
+		// pre-synth recomputation (see db-connection-param multi-app design).
+		if (external) {
+			const outputId = `BlocksSsmParam${id.split(/[^a-zA-Z0-9]+/).filter(Boolean)
+				.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('')}`;
+			new cdk.CfnOutput(cdk.Stack.of(this), outputId, {
+				value: parameterName,
+				description: `SSM parameter name for external AppSetting '${id}' (seeded out-of-band post-deploy).`,
+			});
+		}
 	}
 }
 

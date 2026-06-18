@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { extractDbRef, dbConnectionParameterName } from './db-naming.js';
+import { extractDbRef } from './db-naming.js';
 
 describe('extractDbRef', () => {
   test('pooler form (postgres.{ref}@) yields ref', () => {
@@ -35,14 +35,5 @@ describe('extractDbRef', () => {
 
   test('throws when no host is present', () => {
     assert.throws(() => extractDbRef('not-a-connection-string'));
-  });
-});
-
-describe('dbConnectionParameterName', () => {
-  test('composes the stage into the SSM name', () => {
-    assert.strictEqual(
-      dbConnectionParameterName('production'),
-      '/blocks/production/db-connection-string',
-    );
   });
 });

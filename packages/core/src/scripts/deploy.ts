@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { ensureSecrets, loadProductionEnv, dbParamNameFromOutputs } from './ensure-secrets.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
@@ -24,14 +24,10 @@ export async function deploy(options: DeployOptions) {
 
     process.env.BLOCKS_STAGE = 'production';
 
-    // Provision secrets for production
-    const secrets = await ensureSecrets('production');
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
-
     // Apply external-database migrations to the production database before
     // deploying. No-op unless this app uses an external DB and has ./migrations.
+    // Uses the connection string from process.env, not the SSM parameter, so it
+    // is independent of the post-deploy secret write below.
     await applyExternalMigrations({ stage: 'production' });
     
     // Import backend to populate BB registry for telemetry
@@ -82,6 +78,16 @@ export async function deploy(options: DeployOptions) {
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
+
+    // Seed the external-DB connection string AFTER a successful deploy, into the
+    // exact stack-scoped parameter name the stack exposed via CfnOutput. Writing
+    // post-deploy keeps the name authoritative (resolved by synth, not guessed)
+    // and avoids provisioning a secret for a deploy that failed/rolled back.
+    const dbParamName = dbParamNameFromOutputs(stackOutputs);
+    const secrets = await ensureSecrets(dbParamName);
+    if (secrets.created.length > 0 || secrets.updated.length > 0) {
+      console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
+    }
     
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
       key.includes('Hosting') && key.includes('Url')

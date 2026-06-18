@@ -194,15 +194,32 @@ test('CDK: external non-secret creates no SSM parameter and grants read-only acc
 	);
 });
 
-test('CDK: the internal external guard requires a name and forbids a value', () => {
-	// fromExisting() is the public API and makes `name` required at the type level;
-	// these assertions cover the runtime guard on the underlying `external` option
-	// (defense for JS callers / direct construction).
-	const { parent } = setup();
-	assert.throws(
-		() => new AppSetting(parent, 'ext-no-name', { secret: true, external: true } as any),
-		/requires an explicit 'name'/,
+test('CDK: external secret without a name self-names (/${fullId}, stack-scoped) and emits a CfnOutput', () => {
+	const { stack, parent } = setup();
+	// No name → framework default /${fullId}, which is stack-scoped and so
+	// cannot collide with other apps in the same account/region.
+	AppSetting.fromExisting(parent, 'db-url', { secret: true });
+	const template = Template.fromStack(stack);
+
+	// The resolved name is registered for the runtime (BLOCKS_SSM_PARAM_DB_URL).
+	const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as { entries: Map<string, unknown> } | undefined;
+	assert.ok(registry, 'config registry exists on the stack');
+	const name = registry.entries.get('BLOCKS_SSM_PARAM_DB_URL') as string | undefined;
+	// fullId = `${stackName}-${scopeChain}-db-url` → here `/TestStack-app-db-url`.
+	assert.ok(
+		name && name.startsWith('/') && name.includes('TestStack') && name.endsWith('db-url'),
+		`self-named external secret should be /<stackName>-...-db-url, got ${name}`,
 	);
+
+	// ...and exposed as a CfnOutput so ensureSecrets can read it post-deploy and
+	// write the connection string to the exact same name.
+	const outputs = template.findOutputs('BlocksSsmParamDbUrl');
+	assert.equal(Object.keys(outputs).length, 1, 'external secret should emit a BlocksSsmParam CfnOutput');
+	assert.equal(outputs.BlocksSsmParamDbUrl.Value, name, 'CfnOutput value must equal the resolved parameter name');
+});
+
+test('CDK: external secret still forbids a value', () => {
+	const { parent } = setup();
 	assert.throws(
 		() => new AppSetting(parent, 'ext-with-value', { external: true, name: '/x', value: 'v' } as any),
 		/must not have a value/,

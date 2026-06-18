@@ -135,18 +135,21 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes("Auth not configured"));
   });
 
-  test('includes stage-scoped AppSetting name (ref-independent)', () => {
-    assert.ok(output.includes("dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox')"));
-    assert.ok(output.includes("from '@aws-blocks/core/db-naming'"));
+  test('DB AppSetting is self-named (stack-scoped) at synth, not stage-scoped', () => {
+    // Synth path passes NO name → framework default /${fullId} (stack-scoped),
+    // so it cannot collide across apps. The old stage-only name and its helper
+    // import must be gone.
+    assert.ok(output.includes("AppSetting.fromExisting(scope, 'db-url', { secret: true })"));
+    assert.ok(!output.includes('dbConnectionParameterName'));
+    assert.ok(!output.includes("@aws-blocks/core/db-naming"));
   });
 
-  test('resolves SSM parameter name from blocks-config at runtime (not BLOCKS_STAGE)', () => {
-    // At Lambda runtime BLOCKS_STAGE is unset; the name must come from the
-    // deploy-stamped BLOCKS_SSM_PARAM_DB_URL or the prod Lambda requests the
-    // sandbox parameter and gets AccessDenied.
+  test('resolves SSM parameter name from blocks-config at runtime (not recomputed)', () => {
+    // At Lambda runtime BLOCKS_SSM_PARAM_DB_URL is loaded from blocks-config;
+    // the runtime branch passes it explicitly as `name` so the Lambda reads the
+    // exact name synth stamped, never recomputing /${fullId}.
     assert.ok(output.includes('process.env.BLOCKS_SSM_PARAM_DB_URL'));
-    // The deploy-time fallback (?? ...) still computes the stage-scoped name.
-    assert.ok(output.includes('?? dbConnectionParameterName('));
+    assert.ok(output.includes("{ name: process.env.BLOCKS_SSM_PARAM_DB_URL, secret: true }"));
   });
 
   test('derives the connection port per environment at runtime', () => {

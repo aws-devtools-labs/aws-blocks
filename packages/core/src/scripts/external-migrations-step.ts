@@ -27,7 +27,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
-import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
+import { extractDbRef } from '../db-naming.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -153,10 +153,14 @@ export function isProductionTarget(devRef: string | null, prodRefs: Set<string>)
 
 /**
  * Collect database identities known to be **production**, to guard the dev loop
- * from accidentally migrating production:
- * - local `.env.production` (read directly, NOT loaded into the environment), and
- * - the production SSM parameter for this ref (best-effort; skipped silently when
- *   offline or unauthenticated).
+ * from accidentally migrating production. Source: local `.env.production` (read
+ * directly, NOT loaded into the environment).
+ *
+ * Note: this used to also read the production SSM parameter by a fixed
+ * stage-only name. That name is now stack-scoped (`/<stackName>-supabase-db-url`,
+ * resolved at synth) and is not knowable in the dev loop without synthesizing
+ * the production stack, so the SSM leg has been removed. The guard already
+ * fails open, and the `.env.production` leg remains the reliable signal.
  */
 async function productionRefs(devRef: string): Promise<Set<string>> {
   const refs = new Set<string>();
@@ -165,18 +169,6 @@ async function productionRefs(devRef: string): Promise<Set<string>> {
     for (const r of parseProductionRefsFromEnvContent(readFileSync('.env.production', 'utf-8'))) {
       refs.add(r);
     }
-  }
-
-  try {
-    const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
-    const res = await new SSMClient().send(
-      new GetParameterCommand({ Name: dbConnectionParameterName('production'), WithDecryption: true }),
-    );
-    const v = res.Parameter?.Value;
-    const r = v ? safeRef(v) : null;
-    if (r) refs.add(r);
-  } catch {
-    /* best-effort: no creds / offline / parameter absent — skip */
   }
 
   return refs;

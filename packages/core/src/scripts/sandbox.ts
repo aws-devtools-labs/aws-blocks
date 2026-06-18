@@ -5,7 +5,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
+import { ensureSecrets, loadEnvFile, dbParamNameFromOutputs } from './ensure-secrets.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -47,18 +47,10 @@ export async function startSandbox(options: SandboxOptions) {
 
   process.env.BLOCKS_STAGE = 'sandbox';
 
-  // Provision connection string to SSM SecureString.
-  // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
-  const secrets = await ensureSecrets('sandbox');
-  if (secrets.created.length > 0) {
-    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
-  }
-  if (secrets.updated.length > 0) {
-    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
-  }
-
   // Apply external-database migrations to the sandbox database before
   // deploying. No-op unless this app uses an external DB and has ./migrations.
+  // Uses the connection string from process.env, not the SSM parameter, so it
+  // is independent of the post-deploy secret write below.
   await applyExternalMigrations({ stage: 'sandbox' });
 
   // Import backend to populate Scope BB registry (for telemetry).
@@ -101,6 +93,19 @@ export async function startSandbox(options: SandboxOptions) {
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
     throw new Error("Could not find API URL in CDK outputs");
+  }
+
+  // Seed the external-DB connection string AFTER a successful deploy, into the
+  // exact stack-scoped parameter name the stack exposed via CfnOutput. Runs
+  // before the dev server starts, so the parameter exists by the time anything
+  // can proxy a request. No-op unless this app uses an external DB.
+  const dbParamName = dbParamNameFromOutputs(stackOutputs);
+  const secrets = await ensureSecrets(dbParamName);
+  if (secrets.created.length > 0) {
+    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+  }
+  if (secrets.updated.length > 0) {
+    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
   }
 
   console.log("\n✅ Sandbox deployed!");

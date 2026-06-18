@@ -86,7 +86,7 @@ export class AppSetting<T = string> extends Scope {
 	static fromExisting<T = string>(
 		scope: ScopeParent,
 		id: string,
-		options: { name: string; secret?: boolean },
+		options: { name?: string; secret?: boolean },
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);

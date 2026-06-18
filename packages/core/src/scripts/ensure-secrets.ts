@@ -4,15 +4,17 @@
 /**
  * Pre-deploy secret provisioning.
  *
- * Writes the connection string to an SSM SecureString parameter.
- * Parameter name includes the stage to prevent sandbox/prod collision:
- *   /blocks/{stage}/db-connection-string
+ * Writes the connection string found in the environment to an SSM SecureString
+ * parameter. The parameter NAME is supplied by the caller — it is the
+ * stack-scoped name the CDK app resolved at synth and exposed via a CfnOutput
+ * (read from the deploy outputs). This keeps the written name identical to the
+ * name the Lambda reads (stamped in blocks-config), with no pre-synth
+ * recomputation. See the db-connection-param multi-app design.
  *
- * On first deploy: creates the parameter.
- * On subsequent deploys: updates if value changed, no-op otherwise.
+ * On first deploy: creates the parameter. On subsequent deploys: updates if the
+ * value changed, no-op otherwise.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { dbConnectionParameterName } from '../db-naming.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 
@@ -32,21 +34,38 @@ export function findConnectionString(): { name: string; value: string } | null {
 }
 
 /**
- * Ensure the connection string is stored in SSM for the current stage.
+ * Find the external-secret SSM parameter name in a stack's CDK outputs.
+ *
+ * `AppSetting.fromExisting` emits the resolved (stack-scoped) parameter name as
+ * a CfnOutput whose logical id starts with `BlocksSsmParam`. The DB connection
+ * string is the only external secret today, so the first such output is it.
  */
-export async function ensureSecrets(stage?: 'sandbox' | 'production'): Promise<EnsureSecretsResult> {
+export function dbParamNameFromOutputs(
+  stackOutputs: Record<string, string> | undefined,
+): string | undefined {
+  if (!stackOutputs) return undefined;
+  const entry = Object.entries(stackOutputs).find(([key]) => key.startsWith('BlocksSsmParam'));
+  return entry?.[1];
+}
+
+/**
+ * Ensure the connection string is stored in SSM under the given parameter name.
+ *
+ * @param parameterName the stack-scoped SSM parameter name (from the deploy
+ *   CfnOutput). When falsy, this is a no-op — the stack has no external DB
+ *   secret to seed.
+ */
+export async function ensureSecrets(parameterName: string | undefined): Promise<EnsureSecretsResult> {
   const result: EnsureSecretsResult = { created: [], updated: [], unchanged: [] };
 
   const conn = findConnectionString();
   if (!conn) return result;
-
-  const resolvedStage = stage ?? process.env.BLOCKS_STAGE ?? 'sandbox';
+  if (!parameterName) return result;
 
   const { SSMClient, GetParameterCommand, PutParameterCommand } =
     await import('@aws-sdk/client-ssm');
 
   const client = new SSMClient();
-  const parameterName = dbConnectionParameterName(resolvedStage);
 
   let isNew = false;
   try {

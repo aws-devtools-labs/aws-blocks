@@ -2,13 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Single source of truth for the SSM parameter name that stores an external
- * database connection string, and for the project ref derived from a Postgres
- * connection string.
- *
- * Both the deploy-time provisioner (`ensure-secrets`) and the `db pull`
- * generated code derive this name from the stage alone. Keep this the only
- * place the name is constructed.
+ * Extracts the project ref / stable identifier from a Postgres connection
+ * string. Used by the external-migration tooling to compare database identities.
  */
 
 /**
@@ -33,9 +28,4 @@ export function extractDbRef(connectionString: string): string {
   if (host) return host[1].replace(/\./g, '-');
 
   throw new Error('Cannot extract database identifier from connection string.');
-}
-
-/** SSM parameter name storing the connection string for a given stage. */
-export function dbConnectionParameterName(stage: string): string {
-  return `/blocks/${stage}/db-connection-string`;
 }
