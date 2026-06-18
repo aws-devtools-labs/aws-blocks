@@ -3,13 +3,12 @@ import { Database, fromExisting } from '@aws-blocks/bb-data';
 import { tableMeta, type TableMeta } from './database.meta.js';
 import { Scope } from '@aws-blocks/core';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { dbConnectionParameterName } from '@aws-blocks/core/db-naming';
 
 const scope = new Scope('supabase');
 
-const dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL
-  ?? dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox');
-const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });
+const dbUrl = process.env.BLOCKS_SSM_PARAM_DB_URL
+  ? AppSetting.fromExisting(scope, 'db-url', { name: process.env.BLOCKS_SSM_PARAM_DB_URL, secret: true })
+  : AppSetting.fromExisting(scope, 'db-url', { secret: true });
 
 async function resolveConnString(): Promise<string> {
   const raw = await dbUrl.get();
@@ -31,6 +30,14 @@ async function resolveConnString(): Promise<string> {
   return u.toString();
 }
 
+/**
+ * Database instance connected to your Supabase Postgres.
+ *
+ * RLS caveat: db.crud() (via supabaseCrud()) always enforces RLS.
+ * Raw db.query() / db.execute() / db.transaction() BYPASS RLS.
+ * For hand-written queries, use db.withRLS({ userId }) to enforce
+ * row-level security — otherwise all rows are visible.
+ */
 export const db = new Database(scope, 'db', {
   connection: fromExisting({ connectionString: { get: resolveConnString } }),
   rlsPolicy: 'enforce',
