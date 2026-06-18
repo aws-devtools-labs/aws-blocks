@@ -1,5 +1,11 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.3
+
+### Patch Changes
+
+- bbf0c4a: Add the missing `/.blocks-sandbox/config.json` route handler to the Next.js template so the browser client can discover the API URL.
+
 ## 0.1.2
 
 ### Patch Changes
