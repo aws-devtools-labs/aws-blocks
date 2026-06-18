@@ -1682,7 +1682,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const presetAgent = presetAgents[presetName];
     if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
     const result = await presetAgent.stream(message);
-    return { channelId: result.channelId, channel: await presetAgent.getChannel(result.channelId) };
+    const done = await result.complete();
+    return { text: done.text ?? '' };
   },
 
   async agentTestApiKeyResolver() {
