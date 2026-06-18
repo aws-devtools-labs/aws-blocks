@@ -21,6 +21,7 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "seed:cognito": "tsx aws-blocks/scripts/seed-cognito-user.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
