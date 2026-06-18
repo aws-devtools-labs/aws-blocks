@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-knowledge-base",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.1",
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/core": "^0.1.2",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.0.0"
   },
   "devDependencies": {
