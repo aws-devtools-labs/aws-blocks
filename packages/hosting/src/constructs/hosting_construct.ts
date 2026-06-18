@@ -46,7 +46,7 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { HostingResources } from '../types.js';
-import { ERROR_PAGE_KEY, generateBuildId } from '../defaults.js';
+import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
 import { StorageConstruct } from './storage_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { WafConstruct } from './waf_construct.js';
@@ -1259,6 +1259,20 @@ export class HostingConstruct extends Construct {
           prune: false,
         }),
       );
+    }
+
+    // ---- 11-bis. Default 404 page (multi-page static only) ----
+    // Set by the CDN construct only for multi-page static sites
+    // (spaFallback === false) that shipped no 404.html and got no
+    // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
+    // → /builds/<id>/_not_found.html responses resolve from S3.
+    if (cdn.defaultNotFoundPageHtml) {
+      new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
+        sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
+        destinationBucket: this.bucket,
+        destinationKeyPrefix: `builds/${buildId}/`,
+        prune: false,
+      });
     }
 
     // ---- 11a. Custom error pages ----

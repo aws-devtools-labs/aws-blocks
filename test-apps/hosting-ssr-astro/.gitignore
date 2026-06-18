@@ -1,0 +1,8 @@
+node_modules
+dist
+.astro
+.hosting
+.blocks-sandbox
+test-results
+playwright-report
+*.log

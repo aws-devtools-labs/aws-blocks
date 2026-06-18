@@ -711,6 +711,13 @@ const buildStaticManifest = (distDir: string): DeployManifest => {
       // Astro content-hashes assets into `_astro/`; the rest of dist/ is
       // user HTML and assets from `public/` which must NOT be immutable.
       immutablePaths: ['_astro/*'],
+      // Astro static output is ALWAYS multi-page: each route is prerendered
+      // to its own `<path>/index.html`. Declare it explicitly so the L3
+      // uses directory-index resolution (e.g. /about → about/index.html)
+      // rather than SPA fallback (every path → /index.html). Without this,
+      // a static Astro site with no 404.astro was misclassified as a SPA
+      // and every route rendered the home page.
+      spaFallback: false,
     },
     routes: [{ pattern: '/*', target: 'static' }],
     ...(Object.keys(errorPages).length > 0 ? { errorPages } : {}),
