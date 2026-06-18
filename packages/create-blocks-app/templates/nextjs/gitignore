@@ -9,7 +9,7 @@ out/
 dist/
 
 # Blocks
-.blocks-sandbox/
+/.blocks-sandbox/
 cdk.out/
 
 # Environment
