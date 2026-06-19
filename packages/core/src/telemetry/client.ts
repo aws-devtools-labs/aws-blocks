@@ -1,7 +1,7 @@
-import { request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
 import { existsSync, readFileSync, mkdirSync, openSync, writeSync, closeSync, writeFileSync, constants } from 'node:fs';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { debuglog } from 'node:util';
 import { CORE_VERSION } from '../version.js';
 import { Scope } from '../common/index.js';
@@ -14,7 +14,6 @@ import type { BlocksTelemetryEvent, BuildAndSendEventOptions } from './types.js'
 const debug = debuglog('blocks-telemetry');
 
 const DEFAULT_ENDPOINT = 'https://blocks-telemetry.us-east-1.api.aws/metrics';
-const TIMEOUT_MS = 500;
 const TELEMETRY_VERSION = '1.0.0';
 
 function getEndpoint(): string {
@@ -179,7 +178,9 @@ export function buildAndSendEvent(opts: BuildAndSendEventOptions): void {
 /**
  * Send a pre-built telemetry event to the collection endpoint.
  *
- * Fire-and-forget: no retry, 500ms timeout, all errors silently swallowed.
+ * Spawns a detached subprocess that performs the HTTPS POST independently of
+ * the parent CLI process. This ensures the request completes even when the
+ * parent exits on failure paths before an in-process request would flush.
  * Debug output available via `NODE_DEBUG=blocks-telemetry`.
  */
 export function sendEvent(event: BlocksTelemetryEvent): void {
@@ -194,32 +195,23 @@ export function sendEvent(event: BlocksTelemetryEvent): void {
 
     debug('sending event to %s (%d bytes)', endpoint, Buffer.byteLength(payload));
 
-    const url = new URL(endpoint);
-    const isHttps = url.protocol === 'https:';
-    const requestFn = isHttps ? httpsRequest : httpRequest;
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const workerPath = path.join(dir, 'telemetry-send-worker.js');
+    const child = spawn(process.execPath, [workerPath, endpoint], {
+      detached: true,
+      stdio: ['pipe', 'ignore', 'ignore'],
+      // Clear NODE_OPTIONS so inherited flags (e.g. --conditions=cdk) don't interfere
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
 
-    const req = requestFn(
-      {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? '443' : '80'),
-        path: url.pathname + url.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-        timeout: TIMEOUT_MS,
-      },
-      (res) => {
-        debug('event sent (status=%d)', res.statusCode);
-        res.resume();
-      },
-    );
-
-    req.on('error', (err) => { debug('send failed: %s', err.message); });
-    req.on('timeout', () => { debug('send timed out'); req.destroy(); });
-    req.write(payload);
-    req.end();
+    child.stdin!.on('error', (err) => { debug('stdin write failed: %s', err.message); });
+    // Payload is small (<1KB JSON) so it fits in the kernel pipe buffer (~64KB)
+    // and survives the parent closing its fd on exit.
+    child.stdin!.write(payload);
+    child.stdin!.end();
+    child.on('error', (err) => { debug('spawn failed: %s', err.message); });
+    child.unref();
+    debug('spawned telemetry subprocess (pid=%d)', child.pid);
   } catch {
     // Telemetry must never throw or affect the user's command
   }

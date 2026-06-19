@@ -11,7 +11,7 @@ import { isCI, detectOS, detectNodeVersion, detectPackageManager, detectAgent, c
 import { trackCommand, classifyError } from './trackCommand.js';
 import { buildAndSendEvent, buildEvent, sendEvent, getTelemetryFilePath } from './client.js';
 import { getInstallationId, getProjectId, generateEventId } from './identifiers.js';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn as spawnChild } from 'node:child_process';
 import type { BlocksTelemetryEvent } from './types.js';
 import { Scope, OFFICIAL_BB_NAMES } from '../common/index.js';
 import type { ScopeParent } from '../common/index.js';
@@ -530,6 +530,96 @@ describe('telemetry/client', () => {
     assert.doesNotThrow(() => sendEvent(event));
 
     process.env = { ...originalEnv };
+  });
+});
+
+describe('telemetry/send-worker', () => {
+  it('worker POSTs payload from stdin to endpoint', async () => {
+    const received: string[] = [];
+
+    const server: Server = await new Promise((resolve) => {
+      const s = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => {
+          received.push(body);
+          res.writeHead(200);
+          res.end();
+        });
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    const addr = server.address() as { port: number };
+    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
+    const payload = JSON.stringify({ test: true, command: 'dev' });
+    const workerPath = join(__dirname, 'telemetry-send-worker.js');
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const proc = spawnChild(process.execPath, [workerPath, endpoint], {
+        stdio: ['pipe', 'ignore', 'ignore'],
+        env: { ...process.env, NODE_OPTIONS: '' },
+      });
+      proc.stdin!.write(payload);
+      proc.stdin!.end();
+      proc.on('close', (code) => resolve(code));
+    });
+
+    assert.strictEqual(exitCode, 0);
+    assert.strictEqual(received.length, 1);
+    assert.deepStrictEqual(JSON.parse(received[0]), { test: true, command: 'dev' });
+
+    server.close();
+  });
+
+  it('worker exits with 1 on unreachable endpoint', async () => {
+    const payload = JSON.stringify({ test: true });
+    const workerPath = join(__dirname, 'telemetry-send-worker.js');
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const proc = spawnChild(process.execPath, [workerPath, 'http://127.0.0.1:1/unreachable'], {
+        stdio: ['pipe', 'ignore', 'ignore'],
+        env: { ...process.env, NODE_OPTIONS: '' },
+      });
+      proc.stdin!.write(payload);
+      proc.stdin!.end();
+      proc.on('close', (code) => resolve(code));
+    });
+
+    assert.strictEqual(exitCode, 1);
+  });
+
+  it('worker writes debug output to stderr when NODE_DEBUG is set', async () => {
+    const server: Server = await new Promise((resolve) => {
+      const s = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => { res.writeHead(200); res.end(); });
+      });
+      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+
+    const addr = server.address() as { port: number };
+    const endpoint = `http://127.0.0.1:${addr.port}/collect`;
+    const payload = JSON.stringify({ test: true });
+    const workerPath = join(__dirname, 'telemetry-send-worker.js');
+
+    const result = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const proc = spawnChild(process.execPath, [workerPath, endpoint], {
+        stdio: ['pipe', 'ignore', 'pipe'],
+        env: { ...process.env, NODE_OPTIONS: '', NODE_DEBUG: 'blocks-telemetry' },
+      });
+      let stderr = '';
+      proc.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      proc.stdin!.write(payload);
+      proc.stdin!.end();
+      proc.on('close', (code) => resolve({ code, stderr }));
+    });
+
+    assert.strictEqual(result.code, 0);
+    assert.ok(result.stderr.includes('BLOCKS-TELEMETRY: sent (status=200)'), `Expected debug output, got: ${result.stderr}`);
+
+    server.close();
   });
 });
 
