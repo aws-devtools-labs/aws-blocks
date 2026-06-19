@@ -155,7 +155,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('derives stack name from package.json in generated aws-blocks/index.cdk.ts', () => {
+  it('generates blocks/config.json with stackId and uses it in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -165,33 +165,36 @@ describe('create-blocks-app auto-detection', () => {
       const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
-        'generated index.cdk.ts should not contain the static placeholder "my-blocks-stack"'
+        'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('package.json'),
-        'generated index.cdk.ts should read the app name from package.json'
+        cdkContent.includes('config.json'),
+        'generated index.cdk.ts should read stackId from blocks/config.json'
       );
+      const config = JSON.parse(readFileSync(join(tmpDir, 'blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, 'blocks/config.json should have a stackId');
+      assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
+      assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('generates CDK file that derives stack name from package.json for special character names', () => {
+  it('truncates long names to 16 chars in stackId', () => {
     const tmpDir = join(__dirname, '../.test-sanitize-stack-name');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: '@scope/my_app.test', version: '1.0.0' }));
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
-      assert.ok(
-        !cdkContent.includes('my-blocks-stack'),
-        'placeholder should not be present'
-      );
-      assert.ok(
-        cdkContent.includes('package.json'),
-        'stack name should be derived from package.json'
-      );
+      const config = JSON.parse(readFileSync(join(tmpDir, 'blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, 'blocks/config.json should have a stackId');
+      // Name part (before the random suffix) should be at most 16 chars
+      const parts = config.stackId.split('-');
+      const suffix = parts.pop();
+      const namepart = parts.join('-');
+      assert.ok(namepart.length <= 16, `name portion "${namepart}" should be at most 16 chars`);
+      assert.strictEqual(suffix!.length, 6, 'random suffix should be 6 chars');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

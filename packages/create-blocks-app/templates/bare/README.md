@@ -34,7 +34,9 @@ Open http://localhost:3000 after `npm run dev`.
 
 ## Stack naming
 
-Your CloudFormation stack is named `<package-name>-stack-prod` (production) or `<package-name>-stack-<sandbox-id>` (sandbox), derived from the `name` field in `package.json`. If you deploy multiple apps to the same AWS account and region, ensure each has a unique `name` — otherwise deployments will overwrite each other.
+Your CloudFormation stack names are derived from the `stackId` in `blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-sandbox`.
+
+To change the stack name, edit `stackId` in `blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
 
 ## For Agents
 
