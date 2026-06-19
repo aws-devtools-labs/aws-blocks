@@ -87,7 +87,7 @@ Every method takes `context: BlocksContext` (for cookie I/O) or operates on the 
 
 | Method | Signature | Notes |
 |---|---|---|
-| `signIn(username, password, context, options?)` | `Promise<SignInResult>` | Returns `{isSignedIn: true, user}` or `{isSignedIn: false, nextStep}`. On success, sets the session cookie. |
+| `signIn(username, password, context, options?)` | `Promise<SignInResult>` | Returns `{status: 'signedIn', user}` or `{status: 'continueSignIn', nextStep}` (narrow with `if (result.status === 'signedIn')`). On success, sets the session cookie. |
 | `confirmSignIn(session, response, context, options?)` | `Promise<SignInResult>` | Advance any challenge. `response` is discriminated: `{ code }` (SMS/TOTP/Email/TOTP-setup), `{ newPassword }` (NEW_PASSWORD_REQUIRED), `{ mfaType }` (MFA selection / setup selection), `{ email }` (EMAIL_SETUP address submit), `{ password }` (USER_AUTH password leg), `{ firstFactor }` (USER_AUTH first-factor pick), `{ credential }` (USER_AUTH passkey assertion — the JSON-encoded `PublicKeyCredential` from `navigator.credentials.get(...)`). Legacy `string` is still accepted and routed to the code branch. |
 | `signOut(context, options?)` | `Promise<void>` | `{global: true}` calls `GlobalSignOutCommand` (revokes the refresh token at Cognito). |
 
@@ -394,11 +394,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   async sessionInfo() {
     const session = await auth.fetchAuthSession(context);
-    if (!session.tokens) return { signedIn: false };
+    // Discriminate on a string `status` (not a boolean): native-client codegen
+    // (Swift/Kotlin/Dart) only builds a proper discriminated union from a
+    // single-value string const/enum per arm.
+    if (!session.tokens) return { status: 'signedOut' as const };
     // Claims are `unknown` — narrow before using.
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
-    return { signedIn: true, sub };
+    return { status: 'signedIn' as const, sub };
   },
 }));
 

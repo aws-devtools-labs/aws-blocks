@@ -178,7 +178,7 @@ describe('passwordless-demo.sandbox · matches the template config', { skip: !EN
 
 			const autoCtx = roll(confirmCtx);
 			const done = await auth.autoSignIn(autoCtx);
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -196,13 +196,13 @@ describe('passwordless-demo.sandbox · matches the template config', { skip: !EN
 			await auth.confirmSignUp(username, signUpCode);
 
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn) throw new Error('expected EMAIL_OTP challenge');
+			if (r1.status === 'signedIn') throw new Error('expected EMAIL_OTP challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 
 			const otp = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code: otp }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
