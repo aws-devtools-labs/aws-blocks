@@ -57,6 +57,16 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 | `batchSize` | 1 | Messages per Lambda invocation |
 | `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
 
+## Handler Context
+
+The handler receives a second argument, `ctx: AsyncJobContext`, carrying metadata about the current job:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `jobId` | `string` | Unique identifier for this job (SQS message ID in AWS, truncated UUID in the mock). |
+| `receiveCount` | `number` | Number of times this message has been received (`1` on first delivery; increments on each retry). |
+| `sentAt` | `string` | ISO 8601 timestamp of when the message was sent (enqueued). |
+
 ## Error Constants
 
 ```typescript
