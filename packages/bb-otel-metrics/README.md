@@ -48,14 +48,30 @@ There is no "namespace" — service identity lives in the resource attributes ab
 
 ## Resource attributes & automatic Lambda enrichment
 
-Telemetry is tagged with semconv **resource attributes**: your `service.*` identity plus
-AWS Lambda attributes detected automatically by the in-process SDK
-(`@opentelemetry/resource-detector-aws`) — `cloud.provider`, `cloud.platform`,
-`cloud.region`, `faas.name`, `faas.version`, `faas.max_memory`, `faas.instance`,
-`aws.log.group.names`. No extra IAM and no collector processor required (the lambda
-collector layer doesn't ship `resourcedetection` — see OTel contrib #17584). In CloudWatch
-these are queryable as `@resource.<attr>` PromQL labels (e.g. `@resource.faas.name`,
-`@resource.service.name`).
+Telemetry is tagged with semconv **resource attributes**: your `service.*` identity plus AWS
+Lambda attributes detected automatically by the in-process SDK
+(`@opentelemetry/resource-detector-aws`'s `awsLambdaDetector`). No extra IAM and no collector
+processor required — the lambda collector layer doesn't ship `resourcedetection`, so detection
+runs in the SDK (the OTel-recommended path; see OTel contrib #17584). In CloudWatch these are
+queryable as `@resource.<attr>` PromQL labels (e.g. `@resource.faas.name`).
+
+Out of the box on AWS Lambda you get ([OTel cloud](https://opentelemetry.io/docs/specs/semconv/resource/cloud/)
++ [FaaS](https://opentelemetry.io/docs/specs/semconv/resource/faas/) resource conventions):
+
+| Attribute | Value / source (Lambda env var) |
+|-----------|----------------------------------|
+| `cloud.provider` | `aws` |
+| `cloud.platform` | `aws_lambda` |
+| `cloud.region` | `AWS_REGION` |
+| `faas.name` | `AWS_LAMBDA_FUNCTION_NAME` |
+| `faas.version` | `AWS_LAMBDA_FUNCTION_VERSION` |
+| `faas.max_memory` | `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` (×1024² → bytes) |
+| `faas.instance` | `AWS_LAMBDA_LOG_STREAM_NAME` — *omitted on SnapStart* |
+| `aws.log.group.names` | `AWS_LAMBDA_LOG_GROUP_NAME` — *omitted on SnapStart* |
+
+The detector reads only Lambda's reserved env vars (no IAM, no API calls) and is a no-op off
+Lambda, where only your configured `service.*` identity is applied. `OTEL_RESOURCE_ATTRIBUTES`
+can add/override attributes at deploy time.
 
 ## CloudWatch & the Dashboard
 

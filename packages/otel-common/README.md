@@ -9,8 +9,13 @@ like `@aws-blocks/auth-common` and `@aws-blocks/data-common`.
 - **`getOrCreateOtelSdk(options, exporters?)`** / **`flushOtel()`** (runtime, `.`) — an
   in-process OpenTelemetry SDK singleton. Registers global Tracer/Meter/Logger providers
   whose exporters target the standalone OpenTelemetry Collector Lambda layer on
-  `localhost:4318`. `flushOtel()` force-flushes all signals and **must be called before
-  the Lambda handler returns** — otherwise the sandbox freeze drops the async exports.
+  `localhost:4318`. The SDK Resource carries the caller's `service.*` identity merged with
+  attributes from the `awsLambdaDetector` + `envDetector` — on AWS Lambda this adds
+  `cloud.provider`/`cloud.platform`/`cloud.region` and `faas.name`/`faas.version`/`faas.max_memory`/`faas.instance`
+  (+ `aws.log.group.names`) out of the box, from Lambda's reserved env vars (no IAM). See the
+  table in `@aws-blocks/bb-otel-metrics`'s README. `flushOtel()` force-flushes all signals and
+  **must be called before the Lambda handler returns** — otherwise the sandbox freeze drops the
+  async exports.
 - **`renderCollectorConfig(input)`** (runtime, `.`) — pure renderer for the collector
   YAML: per-service `sigv4auth` extensions, per-signal `otlphttp` exporters to the
   CloudWatch OTLP endpoints, and the **`decouple`** processor (the layer's collector
