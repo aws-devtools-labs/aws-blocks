@@ -155,7 +155,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates blocks/config.json with stackId and uses it in index.cdk.ts', () => {
+  it('generates .blocks/config.json with stackId and uses getStackId in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -168,11 +168,11 @@ describe('create-blocks-app auto-detection', () => {
         'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('config.json'),
-        'generated index.cdk.ts should read stackId from blocks/config.json'
+        cdkContent.includes('getStackId'),
+        'generated index.cdk.ts should import getStackId from @aws-blocks/blocks/scripts'
       );
-      const config = JSON.parse(readFileSync(join(tmpDir, 'blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, 'blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
       assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
       assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
@@ -187,8 +187,8 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(tmpDir, 'blocks', 'config.json'), 'utf-8'));
-      assert.ok(config.stackId, 'blocks/config.json should have a stackId');
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
       // Name part (before the random suffix) should be at most 16 chars
       const parts = config.stackId.split('-');
       const suffix = parts.pop();

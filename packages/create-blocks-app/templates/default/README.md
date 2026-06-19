@@ -47,9 +47,9 @@ To replace the todo domain with your own: update the Zod schema, rename the API 
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<sandboxId>`, where `sandboxId` is a per-machine random ID stored in `.blocks-sandbox/sandbox-id` (gitignored). This lets multiple developers share a testing account without colliding.
+Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.blocks-sandbox/sandbox-id` (gitignored). This lets multiple developers share a testing account without colliding.
 
-To change the stack name, edit `stackId` in `blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
+To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
 
 ## For Agents
 

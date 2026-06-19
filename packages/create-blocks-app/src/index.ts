@@ -244,9 +244,9 @@ async function createFreshProject(targetDir: string, templateName: string) {
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Generate blocks/config.json with a unique stackId
+  // Generate .blocks/config.json with a unique stackId
   const stackId = appName.slice(0, 16).replace(/-$/, '') + '-' + Math.random().toString(36).slice(2, 8);
-  const blocksConfigDir = join(targetDir, 'blocks');
+  const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
@@ -482,7 +482,7 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
   const baseName = (existingPkg.name || basename(resolve(targetDir)))
     .replace(/[^A-Za-z0-9-]/g, '-').replace(/^[^A-Za-z]+/, 'app-').replace(/-+/g, '-').replace(/-$/, '') || 'blocks-app';
   const stackId = baseName.slice(0, 16).replace(/-$/, '') + '-' + Math.random().toString(36).slice(2, 8);
-  const blocksConfigDir = join(targetDir, 'blocks');
+  const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
 
