@@ -244,16 +244,6 @@ async function createFreshProject(targetDir: string, templateName: string) {
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Update stack name in CDK file — sanitize for CDK-safe IDs
-  const cdkPath = join(targetDir, 'aws-blocks/index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  let sanitizedName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${sanitizedName}-stack`);
-  await writeFile(cdkPath, cdkContent);
   
   console.log('Installing dependencies...');
   execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
@@ -481,19 +471,6 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
   }
 
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
-
-  // Derive a CDK-safe app name from the directory basename for stack naming.
-  // CDK stack IDs must match /^[A-Za-z][A-Za-z0-9-]*$/.
-  let appName = basename(resolve(targetDir));
-  appName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  const cdkPath = join(awsBlocksDest, 'index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${appName}-stack`);
-  await writeFile(cdkPath, cdkContent);
 
   console.log('  ✓ Created aws-blocks/');
 

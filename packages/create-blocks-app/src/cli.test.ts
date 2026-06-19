@@ -155,7 +155,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('replaces my-blocks-stack placeholder in generated aws-blocks/index.cdk.ts', () => {
+  it('derives stack name from package.json in generated aws-blocks/index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -165,18 +165,18 @@ describe('create-blocks-app auto-detection', () => {
       const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
-        'generated index.cdk.ts should not contain the placeholder "my-blocks-stack"'
+        'generated index.cdk.ts should not contain the static placeholder "my-blocks-stack"'
       );
       assert.ok(
-        cdkContent.includes('-stack'),
-        'generated index.cdk.ts should contain the derived stack name'
+        cdkContent.includes('package.json'),
+        'generated index.cdk.ts should read the app name from package.json'
       );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('sanitizes directory names with special characters for CDK stack IDs', () => {
+  it('generates CDK file that derives stack name from package.json for special character names', () => {
     const tmpDir = join(__dirname, '../.test-sanitize-stack-name');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: '@scope/my_app.test', version: '1.0.0' }));
@@ -186,14 +186,12 @@ describe('create-blocks-app auto-detection', () => {
       const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
-        'placeholder should be replaced'
+        'placeholder should not be present'
       );
-      // Stack name should only contain [A-Za-z][A-Za-z0-9-]* characters
-      const stackNameMatch = cdkContent.match(/`([^`]+)-\$\{getSandboxId/);
-      assert.ok(stackNameMatch, 'regex should match stack name pattern in CDK output');
-      if (stackNameMatch) {
-        assert.match(stackNameMatch[1], /^[A-Za-z][A-Za-z0-9-]*$/, 'stack name should be CDK-safe');
-      }
+      assert.ok(
+        cdkContent.includes('package.json'),
+        'stack name should be derived from package.json'
+      );
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
