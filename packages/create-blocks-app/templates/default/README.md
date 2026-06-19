@@ -45,6 +45,10 @@ The test file (`test/e2e.test.ts`) is structured in sections — Auth, CRUD, Con
 
 To replace the todo domain with your own: update the Zod schema, rename the API methods, and adjust the tests. The auth and real-time wiring stays the same.
 
+## Stack naming
+
+Your CloudFormation stack is named `<package-name>-stack-prod` (production) or `<package-name>-stack-<sandbox-id>` (sandbox), derived from the `name` field in `package.json`. If you deploy multiple apps to the same AWS account and region, ensure each has a unique `name` — otherwise deployments will overwrite each other.
+
 ## For Agents
 
 Full Building Block documentation: `node_modules/@aws-blocks/blocks/README.md`

@@ -56,6 +56,10 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 **Read `node_modules/@aws-blocks/blocks/README.md` for complete documentation.**
 
+## Stack naming
+
+Your CloudFormation stack is named `<package-name>-stack-prod` (production) or `<package-name>-stack-<sandbox-id>` (sandbox), derived from the `name` field in `package.json`. If you deploy multiple apps to the same AWS account and region, ensure each has a unique `name` — otherwise deployments will overwrite each other.
+
 ## Adding a Frontend Later
 
 This template is backend-only. To add a frontend:
