@@ -4,6 +4,7 @@
 import type { ModelConfig } from './types.js';
 
 const BALANCED_MODEL_ID = 'global.anthropic.claude-sonnet-4-6';
+const FAST_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 /**
  * Pre-configured Bedrock model presets using global inference profiles.
@@ -28,7 +29,7 @@ export const BedrockModels = {
 	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
 		provider: 'bedrock',
-		modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+		modelId: FAST_MODEL_ID,
 	},
 
 
@@ -45,7 +46,7 @@ export const BedrockModels = {
 	/** @deprecated Use `BedrockModels.FAST` instead. */
 	MICRO: {
 		provider: 'bedrock',
-		modelId: BALANCED_MODEL_ID,
+		modelId: FAST_MODEL_ID,
 	},
 } as const satisfies Record<string, ModelConfig>;
 
