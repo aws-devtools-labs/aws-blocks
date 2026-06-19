@@ -32,6 +32,10 @@ jobs:
       - name: Bump templates
         run: |
           for dir in packages/create-blocks-app/templates/*/; do
+            if [ ! -f "$dir/package.json" ]; then
+              echo "Skipping $dir (no package.json)"
+              continue
+            fi
             echo "Updating $dir"
             ncu -u --cwd "$dir"
           done
