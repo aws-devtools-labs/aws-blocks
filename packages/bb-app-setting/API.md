@@ -36,7 +36,18 @@ export interface AppSettingOptions<T = string> {
     name?: string;
     schema?: StandardSchemaV1<T>;
     secret?: boolean;
-    value?: T;
+    value?: T | CopyFromSource<T>;
+}
+
+// @public
+export function copyFrom<T = string>(stagingParameterName: string): CopyFromSource<T>;
+
+// @public
+export interface CopyFromSource<T = string> {
+    // @internal (undocumented)
+    readonly [COPY_FROM_BRAND]: true;
+    readonly __valueType?: T;
+    readonly stagingParameterName: string;
 }
 
 // (No @packageDocumentation comment for this package)

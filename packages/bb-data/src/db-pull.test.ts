@@ -135,13 +135,24 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes("Auth not configured"));
   });
 
-  test('DB AppSetting is self-named (stack-scoped) at synth, not stage-scoped', () => {
-    // Synth path passes NO name → framework default /${fullId} (stack-scoped),
-    // so it cannot collide across apps. The old stage-only name and its helper
-    // import must be gone.
+  test('DB AppSetting local-dev/bare-synth path is self-named (stack-scoped), not stage-scoped', () => {
+    // The fallback branch (neither runtime nor staging env set — local dev or a
+    // bare `cdk synth`) passes NO name → framework default /${fullId}
+    // (stack-scoped), so it cannot collide across apps. The old stage-only name
+    // and its helper import must be gone.
     assert.ok(output.includes("AppSetting.fromExisting(scope, 'db-url', { secret: true })"));
     assert.ok(!output.includes('dbConnectionParameterName'));
     assert.ok(!output.includes("@aws-blocks/core/db-naming"));
+  });
+
+  test('CDK synth path seeds the DB secret via copyFrom from the staged parameter', () => {
+    // During deploy/sandbox the orchestrator stages the connection string and
+    // sets BLOCKS_DB_STAGING_PARAM. The synth branch declares a stack-owned
+    // secret seeded by an in-stack copy custom resource — the value is never a
+    // literal in the file and never enters the CloudFormation template.
+    assert.ok(output.includes("import { AppSetting, copyFrom } from '@aws-blocks/bb-app-setting'"));
+    assert.ok(output.includes('process.env.BLOCKS_DB_STAGING_PARAM'));
+    assert.ok(output.includes("new AppSetting(scope, 'db-url', { secret: true, value: copyFrom(process.env.BLOCKS_DB_STAGING_PARAM) })"));
   });
 
   test('resolves SSM parameter name from blocks-config at runtime (not recomputed)', () => {

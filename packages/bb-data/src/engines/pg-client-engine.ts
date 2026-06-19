@@ -22,11 +22,11 @@ export interface PgClientEngineConfig {
 
 /**
  * Guard against an unprovisioned secret reaching the pool. The connection string
- * is written to SSM by `ensureSecrets()` during `npm run sandbox` / `npm run deploy`;
- * if that step found no connection string (e.g. it's missing from `.env.local` /
- * `.env.production`), the AppSetting secret Custom Resource leaves a random
- * base64url placeholder in SSM. Connecting with it surfaces as an opaque pg
- * parse/auth error — fail loud and actionable instead.
+ * is seeded into SSM by the in-stack copyFrom copy custom resource during
+ * `npm run sandbox` / `npm run deploy`; if that step found no connection string
+ * (e.g. it's missing from `.env.local` / `.env.production`), the AppSetting secret
+ * Custom Resource leaves a random base64url placeholder in SSM. Connecting with it
+ * surfaces as an opaque pg parse/auth error — fail loud and actionable instead.
  */
 function assertPostgresUrl(connectionString: string): void {
   if (!/^postgres(ql)?:\/\//i.test((connectionString ?? '').trim())) {

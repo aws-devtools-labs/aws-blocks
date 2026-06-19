@@ -5,7 +5,8 @@ import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ensureSecrets, loadEnvFile, dbParamNameFromOutputs } from './ensure-secrets.js';
+import { loadEnvFile } from './ensure-secrets.js';
+import { stageConnectionString, sweepOrphanStagingParams, STAGING_ENV_VAR } from './stage-secret.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -51,8 +52,20 @@ export async function startSandbox(options: SandboxOptions) {
   // Apply external-database migrations to the sandbox database before
   // deploying. No-op unless this app uses an external DB and has ./migrations.
   // Uses the connection string from process.env, not the SSM parameter, so it
-  // is independent of the post-deploy secret write below.
+  // is independent of the copyFrom staging below.
   await applyExternalMigrations({ stage: 'sandbox' });
+
+  // Stage the connection string for the copyFrom mechanism (see deploy.ts for
+  // the full rationale): write it to a unique throwaway SSM parameter and pass
+  // that name (never the value) to the CDK app via the environment, so the
+  // in-stack copy custom resource seeds the final parameter during deploy. Set
+  // before both `cdk deploy` and `cdk watch` below so the staged name is stable
+  // for the whole sandbox session. No-op when there is no connection string.
+  await sweepOrphanStagingParams();
+  const staged = await stageConnectionString();
+  if (staged) {
+    process.env[STAGING_ENV_VAR] = staged.stagingParameterName;
+  }
 
   // Import backend to populate Scope BB registry (for telemetry).
   // Runs before CDK deploy so both success and failure paths include block info.
@@ -96,26 +109,9 @@ export async function startSandbox(options: SandboxOptions) {
     throw new Error("Could not find API URL in CDK outputs");
   }
 
-  // Seed the external-DB connection string AFTER a successful deploy, into the
-  // exact stack-scoped parameter name the stack exposed via CfnOutput. Runs
-  // before the dev server starts, so the parameter exists by the time anything
-  // can proxy a request. No-op unless this app uses an external DB.
-  const dbParamName = dbParamNameFromOutputs(stackOutputs);
-  let secrets;
-  try {
-    secrets = await ensureSecrets(dbParamName);
-  } catch (error) {
-    console.error('\n⚠️  Sandbox deployed, but writing the database connection string failed.');
-    console.error('   The app is deployed but cannot reach its database until this is resolved.');
-    console.error('   Re-run `npm run sandbox` to retry — the write is safe and idempotent.');
-    throw error;
-  }
-  if (secrets.created.length > 0) {
-    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
-  }
-  if (secrets.updated.length > 0) {
-    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
-  }
+  // Note: the database connection string was already seeded into its
+  // stack-scoped SSM parameter by the in-stack copy custom resource during
+  // deploy (see the copyFrom staging above) — there is no post-deploy write.
 
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);

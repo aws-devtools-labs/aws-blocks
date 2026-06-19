@@ -2,13 +2,15 @@
 import { Database, fromExisting } from '@aws-blocks/bb-data';
 import { tableMeta, type TableMeta } from './database.meta.js';
 import { Scope } from '@aws-blocks/core';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { AppSetting, copyFrom } from '@aws-blocks/bb-app-setting';
 
 const scope = new Scope('supabase');
 
 const dbUrl = process.env.BLOCKS_SSM_PARAM_DB_URL
   ? AppSetting.fromExisting(scope, 'db-url', { name: process.env.BLOCKS_SSM_PARAM_DB_URL, secret: true })
-  : AppSetting.fromExisting(scope, 'db-url', { secret: true });
+  : process.env.BLOCKS_DB_STAGING_PARAM
+    ? new AppSetting(scope, 'db-url', { secret: true, value: copyFrom(process.env.BLOCKS_DB_STAGING_PARAM) })
+    : AppSetting.fromExisting(scope, 'db-url', { secret: true });
 
 async function resolveConnString(): Promise<string> {
   const raw = await dbUrl.get();

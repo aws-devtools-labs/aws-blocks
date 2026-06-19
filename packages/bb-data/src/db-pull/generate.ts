@@ -124,21 +124,23 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
   const hasRls = tables.some(t => t.hasRls);
   const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';
 
-  // Parameter name resolution differs by phase:
-  //  - At synth (no BLOCKS_SSM_PARAM_DB_URL yet): pass NO name, so the AppSetting
-  //    uses the framework default `/${fullId}` — a stack-scoped name that can't
-  //    collide with other apps in the same account/region. Synth grants the
-  //    Lambda, stamps that name into blocks-config as BLOCKS_SSM_PARAM_DB_URL,
-  //    and emits it as a CfnOutput. `ensureSecrets` reads that output AFTER
-  //    deploy and writes the connection string to the exact same name.
-  //  - At Lambda runtime: BLOCKS_SSM_PARAM_DB_URL is loaded from blocks-config
-  //    into process.env. Pass it explicitly as `name` so the Lambda reads the
-  //    exact name synth stamped — never recomputing `/${fullId}` from the
-  //    runtime construct tree (which would not match).
+  // Parameter name/value resolution differs by phase:
+  //  - At Lambda runtime (BLOCKS_SSM_PARAM_DB_URL set): read the stack-scoped
+  //    parameter by the exact name synth stamped into blocks-config. Read-only;
+  //    never recompute `/${fullId}` from the runtime construct tree.
+  //  - At CDK synth during deploy/sandbox (BLOCKS_DB_STAGING_PARAM set): declare
+  //    a stack-owned secret seeded via copyFrom(stagingRef). An in-stack copy
+  //    custom resource reads the staging parameter the deploy orchestrator wrote
+  //    and writes the value into the final, stack-scoped parameter during
+  //    deploy — atomically with the stack, never in the template.
+  //  - Local dev / bare synth (neither set): self-named external secret; the
+  //    value comes from `.bb-data/settings.json` seeded by `db pull`.
   const paramBlock =
     `const dbUrl = process.env.BLOCKS_SSM_PARAM_DB_URL\n` +
     `  ? AppSetting.fromExisting(scope, 'db-url', { name: process.env.BLOCKS_SSM_PARAM_DB_URL, secret: true })\n` +
-    `  : AppSetting.fromExisting(scope, 'db-url', { secret: true });\n\n`;
+    `  : process.env.BLOCKS_DB_STAGING_PARAM\n` +
+    `    ? new AppSetting(scope, 'db-url', { secret: true, value: copyFrom(process.env.BLOCKS_DB_STAGING_PARAM) })\n` +
+    `    : AppSetting.fromExisting(scope, 'db-url', { secret: true });\n\n`;
 
   const dbBlock =
     `/**\n` +

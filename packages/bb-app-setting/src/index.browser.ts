@@ -8,3 +8,8 @@ export class AppSetting {
 	}
 	constructor(...args: any[]) {}
 }
+
+// copyFrom is a server/synth-side concept; the browser stub just returns a marker.
+export function copyFrom(stagingParameterName: string): any {
+	return { stagingParameterName };
+}

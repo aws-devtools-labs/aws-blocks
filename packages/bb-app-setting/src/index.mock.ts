@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { AppSettingErrors } from './errors.js';
+import { isCopyFromSource } from './types.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -16,7 +17,8 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types
 export { AppSettingErrors } from './errors.js';
-export type { AppSettingOptions } from './types.js';
+export { copyFrom } from './types.js';
+export type { AppSettingOptions, CopyFromSource } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -107,10 +109,13 @@ export class AppSetting<T = string> extends Scope {
 		this.schema = options.schema;
 		this.isSecret = options.secret ?? false;
 
-		// Determine initial value: use provided value, or generate random for secrets, or empty string
-		if (options.value !== undefined) {
-			this.initialValue = options.value;
-		} else if (this.isSecret) {
+		// Determine initial value: a literal value wins; a copyFrom source has no
+		// value available locally (it is seeded at deploy from a staging param),
+		// so it behaves like a secret placeholder; secrets get a random value.
+		const copyFromSource = isCopyFromSource(options.value);
+		if (options.value !== undefined && !copyFromSource) {
+			this.initialValue = options.value as T;
+		} else if (this.isSecret || copyFromSource) {
 			this.initialValue = randomBytes(32).toString('base64url') as T;
 		} else {
 			this.initialValue = '' as T;

@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ensureSecrets, loadProductionEnv, dbParamNameFromOutputs } from './ensure-secrets.js';
+import { loadProductionEnv } from './ensure-secrets.js';
+import { stageConnectionString, sweepOrphanStagingParams, STAGING_ENV_VAR } from './stage-secret.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
@@ -28,8 +29,22 @@ export async function deploy(options: DeployOptions) {
     // Apply external-database migrations to the production database before
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     // Uses the connection string from process.env, not the SSM parameter, so it
-    // is independent of the post-deploy secret write below.
+    // is independent of the copyFrom staging below.
     await applyExternalMigrations({ stage: 'production' });
+
+    // Stage the connection string for the copyFrom mechanism: write it to a
+    // unique throwaway SSM parameter and pass that name (never the value) to the
+    // CDK app via the environment. The in-stack copy custom resource reads it at
+    // deploy time, writes it into the final stack-scoped parameter, and deletes
+    // the staging parameter — all inside the CloudFormation transaction, so the
+    // value is seeded atomically with the stack. No-op when there is no
+    // connection string. Reap orphaned staging params from prior failed deploys
+    // first (best-effort).
+    await sweepOrphanStagingParams();
+    const staged = await stageConnectionString();
+    if (staged) {
+      process.env[STAGING_ENV_VAR] = staged.stagingParameterName;
+    }
     
     // Import backend to populate BB registry for telemetry
     const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
@@ -80,24 +95,10 @@ export async function deploy(options: DeployOptions) {
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     const apiUrl = stackOutputs.ApiUrl;
 
-    // Seed the external-DB connection string AFTER a successful deploy, into the
-    // exact stack-scoped parameter name the stack exposed via CfnOutput. Writing
-    // post-deploy keeps the name authoritative (resolved by synth, not guessed)
-    // and avoids provisioning a secret for a deploy that failed/rolled back.
-    const dbParamName = dbParamNameFromOutputs(stackOutputs);
-    let secrets;
-    try {
-      secrets = await ensureSecrets(dbParamName);
-    } catch (error) {
-      console.error('\n⚠️  Deployment succeeded, but writing the database connection string failed.');
-      console.error('   The app is deployed but cannot reach its database until this is resolved.');
-      console.error('   Re-run `npm run deploy` to retry — the write is safe and idempotent.');
-      throw error;
-    }
-    if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
-    }
-    
+    // Note: the database connection string was already seeded into its
+    // stack-scoped SSM parameter by the in-stack copy custom resource during
+    // deploy (see the copyFrom staging above) — there is no post-deploy write.
+
     const hostingUrl = Object.entries(stackOutputs).find(([key]) => 
       key.includes('Hosting') && key.includes('Url')
     )?.[1];

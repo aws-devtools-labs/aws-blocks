@@ -9,7 +9,8 @@ export { validateSpec, type SpecValidationError } from './validate-spec.js';
 export { deploy, type DeployOptions } from './deploy.js';
 export { destroy, type DestroyOptions } from './destroy.js';
 export { openConsole, type ConsoleOptions } from './console.js';
-export { ensureSecrets, loadProductionEnv, loadEnvFile } from './ensure-secrets.js';
+export { loadProductionEnv, loadEnvFile, findConnectionString } from './ensure-secrets.js';
+export { stageConnectionString, sweepOrphanStagingParams, STAGING_PARAM_PREFIX, STAGING_ENV_VAR, type StagedSecret } from './stage-secret.js';
 export {
   trackCommand,
   buildAndSendEvent,

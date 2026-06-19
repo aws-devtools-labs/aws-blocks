@@ -17,7 +17,8 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 // Re-export public types from types module (canonical source)
 export { AppSettingErrors } from './errors.js';
-export type { AppSettingOptions } from './types.js';
+export { copyFrom } from './types.js';
+export type { AppSettingOptions, CopyFromSource } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ async function validateSchema<T>(schema: StandardSchemaV1<T> | undefined, value:
 export class AppSetting<T = string> extends Scope {
 	/**
 	 * Reference an SSM parameter created and owned **outside this stack** (e.g. a
-	 * connection string seeded by `ensureSecrets` before deploy). At runtime this
+	 * connection string seeded out-of-band by your own tooling). At runtime this
 	 * reads the value like any other setting; the construct-time behavior (no
 	 * create/seed/tag/delete, read-only grant) is applied by the CDK variant. The
 	 * factory exists on every variant so app code uses one API across dev/deploy.

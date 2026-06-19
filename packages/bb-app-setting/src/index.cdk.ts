@@ -9,10 +9,12 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
-import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
+import { isCopyFromSource } from './types.js';
+import type { AppSettingOptions, InternalAppSettingOptions, CopyFromSource } from './types.js';
 
 export { AppSettingErrors } from './errors.js';
-export type { AppSettingOptions } from './types.js';
+export { copyFrom } from './types.js';
+export type { AppSettingOptions, CopyFromSource } from './types.js';
 
 /**
  * CDK construct for AppSetting. Creates a single SSM parameter (String or
@@ -22,11 +24,14 @@ export type { AppSettingOptions } from './types.js';
  * - SecureString parameters use a Custom Resource Lambda because
  *   CloudFormation cannot natively create SecureString parameters.
  * - SecureString parameters are encrypted with the default `aws/ssm` KMS key.
+ * - When `value` is a {@link copyFrom} source, a Custom Resource copies the value
+ *   from a staging parameter into this (stack-owned) parameter during deploy, so
+ *   the value is seeded atomically with the stack and never enters the template.
  */
 export class AppSetting<T = string> extends Scope {
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
-	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
+	 * (e.g. a connection string seeded by your own tooling out-of-band). The
 	 * construct does not create, seed, tag, or delete it — it only grants the app
 	 * **read-only** access (`ssm:GetParameter`, plus `kms:Decrypt` when `secret`)
 	 * and registers the name for config resolution.
@@ -37,9 +42,12 @@ export class AppSetting<T = string> extends Scope {
 	 * `name` is optional. When omitted, the parameter is named with the
 	 * framework default `/${fullId}` (stack-scoped, so it never collides across
 	 * apps in one account/region). The resolved name is exposed as a `CfnOutput`
-	 * so an out-of-band writer (`ensureSecrets`, post-deploy) can discover and
-	 * seed it. Pass `name` only when referencing a parameter whose name is fixed
-	 * by something outside this stack.
+	 * so an out-of-band writer can discover and seed it. Pass `name` only when
+	 * referencing a parameter whose name is fixed by something outside this stack.
+	 *
+	 * To have the framework seed the value *during* deploy (atomically, inside the
+	 * CloudFormation transaction) instead of out-of-band, use {@link copyFrom} on
+	 * a regular `new AppSetting(...)` rather than `fromExisting`.
 	 *
 	 * @example
 	 * // self-named, stack-scoped (preferred for app-owned external secrets):
@@ -61,6 +69,13 @@ export class AppSetting<T = string> extends Scope {
 		// public AppSettingOptions — read it via the internal options type.
 		const external = (options as InternalAppSettingOptions<T>).external ?? false;
 
+		// A copyFrom() source seeds the value at deploy time from a staging
+		// parameter (see registerCopyFrom). It is the only `value` form allowed
+		// for a secret, because it never places the value in the template.
+		const copyFromSource: CopyFromSource | undefined = isCopyFromSource(options.value)
+			? (options.value as CopyFromSource)
+			: undefined;
+
 		// ── Validation ──────────────────────────────────────────────────────
 		if (options.secret && options.schema) {
 			const err = new Error(
@@ -80,10 +95,11 @@ export class AppSetting<T = string> extends Scope {
 			throw err;
 		}
 
-		if (options.secret && options.value !== undefined) {
+		if (options.secret && options.value !== undefined && !copyFromSource) {
 			const err = new Error(
-				`AppSetting '${id}': secrets should not have a value in source code. ` +
-				`Remove the value — a random secret will be generated on first deploy. ` +
+				`AppSetting '${id}': secrets should not have a literal value in source code. ` +
+				`Remove the value — a random secret will be generated on first deploy, or use ` +
+				`copyFrom(stagingRef) to seed it at deploy time. ` +
 				`Set the real value at runtime via AppSetting.put().`
 			);
 			err.name = AppSettingErrors.ValidationFailed;
@@ -110,9 +126,15 @@ export class AppSetting<T = string> extends Scope {
 
 		const parameterName = options.name ?? `/${this.fullId}`;
 
-		// Always JSON.stringify
-		// For secrets without a value, the Custom Resource Lambda generates a random string
-		const initialValue = options.value !== undefined
+		// `external` settings and copyFrom-seeded settings are read-only from the
+		// app's perspective: the value is owned/seeded out-of-band (external) or
+		// by the in-stack copy custom resource (copyFrom). The app never put()s it.
+		const readOnly = external || copyFromSource !== undefined;
+
+		// Always JSON.stringify a literal value. Secrets without a value get a
+		// random placeholder from the Custom Resource; copyFrom values are seeded
+		// by the copy Custom Resource, so neither produces an initialValue here.
+		const initialValue = (options.value !== undefined && !copyFromSource)
 			? JSON.stringify(options.value)
 			: undefined;
 
@@ -124,20 +146,22 @@ export class AppSetting<T = string> extends Scope {
 
 		if (options.secret) {
 			// ── SecureString ────────────────────────────────────────────────
-			// Externally-owned secrets (e.g. the connection string seeded by
-			// ensureSecrets) are NOT enrolled in the bulk-init: it would
-			// PutParameter a random placeholder over a parameter we don't own and
-			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
-			// We only need runtime read access, granted below.
-			if (!external) {
+			// Externally-owned secrets (e.g. a connection string seeded out-of-band)
+			// are NOT enrolled in the bulk-init: it would PutParameter a random
+			// placeholder over a parameter we don't own and then fail tagging it.
+			// copyFrom secrets ARE created by us — but via the copy custom resource
+			// (which seeds the real value), not the random bulk-init.
+			if (copyFromSource) {
+				registerCopyFrom(cdk.Stack.of(this), parameterName, copyFromSource.stagingParameterName, true);
+			} else if (!external) {
 				registerSecret(cdk.Stack.of(this), parameterName);
 			}
 
-			// Grant handler KMS access for the default aws/ssm key. External secrets
-			// are read-only (Decrypt only); stack-managed secrets also need Encrypt
-			// so the app can write the value via put().
+			// Grant handler KMS access for the default aws/ssm key. Read-only
+			// settings (external or copyFrom-seeded) only need Decrypt; a
+			// stack-managed secret the app can write via put() also needs Encrypt.
 			this.handler.addToRolePolicy(new iam.PolicyStatement({
-				actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
+				actions: readOnly ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
 				resources: ['*'],
 				conditions: {
 					StringEquals: {
@@ -145,6 +169,9 @@ export class AppSetting<T = string> extends Scope {
 					},
 				},
 			}));
+		} else if (copyFromSource) {
+			// ── Non-secret String, seeded by the copy custom resource ────────
+			registerCopyFrom(cdk.Stack.of(this), parameterName, copyFromSource.stagingParameterName, false);
 		} else if (!external) {
 			// ── String parameter via CDK construct ──────────────────────────
 			const param = new ssm.StringParameter(this, 'Param', {
@@ -157,10 +184,10 @@ export class AppSetting<T = string> extends Scope {
 		}
 		// (external non-secret: parameter exists already; nothing to create.)
 
-		// Grant handler SSM access on this parameter. External parameters are owned
-		// elsewhere, so the app only reads them (no ssm:PutParameter).
+		// Grant handler SSM access on this parameter. Read-only settings (external
+		// or copyFrom-seeded) only read; stack-managed settings also write via put().
 		this.handler.addToRolePolicy(new iam.PolicyStatement({
-			actions: external ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
+			actions: readOnly ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
 			resources: [parameterArn],
 		}));
 
@@ -168,12 +195,11 @@ export class AppSetting<T = string> extends Scope {
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerConfig(this, envKey, parameterName);
 
-		// External secrets are seeded out-of-band AFTER deploy (e.g. the DB
-		// connection string written by `ensureSecrets`). Expose the resolved,
-		// synth-time name as a CfnOutput so the deploy script can read it back
-		// from the stack outputs and write to the exact same name — making the
-		// written name == the stamped name == the name the Lambda reads, with no
-		// pre-synth recomputation (see db-connection-param multi-app design).
+		// External secrets are seeded out-of-band (by your own tooling) after the
+		// parameter name is known. Expose the resolved, synth-time name as a
+		// CfnOutput so that out-of-band writer can read it back from the stack
+		// outputs and write to the exact same name. (For framework-seeded values
+		// during deploy, prefer copyFrom — which needs no output.)
 		if (external) {
 			const outputId = `BlocksSsmParam${id.split(/[^a-zA-Z0-9]+/).filter(Boolean)
 				.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('')}`;
@@ -300,6 +326,139 @@ function registerSecret(stack: cdk.Stack, parameterName: string): void {
 		serviceToken: provider.serviceToken,
 		properties: {
 			ParameterNames: cdk.Lazy.list({ produce: () => state!.parameterNames }),
+			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
+		},
+	});
+}
+
+// ── copyFrom: staging → final copy (one CustomResource per stack) ───────────
+
+const COPY_FROM_BULK_KEY = Symbol.for('BLOCKS_COPYFROM_BULK');
+
+interface CopyFromEntry {
+	/** Final, stack-scoped parameter name this stack owns. */
+	finalName: string;
+	/** Staging parameter to read the value from (minted by the orchestrator). */
+	stagingName: string;
+	/** Whether the final parameter is a SecureString. */
+	secret: boolean;
+}
+
+interface CopyFromBulkState {
+	entries: CopyFromEntry[];
+}
+
+/**
+ * Register a copyFrom-seeded parameter. On first call, creates the shared Lambda,
+ * Provider, and a single CustomResource that — during deployment — reads each
+ * staging parameter and writes its value into the final, stack-owned parameter,
+ * then deletes the staging parameter. Subsequent calls append to the list
+ * (resolved lazily at synth).
+ *
+ * Properties hold only parameter **names** (references), never the secret value,
+ * so nothing sensitive enters the CloudFormation template (readable via
+ * `GetTemplate`). The custom resource reads the value from SSM at deploy time.
+ *
+ * Semantics: **copy-on-every-deploy**. The orchestrator mints a fresh staging
+ * name per deploy, so the resource's properties change each deploy and
+ * CloudFormation fires an Update → the value is re-synced from the source. The
+ * Update handler is idempotent: if the staging parameter is already gone (e.g. a
+ * sandbox `cdk watch` re-synth after a previous delete-after-copy) and the final
+ * parameter already holds a value, it is a no-op. The final parameter is
+ * stack-owned, so `cdk destroy` cleans it up via the Delete handler.
+ */
+function registerCopyFrom(stack: cdk.Stack, finalName: string, stagingName: string, secret: boolean): void {
+	let state = (stack as any)[COPY_FROM_BULK_KEY] as CopyFromBulkState | undefined;
+	if (state) {
+		state.entries.push({ finalName, stagingName, secret });
+		return;
+	}
+
+	state = { entries: [{ finalName, stagingName, secret }] };
+	(stack as any)[COPY_FROM_BULK_KEY] = state;
+
+	const copyFn = new lambda.Function(stack, 'BlocksCopyFromFn', {
+		runtime: DEFAULT_NODE_RUNTIME,
+		handler: 'index.handler',
+		code: lambda.Code.fromInline(`
+			const { SSMClient, GetParameterCommand, PutParameterCommand, DeleteParameterCommand, AddTagsToResourceCommand } = require('@aws-sdk/client-ssm');
+			const client = new SSMClient({});
+			async function exists(name) {
+				try { await client.send(new GetParameterCommand({ Name: name })); return true; }
+				catch (e) { if (e.name === 'ParameterNotFound') return false; throw e; }
+			}
+			exports.handler = async (event) => {
+				const entries = event.ResourceProperties.Entries || [];
+				const stackName = event.ResourceProperties.StackName || '';
+				const tags = stackName ? [{ Key: 'aws-blocks-stack', Value: stackName }] : [];
+				if (event.RequestType === 'Delete') {
+					// Final parameter is stack-owned → delete it. Best-effort delete
+					// any staging param that outlived the copy.
+					for (const e of entries) {
+						try { await client.send(new DeleteParameterCommand({ Name: e.finalName })); } catch {}
+						try { await client.send(new DeleteParameterCommand({ Name: e.stagingName })); } catch {}
+					}
+					return { PhysicalResourceId: 'bb-copyfrom-bulk' };
+				}
+				// Create or Update: copy staging → final, then delete staging.
+				for (const e of entries) {
+					let value;
+					try {
+						const got = await client.send(new GetParameterCommand({ Name: e.stagingName, WithDecryption: true }));
+						value = got.Parameter && got.Parameter.Value;
+					} catch (err) {
+						if (err.name === 'ParameterNotFound') {
+							// Staging already consumed (delete-after-copy on a prior cycle).
+							// No-op if the final value is already seeded; otherwise it's a real error.
+							if (await exists(e.finalName)) continue;
+							throw new Error('copyFrom: staging parameter ' + e.stagingName + ' not found and final ' + e.finalName + ' does not exist');
+						}
+						throw err;
+					}
+					if (value === undefined || value === null) {
+						throw new Error('copyFrom: staging parameter ' + e.stagingName + ' has no value');
+					}
+					// CloudFormation stringifies custom-resource property scalars, so
+					// e.secret arrives as "true"/"false" — coerce explicitly.
+					const isSecret = e.secret === true || e.secret === 'true';
+					await client.send(new PutParameterCommand({
+						Name: e.finalName, Value: value, Type: isSecret ? 'SecureString' : 'String', Overwrite: true,
+					}));
+					if (tags.length) {
+						try { await client.send(new AddTagsToResourceCommand({ ResourceType: 'Parameter', ResourceId: e.finalName, Tags: tags })); } catch {}
+					}
+					try { await client.send(new DeleteParameterCommand({ Name: e.stagingName })); } catch {}
+				}
+				return { PhysicalResourceId: 'bb-copyfrom-bulk' };
+			};
+		`),
+	});
+
+	// Scope IAM to the specific staging + final parameter ARNs (no wildcard).
+	const arnFor = (name: string) => stack.formatArn({
+		service: 'ssm', resource: 'parameter', resourceName: name.replace(/^\//, ''),
+	});
+	copyFn.addToRolePolicy(new iam.PolicyStatement({
+		actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
+		resources: cdk.Lazy.list({
+			produce: () => state!.entries.flatMap(e => [arnFor(e.finalName), arnFor(e.stagingName)]),
+		}),
+	}));
+	// Decrypt to read the staging SecureString; Encrypt to write the final one.
+	copyFn.addToRolePolicy(new iam.PolicyStatement({
+		actions: ['kms:Decrypt', 'kms:Encrypt'],
+		resources: ['*'],
+		conditions: { StringEquals: { 'kms:ViaService': `ssm.${stack.region}.amazonaws.com` } },
+	}));
+
+	const provider = new cr.Provider(stack, 'BlocksCopyFromProvider', {
+		onEventHandler: copyFn,
+	});
+
+	new cdk.CustomResource(stack, 'BlocksCopyFromBulk', {
+		serviceToken: provider.serviceToken,
+		properties: {
+			Entries: cdk.Lazy.any({ produce: () => state!.entries }),
 			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
 		},
 	});

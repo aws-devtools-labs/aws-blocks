@@ -13,7 +13,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AppSetting } from './index.cdk.js';
+import { AppSetting, copyFrom } from './index.cdk.js';
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
@@ -211,8 +211,8 @@ test('CDK: external secret without a name self-names (/${fullId}, stack-scoped) 
 		`self-named external secret should be /<stackName>-...-db-url, got ${name}`,
 	);
 
-	// ...and exposed as a CfnOutput so ensureSecrets can read it post-deploy and
-	// write the connection string to the exact same name.
+	// ...and exposed as a CfnOutput so an out-of-band writer can read it post-deploy
+	// and write the connection string to the exact same name.
 	const outputs = template.findOutputs('BlocksSsmParamDbUrl');
 	assert.equal(Object.keys(outputs).length, 1, 'external secret should emit a BlocksSsmParam CfnOutput');
 	assert.equal(outputs.BlocksSsmParamDbUrl.Value, name, 'CfnOutput value must equal the resolved parameter name');
@@ -241,4 +241,103 @@ test('CDK: fromExisting still registers the runtime config key (BLOCKS_SSM_PARAM
 		'external setting must register BLOCKS_SSM_PARAM_DB_URL so the runtime can resolve the parameter',
 	);
 	assert.equal(registry.entries.get('BLOCKS_SSM_PARAM_DB_URL'), '/blocks/sandbox/db-abc-connection-string');
+});
+
+// ── copyFrom: in-stack staging → final copy ─────────────────────────────────
+
+const STAGING = '/awsBlocksStagingSecret/11111111-2222-3333-4444-555555555555';
+
+test('CDK: copyFrom secret provisions exactly one copy custom resource + copy Lambda', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'db-url', { secret: true, value: copyFrom(STAGING) });
+	const template = Template.fromStack(stack);
+
+	// One CustomResource — the BlocksCopyFromBulk that copies staging → final.
+	template.resourceCountIs('AWS::CloudFormation::CustomResource', 1);
+
+	// The copy Lambda's inline code performs the get/put/delete copy.
+	const lambdas = template.findResources('AWS::Lambda::Function');
+	const copyFn = Object.values(lambdas).find(l => {
+		const code = JSON.stringify(l?.Properties?.Code ?? {});
+		return code.includes('PutParameterCommand') && code.includes('DeleteParameterCommand') && code.includes('WithDecryption');
+	});
+	assert.ok(copyFn, 'expected a copy Lambda that reads staging (WithDecryption) and writes/deletes');
+});
+
+test('CDK: copyFrom passes the staging NAME as a reference, never a literal value', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'db-url', { secret: true, value: copyFrom(STAGING) });
+	const template = Template.fromStack(stack);
+
+	// The staging parameter name is present (passed to the CR as a reference so
+	// the CR can read the value from SSM at deploy time)...
+	const json = JSON.stringify(template.toJSON());
+	assert.ok(json.includes(STAGING), 'staging parameter name should appear as a CR property reference');
+
+	// ...and the CR carries Entries with the staging + final names, not a value.
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const entries = Object.values(crs)[0]?.Properties?.Entries;
+	assert.ok(entries, 'copy CR should carry an Entries property (the name references)');
+});
+
+test('CDK: copyFrom copy Lambda IAM is scoped to staging + final ARNs (no wildcard)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'db-url', { secret: true, value: copyFrom(STAGING) });
+	const template = Template.fromStack(stack);
+
+	const policies = template.findResources('AWS::IAM::Policy');
+	let foundCopyPolicy = false;
+	for (const logicalId of Object.keys(policies)) {
+		const statements = policies[logicalId]?.Properties?.PolicyDocument?.Statement;
+		if (!Array.isArray(statements)) continue;
+		for (const stmt of statements) {
+			const actions = stmt.Action;
+			if (!Array.isArray(actions) || !actions.includes('ssm:PutParameter') || !actions.includes('ssm:GetParameter')) continue;
+			foundCopyPolicy = true;
+			const resources = Array.isArray(stmt.Resource) ? stmt.Resource : [stmt.Resource];
+			for (const res of resources) {
+				const arnStr = typeof res === 'string' ? res : JSON.stringify(res);
+				assert.ok(arnStr !== '*' && !arnStr.includes('"*"'), `copy policy resource must not be a wildcard, got ${arnStr}`);
+			}
+		}
+	}
+	assert.ok(foundCopyPolicy, 'expected the copy Lambda IAM policy with scoped ssm:GetParameter/PutParameter');
+});
+
+test('CDK: copyFrom grants the app handler READ-ONLY access (GetParameter + Decrypt)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'db-url', { secret: true, value: copyFrom(STAGING) });
+	const template = Template.fromStack(stack);
+
+	// Read-only ssm:GetParameter (rendered as a single string when it's the only action).
+	template.hasResourceProperties('AWS::IAM::Policy', {
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({ Action: 'ssm:GetParameter', Resource: Match.objectLike({ 'Fn::Join': Match.anyValue() }) }),
+			]),
+		},
+	});
+	// Decrypt for the app handler to read the SecureString.
+	template.hasResourceProperties('AWS::IAM::Policy', {
+		PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: 'kms:Decrypt' })]) },
+	});
+});
+
+test('CDK: copyFrom emits NO BlocksSsmParam CfnOutput (stack-owned, seeded in-stack)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'db-url', { secret: true, value: copyFrom(STAGING) });
+	const template = Template.fromStack(stack);
+
+	// Unlike fromExisting (external, seeded out-of-band post-deploy), copyFrom is
+	// stack-owned and seeded by the in-stack copy resource — nothing reads the
+	// name back after deploy, so no output is needed.
+	assert.equal(Object.keys(template.findOutputs('BlocksSsmParamDbUrl')).length, 0);
+});
+
+test('CDK: a literal secret value is still rejected (only copyFrom is allowed for secrets)', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AppSetting(parent, 'lit-secret', { secret: true, value: 'plaintext' }),
+		/should not have a literal value/,
+	);
 });
