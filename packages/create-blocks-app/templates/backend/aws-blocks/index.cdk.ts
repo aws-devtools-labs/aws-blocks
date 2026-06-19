@@ -5,6 +5,7 @@ import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/block
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { getSandboxId } from './scripts/sandbox-id.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -13,7 +14,7 @@ const app = new cdk.App();
 const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
 
 const { stackId } = JSON.parse(readFileSync(join(__dirname, '..', 'blocks', 'config.json'), 'utf-8'));
-const stackName = sandboxMode ? `${stackId}-sandbox` : `${stackId}-prod`;
+const stackName = sandboxMode ? `${stackId}-${getSandboxId()}` : `${stackId}-prod`;
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts')

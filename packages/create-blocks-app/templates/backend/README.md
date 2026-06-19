@@ -58,7 +58,7 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 
 ## Stack naming
 
-Your CloudFormation stack names are derived from the `stackId` in `blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-sandbox`.
+Your CloudFormation stack names are derived from the `stackId` in `blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<sandboxId>`, where `sandboxId` is a per-machine random ID stored in `.blocks-sandbox/sandbox-id` (gitignored). This lets multiple developers share a testing account without colliding.
 
 To change the stack name, edit `stackId` in `blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
 
