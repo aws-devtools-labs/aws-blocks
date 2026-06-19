@@ -196,3 +196,16 @@ test('handles unicode characters gracefully', () => {
 	const results = search(index, 'café', 5);
 	assert.ok(results.length > 0, 'Should handle unicode input without crashing');
 });
+
+test('accent-insensitive matching: unaccented query matches accented document', () => {
+	// NFD normalization folds accents, so a user typing "resume" finds "résumé".
+	const docs = [
+		'Veuillez préparer votre résumé détaillé pour évaluation complète',
+		'Completely unrelated content about gardening tools and garden soil',
+	];
+	const index = buildIndex(docs);
+	const results = search(index, 'resume detaille evaluation', 5);
+
+	assert.ok(results.length > 0, 'unaccented query should match the accented document');
+	assert.strictEqual(results[0].docIndex, 0, 'the accented document should rank first');
+});
