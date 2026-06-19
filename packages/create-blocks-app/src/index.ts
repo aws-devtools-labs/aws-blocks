@@ -565,6 +565,7 @@ Arguments:
 
 Options:
   --template <name>      Template to use for fresh projects (default: "default")
+                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
