@@ -114,6 +114,18 @@ export const BedrockModels: {
         readonly provider: "bedrock";
         readonly modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0";
     };
+    readonly DEFAULT: {
+        readonly provider: "bedrock";
+        readonly modelId: "global.anthropic.claude-sonnet-4-6";
+    };
+    readonly BUDGET: {
+        readonly provider: "bedrock";
+        readonly modelId: "global.anthropic.claude-sonnet-4-6";
+    };
+    readonly MICRO: {
+        readonly provider: "bedrock";
+        readonly modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    };
 };
 
 // @public (undocumented)
