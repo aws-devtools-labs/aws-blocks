@@ -54,6 +54,20 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stderr, /Unknown option: -z/);
   });
 
+  it('--template without a value exits 1 with error message', () => {
+    const result = run(['--template']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+
+  it('--template followed by another option exits 1 with error message', () => {
+    const result = run(['--template', '--skip-install']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+
   it('multiple positional args exits 1 with error message', () => {
     const result = run(['my-app', 'extra-arg']);
     assert.strictEqual(result.exitCode, 1);

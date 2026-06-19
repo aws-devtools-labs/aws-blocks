@@ -586,8 +586,14 @@ async function create() {
     if (args[i] === '--help' || args[i] === '-h') {
       printUsage();
       process.exit(0);
-    } else if (args[i] === '--template' && i + 1 < args.length) {
-      templateName = args[i + 1];
+    } else if (args[i] === '--template') {
+      const value = args[i + 1];
+      if (!value || value.startsWith('-')) {
+        console.error('Error: Missing value for --template.');
+        console.error(`Run with --help for usage information.`);
+        process.exit(1);
+      }
+      templateName = value;
       i++;
     } else if (args[i] === '--yes' || args[i] === '-y') {
       skipConfirm = true;
