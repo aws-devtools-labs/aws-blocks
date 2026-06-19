@@ -26,6 +26,7 @@ import {
 import {
   detectFramework,
   getAdapter,
+  normalizeBasePath,
   type FrameworkAdapterFn,
 } from '@aws-blocks/hosting/adapters';
 import type {
@@ -128,6 +129,27 @@ export interface HostingProps {
 
   /** Supply a custom adapter when using an unsupported framework. */
   customAdapter?: FrameworkAdapterFn;
+
+  /**
+   * URL prefix the whole site is served under (Next.js `basePath`, Astro
+   * `base`, Nuxt `app.baseURL`). When set, CloudFront behaviors are prefixed
+   * with it and the bare root issues a 308 redirect to `/<basePath>/`.
+   *
+   * Declaring it here is the recommended source of truth: the value is
+   * caller-provided rather than reverse-engineered from build output, so it
+   * can't drift with framework/bundler internals. When omitted, the adapter
+   * falls back to detecting the framework's own base-path config from the
+   * build output.
+   *
+   * Format: leading slash, no trailing slash (e.g. `'/app'`). A trailing
+   * slash or bare `'/'` is normalized/ignored.
+   *
+   * @example
+   * ```ts
+   * new Hosting(stack, 'Web', { root, framework: 'nuxt', basePath: '/app' });
+   * ```
+   */
+  basePath?: string;
 
   // ── Blocks backend integration ────────────────────────────────────
   /**
@@ -378,6 +400,23 @@ export class Hosting extends Construct {
     // ── 4b. Ensure buildId is set on the manifest ────────────────
     if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
+    }
+
+    // ── 4b'. basePath: prop is the source of truth ───────────────
+    //    A caller-declared `basePath` overrides whatever the adapter
+    //    detected from build output. This is the robust path: the value
+    //    is provided rather than reverse-engineered from framework/bundler
+    //    internals (which drift across versions). When the prop is omitted,
+    //    the adapter's detected `manifest.basePath` (if any) stands.
+    if (props.basePath !== undefined) {
+      const normalized = normalizeBasePath(props.basePath);
+      if (normalized) {
+        manifest.basePath = normalized;
+      } else {
+        // Explicit '/' (or empty) means "no base path" — clear any value
+        // the adapter may have detected so the prop genuinely wins.
+        delete manifest.basePath;
+      }
     }
 
     // ── 4c. Prevent duplicate error pages ────────────────────────

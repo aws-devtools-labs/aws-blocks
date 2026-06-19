@@ -1429,6 +1429,59 @@ describe('Hosting', () => {
     });
   });
 
+  // ── basePath prop (caller-declared source of truth) ─────────
+  describe('basePath prop', () => {
+    const prefixedPatterns = (root: string, basePath?: string): string[] => {
+      const app = new App();
+      const stack = new Stack(app, 'BasePathStack', {
+        env: { account: '123456789012', region: 'us-east-1' },
+      });
+      new Hosting(stack, 'Web', {
+        root,
+        framework: 'spa',
+        buildOutputDir: 'dist',
+        ...(basePath !== undefined ? { basePath } : {}),
+      });
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; Properties?: any }>;
+      };
+      const dist = Object.values(tpl.Resources).find(
+        (r) => r.Type === 'AWS::CloudFront::Distribution',
+      );
+      return (dist?.Properties?.DistributionConfig?.CacheBehaviors ?? []).map(
+        (b: { PathPattern: string }) => b.PathPattern,
+      );
+    };
+
+    it('prefixes CloudFront behaviors when basePath is set (SPA, no framework base)', () => {
+      createSpaBuildOutput(tmpDir);
+      const patterns = prefixedPatterns(tmpDir, '/app');
+      assert.ok(
+        patterns.length > 0 && patterns.every((p) => p.startsWith('/app')),
+        `all behavior patterns should be prefixed with /app; got ${JSON.stringify(patterns)}`,
+      );
+    });
+
+    it('normalizes a trailing slash (/app/ → /app)', () => {
+      createSpaBuildOutput(tmpDir);
+      const patterns = prefixedPatterns(tmpDir, '/app/');
+      assert.ok(
+        patterns.some((p) => /^\/app\//.test(p)) &&
+          !patterns.some((p) => /^\/app\/\//.test(p)),
+        `expected single-slash /app prefix; got ${JSON.stringify(patterns)}`,
+      );
+    });
+
+    it('treats "/" as no base path', () => {
+      createSpaBuildOutput(tmpDir);
+      const patterns = prefixedPatterns(tmpDir, '/');
+      assert.ok(
+        !patterns.some((p) => p.startsWith('/app')),
+        'bare "/" should not introduce a base-path prefix',
+      );
+    });
+  });
+
   // ── P0.4: config.json ordering dependency ────────────────────
   describe('config.json deploy ordering (P0.4)', () => {
     it('BlocksConfigDeployment depends on the asset deployments', () => {
