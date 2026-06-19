@@ -62,9 +62,17 @@ if [ -z "$BLOCKS_URL" ]; then
   echo ""
   echo "🚀 Step 4: Start native-bindings dev server"
   cd "$BACKEND"
+  # Pick a free port so concurrent runs / an already-bound 3001 never collide.
+  # python3 bind-to-0 is portable across macOS (local) and ubuntu (CI); fall
+  # back to 3001 if the picker fails. The launcher owns the port: it passes it
+  # to the server via PORT and builds BLOCKS_URL from the same value, so server
+  # and client agree without a hardcoded literal.
+  PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
+  export PORT
+  echo "   ℹ️  Using local server port $PORT"
   npx tsx aws-blocks/scripts/server.ts > /tmp/blocks-e2e-server.log 2>&1 &
   SERVER_PID=$!
-  BLOCKS_URL="http://localhost:3001/aws-blocks/api"
+  BLOCKS_URL="http://localhost:$PORT/aws-blocks/api"
 
   # Wait for server
   for i in $(seq 1 30); do

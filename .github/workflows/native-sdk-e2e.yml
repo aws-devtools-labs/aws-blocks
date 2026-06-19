@@ -108,12 +108,25 @@ jobs:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
 
+      - name: Pick a free port for the local server
+        run: |
+          # Pick a free port so the local server never collides on the runner.
+          # python3 bind-to-0 is portable (the ubuntu runner ships python3);
+          # fall back to 3001 if it fails. Thread the value to later steps via
+          # $GITHUB_ENV so the server (reads PORT) and the suite (reads
+          # BLOCKS_URL) agree on it without a hardcoded literal.
+          PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
+          echo "PORT=${PORT}" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "Picked local server port ${PORT}"
+
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
         run: |
+          # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
           npx tsx aws-blocks/scripts/server.ts &
           for i in $(seq 1 30); do
-            curl -s -X POST http://localhost:3001/aws-blocks/api \
+            curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
               -d '{"jsonrpc":"2.0","method":"api.kvGet","params":{"key":"healthcheck"},"id":1}' && break
             sleep 1
@@ -143,8 +156,7 @@ jobs:
 
       - name: Run E2E tests
         working-directory: native/dart/example
-        env:
-          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+        # BLOCKS_URL is provided via $GITHUB_ENV from the "Pick a free port" step.
         run: dart run bin/e2e_test.dart
 
   # Kotlin E2E (TODO: add when ready)
