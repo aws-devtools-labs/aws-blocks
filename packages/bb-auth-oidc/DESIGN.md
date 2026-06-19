@@ -2,33 +2,6 @@
 
 Implementation notes. Customer-facing docs live in `README.md`.
 
-## Package layout
-
-```
-src/
-├── auth-oidc.ts                    — shared AuthOIDC base class (runtime-agnostic)
-├── engine.ts                       — internal AuthEngine interface
-├── engines/
-│   ├── session-manager.ts          — shared session/cookie/CAS-refresh logic
-│   ├── oidc-client-engine.ts       — self-hosted engine (openid-client + jose)
-│   ├── cognito-federation-engine.ts — Cognito Hosted UI engine (plain fetch)
-│   └── stub-idp.ts                 — mock-runtime stub IdP
-├── errors.ts                       — AuthOIDCErrors taxonomy + InvalidRelayError
-├── relay.ts                        — relay-target validation (allowlist, loopback, same-origin)
-├── state.ts                        — structured-state envelope codec (HMAC-signed, versioned)
-├── index.aws.ts                    — AWS runtime entry (engine selection)
-├── index.browser.ts                — browser client (AuthOIDCClient)
-├── index.cdk.ts                    — CDK synth entry (routes, secrets, Cognito pool)
-├── index.mock.ts                   — mock runtime entry (stub IdP, loose cookies)
-├── providers.ts                    — google / github / customOidc / customOauth2 / cognitoFederated
-├── routes.ts                       — route mounting (callback dispatcher, exchange, authorize-params)
-├── session-cookie.ts               — HMAC-signed cookie helpers
-├── types.ts                        — public types
-├── index.test.ts                   — unit tests (construction, path config, provider helpers)
-├── relay.test.ts                   — relay validation unit tests
-└── state.test.ts                   — state envelope unit tests
-```
-
 ## Sign-in flows
 
 Three flows share the same `AuthOIDC` instance. Each serves a distinct transport

@@ -34,16 +34,6 @@ Two storage backends, same FileBucket BB:
 - **AWS:** Strands' native `S3Storage` → FileBucket-provisioned S3 bucket
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
-## Error Constants
-
-```typescript
-export const AgentErrors = {
-  PersistenceRequired: 'PersistenceRequiredException',
-  InvalidModelConfig: 'InvalidModelConfigException',
-  BrowserNotSupported: 'BrowserNotSupportedException',
-} as const;
-```
-
 ## Infrastructure (CDK)
 
 The CDK class mirrors the runtime's BB creation:

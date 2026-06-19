@@ -4,38 +4,6 @@
 **Type:** Primitive (new infrastructure)
 **AWS Service:** SSM Parameter Store (String + SecureString)
 
-## API Surface
-
-```typescript
-class AppSetting<T = string> extends Scope {
-	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>);
-	get(): Promise<T>;
-	put(value: T): Promise<void>;
-}
-
-interface AppSettingOptions<T = string> {
-	/** SSM parameter name/path. Optional — when omitted, derived from the scope tree as `/${fullId}`. */
-	name?: string;
-	/** The value of the SSM parameter. Set during CDK deployment and can be updated at runtime via `put()`. Required for non-secret parameters. Must not be provided for secrets. */
-	value?: T;
-	/** Runtime validation schema. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). When provided, T is inferred from the schema. */
-	schema?: StandardSchemaV1<T>;
-	/** When true, creates an SSM SecureString parameter encrypted with the default aws/ssm KMS key. */
-	secret?: boolean;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-```
-
-## Error Constants
-
-```typescript
-export const AppSettingErrors = {
-	ParameterNotFound: 'ParameterNotFoundException',
-	ValidationFailed: 'ValidationFailedException',
-} as const;
-```
-
 ## Infrastructure (CDK)
 
 ### String Parameters (`secret` not set or `false`)

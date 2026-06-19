@@ -26,13 +26,7 @@ Design document. For usage, see [README.md](./README.md).
 - **Cognito Lambda triggers** (`preSignUp`, `postConfirmation`, `preAuthentication`, …) — customers who need them can attach against the underlying `userPool` construct directly.
 - **Auth flows other than `USER_PASSWORD_AUTH`** — widened typing only.
 
-## API Surface
-
-All public types live in `src/types.ts` (canonical source) and are re-exported from every entry file. The class is entirely **client-facing**: every method that performs auth action takes `context: BlocksContext` so it can read / write the session cookie and act on the signed-in user.
-
-See [README.md](./README.md) for the full method table. The state machine emitted by `createApi()` drives `<Authenticator>` (from `@aws-blocks/auth-common/ui`) and handles every challenge type.
-
-### `fetchAuthSession` — intentional token egress
+## `fetchAuthSession` — intentional token egress
 
 The general design keeps Cognito tokens on the server (see *Cookie + Session Architecture* below). `fetchAuthSession(context, options?)` is the **one** API that deliberately hands tokens back to the caller, in a standard `AuthSession` shape. Two legitimate reasons to use it:
 
@@ -42,38 +36,6 @@ The general design keeps Cognito tokens on the server (see *Cookie + Session Arc
 It is **not** the right tool for identity checks on the current request — `requireAuth` / `getCurrentUser` are cheaper (no JWT decode round-trip, no refresh path). The method auto-refreshes if the access token has expired, and `{ forceRefresh: true }` rotates unconditionally (useful after an out-of-band group/attribute change where the caller wants the new claims to appear immediately).
 
 The `AuthSession` shape follows a conventional structure, so callers work with a familiar surface. `credentials` / `identityId` are not populated: Blocks uses User Pools only, not Identity Pools; to call AWS from the browser, use the Lambda's IAM role rather than vending temporary credentials to the client.
-
-## Error Constants
-
-```typescript
-export const AuthCognitoErrors = {
-  NotAuthenticated:            'NotAuthenticatedException',
-  NotAuthorized:               'NotAuthorizedException',
-  UserNotFound:                'UserNotFoundException',
-  UserAlreadyExists:           'UsernameExistsException',
-  InvalidPassword:             'InvalidPasswordException',
-  InvalidParameter:            'InvalidParameterException',
-  CodeMismatch:                'CodeMismatchException',
-  ExpiredCode:                 'ExpiredCodeException',
-  LimitExceeded:               'LimitExceededException',
-  TooManyRequests:             'TooManyRequestsException',
-  TooManyFailedAttempts:       'TooManyFailedAttemptsException',
-  PasswordResetRequired:       'PasswordResetRequiredException',
-  UserNotConfirmed:            'UserNotConfirmedException',
-  MFAMethodNotFound:           'MFAMethodNotFoundException',
-  SoftwareTokenMFANotFound:    'SoftwareTokenMFANotFoundException',
-  GroupNotFound:               'ResourceNotFoundException',
-  UnsupportedUserState:        'UnsupportedUserStateException',
-  AliasExistsException:        'AliasExistsException',
-  InvalidLambdaResponseException: 'InvalidLambdaResponseException',
-  UserLambdaValidationException:  'UserLambdaValidationException',
-  InternalErrorException:      'InternalErrorException',
-} as const;
-```
-
-Every value matches Cognito's wire-format exception name — `isBlocksError(e, AuthCognitoErrors.X)` works identically for errors thrown by the mock (matched name directly) and errors propagated from the AWS SDK (name preserved when re-thrown as `ApiError`).
-
-Note: `GroupNotFound` resolves to `'ResourceNotFoundException'` (not the intuitive `GroupNotFoundException`) because that's what real Cognito returns for a missing group. The constant name preserves the semantic label; the value matches reality.
 
 ## Infrastructure (CDK)
 
@@ -164,21 +126,11 @@ Resolved by the MFA_SETUP + USER_AUTH work:
 - ✅ MFA_SETUP now runs the full `AssociateSoftwareToken` → `VerifySoftwareToken` → `RespondToAuthChallenge` ceremony in the AWS runtime; the mock mirrors the address-submit-then-confirm UX for EMAIL setup so `AuthState` sequences line up in both modes.
 - ✅ USER_AUTH passwordless (email-OTP / SMS-OTP) + first-factor selection flow through the same state-machine action surface. New payload shapes (`{ password }`, `{ firstFactor }`, `{ email }`) are driven end-to-end through the mock's `setAuthState` in unit tests.
 
-## Conditional-Export Map
-
-```
-packages/bb-auth-cognito/
-├── src/index.ts              — default condition (mock)
-├── src/index.aws.ts          — aws-runtime condition
-├── src/index.cdk.ts          — cdk condition
-└── src/index.browser.ts      — browser condition (types + no-op stub)
-```
-
-`src/types.ts` is the canonical type source, re-exported from every entry. `src/cookies.ts`, `src/sessions.ts`, and `src/state-machine.ts` are shared utility modules imported by both the mock and the AWS runtime — no duplication.
-
 ## Key Design Decisions
 
 1. **Server-side session records over client-held JWTs.** Rather than handing raw Cognito tokens to the browser (localStorage / cookies), Blocks holds the tokens server-side keyed by an opaque session ID. Upside: Cognito tokens never reach the browser; server is authoritative on validity; operators can invalidate sessions without rotating secrets. Downside: every request hits the session KVStore (single-digit-ms DynamoDB read).
 2. **`AuthFlowType` runtime-throw instead of silent pass on unimplemented flows.** Typing exposes the full Cognito union so customer code doesn't need to cast, but passing `USER_SRP_AUTH` etc. throws at synth time (and again at runtime as defense-in-depth). Surfaces the unsupported config at deploy time, not at first login.
 3. **Group membership from the ID-token `cognito:groups` claim, not a runtime `AdminListGroupsForUser` call.** `requireRole` decodes the cached ID token; no extra Cognito API call per request. Group changes take effect at the next sign-in (or next refresh), which is the same behavior Cognito exhibits for any client reading the token.
 4. **Mock + AWS runtimes share the session/cookie code path.** `SessionStore`, cookie helpers, JWT decode — all shared. The only divergence is that mock issues placeholder-signature JWTs and never talks to Cognito.
+5. **Error constants mirror Cognito's wire-format exception names.** Every value equals the name Cognito puts on the wire, so `isBlocksError(e, AuthCognitoErrors.X)` works identically for errors thrown by the mock (matched name directly) and errors propagated from the AWS SDK (name preserved when re-thrown as `ApiError`).
+6. **`GroupNotFound` maps to `ResourceNotFoundException`.** Real Cognito returns `ResourceNotFoundException` (not the intuitive `GroupNotFoundException`) for a missing group. The constant name preserves the semantic label while the value matches what Cognito actually returns.

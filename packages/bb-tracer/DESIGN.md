@@ -6,38 +6,7 @@ Design document for Tracer. For usage, see [README.md](./README.md).
 **Type:** Composite (no new infrastructure)
 **AWS Service:** AWS X-Ray (via Lambda's built-in X-Ray integration)
 
-## API Surface
-
-```typescript
-class Tracer extends Scope {
-	constructor(scope: ScopeParent, id: string, options?: TracerOptions);
-	startSegment<T>(name: string, fn: (segment: Segment) => Promise<T>): Promise<T>;
-	addAnnotation(key: string, value: AnnotationValue): void;
-	addMetadata(key: string, value: unknown): void;
-	getTraceId(): string | null;
-}
-
-interface Segment {
-	addAnnotation(key: string, value: AnnotationValue): void;
-	addMetadata(key: string, value: unknown): void;
-	addError(error: Error): void;
-	setHttpStatus(statusCode: number): void;
-}
-
-type AnnotationValue = string | number | boolean;
-
-interface TracerOptions {
-	/** Enable or disable tracing. Default: `true`. */
-	enabled?: boolean;
-	/**
-	 * Sampling rate between 0 and 1. Default: `1.0`.
-	 * Only affects local mock behavior — production uses X-Ray sampling rules.
-	 */
-	samplingRate?: number;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-```
+## Interface Design
 
 ### Synchronous Annotation Methods
 

@@ -6,64 +6,6 @@ Design document for Metrics. For usage, see [README.md](./README.md).
 **Type:** Primitive (no new infrastructure created)
 **AWS Service:** Amazon CloudWatch Metrics (via Embedded Metric Format)
 
-## API Surface
-
-```typescript
-class Metrics extends Scope implements MetricsEmitter {
-	constructor(scope: ScopeParent, id: string, options?: MetricsOptions);
-	emit(name: string, value: number, options?: EmitOptions): void;
-	emitBatch(metrics: MetricDatum[]): void;
-	flush(): void;
-	child(dimensions: Record<string, string>): MetricsEmitter;
-	static fromExisting(namespace: string): ExternalMetricsRef;
-}
-
-interface MetricsOptions {
-	/** CloudWatch namespace. Defaults to scope.fullId. */
-	namespace?: string;
-	/** Dimensions applied to every metric emitted by this instance. */
-	defaultDimensions?: Record<string, string>;
-	/** Wrap an existing CloudWatch namespace. */
-	metrics?: ExternalMetricsRef;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface EmitOptions {
-	unit?: MetricUnit;
-	dimensions?: Record<string, string>;
-	timestamp?: Date;
-	resolution?: MetricResolution;
-}
-
-interface MetricDatum {
-	name: string;
-	value: number;
-	unit?: MetricUnit;
-	dimensions?: Record<string, string>;
-	timestamp?: Date;
-	resolution?: MetricResolution;
-}
-
-interface MetricsEmitter {
-	emit(name: string, value: number, options?: EmitOptions): void;
-	emitBatch(metrics: MetricDatum[]): void;
-	flush(): void;
-	child(dimensions: Record<string, string>): MetricsEmitter;
-}
-```
-
-## Error Constants
-
-```typescript
-export const MetricsErrors = {
-	InvalidMetricName: 'InvalidMetricNameException',
-	InvalidDimensions: 'InvalidDimensionsException',
-	BatchTooLarge: 'BatchTooLargeException',
-	InvalidNamespace: 'InvalidNamespaceException',
-} as const;
-```
-
 ## Key Design Decision: EMF over PutMetricData
 
 Metrics are emitted using **CloudWatch Embedded Metric Format (EMF)** rather than calling the `PutMetricData` API directly.

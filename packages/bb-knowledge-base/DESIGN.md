@@ -6,68 +6,6 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 **Type:** Primitive (new infrastructure)
 **AWS Services:** Amazon Bedrock Knowledge Bases, S3, S3 Vectors
 
-## API Surface
-
-```typescript
-class KnowledgeBase extends Scope {
-	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions);
-	retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]>;
-}
-
-interface KnowledgeBaseOptions {
-	/** Document source — local folder path or `s3://` URI pointing to a bucket or folder. */
-	source: string;
-	/** How documents are split into chunks. Default: `{ strategy: 'semantic' }`. */
-	chunking?: ChunkingConfig;
-	/** Embedding dimensions (256, 512, or 1024). Default: 1024. */
-	embeddingDimensions?: 256 | 512 | 1024;
-	/** Human-readable description for the knowledge base. */
-	description?: string;
-	/** CDK removal behavior for BB-created data buckets. Default: RETAIN (preserved on `cdk destroy`) unless sandbox mode. Pass `'destroy'` for ephemeral stacks. */
-	removalPolicy?: 'destroy' | 'retain';
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-type ChunkingStrategy = 'semantic' | 'fixed' | 'hierarchical' | 'none';
-
-interface ChunkingConfig {
-	strategy?: ChunkingStrategy;
-	chunkSize?: number;
-	chunkOverlap?: number;
-	breakpointPercentile?: number;
-}
-
-interface RetrieveOptions {
-	/** Maximum results (1–100). Default: 10. */
-	maxResults?: number;
-	/** Metadata filter with AND semantics. */
-	filter?: MetadataFilter;
-}
-
-type MetadataFilter = Record<string, { equals: string }>;
-
-interface RetrieveResult {
-	text: string;
-	score: number;
-	source: string;
-	metadata: Record<string, string>;
-}
-```
-
-## Error Constants
-
-```typescript
-export const KnowledgeBaseErrors = {
-	RetrievalFailed: 'RetrievalFailedException',
-	NotReady: 'KnowledgeBaseNotReadyException',
-	InvalidSource: 'InvalidSourceConfigException',
-	InvalidFilter: 'InvalidFilterException',
-	ValidationError: 'KnowledgeBaseValidationError',
-	BrowserNotSupported: 'BrowserNotSupportedException',
-} as const;
-```
-
 ## Design Decisions
 
 ### D-KB-1: S3 Vectors over OpenSearch / Aurora pgvector

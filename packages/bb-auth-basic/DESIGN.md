@@ -45,81 +45,11 @@ Browser Stub:
         (actual implementation runs server-side only)
 ```
 
-## API Surface (Implemented)
+## State Machine Behavior
 
-```typescript
-class AuthBasic extends Scope implements BlocksAuth {
-	constructor(scope: ScopeParent, id: string, options?: AuthBasicOptions);
+`createApi()` exposes the auth state machine that drives the `<Authenticator>` component via `getAuthState` / `setAuthState` (see the README for signatures). `buildApi()` is a deprecated predecessor retained for backward compatibility — use `createApi()` instead. The design-relevant behavior is below.
 
-	// BlocksAuth interface
-	requireAuth(context: BlocksContext): Promise<AuthBasicUser>;
-	checkAuth(context: BlocksContext): Promise<boolean>;
-	getCurrentUser(context: BlocksContext): Promise<AuthBasicUser | null>;
-
-	// User management
-	signUp(username: string, password: string): Promise<void>;
-	confirmSignUp(username: string, code: string): Promise<void>;
-	signIn(username: string, password: string, context: BlocksContext): Promise<AuthBasicUser>;
-	signOut(context: BlocksContext): Promise<void>;
-
-	// Password reset
-	resetPassword(username: string): Promise<void>;
-	confirmResetPassword(username: string, code: string, newPassword: string): Promise<void>;
-
-	// State machine API for Authenticator component
-	createApi(): ApiNamespace;
-
-	/** @deprecated Use createApi() instead. */
-	buildApi(): ApiNamespace;
-}
-
-interface AuthBasicOptions {
-	sessionDuration?: number;       // seconds, @default 86400 (24 hours)
-	passwordPolicy?: PasswordPolicy;
-	codeDelivery?: CodeDeliveryFn;  // enables confirmed signup + password reset
-	logger?: ChildLogger;           // @default Logger at error level
-}
-
-interface PasswordPolicy {
-	minLength?: number;             // @default 8
-	requireUppercase?: boolean;     // @default false
-	requireLowercase?: boolean;     // @default false
-	requireDigits?: boolean;        // @default false
-	requireSpecialChars?: boolean;  // @default false
-}
-
-type CodeDeliveryFn = (username: string, code: string) => Promise<void>;
-
-interface AuthBasicUser extends AuthUser {
-	userId: string;    // same as username
-	username: string;
-	createdAt: string; // ISO 8601
-}
-```
-
-### Type Re-exports
-
-The package re-exports the following types from `@aws-blocks/auth-common` for consumer convenience (so consumers don't need a direct dependency on `auth-common`):
-
-| Re-exported Type | Source | Purpose |
-|-----------------|--------|---------|
-| `BlocksAuth` | `@aws-blocks/auth-common` | Auth interface type |
-| `AuthUser` | `@aws-blocks/auth-common` | Base user type |
-| `AuthState` | `@aws-blocks/auth-common` | State machine state type |
-| `AuthActionInput` | `@aws-blocks/auth-common` | State machine action input type |
-| `AuthAction` | `@aws-blocks/auth-common` | Action descriptor type (name, label, fields) |
-| `AuthField` | `@aws-blocks/auth-common` | Field descriptor type (name, label, type, required) |
-
-The browser stub (`index.browser.ts`) additionally re-exports the server-defined types (`AuthBasicUser`, `PasswordPolicy`, `AuthBasicOptions`) and the `AuthBasicErrors` value constant, ensuring type-safe client code without bundling the server implementation.
-
-### State Machine API (`createApi()`)
-
-The `createApi()` method returns an `new ApiNamespace(scope, 'auth', ...)` with two methods:
-
-- `getAuthState(): Promise<AuthState>` — returns the current auth state based on the session cookie.
-- `setAuthState(input: AuthActionInput): Promise<AuthState>` — processes an action and returns the new state.
-
-#### Auth States Produced by AuthBasic
+### Auth States Produced by AuthBasic
 
 | State | When | Actions Available |
 |-------|------|-------------------|
@@ -128,14 +58,14 @@ The `createApi()` method returns an `new ApiNamespace(scope, 'auth', ...)` with 
 | `confirmingSignUp` | After signUp with codeDelivery | `confirmSignUp` |
 | `confirmingPasswordReset` | After resetPassword | `confirmResetPassword` |
 
-#### Auto-Sign-In Behavior
+### Auto-Sign-In Behavior
 
 The state machine automatically signs the user in (establishing a session cookie) in two scenarios:
 
 1. **signUp without `codeDelivery`:** After successful registration, `signIn()` is called immediately with the same credentials, transitioning directly to `signedIn` state. The user never sees the `signedOut` state after registration.
 2. **confirmSignUp:** After successful code verification, `signIn()` is called with the provided `username` and `password`, transitioning directly to `signedIn` state. This is why the `confirmSignUp` action requires the `password` field (see D-AB-9).
 
-#### Error Recovery in `setAuthState`
+### Error Recovery in `setAuthState`
 
 The `setAuthState` method never throws. If any action fails, the error is caught and the method returns the current valid auth state with an `error` field attached:
 
@@ -144,43 +74,6 @@ The `setAuthState` method never throws. If any action fails, the error is caught
 3. The error message is merged: `{ ...baseState, error: e.message }`.
 
 This allows the Authenticator UI component to display errors without losing track of the current state machine position. Unknown actions return `{ ...signedOutState, error: "Unknown action: ..." }` without throwing.
-
-### Deprecated API (`buildApi()`)
-
-The `buildApi()` method is retained for backward compatibility. It returns an `new ApiNamespace(scope, 'auth', ...)` with direct methods:
-
-- `signUp(username, password)` → `{ username }` — registers the user and sets the session cookie if no `codeDelivery` is configured (auto-sign-in).
-- `signIn(username, password)` → `{ username }` — authenticates and sets session cookie.
-- `signOut()` → `{ success: true }` — clears the session cookie.
-- `getCurrentUser()` → `AuthBasicUser | null` — returns the authenticated user from the session cookie, or `null` if not signed in.
-
-## Error Constants
-
-```typescript
-export const AuthBasicErrors = {
-	InvalidCredentials: 'InvalidCredentialsException',
-	UserAlreadyExists: 'UserAlreadyExistsException',
-	InvalidCode: 'InvalidCodeException',
-	SessionExpired: 'SessionExpiredException',
-	InvalidPassword: 'InvalidPasswordException',
-} as const;
-```
-
-| Error | HTTP Status | Thrown By |
-|-------|-------------|-----------|
-| `InvalidCredentials` | 401 | `signIn` — wrong username/password, or unconfirmed user |
-| `UserAlreadyExists` | 409 | `signUp` — duplicate username (uses KVStore `ifNotExists`) |
-| `InvalidCode` | 400 | `confirmSignUp`, `confirmResetPassword` — wrong/expired code |
-| `SessionExpired` | 401 | `requireAuth` — missing, invalid, or expired JWT |
-| `InvalidPassword` | 400 | `signUp`, `confirmResetPassword` — password doesn't meet policy |
-
-**Additional guard errors** (thrown as plain `ApiError` without a named error constant):
-
-| HTTP Status | Thrown By | Condition |
-|-------------|-----------|-----------|
-| 400 | `resetPassword` | `codeDelivery` is not configured — password reset is unavailable |
-
-**Note:** Errors are thrown as `ApiError` instances from `@aws-blocks/core`. Use `isBlocksError(e, AuthBasicErrors.X)` for typed error handling. The `resetPassword` guard error has no named constant because it represents a configuration issue (calling a feature that was not enabled), not a user input error.
 
 ## Design Decisions
 
@@ -259,6 +152,7 @@ export const AuthBasicErrors = {
 
 **Rationale:**
 - **Composite BB** — because AuthBasic composes KVStore and AppSetting (which handle their own context switching), there is no need for separate environment-specific entry points.
+- **Two conditional exports only** — the package exposes just `default` (full server implementation) and `browser` (a stub of types, error constants, and a no-op `createApi()`/`buildApi()` class) export conditions. There is no `cdk`, `aws-runtime`, or `hooks` export because the composed KVStore and AppSetting own all infrastructure and runtime concerns.
 - **Code simplicity** — one file contains all logic. The same code runs in mock (KVStore mock = JSON files) and AWS (KVStore AWS = DynamoDB).
 - **Trade-off** — if AuthBasic later needs environment-specific behavior (e.g., rate limiting in AWS only), it would need to be split. Acceptable for current scope.
 
@@ -270,6 +164,12 @@ export const AuthBasicErrors = {
 - **UX** — users don't have to sign in separately after confirming their account. One step instead of two.
 - **Implementation** — AuthBasic needs the password to call `signIn()` and establish a session. Unlike Cognito (which has server-side session continuity), AuthBasic has no way to auto-authenticate without the password.
 - **Trade-off** — diverges from the auth-common interface where `password` is optional for `confirmSignUp`. The Authenticator component must render the password field in the confirmation form when using AuthBasic.
+
+### D-AB-10: Named error constants only for user-facing input errors
+
+**Decision:** User-input failures (`InvalidCredentials`, `UserAlreadyExists`, `InvalidCode`, `SessionExpired`, `InvalidPassword`) get named constants in `AuthBasicErrors`; configuration errors — such as calling `resetPassword` when `codeDelivery` was never configured — are thrown as a plain `ApiError` with no named constant.
+
+**Rationale:** A named constant exists so callers can branch on it via `isBlocksError(e, AuthBasicErrors.X)`. That is worthwhile for user-input errors a caller may recover from, but not for a configuration mistake (using a feature that was not enabled), which is a build-time programming error to fix rather than a runtime condition to branch on.
 
 ## Infrastructure (CDK)
 
@@ -339,52 +239,6 @@ The mock behavior is identical to AWS behavior with the following environment di
 | No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | Not applicable in local dev (single instance). In AWS, JWT-based sessions are stateless — signOut only clears the client cookie |
 | bcrypt timing may differ | Hashing speed varies between local machine and Lambda | No mitigation needed — timing differences don't affect correctness |
 | No email/SMS delivery infrastructure | Codes are delivered via callback (typically console.log in dev) | Intentional — codeDelivery is the integration point for real delivery in production |
-
-## Package Structure
-
-```
-packages/bb-auth-basic/
-├── package.json           # Conditional exports (default + browser)
-├── tsconfig.json          # References: core, bb-app-setting, auth-common, bb-kv-store, bb-logger
-├── README.md              # Usage documentation
-├── DESIGN.md              # This file
-└── src/
-    ├── index.ts           # Full implementation (AuthBasic class, errors, types)
-    └── index.browser.ts   # Browser stub (no-op class, re-exports types + errors)
-```
-
-### Conditional Exports (package.json)
-
-```json
-{
-  "name": "@aws-blocks/bb-auth-basic",
-  "exports": {
-    ".": {
-      "browser": "./dist/index.browser.js",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  }
-}
-```
-
-Unlike primitive BBs (e.g., CronJob, AsyncJob), AuthBasic has only two entry points:
-- **`default`** — full implementation (runs on server: mock or AWS Lambda).
-- **`browser`** — stub that exports only types, error constants, and a no-op class with `createApi()`/`buildApi()` methods (for tree-shaking and type checking in client code).
-
-There is no `cdk`, `aws-runtime`, or `hooks` export because AuthBasic is a composite BB — it delegates all infrastructure and runtime concerns to its composed KVStore and AppSetting instances.
-
-### Dependencies
-
-| Dependency | Purpose |
-|------------|---------|
-| `@aws-blocks/core` | `Scope`, `ScopeParent`, `BlocksContext`, `ApiNamespace`, `ApiError`, `constantTimeEquals` |
-| `@aws-blocks/bb-kv-store` | User record and verification code storage |
-| `@aws-blocks/bb-app-setting` | JWT signing secret (SSM SecureString) |
-| `@aws-blocks/auth-common` | `BlocksAuth` interface, `AuthUser`, `AuthState`, `AuthActionInput` types |
-| `@aws-blocks/bb-logger` | `Logger`, `ChildLogger` for internal logging |
-| `bcryptjs` | Password hashing (pure JS, no native deps) |
-| `jsonwebtoken` | JWT sign/verify for session tokens |
 
 ## Trade-offs
 

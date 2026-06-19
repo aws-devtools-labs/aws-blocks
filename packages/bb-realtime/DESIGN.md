@@ -6,47 +6,7 @@ Design document for Realtime. For usage, see [README.md](./README.md).
 **Type:** Client-facing
 **AWS Services:** API Gateway WebSocket, DynamoDB, SSM Parameter Store
 
-## API Surface
-
-```typescript
-const Realtime: {
-	new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T>;
-	namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M>;
-};
-
-interface RealtimeOptions<T extends NamespaceDefs> {
-	namespaces: T;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface RealtimeServer<T extends NamespaceDefs> {
-	publish<K extends keyof T>(namespace: K, channel: string, data: InferMessage<T[K]>): Promise<void>;
-	subscribe<K extends keyof T>(namespace: K, channel: string, handler: (message: InferMessage<T[K]>) => void): () => void;
-	getChannel<K extends keyof T>(namespace: K, channel: string): Promise<RealtimeChannel<InferMessage<T[K]>>>;
-}
-
-interface RealtimeChannel<T> {
-	subscribe(handler: (message: T) => void): RealtimeSubscription;
-	subscribe(options: SubscribeOptions<T>): RealtimeSubscription;
-	/** @internal */ toJSON(): RealtimeChannelDescriptor;
-}
-
-interface SubscribeOptions<T> {
-	onMessage: (message: T) => void;
-	onDisconnect?: (reason: DisconnectReason) => void;
-}
-
-type DisconnectReason = 'timeout' | 'error' | 'unknown';
-
-interface RealtimeSubscription {
-	unsubscribe(): void;
-	established: Promise<void>;
-	connection?: WebSocket;
-}
-```
-
-### Design Decisions
+## Design Decisions
 
 **Options object for extensibility:** Constructor takes `RealtimeOptions<T>` with a `namespaces` key. Allows additional options (auth integration, history, TTL) to be added without breaking the signature.
 

@@ -6,48 +6,6 @@ Design document for KVStore. For usage, see [README.md](./README.md).
 **Type:** Primitive (new infrastructure)
 **AWS Service:** DynamoDB (single-table, partition key only)
 
-## API Surface
-
-```typescript
-class KVStore<T = string> extends Scope {
-	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<T>);
-	get(key: string): Promise<T | null>;
-	put(key: string, value: T, conditions?: ConditionalWriteOptions<T>): Promise<void>;
-	delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void>;
-	scan(): AsyncIterable<{ key: string; value: T }>;
-	static fromExisting(tableName: string): ExternalTableRef;
-}
-
-interface KVStoreOptions<T = string> {
-	/** Runtime validation schema. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). When provided, T is inferred from the schema. */
-	schema?: StandardSchemaV1<T>;
-	/** Wrap an existing DynamoDB table instead of creating one. */
-	table?: ExternalTableRef;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface ConditionalWriteOptions<T> {
-	ifNotExists?: boolean;
-	ifValueEquals?: T;
-}
-
-interface ConditionalDeleteOptions<T> {
-	ifExists?: boolean;
-	ifValueEquals?: T;
-}
-```
-
-## Error Constants
-
-```typescript
-export const KVStoreErrors = {
-	ConditionalCheckFailed: 'ConditionalCheckFailedException',
-	ValidationFailed: 'ValidationFailedException',
-	ItemTooLarge: 'ItemTooLargeException',
-} as const;
-```
-
 ## Infrastructure (CDK)
 
 Creates a single DynamoDB table:

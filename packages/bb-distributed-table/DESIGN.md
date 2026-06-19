@@ -6,137 +6,6 @@ Design document for DistributedTable. For usage, see [README.md](./README.md).
 **Type:** Primitive (new infrastructure)
 **AWS Service:** DynamoDB (partition key + optional sort key + GSIs)
 
-## API Surface
-
-```typescript
-class DistributedTable<T, K extends TableKeyConfig<T>, Indexes extends Record<string, TableKeyConfig<T>>> extends Scope {
-	constructor(scope: ScopeParent, id: string, options: DistributedTableOptions<T, K, Indexes>);
-	get(key: TableKey<T, K>): Promise<T | null>;
-	put(item: T, options?: PutOptions<T>): Promise<void>;
-	delete(key: TableKey<T, K>, options?: DeleteOptions<T>): Promise<void>;
-	query(options: QueryOptions<T, K, Indexes>): AsyncIterable<T>;
-	scan(options?: ScanOptions): AsyncIterable<T>;
-	getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]>;
-	putBatch(items: T[]): Promise<void>;
-	deleteBatch(keys: TableKey<T, K>[]): Promise<void>;
-	static fromExisting(tableName: string): ExternalTableRef;
-}
-
-interface DistributedTableOptions<T, K extends TableKeyConfig<T>, Indexes extends Record<string, TableKeyConfig<T>>> {
-	schema: StandardSchemaV1<T>;
-	key: K;
-	indexes?: Indexes;
-	ttl?: keyof T & string;
-	table?: ExternalTableRef;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface TableKeyConfig<T> {
-	partitionKey: keyof T & string;
-	sortKey?: keyof T & string;
-}
-
-/**
- * Picks exactly the key fields from T and makes them required.
- * Non-key fields are excluded.
- */
-type TableKey<T, K extends TableKeyConfig<T>> =
-	K extends { sortKey: infer SK extends keyof T & string }
-		? Required<Pick<T, K['partitionKey'] | SK>>
-		: Required<Pick<T, K['partitionKey']>>;
-
-/** Partition key condition — DynamoDB requires exact match on PK in a Query. */
-type PartitionKeyCondition<V> = { equals: V };
-
-/** Sort key condition — supports range queries, beginsWith (strings only). */
-type SortKeyCondition<V> = {
-	equals?: V;
-	greaterThan?: V;
-	greaterThanOrEqual?: V;
-	lessThan?: V;
-	lessThanOrEqual?: V;
-	between?: [V, V];
-	beginsWith?: V extends string ? string : never;
-};
-
-/**
- * Computed per-index key condition. PK field is required (equals only).
- * SK field is optional with rich conditions. Non-key fields don't appear.
- */
-type KeyCondition<T, K extends TableKeyConfig<T>> =
-	K extends { sortKey: infer SK extends keyof T }
-		? { [P in K['partitionKey']]: PartitionKeyCondition<T[P]> } &
-		  { [P in SK]?: SortKeyCondition<T[P]> }
-		: { [P in K['partitionKey']]: PartitionKeyCondition<T[P]> };
-
-/**
- * Query options — discriminated union. When `index` is provided, `where`
- * is typed against that GSI's key config. When omitted, `where` is typed
- * against the table's primary key.
- */
-type QueryOptions<T, K, Indexes> =
-	| { index: keyof Indexes; where: KeyCondition<...>; limit?: number; order?: 'asc' | 'desc' }
-	| { index?: undefined; where: KeyCondition<T, K>; limit?: number; order?: 'asc' | 'desc' };
-
-interface ScanOptions {
-	limit?: number;
-}
-
-type PutOptions<T> =
-	| { ifNotExists: true; ifFieldEquals?: never }
-	| { ifNotExists?: never; ifFieldEquals: Partial<T> }
-	| Record<string, never>;
-
-type DeleteOptions<T> =
-	| { ifExists: true; ifFieldEquals?: never }
-	| { ifExists?: never; ifFieldEquals: Partial<T> }
-	| Record<string, never>;
-```
-
-## Error Constants
-
-```typescript
-export const DistributedTableErrors = {
-	ConditionalCheckFailed: 'ConditionalCheckFailedException',
-	ValidationFailed: 'ValidationFailedException',
-	InvalidQuery: 'InvalidQueryException',
-	ItemTooLarge: 'ItemTooLargeException',
-	BatchIncomplete: 'BatchIncompleteException',
-} as const;
-```
-
-### Why `InvalidQuery` and `ItemTooLarge` are split (not one `Validation` bucket)
-
-An earlier revision routed every pre-flight input error through a single
-`Validation: 'ValidationException'` constant that mirrored DynamoDB's wire name.
-That collapsed two genuinely different failure modes under one catch:
-
-- **`InvalidQuery`** — the request *shape* is wrong: a missing `where` clause, a
-  partition key not given as `{ equals: value }`, an unknown index, more than one
-  sort-key condition, or an empty `ifFieldEquals`. Every one of these is a **caller
-  bug** — something the caller fixes by correcting the call. There's no value in
-  branching on which specific shape error occurred at runtime, so they share one name.
-- **`ItemTooLarge`** — an item exceeds the 400 KB per-item limit. This is **not
-  necessarily a caller bug**: the size of a given record may be outside the caller's
-  control (user-supplied content, accumulated history). A caller may legitimately want
-  to branch on it — skip the item, split it, or store a reference instead — which it
-  cannot do if the only signal is a generic name plus message text.
-
-A generic `ValidationException` is exactly the kind of catch-all bucket worth avoiding, and
-`BatchIncomplete` already establishes the Blocks-specific-name pattern in this same file.
-Splitting into intent-revealing names lets a customer write
-`isBlocksError(e, DistributedTableErrors.ItemTooLarge)` and reliably tell "this item is
-too big" from "my query is malformed" without string-matching the message.
-
-**Mock/AWS parity:** the mock checks serialized byte length client-side and throws
-`ItemTooLarge` directly. On AWS, DynamoDB raises a generic `ValidationException` for an
-oversized item; the runtime narrows on the size-specific message (`size has exceeded`)
-and re-maps only that case to `ItemTooLarge`. Other `ValidationException` causes
-(malformed expressions, type mismatches) propagate unchanged. Both layers therefore
-surface the same `error.name`, and the shared message lives in `errors.ts`
-(`DistributedTableMessages.itemTooLarge`) so the two stay byte-for-byte aligned.
-
 ## Design Decisions
 
 ### D-DT-1: Key object over positional arguments
@@ -217,6 +86,19 @@ The `order` field maps to DynamoDB's `ScanIndexForward` parameter (`'desc'` → 
 **Decision:** TTL is configured via `ttl: 'fieldName'` in the constructor options, not as a separate method or decorator.
 
 **Rationale:** DynamoDB TTL is a table-level setting that designates one attribute as the expiration timestamp. It's a static configuration concern, not a per-item operation, so it belongs in the constructor options alongside `key` and `indexes`. The field must exist in the schema and should contain a Unix epoch timestamp in seconds. DynamoDB automatically deletes expired items in the background (typically within 48 hours of expiration).
+
+### D-DT-8: Split `InvalidQuery` and `ItemTooLarge` rather than one `Validation` bucket
+
+**Decision:** Pre-flight input failures surface as two intent-revealing error names — `InvalidQueryException` and `ItemTooLargeException` — instead of a single generic `ValidationException` that mirrors DynamoDB's wire name.
+
+**Rationale:** These are two genuinely different failure modes that an earlier revision collapsed under one catch:
+
+- **`InvalidQuery`** — the request *shape* is wrong: a missing `where` clause, a partition key not given as `{ equals: value }`, an unknown index, more than one sort-key condition, or an empty `ifFieldEquals`. Every one of these is a **caller bug** — something the caller fixes by correcting the call. There's no value in branching on which specific shape error occurred at runtime, so they share one name.
+- **`ItemTooLarge`** — an item exceeds the 400 KB per-item limit. This is **not necessarily a caller bug**: the size of a given record may be outside the caller's control (user-supplied content, accumulated history). A caller may legitimately want to branch on it — skip the item, split it, or store a reference instead — which it cannot do if the only signal is a generic name plus message text.
+
+A generic `ValidationException` is exactly the kind of catch-all bucket worth avoiding, and `BatchIncomplete` already establishes the Blocks-specific-name pattern in this same package. Splitting into intent-revealing names lets a customer write `isBlocksError(e, DistributedTableErrors.ItemTooLarge)` and reliably tell "this item is too big" from "my query is malformed" without string-matching the message.
+
+**Mock/AWS parity:** the mock checks serialized byte length client-side and throws `ItemTooLarge` directly. On AWS, DynamoDB raises a generic `ValidationException` for an oversized item; the runtime narrows on the size-specific message (`size has exceeded`) and re-maps only that case to `ItemTooLarge`. Other `ValidationException` causes (malformed expressions, type mismatches) propagate unchanged. Both layers therefore surface the same `error.name`, and the shared message lives in `errors.ts` (`DistributedTableMessages.itemTooLarge`) so the two stay byte-for-byte aligned.
 
 ## Infrastructure (CDK)
 

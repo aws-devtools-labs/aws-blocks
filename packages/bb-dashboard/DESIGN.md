@@ -6,162 +6,6 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 **Type:** Primitive (creates new infrastructure)
 **AWS Service:** Amazon CloudWatch Dashboards
 
-## API Surface
-
-```typescript
-/**
- * Auto-generated CloudWatch Dashboard composing Metrics, Logger, and Tracer BBs.
- *
- * **When to use:** You want operational visibility into your deployed application
- * without manually creating CloudWatch dashboards. Good for monitoring request
- * rates, error counts, latency, and Lambda health.
- *
- * **When NOT to use:** If you need fully custom dashboards with specific widget
- * layouts, use the CloudWatch console directly. If you need an admin UI for
- * data inspection, use `AdminSite`.
- *
- * **Best practices:**
- * - Connect all three observability BBs (Metrics, Logger, Tracer) for full visibility
- * - Use `title` to distinguish dashboards in multi-stage deployments
- * - Keep the default widget set for standard apps; use `widgets` only for custom additions
- *
- * **Scaling:** CloudWatch Dashboards are free for up to 3 dashboards (50 metrics
- * each). Beyond that, $3/dashboard/month. No runtime cost — dashboards are
- * read-only views over existing CloudWatch data.
- */
-class Dashboard extends Scope {
-	/**
-	 * CloudWatch Dashboard console URL (contains CDK tokens until deployment).
-	 *
-	 * During CDK synthesis this is an unresolved token (e.g., `https://${AWS::Region}...`).
-	 * The actual URL is resolved at deployment time and exported as a CfnOutput.
-	 * Use the CfnOutput value (visible in `cdk deploy` output or CloudFormation console)
-	 * rather than reading this property at synthesis time.
-	 */
-	readonly url: string;
-
-	/**
-	 * The resolved CloudWatch Dashboard name.
-	 * Derived from the `dashboardName` option or falling back to the construct ID.
-	 */
-	readonly dashboardName: string;
-
-	/**
-	 * Create an auto-generated observability dashboard.
-	 *
-	 * @param scope - Parent scope.
-	 * @param id - Unique identifier within the parent scope.
-	 * @param options - Dashboard configuration.
-	 *
-	 * @example
-	 * ```typescript
-	 * // Minimal: auto-generates Lambda health widgets
-	 * const dashboard = new Dashboard(scope, 'dashboard');
-	 * ```
-	 *
-	 * @example
-	 * ```typescript
-	 * // Compose with observability BBs
-	 * const logger = new Logger(scope, 'logs');
-	 * const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
-	 * const tracer = new Tracer(scope, 'tracing');
-	 *
-	 * const dashboard = new Dashboard(scope, 'dashboard', {
-	 *   logger,
-	 *   metrics,
-	 *   tracer,
-	 * });
-	 * ```
-	 */
-	constructor(scope: ScopeParent, id: string, options?: DashboardOptions);
-}
-
-interface DashboardOptions {
-	/**
-	 * Dashboard display title. Shown in CloudWatch console and as the page heading.
-	 * @default Derived from scope fullId (e.g., 'myapp-dashboard')
-	 */
-	title?: string;
-
-	// ── Observability BB composition ──────────────────────────────────────────
-	// Pass real BB instances for type-safe integration.
-	// Uses structural typing — any object with `fullId` satisfies the interface.
-
-	/**
-	 * Logger Building Block instance.
-	 * Enables log query widgets. Log group derived from Lambda handler function name.
-	 */
-	logger?: LoggerBBRef;
-
-	/**
-	 * Metrics Building Block instance.
-	 * Adds metric widgets using the BB's resolved CloudWatch `namespace`.
-	 */
-	metrics?: MetricsBBRef;
-
-	/**
-	 * Tracer Building Block instance.
-	 * Presence implies X-Ray tracing is active; enables trace widgets.
-	 */
-	tracer?: TracerBBRef;
-
-	// ── Configuration ──────────────────────────────────────────────
-
-	/**
-	 * Pre-registered metrics to create widgets for on first deploy.
-	 *
-	 * CloudWatch cannot list metrics that haven't been emitted yet. Without this,
-	 * custom metric widgets only appear after the app has emitted data. Providing
-	 * metrics here creates widgets immediately, showing "Insufficient data"
-	 * until the first emission.
-	 *
-	 * Each metric can be configured with custom stat/period or use defaults (Sum, 60s).
-	 * Dimensions can be used to narrow the metric scope to specific resources.
-	 * Used when `metrics` BB is provided.
-	 *
-	 * @example
-	 * ```typescript
-	 * metricConfigs: [
-	 *   { name: 'RequestCount' },
-	 *   { name: 'Latency', stat: 'p99', period: 300 },
-	 *   { name: 'CustomMetric', dimensions: { Service: 'API', Stage: 'prod' } },
-	 * ]
-	 * ```
-	 */
-	metricConfigs?: MetricConfig[];
-
-	/**
-	 * Time range for the dashboard view.
-	 * @default '-PT3H' (last 3 hours)
-	 */
-	defaultTimeRange?: string;
-
-	/**
-	 * Route path for the dashboard redirect endpoint.
-	 * When set to a string, registers a RawRoute at this path that 302-redirects
-	 * to the CloudWatch Dashboard console URL.
-	 * Set to `false` to disable the route entirely (URL is still available via CfnOutput).
-	 *
-	 * The redirect requires AWS Console login to view the dashboard —
-	 * exposing the URL alone grants no data access.
-	 *
-	 * @default '/aws-blocks/dashboard'
-	 */
-	routePath?: string | false;
-}
-```
-
-## Error Constants
-
-```typescript
-export const DashboardErrors = {
-  InvalidMetricConfig: 'InvalidMetricConfigException',
-} as const;
-```
-
-One error constant is exported:
-- **InvalidMetricConfig** — Thrown when a metric configuration is invalid (empty name, invalid period, etc.)
-
 ## Design Decisions
 
 ### D-DB-1: Structural typing for observability BB composition
@@ -224,6 +68,16 @@ One error constant is exported:
 - **Zero configuration** — No need to pass `logGroupName` explicitly if a Logger BB is connected
 - **Consistency** — If Logger BB exists, its logs are automatically queried
 - **Fallback** — If no Logger BB is provided, no log widgets appear (expected behavior)
+
+### D-DB-7: Scope, composition guidance, and cost model
+
+**Decision:** Dashboard targets standard operational visibility (request rates, error counts, latency, Lambda health) and is intentionally scoped narrower than a fully custom visualization layer or an admin UI.
+
+**Rationale:**
+- **When it fits** — Teams that want operational visibility into a deployed application without hand-building CloudWatch dashboards.
+- **When it does not** — Fully custom widget layouts are better served by the CloudWatch console directly; data-inspection admin UIs belong in `AdminSite`, not here. (complements D-DB-3, which covers why we lean on CloudWatch's native dashboard over a custom UI)
+- **Composition guidance** — Connect all three observability BBs (Metrics, Logger, Tracer) for full visibility; use `title` to distinguish dashboards across multi-stage deployments; keep the default widget set for standard apps and use `widgets` only for custom additions.
+- **Cost model** — CloudWatch Dashboards are free for up to 3 dashboards (50 metrics each); beyond that they cost $3/dashboard/month. There is no runtime cost — dashboards are read-only views over existing CloudWatch data. This is the concrete pricing behind D-DB-3's "zero runtime cost" claim.
 
 ## Infrastructure (CDK)
 
@@ -427,46 +281,6 @@ Dashboard intentionally does **not** walk the scope tree to auto-discover BBs be
 | Unauthorized dashboard access | IAM-protected; requires AWS Console login with CloudWatch read permissions |
 | URL leakage from redirect route | URL alone grants no access without AWS login |
 | Dashboard manipulation | CloudWatch Dashboards are read-only views; source of truth is CDK (re-deploy overwrites manual changes) |
-
-## Package Structure
-
-```
-packages/bb-dashboard/
-├── package.json          # Conditional exports
-├── tsconfig.json
-├── README.md             # Usage documentation
-├── DESIGN.md             # This file
-└── src/
-    ├── types.ts          # DashboardOptions, MetricConfig, DashboardErrors
-    ├── errors.ts         # Error constants
-    ├── routes.ts         # RawRoute registration (302 redirect to CloudWatch URL)
-    ├── widgets.ts        # Widget builder utilities (Lambda, Metrics, Logger, Tracer)
-    ├── index.cdk.ts      # CDK construct (creates CloudWatch Dashboard + env var)
-    ├── index.mock.ts     # Mock with route (returns 503 in local mode)
-    ├── index.aws.ts      # AWS runtime (reads URL from BB_DASHBOARD_URL env var)
-    ├── index.browser.ts  # No-op browser stub
-    └── index.test.ts     # Unit tests
-```
-
-### Conditional Exports (package.json)
-
-```json
-{
-  "name": "@aws-blocks/bb-dashboard",
-  "exports": {
-    ".": {
-      "browser": "./dist/index.browser.js",
-      "cdk": {
-        "types": "./dist/index.cdk.d.ts",
-        "default": "./dist/index.cdk.js"
-      },
-      "aws-runtime": "./dist/index.aws.js",
-      "types": "./dist/index.mock.d.ts",
-      "default": "./dist/index.mock.js"
-    }
-  }
-}
-```
 
 ## Trade-offs
 

@@ -6,50 +6,6 @@ Design document for Logger. For usage, see [README.md](./README.md).
 **Type:** Composite (optional infrastructure)
 **AWS Service:** Amazon CloudWatch Logs (via Lambda's built-in log integration)
 
-## API Surface
-
-```typescript
-class Logger extends Scope implements ChildLogger {
-	constructor(scope: ScopeParent, id: string, options?: LoggingOptions);
-	debug(message: string, context?: Record<string, unknown>): void;
-	info(message: string, context?: Record<string, unknown>): void;
-	warn(message: string, context?: Record<string, unknown>): void;
-	error(message: string, context?: Record<string, unknown>): void;
-	child(context: Record<string, unknown>): ChildLogger;
-}
-
-interface LoggingOptions {
-	/** Minimum log level. Messages below this are silently dropped. Default: 'info'. */
-	level?: LogLevel;
-	/** Fields included in every log entry from this logger. */
-	defaultContext?: Record<string, unknown>;
-	/**
-	 * CloudWatch Logs retention period (days). Creates a LogGroup when set.
-	 * When omitted, Lambda's auto-created log group applies (logs never expire).
-	 * Ignored in local dev.
-	 */
-	retention?: RetentionDays;
-}
-
-interface ChildLogger {
-	debug(message: string, context?: Record<string, unknown>): void;
-	info(message: string, context?: Record<string, unknown>): void;
-	warn(message: string, context?: Record<string, unknown>): void;
-	error(message: string, context?: Record<string, unknown>): void;
-	child(context: Record<string, unknown>): ChildLogger;
-}
-```
-
-## Error Constants
-
-```typescript
-export const LoggingErrors = {
-	SerializationFailed: 'SerializationFailedException',
-} as const;
-```
-
-Used as a marker in degraded log entries when context serialization fails. Not thrown to consumers — logging should never throw.
-
 ## Infrastructure (CDK)
 
 The CDK construct optionally creates a CloudWatch Logs LogGroup:

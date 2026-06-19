@@ -31,70 +31,6 @@ Local Mock
               └── _queue: { pending, processing, delayed, failed, totals }
 ```
 
-## API Surface
-
-The README is the canonical API reference (signatures, examples, best practices) per [D-002](../../docs/DECISIONS.md). The shapes below are reproduced as context for the error contract and design notes that follow.
-
-```typescript
-class AsyncJob<T = unknown> extends Scope {
-	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>);
-	submit(payload: T, options?: SubmitOptions): Promise<{ jobId: string }>;
-	submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult>;
-}
-
-interface AsyncJobOptions<T> {
-	/** Async function that processes each job payload. */
-	handler: (payload: T, context: AsyncJobContext) => Promise<void>;
-	/** Runtime payload validation schema. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). */
-	schema?: StandardSchemaV1<T>;
-	/** Maximum retry attempts before the message is sent to the DLQ. Default: 3. */
-	maxRetries?: number;
-	/** Messages the Lambda trigger receives per invocation. Default: 1. */
-	batchSize?: number;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface SubmitOptions {
-	/** Delay before the job becomes visible for processing. 0–900 seconds. Default: 0. */
-	delaySeconds?: number;
-}
-
-interface AsyncJobContext {
-	/** Unique job identifier — SQS message ID in AWS, truncated UUID in mock. */
-	jobId: string;
-	/** Number of times this message has been received (1 on first delivery). */
-	receiveCount: number;
-	/** ISO 8601 timestamp of when the message was sent. */
-	sentAt: string;
-}
-
-interface BatchSubmitResult {
-	/** Job IDs in the same order as input payloads. `null` for entries that failed. */
-	jobIds: Array<string | null>;
-	/** Details of any entries that failed to enqueue. */
-	failed: Array<{ index: number; code: string; message: string }>;
-}
-```
-
-## Error Constants
-
-```typescript
-export const AsyncJobErrors = {
-	PayloadTooLarge: 'PayloadTooLargeException',
-	BatchEmpty: 'BatchEmptyException',
-	BatchTooLarge: 'BatchTooLargeException',
-	ValidationFailed: 'ValidationFailedException',
-	BatchSubmitFailed: 'BatchSubmitFailedException',
-} as const;
-```
-
-- `PayloadTooLarge` — serialized payload exceeds the 256 KB SQS message limit. Enforced in both layers.
-- `BatchEmpty` — `submitBatch()` called with an empty array. Enforced in both layers.
-- `BatchTooLarge` — `submitBatch()` called with more than 10 payloads (SQS `SendMessageBatch` limit). Enforced in both layers.
-- `ValidationFailed` — schema validation failed on `submit()`/`submitBatch()` when a `schema` is configured. Enforced in both layers.
-- `BatchSubmitFailed` — one or more messages failed to enqueue (AWS only). The thrown error carries `failed` and `jobIds` properties with the partial results.
-
 ## Design Decisions
 
 ### D-AJ-1: SQS standard queue with a dedicated DLQ
@@ -172,24 +108,6 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 | No real visibility timeout | Retries are immediate rather than after a timeout window | No mitigation — timing differences don't affect at-least-once + retry correctness |
 | `submitBatch()` never returns partial failures | The mock enqueues each payload locally, so `failed` is always empty and `BatchSubmitFailed` is never thrown | AWS surfaces per-entry failures; design handlers and callers to handle the `failed` array and `BatchSubmitFailedException` |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
-
-## Package Structure
-
-```
-packages/bb-async-job/
-├── package.json           # Conditional exports
-├── tsconfig.json
-├── README.md              # Usage documentation
-├── DESIGN.md              # This file
-└── src/
-    ├── types.ts           # AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult
-    ├── errors.ts          # AsyncJobErrors constants
-    ├── version.ts         # BB_NAME, BB_VERSION (auto-generated)
-    ├── index.cdk.ts       # CDK construct (SQS queue + DLQ + event source)
-    ├── index.mock.ts      # Mock with in-process queue + retry/DLQ
-    ├── index.aws.ts       # AWS runtime (SQS client + SQS event handler)
-    └── index.browser.ts   # No-op browser stub
-```
 
 ## Integration with CronJob
 

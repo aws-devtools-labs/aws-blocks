@@ -10,56 +10,6 @@ Design document for the Email Building Block. For usage, examples, best practice
 
 Email sending for transactional emails — welcome emails, password resets, order confirmations, notifications. For real-time messaging, use `Realtime`. For async job notifications, use `AsyncJob`.
 
-## API Surface
-
-The README is the canonical API reference (signatures, examples, best practices, scaling/cost) per [D-002](../../docs/DECISIONS.md). The shapes below are reproduced only as context for the error contract and design notes that follow.
-
-```typescript
-class EmailClient extends Scope {
-	constructor(scope: ScopeParent, id: string, options: EmailOptions);
-	send(message: EmailMessage): Promise<SendResult>;
-	sendBatch(messages: EmailMessage[]): Promise<SendBatchResult>;
-}
-
-interface EmailOptions {
-	/** Verified sender email address (e.g., 'noreply@example.com'). */
-	fromAddress: string;
-	/** Reply-to address(es). */
-	replyTo?: string[];
-	/** Name of an existing SES configuration set to use for tracking/events. */
-	configurationSet?: string;
-	/** Optional logger for internal BB diagnostics. Defaults to error-level logging. */
-	logger?: ChildLogger;
-}
-
-interface EmailMessage {
-	/** Recipient email address or array of addresses. */
-	to: string | string[];
-	/** Email subject line. */
-	subject: string;
-	/** Plain text email body. */
-	body: string;
-	/** Optional HTML email body. */
-	html?: string;
-	/** Optional CC recipient address(es). */
-	cc?: string[];
-	/** Optional BCC recipient address(es). */
-	bcc?: string[];
-}
-```
-
-## Error Constants
-
-```typescript
-export const EmailErrors = {
-	SendFailed: 'EmailSendFailedException',
-	InvalidInput: 'InvalidInputException',
-	DomainNotVerified: 'DomainNotVerifiedException',
-	AccountPaused: 'AccountSendingPausedException',
-	RateLimited: 'RateLimitedException',
-} as const;
-```
-
 ## Infrastructure (CDK)
 
 Creates the following resources:

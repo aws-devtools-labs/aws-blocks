@@ -31,46 +31,6 @@ Local Mock
          └── handler called with CronJobEvent<T>
 ```
 
-## API Surface (Implemented)
-
-```typescript
-class CronJob<T = void> extends Scope {
-	constructor(scope: ScopeParent, id: string, options: CronJobOptions<T>);
-}
-
-interface CronJobOptions<T = void> {
-	schedule: string;
-	handler: (event: CronJobEvent<T>) => Promise<void>;
-	enabled?: boolean;       // @default true
-	description?: string;
-	timezone?: string;       // IANA timezone, @default UTC
-	input?: T;
-	logger?: ChildLogger;    // optional logger override
-}
-
-interface CronJobEvent<T = void> {
-	scheduledTime: string;   // ISO 8601
-	jobName: string;         // matches fullId
-	input: T;
-}
-```
-
-The class has **no public methods** — the constructor is the entire public API. The handler runs automatically on the schedule.
-
-## Error Constants
-
-```typescript
-export const CronJobErrors = {
-	InvalidSchedule: 'InvalidScheduleExpression',
-	InvalidTimezone: 'InvalidTimezoneExpression',
-} as const;
-```
-
-- `InvalidSchedule` — thrown at construction time if `schedule` is not a valid cron or rate expression.
-- `InvalidTimezone` — thrown at construction time if `timezone` is not a valid IANA timezone.
-
-**Note:** Validation runs in the mock implementation. The CDK construct passes the expression directly to EventBridge (which performs its own validation at deploy time). The AWS runtime does not validate either — it only registers the handler.
-
 ## Design Decisions
 
 ### D-CJ-1: No runtime methods (infrastructure-only BB)
@@ -189,46 +149,6 @@ This is a brute-force approach that trades performance for correctness. Acceptab
 | No concurrency control | Multiple invocations can overlap locally | No mitigation — same behavior in AWS (no per-job concurrency option) |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by the shared Lambda's grants |
 | No schedule validation in CDK | Invalid expressions only fail at deploy time (EventBridge rejects) | Mock validates locally; developers catch errors in local dev first |
-
-## Package Structure
-
-```
-packages/bb-cron-job/
-├── package.json           # Conditional exports
-├── tsconfig.json
-├── README.md              # Usage documentation
-├── DESIGN.md              # This file
-└── src/
-    ├── types.ts           # CronJobOptions, CronJobEvent
-    ├── errors.ts          # CronJobErrors constants
-    ├── version.ts         # BB_NAME, BB_VERSION (auto-generated)
-    ├── index.cdk.ts       # CDK construct (EventBridge Schedule + IAM)
-    ├── index.mock.ts      # Mock with setInterval/setTimeout scheduling
-    ├── index.aws.ts       # AWS runtime (registerLambdaEventHandler)
-    ├── index.browser.ts   # No-op browser stub
-    └── index.hooks.ts     # Client hooks export
-```
-
-### Conditional Exports (package.json)
-
-```json
-{
-  "name": "@aws-blocks/bb-cron-job",
-  "exports": {
-    ".": {
-      "browser": "./dist/index.browser.js",
-      "cdk": {
-        "types": "./dist/index.cdk.d.ts",
-        "default": "./dist/index.cdk.js"
-      },
-      "aws-runtime": "./dist/index.aws.js",
-      "hooks": "./dist/index.hooks.js",
-      "types": "./dist/index.mock.d.ts",
-      "default": "./dist/index.mock.js"
-    }
-  }
-}
-```
 
 ## Trade-offs
 
