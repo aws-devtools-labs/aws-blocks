@@ -84,7 +84,15 @@ export async function deploy(options: DeployOptions) {
     // post-deploy keeps the name authoritative (resolved by synth, not guessed)
     // and avoids provisioning a secret for a deploy that failed/rolled back.
     const dbParamName = dbParamNameFromOutputs(stackOutputs);
-    const secrets = await ensureSecrets(dbParamName);
+    let secrets;
+    try {
+      secrets = await ensureSecrets(dbParamName);
+    } catch (error) {
+      console.error('\n⚠️  Deployment succeeded, but writing the database connection string failed.');
+      console.error('   The app is deployed but cannot reach its database until this is resolved.');
+      console.error('   Re-run `npm run deploy` to retry — the write is safe and idempotent.');
+      throw error;
+    }
     if (secrets.created.length > 0 || secrets.updated.length > 0) {
       console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
     }

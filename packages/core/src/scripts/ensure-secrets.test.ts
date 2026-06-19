@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadProductionEnv } from './ensure-secrets.js';
+import { loadProductionEnv, withRetry } from './ensure-secrets.js';
 
 describe('loadProductionEnv', () => {
   let workDir: string;
@@ -46,5 +46,76 @@ describe('loadProductionEnv', () => {
     } finally {
       delete process.env[key];
     }
+  });
+});
+
+
+describe('withRetry', () => {
+  const NO_DELAY = [0, 0, 0];
+
+  it('returns the result without retrying on success', async () => {
+    let calls = 0;
+    const result = await withRetry(async () => { calls++; return 'ok'; }, NO_DELAY);
+    assert.strictEqual(result, 'ok');
+    assert.strictEqual(calls, 1);
+  });
+
+  it('retries a transient error then succeeds', async () => {
+    let calls = 0;
+    const result = await withRetry(async () => {
+      calls++;
+      if (calls < 3) {
+        const e: any = new Error('throttled');
+        e.name = 'ThrottlingException';
+        throw e;
+      }
+      return 'ok';
+    }, NO_DELAY);
+    assert.strictEqual(result, 'ok');
+    assert.strictEqual(calls, 3);
+  });
+
+  it('does not retry a non-transient error (throws immediately)', async () => {
+    let calls = 0;
+    await assert.rejects(
+      () => withRetry(async () => {
+        calls++;
+        const e: any = new Error('missing');
+        e.name = 'ParameterNotFound';
+        throw e;
+      }, NO_DELAY),
+      /missing/,
+    );
+    assert.strictEqual(calls, 1);
+  });
+
+  it('treats 5xx responses as transient', async () => {
+    let calls = 0;
+    const result = await withRetry(async () => {
+      calls++;
+      if (calls < 2) {
+        const e: any = new Error('server error');
+        e.$metadata = { httpStatusCode: 500 };
+        throw e;
+      }
+      return 'ok';
+    }, NO_DELAY);
+    assert.strictEqual(result, 'ok');
+    assert.strictEqual(calls, 2);
+  });
+
+  it('gives up after exhausting retries on a persistent transient error', async () => {
+    let calls = 0;
+    await assert.rejects(
+      () => withRetry(async () => {
+        calls++;
+        const e: any = new Error('still throttled');
+        e.name = 'ThrottlingException';
+        throw e;
+      }, NO_DELAY),
+      /still throttled/,
+    );
+    // initial attempt + one per delay entry
+    assert.strictEqual(calls, NO_DELAY.length + 1);
   });
 });

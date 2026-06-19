@@ -51,6 +51,12 @@ export function dbParamNameFromOutputs(
 /**
  * Ensure the connection string is stored in SSM under the given parameter name.
  *
+ * Idempotent: a no-op when there is no connection string in the environment or
+ * no parameter name, and a no-op when the stored value already matches. Safe to
+ * re-run (e.g. after a transient failure). Transient SSM errors (throttling,
+ * 5xx, timeouts) are retried with backoff; non-transient errors propagate so
+ * the caller can surface them.
+ *
  * @param parameterName the stack-scoped SSM parameter name (from the deploy
  *   CfnOutput). When falsy, this is a no-op — the stack has no external DB
  *   secret to seed.
@@ -69,10 +75,10 @@ export async function ensureSecrets(parameterName: string | undefined): Promise<
 
   let isNew = false;
   try {
-    const current = await client.send(new GetParameterCommand({
+    const current = await withRetry(() => client.send(new GetParameterCommand({
       Name: parameterName,
       WithDecryption: true,
-    }));
+    })));
     if (current.Parameter?.Value === conn.value) {
       result.unchanged.push(parameterName);
       return result;
@@ -82,15 +88,42 @@ export async function ensureSecrets(parameterName: string | undefined): Promise<
     isNew = true;
   }
 
-  await client.send(new PutParameterCommand({
+  await withRetry(() => client.send(new PutParameterCommand({
     Name: parameterName,
     Value: conn.value,
     Type: 'SecureString',
     Overwrite: true,
-  }));
+  })));
   (isNew ? result.created : result.updated).push(parameterName);
 
   return result;
+}
+
+/**
+ * Retry an SSM operation on transient failures (throttling, 5xx, timeouts) with
+ * exponential backoff. Non-transient errors (e.g. ParameterNotFound,
+ * AccessDenied) are thrown immediately so callers can handle them.
+ *
+ * @internal exported for testing; not part of the package's public API.
+ */
+export async function withRetry<T>(op: () => Promise<T>, delaysMs: number[] = [200, 600, 1500]): Promise<T> {
+  const TRANSIENT = new Set([
+    'ThrottlingException', 'Throttling', 'TooManyUpdates',
+    'RequestLimitExceeded', 'InternalServerError', 'ServiceUnavailable',
+    'TimeoutError', 'RequestTimeout',
+  ]);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await op();
+    } catch (e: any) {
+      const transient =
+        TRANSIENT.has(e?.name) ||
+        (typeof e?.$metadata?.httpStatusCode === 'number' && e.$metadata.httpStatusCode >= 500) ||
+        e?.$retryable != null;
+      if (!transient || attempt >= delaysMs.length) throw e;
+      await new Promise((r) => setTimeout(r, delaysMs[attempt]));
+    }
+  }
 }
 
 /**

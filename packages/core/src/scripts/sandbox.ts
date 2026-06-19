@@ -100,7 +100,15 @@ export async function startSandbox(options: SandboxOptions) {
   // before the dev server starts, so the parameter exists by the time anything
   // can proxy a request. No-op unless this app uses an external DB.
   const dbParamName = dbParamNameFromOutputs(stackOutputs);
-  const secrets = await ensureSecrets(dbParamName);
+  let secrets;
+  try {
+    secrets = await ensureSecrets(dbParamName);
+  } catch (error) {
+    console.error('\n⚠️  Sandbox deployed, but writing the database connection string failed.');
+    console.error('   The app is deployed but cannot reach its database until this is resolved.');
+    console.error('   Re-run `npm run sandbox` to retry — the write is safe and idempotent.');
+    throw error;
+  }
   if (secrets.created.length > 0) {
     console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
   }
