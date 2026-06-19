@@ -1,5 +1,11 @@
 # @aws-blocks/bb-tracer
 
+## 0.1.3
+
+### Patch Changes
+
+- b90b7d9: fix(bb-tracer): make sampling a per-trace decision so all spans within a trace share the same sampling outcome
+
 ## 0.1.2
 
 ### Patch Changes
