@@ -198,6 +198,21 @@ jobs:
             sleep 1
           done
 
+      - name: Verify server is ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf -X POST http://localhost:3001/aws-blocks/api \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"api.kvGet","params":["healthcheck"],"id":1}' > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              exit 0
+            fi
+            echo "⏳ attempt $i/30: server not ready; retrying in 2s..."
+            sleep 2
+          done
+          echo "❌ Server never became ready"
+          exit 1
+
       - name: Run E2E tests
         env:
           BLOCKS_URL: http://localhost:3001/aws-blocks/api
@@ -400,6 +415,27 @@ jobs:
           swift run swift-code-generator \
             ../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
             Tests/BlocksE2ETests/Generated
+
+      - name: Warm up sandbox API
+        env:
+          BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
+        run: |
+          attempts=24
+          delay=2
+          for i in $(seq 1 "$attempts"); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST -H 'content-type: application/json' -d '{}' \
+              "$BLOCKS_URL" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ Sandbox API warm after $i attempt(s) (http=200)."
+              exit 0
+            fi
+            echo "⏳ attempt $i/$attempts: API not ready (http=$code); retrying in ${delay}s..."
+            sleep "$delay"
+            if [ "$delay" -lt 10 ]; then delay=$((delay + 2)); fi
+          done
+          echo "❌ Sandbox API did not return HTTP 200 after $attempts attempts."
+          exit 1
 
       - name: Run Swift E2E against sandbox
         env:
