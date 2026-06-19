@@ -3,6 +3,8 @@
 
 import type { ModelConfig } from './types.js';
 
+const BALANCED_MODEL_ID = 'global.anthropic.claude-sonnet-4-6';
+
 /**
  * Pre-configured Bedrock model presets using global inference profiles.
  * Names are capability-based so the underlying model can be upgraded without breaking user code.
@@ -16,7 +18,7 @@ export const BedrockModels = {
 	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
 	BALANCED: {
 		provider: 'bedrock',
-		modelId: 'global.anthropic.claude-sonnet-4-6',
+		modelId: BALANCED_MODEL_ID,
 	},
 	/** Highest capability for the hardest tasks. Currently: Claude Opus 4.8. */
 	SMART: {
@@ -27,6 +29,23 @@ export const BedrockModels = {
 	FAST: {
 		provider: 'bedrock',
 		modelId: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+	},
+
+
+	/** @deprecated Use `BedrockModels.BALANCED` instead. */
+	DEFAULT: {
+		provider: 'bedrock',
+		modelId: BALANCED_MODEL_ID,
+	},
+	/** @deprecated Use `BedrockModels.BALANCED` instead. */
+	BUDGET: {
+		provider: 'bedrock',
+		modelId: BALANCED_MODEL_ID,
+	},
+	/** @deprecated Use `BedrockModels.FAST` instead. */
+	MICRO: {
+		provider: 'bedrock',
+		modelId: BALANCED_MODEL_ID,
 	},
 } as const satisfies Record<string, ModelConfig>;
 
