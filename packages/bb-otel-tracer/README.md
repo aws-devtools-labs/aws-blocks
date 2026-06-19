@@ -17,8 +17,8 @@ AWS-native `Tracer` block only if you specifically want the X-Ray SDK.
 ```typescript
 const tracer = new OtelTracer(scope, id, options?)
 
-const user = await tracer.startSegment('fetchUser', async (segment) => {
-  segment.addAnnotation('userId', 'u1');   // searchable attribute
+const user = await tracer.startSegment('fetch-user', async (segment) => {
+  segment.addAnnotation('user.id', 'u1');   // searchable attribute (lowercase, dot-separated)
   segment.setHttpStatus(200);
   return db.get('u1');
 }, { kind: SpanKind.CLIENT });

@@ -17,9 +17,9 @@ describe('OtelTracer — startSegment', () => {
 	test('returns the wrapped fn result and passes a segment', async () => {
 		const t = new OtelTracer(fakeScope, 'tracer');
 		let gotSegment = false;
-		const result = await t.startSegment('work', async (segment) => {
+		const result = await t.startSegment('fetch.user', async (segment) => {
 			gotSegment = typeof segment.addAnnotation === 'function';
-			segment.addAnnotation('userId', 'u1');
+			segment.addAnnotation('user.id', 'u1');
 			segment.addMetadata('payload', { a: 1 });
 			segment.addEvent('did-work', { step: 'compute' });
 			segment.setHttpStatus(200);

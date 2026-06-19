@@ -49,11 +49,15 @@ const dashboard = new Dashboard(scope, 'dashboard', {
   metrics, // metricsKind: 'otlp' is read off the instance → PromQL widgets
   tracer,
   metricConfigs: [
-    { name: 'OrdersPlaced' },                                  // → sum({"OrdersPlaced"})
-    { name: 'Latency', promql: 'histogram_quantile(0.99, {"Latency"})', title: 'P99 Latency' },
+    { name: 'orders.placed' },                                  // → sum({"orders.placed"})
+    { name: 'faas.invoke_duration', promql: 'histogram_quantile(0.99, {"faas.invoke_duration"})', title: 'P99 Invoke Duration' },
   ],
 });
 ```
+
+OTel metric names use lowercase, dot-separated names (e.g. `orders.placed`, and the FaaS
+semantic-convention `faas.invoke_duration` for Lambda invocation time) and lowercase
+attribute keys — not the CloudWatch `PascalCase` convention.
 
 Why OTLP metrics differ: CloudWatch ingests OTLP metrics as **PromQL-queryable** series with
 **no namespace** (they don't appear in classic `ListMetrics`), so they can't be shown with
