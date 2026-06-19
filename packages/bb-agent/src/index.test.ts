@@ -115,6 +115,19 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 	});
 });
 
+// ── stream() input validation ────────────────────────────────────────────────
+
+describe('stream() input validation', () => {
+	test('rejects empty channelId', async () => {
+		const scope = new Scope('test-empty-ch');
+		const agent = new Agent(scope, 'ec', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		await assert.rejects(
+			() => agent.stream('hello', { userId: 'test-user', channelId: '' }),
+			(err: any) => err.name === 'ValidationFailedException',
+		);
+	});
+});
+
 // ── tool factory enforcement (compile-time) ──────────────────────────────────
 
 describe('tool factory enforcement', () => {
