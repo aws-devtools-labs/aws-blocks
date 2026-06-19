@@ -9,6 +9,7 @@ import { ensureSecrets, loadProductionEnv, dbParamNameFromOutputs } from './ensu
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { runSync } from './run-command.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -52,7 +53,7 @@ export async function deploy(options: DeployOptions) {
     console.log('   - Frontend hosting (S3 + CloudFront)');
     
     try {
-      execFileSync(
+      runSync(
         "npx",
         [
           "cdk", "deploy",

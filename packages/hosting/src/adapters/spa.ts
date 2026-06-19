@@ -18,6 +18,24 @@ const STATIC_EXCLUDE_NAMES = ['.ds_store', 'thumbs.db'];
 export type SpaAdapterOptions = {
   /** Explicit build output directory relative to project root. Overrides auto-detection. */
   buildOutputDir?: string;
+  /**
+   * Routing model declared by the caller from the framework's build
+   * contract — NOT inferred from the filesystem.
+   *
+   *   - `true`  → single-page app (`framework: 'spa'`): extensionless
+   *     paths fall back to `/index.html` for client-side routing.
+   *   - `false` → multi-page static site (`framework: 'static'`): each
+   *     route resolves to its own `<path>/index.html` (directory-index).
+   *
+   * Sourced by {@link getAdapter} from the framework string. When omitted,
+   * keeps the historical SPA behavior so callers that don't declare a model
+   * keep working. The L3 still applies its own fallback heuristic when the
+   * manifest omits `spaFallback` entirely; here we always set it because the
+   * framework is known.
+   *
+   * @default true
+   */
+  spaFallback?: boolean;
 };
 
 /**
@@ -108,11 +126,23 @@ export const spaAdapter = (
     errorPages[500] = '/500.html';
   }
 
+  // Routing model comes from the caller's framework contract (see
+  // SpaAdapterOptions.spaFallback), NOT from sniffing the output tree.
+  // Filesystem sniffing misclassifies both ways: a real SPA that ships a
+  // nested index.html (e.g. public/legal/index.html) would lose
+  // client-side deep-linking, and a flat-file SSG (about.html, no
+  // about/index.html) would wrongly get SPA fallback and hit the routing
+  // bug this whole change fixes. `framework: 'spa'` → true (single-page);
+  // `framework: 'static'` → false (multi-page). Defaults to true when the
+  // caller doesn't declare one (historical SPA behavior).
+  const spaFallback = options?.spaFallback ?? true;
+
   const manifest: DeployManifest = {
     version: 1,
     compute: {},
     staticAssets: {
       directory: staticDir,
+      spaFallback,
     },
     routes: [
       {

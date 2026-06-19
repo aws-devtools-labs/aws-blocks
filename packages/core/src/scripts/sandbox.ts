@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { runSync, spawnCommand } from './run-command.js';
 
 /**
  * Import the backend definition to populate the Scope BB registry.
@@ -61,7 +62,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("   (This may take a few minutes on first deploy)");
 
   try {
-    execFileSync(
+    runSync(
       "npm",
       [
         "exec", "cdk", "--", "deploy",
@@ -151,7 +152,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawn("npx", [
+  const cdkWatch = spawnCommand("npx", [
     "cdk", "watch", "--hotswap",
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${process.cwd()}`,
@@ -175,7 +176,7 @@ export async function startSandbox(options: SandboxOptions) {
   const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
   const [cmd, ...args] = devServerCmd.split(' ');
   
-  const devServer = spawn(cmd, args, {
+  const devServer = spawnCommand(cmd, args, {
     stdio: "inherit",
     shell: true,
     env: { 
@@ -225,7 +226,7 @@ export async function destroySandbox(backendPath: string) {
 
     for (let attempt = 0; ; attempt++) {
       try {
-        execFileSync("npm", cdkArgs, { stdio: "inherit", env: cdkEnv });
+        runSync("npm", cdkArgs, { stdio: "inherit", env: cdkEnv });
         console.log(attempt === 0 ? "\n✅ Sandbox destroyed!" : "\n✅ Sandbox destroyed on retry!");
         return;
       } catch (error) {

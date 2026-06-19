@@ -24,10 +24,10 @@
  * here.
  */
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef } from '../db-naming.js';
+import { runSync } from './run-command.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
 /** Default output dir for db-pull generated files (database.types.ts / database.meta.ts). */
@@ -59,7 +59,7 @@ function runMigrateSubprocess(
   migrationsDir: string,
   regenerateTypesDir?: string,
 ): void {
-  execFileSync('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
+  runSync('npx', buildMigrateArgs(stage, migrationsDir, regenerateTypesDir), {
     stdio: 'inherit',
     env: { ...process.env, BLOCKS_MIGRATE_URL: connValue },
   });

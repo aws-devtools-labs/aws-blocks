@@ -15,6 +15,7 @@ import {
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'node:url';
 import type {
   BranchConfig,
   PipelineProps,
@@ -579,8 +580,10 @@ async function importAppFileForStage<TConfig>(
   const listenersBefore = process.listeners('beforeExit').slice();
 
   try {
-    // ESM caches modules by URL — append a unique query string so each stage re-executes the module body
-    await import(`${appFile}?stage=${encodeURIComponent(stageConfig.name)}`);
+    // file:// URL (not a raw path) so the cache-busting query works on Windows.
+    const appUrl = pathToFileURL(appFile);
+    appUrl.searchParams.set('stage', stageConfig.name);
+    await import(appUrl.href);
   } finally {
     // Remove any beforeExit listeners added during import.
     // The imported file's cdk.App() registers a synth() handler that would

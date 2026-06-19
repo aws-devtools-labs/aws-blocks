@@ -259,6 +259,166 @@ void describe('CdnConstruct', () => {
     });
   });
 
+  // ---- Explicit spaFallback signal (multi-page static) ----
+
+  void describe('explicit staticAssets.spaFallback', () => {
+    // Helper: pull the viewer-request CloudFront Function source.
+    const viewerRequestCode = (template: Template): string => {
+      const fns = template.findResources('AWS::CloudFront::Function');
+      const codes = Object.values(fns)
+        .map((f) => (f.Properties as Record<string, unknown>)?.FunctionCode)
+        .filter((c): c is string => typeof c === 'string');
+      // The build-id rewrite (viewer-request) function contains the
+      // '/builds/' prefix rewrite; the response/strip functions don't.
+      return codes.find((c) => c.includes("'/builds/'")) ?? codes.join('\n');
+    };
+
+    void it('uses directory-index resolution (not SPA fallback) when spaFallback:false', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const multiPageManifest: DeployManifest = {
+        ...spaManifest,
+        staticAssets: { directory: '/tmp/assets', spaFallback: false },
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: multiPageManifest,
+        securityHeadersPolicy: policy,
+      });
+
+      const code = viewerRequestCode(Template.fromStack(stack));
+      // Directory-index mode appends '/index.html' to extensionless paths
+      // (`uri = uri + '/index.html'`) and must NOT blanket-rewrite every
+      // path to a single '/index.html' (the SPA form `uri = '/index.html'`).
+      assert.ok(
+        code.includes("uri = uri + '/index.html'"),
+        'multi-page mode should resolve <path>/index.html via directory-index',
+      );
+      assert.ok(
+        code.includes("uri = '/index.html'") === false,
+        'multi-page mode must not blanket-rewrite every path to /index.html',
+      );
+    });
+
+    void it('honors explicit spaFallback:true even when errorPages are present', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      // errorPages present would, under the legacy heuristic, disable SPA
+      // fallback. The explicit signal must win.
+      const spaWithErrorPages: DeployManifest = {
+        ...spaManifest,
+        staticAssets: { directory: '/tmp/assets', spaFallback: true },
+        errorPages: { 404: '/404.html' as const },
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaWithErrorPages,
+        securityHeadersPolicy: policy,
+      });
+
+      const code = viewerRequestCode(Template.fromStack(stack));
+      assert.ok(
+        code.includes("uri = '/index.html'"),
+        'explicit spaFallback:true must force the SPA blanket rewrite',
+      );
+    });
+
+    void it('wires a default 404 response for multi-page static with no errorPages', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const multiPageNoErr: DeployManifest = {
+        ...spaManifest,
+        staticAssets: { directory: '/tmp/assets', spaFallback: false },
+      };
+
+      const cdn = new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: multiPageNoErr,
+        securityHeadersPolicy: policy,
+      });
+
+      // The construct should expose the built-in default 404 page so the
+      // L3 can deploy it.
+      assert.ok(
+        cdn.defaultNotFoundPageHtml &&
+          cdn.defaultNotFoundPageHtml.includes('404'),
+        'multi-page static with no 404 should get a default 404 page',
+      );
+
+      // And wire CloudFront 403/404 → the default page at status 404.
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::CloudFront::Distribution', {
+        DistributionConfig: Match.objectLike({
+          CustomErrorResponses: Match.arrayWith([
+            Match.objectLike({
+              ErrorCode: 403,
+              ResponseCode: 404,
+              ResponsePagePath: Match.stringLikeRegexp('_not_found\\.html$'),
+            }),
+            Match.objectLike({
+              ErrorCode: 404,
+              ResponseCode: 404,
+              ResponsePagePath: Match.stringLikeRegexp('_not_found\\.html$'),
+            }),
+          ]),
+        }),
+      });
+    });
+
+    void it('does NOT add a default 404 when the framework emitted its own (errorPages set)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const multiPageWithErr: DeployManifest = {
+        ...spaManifest,
+        staticAssets: { directory: '/tmp/assets', spaFallback: false },
+        errorPages: { 404: '/404.html' as const },
+      };
+
+      const cdn = new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: multiPageWithErr,
+        securityHeadersPolicy: policy,
+      });
+
+      assert.equal(
+        cdn.defaultNotFoundPageHtml,
+        undefined,
+        'framework-emitted 404 takes precedence over the built-in default',
+      );
+    });
+
+    void it('does NOT add a default 404 for SPA sites', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const cdn = new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: {
+          ...spaManifest,
+          staticAssets: { directory: '/tmp/assets', spaFallback: true },
+        },
+        securityHeadersPolicy: policy,
+      });
+
+      assert.equal(
+        cdn.defaultNotFoundPageHtml,
+        undefined,
+        'SPA sites deep-link to /index.html at 200; no default 404',
+      );
+    });
+  });
+
   // ---- SSR mode ----
 
   void describe('SSR mode (with compute)', () => {
