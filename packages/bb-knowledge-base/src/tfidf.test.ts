@@ -209,3 +209,33 @@ test('accent-insensitive matching: unaccented query matches accented document', 
 	assert.ok(results.length > 0, 'unaccented query should match the accented document');
 	assert.strictEqual(results[0].docIndex, 0, 'the accented document should rank first');
 });
+
+// ── Single-character CJK ───────────────────────────────────────────────────
+
+test('single-character CJK string is searchable', () => {
+	// A lone CJK character produces no bigram; the unigram fallback keeps it
+	// indexed so a single-character query can still match.
+	const docs = [
+		'第',
+		'completely unrelated english content about gardening tools',
+	];
+	const index = buildIndex(docs);
+	const results = search(index, '第', 5);
+
+	assert.ok(results.length > 0, 'single-character CJK doc should be findable');
+	assert.strictEqual(results[0].docIndex, 0, 'the CJK document should match the CJK query');
+});
+
+test('single-character CJK token is matched within mixed content', () => {
+	// The character 中 appears isolated between ASCII words, so it is segmented as
+	// a length-1 CJK run and must survive as a unigram token.
+	const docs = [
+		'project 中 documentation overview',
+		'unrelated english sentence with several common words here',
+	];
+	const index = buildIndex(docs);
+	const results = search(index, '中', 5);
+
+	assert.ok(results.length > 0, 'isolated single CJK character should be searchable');
+	assert.strictEqual(results[0].docIndex, 0);
+});

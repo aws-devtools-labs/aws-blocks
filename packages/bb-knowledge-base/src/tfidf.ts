@@ -55,6 +55,13 @@ function extractCjkBigrams(text: string): string[] {
 	const bigrams: string[] = [];
 	for (const seg of segments) {
 		const chars = [...seg];
+		if (chars.length === 1) {
+			// A single-character CJK segment (e.g. "第") produces no bigram; index
+			// the lone character as a unigram so it stays searchable. `[...seg]` is
+			// surrogate-pair-safe (iterates by code point).
+			bigrams.push(chars[0]);
+			continue;
+		}
 		for (let i = 0; i < chars.length - 1; i++) {
 			bigrams.push(chars[i] + chars[i + 1]);
 		}

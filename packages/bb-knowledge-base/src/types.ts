@@ -49,7 +49,14 @@ export interface ChunkingConfig {
 	strategy?: ChunkingStrategy;
 	/** Max tokens per chunk. Only used with `'fixed'` strategy. Default: 300. */
 	chunkSize?: number;
-	/** Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20. */
+	/**
+	 * Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20.
+	 *
+	 * **Parity note:** In local development this is interpreted as a *percentage*
+	 * of `chunkSize` (0–100). The real Bedrock API treats overlap as an *absolute
+	 * token count*, so the value is not directly transferable between local dev
+	 * and production — tune it per environment.
+	 */
 	chunkOverlap?: number;
 	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. */
 	breakpointPercentile?: number;

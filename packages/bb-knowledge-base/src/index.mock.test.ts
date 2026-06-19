@@ -3,9 +3,10 @@
 
 import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, cpSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
@@ -190,23 +191,28 @@ test('RetrieveResult has all required fields with correct types', async () => {
 
 // ── Persistence ────────────────────────────────────────────────────────────
 
-test('second instance loads from chunks.json cache', async () => {
+test('second instance reuses chunks.json cache when the source is unchanged', async () => {
 	const kb1 = new KnowledgeBase({ id: 'test' }, 'persist', { source: 'test-knowledge-tmp' });
 	const results1 = await kb1.retrieve('password');
 	assert.ok(results1.length > 0);
 
-	assert.ok(
-		existsSync(join('.bb-data', 'test-persist', 'chunks.json')),
-		'chunks.json cache should exist',
-	);
+	const cachePath = join('.bb-data', 'test-persist', 'chunks.json');
+	assert.ok(existsSync(cachePath), 'chunks.json cache should exist');
 
-	// Delete the source folder to prove we're loading from cache
-	rmSync(TEST_KNOWLEDGE, { recursive: true, force: true });
+	// Overwrite the cache with a sentinel chunk while leaving the source (and its
+	// source.hash fingerprint) untouched. A second instance that reads the cache —
+	// rather than re-reading the source — will surface the sentinel, proving the
+	// cache is reused when the source is unchanged.
+	const sentinel = 'zzqxmarker unique sentinel chunk present only in the cache file content here';
+	writeFileSync(cachePath, JSON.stringify([{ text: sentinel, source: 'sentinel.md', metadata: {} }]));
 
 	const kb2 = new KnowledgeBase({ id: 'test' }, 'persist', { source: 'test-knowledge-tmp' });
-	const results2 = await kb2.retrieve('password');
-	assert.ok(results2.length > 0, 'should load from cache even without source');
-	assert.deepStrictEqual(results1[0].source, results2[0].source, 'same results from cache');
+	const results2 = await kb2.retrieve('zzqxmarker sentinel');
+	assert.ok(results2.length > 0, 'should load chunks from cache');
+	assert.ok(
+		results2[0].text.includes('zzqxmarker'),
+		'cached sentinel chunk should be returned, proving the cache was reused',
+	);
 });
 
 // ── S3 URI source ──────────────────────────────────────────────────────────
@@ -472,10 +478,12 @@ describe('source path containment', () => {
 		try {
 			// Run in a subprocess with cwd=proj so resolve(cwd) = .../proj. __dirname
 			// resolves to the compiled dist/ directory, where index.mock.js sits beside
-			// this test, so the import path stays valid after consolidation.
-			const distPath = join(__dirname, 'index.mock.js').replace(/\\/g, '/');
+			// this test. Build the ESM specifier as a file:// URL so it is valid on
+			// every platform (a bare Windows path like C:\... is not a legal ESM
+			// specifier). Requires a prior `tsc` build — this test runs against dist/.
+			const distUrl = pathToFileURL(join(__dirname, 'index.mock.js')).href;
 			const script = `
-import { KnowledgeBase, KnowledgeBaseErrors } from '${distPath}';
+import { KnowledgeBase, KnowledgeBaseErrors } from '${distUrl}';
 try {
 	const kb = new KnowledgeBase({ id: 'app' }, 'leak', { source: '../proj-secrets' });
 	await kb.retrieve('secret document');
@@ -545,13 +553,56 @@ try {
 			rmSync(outside, { recursive: true, force: true });
 		}
 	});
+
+	test('rejects a symlink whose target is outside the project', async () => {
+		// A symlink inside the project that points at a real target outside it
+		// passes lexical containment but must be rejected by the realpath check.
+		// The target lives in the OS temp dir (outside the project). Symlink
+		// creation is skipped where the platform/CI forbids it (e.g. Windows
+		// without privilege), keeping the test portable.
+		const outsideTarget = mkdtempSync(join(tmpdir(), 'kb-symlink-target-'));
+		writeFileSync(
+			join(outsideTarget, 'secret.md'),
+			'Secret content that lives outside the project and must not be reachable through a symlink.',
+		);
+		const linkName = '_symlink-escape';
+		const linkPath = join(CWD, linkName);
+		try {
+			rmSync(linkPath, { recursive: true, force: true });
+		} catch {}
+
+		let symlinkOk = true;
+		try {
+			symlinkSync(outsideTarget, linkPath, 'dir');
+		} catch (err) {
+			symlinkOk = false;
+			console.warn(`Skipping symlink test — cannot create symlink on this platform: ${(err as Error).message}`);
+		}
+
+		try {
+			if (!symlinkOk) return;
+			const kb = new KnowledgeBase({ id: 'app' }, 'symlink', { source: linkName });
+			await assert.rejects(
+				() => kb.retrieve('secret content'),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+					return true;
+				},
+				'A symlink pointing outside the project must be rejected with InvalidSource',
+			);
+		} finally {
+			rmSync(linkPath, { recursive: true, force: true });
+			rmSync(outsideTarget, { recursive: true, force: true });
+		}
+	});
 });
 
 // ── Cache invalidation ──────────────────────────────────────────────────────
 //
 // The chunks cache is keyed on the source folder's contents (path plus per-file
-// mtime/size). Changing the source must rebuild the index rather than serving
-// stale results.
+// mtime/size) and the chunking config. Changing the source or the chunking
+// config must rebuild the index rather than serving stale results, and deleting
+// the source must throw rather than serving stale cache.
 
 describe('cache invalidation', () => {
 	test('switching the source folder returns new content, not stale cache', async () => {
@@ -605,6 +656,77 @@ describe('cache invalidation', () => {
 			assert.strictEqual(r3.length, 0, 'old content should not be returned after the document edit');
 		} finally {
 			cleanupDirs('_cache-edit');
+		}
+	});
+
+	test('deleting the source after a cached load throws InvalidSource, not stale data', async () => {
+		const srcName = '_cache-then-delete';
+		const src = freshDir(srcName);
+		writeFileSync(
+			join(src, 'doc.md'),
+			'Content about renewable energy and sustainable power generation technologies worldwide.',
+		);
+
+		try {
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'deltest', { source: srcName });
+			const r1 = await kb1.retrieve('renewable energy sustainable');
+			assert.ok(r1.length > 0, 'first load should return results');
+			assert.ok(
+				existsSync(join('.bb-data', 'app-deltest', 'chunks.json')),
+				'cache should be written after the first load',
+			);
+
+			// Remove the source folder. A fresh instance must NOT serve the stale
+			// cache — the empty source hash forces a rebuild, which throws.
+			rmSync(src, { recursive: true, force: true });
+
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'deltest', { source: srcName });
+			await assert.rejects(
+				() => kb2.retrieve('renewable energy sustainable'),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+					return true;
+				},
+				'Deleting the source must throw InvalidSource rather than serve stale cached chunks',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+
+	test('changing the chunking config for the same kb id invalidates the cache and re-chunks', async () => {
+		const srcName = '_chunk-cache-key';
+		const src = freshDir(srcName);
+		// One large no-blank-line paragraph: 'semantic' yields a single big chunk,
+		// while 'fixed' with a small chunkSize yields many small chunks.
+		const words = Array.from({ length: 400 }, (_, i) => `term${i} alpha beta gamma`).join(' ');
+		writeFileSync(join(src, 'big.md'), words);
+
+		try {
+			// First load with default (semantic) chunking under id 'chunkkey'.
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'chunkkey', { source: srcName });
+			const r1 = await kb1.retrieve('term0 alpha');
+			assert.ok(r1.length > 0, 'semantic load should return results');
+			const semanticMaxLen = Math.max(...r1.map((r) => r.text.length));
+
+			// Same id + same source, but switch to fixed/small chunking. The cache key
+			// must include the chunking config, so this rebuilds rather than serving
+			// the previously-cached semantic chunks.
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'chunkkey', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 30 },
+			});
+			const r2 = await kb2.retrieve('term0 alpha');
+			assert.ok(r2.length > 0, 'fixed load should return results');
+			const fixedMaxLen = Math.max(...r2.map((r) => r.text.length));
+
+			assert.ok(
+				fixedMaxLen < semanticMaxLen,
+				`Fixed chunking should re-chunk into smaller chunks (fixed max ${fixedMaxLen} < semantic max ${semanticMaxLen}). ` +
+					'If equal, the cache key ignored the chunking config and served stale semantic chunks.',
+			);
+		} finally {
+			cleanupDirs(srcName);
 		}
 	});
 });
@@ -737,6 +859,38 @@ describe('chunking configuration', () => {
 			}
 		} finally {
 			cleanupDirs('_chunking-fixed');
+		}
+	});
+
+	test('negative / over-range chunkOverlap does not drop words (clamp behavior)', async () => {
+		const srcName = '_overlap-clamp';
+		const src = freshDir(srcName);
+		// 200 words with a unique sentinel at index 120. A negative overlap in the
+		// unclamped code pushes `step` past chunkSize (100), so the window holding
+		// the sentinel (indices 100–199) is skipped entirely and the word vanishes
+		// from the index. Clamping the overlap to >= 0 keeps every word covered.
+		const parts: string[] = [];
+		for (let i = 0; i < 200; i++) {
+			parts.push(i === 120 ? 'zzsentinelword' : `filler${i}`);
+		}
+		writeFileSync(join(src, 'doc.md'), parts.join(' '));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'clampneg', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 100, chunkOverlap: -50 },
+			});
+			const results = await kb.retrieve('zzsentinelword');
+			assert.ok(
+				results.length > 0,
+				'A negative chunkOverlap must not drop the middle window — every word stays indexed after clamping',
+			);
+			assert.ok(
+				results[0].text.includes('zzsentinelword'),
+				'the sentinel word in the would-be-skipped window should still be retrievable',
+			);
+		} finally {
+			cleanupDirs(srcName);
 		}
 	});
 });

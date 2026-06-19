@@ -172,6 +172,7 @@ In local dev mode, KnowledgeBase reads documents from the source folder, splits 
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
 - The TF-IDF tokenizer is Unicode-aware: accents are normalized (so `resume` matches `résumé`) and CJK text is matched via character bigrams.
 - Chunking is approximated locally: `'fixed'` uses word-count windows (`chunkSize`/`chunkOverlap`), `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
+- `chunkOverlap` is interpreted differently per environment: locally it is a **percentage** of `chunkSize` (0–100), while the real Bedrock API treats it as an **absolute token count**. The value is not directly transferable — tune it per environment.
 - The API contract (method signatures, error types, result shape) is identical to AWS.
 - Metadata filtering and `maxResults` work identically.
 - `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`. S3 URI sources are not supported in local development — use a local folder path.

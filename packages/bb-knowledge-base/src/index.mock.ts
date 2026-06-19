@@ -4,7 +4,7 @@
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
@@ -66,7 +66,10 @@ function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): 
 	const words = text.split(/\s+/);
 	if (words.length <= maxTokens) return text.trim().length >= 20 ? [text.trim()] : [];
 
-	const overlap = Math.floor((maxTokens * overlapPct) / 100);
+	// Clamp overlap to [0, maxTokens-1]: a negative percentage would push `step`
+	// past maxTokens and silently skip words, while overlap >= maxTokens would
+	// stall progress. This keeps step >= 1 and guarantees full word coverage.
+	const overlap = Math.min(Math.max(Math.floor((maxTokens * overlapPct) / 100), 0), maxTokens - 1);
 	const step = Math.max(1, maxTokens - overlap);
 	const chunks: string[] = [];
 
@@ -116,9 +119,11 @@ function matchesFilter(metadata: Record<string, string>, filter: MetadataFilter)
 /**
  * Semantic document retrieval backed by a local TF-IDF engine.
  *
- * Reads documents from a local folder, chunks by paragraphs, and uses TF-IDF
- * for relevance scoring. Chunks are cached to `.bb-data/{fullId}/chunks.json`
- * for fast restarts. Wipe cached data with `rm -rf .bb-data`.
+ * Reads documents from a local folder, splits them using the configured
+ * chunking strategy (default `'semantic'`), and uses TF-IDF for relevance
+ * scoring. Chunks are cached to `.bb-data/{fullId}/chunks.json` alongside a
+ * `source.hash` fingerprint for fast restarts; the cache is rebuilt when the
+ * source contents or chunking config change. Wipe cached data with `rm -rf .bb-data`.
  *
  * **When to use:** You need natural-language search over your own documents —
  * FAQs, product guides, support articles, internal wikis. Point it at a
@@ -227,14 +232,27 @@ export class KnowledgeBase extends Scope {
 
 		this.loadPromise = Promise.resolve()
 			.then(() => {
+				// Validate the source path up-front — before any filesystem
+				// enumeration — so an out-of-bounds path never triggers stat/readdir
+				// on disk. S3 URIs are rejected later by loadFromSource() with an
+				// actionable message.
+				const source = this.options.source;
+				if (!source.startsWith('s3://')) {
+					this.validateSourcePath(source);
+				}
+
 				const sourceHash = this.computeSourceHash();
 				const cachePath = join(this.dataDir, 'chunks.json');
 				const hashPath = join(this.dataDir, 'source.hash');
 
-				if (existsSync(cachePath)) {
+				// Serve cache only when the source still exists (non-empty hash) and
+				// its content hash matches. A deleted source yields an empty hash, so
+				// we fall through to loadFromSource() — which throws InvalidSource —
+				// instead of serving stale chunks.
+				if (sourceHash !== '' && existsSync(cachePath)) {
 					try {
 						const cachedHash = existsSync(hashPath) ? readFileSync(hashPath, 'utf8') : '';
-						if (cachedHash === sourceHash || sourceHash === '') {
+						if (cachedHash === sourceHash) {
 							this.chunks = JSON.parse(readFileSync(cachePath, 'utf8'));
 							this.index = buildIndex(this.chunks!.map((c) => c.text));
 							return;
@@ -267,7 +285,19 @@ export class KnowledgeBase extends Scope {
 		if (!existsSync(sourceDir)) return '';
 		const hash = createHash('sha256');
 		hash.update(sourceDir);
-		const files = walkDir(sourceDir).sort();
+		// Key the cache on the chunking config (using the same defaults applied in
+		// loadFromSource) so changing strategy/size/overlap for the same kb id
+		// invalidates the cache and forces a re-chunk.
+		const strategy = this.options.chunking?.strategy ?? 'semantic';
+		const chunkSize = this.options.chunking?.chunkSize ?? 300;
+		const chunkOverlap = this.options.chunking?.chunkOverlap ?? 20;
+		hash.update(JSON.stringify({ strategy, chunkSize, chunkOverlap }));
+		// Hash only the files that are actually indexed (supported extensions,
+		// excluding `.metadata.json` sidecars) so adding an unsupported file
+		// (e.g. a .png) doesn't force a needless rebuild.
+		const files = walkDir(sourceDir)
+			.filter((f) => SUPPORTED_EXTENSIONS.has(extname(f).toLowerCase()) && !f.endsWith('.metadata.json'))
+			.sort();
 		for (const f of files) {
 			hash.update(f);
 			try {
@@ -281,6 +311,55 @@ export class KnowledgeBase extends Scope {
 		return hash.digest('hex');
 	}
 
+	/**
+	 * Validate that `source` resolves to a path inside the project directory.
+	 *
+	 * Rejects absolute paths (POSIX `/`, Windows UNC `\\`, and drive-letter
+	 * `C:\`) and any path that escapes the project via `..`, using
+	 * separator-aware containment so a sibling like `<cwd>-secrets` is not
+	 * mistaken for being inside `<cwd>`. After lexical containment passes the
+	 * source is resolved through the filesystem (`realpathSync`) and re-checked,
+	 * so a symlink inside the project cannot point at a target outside it.
+	 *
+	 * @throws {InvalidSourceConfigException} If the path is absolute or escapes the project directory.
+	 */
+	private validateSourcePath(source: string): void {
+		// `source.startsWith('\\')` catches Windows UNC paths (e.g. \\server\share).
+		if (source.startsWith('/') || source.startsWith('\\') || /^[A-Z]:/i.test(source)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be a relative path within the project directory: ${source}`,
+			);
+		}
+		// Note: `source: '.'` resolves to the project root and would index the
+		// entire project tree — point at a dedicated docs folder instead.
+		const cwdResolved = resolve(process.cwd());
+		const sourceDir = resolve(cwdResolved, source);
+		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be within project directory: ${source}`,
+			);
+		}
+		// Defeat a symlink bypass: resolve symlinks and re-check containment against
+		// the real cwd. A missing source makes realpathSync throw ENOENT — swallow it
+		// so the canonical "Source folder not found" check reports InvalidSource.
+		let realSource: string;
+		let realCwd: string;
+		try {
+			realSource = realpathSync(sourceDir);
+			realCwd = realpathSync(cwdResolved);
+		} catch {
+			return;
+		}
+		if (realSource !== realCwd && !realSource.startsWith(realCwd + sep)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be within project directory: ${source}`,
+			);
+		}
+	}
+
 	private loadFromSource(): void {
 		const source = this.options.source;
 
@@ -291,20 +370,8 @@ export class KnowledgeBase extends Scope {
 			);
 		}
 
-		if (source.startsWith('/') || source.startsWith('\\') || /^[A-Z]:/i.test(source)) {
-			throw blocksError(
-				KnowledgeBaseErrors.InvalidSource,
-				`Source path must be a relative path within the project directory: ${source}`,
-			);
-		}
+		this.validateSourcePath(source);
 		const sourceDir = resolve(process.cwd(), source);
-		const cwdResolved = resolve(process.cwd());
-		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
-			throw blocksError(
-				KnowledgeBaseErrors.InvalidSource,
-				`Source path must be within project directory: ${source}`,
-			);
-		}
 		if (!existsSync(sourceDir)) {
 			throw blocksError(KnowledgeBaseErrors.InvalidSource, `Source folder not found: ${source}`);
 		}
