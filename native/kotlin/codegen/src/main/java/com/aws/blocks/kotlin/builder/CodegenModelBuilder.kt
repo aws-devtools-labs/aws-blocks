@@ -138,7 +138,11 @@ class CodegenModelBuilder {
                 val name = collector.nameForTypeRef(typeRef) ?: ""
                 ResolvedType.Enum(name = name, values = typeRef.values)
             }
-            is TypeRef.Union -> resolveUnion(typeRef, collector)
+            is TypeRef.Union -> {
+                val hasNullMember = typeRef.members.any { it is TypeRef.Primitive && it.tsType == "void" }
+                val resolved = resolveUnion(typeRef, collector)
+                if (hasNullMember) ResolvedType.Nullable(resolved) else resolved
+            }
             is TypeRef.ArrayType -> ResolvedType.ListType(resolveType(typeRef.elementType, collector), typeRef.constraints)
             is TypeRef.MapType -> ResolvedType.MapType(resolveType(typeRef.valueType, collector))
             is TypeRef.TupleType -> ResolvedType.TupleType(
@@ -201,7 +205,11 @@ class CodegenModelBuilder {
     private fun resolveUnion(union: TypeRef.Union, collector: TypeCollector): ResolvedType.Union {
         val name = collector.nameForTypeRef(union) ?: ""
         val discriminator = detectDiscriminator(union)
-        val variants = union.members.mapIndexed { index, member ->
+        // Filter out null/void primitive members — they don't become sealed class variants
+        val nonNullMembers = union.members.filter { member ->
+            !(member is TypeRef.Primitive && member.tsType == "void")
+        }
+        val variants = nonNullMembers.mapIndexed { index, member ->
             when (member) {
                 is TypeRef.InlineObject -> {
                     val discField = findDiscriminatorField(member)
@@ -356,6 +364,9 @@ class CodegenModelBuilder {
         var discriminatorFieldName: String? = null
 
         for (member in union.members) {
+            // Skip null/primitive members — they don't participate in discrimination
+            if (member is TypeRef.Primitive || member is TypeRef.Nullable) continue
+
             val disc = when (member) {
                 is TypeRef.InlineObject -> findDiscriminatorField(member)
                 is TypeRef.ObjectWithOneOf -> findDiscriminatorFieldInObjectWithOneOf(member)
