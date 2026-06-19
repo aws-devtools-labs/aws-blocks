@@ -9,6 +9,8 @@ import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import { Bucket } from 'aws-cdk-lib/aws-s3';
+import { CodePipelineSource } from 'aws-cdk-lib/pipelines';
 import { Annotations, Template, Match } from 'aws-cdk-lib/assertions';
 import { Pipeline, validateAppFilePath } from './pipeline-construct.js';
 import type { PipelineProps, PipelineStageConfig } from './types.js';
@@ -1561,5 +1563,255 @@ describe('validateAppFilePath', () => {
     } finally {
       fs.unlinkSync(symlinkPath);
     }
+  });
+});
+
+describe('synth partialBuildSpec', () => {
+  it('declares the Node.js 22 runtime in the synth buildspec by default', () => {
+    const app = new App();
+    const stack = new Stack(app, 'DefaultPartialBuildSpecStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps());
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::CodeBuild::Project', {
+      Source: Match.objectLike({
+        BuildSpec: Match.serializedJson(Match.objectLike({
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+            }),
+          }),
+        })),
+      }),
+    });
+  });
+
+  it('omits runtime-versions entirely when partialBuildSpec is null (explicit opt-out)', () => {
+    const app = new App();
+    const stack = new Stack(app, 'NullOptOutBuildSpecStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      synth: {
+        partialBuildSpec: null,
+      },
+    }));
+
+    const template = Template.fromStack(stack);
+
+    // With the null opt-out, the Node.js 22 default must NOT be injected:
+    // no CodeBuild project's buildspec should declare runtime-versions.
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const buildSpecs = Object.values(projects)
+      .map((p: any) => p.Properties?.Source?.BuildSpec)
+      .filter((b: unknown): b is string => typeof b === 'string');
+
+    assert.ok(buildSpecs.length > 0, 'Expected at least one CodeBuild project with an inline buildspec');
+    for (const spec of buildSpecs) {
+      assert.ok(
+        !spec.includes('runtime-versions'),
+        `Expected no runtime-versions in any synth buildspec when opting out with null, but found: ${spec}`,
+      );
+    }
+  });
+
+  it('honors a custom partialBuildSpec override (Node.js 20)', () => {
+    const app = new App();
+    const stack = new Stack(app, 'CustomPartialBuildSpecStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      synth: {
+        partialBuildSpec: codebuild.BuildSpec.fromObject({
+          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+        }),
+      },
+    }));
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::CodeBuild::Project', {
+      Source: Match.objectLike({
+        BuildSpec: Match.serializedJson(Match.objectLike({
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 20 }),
+            }),
+          }),
+        })),
+      }),
+    });
+  });
+
+  it('does not retain the default Node.js 22 runtime when overridden', () => {
+    const app = new App();
+    const stack = new Stack(app, 'OverrideReplacesDefaultStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      synth: {
+        partialBuildSpec: codebuild.BuildSpec.fromObject({
+          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+        }),
+      },
+    }));
+
+    const template = Template.fromStack(stack);
+    const projects = template.findResources('AWS::CodeBuild::Project');
+    const buildSpecs = Object.values(projects)
+      .map((p: any) => p.Properties?.Source?.BuildSpec)
+      .filter((b: unknown): b is string => typeof b === 'string');
+
+    const synthSpec = buildSpecs.find(b => b.includes('runtime-versions'));
+    assert.ok(synthSpec, 'Expected a synth buildspec declaring runtime-versions');
+
+    const parsed = JSON.parse(synthSpec);
+    assert.strictEqual(
+      parsed.phases.install['runtime-versions'].nodejs,
+      20,
+      'Custom partialBuildSpec should replace the default Node.js 22 runtime',
+    );
+  });
+
+  it('keeps partialBuildSpec (buildspec) orthogonal to the NODE_OPTIONS env var', () => {
+    const app = new App();
+    const stack = new Stack(app, 'OrthogonalBuildSpecStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      synth: {
+        env: { NODE_OPTIONS: '--max-old-space-size=4096' },
+      },
+    }));
+
+    const template = Template.fromStack(stack);
+
+    // The Node.js 22 runtime (buildspec) and the merged NODE_OPTIONS env var
+    // both appear on the same synth CodeBuild project.
+    template.hasResourceProperties('AWS::CodeBuild::Project', {
+      Source: Match.objectLike({
+        BuildSpec: Match.serializedJson(Match.objectLike({
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+            }),
+          }),
+        })),
+      }),
+      Environment: Match.objectLike({
+        EnvironmentVariables: Match.arrayWith([
+          Match.objectLike({
+            Name: 'NODE_OPTIONS',
+            Value: '--conditions=cdk --max-old-space-size=4096',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('merges runtime-versions with custom installCommands', () => {
+    const app = new App();
+    const stack = new Stack(app, 'InstallCommandsMergeStack');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      synth: {
+        installCommands: ['corepack enable'],
+      },
+    }));
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::CodeBuild::Project', {
+      Source: Match.objectLike({
+        BuildSpec: Match.serializedJson(Match.objectLike({
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+              commands: Match.arrayWith(['corepack enable']),
+            }),
+          }),
+        })),
+      }),
+    });
+  });
+});
+
+describe('_sourceOverride (internal test hook)', () => {
+  it('substitutes the GitHub source with the provided producer (S3)', () => {
+    const app = new App();
+    const stack = new Stack(app, 'SourceOverrideStack');
+    const bucket = new Bucket(stack, 'SourceBucket');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+    }));
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties('AWS::CodePipeline::Pipeline', {
+      Stages: Match.arrayWith([
+        Match.objectLike({
+          Name: 'Source',
+          Actions: Match.arrayWith([
+            Match.objectLike({
+              ActionTypeId: Match.objectLike({ Provider: 'S3' }),
+            }),
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('does not create a CodeStarSourceConnection action when overridden', () => {
+    const app = new App();
+    const stack = new Stack(app, 'SourceOverrideNoConnectionStack');
+    const bucket = new Bucket(stack, 'SourceBucket');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+    }));
+
+    const template = Template.fromStack(stack);
+    const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
+    const providers = Object.values(pipelines)
+      .flatMap((p: any) => p.Properties?.Stages ?? [])
+      .flatMap((s: any) => s.Actions ?? [])
+      .map((a: any) => a.ActionTypeId?.Provider);
+
+    assert.ok(
+      !providers.includes('CodeStarSourceConnection'),
+      `Expected no CodeStarSourceConnection action when _sourceOverride is set, got providers: ${providers.join(', ')}`,
+    );
+  });
+
+  it('still synthesizes a single CodePipeline when source is overridden', () => {
+    const app = new App();
+    const stack = new Stack(app, 'SourceOverrideSynthStack');
+    const bucket = new Bucket(stack, 'SourceBucket');
+
+    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+    }));
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::CodePipeline::Pipeline', 1);
+  });
+
+  it('still validates the connection ARN even when _sourceOverride is set', () => {
+    const app = new App();
+    const stack = new Stack(app, 'SourceOverrideArnValidationStack');
+    const bucket = new Bucket(stack, 'SourceBucket');
+
+    // _sourceOverride bypasses the GitHub source at synth time, but `source`
+    // (repo + connectionArn) is still required and validated so production
+    // configs stay well-formed. An invalid ARN must still throw.
+    assert.throws(
+      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'not-an-arn-at-all',
+        },
+        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      })),
+      /connectionArn.*must be a valid CodeConnections ARN/,
+    );
   });
 });

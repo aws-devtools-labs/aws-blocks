@@ -3,6 +3,7 @@
 
 import type * as cdk from 'aws-cdk-lib';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import type { IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
 /**
  * Configuration for the pipeline source (GitHub/CodeConnections).
@@ -140,6 +141,49 @@ export interface PipelineSynthConfig {
    * Lambda bundling + frontend builds. Use SMALL for trivial apps or LARGE for monorepos.
    */
   readonly computeType?: codebuild.ComputeType;
+
+  /**
+   * A partial CodeBuild BuildSpec merged into the synth step's generated buildspec.
+   *
+   * Use this to control the synth runtime declaratively, most commonly to pin
+   * the Node.js version via `runtime-versions`. It merges with (does not replace)
+   * the install/build commands generated from {@link installCommands} and
+   * {@link commands}, and is orthogonal to the `NODE_OPTIONS` environment variable
+   * injection (one configures the buildspec, the other sets an env var).
+   *
+   * Three behaviors, selected by the value you pass:
+   * - **omitted** (`undefined`): the synth step gets a default BuildSpec pinning
+   *   the Node.js 22 runtime (see `@default` below). This is the recommended path.
+   * - **`null`**: explicit opt-out. No `partialBuildSpec` is injected at all, so
+   *   the synth buildspec carries no `runtime-versions` block. Use this when you
+   *   want to control the runtime yourself, for example by installing a Node
+   *   version via {@link installCommands} (such as `['n 20']`) or by relying on
+   *   the build image's built-in runtime without any merged buildspec.
+   * - **a `BuildSpec`**: used as-is, replacing the Node.js 22 default.
+   *
+   * @default a BuildSpec declaring the Node.js 22 runtime:
+   * `BuildSpec.fromObject({ phases: { install: { 'runtime-versions': { nodejs: 22 } } } })`.
+   * Override with a BuildSpec to select a different runtime or add other
+   * buildspec-only settings, or pass `null` to disable the default entirely.
+   *
+   * @example Pin Node.js 20
+   * ```ts
+   * synth: {
+   *   partialBuildSpec: BuildSpec.fromObject({
+   *     phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+   *   }),
+   * }
+   * ```
+   *
+   * @example Opt out of the Node.js 22 default (bring your own runtime)
+   * ```ts
+   * synth: {
+   *   partialBuildSpec: null,
+   *   installCommands: ['n 20'], // or rely on the build image's default runtime
+   * }
+   * ```
+   */
+  readonly partialBuildSpec?: codebuild.BuildSpec | null;
 }
 
 /**
@@ -381,4 +425,20 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
    * @default false
    */
   readonly crossAccountKeys?: boolean;
+
+  /**
+   * Substitute the pipeline source with an alternative file-set producer.
+   *
+   * When provided, this replaces the GitHub/CodeConnections source created from
+   * {@link source} as the input to the synth step. This exists so the pipeline
+   * can be deployed and exercised in tests without a live GitHub CodeConnections
+   * OAuth handshake (for example, by substituting an S3 source).
+   *
+   * `source` (repo + connectionArn) is still required and validated even when
+   * this override is set, so production configs remain well-formed.
+   *
+   * @internal Not part of the public API. Intended for testing only; the shape
+   * and behavior may change without a major version bump.
+   */
+  readonly _sourceOverride?: IFileSetProducer;
 }
