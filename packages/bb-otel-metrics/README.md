@@ -34,7 +34,7 @@ const metrics = new OtelMetrics(scope, id, options?)
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `serviceName` | `string` | `service.name` resource attribute (semconv). Process-wide. Defaults to `BLOCKS_STACK_NAME`, then `scope.fullId`. |
+| `serviceName` | `string` | `service.name` resource attribute (semconv). Process-wide. Defaults to the Lambda function name (`AWS_LAMBDA_FUNCTION_NAME`), then `BLOCKS_STACK_NAME`, then `scope.fullId` (local dev). |
 | `serviceNamespace` | `string` | `service.namespace` resource attribute — a grouping for related services. |
 | `serviceVersion` | `string` | `service.version` resource attribute. |
 | `meterName` | `string` | Instrumentation scope (OTel Meter name; `@instrumentation.@name` in PromQL). Defaults to `scope.fullId`. |

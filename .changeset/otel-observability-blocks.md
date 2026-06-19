@@ -22,7 +22,8 @@ OTel's typed instruments, span links/events, context propagation, and the raw
   via `serviceName`/`serviceNamespace`/`serviceVersion` resource attributes (no
   "namespace"), and AWS Lambda resource attributes (`faas.*`, `cloud.*`,
   `aws.log.group.names`) are auto-detected in-process and queryable as `@resource.*`
-  PromQL labels. `service.name` defaults to `BLOCKS_STACK_NAME`.
+  PromQL labels. `service.name` defaults to the Lambda function name, then
+  `BLOCKS_STACK_NAME`, then the block's scope `fullId` (local dev).
 - `OtelMetrics` exposes `emit` + typed OTel instruments; metric `unit` values are UCUM.
   (There is no `emitBatch`/`MetricDatum` — OTel batches at export, not at the API.)
 - Provider escape hatch for OTel-compatible libraries: `getOtelMeterProvider()`,

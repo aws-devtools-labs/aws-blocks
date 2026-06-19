@@ -77,18 +77,29 @@ describe('resource (service identity + detection)', () => {
 		assert.strictEqual(attrs['service.version'], '1.2.3');
 	});
 
-	test('defaults service.name to BLOCKS_STACK_NAME, then defaultServiceName', () => {
+	test('defaults service.name to the Lambda function name when present', () => {
+		delete process.env.BLOCKS_STACK_NAME;
+		process.env.AWS_LAMBDA_FUNCTION_NAME = 'my-fn';
+		const sdk = getOrCreateOtelSdk({ defaultServiceName: 'fallback-id' }, inMemoryExporters());
+		const attrs = (sdk.meterProvider as any)._sharedState?.resource?.attributes ?? {};
+		assert.strictEqual(attrs['service.name'], 'my-fn');
+	});
+
+	test('falls back to BLOCKS_STACK_NAME when no Lambda function name', () => {
+		delete process.env.AWS_LAMBDA_FUNCTION_NAME;
 		process.env.BLOCKS_STACK_NAME = 'my-stack';
 		const sdk = getOrCreateOtelSdk({ defaultServiceName: 'fallback-id' }, inMemoryExporters());
 		const attrs = (sdk.meterProvider as any)._sharedState?.resource?.attributes ?? {};
 		assert.strictEqual(attrs['service.name'], 'my-stack');
 	});
 
-	test('falls back to defaultServiceName when BLOCKS_STACK_NAME is unset', () => {
+	test('local dev (no Lambda/stack env) → service.name is the block fullId, never unknown_service', () => {
+		delete process.env.AWS_LAMBDA_FUNCTION_NAME;
 		delete process.env.BLOCKS_STACK_NAME;
-		const sdk = getOrCreateOtelSdk({ defaultServiceName: 'block-fullid' }, inMemoryExporters());
+		const sdk = getOrCreateOtelSdk({ defaultServiceName: 'my-app-metrics' }, inMemoryExporters());
 		const attrs = (sdk.meterProvider as any)._sharedState?.resource?.attributes ?? {};
-		assert.strictEqual(attrs['service.name'], 'block-fullid');
+		assert.strictEqual(attrs['service.name'], 'my-app-metrics');
+		assert.doesNotMatch(String(attrs['service.name']), /unknown_service/);
 	});
 
 	test('merges AWS Lambda detected attributes (faas.*/cloud.*) when in a Lambda env', () => {

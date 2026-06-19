@@ -33,8 +33,9 @@ const reqLog = log.child({ requestId: 'r1' });
 - `level` — minimum level (`debug`/`info`/`warn`/`error`). Default `info`, or `LOG_LEVEL` env.
 - `defaultContext` — attributes on every record.
 - `serviceName` / `serviceNamespace` / `serviceVersion` — OTel `service.*` resource
-  attributes (semconv), set once per process on the SDK resource. `serviceName` defaults to
-  `BLOCKS_STACK_NAME`, then the block's scope `fullId`.
+  attributes (semconv), set once per process on the SDK resource. `serviceName` defaults to the
+  Lambda function name (`AWS_LAMBDA_FUNCTION_NAME`), then `BLOCKS_STACK_NAME`, then the block's
+  scope `fullId` (local dev).
 
 Context values are coerced to OTel-safe attributes: primitives pass through, `Error`s are
 extracted to `{name,message,stack}`, BigInt → string, and complex/circular values are

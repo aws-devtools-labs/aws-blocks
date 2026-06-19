@@ -68,7 +68,11 @@ function defaultExporters(collectorUrl: string): OtelExporters {
 /**
  * Build the SDK Resource from semantic-convention service identity, then merge
  * detected attributes. `service.name` resolves to (in order): an explicit
- * `resource.serviceName`, the `BLOCKS_STACK_NAME` env var, or `defaultServiceName`.
+ * `resource.serviceName`, the Lambda function name (`AWS_LAMBDA_FUNCTION_NAME`), the
+ * `BLOCKS_STACK_NAME` env var, `defaultServiceName` (the block's scope `fullId`), and
+ * finally a constant. We always set it because the Lambda detector populates `faas.name`
+ * (not `service.name`) and an unset `service.name` becomes the `unknown_service:node`
+ * sentinel.
  *
  * Detection adds AWS Lambda attributes (`faas.*`, `cloud.*`, `aws.log.group.names`)
  * out of the box — the OTel-recommended path, since the collector layer omits the
@@ -77,7 +81,13 @@ function defaultExporters(collectorUrl: string): OtelExporters {
  */
 function buildResource(options: OtelSdkOptions) {
 	const r: OtelResourceOptions = options.resource ?? {};
+	// service.name resolution (the Lambda detector sets faas.name, NOT service.name; an
+	// unset service.name becomes the useless `unknown_service:node` sentinel, so we always
+	// default it). Prefer the most specific real identity available:
+	//   explicit option → Lambda function name → stack/app name → block fullId → constant.
+	// Locally (mock runtime) the first three are unset, so it resolves to the block fullId.
 	const serviceName = r.serviceName
+		?? process.env.AWS_LAMBDA_FUNCTION_NAME
 		?? process.env.BLOCKS_STACK_NAME
 		?? options.defaultServiceName
 		?? 'aws-blocks-service';

@@ -44,8 +44,9 @@ not by the annotation/metadata distinction.
 
 - `enabled` — disable tracing (`startSegment` still runs the wrapped fn). Default `true`.
 - `serviceName` / `serviceNamespace` / `serviceVersion` — OTel `service.*` resource
-  attributes (semconv), set once per process. `serviceName` defaults to `BLOCKS_STACK_NAME`,
-  then the block's scope `fullId`.
+  attributes (semconv), set once per process. `serviceName` defaults to the Lambda function
+  name (`AWS_LAMBDA_FUNCTION_NAME`), then `BLOCKS_STACK_NAME`, then the block's scope `fullId`
+  (local dev).
 
 Spans carry the SDK's **resource attributes** — your `service.*` identity plus auto-detected
 AWS Lambda attributes (`faas.*`, `cloud.*`). The raw `Tracer`/provider escape hatch is
