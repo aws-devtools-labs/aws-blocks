@@ -313,6 +313,12 @@ jobs:
           - framework: nuxt
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
+          - framework: astro
+            app-dir: test-apps/hosting-ssr-astro
+            script: test:e2e:hosting-ssr-astro
+          - framework: astro-default404
+            app-dir: test-apps/hosting-ssr-astro-default404
+            script: test:e2e:hosting-ssr-astro-default404
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}

@@ -1,5 +1,14 @@
 # @aws-blocks/blocks
 
+## 0.1.3
+
+### Patch Changes
+
+- 835c425: docs(bb-agent): document AgentStreamChunk types and Message roles
+- Updated dependencies [835c425]
+- Updated dependencies [dd07335]
+  - @aws-blocks/bb-agent@0.1.2
+
 ## 0.1.2
 
 ### Patch Changes

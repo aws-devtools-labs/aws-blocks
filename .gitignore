@@ -26,6 +26,7 @@ cdk.context.json
 
 # Sandbox deploy artifacts (per-deploy state, account-specific)
 .blocks-sandbox/
+!/packages/create-blocks-app/templates/*/src/app/.blocks-sandbox/
 
 # Per-project telemetry/config state (auto-generated, contains UUIDs)
 .blocks/

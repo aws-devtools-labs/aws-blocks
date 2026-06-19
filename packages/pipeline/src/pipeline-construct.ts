@@ -15,11 +15,13 @@ import {
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'node:url';
 import type {
   BranchConfig,
   PipelineProps,
   PipelineStageConfig,
 } from './types.js';
+import { __PIPELINE_STAGE_SCOPE__ } from './constants.js';
 
 /**
  * Resolve a relative file path against the calling file's directory.
@@ -63,6 +65,18 @@ const VALID_ARN_PATTERN = /^arn:(aws|aws-us-gov|aws-cn):(codeconnections|codesta
 const DEFAULT_SYNTH_COMMANDS = ['npm ci', 'npx cdk synth'];
 
 const BAKE_TIMEOUT_BUFFER_MINUTES = 10;
+
+/**
+ * Default partial CodeBuild BuildSpec applied to the synth step when
+ * `synth.partialBuildSpec` is omitted. Pins the synth runtime to Node.js 22.
+ *
+ * Hoisted to module scope so the consuming site and tests share a single
+ * source of truth. `BuildSpec.fromObject` does not require a construct scope,
+ * so it is safe to construct once at module load.
+ */
+const DEFAULT_SYNTH_PARTIAL_BUILD_SPEC = codebuild.BuildSpec.fromObject({
+  phases: { install: { 'runtime-versions': { nodejs: 22 } } },
+});
 
 /**
  * CDK Pipelines-based CI/CD pipeline construct (L3).
@@ -383,7 +397,7 @@ function buildCodePipeline<TConfig>(
     ? false
     : (branchConfig.triggerOnPush ?? props.source.triggerOnPush ?? true);
 
-  const source = CodePipelineSource.connection(
+  const source = props._sourceOverride ?? CodePipelineSource.connection(
     props.source.repo,
     branchConfig.branch,
     {
@@ -407,6 +421,14 @@ function buildCodePipeline<TConfig>(
     primaryOutputDirectory: props.synth?.primaryOutputDirectory,
   });
 
+  // partialBuildSpec opt-out semantics:
+  //   undefined (omitted) -> apply the Node.js 22 default
+  //   null                -> opt out entirely (no partialBuildSpec injected; bring your own via installCommands)
+  //   a BuildSpec value    -> use it as-is
+  const partial = props.synth?.partialBuildSpec === null
+    ? undefined
+    : (props.synth?.partialBuildSpec ?? DEFAULT_SYNTH_PARTIAL_BUILD_SPEC);
+
   return new CodePipeline(construct, branchId, {
     synth: synthStep,
     selfMutation: props.selfMutation ?? true,
@@ -414,6 +436,9 @@ function buildCodePipeline<TConfig>(
     pipelineType: codepipeline.PipelineType.V2,
     dockerEnabledForSynth: props.synth?.dockerEnabled ?? false,
     synthCodeBuildDefaults: {
+      // Only set partialBuildSpec when defined so the null opt-out leaves the
+      // synth buildspec untouched (the field is omitted rather than set to undefined).
+      ...(partial ? { partialBuildSpec: partial } : {}),
       buildEnvironment: {
         buildImage: props.synth?.buildImage ?? codebuild.LinuxBuildImage.AMAZON_LINUX_2023_5,
         computeType: props.synth?.computeType ?? codebuild.ComputeType.MEDIUM,
@@ -573,14 +598,16 @@ async function importAppFileForStage<TConfig>(
   }
 
   // Set ambient scope for BlocksStack.create() to pick up
-  (globalThis as any).__PIPELINE_STAGE_SCOPE__ = stage;
+  (globalThis as any)[__PIPELINE_STAGE_SCOPE__] = stage;
 
   // Capture current beforeExit listeners before import
   const listenersBefore = process.listeners('beforeExit').slice();
 
   try {
-    // ESM caches modules by URL — append a unique query string so each stage re-executes the module body
-    await import(`${appFile}?stage=${encodeURIComponent(stageConfig.name)}`);
+    // file:// URL (not a raw path) so the cache-busting query works on Windows.
+    const appUrl = pathToFileURL(appFile);
+    appUrl.searchParams.set('stage', stageConfig.name);
+    await import(appUrl.href);
   } finally {
     // Remove any beforeExit listeners added during import.
     // The imported file's cdk.App() registers a synth() handler that would
@@ -594,7 +621,7 @@ async function importAppFileForStage<TConfig>(
     }
 
     // Clean up ambient scope
-    delete (globalThis as any).__PIPELINE_STAGE_SCOPE__;
+    delete (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
 
     // Restore process.env
     if (stageEnv) {
