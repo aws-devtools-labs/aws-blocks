@@ -1428,4 +1428,36 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
   });
+
+  // ── P0.4: config.json ordering dependency ────────────────────
+  describe('config.json deploy ordering (P0.4)', () => {
+    it('BlocksConfigDeployment depends on the asset deployments', () => {
+      // The asset deployments upload the whole static dir — including the
+      // placeholder `.blocks-sandbox/config.json` — to the same key the
+      // resolved config writes to. Without an ordering dependency the
+      // placeholder can clobber the real config. The previous
+      // `tryFindChild('AssetDeployment')` never matched the real child ids
+      // (AssetDeploymentImmutable/Html/Mutable), so the dep was never wired.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ConfigOrderStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; DependsOn?: string[] }>;
+      };
+      const configId = Object.keys(tpl.Resources).find(
+        (id) => /BlocksConfigDeployment/.test(id) && /CustomResource/.test(id),
+      );
+      assert.ok(configId, 'expected a BlocksConfigDeployment custom resource');
+
+      const dependsOn = tpl.Resources[configId].DependsOn ?? [];
+      const assetDeps = dependsOn.filter((d) => /AssetDeployment/.test(d));
+      assert.ok(
+        assetDeps.length >= 1,
+        `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
+          `found DependsOn=${JSON.stringify(dependsOn)}`,
+      );
+    });
+  });
 });

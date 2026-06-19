@@ -2422,3 +2422,81 @@ void describe('CdnConstruct', () => {
     });
   });
 });
+
+// ================================================================
+// P0.3 — dropped header at the behavior cap: fail loud for security
+// headers, warn-only for cosmetic ones.
+// ================================================================
+
+void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
+  const baseStatic = (
+    headers: { source: string; headers: Record<string, string> }[],
+  ): DeployManifest => ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory: '/tmp/assets' },
+    routes: [{ pattern: '/*', target: 'static' }],
+    headers,
+    buildId: 'test-hdrcap-1',
+  });
+
+  // 24 distinct header patterns fill the additional-behavior cap; the 25th
+  // overflows. (MAX_ADDITIONAL_BEHAVIORS = 24.)
+  const fill = (last: Record<string, string>) => {
+    const rules: { source: string; headers: Record<string, string> }[] = [];
+    for (let i = 0; i < 24; i++) {
+      rules.push({ source: `/h${i}`, headers: { 'x-h': String(i) } });
+    }
+    rules.push({ source: '/overflow', headers: last });
+    return rules;
+  };
+
+  void it('throws when an over-cap rule drops a security header (CSP)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    assert.throws(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseStatic(fill({ 'content-security-policy': "default-src 'self'" })),
+          securityHeadersPolicy: policy,
+        }),
+      (e: Error) => {
+        assert.strictEqual(e.name, 'SecurityHeaderDroppedError');
+        return true;
+      },
+    );
+  });
+
+  void it('does NOT throw when an over-cap rule drops only a cosmetic header', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    // Should synth fine (the cosmetic header is dropped with a warning).
+    assert.doesNotThrow(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseStatic(fill({ 'x-custom-cosmetic': 'value' })),
+          securityHeadersPolicy: policy,
+        }),
+    );
+  });
+
+  void it('does NOT throw for a security header that fits under the cap', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    assert.doesNotThrow(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseStatic([
+            { source: '/secure', headers: { 'content-security-policy': "default-src 'self'" } },
+          ]),
+          securityHeadersPolicy: policy,
+        }),
+    );
+  });
+});

@@ -37,6 +37,7 @@ import {
   IPX_LAMBDA_HANDLER_SOURCE,
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
+import { normalizeBasePath } from './shared/basepath.js';
 
 export type NitroAdapterOptions = {
   /** Project root directory (the directory containing the framework config) */
@@ -393,10 +394,33 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // Nuxt/Nitro projects can also carry a vercel.json with crons (e.g. set up
   // for a Vercel preview) — warn for parity with the Next/Astro path.
   warnIfVercelCron(projectDir);
-  // basePath: skipped for Nitro/Nuxt. The framework-side equivalent
-  // (`app.baseURL` in nuxt.config) is not exposed in `.output/nitro.json`,
-  // and reading it from `nuxt.config.ts` would require migrating off the
-  // regex-based config scanner — tracked as a separate follow-up PR.
+  // basePath: Nuxt's `app.baseURL` (parity with Next `basePath` / Astro
+  // `base`). It's not in `.output/nitro.json`, so we read it from the
+  // server bundle's baked runtime config. Without this the prefix is
+  // dropped: the framework emits `/<base>/_nuxt/*` asset URLs but no
+  // matching CloudFront behavior is created, so every hashed asset 404s
+  // and the app renders but never hydrates.
+  const basePath = normalizeBasePath(readBundledBaseURL(serverDir));
+
+  // Safety net: if the bundle scan found nothing but the prerendered HTML
+  // clearly references a non-root `/<prefix>/_nuxt/` asset path, the
+  // extraction missed a real baseURL (e.g. a future Nitro bundle-shape
+  // change). Fail loud rather than silently shipping a broken site.
+  if (!basePath) {
+    const htmlPrefix = detectBaseURLFromPrerenderedHtml(publicDir);
+    if (htmlPrefix) {
+      throw new HostingError('NuxtBaseURLDetectionError', {
+        message:
+          `Detected a non-root asset prefix "${htmlPrefix}/_nuxt/" in the ` +
+          `prerendered output, but could not read app.baseURL from the ` +
+          `Nitro server bundle to model it.`,
+        resolution:
+          'This is likely an unsupported Nitro/Nuxt version whose bundle ' +
+          'layout changed. Please report it; as a workaround, deploy without ' +
+          '`app.baseURL` until support catches up.',
+      });
+    }
+  }
 
   return buildManifest({
     preset: resolvedPreset,
@@ -406,6 +430,7 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    basePath,
   });
 };
 
@@ -602,12 +627,76 @@ const readBundledRouteRules = (
     if (!blob) continue;
     try {
       return JSON.parse(blob) as Record<string, NitroRouteRule>;
-      
+
     } catch {
       // Malformed extraction — try next candidate.
     }
   }
   return {};
+};
+
+/**
+ * Extract Nuxt's `app.baseURL` from the built server bundle.
+ *
+ * `app.baseURL` (Next's `basePath` / Astro's `base` equivalent) is NOT
+ * surfaced in `.output/nitro.json`, but Nitro bakes it into the runtime
+ * config inside the server bundle as a single `"baseURL": "<value>"`
+ * entry. We read it from there (the same bundle-scan approach as
+ * {@link readBundledRouteRules}) rather than parsing `nuxt.config.ts`.
+ *
+ * Returns the raw value (e.g. `'/myapp/'`), or `undefined` when absent or
+ * the default `'/'` (which means "no base path").
+ * @internal
+ */
+const readBundledBaseURL = (serverDir: string): string | undefined => {
+  const candidates: string[] = [];
+  const bundlePath = resolveNitroBundlePath(serverDir);
+  if (bundlePath) candidates.push(bundlePath);
+  const indexPath = path.join(serverDir, 'index.mjs');
+  if (fs.existsSync(indexPath)) candidates.push(indexPath);
+
+  for (const candidate of candidates) {
+    const source = fs.readFileSync(candidate, 'utf-8');
+    // The runtime-config blob embeds it as `"baseURL": "/myapp/"`.
+    const match = source.match(/"baseURL"\s*:\s*"([^"]*)"/);
+    if (match) {
+      const value = match[1];
+      return value === '/' ? undefined : value;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Safety net for {@link readBundledBaseURL}: if the bundle scan came up
+ * empty but the prerendered HTML clearly shows a non-root asset prefix
+ * (e.g. `/myapp/_nuxt/...`), the extraction silently missed a real
+ * baseURL — a future Nitro bundle-shape change would otherwise re-open the
+ * "baseURL dropped → assets 404" bug. Fail loud instead.
+ *
+ * Returns the prefix detected in HTML (normalized, no `_nuxt`), or
+ * `undefined` when none (the common no-baseURL case).
+ * @internal
+ */
+const detectBaseURLFromPrerenderedHtml = (
+  publicDir: string,
+): string | undefined => {
+  const htmlFiles = fg.sync('**/*.html', {
+    cwd: publicDir,
+    absolute: true,
+    onlyFiles: true,
+  });
+  for (const file of htmlFiles.slice(0, 20)) {
+    const html = fs.readFileSync(file, 'utf-8');
+    // Match an absolute asset reference like `/myapp/_nuxt/abc.js`. The
+    // default (root) build emits `/_nuxt/...`, which yields prefix ''.
+    const m = html.match(/["'(](\/[^"'()]*?)\/_nuxt\//);
+    if (m) {
+      const prefix = m[1]; // '' for root, '/myapp' for a base path
+      return prefix === '' ? undefined : prefix;
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -1053,6 +1142,8 @@ const buildManifest = (input: {
    * `runtimeConfig.ipx.baseURL` in nuxt.config.
    */
   ipxBaseURL?: string;
+  /** Normalized `app.baseURL` (Nuxt), if set. Maps to `manifest.basePath`. */
+  basePath?: string;
 }): DeployManifest => {
   const {
     preset,
@@ -1062,6 +1153,7 @@ const buildManifest = (input: {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    basePath,
   } = input;
 
   // Default the IPX base URL to @nuxt/image's `/_ipx` convention.
@@ -1104,6 +1196,16 @@ const buildManifest = (input: {
   const headers = buildHeaders(routeRules);
   if (headers.length > 0) {
     manifest.headers = headers;
+  }
+
+  // Nuxt `app.baseURL` → cross-framework `manifest.basePath`. The L3
+  // prefixes every CloudFront behavior with it (and 308-redirects the bare
+  // root to `/<base>/`), matching the Next/Astro path.
+  if (basePath) {
+    manifest.basePath = basePath;
+    process.stdout.write(
+      `🔗 Detected Nuxt app.baseURL=${basePath}; CloudFront behaviors will be prefixed.\n`,
+    );
   }
 
   // If any route rule uses SWR / ISR / cache, ask the L3 to provision

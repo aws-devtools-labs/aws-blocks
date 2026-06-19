@@ -58,7 +58,10 @@ import {
   generateBuildIdAndRedirectFunctionCode,
   generateForwardedHostAndRedirectFunctionCode,
 } from '../defaults.js';
-import { createCustomHeadersPolicy } from './security_headers.js';
+import {
+  createCustomHeadersPolicy,
+  containsSecurityHeader,
+} from './security_headers.js';
 import {
   SkewProtectionConfig,
   generateSkewProtectionViewerRequestCode,
@@ -971,12 +974,33 @@ export class CdnConstruct extends Construct {
         } else {
           // No behavior for this pattern yet. Create one that matches the
           // catch-all's origin choice (compute or static) so headers are
-          // additive, not redirecting requests. Skip silently if we'd exceed the
-          // CloudFront behavior cap (better to lose the header than fail
-          // the deploy; warn at synth-time).
+          // additive, not redirecting requests. When we'd exceed the
+          // CloudFront behavior cap the rule can't be wired:
+          //   - a SECURITY header (CSP/HSTS/X-Frame-Options/…) silently
+          //     vanishing looks like a successful deploy but ships an
+          //     unprotected site — fail the build instead.
+          //   - a cosmetic custom header is acceptable to lose; warn only.
           if (
             Object.keys(additionalBehaviors).length >= MAX_ADDITIONAL_BEHAVIORS
           ) {
+            if (containsSecurityHeader(entry.headers)) {
+              throw new HostingError('SecurityHeaderDroppedError', {
+                message:
+                  `Cannot apply the header rule for "${entry.source}": the ` +
+                  `distribution is already at the CloudFront cache-behavior ` +
+                  `cap (${MAX_ADDITIONAL_BEHAVIORS}), and this rule sets a ` +
+                  `security header (${Object.keys(entry.headers)
+                    .filter((h) => containsSecurityHeader({ [h]: '' }))
+                    .join(', ')}). Dropping it would silently ship an ` +
+                  `unprotected response.`,
+                resolution:
+                  'Reduce the number of routed paths / per-pattern header ' +
+                  'rules so the distribution stays under the behavior cap, ' +
+                  'or apply this security header globally (e.g. via the ' +
+                  'default security-headers policy / contentSecurityPolicy) ' +
+                  'instead of a per-pattern rule.',
+              });
+            }
             process.stderr.write(
               `⚠️  Skipping custom headers for "${entry.source}" — would exceed CloudFront behavior cap.\n`,
             );

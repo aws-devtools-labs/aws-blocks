@@ -500,11 +500,25 @@ export class Hosting extends Construct {
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
-      // Ensure config deployment runs after the hosting construct's
-      // asset deployment so the resolved config.json is not overwritten.
-      const assetDeployment = hosting.node.tryFindChild('AssetDeployment') as Construct | undefined;
-      if (assetDeployment) {
-        configDeployment.node.addDependency(assetDeployment);
+      // Ensure the config deployment runs AFTER the hosting construct's
+      // asset deployments. Those deployments upload the whole static dir —
+      // which includes the *placeholder* `.blocks-sandbox/config.json`
+      // (`{_placeholder:true}`) written during synth — to the same
+      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
+      // the resolved config to. Without an ordering dependency the
+      // placeholder can land last and clobber the real config.
+      //
+      // We depend on EVERY BucketDeployment under the hosting construct
+      // rather than a single hard-coded child id: the real children are
+      // `AssetDeploymentImmutable` / `AssetDeploymentHtml` / `...Mutable`
+      // (and vary by deploy shape), so the previous
+      // `tryFindChild('AssetDeployment')` never matched and the dependency
+      // was silently never wired.
+      const assetDeployments = hosting.node
+        .findAll()
+        .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+      for (const dep of assetDeployments) {
+        configDeployment.node.addDependency(dep);
       }
     }
 
