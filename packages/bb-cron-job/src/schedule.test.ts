@@ -160,4 +160,32 @@ describe('parseSchedule – cron step expressions', () => {
 		const job = new CronJob(fakeScope, 'stepStart', opts('cron(15/30 * * * ? *)')) as any;
 		assert.deepStrictEqual(job._schedule.fields.minute, [15, 45]);
 	});
+
+	test('cron(30-10/5 * * * ? *) throws — inverted stepped range', () => {
+		assert.throws(
+			() => new CronJob(fakeScope, 'invStep', opts('cron(30-10/5 * * * ? *)')),
+			(err: Error) => err.name === CronJobErrors.InvalidSchedule
+		);
+	});
+
+	test('cron(0-100/5 * * * ? *) throws — stepped range exceeds field max', () => {
+		assert.throws(
+			() => new CronJob(fakeScope, 'oobStep', opts('cron(0-100/5 * * * ? *)')),
+			(err: Error) => err.name === CronJobErrors.InvalidSchedule
+		);
+	});
+
+	test('cron(30-10 * * * ? *) throws — inverted range', () => {
+		assert.throws(
+			() => new CronJob(fakeScope, 'invRange', opts('cron(30-10 * * * ? *)')),
+			(err: Error) => err.name === CronJobErrors.InvalidSchedule
+		);
+	});
+
+	test('cron(100 * * * ? *) throws — minute out of bounds', () => {
+		assert.throws(
+			() => new CronJob(fakeScope, 'oobMin', opts('cron(100 * * * ? *)')),
+			(err: Error) => err.name === CronJobErrors.InvalidSchedule
+		);
+	});
 });
