@@ -27,7 +27,6 @@ Available templates:
 - **backend** - Backend-only (no frontend)
 - **nextjs** - Next.js integration
 - **auth-cognito** - Cognito authentication example
-- **amplify** - Amplify Gen 2 integration
 - **demo** - Demo application
 
 ### Add to Existing Project
@@ -45,6 +44,8 @@ npx @aws-blocks/create-blocks-app .
 ```
 
 The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Blocks alongside it — adding a `aws-blocks/` workspace, wiring auth via bearer tokens, and scaffolding npm scripts for deployment. Your existing Amplify auth, data, and hosting stay untouched.
+
+Amplify Gen 2 integration is auto-detected from an existing project and is not selected with `--template`.
 
 ## What Gets Created
 
