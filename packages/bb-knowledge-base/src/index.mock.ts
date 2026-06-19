@@ -5,21 +5,22 @@ import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, dirname, extname, resolve } from 'node:path';
+import { join, relative, dirname, extname, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
-import type {
-	KnowledgeBaseOptions, RetrieveOptions, RetrieveResult,
-	MetadataFilter,
-} from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export type {
-	KnowledgeBaseOptions, SourceConfig,
-	ChunkingConfig, ChunkingStrategy,
-	RetrieveOptions, RetrieveResult,
+	KnowledgeBaseOptions,
+	SourceConfig,
+	ChunkingConfig,
+	ChunkingStrategy,
+	RetrieveOptions,
+	RetrieveResult,
 	MetadataFilter,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
@@ -56,8 +57,28 @@ function walkDir(dir: string): string[] {
 function chunkByParagraphs(text: string): string[] {
 	return text
 		.split(/\n\s*\n/)
-		.map(p => p.trim())
-		.filter(p => p.length >= 20);
+		.map((p) => p.trim())
+		.filter((p) => p.length >= 20);
+}
+
+/** Split text into overlapping windows of ~maxTokens words. Chunks < 20 chars are dropped. */
+function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): string[] {
+	const words = text.split(/\s+/);
+	if (words.length <= maxTokens) return text.trim().length >= 20 ? [text.trim()] : [];
+
+	const overlap = Math.floor((maxTokens * overlapPct) / 100);
+	const step = Math.max(1, maxTokens - overlap);
+	const chunks: string[] = [];
+
+	for (let i = 0; i < words.length; i += step) {
+		const chunk = words
+			.slice(i, i + maxTokens)
+			.join(' ')
+			.trim();
+		if (chunk.length >= 20) chunks.push(chunk);
+		if (i + maxTokens >= words.length) break;
+	}
+	return chunks;
 }
 
 /**
@@ -170,10 +191,7 @@ export class KnowledgeBase extends Scope {
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
 		if (!query || !query.trim()) {
-			throw blocksError(
-				KnowledgeBaseErrors.ValidationError,
-				'Query must be a non-empty string.',
-			);
+			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
 		const maxResults = Math.min(Math.max(options?.maxResults ?? 10, 1), 100);
@@ -181,7 +199,9 @@ export class KnowledgeBase extends Scope {
 
 		await this.ensureLoaded();
 
-		const searchResults = search(this.index!, query, filter ? Math.min(maxResults * 10, this.chunks!.length) : maxResults);
+		// When filtering, score all chunks so post-filter doesn't silently drop valid matches.
+		// Acceptable for local dev corpus sizes; production uses Bedrock's server-side filtering.
+		const searchResults = search(this.index!, query, filter ? this.chunks!.length : maxResults);
 
 		const results: RetrieveResult[] = [];
 		for (const hit of searchResults) {
@@ -205,29 +225,60 @@ export class KnowledgeBase extends Scope {
 		if (this.chunks && this.index) return Promise.resolve();
 		if (this.loadPromise) return this.loadPromise;
 
-		this.loadPromise = Promise.resolve().then(() => {
-			const cachePath = join(this.dataDir, 'chunks.json');
-			if (existsSync(cachePath)) {
-				try {
-					this.chunks = JSON.parse(readFileSync(cachePath, 'utf8'));
-					this.index = buildIndex(this.chunks!.map(c => c.text));
-					return;
-				} catch (err) {
-					console.warn('[KnowledgeBase] Cache corrupt, rebuilding from source:', (err as Error).message);
-				}
-			}
+		this.loadPromise = Promise.resolve()
+			.then(() => {
+				const sourceHash = this.computeSourceHash();
+				const cachePath = join(this.dataDir, 'chunks.json');
+				const hashPath = join(this.dataDir, 'source.hash');
 
-			this.loadFromSource();
-			try {
-				const cachePath2 = join(this.dataDir, 'chunks.json');
-				mkdirSync(dirname(cachePath2), { recursive: true });
-				writeFileSync(cachePath2, JSON.stringify(this.chunks));
-			} catch (err) {
-				console.warn('[KnowledgeBase] Failed to write cache:', (err as Error).message);
-			}
-		});
+				if (existsSync(cachePath)) {
+					try {
+						const cachedHash = existsSync(hashPath) ? readFileSync(hashPath, 'utf8') : '';
+						if (cachedHash === sourceHash || sourceHash === '') {
+							this.chunks = JSON.parse(readFileSync(cachePath, 'utf8'));
+							this.index = buildIndex(this.chunks!.map((c) => c.text));
+							return;
+						}
+					} catch (err) {
+						console.warn('[KnowledgeBase] Cache corrupt, rebuilding from source:', (err as Error).message);
+					}
+				}
+
+				this.loadFromSource();
+				try {
+					mkdirSync(dirname(cachePath), { recursive: true });
+					writeFileSync(cachePath, JSON.stringify(this.chunks));
+					writeFileSync(hashPath, sourceHash);
+				} catch (err) {
+					console.warn('[KnowledgeBase] Failed to write cache:', (err as Error).message);
+				}
+			})
+			.catch((err) => {
+				this.loadPromise = null;
+				throw err;
+			});
 
 		return this.loadPromise;
+	}
+
+	private computeSourceHash(): string {
+		const source = this.options.source;
+		const sourceDir = resolve(process.cwd(), source);
+		if (!existsSync(sourceDir)) return '';
+		const hash = createHash('sha256');
+		hash.update(sourceDir);
+		const files = walkDir(sourceDir).sort();
+		for (const f of files) {
+			hash.update(f);
+			try {
+				const stat = statSync(f);
+				hash.update(String(stat.mtimeMs));
+				hash.update(String(stat.size));
+			} catch {
+				hash.update('deleted');
+			}
+		}
+		return hash.digest('hex');
 	}
 
 	private loadFromSource(): void {
@@ -240,18 +291,22 @@ export class KnowledgeBase extends Scope {
 			);
 		}
 
+		if (source.startsWith('/') || source.startsWith('\\') || /^[A-Z]:/i.test(source)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be a relative path within the project directory: ${source}`,
+			);
+		}
 		const sourceDir = resolve(process.cwd(), source);
-		if (!sourceDir.startsWith(resolve(process.cwd()))) {
+		const cwdResolved = resolve(process.cwd());
+		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
 			throw blocksError(
 				KnowledgeBaseErrors.InvalidSource,
 				`Source path must be within project directory: ${source}`,
 			);
 		}
 		if (!existsSync(sourceDir)) {
-			throw blocksError(
-				KnowledgeBaseErrors.InvalidSource,
-				`Source folder not found: ${source}`,
-			);
+			throw blocksError(KnowledgeBaseErrors.InvalidSource, `Source folder not found: ${source}`);
 		}
 
 		const files = walkDir(sourceDir);
@@ -278,13 +333,23 @@ export class KnowledgeBase extends Scope {
 				metadata.folder = relDir.replace(/\\/g, '/').split('/')[0];
 			}
 
-			const paragraphs = chunkByParagraphs(content);
-			for (const text of paragraphs) {
+			const strategy = this.options.chunking?.strategy ?? 'semantic';
+			let textChunks: string[];
+			if (strategy === 'fixed') {
+				const maxTokens = this.options.chunking?.chunkSize ?? 300;
+				const overlap = this.options.chunking?.chunkOverlap ?? 20;
+				textChunks = chunkByFixedSize(content, maxTokens, overlap);
+			} else if (strategy === 'none') {
+				textChunks = content.trim().length >= 20 ? [content.trim()] : [];
+			} else {
+				textChunks = chunkByParagraphs(content);
+			}
+			for (const text of textChunks) {
 				chunks.push({ text, source: relPath.replace(/\\/g, '/'), metadata: { ...metadata } });
 			}
 		}
 
 		this.chunks = chunks;
-		this.index = buildIndex(chunks.map(c => c.text));
+		this.index = buildIndex(chunks.map((c) => c.text));
 	}
 }

@@ -9,7 +9,7 @@
  * embeddings instead.
  *
  * **Algorithm:**
- * 1. Documents are tokenized into lowercase alphanumeric tokens.
+ * 1. Documents are tokenized into lowercase Unicode-aware tokens.
  * 2. Term frequencies (TF) are normalized by document length.
  * 3. Inverse document frequencies (IDF) use smoothed log: `log((N+1)/(df+1)) + 1`.
  * 4. Query scores are the sum of `TF * IDF` for each query token.
@@ -41,12 +41,51 @@ export interface TfIdfIndex {
 	docCount: number;
 }
 
+// Explicit CJK blocks (Hiragana/Katakana, CJK Unified Ideographs incl. Extension A,
+// and compatibility ideographs) rather than one broad \u3040-\ufaff sweep, which
+// would also capture unrelated ranges such as Hangul, Yi, surrogates and the
+// private-use area.
+const CJK_CHAR = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+
+// CJK languages don't use spaces between words, so whitespace splitting
+// produces zero useful tokens. Bigram overlap enables approximate matching.
+function extractCjkBigrams(text: string): string[] {
+	const cleaned = text.replace(/[^\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu, ' ');
+	const segments = cleaned.split(/\s+/).filter(Boolean);
+	const bigrams: string[] = [];
+	for (const seg of segments) {
+		const chars = [...seg];
+		for (let i = 0; i < chars.length - 1; i++) {
+			bigrams.push(chars[i] + chars[i + 1]);
+		}
+	}
+	return bigrams;
+}
+
+// NFD decomposition separates base characters from combining diacritical marks
+// (e.g. "é" → "e" + combining accent), the replace strips the marks, and NFC
+// recomposes. Result: "résumé" → "resume", enabling accent-insensitive matching.
 function tokenize(text: string): string[] {
-	return text
+	const normalized = text
 		.toLowerCase()
-		.replace(/[^a-z0-9\s]/g, ' ')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.normalize('NFC');
+
+	const tokens: string[] = [];
+
+	if (CJK_CHAR.test(normalized)) {
+		tokens.push(...extractCjkBigrams(normalized));
+	}
+
+	const words = normalized
+		.replace(/[^\p{L}\p{N}\s]/gu, ' ')
+		.replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu, ' ')
 		.split(/\s+/)
-		.filter(t => t.length > 1);
+		.filter((t) => t.length > 1);
+	tokens.push(...words);
+
+	return tokens;
 }
 
 /**
@@ -103,11 +142,7 @@ export function buildIndex(documents: string[]): TfIdfIndex {
  * @returns Sorted array of `{ docIndex, score }` pairs, highest score first.
  *   Empty array if the query has no matching tokens or the index is empty.
  */
-export function search(
-	index: TfIdfIndex,
-	query: string,
-	maxResults: number,
-): { docIndex: number; score: number }[] {
+export function search(index: TfIdfIndex, query: string, maxResults: number): { docIndex: number; score: number }[] {
 	if (index.docCount === 0) return [];
 
 	const queryTokens = tokenize(query);
@@ -131,7 +166,7 @@ export function search(
 	if (scores.length === 0) return [];
 
 	// Normalize scores to [0, 1]
-	const maxScore = Math.max(...scores.map(s => s.score));
+	const maxScore = Math.max(...scores.map((s) => s.score));
 	if (maxScore > 0) {
 		for (const s of scores) {
 			s.score = s.score / maxScore;
