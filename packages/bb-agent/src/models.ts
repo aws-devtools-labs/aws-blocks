@@ -4,6 +4,7 @@
 import type { ModelConfig } from './types.js';
 
 const BALANCED_MODEL_ID = 'global.anthropic.claude-sonnet-4-6';
+const SMART_MODEL_ID = 'global.anthropic.claude-opus-4-8';
 const FAST_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 /**
@@ -24,7 +25,7 @@ export const BedrockModels = {
 	/** Highest capability for the hardest tasks. Currently: Claude Opus 4.8. */
 	SMART: {
 		provider: 'bedrock',
-		modelId: 'global.anthropic.claude-opus-4-8',
+		modelId: SMART_MODEL_ID,
 	},
 	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
@@ -32,16 +33,15 @@ export const BedrockModels = {
 		modelId: FAST_MODEL_ID,
 	},
 
-
 	/** @deprecated Use `BedrockModels.BALANCED` instead. */
 	DEFAULT: {
 		provider: 'bedrock',
 		modelId: BALANCED_MODEL_ID,
 	},
-	/** @deprecated Use `BedrockModels.BALANCED` instead. */
+	/** @deprecated Use `BedrockModels.FAST` instead. */
 	BUDGET: {
 		provider: 'bedrock',
-		modelId: BALANCED_MODEL_ID,
+		modelId: FAST_MODEL_ID,
 	},
 	/** @deprecated Use `BedrockModels.FAST` instead. */
 	MICRO: {

@@ -266,7 +266,7 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
 });
 
 // Agent BB - AI agent with tools and conversation persistence
-import { Agent } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   removalPolicy: 'destroy',
@@ -379,7 +379,6 @@ const cannedAgent = new Agent(scope, 'canned', {
 
 
 // Preset agents — one per BedrockModels preset, used to verify presets work e2e
-import { BedrockModels } from '@aws-blocks/bb-agent';
 
 const presetAgents = Object.fromEntries(
 	Object.entries(BedrockModels).map(([name, config]) => [

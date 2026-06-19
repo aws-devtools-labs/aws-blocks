@@ -11,4 +11,4 @@ New presets:
 
 All presets use `global.` inference profiles for region-agnostic deployment.
 
-Deprecated (non-breaking): `DEFAULT`, `BUDGET`, `MICRO` still work but resolve to `BALANCED`.
+Deprecated (non-breaking): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`.
