@@ -60,6 +60,15 @@ export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from '@aws-blocks/bb-logger';
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from '@aws-blocks/bb-email-client';
+export { SmsClient, SmsErrors } from '@aws-blocks/bb-sms-client';
+export type {
+	SmsOptions,
+	SmsMessage,
+	PushMessage,
+	SmsType,
+	SendResult as SmsSendResult,
+	SendBatchResult as SmsSendBatchResult,
+} from '@aws-blocks/bb-sms-client';
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type { MetricsOptions, EmitOptions, MetricDatum, MetricUnit, MetricResolution, ExternalMetricsRef, MetricsEmitter } from '@aws-blocks/bb-metrics';
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';

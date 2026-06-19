@@ -23,6 +23,7 @@
     { "path": "../bb-cron-job" },
     { "path": "../bb-file-bucket" },
     { "path": "../bb-email-client" },
+    { "path": "../bb-sms-client" },
     { "path": "../bb-metrics" },
     { "path": "../bb-logger" },
     { "path": "../bb-tracer" },

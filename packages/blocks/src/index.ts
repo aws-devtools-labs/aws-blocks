@@ -245,6 +245,28 @@ export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from '@aws-blocks/bb-email-client';
 
 /**
+ * **Transactional SMS and mobile push notifications with AWS SNS integration.**
+ *
+ * Use for sending one-time passwords, delivery alerts, and mobile push
+ * notifications to phone numbers or registered devices. Supports single and
+ * batch SMS with partial failure handling, plus push to SNS platform endpoints
+ * and topics. For email, use `EmailClient`. For in-app real-time messages to
+ * connected browser clients, use `Realtime`.
+ *
+ * Package: `@aws-blocks/bb-sms-client`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { SmsClient, SmsErrors } from '@aws-blocks/bb-sms-client';
+export type {
+	SmsOptions,
+	SmsMessage,
+	PushMessage,
+	SmsType,
+	SendResult as SmsSendResult,
+	SendBatchResult as SmsSendBatchResult,
+} from '@aws-blocks/bb-sms-client';
+
+/**
  * **File storage backed by Amazon S3.**
  *
  * Use for storing, retrieving, and serving binary files — user uploads,
