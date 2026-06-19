@@ -56,7 +56,7 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 | Constraints / formats / defaults / const / tuple | `Tests/BlocksCodegenTests/ConstraintsAndDefaultsTests.swift` |
 | Helpers / naming | `Tests/BlocksCodegenTests/HelpersTests.swift` |
 | Generator output | `Tests/BlocksCodegenTests/SwiftCodeGeneratorTests.swift` |
-| Hybrid-arm fixture spec | `Tests/BlocksCodegenTests/Resources/hybrid-arm-spec.json` |
+| Hybrid-arm fixture spec | `../codegen-fixtures/18-hybrid-arm/spec.json` |
 | Runtime tests | `Tests/BlocksRuntimeTests/*` |
 
 ## Build and Test Commands
@@ -67,7 +67,7 @@ A Swift Package that generates type-safe Swift client code from an OpenRPC speci
 # Build everything (codegen, runtime, plugins, CLI)
 swift build
 
-# Run all tests (114 tests)
+# Run all tests
 swift test
 
 # Filter to one suite

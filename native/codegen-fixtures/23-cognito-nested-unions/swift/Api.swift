@@ -26,7 +26,7 @@ public class Api {
 
     public enum CognitoConfirmSignIn {
 
-        public struct IsSignedInFalse: Codable {
+        public struct ContinueSignIn: Codable {
             public let nextStep: NextStep
 
             public struct ConfirmSignInWithSmsCode: Codable {
@@ -230,38 +230,38 @@ public class Api {
             }
         }
 
-        public struct IsSignedInTrue: Codable {
+        public struct SignedIn: Codable {
             public let user: CognitoUser
         }
 
         public enum Result: Codable {
-            case isSignedInFalse(IsSignedInFalse)
-            case isSignedInTrue(IsSignedInTrue)
+            case continueSignIn(ContinueSignIn)
+            case signedIn(SignedIn)
 
             enum CodingKeys: String, CodingKey {
-                case isSignedIn
+                case status
             }
 
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .isSignedInFalse(let params):
-                    try container.encode("false", forKey: .isSignedIn)
+                case .continueSignIn(let params):
+                    try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
-                case .isSignedInTrue(let params):
-                    try container.encode("true", forKey: .isSignedIn)
+                case .signedIn(let params):
+                    try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                let disc = try container.decode(String.self, forKey: .isSignedIn)
+                let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "false": self = .isSignedInFalse(try IsSignedInFalse(from: decoder))
-                case "true": self = .isSignedInTrue(try IsSignedInTrue(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
+                case "signedIn": self = .signedIn(try SignedIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .isSignedIn, in: container, debugDescription: "Unknown value: \(disc)")
+                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
                 }
             }
         }
@@ -269,7 +269,7 @@ public class Api {
 
     public enum CognitoSignIn {
 
-        public struct IsSignedInFalse: Codable {
+        public struct ContinueSignIn: Codable {
             public let nextStep: NextStep
 
             public struct ConfirmSignInWithSmsCode: Codable {
@@ -473,38 +473,38 @@ public class Api {
             }
         }
 
-        public struct IsSignedInTrue: Codable {
+        public struct SignedIn: Codable {
             public let user: CognitoUser
         }
 
         public enum Result: Codable {
-            case isSignedInFalse(IsSignedInFalse)
-            case isSignedInTrue(IsSignedInTrue)
+            case continueSignIn(ContinueSignIn)
+            case signedIn(SignedIn)
 
             enum CodingKeys: String, CodingKey {
-                case isSignedIn
+                case status
             }
 
             public func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .isSignedInFalse(let params):
-                    try container.encode("false", forKey: .isSignedIn)
+                case .continueSignIn(let params):
+                    try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
-                case .isSignedInTrue(let params):
-                    try container.encode("true", forKey: .isSignedIn)
+                case .signedIn(let params):
+                    try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
                 }
             }
 
             public init(from decoder: Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
-                let disc = try container.decode(String.self, forKey: .isSignedIn)
+                let disc = try container.decode(String.self, forKey: .status)
                 switch disc {
-                case "false": self = .isSignedInFalse(try IsSignedInFalse(from: decoder))
-                case "true": self = .isSignedInTrue(try IsSignedInTrue(from: decoder))
+                case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
+                case "signedIn": self = .signedIn(try SignedIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .isSignedIn, in: container, debugDescription: "Unknown value: \(disc)")
+                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
                 }
             }
         }
