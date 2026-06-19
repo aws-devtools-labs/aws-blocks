@@ -402,9 +402,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Subscribe to chunks via result.channel, or await result.complete() for the final response.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
-		if (options?.channelId !== undefined && !options.channelId) throw blocksAgentError(AgentErrors.ValidationFailed, 'channelId must not be empty when provided');
 		const conversationId = options?.conversationId;
-		const channelId = options?.channelId ?? conversationId ?? crypto.randomUUID();
+		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
 		const context = this.resolveContext(options?.context);

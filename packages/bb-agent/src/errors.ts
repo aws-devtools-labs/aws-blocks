@@ -25,7 +25,6 @@ export const AgentErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	StreamFailed: 'StreamFailedException',
 	InterruptRequired: 'InterruptRequiredException',
-	ValidationFailed: 'ValidationFailedException',
 } as const;
 
 export function blocksAgentError(name: string, message: string): Error {

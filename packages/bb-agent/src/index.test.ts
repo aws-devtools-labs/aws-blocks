@@ -115,16 +115,21 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 	});
 });
 
-// ── stream() input validation ────────────────────────────────────────────────
+// ── stream() empty channelId fallback ────────────────────────────────────────
 
-describe('stream() input validation', () => {
-	test('rejects empty channelId', async () => {
+describe('stream() empty channelId fallback', () => {
+	test('empty channelId falls back to a generated value', async () => {
 		const scope = new Scope('test-empty-ch');
 		const agent = new Agent(scope, 'ec', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		await assert.rejects(
-			() => agent.stream('hello', { userId: 'test-user', channelId: '' }),
-			(err: any) => err.name === 'ValidationFailedException',
-		);
+		const result = await agent.stream('hello', { userId: 'test-user', channelId: '' });
+		assert.ok(result.channelId.length > 0, 'empty channelId should fall back to a non-empty value');
+	});
+
+	test('empty conversationId falls back to a generated value', async () => {
+		const scope = new Scope('test-empty-conv');
+		const agent = new Agent(scope, 'ev', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const result = await agent.stream('hello', { userId: 'test-user', conversationId: '' });
+		assert.ok(result.channelId.length > 0, 'empty conversationId should fall back to a non-empty channelId');
 	});
 });
 

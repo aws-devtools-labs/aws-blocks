@@ -2,6 +2,6 @@
 "@aws-blocks/bb-agent": patch
 ---
 
-fix(bb-agent): reject empty channelId in stream()
+fix(bb-agent): treat empty channelId as unset in stream()
 
-An empty `channelId` produced an invalid Realtime channel path, causing the client subscription to silently receive no chunks. Now throws `ValidationFailedException` immediately.
+An empty `channelId` now falls back to `conversationId` or a random UUID, preventing all streams from sharing the same channel. Empty strings are treated as unset rather than used literally.
