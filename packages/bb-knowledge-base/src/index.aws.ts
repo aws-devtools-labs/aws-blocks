@@ -60,21 +60,29 @@ function isFilterRelatedValidation(message: string): boolean {
 }
 
 function mapSdkError(err: unknown): Error {
-	if (err instanceof Error) {
-		if (err.name === 'ResourceNotFoundException') {
-			return blocksError(KnowledgeBaseErrors.NotReady, 'Knowledge base not found. Run `cdk deploy` first.');
-		}
-		if (err.name === 'ValidationException') {
-			if (isFilterRelatedValidation(err.message)) {
-				return blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
-			}
-			return blocksError(KnowledgeBaseErrors.ValidationError, err.message);
-		}
-		// Catch-all for unrecognized SDK errors — original error name + message are preserved.
-		return blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
+	// Non-Error throw (e.g., string or object) — stringify for diagnostics. There
+	// is no underlying Error to attach, so `cause` is left unset.
+	if (!(err instanceof Error)) {
+		return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
 	}
-	// Non-Error throw (e.g., string or object) — stringify for diagnostics.
-	return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
+
+	let mapped: Error;
+	if (err.name === 'ResourceNotFoundException') {
+		mapped = blocksError(KnowledgeBaseErrors.NotReady, 'Knowledge base not found. Run `cdk deploy` first.');
+	} else if (err.name === 'ValidationException' && isFilterRelatedValidation(err.message)) {
+		mapped = blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
+	} else if (err.name === 'ValidationException') {
+		mapped = blocksError(KnowledgeBaseErrors.ValidationError, err.message);
+	} else {
+		// Catch-all for unrecognized SDK errors (network, auth, throttling, etc.).
+		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
+	}
+
+	// Genuinely preserve the original SDK error as the standard `Error.cause`. The
+	// mapped error normalizes `name`/`message` for callers, so attaching the
+	// untouched SDK error keeps its original name, message, and stack for diagnostics.
+	mapped.cause = err;
+	return mapped;
 }
 
 // ── Filter builder ─────────────────────────────────────────────────────────

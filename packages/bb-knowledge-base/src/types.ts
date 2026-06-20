@@ -58,7 +58,7 @@ export interface ChunkingConfig {
 	 * and production — tune it per environment.
 	 */
 	chunkOverlap?: number;
-	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. */
+	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. (No effect in local dev / mock.) */
 	breakpointPercentile?: number;
 }
 

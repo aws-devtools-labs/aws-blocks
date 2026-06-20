@@ -265,6 +265,7 @@ export class KnowledgeBase extends Scope {
 							return;
 						}
 					} catch (err) {
+						// Uses console.warn (not this.log.warn): the default logger is capped at 'error' level, which would suppress these genuinely useful local-dev diagnostics.
 						console.warn('[KnowledgeBase] Cache corrupt, rebuilding from source:', (err as Error).message);
 					}
 				}
@@ -322,6 +323,7 @@ export class KnowledgeBase extends Scope {
 			hash.update(f);
 			try {
 				const stat = statSync(f);
+				// Trade-off: key on mtime+size (rsync-style heuristic), not byte content — fast and fine for local dev, though a same-second, same-size edit could be missed.
 				hash.update(String(stat.mtimeMs));
 				hash.update(String(stat.size));
 			} catch {

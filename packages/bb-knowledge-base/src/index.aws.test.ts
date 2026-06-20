@@ -450,7 +450,7 @@ describe('error classification — other SDK exceptions', () => {
 		}
 	});
 
-	test('AccessDeniedException maps to RetrievalFailed and preserves the message', async () => {
+	test('AccessDeniedException maps to RetrievalFailed and preserves message + original error as cause', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR5');
 		const err = new Error('User is not authorized to perform bedrock:Retrieve');
 		err.name = 'AccessDeniedException';
@@ -465,6 +465,11 @@ describe('error classification — other SDK exceptions', () => {
 					assert.ok(
 						e.message.includes('not authorized'),
 						'Error message should preserve the original SDK message',
+					);
+					assert.strictEqual(
+						e.cause,
+						err,
+						'Mapped error should attach the original SDK error as `cause`',
 					);
 					return true;
 				},
