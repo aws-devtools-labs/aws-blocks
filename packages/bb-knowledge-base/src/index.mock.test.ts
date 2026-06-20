@@ -501,10 +501,36 @@ try {
 				timeout: 10000,
 			});
 
+			// res.status === 0 means the guard correctly threw InvalidSource and the
+			// subprocess exited cleanly. A non-zero status has causes that must NOT be
+			// conflated with a guard bug, so rule them out before the real assertion:
+			//   • res.error set → the subprocess could not be spawned or timed out
+			//     (infrastructure issue, not a guard failure).
+			//   • ERR_MODULE_NOT_FOUND on stderr → the compiled dist/index.mock.js is
+			//     missing or stale, so the static `import` fails BEFORE the in-script
+			//     try/catch runs. Fix by building first; this is not a guard bug.
+			// Only once those are excluded does a non-zero exit mean a genuine failure:
+			//   exit 1 = retrieve() resolved (guard did not block the sibling dir),
+			//   exit 2 = retrieve() threw a non-InvalidSource error.
+			const stderr = res.stderr ?? '';
+			assert.ok(
+				res.error == null,
+				`Subprocess could not run to completion (spawn error or timeout): ` +
+					`${res.error?.message}. Environment issue, not a guard failure.`,
+			);
+			assert.ok(
+				!/ERR_MODULE_NOT_FOUND|Cannot find (module|package)/.test(stderr),
+				`Subprocess could not import compiled dist/index.mock.js — the dist build is ` +
+					`missing or stale. Build the package first ` +
+					`(\`npm run build -w packages/bb-knowledge-base\`), then re-run. stderr: ${stderr}`,
+			);
 			assert.strictEqual(
 				res.status,
 				0,
-				`Expected InvalidSource for sibling dir. Exit code ${res.status}. stdout: ${res.stdout}. stderr: ${res.stderr}`,
+				`Path guard failed to block a sibling dir that shares the cwd string prefix. ` +
+					`Exit ${res.status}: 1 = retrieve() resolved (guard did not block), ` +
+					`2 = retrieve() threw a non-InvalidSource error. ` +
+					`stdout: ${res.stdout}. stderr: ${stderr}`,
 			);
 		} finally {
 			rmSync(base, { recursive: true, force: true });

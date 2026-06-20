@@ -292,6 +292,10 @@ export class KnowledgeBase extends Scope {
 		const chunkSize = this.options.chunking?.chunkSize ?? 300;
 		const chunkOverlap = this.options.chunking?.chunkOverlap ?? 20;
 		hash.update(JSON.stringify({ strategy, chunkSize, chunkOverlap }));
+		// `breakpointPercentile` is intentionally omitted from the key: the mock's
+		// 'semantic' strategy splits purely on blank-line paragraphs and never reads
+		// it, so it cannot change the produced chunks. TODO: add it to the key if the
+		// mock ever honors breakpointPercentile for semantic chunking.
 		// Hash only the files that are actually indexed (supported extensions,
 		// excluding `.metadata.json` sidecars) so adding an unsupported file
 		// (e.g. a .png) doesn't force a needless rebuild.
@@ -349,8 +353,9 @@ export class KnowledgeBase extends Scope {
 		try {
 			realSource = realpathSync(sourceDir);
 			realCwd = realpathSync(cwdResolved);
-		} catch {
-			return;
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+			return; // ENOENT → missing path; loadFromSource() reports InvalidSource
 		}
 		if (realSource !== realCwd && !realSource.startsWith(realCwd + sep)) {
 			throw blocksError(
@@ -370,6 +375,9 @@ export class KnowledgeBase extends Scope {
 			);
 		}
 
+		// Defense-in-depth: ensureLoaded() already validates non-S3 paths before
+		// reaching here, but re-validating guards direct or subclass calls to
+		// loadFromSource() that bypass ensureLoaded()'s up-front check.
 		this.validateSourcePath(source);
 		const sourceDir = resolve(process.cwd(), source);
 		if (!existsSync(sourceDir)) {
