@@ -452,7 +452,7 @@ frontend:
 
 // ─── Init into existing project ─────────────────────────────────────────────
 
-async function integrateWithExistingProject(targetDir: string, skipConfirm = false, skipInstall = false) {
+async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
@@ -470,8 +470,14 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the default template (reuses the same source of truth)
-  const templateDir = join(__dirname, '../templates/default');
+  // 1. Copy aws-blocks/ from the requested template so framework-specific files
+  // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
+  // user's project. Fall back to the default template when the requested one has
+  // no aws-blocks/ workspace to copy.
+  let templateDir = join(__dirname, '../templates', templateName);
+  if (!(await exists(join(templateDir, 'aws-blocks')))) {
+    templateDir = join(__dirname, '../templates/default');
+  }
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
 
@@ -564,7 +570,10 @@ Arguments:
   directory              Target directory (default: ".")
 
 Options:
-  --template <name>      Template to use for fresh projects (default: "default")
+  --template <name>      Template to use. For fresh projects it selects the
+                         starter app; when adding to an existing project it
+                         selects which aws-blocks/ workspace to copy, e.g.
+                         "nextjs" for a Next.js dev server (default: "default")
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -625,7 +634,7 @@ async function create() {
     // Mode 2: Existing project (package.json, no Amplify) — triggered when the
     // resolved directory contains a package.json (covers no-arg, ".", or named dir)
     if (await exists(join(resolvedDir, 'package.json'))) {
-      await integrateWithExistingProject(resolvedDir, skipConfirm, skipInstall);
+      await integrateWithExistingProject(resolvedDir, templateName, skipConfirm, skipInstall);
       return;
     }
 
