@@ -16,6 +16,13 @@ const FIXTURES_SRC = join(PKG_ROOT, 'test-fixtures', 'knowledge');
 const TEST_KNOWLEDGE_NAME = 'test-knowledge-tmp';
 const TEST_KNOWLEDGE = join(process.cwd(), TEST_KNOWLEDGE_NAME);
 
+// The sibling-dir guard test spawns a subprocess that statically imports the
+// COMPILED dist/index.mock.js; skip it when the build is absent so a missing
+// dist surfaces as a skip rather than a confusing module-not-found failure.
+const SKIP_IF_UNBUILT: string | false = existsSync(join(__dirname, 'index.mock.js'))
+	? false
+	: 'compiled dist/index.mock.js not found — run `npm run build -w packages/bb-knowledge-base` first';
+
 function setupTestFixtures(): void {
 	if (existsSync(TEST_KNOWLEDGE)) rmSync(TEST_KNOWLEDGE, { recursive: true, force: true });
 	cpSync(FIXTURES_SRC, TEST_KNOWLEDGE, { recursive: true });
@@ -464,7 +471,7 @@ test('metadata.json sidecar files are not indexed as documents', async () => {
 // treated as inside the project.
 
 describe('source path containment', () => {
-	test('rejects sibling directory that shares the cwd string prefix', () => {
+	test('rejects sibling directory that shares the cwd string prefix', { skip: SKIP_IF_UNBUILT }, () => {
 		const base = freshDir('_path-guard-base');
 		const proj = join(base, 'proj');
 		mkdirSync(proj, { recursive: true });
@@ -501,17 +508,7 @@ try {
 				timeout: 10000,
 			});
 
-			// res.status === 0 means the guard correctly threw InvalidSource and the
-			// subprocess exited cleanly. A non-zero status has causes that must NOT be
-			// conflated with a guard bug, so rule them out before the real assertion:
-			//   • res.error set → the subprocess could not be spawned or timed out
-			//     (infrastructure issue, not a guard failure).
-			//   • ERR_MODULE_NOT_FOUND on stderr → the compiled dist/index.mock.js is
-			//     missing or stale, so the static `import` fails BEFORE the in-script
-			//     try/catch runs. Fix by building first; this is not a guard bug.
-			// Only once those are excluded does a non-zero exit mean a genuine failure:
-			//   exit 1 = retrieve() resolved (guard did not block the sibling dir),
-			//   exit 2 = retrieve() threw a non-InvalidSource error.
+			// Exit codes: 0 = guard blocked (pass), 1 = retrieve() resolved (guard miss), 2 = non-InvalidSource error.
 			const stderr = res.stderr ?? '';
 			assert.ok(
 				res.error == null,
@@ -561,23 +558,19 @@ try {
 		}
 	});
 
-	test('rejects absolute path outside the project', async () => {
-		const outside = freshDir('_path-guard-abs');
-		writeFileSync(join(outside, 'doc.md'), 'Absolute path document content for testing path guard enforcement.');
-
-		try {
-			const kb = new KnowledgeBase({ id: 'app' }, 'abs', { source: outside });
-			await assert.rejects(
-				() => kb.retrieve('absolute path document'),
-				(err: Error) => {
-					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
-					return true;
-				},
-				'Should throw InvalidSource for absolute paths outside project',
-			);
-		} finally {
-			rmSync(outside, { recursive: true, force: true });
-		}
+	test('rejects any absolute path, even one inside the project', async () => {
+		// validateSourcePath rejects absolute paths via the leading-separator check
+		// before any filesystem access, so no on-disk fixture is needed. TEST_KNOWLEDGE
+		// is a real in-project directory, yet passing it as an absolute path is rejected.
+		const kb = new KnowledgeBase({ id: 'app' }, 'abs', { source: TEST_KNOWLEDGE });
+		await assert.rejects(
+			() => kb.retrieve('absolute path document'),
+			(err: Error) => {
+				assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+				return true;
+			},
+			'Should throw InvalidSource for any absolute path',
+		);
 	});
 
 	test('rejects a symlink whose target is outside the project', async () => {
@@ -852,9 +845,11 @@ describe('load recovery after failed load', () => {
 // blank-line-free document as a single oversized chunk.
 
 describe('chunking configuration', () => {
-	test('fixed chunking with a small chunkSize produces smaller chunks than the default', async () => {
+	test('fixed chunking splits a blank-line-free document into multiple chunks', async () => {
 		const src = freshDir('_chunking-fixed');
-		// Single large paragraph (no blank lines) — about 500 words.
+		// Single large paragraph (no blank lines) — about 500 words. The default
+		// 'semantic' strategy would return it as one oversized chunk; 'fixed' with a
+		// small chunkSize must split it into several, proving the option is honored.
 		const words = Array.from(
 			{ length: 500 },
 			(_, i) => `word${i} sentence${i % 50} paragraph content text document knowledge base`,
@@ -862,27 +857,17 @@ describe('chunking configuration', () => {
 		writeFileSync(join(src, 'big.md'), words);
 
 		try {
-			const kbDefault = new KnowledgeBase({ id: 'app' }, 'chunkdef', { source: '_chunking-fixed' });
-			const defaultResults = await kbDefault.retrieve('word0 sentence0');
-
 			const kbFixed = new KnowledgeBase({ id: 'app' }, 'chunkfix', {
 				source: '_chunking-fixed',
 				chunking: { strategy: 'fixed', chunkSize: 50 },
 			});
 			const fixedResults = await kbFixed.retrieve('word0 sentence0');
 
-			if (defaultResults.length > 0 && fixedResults.length > 0) {
-				const defaultMaxLen = Math.max(...defaultResults.map((r) => r.text.length));
-				const fixedMaxLen = Math.max(...fixedResults.map((r) => r.text.length));
-				assert.ok(
-					fixedMaxLen < defaultMaxLen,
-					`Fixed chunking (chunkSize=50) should produce smaller chunks than default. ` +
-						`Fixed max: ${fixedMaxLen}, Default max: ${defaultMaxLen}. ` +
-						'The chunking option appears to be ignored.',
-				);
-			} else {
-				assert.ok(fixedResults.length > 0, 'Fixed chunking should still produce searchable results');
-			}
+			assert.ok(
+				fixedResults.length > 1,
+				`Fixed chunking (chunkSize=50) should split the single paragraph into multiple chunks ` +
+					`(got ${fixedResults.length}). The chunking option appears to be ignored.`,
+			);
 		} finally {
 			cleanupDirs('_chunking-fixed');
 		}
@@ -914,6 +899,39 @@ describe('chunking configuration', () => {
 			assert.ok(
 				results[0].text.includes('zzsentinelword'),
 				'the sentinel word in the would-be-skipped window should still be retrievable',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+
+	test('zero overlap does not drop a short final window (tail-loss regression)', async () => {
+		const srcName = '_overlap-zero-tail';
+		const src = freshDir(srcName);
+		// 201 words, chunkSize 100, overlap 0 → step 100 → windows [0,100), [100,200),
+		// [200,201). The last window is a single short word, below the 20-char floor that
+		// filters out junk fragments. It must still be emitted so the trailing word is
+		// never lost; otherwise words[200] would never be indexed.
+		const parts: string[] = [];
+		for (let i = 0; i < 200; i++) {
+			parts.push(`filler${i}`);
+		}
+		parts.push('zztailsentinel'); // index 200 — the final word, alone in the last window
+		writeFileSync(join(src, 'doc.md'), parts.join(' '));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'zerotail', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 100, chunkOverlap: 0 },
+			});
+			const results = await kb.retrieve('zztailsentinel');
+			assert.ok(
+				results.length > 0,
+				'the final short window must be emitted even below the 20-char floor — the last word stays indexed',
+			);
+			assert.ok(
+				results[0].text.includes('zztailsentinel'),
+				'the sentinel word in the short final window should be retrievable',
 			);
 		} finally {
 			cleanupDirs(srcName);

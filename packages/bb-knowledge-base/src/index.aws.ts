@@ -49,6 +49,7 @@ function blocksError(name: string, message: string): Error {
 // block → "your filter is wrong").
 const FILTER_ERROR_PATTERNS = [
 	/field\b.*\bnot found/i,
+	// Targets filter-attribute lookup messages (e.g. "metadata attribute ... not found").
 	/metadata.*attribute/i,
 	/invalid.*filter|filter.*invalid/i,
 	/filter\b.*\bkey\b.*\bnot/i,
@@ -60,11 +61,10 @@ function isFilterRelatedValidation(message: string): boolean {
 
 function mapSdkError(err: unknown): Error {
 	if (err instanceof Error) {
-		const name = err.name;
-		if (name === 'ResourceNotFoundException') {
+		if (err.name === 'ResourceNotFoundException') {
 			return blocksError(KnowledgeBaseErrors.NotReady, 'Knowledge base not found. Run `cdk deploy` first.');
 		}
-		if (name === 'ValidationException') {
+		if (err.name === 'ValidationException') {
 			if (isFilterRelatedValidation(err.message)) {
 				return blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
 			}

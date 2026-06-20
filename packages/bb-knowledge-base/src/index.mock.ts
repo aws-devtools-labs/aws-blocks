@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSy
 import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter } from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -61,7 +61,11 @@ function chunkByParagraphs(text: string): string[] {
 		.filter((p) => p.length >= 20);
 }
 
-/** Split text into overlapping windows of ~maxTokens words. Chunks < 20 chars are dropped. */
+/**
+ * Split text into overlapping windows of ~maxTokens words. Windows under 20
+ * chars are dropped as noise, except the final window — emitting it always
+ * keeps trailing words indexed (e.g. with zero overlap, where step === maxTokens).
+ */
 function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): string[] {
 	const words = text.split(/\s+/);
 	if (words.length <= maxTokens) return text.trim().length >= 20 ? [text.trim()] : [];
@@ -74,12 +78,15 @@ function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): 
 	const chunks: string[] = [];
 
 	for (let i = 0; i < words.length; i += step) {
+		const isFinal = i + maxTokens >= words.length;
 		const chunk = words
 			.slice(i, i + maxTokens)
 			.join(' ')
 			.trim();
-		if (chunk.length >= 20) chunks.push(chunk);
-		if (i + maxTokens >= words.length) break;
+		// The 20-char floor drops short windows as noise, but the final window is
+		// always emitted (when non-empty) so trailing words are never lost.
+		if (chunk.length >= 20 || (isFinal && chunk.length > 0)) chunks.push(chunk);
+		if (isFinal) break;
 	}
 	return chunks;
 }
@@ -279,23 +286,32 @@ export class KnowledgeBase extends Scope {
 		return this.loadPromise;
 	}
 
+	/**
+	 * Resolve the chunking config with defaults applied, centralizing the
+	 * `'semantic'`/300/20 defaults shared by `computeSourceHash()` and
+	 * `loadFromSource()` so they can never drift apart.
+	 */
+	private resolvedChunking(): { strategy: ChunkingStrategy; chunkSize: number; chunkOverlap: number } {
+		return {
+			strategy: this.options.chunking?.strategy ?? 'semantic',
+			chunkSize: this.options.chunking?.chunkSize ?? 300,
+			chunkOverlap: this.options.chunking?.chunkOverlap ?? 20,
+		};
+	}
+
 	private computeSourceHash(): string {
 		const source = this.options.source;
 		const sourceDir = resolve(process.cwd(), source);
 		if (!existsSync(sourceDir)) return '';
 		const hash = createHash('sha256');
 		hash.update(sourceDir);
-		// Key the cache on the chunking config (using the same defaults applied in
-		// loadFromSource) so changing strategy/size/overlap for the same kb id
-		// invalidates the cache and forces a re-chunk.
-		const strategy = this.options.chunking?.strategy ?? 'semantic';
-		const chunkSize = this.options.chunking?.chunkSize ?? 300;
-		const chunkOverlap = this.options.chunking?.chunkOverlap ?? 20;
-		hash.update(JSON.stringify({ strategy, chunkSize, chunkOverlap }));
+		// Key the cache on the chunking config so changing strategy/size/overlap
+		// for the same kb id invalidates the cache and forces a re-chunk.
+		hash.update(JSON.stringify(this.resolvedChunking()));
 		// `breakpointPercentile` is intentionally omitted from the key: the mock's
 		// 'semantic' strategy splits purely on blank-line paragraphs and never reads
-		// it, so it cannot change the produced chunks. TODO: add it to the key if the
-		// mock ever honors breakpointPercentile for semantic chunking.
+		// it, so it cannot change the produced chunks.
+		//
 		// Hash only the files that are actually indexed (supported extensions,
 		// excluding `.metadata.json` sidecars) so adding an unsupported file
 		// (e.g. a .png) doesn't force a needless rebuild.
@@ -335,8 +351,7 @@ export class KnowledgeBase extends Scope {
 				`Source path must be a relative path within the project directory: ${source}`,
 			);
 		}
-		// Note: `source: '.'` resolves to the project root and would index the
-		// entire project tree — point at a dedicated docs folder instead.
+		// `source: '.'` resolves to the project root and would index the whole tree — use a dedicated docs folder.
 		const cwdResolved = resolve(process.cwd());
 		const sourceDir = resolve(cwdResolved, source);
 		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
@@ -346,17 +361,18 @@ export class KnowledgeBase extends Scope {
 			);
 		}
 		// Defeat a symlink bypass: resolve symlinks and re-check containment against
-		// the real cwd. A missing source makes realpathSync throw ENOENT — swallow it
-		// so the canonical "Source folder not found" check reports InvalidSource.
+		// the real cwd. A missing source makes realpathSync(sourceDir) throw ENOENT —
+		// swallow only that so the canonical "Source folder not found" check reports
+		// InvalidSource. A realpathSync(cwdResolved) failure (e.g. a deleted CWD) is a
+		// hard environment error: let it propagate rather than skip the symlink re-check.
 		let realSource: string;
-		let realCwd: string;
 		try {
 			realSource = realpathSync(sourceDir);
-			realCwd = realpathSync(cwdResolved);
 		} catch (e) {
 			if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
-			return; // ENOENT → missing path; loadFromSource() reports InvalidSource
+			return; // ENOENT → missing source; loadFromSource() reports InvalidSource
 		}
+		const realCwd = realpathSync(cwdResolved);
 		if (realSource !== realCwd && !realSource.startsWith(realCwd + sep)) {
 			throw blocksError(
 				KnowledgeBaseErrors.InvalidSource,
@@ -375,10 +391,6 @@ export class KnowledgeBase extends Scope {
 			);
 		}
 
-		// Defense-in-depth: ensureLoaded() already validates non-S3 paths before
-		// reaching here, but re-validating guards direct or subclass calls to
-		// loadFromSource() that bypass ensureLoaded()'s up-front check.
-		this.validateSourcePath(source);
 		const sourceDir = resolve(process.cwd(), source);
 		if (!existsSync(sourceDir)) {
 			throw blocksError(KnowledgeBaseErrors.InvalidSource, `Source folder not found: ${source}`);
@@ -386,6 +398,7 @@ export class KnowledgeBase extends Scope {
 
 		const files = walkDir(sourceDir);
 		const chunks: Chunk[] = [];
+		const { strategy, chunkSize, chunkOverlap: overlapPct } = this.resolvedChunking();
 
 		for (const filePath of files) {
 			const ext = extname(filePath).toLowerCase();
@@ -408,12 +421,9 @@ export class KnowledgeBase extends Scope {
 				metadata.folder = relDir.replace(/\\/g, '/').split('/')[0];
 			}
 
-			const strategy = this.options.chunking?.strategy ?? 'semantic';
 			let textChunks: string[];
 			if (strategy === 'fixed') {
-				const maxTokens = this.options.chunking?.chunkSize ?? 300;
-				const overlap = this.options.chunking?.chunkOverlap ?? 20;
-				textChunks = chunkByFixedSize(content, maxTokens, overlap);
+				textChunks = chunkByFixedSize(content, chunkSize, overlapPct);
 			} else if (strategy === 'none') {
 				textChunks = content.trim().length >= 20 ? [content.trim()] : [];
 			} else {

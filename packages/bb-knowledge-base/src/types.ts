@@ -152,5 +152,3 @@ export interface RetrieveResult {
 	/** Document metadata key-value pairs. Includes auto-populated `folder` key derived from subfolder structure. */
 	metadata: Record<string, string>;
 }
-
-

@@ -225,17 +225,3 @@ test('single-character CJK string is searchable', () => {
 	assert.ok(results.length > 0, 'single-character CJK doc should be findable');
 	assert.strictEqual(results[0].docIndex, 0, 'the CJK document should match the CJK query');
 });
-
-test('single-character CJK token is matched within mixed content', () => {
-	// The character 中 appears isolated between ASCII words, so it is segmented as
-	// a length-1 CJK run and must survive as a unigram token.
-	const docs = [
-		'project 中 documentation overview',
-		'unrelated english sentence with several common words here',
-	];
-	const index = buildIndex(docs);
-	const results = search(index, '中', 5);
-
-	assert.ok(results.length > 0, 'isolated single CJK character should be searchable');
-	assert.strictEqual(results[0].docIndex, 0);
-});

@@ -44,13 +44,19 @@ export interface TfIdfIndex {
 // Explicit CJK blocks (Hiragana/Katakana, CJK Unified Ideographs incl. Extension A,
 // and compatibility ideographs) rather than one broad \u3040-\ufaff sweep, which
 // would also capture unrelated ranges such as Hangul, Yi, surrogates and the
-// private-use area.
-const CJK_CHAR = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u;
+// private-use area. The range is defined once here and reused by the regexes below.
+const CJK_RANGE = '\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff';
+// Non-global: detects CJK presence, safe to use with `.test()`.
+const CJK_CHAR = new RegExp(`[${CJK_RANGE}]`, 'u');
+// Replaces every non-CJK character with a space, isolating CJK runs for bigrams.
+const CJK_STRIP = new RegExp(`[^${CJK_RANGE}]`, 'gu');
+// Erases CJK characters from the word-token path (they are indexed as bigrams).
+const CJK_ERASE = new RegExp(`[${CJK_RANGE}]`, 'gu');
 
 // CJK languages don't use spaces between words, so whitespace splitting
 // produces zero useful tokens. Bigram overlap enables approximate matching.
 function extractCjkBigrams(text: string): string[] {
-	const cleaned = text.replace(/[^\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu, ' ');
+	const cleaned = text.replace(CJK_STRIP, ' ');
 	const segments = cleaned.split(/\s+/).filter(Boolean);
 	const bigrams: string[] = [];
 	for (const seg of segments) {
@@ -69,14 +75,15 @@ function extractCjkBigrams(text: string): string[] {
 	return bigrams;
 }
 
-// NFD decomposition separates base characters from combining diacritical marks
-// (e.g. "é" → "e" + combining accent), the replace strips the marks, and NFC
-// recomposes. Result: "résumé" → "resume", enabling accent-insensitive matching.
+// NFD decomposition separates combining marks from their base characters (e.g.
+// "é" → "e" + accent) so `\p{Mn}` can strip them, enabling accent-insensitive
+// matching ("résumé" → "resume"). The final NFC recompose isn't for the Latin
+// strip — it reassembles Korean Hangul, which NFD splits into separate Jamo.
 function tokenize(text: string): string[] {
 	const normalized = text
 		.toLowerCase()
 		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '')
+		.replace(/\p{Mn}/gu, '')
 		.normalize('NFC');
 
 	const tokens: string[] = [];
@@ -87,7 +94,7 @@ function tokenize(text: string): string[] {
 
 	const words = normalized
 		.replace(/[^\p{L}\p{N}\s]/gu, ' ')
-		.replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu, ' ')
+		.replace(CJK_ERASE, ' ')
 		.split(/\s+/)
 		.filter((t) => t.length > 1);
 	tokens.push(...words);

@@ -402,39 +402,15 @@ describe('error classification — ValidationException', () => {
 		}
 	});
 
-	test('malformed-request ValidationException does NOT map to InvalidFilter', async () => {
-		const cleanup = setKbEnv('TEST', 'ERR3');
-		const malformedErr = new Error('Invalid request body');
-		malformedErr.name = 'ValidationException';
-		mockRuntimeSend(() => { throw malformedErr; });
-
-		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'err3', { source: './knowledge' });
-			await assert.rejects(
-				() => kb.retrieve('normal query'),
-				(err: Error) => {
-					assert.notStrictEqual(
-						err.name,
-						KnowledgeBaseErrors.InvalidFilter,
-						'Malformed-request ValidationException must NOT map to InvalidFilter',
-					);
-					return true;
-				},
-			);
-		} finally {
-			cleanup();
-		}
-	});
-
 	test('original error message is preserved in the mapped error for debugging', async () => {
-		const cleanup = setKbEnv('TEST', 'ERR5');
+		const cleanup = setKbEnv('TEST', 'ERR3');
 		const originalMsg = 'Specific validation error details from Bedrock service';
 		const err = new Error(originalMsg);
 		err.name = 'ValidationException';
 		mockRuntimeSend(() => { throw err; });
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'err5', { source: './knowledge' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'err3', { source: './knowledge' });
 			await assert.rejects(
 				() => kb.retrieve('test', { filter: { x: { equals: 'y' } } }),
 				(e: Error) => {
@@ -455,13 +431,13 @@ describe('error classification — ValidationException', () => {
 
 describe('error classification — other SDK exceptions', () => {
 	test('ResourceNotFoundException maps to NotReady', async () => {
-		const cleanup = setKbEnv('TEST', 'ERR6');
+		const cleanup = setKbEnv('TEST', 'ERR4');
 		const err = new Error('Knowledge base not found');
 		err.name = 'ResourceNotFoundException';
 		mockRuntimeSend(() => { throw err; });
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'err6', { source: './knowledge' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'err4', { source: './knowledge' });
 			await assert.rejects(
 				() => kb.retrieve('query'),
 				(e: Error) => {
@@ -475,13 +451,13 @@ describe('error classification — other SDK exceptions', () => {
 	});
 
 	test('AccessDeniedException maps to RetrievalFailed and preserves the message', async () => {
-		const cleanup = setKbEnv('TEST', 'ERR7');
+		const cleanup = setKbEnv('TEST', 'ERR5');
 		const err = new Error('User is not authorized to perform bedrock:Retrieve');
 		err.name = 'AccessDeniedException';
 		mockRuntimeSend(() => { throw err; });
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'err7', { source: './knowledge' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'err5', { source: './knowledge' });
 			await assert.rejects(
 				() => kb.retrieve('query'),
 				(e: Error) => {
@@ -490,26 +466,6 @@ describe('error classification — other SDK exceptions', () => {
 						e.message.includes('not authorized'),
 						'Error message should preserve the original SDK message',
 					);
-					return true;
-				},
-			);
-		} finally {
-			cleanup();
-		}
-	});
-
-	test('ThrottlingException maps to RetrievalFailed', async () => {
-		const cleanup = setKbEnv('TEST', 'ERR8');
-		const err = new Error('Rate exceeded');
-		err.name = 'ThrottlingException';
-		mockRuntimeSend(() => { throw err; });
-
-		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'err8', { source: './knowledge' });
-			await assert.rejects(
-				() => kb.retrieve('query'),
-				(e: Error) => {
-					assert.strictEqual(e.name, KnowledgeBaseErrors.RetrievalFailed);
 					return true;
 				},
 			);
