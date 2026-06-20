@@ -1,0 +1,44 @@
+{
+  "name": "@aws-blocks/bb-event-bus",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "src",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/index.browser.js",
+      "cdk": {
+        "types": "./dist/index.cdk.d.ts",
+        "default": "./dist/index.cdk.js"
+      },
+      "aws-runtime": "./dist/index.aws.js",
+      "types": "./dist/index.mock.d.ts",
+      "default": "./dist/index.mock.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs EventBus",
+    "build": "tsc --build",
+    "test": "node --test --test-force-exit dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@aws-blocks/bb-logger": "^0.1.1",
+    "@aws-blocks/core": "^0.1.1",
+    "@aws-sdk/client-eventbridge": "^3.0.0"
+  },
+  "devDependencies": {
+    "@standard-schema/spec": "^1.0.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.0.0"
+  }
+}
