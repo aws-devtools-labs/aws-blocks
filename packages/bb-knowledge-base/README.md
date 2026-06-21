@@ -166,7 +166,7 @@ try {
 
 ## Local Development
 
-In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and is rebuilt automatically when documents are added, edited, or removed.
+In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and the chunking configuration, and is rebuilt automatically when documents are added, edited, or removed, or the chunking settings change.
 
 **Parity notes:**
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
