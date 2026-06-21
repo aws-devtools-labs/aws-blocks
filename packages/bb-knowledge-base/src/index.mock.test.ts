@@ -257,6 +257,16 @@ test('whitespace-only query throws ValidationError', async () => {
 	);
 });
 
+test('non-string runtime query throws ValidationError', async () => {
+	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
+	for (const bad of [0, false, Number.NaN, null]) {
+		await assert.rejects(
+			() => kb.retrieve(bad as unknown as string),
+			(err: Error) => err.name === KnowledgeBaseErrors.ValidationError,
+		);
+	}
+});
+
 // ── Unsupported file types ─────────────────────────────────────────────────
 
 test('unsupported file types are skipped without error', async () => {

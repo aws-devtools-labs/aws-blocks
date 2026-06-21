@@ -78,10 +78,11 @@ function mapSdkError(err: unknown): Error {
 		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
 	}
 
-	// Genuinely preserve the original SDK error as the standard `Error.cause`. The
-	// mapped error normalizes `name`/`message` for callers, so attaching the
-	// untouched SDK error keeps its original name, message, and stack for diagnostics.
-	mapped.cause = err;
+	// Preserve the original SDK error as the standard `Error.cause` for diagnostics
+	// (keeps its original name, message, and stack). Defined NON-ENUMERABLE so
+	// `JSON.stringify(mapped)` cannot leak the SDK error's $metadata (requestId/cfId);
+	// the cause stays programmatically accessible (`mapped.cause === err`).
+	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
 	return mapped;
 }
 
@@ -182,7 +183,7 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query?.trim()) {
+		if (typeof query !== 'string' || !query.trim()) {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 

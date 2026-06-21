@@ -127,6 +127,24 @@ describe('retrieve validation', () => {
 			cleanup();
 		}
 	});
+
+	test('non-string runtime query throws clean ValidationError', async () => {
+		const cleanup = setKbEnv('TEST', 'VAL3');
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'val3', { source: './knowledge' });
+			for (const bad of [0, false, Number.NaN, null]) {
+				await assert.rejects(
+					() => kb.retrieve(bad as unknown as string),
+					(err: Error) => {
+						assert.strictEqual(err.name, KnowledgeBaseErrors.ValidationError);
+						return true;
+					},
+				);
+			}
+		} finally {
+			cleanup();
+		}
+	});
 });
 
 // ── retrieve() — mapResultItem tested indirectly via SDK mock ──────────────
@@ -450,9 +468,13 @@ describe('error classification — other SDK exceptions', () => {
 		}
 	});
 
-	test('AccessDeniedException maps to RetrievalFailed and preserves message + original error as cause', async () => {
+	test('AccessDeniedException maps to RetrievalFailed and preserves message + original error as a non-enumerable cause', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR5');
-		const err = new Error('User is not authorized to perform bedrock:Retrieve');
+		// Mimic the SDK error shape: $metadata carries a requestId that must never
+		// leak through JSON.stringify of the mapped (caller-facing) error.
+		const err = Object.assign(new Error('User is not authorized to perform bedrock:Retrieve'), {
+			$metadata: { requestId: 'req-abc-123' },
+		});
 		err.name = 'AccessDeniedException';
 		mockRuntimeSend(() => { throw err; });
 
@@ -470,6 +492,17 @@ describe('error classification — other SDK exceptions', () => {
 						e.cause,
 						err,
 						'Mapped error should attach the original SDK error as `cause`',
+					);
+					// `cause` must be NON-ENUMERABLE so JSON.stringify of the mapped
+					// error does not serialize the SDK error or leak its $metadata.
+					const serialized = JSON.stringify(e);
+					assert.ok(
+						!serialized.includes('cause'),
+						'`cause` must be non-enumerable (absent from JSON.stringify output)',
+					);
+					assert.ok(
+						!serialized.includes('req-abc-123'),
+						'SDK error $metadata/requestId must not leak through JSON.stringify',
 					);
 					return true;
 				},

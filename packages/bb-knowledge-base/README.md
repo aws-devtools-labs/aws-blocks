@@ -174,7 +174,7 @@ In local dev mode, KnowledgeBase reads documents from the source folder, splits 
 - Chunking is approximated locally: `'fixed'` uses word-count windows (`chunkSize`/`chunkOverlap`), `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
 - `chunkOverlap` is interpreted differently per environment: locally it is a **percentage** of `chunkSize` (0–100), while the real Bedrock API treats it as an **absolute token count**. The value is not directly transferable — tune it per environment.
 - The API contract (method signatures, error types, result shape) is identical to AWS.
-- `maxResults` works identically. Metadata filtering uses the same `equals`/AND semantics, with one asymmetry: an unknown or invalid filter key throws `InvalidFilterException` in production (Bedrock validates filter keys server-side), whereas locally the mock silently matches nothing and returns an empty result set.
+- `maxResults` works identically. Metadata filtering uses the same `equals`/AND semantics, with one asymmetry: in production an unknown or invalid filter key is *typically* rejected server-side by Bedrock (surfaced as `InvalidFilterException` when the service flags the filter), whereas locally the mock silently matches nothing and returns an empty result set.
 - `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`. S3 URI sources are not supported in local development — use a local folder path.
 
 Wipe cached data with `rm -rf .bb-data`.

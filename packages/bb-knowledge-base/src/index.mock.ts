@@ -182,6 +182,16 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
+	 * Local-dev diagnostic warning. Routed through `console.warn` (not
+	 * `this.log.warn`) deliberately: the default logger is capped at 'error'
+	 * level, which would suppress these genuinely useful local-dev diagnostics
+	 * (corrupt cache, cache-write failure, skipped unsupported file).
+	 */
+	private warn(msg: string): void {
+		console.warn(`[KnowledgeBase] ${msg}`);
+	}
+
+	/**
 	 * Retrieve relevant document chunks for a natural language query.
 	 *
 	 * @param query - Natural language search query. Must be non-empty.
@@ -202,7 +212,7 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query?.trim()) {
+		if (typeof query !== 'string' || !query.trim()) {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
@@ -273,8 +283,7 @@ export class KnowledgeBase extends Scope {
 							return;
 						}
 					} catch (err) {
-						// Uses console.warn (not this.log.warn): the default logger is capped at 'error' level, which would suppress these genuinely useful local-dev diagnostics.
-						console.warn('[KnowledgeBase] Cache corrupt, rebuilding from source:', (err as Error).message);
+						this.warn(`Cache corrupt, rebuilding from source: ${(err as Error).message}`);
 					}
 				}
 
@@ -284,7 +293,7 @@ export class KnowledgeBase extends Scope {
 					writeFileSync(cachePath, JSON.stringify(this.chunks));
 					writeFileSync(hashPath, sourceHash);
 				} catch (err) {
-					console.warn('[KnowledgeBase] Failed to write cache:', (err as Error).message);
+					this.warn(`Failed to write cache: ${(err as Error).message}`);
 				}
 			})
 			.catch((err) => {
@@ -413,7 +422,7 @@ export class KnowledgeBase extends Scope {
 		for (const filePath of files) {
 			const ext = extname(filePath).toLowerCase();
 			if (!SUPPORTED_EXTENSIONS.has(ext)) {
-				console.warn(`[KnowledgeBase] Skipping unsupported file: ${relative(sourceDir, filePath)}`);
+				this.warn(`Skipping unsupported file: ${relative(sourceDir, filePath)}`);
 				continue;
 			}
 
