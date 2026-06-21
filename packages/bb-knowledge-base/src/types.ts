@@ -52,10 +52,11 @@ export interface ChunkingConfig {
 	/**
 	 * Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20.
 	 *
-	 * **Parity note:** In local development this is interpreted as a *percentage*
-	 * of `chunkSize` (0–100). The real Bedrock API treats overlap as an *absolute
-	 * token count*, so the value is not directly transferable between local dev
-	 * and production — tune it per environment.
+	 * **Parity note:** Interpreted as a *percentage* of `chunkSize` in both local
+	 * development and production — the mock overlaps by `chunkSize * chunkOverlap / 100`
+	 * words, and the CDK layer maps it to Bedrock's `overlapPercentage`. The value is
+	 * directly transferable between environments. Bedrock accepts 1–99; the local mock
+	 * also accepts 0 (no overlap).
 	 */
 	chunkOverlap?: number;
 	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. (No effect in local dev / mock.) */

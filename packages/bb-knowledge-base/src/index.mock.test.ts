@@ -624,6 +624,37 @@ try {
 			rmSync(outsideTarget, { recursive: true, force: true });
 		}
 	});
+
+	test('warns (but does not throw) when source resolves to the project root', async () => {
+		// Run in an isolated temp cwd so `source: '.'` indexes a tiny tree rather
+		// than the real repo (which would walk node_modules). The warning is
+		// advisory only — retrieve() must still succeed.
+		const tmpCwd = mkdtempSync(join(tmpdir(), 'kb-root-source-'));
+		writeFileSync(
+			join(tmpCwd, 'doc.md'),
+			'Root level document about widgets and gadgets used to exercise the project-root source warning.',
+		);
+		const originalCwd = process.cwd();
+		const originalWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(' '));
+		};
+		try {
+			process.chdir(tmpCwd);
+			const kb = new KnowledgeBase({ id: 'app' }, 'root-source', { source: '.' });
+			const results = await kb.retrieve('widgets gadgets');
+			assert.ok(
+				warnings.some((w) => w.includes('resolves to the project root')),
+				`Expected a project-root warning via warn(); captured: ${JSON.stringify(warnings)}`,
+			);
+			assert.ok(results.length > 0, 'root source should still index and return results (warn, not block)');
+		} finally {
+			console.warn = originalWarn;
+			process.chdir(originalCwd);
+			rmSync(tmpCwd, { recursive: true, force: true });
+		}
+	});
 });
 
 // ── Cache invalidation ──────────────────────────────────────────────────────

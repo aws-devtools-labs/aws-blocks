@@ -373,6 +373,11 @@ export class KnowledgeBase extends Scope {
 		// `source: '.'` resolves to the project root and would index the whole tree — use a dedicated docs folder.
 		const cwdResolved = resolve(process.cwd());
 		const sourceDir = resolve(cwdResolved, source);
+		if (sourceDir === cwdResolved) {
+			this.warn(
+				`Source "${source}" resolves to the project root — this indexes the entire project tree (including node_modules and .bb-data). Point it at a dedicated docs subfolder instead.`,
+			);
+		}
 		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
 			throw blocksError(
 				KnowledgeBaseErrors.InvalidSource,

@@ -49,7 +49,13 @@ function blocksError(name: string, message: string): Error {
 // block → "your filter is wrong").
 const FILTER_ERROR_PATTERNS = [
 	/field\b.*\bnot found/i,
-	// Targets filter-attribute lookup messages (e.g. "metadata attribute ... not found").
+	// Intentionally loose. This only ever matches retrieve-time ValidationExceptions,
+	// where the user-controllable inputs reaching Bedrock are the (already non-empty)
+	// query text and the metadata filter — so a "metadata attribute" mention is almost
+	// always a filter problem (e.g. "metadata attribute ... not found"). A stricter
+	// "not found"/"key" anchor was considered but rejected: Bedrock's exact wording
+	// varies by vector store and version, so tightening risks dropping real filter
+	// errors. Anything unmatched already falls through to ValidationError below.
 	/metadata.*attribute/i,
 	/invalid.*filter|filter.*invalid/i,
 	/filter\b.*\bkey\b.*\bnot/i,
