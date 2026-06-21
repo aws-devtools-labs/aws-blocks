@@ -202,7 +202,7 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query || !query.trim()) {
+		if (!query?.trim()) {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
@@ -210,14 +210,21 @@ export class KnowledgeBase extends Scope {
 		const filter = options?.filter;
 
 		await this.ensureLoaded();
+		// ensureLoaded() populates both fields or throws; copy into locals so the
+		// nullable types narrow for the remainder of the method.
+		const index = this.index;
+		const chunks = this.chunks;
+		if (!index || !chunks) {
+			throw blocksError(KnowledgeBaseErrors.InvalidSource, 'Knowledge base failed to load.');
+		}
 
 		// When filtering, score all chunks so post-filter doesn't silently drop valid matches.
 		// Acceptable for local dev corpus sizes; production uses Bedrock's server-side filtering.
-		const searchResults = search(this.index!, query, filter ? this.chunks!.length : maxResults);
+		const searchResults = search(index, query, filter ? chunks.length : maxResults);
 
 		const results: RetrieveResult[] = [];
 		for (const hit of searchResults) {
-			const chunk = this.chunks![hit.docIndex];
+			const chunk = chunks[hit.docIndex];
 			if (filter && !matchesFilter(chunk.metadata, filter)) continue;
 			results.push({
 				text: chunk.text,
@@ -260,8 +267,9 @@ export class KnowledgeBase extends Scope {
 					try {
 						const cachedHash = existsSync(hashPath) ? readFileSync(hashPath, 'utf8') : '';
 						if (cachedHash === sourceHash) {
-							this.chunks = JSON.parse(readFileSync(cachePath, 'utf8'));
-							this.index = buildIndex(this.chunks!.map((c) => c.text));
+							const cached: Chunk[] = JSON.parse(readFileSync(cachePath, 'utf8'));
+							this.chunks = cached;
+							this.index = buildIndex(cached.map((c) => c.text));
 							return;
 						}
 					} catch (err) {
@@ -417,7 +425,7 @@ export class KnowledgeBase extends Scope {
 			const relDir = dirname(relPath);
 
 			// Customer-provided sidecar takes precedence; skip auto-generated folder metadata
-			const sidecar = parseSidecarMetadata(filePath + '.metadata.json');
+			const sidecar = parseSidecarMetadata(`${filePath}.metadata.json`);
 			const metadata: Record<string, string> = sidecar ?? {};
 			if (!sidecar && relDir !== '.') {
 				metadata.folder = relDir.replace(/\\/g, '/').split('/')[0];

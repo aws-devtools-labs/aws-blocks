@@ -182,7 +182,7 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query || !query.trim()) {
+		if (!query?.trim()) {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 

@@ -28,8 +28,8 @@ function setKbEnv(scopeId: string, instanceId: string, kbId = 'kb-test-123') {
 
 describe('KnowledgeBase constructor validation', () => {
 	test('constructor succeeds without env var but retrieve() throws NotReady', async () => {
-		const origKb = process.env['BLOCKS_TEST_KB_KB_ID'];
-		delete process.env['BLOCKS_TEST_KB_KB_ID'];
+		const origKb = process.env.BLOCKS_TEST_KB_KB_ID;
+		delete process.env.BLOCKS_TEST_KB_KB_ID;
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: './knowledge' });
@@ -44,7 +44,7 @@ describe('KnowledgeBase constructor validation', () => {
 				},
 			);
 		} finally {
-			if (origKb !== undefined) process.env['BLOCKS_TEST_KB_KB_ID'] = origKb;
+			if (origKb !== undefined) process.env.BLOCKS_TEST_KB_KB_ID = origKb;
 		}
 	});
 });
