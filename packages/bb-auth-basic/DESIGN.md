@@ -26,7 +26,7 @@ Session Flow:
     signIn(username, password, context)
         → bcrypt.compare(password, stored hash)
         → jwt.sign({ username }, secret, { expiresIn })
-        → Set-Cookie: auth_{fullId}=<JWT>; HttpOnly; Secure; SameSite=None; Partitioned
+        → Set-Cookie: auth_{fullId}=<JWT>; HttpOnly; Secure; SameSite=Lax (crossDomain: true → SameSite=None; Partitioned)
 
     requireAuth(context) / getCurrentUser(context)
         → parse cookie from request headers
@@ -117,14 +117,15 @@ This allows the Authenticator UI component to display errors without losing trac
 - **10-minute TTL** — codes expire after 600 seconds, limiting the attack window.
 - **Non-enumerable** — 6-digit codes have 900,000 possible values. Combined with TTL, brute-force is impractical.
 
-### D-AB-5: Cookie attributes (HttpOnly, Secure, SameSite=None, Partitioned)
+### D-AB-5: Cookie attributes (HttpOnly; SameSite=Lax default, cross-domain opt-in)
 
-**Decision:** Session cookies use `HttpOnly; Secure; SameSite=None; Partitioned; Path=/`.
+**Decision:** Session cookies default to `HttpOnly; SameSite=Lax; Path=/`, with `Secure` added in production (plain `SameSite=Lax` on localhost, where `Lax` does not require `Secure`). When `crossDomain: true`, the BB switches to `SameSite=None; Secure; Partitioned`. See [D-007](../../docs/DECISIONS.md#d-007-auth-cookies-default-to-samesitelax-cross-domain-is-opt-in) for the full rationale.
 
 **Rationale:**
 - **HttpOnly** — prevents JavaScript access, mitigating XSS token theft.
-- **Secure** — only sent over HTTPS (enforced in production).
-- **SameSite=None + Partitioned** — required for cross-origin API calls (Blocks apps may be on a different domain than the API). `Partitioned` adds CHIPS isolation.
+- **Secure** — only sent over HTTPS; enforced in production and dropped on plain-HTTP localhost (`SameSite=Lax` does not require it).
+- **SameSite=Lax (default)** — withheld from cross-site subrequests (shrinking CSRF surface) but sent on same-site requests, including same-site cross-port dev. Correct now that dev and standard production deploys are same-origin.
+- **SameSite=None; Secure; Partitioned (`crossDomain: true`)** — only for genuinely cross-domain deployments (frontend and API on a different registrable domain); `Partitioned` adds CHIPS isolation and is dropped on localhost (requires HTTPS).
 - **Path=/** — cookie is sent with all requests to the API origin.
 - **Max-Age** — set to `sessionDuration` (default 24h), providing natural expiration.
 
@@ -250,7 +251,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | Single-file implementation | Cannot have env-specific behavior, but keeps code simple |
 | codeDelivery as callback | No built-in email/SMS, but maximum flexibility |
 | HMAC-hashed codes | Cannot recover codes if secret is lost, but prevents code theft from storage |
-| SameSite=None cookies | Required for cross-origin, but less restrictive than Lax/Strict |
+| SameSite=None cookies (crossDomain: true) | Required for cross-domain, but less restrictive than the Lax default |
 | Password required for confirmSignUp | Extra field in confirmation form, but enables auto-sign-in after confirmation |
 | No `fromExisting()` | Cannot wrap pre-existing user tables, but keeps ownership model clean |
 
@@ -265,7 +266,7 @@ The mock behavior is identical to AWS behavior with the following environment di
 | User enumeration (resetPassword) | Silent success for non-existent users |
 | Code brute-force | 10-minute TTL + 900,000 possible values |
 | Secret exposure | Stored in SSM SecureString (encrypted at rest) |
-| Cross-site request forgery | SameSite=None + Partitioned (CHIPS isolation) |
+| Cross-site request forgery | SameSite=Lax by default (CSRF-resistant); SameSite=None + Partitioned when crossDomain: true (CHIPS isolation) |
 | Unconfirmed user access | signIn rejects users with `unconfirmed: true` |
 
 ## Integration with Auth-Common
