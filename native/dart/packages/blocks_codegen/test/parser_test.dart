@@ -120,6 +120,37 @@ void main() {
       expect(param.values, ['a', 'b', 'c']);
     });
 
+    test('boolean enum maps to bool, not a Dart enum', () {
+      // A boolean discriminator arm (`{"type":"boolean","enum":[true]}`) must
+      // stay a `bool`. Treating it as a UnionLiteralRef would emit
+      // `enum Foo { true }` — and `true`/`false` are Dart keywords that don't
+      // compile. Regression test for the boolean-discriminator codegen bug.
+      final model = parser.parse(_spec([
+        {'name': 'fn', 'params': [
+          {'name': 't', 'required': true, 'schema': {'type': 'boolean', 'enum': [true]}},
+          {'name': 'f', 'required': true, 'schema': {'type': 'boolean', 'enum': [false]}},
+        ], 'result': {'name': 'R', 'schema': {'type': 'null'}}},
+      ]));
+      final params = model.methods[0].params;
+      expect(params[0].schema, isA<PrimitiveRef>());
+      expect((params[0].schema as PrimitiveRef).dartType, 'bool');
+      expect((params[1].schema as PrimitiveRef).dartType, 'bool');
+    });
+
+    test('numeric enum maps to its primitive, not a Dart enum', () {
+      // Same rule for integer/number: an `enum` value-restriction on a numeric
+      // primitive is not a distinct type. Keep it as int/num.
+      final model = parser.parse(_spec([
+        {'name': 'fn', 'params': [
+          {'name': 'i', 'required': true, 'schema': {'type': 'integer', 'enum': [1, 2]}},
+          {'name': 'n', 'required': true, 'schema': {'type': 'number', 'enum': [1.5]}},
+        ], 'result': {'name': 'R', 'schema': {'type': 'null'}}},
+      ]));
+      final params = model.methods[0].params;
+      expect((params[0].schema as PrimitiveRef).dartType, 'int');
+      expect((params[1].schema as PrimitiveRef).dartType, 'num');
+    });
+
     test('parses array with missing items as dynamic list', () {
       final model = parser.parse(_spec([
         {'name': 'list', 'params': [], 'result': {'name': 'R', 'schema': {'type': 'array'}}},

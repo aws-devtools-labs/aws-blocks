@@ -111,12 +111,20 @@ class OpenRpcParser {
       return _parseOneOf(oneOf);
     }
 
-    // Check for enum
-    if (schema.containsKey('enum')) {
+    final type = schema['type'] as String?;
+
+    // Check for enum. Only a *string* enum becomes a Dart enum
+    // (`UnionLiteralRef`). An `enum` constraint on a non-string primitive —
+    // most commonly a boolean discriminator arm like
+    // `{"type":"boolean","enum":[true]}` — is just a value restriction on that
+    // primitive, NOT a distinct type. Turning it into a Dart enum would emit
+    // `enum Foo { true }` / `enum Foo { false }`, and `true`/`false` are
+    // reserved words that don't compile. Fall through to the primitive mapping
+    // instead (a plain `bool`), matching the Swift and Kotlin generators which
+    // both ignore the enum constraint on non-string primitives.
+    if (schema.containsKey('enum') && (type == null || type == 'string')) {
       return UnionLiteralRef((schema['enum'] as List<dynamic>).map((v) => v.toString()).toList());
     }
-
-    final type = schema['type'] as String?;
 
     // Array (check before primitives since arrays have a 'type')
     if (type == 'array') {

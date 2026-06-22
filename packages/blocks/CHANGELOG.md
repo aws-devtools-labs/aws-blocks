@@ -1,5 +1,33 @@
 # @aws-blocks/blocks
 
+## 0.1.4
+
+### Patch Changes
+
+- 7fd51e0: fix(bb-auth-cognito): discriminate `SignInResult` on a string `status` field
+
+  `SignInResult` (from `signIn` / `confirmSignIn` / `autoSignIn`) now discriminates
+  on a string `status` (`'signedIn' | 'continueSignIn'`) instead of the `isSignedIn`
+  boolean, so native-client codegen (Swift / Kotlin / Dart) emits clean, named,
+  switch-decoded variants. Narrow with `if (result.status === 'signedIn')`.
+
+  Breaking change to the `SignInResult` shape (pre-release): `isSignedIn` is removed,
+  not aliased.
+
+- Updated dependencies [7fd51e0]
+- Updated dependencies [e98bab4]
+  - @aws-blocks/bb-auth-cognito@0.1.3
+  - @aws-blocks/core@0.1.3
+
+## 0.1.3
+
+### Patch Changes
+
+- 835c425: docs(bb-agent): document AgentStreamChunk types and Message roles
+- Updated dependencies [835c425]
+- Updated dependencies [dd07335]
+  - @aws-blocks/bb-agent@0.1.2
+
 ## 0.1.2
 
 ### Patch Changes

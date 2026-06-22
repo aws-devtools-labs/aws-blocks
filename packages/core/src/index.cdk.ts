@@ -36,6 +36,7 @@ export {
 export {
   Pipeline,
   DeployStage,
+  __PIPELINE_STAGE_SCOPE__,
   type DeployStageProps,
   type BranchConfig,
   type PipelineProps,

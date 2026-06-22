@@ -4,6 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
+import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
 import {
   type BlocksStackProps,
   type BlocksStack as BaseBlocksStack,
@@ -48,7 +49,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     assertCdkConditionActive();
 
     // Detect ambient pipeline stage scope set by Pipeline appFile imports
-    const pipelineScope = (globalThis as any).__PIPELINE_STAGE_SCOPE__;
+    const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
     const actualScope = pipelineScope || scope;
 
     const stack = new BlocksStack(actualScope, id, props);

@@ -1,0 +1,45 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// In a STATIC build this page is rendered once at build time; live data
+// must be fetched from the browser at runtime. This page exists mainly so
+// the e2e suite can prove the single-origin Blocks API proxy works
+// (`/aws-blocks/api` on the same CloudFront domain, no CORS).
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Astro on Blocks — Posts + API">
+  <h1 data-testid="page-id">Posts</h1>
+  <p data-testid="posts-marker">
+    The backend is reachable at the relative path <code>/aws-blocks/api</code>
+    on this same CloudFront domain.
+  </p>
+  <ul data-testid="post-list"></ul>
+
+  <script>
+    // Runtime fetch through the single-origin proxy (relative URL → no CORS).
+    fetch('/aws-blocks/api', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'api.listPosts', params: [], id: 1 }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        const ul = document.querySelector('[data-testid="post-list"]');
+        const posts = data?.result ?? [];
+        if (ul) {
+          ul.setAttribute('data-loaded', 'true');
+          for (const p of posts) {
+            const li = document.createElement('li');
+            li.textContent = `${p.title} — ${p.author}`;
+            ul.appendChild(li);
+          }
+        }
+      })
+      .catch(() => {
+        const ul = document.querySelector('[data-testid="post-list"]');
+        if (ul) ul.setAttribute('data-loaded', 'error');
+      });
+  </script>
+</Layout>
