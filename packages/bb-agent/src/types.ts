@@ -277,8 +277,8 @@ export interface AgentStreamResult {
 	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
 	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
 	complete: () => Promise<AgentStreamChunk>;
-	/** Only `{ channelId }` is serialized when this object crosses the RPC boundary. */
-	toJSON(): { channelId: string };
+	/** Only `{ channelId, channel: null }` is serialized when this object crosses the RPC boundary. */
+	toJSON(): { channelId: string; channel: null };
 }
 
 export interface AgentStreamChunk {

@@ -93,6 +93,10 @@ export interface AgentStreamResult {
     channel: Promise<RealtimeChannel<AgentStreamChunk>>;
     channelId: string;
     complete: () => Promise<AgentStreamChunk>;
+    toJSON(): {
+        channelId: string;
+        channel: null;
+    };
 }
 
 // @public

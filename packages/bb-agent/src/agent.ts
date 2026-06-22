@@ -428,7 +428,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 					}
 				});
 			}),
-			toJSON() { return { channelId }; },
+			toJSON() { return { channelId, channel: null }; },
 		};
 	}
 
