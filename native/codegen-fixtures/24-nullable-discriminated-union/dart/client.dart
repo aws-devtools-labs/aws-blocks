@@ -10,6 +10,93 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 
 // --- API Namespaces ---
 
+sealed class GetNotificationResult {
+  const GetNotificationResult();
+  Map<String, dynamic> toJson();
+  static GetNotificationResult fromJson(Map<String, dynamic> json) {
+    switch (json['type'] as String) {
+      case 'email': return EmailGetNotificationResult.fromJson(json);
+      case 'sms': return SmsGetNotificationResult.fromJson(json);
+      default: throw ArgumentError('Unknown type: ${json['type']}');
+    }
+  }
+}
+
+class EmailGetNotificationResult extends GetNotificationResult {
+  final String subject;
+  final String body;
+
+  const EmailGetNotificationResult({
+    required this.subject,
+    required this.body,
+  });
+
+  factory EmailGetNotificationResult.fromJson(Map<String, dynamic> json) {
+    return EmailGetNotificationResult(
+      subject: json['subject'] as String,
+      body: json['body'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'type': 'email',
+      'subject': subject,
+      'body': body,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EmailGetNotificationResult &&
+          subject == other.subject &&
+          body == other.body;
+
+  @override
+  int get hashCode => Object.hash(subject, body);
+
+  @override
+  String toString() => 'EmailGetNotificationResult(subject: $subject, body: $body)';
+}
+
+class SmsGetNotificationResult extends GetNotificationResult {
+  final String message;
+
+  const SmsGetNotificationResult({
+    required this.message,
+  });
+
+  factory SmsGetNotificationResult.fromJson(Map<String, dynamic> json) {
+    return SmsGetNotificationResult(
+      message: json['message'] as String,
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'type': 'sms',
+      'message': message,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmsGetNotificationResult &&
+          message == other.message;
+
+  @override
+  int get hashCode => message.hashCode;
+
+  @override
+  String toString() => 'SmsGetNotificationResult(message: $message)';
+}
+
+
+
 class ApiApi {
   final BlocksClient _client;
   ApiApi(this._client);
@@ -22,12 +109,12 @@ class ApiApi {
     return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v as dynamic));
   }
 
-  Future<dynamic> getNotification({required String id}) async {
+  Future<GetNotificationResult?> getNotification({required String id}) async {
     final params = <String, dynamic>{
       'id': id,
     };
     final result = await _client.call('api.getNotification', params);
-    return result as dynamic;
+    return result == null ? null : GetNotificationResult.fromJson(result as Map<String, dynamic>);
   }
 }
 

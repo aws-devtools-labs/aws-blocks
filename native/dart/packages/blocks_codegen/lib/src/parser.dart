@@ -202,26 +202,31 @@ class OpenRpcParser {
   }
 
   TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf) {
-    // Check nullable pattern: [T, {type: "null"}]
-    if (oneOf.length == 2) {
-      final nullIdx = oneOf.indexWhere((s) => s['type'] == 'null');
-      if (nullIdx != -1) {
-        final inner = oneOf[nullIdx == 0 ? 1 : 0];
-        return NullableRef(_parseTypeRef(inner));
-      }
+    // A `{"type":"null"}` member (e.g. from TS `Partial<Record<K, V>>`) does
+    // not participate in discrimination and must not become a sealed-class
+    // variant. Strip such members out, and if any were present mark the
+    // resolved union nullable. The remaining (non-null) arms drive the
+    // nullable/discriminated-union detection below.
+    final hasNullMember = oneOf.any((s) => s['type'] == 'null');
+    final nonNull = oneOf.where((s) => s['type'] != 'null').toList();
+
+    // Nullable of a single member: [T, {type: "null"}] → T?
+    if (hasNullMember && nonNull.length == 1) {
+      return NullableRef(_parseTypeRef(nonNull.first));
     }
 
     // Check discriminated union: all objects with a shared single-value enum field
-    if (oneOf
-        .every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
-      final discriminant = _findDiscriminant(oneOf);
+    if (nonNull.isNotEmpty &&
+        nonNull.every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
+      final discriminant = _findDiscriminant(nonNull);
       if (discriminant != null) {
-        final variants = oneOf.map((v) {
-          final props = (v['properties'] as Map<String, dynamic>).map(
-              (k, val) =>
-                  MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
-          final required =
-              (v['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
+        final variants = nonNull.map((v) {
+          final props = (v['properties'] as Map<String, dynamic>)
+              .map((k, val) => MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
+          final required = (v['required'] as List<dynamic>?)
+                  ?.cast<String>()
+                  .toSet() ??
+              {};
           final discValue =
               ((v['properties'] as Map<String, dynamic>)[discriminant]
                   as Map<String, dynamic>)['enum'][0] as String;
@@ -249,13 +254,12 @@ class OpenRpcParser {
             embeddedUnion: embeddedUnion,
           );
         }).toList();
-        return DiscriminatedUnionRef(
-            discriminant: discriminant, variants: variants);
+        final union = DiscriminatedUnionRef(discriminant: discriminant, variants: variants);
+        return hasNullMember ? NullableRef(union) : union;
       }
     }
 
     // Fallback: treat as nullable of first non-null
-    final nonNull = oneOf.where((s) => s['type'] != 'null').toList();
     if (nonNull.length == 1) {
       return NullableRef(_parseTypeRef(nonNull.first));
     }

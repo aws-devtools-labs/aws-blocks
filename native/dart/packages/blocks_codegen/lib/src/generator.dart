@@ -855,6 +855,8 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SchemaReference(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
+      SealedClassType(name: final name) =>
+        '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       _ => '$accessor',
     };
   }
