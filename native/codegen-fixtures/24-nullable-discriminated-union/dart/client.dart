@@ -8,7 +8,120 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 
 // --- Models ---
 
+class IsUpdatedFalseNextStep {
+  final String name;
+  final String destination;
+
+  const IsUpdatedFalseNextStep({
+    required this.name,
+    required this.destination,
+  });
+
+  factory IsUpdatedFalseNextStep.fromJson(Map<String, dynamic> json) {
+    return IsUpdatedFalseNextStep(
+      name: json['name'] as String,
+      destination: json['destination'] as String,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'destination': destination,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IsUpdatedFalseNextStep &&
+          name == other.name &&
+          destination == other.destination;
+
+  @override
+  int get hashCode => Object.hash(name, destination);
+
+  @override
+  String toString() => 'IsUpdatedFalseNextStep(name: $name, destination: $destination)';
+}
+
+
 // --- API Namespaces ---
+
+sealed class UpdateAttributesResult {
+  const UpdateAttributesResult();
+  Map<String, dynamic> toJson();
+  static UpdateAttributesResult fromJson(Map<String, dynamic> json) {
+    switch (json['isUpdated'] as bool) {
+      case true: return IsUpdatedTrue.fromJson(json);
+      case false: return IsUpdatedFalse.fromJson(json);
+    }
+  }
+}
+
+class IsUpdatedTrue extends UpdateAttributesResult {
+
+  const IsUpdatedTrue();
+
+  factory IsUpdatedTrue.fromJson(Map<String, dynamic> json) {
+    return IsUpdatedTrue(
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'isUpdated': true,
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IsUpdatedTrue;
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() => 'IsUpdatedTrue()';
+}
+
+class IsUpdatedFalse extends UpdateAttributesResult {
+  final IsUpdatedFalseNextStep nextStep;
+
+  const IsUpdatedFalse({
+    required this.nextStep,
+  });
+
+  factory IsUpdatedFalse.fromJson(Map<String, dynamic> json) {
+    return IsUpdatedFalse(
+      nextStep: IsUpdatedFalseNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'isUpdated': false,
+      'nextStep': nextStep.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is IsUpdatedFalse &&
+          nextStep == other.nextStep;
+
+  @override
+  int get hashCode => nextStep.hashCode;
+
+  @override
+  String toString() => 'IsUpdatedFalse(nextStep: $nextStep)';
+}
+
+
 
 sealed class GetNotificationResult {
   const GetNotificationResult();
@@ -101,12 +214,12 @@ class ApiApi {
   final BlocksClient _client;
   ApiApi(this._client);
 
-  Future<Map<String, dynamic>> updateAttributes({required Map<String, String> attributes}) async {
+  Future<Map<String, UpdateAttributesResult?>> updateAttributes({required Map<String, String> attributes}) async {
     final params = <String, dynamic>{
       'attributes': attributes,
     };
     final result = await _client.call('api.updateAttributes', params);
-    return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v as dynamic));
+    return (result as Map<String, dynamic>).map((k, v) => MapEntry(k, v == null ? null : UpdateAttributesResult.fromJson(v as Map<String, dynamic>)));
   }
 
   Future<GetNotificationResult?> getNotification({required String id}) async {

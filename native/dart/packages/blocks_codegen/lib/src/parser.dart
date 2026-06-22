@@ -220,6 +220,14 @@ class OpenRpcParser {
         nonNull.every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
       final discriminant = _findDiscriminant(nonNull);
       if (discriminant != null) {
+        // A boolean-enum discriminant (`{"type":"boolean","enum":[true|false]}`)
+        // is handled distinctly from the usual string enum: its JSON value is a
+        // real bool, not a quoted string.
+        final discriminantIsBoolean = nonNull.every((v) {
+          final p = (v['properties'] as Map<String, dynamic>)[discriminant]
+              as Map<String, dynamic>;
+          return p['type'] == 'boolean';
+        });
         final variants = nonNull.map((v) {
           final props = (v['properties'] as Map<String, dynamic>)
               .map((k, val) => MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
@@ -227,9 +235,13 @@ class OpenRpcParser {
                   ?.cast<String>()
                   .toSet() ??
               {};
+          // `.toString()` yields the literal value for both string ("create")
+          // and boolean (true/false) discriminants; `as String` would throw on
+          // a bool.
           final discValue =
               ((v['properties'] as Map<String, dynamic>)[discriminant]
-                  as Map<String, dynamic>)['enum'][0] as String;
+                  as Map<String, dynamic>)['enum'][0]
+                  .toString();
           // Remove discriminant from properties
           final filteredProps = Map<String, TypeRef>.from(props)
             ..remove(discriminant);
@@ -254,7 +266,11 @@ class OpenRpcParser {
             embeddedUnion: embeddedUnion,
           );
         }).toList();
-        final union = DiscriminatedUnionRef(discriminant: discriminant, variants: variants);
+        final union = DiscriminatedUnionRef(
+          discriminant: discriminant,
+          variants: variants,
+          discriminantIsBoolean: discriminantIsBoolean,
+        );
         return hasNullMember ? NullableRef(union) : union;
       }
     }
@@ -269,16 +285,27 @@ class OpenRpcParser {
   String? _findDiscriminant(List<Map<String, dynamic>> variants) {
     final firstProps =
         (variants.first['properties'] as Map<String, dynamic>).keys.toList();
-    for (final field in firstProps) {
-      final allMatch = variants.every((v) {
+    // A discriminant is a required-shaped single-value enum field shared by
+    // every arm. String discriminants are the classic case; a boolean-enum
+    // field (`{"type":"boolean","enum":[true|false]}`) also discriminates.
+    bool isDiscriminantField(String field, String type) {
+      return variants.every((v) {
         final props = v['properties'] as Map<String, dynamic>;
         if (!props.containsKey(field)) return false;
         final p = props[field] as Map<String, dynamic>;
-        return p['type'] == 'string' &&
+        return p['type'] == type &&
             p.containsKey('enum') &&
             (p['enum'] as List).length == 1;
       });
-      if (allMatch) return field;
+    }
+
+    // Prefer a string discriminant (preserves existing selection), then fall
+    // back to a boolean one.
+    for (final field in firstProps) {
+      if (isDiscriminantField(field, 'string')) return field;
+    }
+    for (final field in firstProps) {
+      if (isDiscriminantField(field, 'boolean')) return field;
     }
     return null;
   }

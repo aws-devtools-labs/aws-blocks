@@ -49,10 +49,15 @@ class SealedClassType extends ResolvedType {
   String name;
   final String discriminant;
   final List<SealedVariant> variants;
+
+  /// True when the discriminant is a boolean enum (true/false) rather than a
+  /// string enum. Drives bool (vs String) emission in the generator.
+  final bool discriminantIsBoolean;
   SealedClassType({
     required this.name,
     required this.discriminant,
     required this.variants,
+    this.discriminantIsBoolean = false,
   });
 }
 
@@ -367,7 +372,7 @@ class CodegenModelBuilder {
           .join(',');
       return '${v.discriminantValue}{$fk}';
     });
-    return 'sealed[${sealed.discriminant}]{${parts.join('|')}}';
+    return 'sealed[${sealed.discriminant}${sealed.discriminantIsBoolean ? ':bool' : ''}]{${parts.join('|')}}';
   }
 
   ResolvedType _resolveEnum(List<String> values, String? hint, [String? path]) {
@@ -467,7 +472,13 @@ class CodegenModelBuilder {
     final variants = groups.entries.map((entry) {
       final discValue = entry.key;
       final group = entry.value;
-      final className = '${_capitalize(discValue)}${_inferSuffix(name)}';
+      // String discriminants keep the established `<Value><SealedName>` scheme
+      // (e.g. `EmailGetNotificationResult`). A boolean discriminant has no
+      // descriptive value, so name the arm after the field + value
+      // (e.g. `IsUpdatedTrue`/`IsUpdatedFalse`), mirroring the Kotlin output.
+      final className = ref.discriminantIsBoolean
+          ? '${_capitalize(ref.discriminant)}${_capitalize(discValue)}'
+          : '${_capitalize(discValue)}${_inferSuffix(name)}';
       final variantPath = path == null ? null : '$path>$discValue';
 
       final List<RecordField> fields;
@@ -527,7 +538,11 @@ class CodegenModelBuilder {
     }).toList();
 
     final sealed = SealedClassType(
-        name: name, discriminant: ref.discriminant, variants: variants);
+      name: name,
+      discriminant: ref.discriminant,
+      variants: variants,
+      discriminantIsBoolean: ref.discriminantIsBoolean,
+    );
 
     // Structural dedup: reuse an existing sealed class with the same shape
     // (ported from #682 — recursive structural + sealed-class dedup).
