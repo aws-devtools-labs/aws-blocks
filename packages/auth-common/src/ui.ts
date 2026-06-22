@@ -148,11 +148,19 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
-	cache.hydrating = api.getAuthState().then((s) => {
-		cache.state = s;
-		cache.hydrating = null;
-		return s;
-	});
+	cache.hydrating = api.getAuthState()
+		.then((s) => {
+			cache.state = s;
+			cache.hydrating = null;
+			return s;
+		})
+		.catch((e) => {
+			// Clear the in-flight marker on failure so the next ensureState()
+			// retries the network instead of replaying a stale rejected
+			// promise forever. Re-throw so callers' .catch() still fires.
+			cache.hydrating = null;
+			throw e;
+		});
 	return cache.hydrating;
 }
 
@@ -508,12 +516,20 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 	const cached = getCache(api).state;
 	if (cached) rerender(cached);
 
-	// Refresh from the (async) hydrated state. .catch() so a rejected
-	// getAuthState() doesn't surface as an unhandled rejection or leave the
-	// component stranded.
-	ensureState(api).then(rerender).catch(() => {
-		// keep the last-known frame
-	});
+	// Refresh from the (async) hydrated state. Skip the repaint when the
+	// resolved state is the very object we already painted synchronously
+	// (warm-cache fast path — `ensureState` returns the cached object), so a
+	// warm load renders exactly once. .catch() so a rejected getAuthState()
+	// doesn't surface as an unhandled rejection or leave the component
+	// stranded.
+	ensureState(api)
+		.then((s) => {
+			if (s === cached) return;
+			rerender(s);
+		})
+		.catch(() => {
+			// keep the last-known frame
+		});
 
 	// Re-render when state is updated (by setAuthState or external changes)
 	subscribe(api, rerender);
