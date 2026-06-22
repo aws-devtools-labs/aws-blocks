@@ -2,6 +2,8 @@
 
 OIDC sign-in gate for AWS Blocks applications. Sessions are long-lived and refresh transparently — users stay signed in past the IdP's ~1-hour ID token TTL, and sign-out actually invalidates the session server-side. Works with Google, GitHub, Okta, Auth0, Microsoft Entra, and any OIDC-compliant identity provider. Pointing at an existing Cognito User Pool is a supported path too.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quickstart
 
 Backend (`aws-blocks/index.ts`):
