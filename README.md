@@ -44,7 +44,7 @@ A Block is a module that gives you a complete feature: cloud resources, a runtim
 | Authentication | `AuthBasic`, `AuthCognito`, `AuthOIDC` |
 | Compute & background | `AsyncJob`, `CronJob` |
 | AI | `Agent`, `KnowledgeBase` |
-| Communication | `Realtime`, `EmailClient` |
+| Communication | `Realtime`, `EmailClient`, `SmsClient` |
 | Configuration | `AppSetting` |
 | Observability | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
 | Hosting | `Hosting` |

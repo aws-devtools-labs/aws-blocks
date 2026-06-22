@@ -130,6 +130,7 @@ Each block is its own package; full per-block docs ship in this package under **
 | `KnowledgeBase` | `@aws-blocks/blocks` | Semantic document retrieval / RAG (Bedrock + S3 Vectors) |
 | `Agent` | `@aws-blocks/blocks` | AI agent — tool use, streaming, conversation persistence |
 | `EmailClient` | `@aws-blocks/blocks` | Transactional email (SES) |
+| `SmsClient` | `@aws-blocks/blocks` | Transactional SMS and mobile push (SNS) |
 | `Logger` / `Metrics` / `Tracer` / `Dashboard` | `@aws-blocks/blocks` | Observability — structured logs, metrics, traces, CloudWatch dashboard |
 | `Hosting` | `@aws-blocks/blocks` | Deploy a frontend (SPA / static / Next.js SSR) on CloudFront + S3 |
 

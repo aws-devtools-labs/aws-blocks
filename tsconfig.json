@@ -15,6 +15,7 @@
     { "path": "packages/bb-agent" },
     { "path": "packages/bb-knowledge-base" },
     { "path": "packages/bb-email-client" },
+    { "path": "packages/bb-sms-client" },
     { "path": "packages/blocks" }
   ]
 }
