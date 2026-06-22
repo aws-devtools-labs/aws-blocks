@@ -55,6 +55,14 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stderr, /Unknown option: -z/);
   });
 
+  it('unknown template exits 1 with a friendly error message', () => {
+    const result = run(['--template', 'does-not-exist']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Unknown template "does-not-exist"/);
+    assert.match(result.stderr, /Available templates:/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  });
+
   it('multiple positional args exits 1 with error message', () => {
     const result = run(['my-app', 'extra-arg']);
     assert.strictEqual(result.exitCode, 1);
