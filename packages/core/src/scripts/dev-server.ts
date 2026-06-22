@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import httpProxy from 'http-proxy';
@@ -255,7 +255,10 @@ export async function startDevServer(options: DevServerOptions) {
     // statically. Otherwise the request is proxied to the framework dev
     // server, which can't serve this project-root file and 404s.
     if (isBlocksConfigRequest(method, url.pathname)) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
       res.end(JSON.stringify(blocksConfig));
       return;
     }
