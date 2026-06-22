@@ -264,7 +264,12 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 	context?: TContext;
 }
 
-/** Returned by stream(). Provides the channelId and server-side convenience methods. */
+/**
+ * Returned by stream(). Provides the channelId and server-side convenience methods.
+ *
+ * Safe to return directly from API methods — `toJSON()` ensures only `{ channelId }`
+ * is serialized over the wire. The `channel` and `complete()` helpers are server-side only.
+ */
 export interface AgentStreamResult {
 	/** Realtime channel ID where chunks are published. */
 	channelId: string;
@@ -272,6 +277,8 @@ export interface AgentStreamResult {
 	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
 	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
 	complete: () => Promise<AgentStreamChunk>;
+	/** Only `{ channelId }` is serialized when this object crosses the RPC boundary. */
+	toJSON(): { channelId: string };
 }
 
 export interface AgentStreamChunk {
