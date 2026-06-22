@@ -189,10 +189,34 @@ export function broadcastAuthChange(user: AuthUser | null): void {
 }
 
 /**
+ * Shallow structural equality for cached auth users. Used to suppress a
+ * redundant repaint when the async hydration resolves to the same user that
+ * was already emitted synchronously. Returns true for two `null`s and for the
+ * same object reference (the warm-cache fast path).
+ */
+function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
+	if (a === b) return true;
+	if (a === null || b === null) return false;
+	const ra = a as unknown as Record<string, unknown>;
+	const rb = b as unknown as Record<string, unknown>;
+	const aKeys = Object.keys(ra);
+	const bKeys = Object.keys(rb);
+	if (aKeys.length !== bKeys.length) return false;
+	return aKeys.every((k) => ra[k] === rb[k]);
+}
+
+/**
  * Subscribe to auth state changes from any source (same window + other tabs).
  *
- * Calls `callback` immediately with the current user, then again whenever
- * auth state changes anywhere. Uses the shared state cache — only one
+ * Invokes `callback` **synchronously** with the last-known user from the
+ * shared cache so the UI can paint a first frame without waiting on the
+ * network, then again once the async hydration settles and on every later
+ * change. A warm cache emits the cached user immediately (and skips the
+ * redundant refresh); a cold cache emits `null` synchronously and refreshes
+ * when `getAuthState()` resolves — unless a hydration is already in flight,
+ * in which case the synchronous `null` is skipped to avoid a signed-out
+ * flash. A rejected `getAuthState()` keeps the synchronous first frame
+ * rather than stranding the UI. Uses the shared state cache — only one
  * network call is made regardless of how many subscribers exist.
  *
  * @returns An unsubscribe function.
@@ -213,8 +237,27 @@ export function onAuthChange(
 	};
 	window.addEventListener(AUTH_LOCAL_EVENT, localHandler);
 
-	// Initial state from shared cache (single network call)
-	ensureState(api).then((s) => callback(s.user ?? null));
+	// Synchronous first frame from the shared cache, then an async refresh.
+	// Skip the sync emit only when the cache is cold AND a hydration is
+	// already in flight — the pending promise will deliver the real value,
+	// so emitting a throwaway `null` now would just flash signed-out.
+	const cache = getCache(api);
+	let emitted: AuthUser | null | undefined;
+	if (cache.state || !cache.hydrating) {
+		emitted = cache.state?.user ?? null;
+		callback(emitted);
+	}
+	ensureState(api)
+		.then((s) => {
+			const user = s.user ?? null;
+			// Don't repaint if the hydrated value matches the sync emit.
+			if (emitted !== undefined && sameAuthUser(user, emitted)) return;
+			callback(user);
+		})
+		.catch(() => {
+			// getAuthState() rejected — keep the last-known frame; never
+			// strand the UI on an unresolved subscribe.
+		});
 
 	return () => {
 		getChannel().removeEventListener('message', channelHandler);
@@ -457,8 +500,20 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 		}
 	}
 
-	// Initial render from shared cache
-	ensureState(api).then(rerender);
+	// Paint a synchronous first frame from the last-known cache so the
+	// component isn't a blank <div> until the network round-trip lands. A
+	// cold cache has no actions to render yet (they arrive with the async
+	// state), so the sync paint only fires once a prior hydration populated
+	// the cache; the async refresh below covers the cold first load.
+	const cached = getCache(api).state;
+	if (cached) rerender(cached);
+
+	// Refresh from the (async) hydrated state. .catch() so a rejected
+	// getAuthState() doesn't surface as an unhandled rejection or leave the
+	// component stranded.
+	ensureState(api).then(rerender).catch(() => {
+		// keep the last-known frame
+	});
 
 	// Re-render when state is updated (by setAuthState or external changes)
 	subscribe(api, rerender);

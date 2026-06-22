@@ -544,6 +544,59 @@ describe('onAuthChange', () => {
 		unsub();
 	});
 
+	// Regression guard: the FIRST emit must be synchronous (no await). Before
+	// the fix the only emit was deferred behind `ensureState().then(...)`, so a
+	// signed-out UI never painted a first frame and CI harnesses timed out.
+	test('emits synchronously on subscribe (signed out)', () => {
+		const api = mockApi(signedOutState());
+		let called = false;
+		let received: any = 'sentinel';
+		onAuthChange(api, (user) => { called = true; received = user; });
+		// No `await flush()` here — synchronous emission is the whole point.
+		assert.strictEqual(called, true, 'callback must fire synchronously on subscribe');
+		assert.strictEqual(received, null, 'cold signed-out load emits null synchronously');
+	});
+
+	test('emits the signed-in user synchronously from a warm cache', async () => {
+		const api = mockApi(signedInState());
+		// Warm the shared cache (async hydration triggered by the first subscribe).
+		const unsubWarm = onAuthChange(api, () => {});
+		await flush();
+
+		// A subsequent subscribe must emit the known user synchronously, and must
+		// NOT flash null → user — the dedupe suppresses the redundant refresh.
+		const seen: any[] = [];
+		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		assert.strictEqual(seen.length, 1, 'warm-cache subscribe emits exactly once, synchronously');
+		assert.deepStrictEqual(seen[0], { userId: 'alice', username: 'alice' });
+
+		await flush();
+		assert.strictEqual(seen.length, 1, 'no redundant repaint after async refresh (no null → user flash)');
+
+		unsub();
+		unsubWarm();
+	});
+
+	test('does not throw or strand the UI when getAuthState rejects', async () => {
+		const api = mockApi(signedOutState());
+		api.getAuthState = async () => { throw new Error('network down'); };
+
+		const seen: any[] = [];
+		// Subscribing must not throw even though hydration will reject.
+		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+
+		// Synchronous first frame still painted from the (cold) cache.
+		assert.strictEqual(seen.length, 1, 'sync first frame emitted before the rejection');
+		assert.strictEqual(seen[0], null);
+
+		// Let the rejected hydration settle: no unhandled rejection, no throw,
+		// and the last-known frame is preserved (no extra emit).
+		await flush();
+		assert.strictEqual(seen.length, 1, 'rejection does not strand or re-emit');
+
+		unsub();
+	});
+
 	test('reacts to broadcastAuthChange', async () => {
 		const api = mockApi(signedOutState());
 		const events: any[] = [];
