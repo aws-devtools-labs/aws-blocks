@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostingConstruct } from './hosting_construct.js';
 import { DeployManifest } from '../manifest/types.js';
@@ -1681,6 +1681,68 @@ void describe('HostingConstruct — Storage', () => {
         ]),
       }),
     });
+  });
+
+  void it('sizes the asset-upload Lambda above CDK defaults (1024 MB / 1024 MiB tmp)', () => {
+    // CDK defaults the BucketDeployment Lambda to 128 MB / 512 MiB tmp, which
+    // large static sites overrun → opaque deploy failure. The L3 raises both.
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+
+    const template = Template.fromStack(stack);
+    // The asset-upload Lambda is the BucketDeployment handler — assert one
+    // Lambda carries the raised memory + ephemeral storage.
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      MemorySize: 1024,
+      EphemeralStorage: { Size: 1024 },
+    });
+  });
+
+  void it('honors storage.deployment overrides for the asset-upload Lambda', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+      storage: { deployment: { memoryLimit: 2048, ephemeralStorageMiB: 4096 } },
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      MemorySize: 2048,
+      EphemeralStorage: { Size: 4096 },
+    });
+  });
+
+  void it('does NOT warn about resource count for a normal-sized stack', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+    Annotations.fromStack(stack).hasNoWarning(
+      '*',
+      Match.stringLikeRegexp('approaching the hard limit'),
+    );
+  });
+
+  void it('warns when the stack approaches the 500-resource CloudFormation limit', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+    // Pad the stack past the 450 warning threshold with dummy resources so the
+    // synth-time guard fires. (Real apps reach this via many routes/headers.)
+    for (let i = 0; i < 460; i++) {
+      new CfnResource(stack, `Dummy${i}`, { type: 'AWS::CloudFormation::WaitConditionHandle' });
+    }
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp('approaching the hard limit'),
+    );
   });
 
   void it('creates bucket with BlockPublicAccess BLOCK_ALL', () => {

@@ -2,11 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Construct } from 'constructs';
 import {
+  Annotations,
   CfnOutput,
+  CfnResource,
   CustomResource,
   Duration,
   Fn,
   RemovalPolicy,
+  Size,
   Stack,
 } from 'aws-cdk-lib';
 import { Provider } from 'aws-cdk-lib/custom-resources';
@@ -60,6 +63,11 @@ import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 // Re-export build ID helpers for public API + tests
 export { generateBuildIdFunctionCode, generateBuildId } from '../defaults.js';
 export type { SkewProtectionConfig } from './skew_protection.js';
+
+// CloudFormation hard limit: 500 resources per stack (not adjustable). We warn
+// well before it so the operator can split the stack before a deploy fails.
+const CFN_MAX_RESOURCES_PER_STACK = 500;
+const CFN_RESOURCE_WARNING_THRESHOLD = 450;
 
 // ---- Public types ----
 
@@ -228,6 +236,20 @@ export type HostingConstructProps = {
     buildRetentionDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };
+    /**
+     * Resources for the Lambda that uploads static assets to S3 (CDK's
+     * `BucketDeployment`). CDK defaults this Lambda to 128 MB memory and a
+     * 512 MiB `/tmp` — too small for large static sites, which then OOM or
+     * run out of disk with an opaque CloudFormation error at deploy time.
+     * The L3 raises the defaults to 1024 MB / 1024 MiB; override here if a
+     * very large build still hits the ceiling.
+     */
+    deployment?: {
+      /** Memory (MiB) for the asset-upload Lambda. @default 1024 */
+      memoryLimit?: number;
+      /** `/tmp` size (MiB) for the asset-upload Lambda. @default 1024 */
+      ephemeralStorageMiB?: number;
+    };
   };
   /** CloudFront access logging configuration. */
   logging?: {
@@ -1454,6 +1476,18 @@ export class HostingConstruct extends Construct {
     // minute before the asset deployment that overwrote it.
     const assetDeployments: BucketDeployment[] = [];
 
+    // Sizing for the asset-upload Lambda (CDK's BucketDeployment custom
+    // resource). CDK defaults to 128 MB memory + 512 MiB /tmp, which a large
+    // static site overruns — the deploy then fails opaquely in CloudFormation
+    // (OOM / "no space left on device") with no hint it was a sizing issue.
+    // Raise the defaults to 1024/1024; allow an override for extreme builds.
+    const deploymentSizing = {
+      memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
+      ephemeralStorageSize: Size.mebibytes(
+        props.storage?.deployment?.ephemeralStorageMiB ?? 1024,
+      ),
+    };
+
     // Deploy no-cache paths (e.g. config.json) — always revalidate.
     if (noCachePaths && noCachePaths.length > 0) {
       assetDeployments.push(
@@ -1465,6 +1499,7 @@ export class HostingConstruct extends Construct {
           include: noCachePaths,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     }
@@ -1481,6 +1516,7 @@ export class HostingConstruct extends Construct {
             CacheControl.fromString('public, max-age=31536000, immutable'),
           ],
           prune: false,
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1492,6 +1528,7 @@ export class HostingConstruct extends Construct {
           include: htmlGlobs,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1502,6 +1539,7 @@ export class HostingConstruct extends Construct {
           exclude: [...immutablePaths, ...htmlGlobs, ...(noCachePaths ?? [])],
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     } else {
@@ -1514,6 +1552,7 @@ export class HostingConstruct extends Construct {
           include: htmlGlobs,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1524,6 +1563,7 @@ export class HostingConstruct extends Construct {
           exclude: [...htmlGlobs, ...(noCachePaths ?? [])],
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     }
@@ -1586,6 +1626,7 @@ export class HostingConstruct extends Construct {
           contentType: mime,
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         },
       );
       // Force ordering: the font deployment must run AFTER the asset
@@ -1611,6 +1652,35 @@ export class HostingConstruct extends Construct {
     for (const dep of buildAssetDeployments) {
       cdn.addBuildAssetDependency(dep);
     }
+
+    // ---- CloudFormation resource-count guard ----
+    // A stack can hold at most 500 resources (a true hard limit — not
+    // adjustable). The hosting construct emits many resources, and they
+    // multiply with routes/behaviors/policies/asset-deployments, so a large
+    // app can approach the ceiling and then fail opaquely at deploy. Emit a
+    // synth-time warning as the stack nears the limit so the operator can
+    // split the stack BEFORE CloudFormation rejects it. This warns (never
+    // fails) — CDK itself errors at 500, and a legitimate stack just under
+    // the limit must still deploy.
+    this.node.addValidation({
+      validate: (): string[] => {
+        const resourceCount = Stack.of(this)
+          .node.findAll()
+          .filter((c) => CfnResource.isCfnResource(c)).length;
+        if (resourceCount >= CFN_RESOURCE_WARNING_THRESHOLD) {
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CfnResourceCount',
+            `This stack synthesizes ~${resourceCount} CloudFormation resources, ` +
+              `approaching the hard limit of ${CFN_MAX_RESOURCES_PER_STACK} per ` +
+              `stack. Large hosting deploys (many routes, header rules, or asset ` +
+              `tiers) can hit this and fail at deploy time. Consider splitting ` +
+              `the backend and hosting into separate stacks, or reducing ` +
+              `per-pattern routes/headers.`,
+          );
+        }
+        return [];
+      },
+    });
   }
 
   /**
