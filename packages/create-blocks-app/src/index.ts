@@ -476,12 +476,8 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   // 1. Copy aws-blocks/ from the requested template so framework-specific files
   // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
-  // user's project. Fall back to the default template when the requested one has
-  // no aws-blocks/ workspace to copy.
-  let templateDir = join(__dirname, '../templates', templateName);
-  if (!(await exists(join(templateDir, 'aws-blocks')))) {
-    templateDir = join(__dirname, '../templates/default');
-  }
+  // user's project.
+  const templateDir = join(__dirname, '../templates', templateName);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
 
