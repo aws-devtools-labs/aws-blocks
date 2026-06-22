@@ -2,6 +2,8 @@
 
 Structured logging with consistent JSON format, log levels, and contextual metadata.
 
+> **Recommended:** Prefer `OtelLogger` (`@aws-blocks/bb-otel-logger`) for new applications — vendor-neutral OpenTelemetry logs that export OTLP to CloudWatch (or any backend) and correlate with OTel traces. Use this AWS-native `Logger` when you specifically want plain structured JSON to stdout/stderr.
+
 ## When to Use
 
 - You need structured, queryable application logs
@@ -11,6 +13,7 @@ Structured logging with consistent JSON format, log levels, and contextual metad
 
 ## When NOT to Use
 
+- For vendor-neutral OpenTelemetry logs (the recommended default) → use `OtelLogger`
 - For numeric measurements over time → use `Metrics`
 - For distributed request tracing → use `Tracing`
 

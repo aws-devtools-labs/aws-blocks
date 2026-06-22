@@ -130,7 +130,8 @@ Each block is its own package; full per-block docs ship in this package under **
 | `KnowledgeBase` | `@aws-blocks/blocks` | Semantic document retrieval / RAG (Bedrock + S3 Vectors) |
 | `Agent` | `@aws-blocks/blocks` | AI agent — tool use, streaming, conversation persistence |
 | `EmailClient` | `@aws-blocks/blocks` | Transactional email (SES) |
-| `Logger` / `Metrics` / `Tracer` / `Dashboard` | `@aws-blocks/blocks` | Observability — structured logs, metrics, traces, CloudWatch dashboard |
+| `OtelMetrics` / `OtelLogger` / `OtelTracer` | `@aws-blocks/blocks` | Observability (**recommended**) — vendor-neutral OpenTelemetry metrics/logs/traces, OTLP to CloudWatch (or any backend) |
+| `Logger` / `Metrics` / `Tracer` / `Dashboard` | `@aws-blocks/blocks` | Observability (AWS-native) — structured logs, metrics, traces, CloudWatch dashboard |
 | `Hosting` | `@aws-blocks/blocks` | Deploy a frontend (SPA / static / Next.js SSR) on CloudFront + S3 |
 
 > **Not sure which data block?** Start with `DistributedTable` (DynamoDB). Reach for SQL only when you need joins across records, many-dimensional filtering, large transactions, or an existing Postgres database — `DistributedDatabase` for serverless Postgres, `Database` for full Aurora Postgres (FKs, RLS, triggers; carries idle cost / cold starts the other two don't). The full rationale is in `docs/index.md`.

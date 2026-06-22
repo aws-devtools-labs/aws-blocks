@@ -73,7 +73,10 @@
     "@aws-blocks/bb-logger": "^0.1.1",
     "@aws-blocks/bb-email-client": "^0.1.1",
     "@aws-blocks/bb-metrics": "^0.1.1",
-    "@aws-blocks/bb-dashboard": "^0.1.1"
+    "@aws-blocks/bb-dashboard": "^0.1.1",
+    "@aws-blocks/bb-otel-metrics": "^0.1.0",
+    "@aws-blocks/bb-otel-logger": "^0.1.0",
+    "@aws-blocks/bb-otel-tracer": "^0.1.0"
   },
   "aws-blocks": {
     "vendorize": {
@@ -133,6 +136,15 @@
       ],
       "@aws-blocks/bb-dashboard": [
         "Dashboard"
+      ],
+      "@aws-blocks/bb-otel-metrics": [
+        "OtelMetrics"
+      ],
+      "@aws-blocks/bb-otel-logger": [
+        "OtelLogger"
+      ],
+      "@aws-blocks/bb-otel-tracer": [
+        "OtelTracer"
       ]
     }
   },

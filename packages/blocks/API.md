@@ -122,6 +122,17 @@ import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
 import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
+import { OtelChildLogger } from '@aws-blocks/bb-otel-logger';
+import { OtelLogger } from '@aws-blocks/bb-otel-logger';
+import { OtelLoggingErrors } from '@aws-blocks/bb-otel-logger';
+import { OtelLoggingOptions } from '@aws-blocks/bb-otel-logger';
+import { OtelMetrics } from '@aws-blocks/bb-otel-metrics';
+import { OtelMetricsEmitter } from '@aws-blocks/bb-otel-metrics';
+import { OtelMetricsErrors } from '@aws-blocks/bb-otel-metrics';
+import { OtelMetricsOptions } from '@aws-blocks/bb-otel-metrics';
+import { Segment as OtelSegment } from '@aws-blocks/bb-otel-tracer';
+import { OtelTracer } from '@aws-blocks/bb-otel-tracer';
+import { OtelTracerOptions } from '@aws-blocks/bb-otel-tracer';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { Realtime } from '@aws-blocks/bb-realtime';
@@ -144,6 +155,7 @@ import { SignUpResult } from '@aws-blocks/bb-auth-cognito';
 import { SourceConfig } from '@aws-blocks/bb-knowledge-base';
 import { sql } from '@aws-blocks/bb-data';
 import { SqlQuery } from '@aws-blocks/bb-data';
+import { StartSegmentOptions } from '@aws-blocks/bb-otel-tracer';
 import { StreamOptions } from '@aws-blocks/bb-agent';
 import { stubIdp } from '@aws-blocks/bb-auth-oidc';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
@@ -423,6 +435,11 @@ export function getSdkIdentifiers(bb: Logger): {
 };
 
 // @public (undocumented)
+export function getSdkIdentifiers(bb: OtelLogger): {
+    logGroupName: string;
+};
+
+// @public (undocumented)
 export function getSdkIdentifiers(bb: {
     fullId: string;
 }): Record<string, string>;
@@ -489,6 +506,28 @@ export { OIDCUser }
 
 export { OllamaModels }
 
+export { OtelChildLogger }
+
+export { OtelLogger }
+
+export { OtelLoggingErrors }
+
+export { OtelLoggingOptions }
+
+export { OtelMetrics }
+
+export { OtelMetricsEmitter }
+
+export { OtelMetricsErrors }
+
+export { OtelMetricsOptions }
+
+export { OtelSegment }
+
+export { OtelTracer }
+
+export { OtelTracerOptions }
+
 export { PasswordPolicy }
 
 export { PutUrlOptions }
@@ -532,6 +571,8 @@ export { SourceConfig }
 export { sql }
 
 export { SqlQuery }
+
+export { StartSegmentOptions }
 
 export { StreamOptions }
 

@@ -24,6 +24,9 @@ export const OFFICIAL_BB_NAMES: ReadonlySet<string> = new Set([
   'KnowledgeBase',
   'Logger',
   'Metrics',
+  'OtelLogger',
+  'OtelMetrics',
+  'OtelTracer',
   'Realtime',
   'Tracer',
 ]);

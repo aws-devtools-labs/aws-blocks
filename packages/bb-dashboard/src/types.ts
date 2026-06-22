@@ -18,13 +18,29 @@
  * (either explicitly configured or defaulting to the Metrics BB's scope fullId).
  */
 export interface MetricsBBRef {
-	readonly namespace: string;
+	/**
+	 * CloudWatch metric namespace for **classic (EMF) `Metrics`**. OTLP-based `OtelMetrics`
+	 * has no namespace (metrics are PromQL-queryable, selected by name) and omits this.
+	 */
+	readonly namespace?: string;
 	/**
 	 * Default dimensions applied to every metric emitted by the Metrics BB.
 	 * When present, the Dashboard BB merges these into widget queries so that
 	 * CloudWatch finds the dimensioned metric stream.
 	 */
 	readonly defaultDimensions?: Record<string, string>;
+	/**
+	 * How the metrics reach CloudWatch, which decides the widget type:
+	 * - `'cloudwatch'` (default) — classic namespace/dimension metrics (EMF-based
+	 *   `Metrics`); rendered as metric `GraphWidget`s.
+	 * - `'otlp'` — OpenTelemetry metrics ingested via CloudWatch's OTLP endpoint
+	 *   (`OtelMetrics`). These are PromQL-queryable and have NO namespace, so they
+	 *   are rendered as PromQL `chart` widgets selecting by metric name.
+	 *
+	 * The `OtelMetrics` block sets this to `'otlp'`. Omitted/`'cloudwatch'` keeps the
+	 * existing behaviour, so EMF-based `Metrics` dashboards are unaffected.
+	 */
+	readonly metricsKind?: 'cloudwatch' | 'otlp';
 }
 
 /**
@@ -87,6 +103,13 @@ export interface MetricConfig {
 	 * Example: `{ FunctionName: 'my-handler', Alias: 'live' }`.
 	 */
 	dimensions?: Record<string, string>;
+
+	/**
+	 * For OTLP (PromQL) metrics only: an explicit PromQL query overriding the default
+	 * `sum({"<name>"})`. Ignored for classic CloudWatch metrics. Use for rates,
+	 * label filters, or aggregations — e.g. `rate({"http.server.duration"}[5m])`.
+	 */
+	promql?: string;
 }
 
 // ── Dashboard configuration types ───────────────────────────────────────────
@@ -188,8 +211,12 @@ export interface DashboardOptions {
 export interface ResolvedDashboardConfig {
 	title: string;
 	dashboardName: string;
+	/** Whether a Metrics ref was provided (renders the metrics section). */
+	metricsEnabled: boolean;
 	metricsNamespace: string | undefined;
 	metricsDefaultDimensions: Record<string, string> | undefined;
+	/** `'otlp'` → render PromQL chart widgets; `'cloudwatch'` (default) → metric GraphWidgets. */
+	metricsKind: 'cloudwatch' | 'otlp';
 	logGroupName: string | undefined;
 	tracingEnabled: boolean;
 	metricConfigs: MetricConfig[];

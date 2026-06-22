@@ -42,6 +42,7 @@ export interface MetricConfig {
     dimensions?: Record<string, string>;
     name: string;
     period?: number;
+    promql?: string;
     stat?: 'Sum' | 'Average' | 'Maximum' | 'Minimum' | 'p99' | 'p95' | 'p50';
     title?: string;
 }
@@ -49,8 +50,8 @@ export interface MetricConfig {
 // @public
 export interface MetricsBBRef {
     readonly defaultDimensions?: Record<string, string>;
-    // (undocumented)
-    readonly namespace: string;
+    readonly metricsKind?: 'cloudwatch' | 'otlp';
+    readonly namespace?: string;
 }
 
 // @public

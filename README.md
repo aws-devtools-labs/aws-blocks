@@ -46,7 +46,8 @@ A Block is a module that gives you a complete feature: cloud resources, a runtim
 | AI | `Agent`, `KnowledgeBase` |
 | Communication | `Realtime`, `EmailClient` |
 | Configuration | `AppSetting` |
-| Observability | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
+| Observability (OpenTelemetry — recommended) | `OtelMetrics`, `OtelLogger`, `OtelTracer` |
+| Observability (AWS-native) | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
 | Hosting | `Hosting` |
 
 For the full catalog and per-Block API reference, see the [AWS Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html).

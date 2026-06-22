@@ -26,6 +26,10 @@
     { "path": "../bb-metrics" },
     { "path": "../bb-logger" },
     { "path": "../bb-tracer" },
-    { "path": "../bb-dashboard" }
+    { "path": "../bb-dashboard" },
+    { "path": "../otel-common" },
+    { "path": "../bb-otel-metrics" },
+    { "path": "../bb-otel-logger" },
+    { "path": "../bb-otel-tracer" }
   ]
 }

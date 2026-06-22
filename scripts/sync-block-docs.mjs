@@ -17,7 +17,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const packagesDir = join(__dirname, '..', 'packages');
 const outDir = join(packagesDir, 'blocks', 'docs');
 
-const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
+const EXCLUDED = new Set(['blocks', 'data-common', 'otel-common', 'foundations', 'create-blocks-app']);
 
 const DECISION_TREE = `# AWS Blocks — Building Block Catalog
 
@@ -41,11 +41,12 @@ Start from what you need:
   - Agent with tool use + conversation → \`Agent\` ([bb-agent](./bb-agent.md))
   - Semantic document retrieval (RAG) → \`KnowledgeBase\` ([bb-knowledge-base](./bb-knowledge-base.md))
 - **Send transactional email** → \`EmailClient\` ([bb-email-client](./bb-email-client.md))
-- **Observe and operate**
-  - Structured logs → \`Logger\` ([bb-logger](./bb-logger.md))
-  - Custom metrics → \`Metrics\` ([bb-metrics](./bb-metrics.md))
-  - Distributed traces → \`Tracer\` ([bb-tracer](./bb-tracer.md))
-  - Auto CloudWatch dashboard → \`Dashboard\` ([bb-dashboard](./bb-dashboard.md))
+- **Observe and operate** (OpenTelemetry blocks are **recommended** — vendor-neutral, with OTLP export to CloudWatch or any backend)
+  - Custom metrics → \`OtelMetrics\` ([bb-otel-metrics](./bb-otel-metrics.md))
+  - Structured logs → \`OtelLogger\` ([bb-otel-logger](./bb-otel-logger.md))
+  - Distributed traces → \`OtelTracer\` ([bb-otel-tracer](./bb-otel-tracer.md))
+  - Auto CloudWatch dashboard → \`Dashboard\` ([bb-dashboard](./bb-dashboard.md)) — works with both families
+  - Prefer AWS-native (CloudWatch EMF / X-Ray SDK) instead? → \`Metrics\` ([bb-metrics](./bb-metrics.md)) / \`Logger\` ([bb-logger](./bb-logger.md)) / \`Tracer\` ([bb-tracer](./bb-tracer.md))
 
 ### Choosing a data block
 

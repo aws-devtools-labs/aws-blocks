@@ -4,7 +4,9 @@ Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Form
 
 **When to use:** You need to track numeric measurements over time — request counts, error rates, latency, queue depths, business KPIs. Good for dashboards, alarms, and operational visibility.
 
-**When NOT to use:** If you need structured log output, use `Logging`. If you need distributed request tracing, use `Tracing`. If you need to store time-series data for querying, use `Database` or `DistributedTable`.
+> **Recommended:** Prefer `OtelMetrics` (`@aws-blocks/bb-otel-metrics`) for new applications — it is vendor-neutral OpenTelemetry, exports OTLP to CloudWatch (or any backend), and offers typed instruments (counters, histograms, gauges). Use this AWS-native EMF `Metrics` block when you specifically want CloudWatch Embedded Metric Format and classic namespace/dimension metrics.
+
+**When NOT to use:** If you need structured log output, use `Logging`. If you need distributed request tracing, use `Tracing`. If you need to store time-series data for querying, use `Database` or `DistributedTable`. For vendor-neutral OpenTelemetry metrics (the recommended default), use `OtelMetrics`.
 
 ## API
 

@@ -26,6 +26,7 @@ import type { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import type { Agent } from '@aws-blocks/bb-agent';
 import type { Dashboard } from '@aws-blocks/bb-dashboard';
 import type { Logger } from '@aws-blocks/bb-logger';
+import type { OtelLogger } from '@aws-blocks/bb-otel-logger';
 import type { Realtime } from '@aws-blocks/bb-realtime';
 import { getSdkIdentifiers as _getSdkIdentifiers } from '@aws-blocks/core';
 
@@ -63,6 +64,7 @@ export function getSdkIdentifiers(bb: InstanceType<typeof Realtime>): { wsUrl: s
 export function getSdkIdentifiers(bb: Agent): { conversationsTableName: string; messagesTableName: string; sessionBucketName: string; realtimeWsUrl: string; realtimeCallbackUrl: string; jobQueueUrl: string };
 export function getSdkIdentifiers(bb: Dashboard): { dashboardName: string };
 export function getSdkIdentifiers(bb: Logger): { logGroupName: string };
+export function getSdkIdentifiers(bb: OtelLogger): { logGroupName: string };
 export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string>;
 export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string> {
 	return _getSdkIdentifiers(bb);

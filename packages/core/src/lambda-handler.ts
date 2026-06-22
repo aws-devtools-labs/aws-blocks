@@ -332,6 +332,17 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
   }
 
   return async (event: any, context?: LambdaContext) => {
+    try {
+      return await dispatch(event, context);
+    } finally {
+      // Flush in-process OpenTelemetry telemetry before the sandbox freezes, so the
+      // OTel blocks' async exports reach the collector. No-op unless an OTel block has
+      // initialized (published via globalThis by @aws-blocks/otel-common).
+      await flushOtelTelemetry();
+    }
+  };
+
+  async function dispatch(event: any, context?: LambdaContext) {
     if (!handler) {
       if (!initPromise) initPromise = initialize();
       await initPromise;
@@ -396,7 +407,22 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Non-timeout errors (handler threw before deadline) propagate normally.
       throw err;
     }
-  };
+  }
+}
+
+/**
+ * Flush in-process OpenTelemetry telemetry if an OTel block has initialized.
+ * `@aws-blocks/otel-common` publishes `flushOtel` on `globalThis.__BLOCKS_OTEL_FLUSH__`;
+ * this stays a no-op (and never throws) when no OTel block is in use.
+ */
+async function flushOtelTelemetry(): Promise<void> {
+  const flush = (globalThis as any).__BLOCKS_OTEL_FLUSH__ as undefined | (() => Promise<void>);
+  if (typeof flush !== 'function') return;
+  try {
+    await flush();
+  } catch {
+    // Telemetry flush failures must never fail the request.
+  }
 }
 
 class HandlerTimeoutError extends Error {

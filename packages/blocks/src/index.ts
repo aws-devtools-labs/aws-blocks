@@ -296,6 +296,9 @@ export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFil
  * (DB calls, HTTP requests, business logic) with `startSegment`. Use
  * annotations for searchable values and metadata for debugging data.
  *
+ * **Prefer `OtelTracer` for new applications** — this block uses the X-Ray SDK
+ * directly; use it only when you specifically want that path.
+ *
  * Package: `@aws-blocks/bb-tracer`
  * Full docs: `README.md` in the package directory above.
  */
@@ -310,6 +313,9 @@ export type { TracerOptions, Segment, AnnotationValue } from '@aws-blocks/bb-tra
  * CloudWatch Embedded Metric Format — synchronous stdout writes with zero
  * latency impact. Supports dimensions, high-resolution (1s) metrics,
  * batch emission, and child emitters for scoped dimension inheritance.
+ *
+ * **Prefer `OtelMetrics` for new applications** — use this EMF block only when
+ * you specifically want CloudWatch Embedded Metric Format / classic metrics.
  *
  * Package: `@aws-blocks/bb-metrics`
  * Full docs: `README.md` in the package directory above.
@@ -327,6 +333,9 @@ export type { MetricsOptions, EmitOptions, MetricDatum, MetricUnit, MetricResolu
  *
  * For numeric measurements over time, use `Metrics`. For distributed
  * request tracing, use `Tracing`.
+ *
+ * **Prefer `OtelLogger` for new applications** — use this stdout-JSON block only
+ * when you specifically want that path.
  *
  * Package: `@aws-blocks/bb-logger`
  * Full docs: `README.md` in the package directory above.
@@ -348,3 +357,27 @@ export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } f
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type { DashboardOptions, MetricConfig, MetricsBBRef, LoggerBBRef, TracerBBRef } from '@aws-blocks/bb-dashboard';
+
+/**
+ * **OpenTelemetry observability blocks (Metrics / Logs / Traces) — recommended.**
+ *
+ * The preferred observability blocks for new applications: vendor-neutral
+ * OpenTelemetry, exporting to Amazon CloudWatch's native OTLP endpoints (or any OTLP
+ * backend) via an in-process OTel SDK and a standalone OpenTelemetry Collector Lambda
+ * layer. They keep the same ergonomic API as the AWS-native blocks (`emit` /
+ * `info`-`warn`-`error` / `startSegment`) and additionally expose OTel's typed
+ * instruments, span links/events, context propagation, and the raw
+ * `Meter` / `Tracer` / `Logger` handles.
+ *
+ * Prefer these over the AWS-native `Metrics` / `Logger` / `Tracer` blocks unless you
+ * specifically need CloudWatch EMF metrics or the X-Ray SDK.
+ *
+ * Packages: `@aws-blocks/bb-otel-metrics`, `@aws-blocks/bb-otel-logger`,
+ * `@aws-blocks/bb-otel-tracer`.
+ */
+export { OtelMetrics, OtelMetricsErrors } from '@aws-blocks/bb-otel-metrics';
+export type { OtelMetricsOptions, OtelMetricsEmitter } from '@aws-blocks/bb-otel-metrics';
+export { OtelLogger, OtelLoggingErrors } from '@aws-blocks/bb-otel-logger';
+export type { OtelLoggingOptions, OtelChildLogger } from '@aws-blocks/bb-otel-logger';
+export { OtelTracer } from '@aws-blocks/bb-otel-tracer';
+export type { OtelTracerOptions, Segment as OtelSegment, StartSegmentOptions } from '@aws-blocks/bb-otel-tracer';

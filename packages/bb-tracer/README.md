@@ -4,7 +4,9 @@ Distributed tracing backed by AWS X-Ray.
 
 **When to use:** You need to trace request flow across services, debug latency issues, or visualize service dependencies. Good for identifying bottlenecks, understanding call chains, and correlating failures across Building Blocks.
 
-**When NOT to use:** If you need structured log output, use `Logging`. If you need numeric measurements over time, use `Metrics`.
+> **Recommended:** Prefer `OtelTracer` (`@aws-blocks/bb-otel-tracer`) for new applications — vendor-neutral OpenTelemetry tracing (span links/events, W3C context propagation) that exports OTLP to CloudWatch/X-Ray (or any backend). Use this AWS-native `Tracer` when you specifically want the X-Ray SDK.
+
+**When NOT to use:** If you need structured log output, use `Logging`. If you need numeric measurements over time, use `Metrics`. For vendor-neutral OpenTelemetry tracing (the recommended default), use `OtelTracer`.
 
 ## Installation
 
@@ -100,3 +102,4 @@ The mock records all traces locally with full timing, annotations, metadata, and
 ## See Also
 
 - [Types](./src/types.ts) — Shared type definitions (`Segment`, `TracerOptions`, `AnnotationValue`)
+- `OtelTracer` (`@aws-blocks/bb-otel-tracer`) — the vendor-neutral OpenTelemetry alternative (OTLP export, span links/events, context propagation)
