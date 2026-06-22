@@ -978,6 +978,31 @@ describe('chunking configuration', () => {
 			cleanupDirs(srcName);
 		}
 	});
+
+	test('chunkSize 0 yields no chunks and retrieve does not crash (maxTokens<=0 guard)', async () => {
+		const srcName = '_chunksize-zero';
+		const src = freshDir(srcName);
+		// A blank-line-free paragraph that 'fixed' chunking would normally split.
+		// With chunkSize 0 (→ maxTokens 0) the guard bails out: nothing is indexed,
+		// and retrieve() must return cleanly rather than throw or loop on a negative overlap.
+		const words = Array.from({ length: 200 }, (_, i) => `word${i} content text knowledge`).join(' ');
+		writeFileSync(join(src, 'doc.md'), words);
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'chunkzero', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 0 },
+			});
+			const results = await kb.retrieve('word0 content');
+			assert.deepStrictEqual(
+				results,
+				[],
+				'chunkSize 0 must produce no chunks (maxTokens<=0 guard) and retrieve must not crash',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
 });
 
 // ── Unicode / multilingual retrieval ─────────────────────────────────────────

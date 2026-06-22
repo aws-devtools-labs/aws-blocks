@@ -74,7 +74,10 @@ function mapSdkError(err: unknown): Error {
 
 	let mapped: Error;
 	if (err.name === 'ResourceNotFoundException') {
-		mapped = blocksError(KnowledgeBaseErrors.NotReady, 'Knowledge base not found. Run `cdk deploy` first.');
+		mapped = blocksError(
+			KnowledgeBaseErrors.NotReady,
+			`Knowledge base not found. Run \`cdk deploy\` first. (${err.message})`,
+		);
 	} else if (err.name === 'ValidationException' && isFilterRelatedValidation(err.message)) {
 		mapped = blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
 	} else if (err.name === 'ValidationException') {

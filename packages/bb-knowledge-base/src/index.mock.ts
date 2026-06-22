@@ -67,6 +67,9 @@ function chunkByParagraphs(text: string): string[] {
  * keeps trailing words indexed (e.g. with zero overlap, where step === maxTokens).
  */
 function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): string[] {
+	// A non-positive window size has no valid chunk to emit. Bail out before the
+	// clamp below, whose upper bound (maxTokens - 1) would otherwise go negative.
+	if (maxTokens <= 0) return [];
 	const words = text.split(/\s+/);
 	if (words.length <= maxTokens) return text.trim().length >= 20 ? [text.trim()] : [];
 
@@ -340,7 +343,8 @@ export class KnowledgeBase extends Scope {
 			hash.update(f);
 			try {
 				const stat = statSync(f);
-				// Trade-off: key on mtime+size (rsync-style heuristic), not byte content — fast and fine for local dev, though a same-second, same-size edit could be missed.
+				// Trade-off: key on mtime+size (rsync-style heuristic), not byte content —
+				// fast for local dev, though a same-second, same-size edit could be missed.
 				hash.update(String(stat.mtimeMs));
 				hash.update(String(stat.size));
 			} catch {

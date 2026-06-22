@@ -448,9 +448,9 @@ describe('error classification — ValidationException', () => {
 // ── Error classification — other SDK exceptions ────────────────────────────
 
 describe('error classification — other SDK exceptions', () => {
-	test('ResourceNotFoundException maps to NotReady', async () => {
+	test('ResourceNotFoundException maps to NotReady (actionable hint + original SDK message)', async () => {
 		const cleanup = setKbEnv('TEST', 'ERR4');
-		const err = new Error('Knowledge base not found');
+		const err = new Error('No knowledge base with ID kb-xyz exists');
 		err.name = 'ResourceNotFoundException';
 		mockRuntimeSend(() => { throw err; });
 
@@ -460,6 +460,14 @@ describe('error classification — other SDK exceptions', () => {
 				() => kb.retrieve('query'),
 				(e: Error) => {
 					assert.strictEqual(e.name, KnowledgeBaseErrors.NotReady);
+					assert.ok(
+						e.message.includes('cdk deploy'),
+						'NotReady message should keep the actionable deploy hint',
+					);
+					assert.ok(
+						e.message.includes('No knowledge base with ID kb-xyz exists'),
+						'NotReady message should append the original SDK message',
+					);
 					return true;
 				},
 			);
