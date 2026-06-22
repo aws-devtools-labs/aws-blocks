@@ -574,6 +574,7 @@ Options:
                          starter app; when adding to an existing project it
                          selects which aws-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
+                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
