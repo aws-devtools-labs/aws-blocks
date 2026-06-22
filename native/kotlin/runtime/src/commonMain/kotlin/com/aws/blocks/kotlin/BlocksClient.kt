@@ -24,6 +24,16 @@ class BlocksClient(
 ) {
     internal val httpClient: HttpClient = defaultHttpClient()
 
+    companion object {
+        /**
+         * Clears all persisted cookies (e.g. session tokens).
+         * Call this to ensure a fully logged-out state across app restarts.
+         */
+        fun clearCookies() {
+            PersistentCookiesStorage().clear()
+        }
+    }
+
     suspend fun execute(request: BlocksRequest): JsonElement {
         val json = Json.encodeToString(request)
 
