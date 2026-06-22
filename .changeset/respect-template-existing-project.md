@@ -12,4 +12,4 @@ instead of `npx next dev ...`, so `npm run dev:server` tried to launch Vite in a
 project without it.
 
 The requested template now drives the copied `aws-blocks/` workspace, `cdk.json`, and
-devDeps, falling back to `default` when the template has no `aws-blocks/` workspace.
+devDeps.
