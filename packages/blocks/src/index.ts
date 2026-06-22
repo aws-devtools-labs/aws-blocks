@@ -203,6 +203,24 @@ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
 
 /**
+ * **Server-to-server pub/sub event bus backed by EventBridge.**
+ *
+ * Use for event-driven, decoupled architectures: publish a typed domain event
+ * once (`order.placed`) and the bus fans it out to every independent subscriber
+ * (charge card, send receipt, update search index) without the producer knowing
+ * who listens. Subscribe with `on(type, handler)` (or `'*'` for all events) and
+ * emit with `publish(type, detail)`. Optional per-subscription schema validation.
+ *
+ * For a single-consumer work queue with retries and a DLQ, use `AsyncJob`. To
+ * push events to browser clients, use `Realtime`.
+ *
+ * Package: `@aws-blocks/bb-event-bus`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { EventBus, EventBusErrors } from '@aws-blocks/bb-event-bus';
+export type { EventBusOptions, EventContext, EventHandler, EventMap, PublishResult, SubscribeOptions as EventSubscribeOptions } from '@aws-blocks/bb-event-bus';
+
+/**
  * **AI agent with streaming, tool calling, and conversation persistence.**
  *
  * Use for building conversational AI experiences: chatbots, copilots, data

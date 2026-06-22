@@ -44,6 +44,8 @@ export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-d
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
+export { EventBus, EventBusErrors } from '@aws-blocks/bb-event-bus';
+export type { EventBusOptions, EventContext, EventHandler, EventMap, PublishResult, SubscribeOptions as EventSubscribeOptions } from '@aws-blocks/bb-event-bus';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AgentConfig, AgentResult, AgentStreamChunk, ToolDefinition, ToolCallRecord, ModelConfig, StreamOptions, TokenUsage } from '@aws-blocks/bb-agent';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';

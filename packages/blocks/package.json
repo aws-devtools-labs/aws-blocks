@@ -64,6 +64,7 @@
     "@aws-blocks/bb-data": "^0.1.1",
     "@aws-blocks/bb-distributed-data": "^0.1.1",
     "@aws-blocks/bb-async-job": "^0.1.1",
+    "@aws-blocks/bb-event-bus": "^0.1.0",
     "@aws-blocks/bb-cron-job": "^0.1.1",
     "@aws-blocks/bb-file-bucket": "^0.1.1",
     "@aws-blocks/bb-app-setting": "^0.1.1",
@@ -94,6 +95,9 @@
       ],
       "@aws-blocks/bb-async-job": [
         "AsyncJob"
+      ],
+      "@aws-blocks/bb-event-bus": [
+        "EventBus"
       ],
       "@aws-blocks/bb-cron-job": [
         "CronJob"
