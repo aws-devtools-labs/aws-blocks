@@ -53,6 +53,7 @@ import { WafConstruct } from './waf_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { CdnConstruct } from './cdn_construct.js';
+import type { QuotaOverrides } from './quota_budget.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
 import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 
@@ -205,6 +206,19 @@ export type HostingConstructProps = {
      * construct is not created.
      */
     webAclArn?: string;
+    /**
+     * Overrides for the adjustable AWS Service Quotas this distribution draws
+     * on — `cacheBehaviors` (CloudFront behaviors per distribution),
+     * `edgeFunctions` (Lambda@Edge associations), and `headerPolicies`
+     * (response-headers policies per account). Omitted fields use AWS
+     * defaults.
+     *
+     * Set a field ONLY to match a quota increase AWS has actually granted:
+     * synth cannot verify your real quota, so an over-set value does not raise
+     * the AWS ceiling — it just moves the failure from a clear synth error to
+     * an opaque CloudFormation rollback at deploy.
+     */
+    quotas?: QuotaOverrides;
   };
   /** S3 storage configuration. */
   storage?: {
@@ -1091,6 +1105,7 @@ export class HostingConstruct extends Construct {
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
+      quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages
         ? {
             notFound: !!props.errorPages.notFound,

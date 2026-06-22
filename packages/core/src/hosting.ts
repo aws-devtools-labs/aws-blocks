@@ -206,6 +206,36 @@ export interface HostingProps {
   };
 
   /**
+   * Overrides for the adjustable AWS Service Quotas the CloudFront
+   * distribution draws on. Each field maps to a named AWS quota you can
+   * request an increase on:
+   *
+   *   - `cacheBehaviors` — "Cache behaviors per distribution" (default 25).
+   *     Consumed by routed paths, prerendered pages, per-pattern header
+   *     rules, assetPrefix, and the error-page behavior.
+   *   - `edgeFunctions` — Lambda@Edge associations per distribution
+   *     (default 25). Consumed by `runtime: 'edge'` routes.
+   *   - `headerPolicies` — "Response headers policies per AWS account"
+   *     (default 20, account-wide).
+   *
+   * Omitted fields use the AWS default. Set a field ONLY to match a quota
+   * increase AWS has actually granted — synth cannot verify your real quota,
+   * so an over-set value does not raise the AWS ceiling; it just moves the
+   * failure from a clear synth error to an opaque CloudFormation rollback.
+   *
+   * @example
+   * ```ts
+   * // After AWS grants "Cache behaviors per distribution" = 50:
+   * new Hosting(stack, 'Web', { root, quotas: { cacheBehaviors: 50 } });
+   * ```
+   */
+  quotas?: {
+    cacheBehaviors?: number;
+    edgeFunctions?: number;
+    headerPolicies?: number;
+  };
+
+  /**
    * Build cache configuration. When enabled, provisions an S3 bucket for
    * framework build caches (e.g. Next.js .next/cache) and exports the bucket
    * name as a CfnOutput. Reduces cold-build times in CI.
@@ -488,11 +518,12 @@ export class Hosting extends Construct {
       storage: props.retainOnDelete != null
         ? { retainOnDelete: props.retainOnDelete }
         : undefined,
-      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction)
+      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas)
         ? {
             contentSecurityPolicy: props.contentSecurityPolicy,
             priceClass: props.priceClass,
             geoRestriction: props.geoRestriction,
+            quotas: props.quotas,
           }
         : undefined,
       logging: props.logging,

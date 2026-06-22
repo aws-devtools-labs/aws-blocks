@@ -897,6 +897,238 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('quotas.cacheBehaviors override raises the behavior cap', () => {
+      // 25 static routes = 25 additional behaviors, which exceeds the default
+      // cap of 24 → would throw. With a granted quota of 30 (29 additional),
+      // it must synth fine.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const manyRoutes = Array.from({ length: 25 }, (_, i) => ({
+        pattern: `/route-${i}`,
+        target: 'static',
+      }));
+      manyRoutes.push({ pattern: '/*', target: 'static' });
+
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {},
+        staticAssets: { directory: '/tmp/assets' },
+        routes: manyRoutes,
+        buildId: 'test-quota-override-1',
+      };
+
+      // Default cap → throws.
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'CdnDefault', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+          }),
+        (e: unknown) => (e as HostingError).name === 'TooManyRoutesError',
+      );
+
+      // Raised quota → succeeds.
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'CdnRaised', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            quotas: { cacheBehaviors: 30 },
+          }),
+      );
+    });
+
+    void it('groups co-located sibling pages under one <parent>/* behavior instead of throwing (static-only)', () => {
+      // 24 sibling pages under /docs → 24 subtree + 24 bare = 48 behaviors,
+      // far over the cap. Static-only, so they group to a single `/docs/*`
+      // behavior (lossless — all resolve from S3) and synth succeeds.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const docRoutes = Array.from({ length: 24 }, (_, i) => ({
+        pattern: `/docs/page-${i}/*`,
+        target: 'static',
+      }));
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {},
+        staticAssets: { directory: '/tmp/assets', spaFallback: false },
+        routes: [...docRoutes, { pattern: '/*', target: 'static' }],
+        buildId: 'test-group-1',
+      };
+
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+          }),
+      );
+      const template = Template.fromStack(stack);
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
+        };
+      };
+      const patterns = (
+        dist.Properties.DistributionConfig.CacheBehaviors ?? []
+      ).map((b) => b.PathPattern);
+      assert.ok(patterns.length <= 24, `expected ≤24 behaviors, got ${patterns.length}`);
+      assert.ok(
+        patterns.includes('/docs/*'),
+        `expected a grouped /docs/* behavior; got ${JSON.stringify(patterns)}`,
+      );
+    });
+
+    void it('demotes prerendered pages to the SSR runtime instead of throwing when over the behavior budget (compute)', () => {
+      // 20 prerendered-page subtree routes → 20 subtree + 20 derived bare = 40
+      // behaviors, far over the cap of 24. With a catch-all SSR Lambda present,
+      // the lowest-priority pages demote to the runtime and synth succeeds.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+
+      const pageRoutes = Array.from({ length: 20 }, (_, i) => ({
+        pattern: `/page-${i}/*`,
+        target: 'static',
+      }));
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: { type: 'handler', bundle: '/tmp/b', handler: 'i.h', placement: 'regional' },
+        },
+        staticAssets: { directory: '/tmp/assets', immutablePaths: ['_nuxt/*'] },
+        routes: [...pageRoutes, { pattern: '/*', target: 'default' }],
+        buildId: 'test-demote-1',
+      };
+
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            computeFunctionUrls: new Map([['default', fnUrl]]),
+            computeFunctions: new Map([['default', fn]]),
+          }),
+      );
+      // After demotion the distribution must be at/under the additional cap.
+      const template = Template.fromStack(stack);
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: { DistributionConfig: { CacheBehaviors?: unknown[] } };
+      };
+      const behaviors = dist.Properties.DistributionConfig.CacheBehaviors ?? [];
+      assert.ok(
+        behaviors.length <= 24,
+        `expected ≤24 additional behaviors after demotion, got ${behaviors.length}`,
+      );
+    });
+
+    void it('does NOT demote a hashed-asset prefix — it must stay on the edge (S3)', () => {
+      // A hashed-asset route (_nuxt/*) is NOT demotable: the SSR Lambda can't
+      // serve those bytes. With enough pages to force demotion, the _nuxt/*
+      // behavior must survive while pages demote.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+
+      const pageRoutes = Array.from({ length: 20 }, (_, i) => ({
+        pattern: `/page-${i}/*`,
+        target: 'static',
+      }));
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: { type: 'handler', bundle: '/tmp/b', handler: 'i.h', placement: 'regional' },
+        },
+        staticAssets: { directory: '/tmp/assets', immutablePaths: ['_nuxt/*'] },
+        routes: [
+          { pattern: '/_nuxt/*', target: 'static' },
+          ...pageRoutes,
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'test-demote-keep-assets',
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+      });
+      const template = Template.fromStack(stack);
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
+        };
+      };
+      const patterns = (
+        dist.Properties.DistributionConfig.CacheBehaviors ?? []
+      ).map((b) => b.PathPattern);
+      assert.ok(
+        patterns.includes('/_nuxt/*'),
+        `_nuxt/* must survive demotion; got ${JSON.stringify(patterns)}`,
+      );
+    });
+
+    void it('quotas.edgeFunctions override raises the edge-function cap', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const edgeRoutes: Map<string, IVersion> = new Map();
+      for (let i = 0; i < 26; i++) {
+        const fn = new LambdaFunction(stack, `QEdgeFn${i}`, {
+          runtime: Runtime.NODEJS_20_X,
+          handler: 'index.handler',
+          code: Code.fromInline('exports.handler = async () => {};'),
+        });
+        edgeRoutes.set(`/edge-${i}`, fn.currentVersion);
+      }
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {},
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'static' }],
+        buildId: 'test-quota-edge-1',
+      };
+      // 26 edge routes > default 25 → throws; raised to 30 → fine.
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'CdnEdgeDefault', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            routeEdgeFunctions: edgeRoutes,
+          }),
+        (e: unknown) => (e as HostingError).name === 'TooManyEdgeRoutesError',
+      );
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'CdnEdgeRaised', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            routeEdgeFunctions: edgeRoutes,
+            quotas: { edgeFunctions: 30 },
+          }),
+      );
+    });
+
     void it('throws EmptyGeoRestrictionError for empty countries', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
@@ -2474,12 +2706,16 @@ void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
     const bucket = new Bucket(stack, 'Bucket');
     const policy = createSecurityHeadersPolicy(stack, 'SH', {});
     // Should synth fine (the cosmetic header is dropped with a warning).
+    // The 24 distinct filler policies would themselves exceed the default
+    // account RHP quota (20); raise headerPolicies so this test isolates the
+    // BEHAVIOR cap it actually exercises (the RHP quota has its own test).
     assert.doesNotThrow(
       () =>
         new CdnConstruct(stack, 'Cdn', {
           bucket,
           manifest: baseStatic(fill({ 'x-custom-cosmetic': 'value' })),
           securityHeadersPolicy: policy,
+          quotas: { headerPolicies: 100 },
         }),
     );
   });
@@ -2497,6 +2733,132 @@ void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
           ]),
           securityHeadersPolicy: policy,
         }),
+    );
+  });
+
+  void it('throws TooManyHeaderPoliciesError when distinct policies exceed the account RHP quota', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    // 24 distinct header-value sets → 24 distinct ResponseHeadersPolicies,
+    // exceeding the default account quota of 20. Previously unguarded; now
+    // surfaced as a clear synth error instead of an opaque deploy failure.
+    assert.throws(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseStatic(fill({ 'x-custom-cosmetic': 'value' })),
+          securityHeadersPolicy: policy,
+        }),
+      (e: Error) => {
+        assert.strictEqual(e.name, 'TooManyHeaderPoliciesError');
+        return true;
+      },
+    );
+  });
+
+  void it('dedupes identical header sets so they draw the RHP quota once', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    // 24 patterns but all the SAME header value → 1 deduped policy. Must NOT
+    // trip the RHP quota (proves dedup feeds the budget, not raw rule count).
+    const sameHeaderRules = Array.from({ length: 24 }, (_, i) => ({
+      source: `/h${i}`,
+      headers: { 'x-shared': 'same-value' },
+    }));
+    assert.doesNotThrow(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseStatic(sameHeaderRules),
+          securityHeadersPolicy: policy,
+        }),
+    );
+  });
+
+  // ----------------------------------------------------------------
+  // Runtime delegation: when compute is present, a header-only pattern
+  // (one with no behavior of its own) is NOT given a dedicated CloudFront
+  // behavior. Its requests fall through to the catch-all SSR Lambda, which
+  // already emits the framework's headers() / routeRules at runtime — so a
+  // dedicated edge behavior would be redundant and would burn a scarce
+  // behavior slot. Two consequences we assert:
+  //   1. Even a CSP rule that "overflows" the static cap does NOT fail the
+  //      build (the runtime applies it).
+  //   2. No extra per-pattern behavior is synthesized for the header rule.
+  // ----------------------------------------------------------------
+
+  // Manifest with an SSR compute origin (catch-all → 'default') so
+  // `hasCompute` is true, plus N header-only patterns.
+  const baseCompute = (
+    headers: { source: string; headers: Record<string, string> }[],
+  ): DeployManifest => ({
+    version: 1,
+    compute: {
+      default: {
+        type: 'handler',
+        bundle: '/tmp/bundle',
+        handler: 'index.handler',
+        placement: 'regional',
+      },
+    },
+    staticAssets: { directory: '/tmp/assets' },
+    routes: [{ pattern: '/*', target: 'default' }],
+    headers,
+    buildId: 'test-hdrcap-compute-1',
+  });
+
+  void it('does NOT throw for a SECURITY header over the static cap when compute is present (runtime delegation)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+    // 24 cosmetic + 1 CSP rule: far past the static-only cap, but every
+    // header-only pattern delegates to the SSR runtime, so synth succeeds.
+    assert.doesNotThrow(
+      () =>
+        new CdnConstruct(stack, 'Cdn', {
+          bucket,
+          manifest: baseCompute(fill({ 'content-security-policy': "default-src 'self'" })),
+          securityHeadersPolicy: policy,
+          computeFunctionUrls: new Map([['default', fnUrl]]),
+          computeFunctions: new Map([['default', fn]]),
+        }),
+    );
+  });
+
+  void it('synthesizes NO per-pattern behavior for header-only rules under compute (delegates to runtime)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: baseCompute([
+        { source: '/secure', headers: { 'content-security-policy': "default-src 'self'" } },
+        { source: '/promo', headers: { 'x-custom-cosmetic': 'value' } },
+      ]),
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+    // The header-only patterns must NOT appear as CloudFront cache
+    // behaviors — they're served by the catch-all SSR Lambda.
+    const template = Template.fromStack(stack);
+    const dist = Object.values(
+      template.findResources('AWS::CloudFront::Distribution'),
+    )[0] as {
+      Properties: {
+        DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
+      };
+    };
+    const patterns = (
+      dist.Properties.DistributionConfig.CacheBehaviors ?? []
+    ).map((b) => b.PathPattern);
+    assert.ok(
+      !patterns.includes('/secure') && !patterns.includes('/promo'),
+      `header-only patterns should not be wired as behaviors; got ${JSON.stringify(patterns)}`,
     );
   });
 });

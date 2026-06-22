@@ -67,6 +67,7 @@ import {
   generateSkewProtectionViewerRequestCode,
   generateSkewProtectionViewerResponseCode,
 } from './skew_protection.js';
+import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 
 // ---- Constants ----
 
@@ -74,24 +75,12 @@ import {
 const CLOUDFRONT_FUNCTION_RUNTIME = FunctionRuntime.JS_2_0;
 
 /**
- * CloudFront allows a maximum of 25 cache behaviors per distribution
- * (1 default + 24 additional).
+ * Headroom (in edge-function slots) below the effective Lambda@Edge quota at
+ * which we emit a stderr warning, so a distribution approaching the account
+ * limit is flagged before it fails. Other distributions in the same account
+ * count against the same quota.
  */
-const MAX_ADDITIONAL_BEHAVIORS = 24;
-
-/**
- * AWS account-level soft limit on Lambda@Edge replicated function
- * versions. The hard cap is 25; we hard-fail at synth time when this
- * distribution alone would exceed it (the deploy would fail anyway with
- * a CloudFormation error that's harder to debug).
- */
-const MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION = 25;
-
-/**
- * Threshold above which we emit a stderr warning. The 5-route gap
- * leaves headroom for other distributions in the same account.
- */
-const EDGE_FUNCTIONS_WARNING_THRESHOLD = 20;
+const EDGE_FUNCTIONS_WARNING_HEADROOM = 5;
 
 const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -191,6 +180,13 @@ export type CdnConstructProps = {
    * the `webAcl` construct reference.
    */
   webAclArn?: string;
+  /**
+   * Overrides for the adjustable AWS Service Quotas this distribution draws
+   * on (cache behaviors, Lambda@Edge associations, response-headers policies).
+   * Omitted fields use AWS defaults. Set a field only to match a quota
+   * increase AWS has actually granted — see {@link QuotaOverrides}.
+   */
+  quotas?: QuotaOverrides;
 };
 
 // ---- Construct ----
@@ -266,22 +262,43 @@ export class CdnConstruct extends Construct {
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
+    // Central accounting for the adjustable quotas this distribution draws on.
+    // Consumers call budget.consume() as they allocate; the authoritative
+    // budget.assertWithinLimits() runs just before the Distribution is created.
+    const budget = new QuotaBudget(props.quotas);
+    // The behavior budget counts the FULL CloudFront limit (default + N
+    // additional), so the additional-behavior ceiling is `limit - 1`. Sourced
+    // from the budget so a `quotas.cacheBehaviors` override is honored instead
+    // of a hardcoded constant. Used by both the per-pattern header cap check
+    // and the authoritative count near the end.
+    const maxAdditionalBehaviors = budget.limit('cacheBehaviors') - 1;
+
     // ---- Lambda@Edge function-count validation ----
+    // Edge functions are validated eagerly (their count is known up front and
+    // is independent of behavior allocation). The cache-behavior and
+    // header-policy budgets are consumed incrementally below and enforced by
+    // the single assertWithinLimits() call near the end.
     const edgeRouteCount = props.routeEdgeFunctions?.size ?? 0;
-    if (edgeRouteCount > MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION) {
+    if (edgeRouteCount > 0) {
+      budget.consume('edgeFunctions', 'edge-routes', edgeRouteCount);
+    }
+    const edgeLimit = budget.limit('edgeFunctions');
+    if (edgeRouteCount > edgeLimit) {
       throw new HostingError('TooManyEdgeRoutesError', {
-        message: `This distribution declares ${edgeRouteCount} edge-runtime routes, exceeding the AWS Lambda@Edge limit of ${MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION} replicated functions per account.`,
+        message: `This distribution declares ${edgeRouteCount} edge-runtime routes, exceeding the Lambda@Edge limit of ${edgeLimit} replicated functions per account.`,
         resolution:
           'Reduce the number of routes that export `runtime: "edge"`, ' +
           'consolidate edge logic into fewer routes (e.g. one router that ' +
-          'switches on path), or request a service-quota increase: ' +
+          'switches on path), raise the `quotas.edgeFunctions` hosting prop if ' +
+          'AWS has granted your account a higher limit, or request a ' +
+          'service-quota increase: ' +
           'https://docs.aws.amazon.com/lambda/latest/dg/edge-functions-restrictions.html',
       });
     }
-    if (edgeRouteCount >= EDGE_FUNCTIONS_WARNING_THRESHOLD) {
+    if (edgeRouteCount >= edgeLimit - EDGE_FUNCTIONS_WARNING_HEADROOM) {
       process.stderr.write(
         `⚠️  Hosting: this distribution declares ${edgeRouteCount} edge-runtime routes. ` +
-          `The AWS Lambda@Edge limit is ${MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION} per account; ` +
+          `The Lambda@Edge limit is ${edgeLimit} per account; ` +
           `other distributions in the same account count against the same quota.\n`,
       );
     }
@@ -741,6 +758,16 @@ export class CdnConstruct extends Construct {
     // ships. See the `TooManyRoutesError` throw below.
 
     const basePath = manifest.basePath;
+    const immutableGlobs = manifest.staticAssets.immutablePaths ?? [];
+
+    // Prerendered-page behaviors, recorded in route order (descending
+    // specificity) so the budget-relief passes below can act on the
+    // lowest-priority ones first. Each entry maps the subtree pattern to its
+    // derived bare pattern (if any) so both move together. Used two ways:
+    //   - compute deploys: DEMOTE to the SSR runtime (Phase 2).
+    //   - static-only deploys: GROUP co-located siblings under one
+    //     `<parent>/*` behavior (Phase 3) — there's no runtime to demote to.
+    const pageBehaviors: { subtree: string; bare: string | null }[] = [];
 
     for (const route of specificRoutes) {
       const isStatic = route.target === 'static' || route.target === 's3';
@@ -766,6 +793,13 @@ export class CdnConstruct extends Construct {
         const barePattern = deriveBareStaticPattern(cfPattern);
         if (barePattern && !(barePattern in additionalBehaviors)) {
           additionalBehaviors[barePattern] = makeStaticBehavior();
+        }
+
+        // Record prerendered pages (not hashed-asset prefixes) for the
+        // budget-relief passes. The compute-vs-static decision of HOW to
+        // relieve pressure is made later; here we just identify candidates.
+        if (isDemotablePageRoute(route, cfPattern, immutableGlobs, basePath)) {
+          pageBehaviors.push({ subtree: cfPattern, bare: barePattern });
         }
       } else {
         // OpenNext edge routes (`runtime = 'edge'`) come through as compute
@@ -937,6 +971,12 @@ export class CdnConstruct extends Construct {
           { contentSecurityPolicy: props.contentSecurityPolicy },
         );
         policyByFingerprint.set(fp, policy);
+        // Each DISTINCT (deduped) per-pattern policy draws from the account-wide
+        // "Response headers policies per AWS account" quota. Track it so the
+        // budget can flag a distribution that alone would exhaust the account
+        // limit — previously this quota was unguarded and blew up opaquely at
+        // deploy time.
+        budget.consume('headerPolicies', `policy:${fp}`);
         return policy;
       };
 
@@ -950,12 +990,13 @@ export class CdnConstruct extends Construct {
 
       // B22: when no behavior exists for a header pattern yet, the synthesized
       // behavior must match how the catch-all would have served the same
-      // request. If the manifest declares any compute (SSR/ISR/SWR), the
-      // route is dynamic and must point to the compute origin — pointing
-      // at S3 here would shadow the catch-all and 403 every request.
-      // Static-only deploys (no compute) fall back to a static behavior.
+      // request. This is only reached for STATIC-only deploys — when the
+      // manifest declares compute, header-only patterns delegate to the SSR
+      // runtime instead of getting a (redundant) dedicated behavior (see the
+      // `hasCompute` early-continue in the header loop below). So a static
+      // behavior is always the correct origin choice here.
       const synthesizeBehaviorForHeaderPattern = (): BehaviorOptions =>
-        hasCompute ? makeComputeBehavior() : makeStaticBehavior();
+        makeStaticBehavior();
 
       for (const entry of manifestHeaders) {
         const cfPattern = normalizePatternForCloudFront(entry.source);
@@ -972,27 +1013,51 @@ export class CdnConstruct extends Construct {
             entry.headers,
           );
         } else {
-          // No behavior for this pattern yet. Create one that matches the
-          // catch-all's origin choice (compute or static) so headers are
-          // additive, not redirecting requests. When we'd exceed the
-          // CloudFront behavior cap the rule can't be wired:
-          //   - a SECURITY header (CSP/HSTS/X-Frame-Options/…) silently
-          //     vanishing looks like a successful deploy but ships an
-          //     unprotected site — fail the build instead.
-          //   - a cosmetic custom header is acceptable to lose; warn only.
+          // No behavior exists for this header-only pattern yet. Whether we
+          // synthesize a dedicated edge behavior for it depends on whether a
+          // runtime sits in the request path:
+          //
+          //   - WITH compute: a synthesized behavior would point at the SAME
+          //     SSR Lambda the catch-all (defaultBehavior) already routes this
+          //     path to — same origin, same policy choice.
+          //     Every manifest.headers entry originates from the framework's
+          //     own config (Next headers() / Nitro routeRules), and the
+          //     framework server emits those headers at runtime from its
+          //     bundled manifest; CloudFront caches the Lambda response
+          //     INCLUDING those headers. So a dedicated edge behavior is pure
+          //     redundancy — it burns one of the scarce ~25 behavior slots to
+          //     re-assert a header the origin already sets. Delegate to the
+          //     runtime: don't wire a behavior, let the request fall through
+          //     to the catch-all. This also keeps header rules from competing
+          //     with genuinely-needed route behaviors for the behavior cap.
+          //   - STATIC-ONLY: S3 serves the bytes directly; there is no runtime
+          //     to emit the header, so a dedicated behavior is the ONLY way to
+          //     apply it. If wiring it would exceed the CloudFront behavior
+          //     cap, a SECURITY header (CSP/HSTS/X-Frame/…) silently vanishing
+          //     looks like a successful deploy but ships an unprotected site —
+          //     fail the build. A cosmetic header is acceptable to lose; warn.
+          if (hasCompute) {
+            process.stdout.write(
+              `ℹ️  Header rule for "${entry.source}" is applied at the ` +
+                `framework server runtime (the SSR origin already emits it); ` +
+                `skipping a redundant CloudFront behavior.\n`,
+            );
+            continue;
+          }
           if (
-            Object.keys(additionalBehaviors).length >= MAX_ADDITIONAL_BEHAVIORS
+            Object.keys(additionalBehaviors).length >= maxAdditionalBehaviors
           ) {
             if (containsSecurityHeader(entry.headers)) {
               throw new HostingError('SecurityHeaderDroppedError', {
                 message:
                   `Cannot apply the header rule for "${entry.source}": the ` +
                   `distribution is already at the CloudFront cache-behavior ` +
-                  `cap (${MAX_ADDITIONAL_BEHAVIORS}), and this rule sets a ` +
+                  `cap (${maxAdditionalBehaviors}), and this rule sets a ` +
                   `security header (${Object.keys(entry.headers)
                     .filter((h) => containsSecurityHeader({ [h]: '' }))
-                    .join(', ')}). Dropping it would silently ship an ` +
-                  `unprotected response.`,
+                    .join(', ')}). This is a static-only deploy, so there is ` +
+                  `no runtime to fall back to and dropping it would silently ` +
+                  `ship an unprotected response.`,
                 resolution:
                   'Reduce the number of routed paths / per-pattern header ' +
                   'rules so the distribution stays under the behavior cap, ' +
@@ -1162,6 +1227,68 @@ export class CdnConstruct extends Construct {
       };
     }
 
+    // ---- Budget relief: grouping (static) then demotion (compute) ----
+    // Both passes only fire when the distribution would exceed its
+    // cache-behavior budget, and both only ever touch prerendered-PAGE
+    // behaviors (hashed-asset prefixes, edge routes, image-opt and non-default
+    // compute are never in `pageBehaviors`, so they are never collapsed or
+    // demoted).
+
+    // Phase 3 — grouping (static-only). Collapse co-located sibling pages that
+    // share a parent path into one `<parent>/*` behavior. Safe ONLY when the
+    // catch-all is itself S3 (no compute): then a path under `<parent>/` —
+    // known or not — resolves through S3 whether it hits the grouped behavior
+    // or the catch-all, so the merge is lossless (same origin, same policy,
+    // fewer behaviors). Under compute it would be UNSAFE (an unknown
+    // `<parent>/x` the SSR Lambda renders dynamically would instead be sent to
+    // S3 and 404), so compute uses demotion below rather than grouping.
+    if (
+      !hasCompute &&
+      Object.keys(additionalBehaviors).length > maxAdditionalBehaviors &&
+      pageBehaviors.length > 0
+    ) {
+      groupSiblingPageBehaviors(
+        additionalBehaviors,
+        pageBehaviors,
+        maxAdditionalBehaviors,
+        makeStaticBehavior,
+      );
+    }
+
+    // Phase 2 — demotion (compute). Drop the lowest-priority prerendered-page
+    // behaviors (subtree + derived bare) until the distribution fits, rather
+    // than failing the build. A demoted page still serves correctly — its bare
+    // path falls through to the catch-all SSR Lambda, which re-renders it on
+    // demand; only the S3 fast-path for that page (and its sibling subtree
+    // assets) is lost. Demotion is LIFO over the specificity-sorted list, so it
+    // sheds the least-specific pages first and keeps deeper routes on the edge.
+    // This makes allocation deterministic — which pages survive no longer
+    // depends on incidental iteration order.
+    if (
+      hasCompute &&
+      Object.keys(additionalBehaviors).length > maxAdditionalBehaviors &&
+      pageBehaviors.length > 0
+    ) {
+      let demotedCount = 0;
+      let victim = pageBehaviors.pop();
+      while (
+        victim &&
+        Object.keys(additionalBehaviors).length > maxAdditionalBehaviors
+      ) {
+        delete additionalBehaviors[victim.subtree];
+        if (victim.bare) delete additionalBehaviors[victim.bare];
+        demotedCount++;
+        victim = pageBehaviors.pop();
+      }
+      process.stdout.write(
+        `ℹ️  Hosting: ${demotedCount} prerendered page${demotedCount === 1 ? '' : 's'} ` +
+          `exceeded the CloudFront behavior budget (${maxAdditionalBehaviors}); ` +
+          `serving ${demotedCount === 1 ? 'it' : 'them'} from the SSR runtime instead ` +
+          `of a dedicated edge behavior. Raise \`quotas.cacheBehaviors\` if AWS has ` +
+          `granted your account a higher limit.\n`,
+      );
+    }
+
     // ---- Authoritative CloudFront behavior-count check ----
     // Count the REAL additional behaviors now that every source has
     // contributed: per-route static/compute/edge behaviors, the derived bare
@@ -1169,16 +1296,22 @@ export class CdnConstruct extends Construct {
     // This is the single enforcement point for both adapters — neither the
     // Next/Astro nor the Nitro adapter caps prerendered-page routes itself;
     // they emit one `/<page>/*` route per page and rely on this check to fail
-    // loudly (rather than CloudFormation failing opaquely at deploy time when
-    // the 25-behavior hard limit is exceeded).
+    // loudly. After the degradation pass above, reaching this throw means the
+    // overflow is NOT demotable pages (it's hashed assets / compute / header
+    // rules / edge routes, or a static-only deploy with no runtime fallback).
     const additionalBehaviorCount = Object.keys(additionalBehaviors).length;
-    if (additionalBehaviorCount > MAX_ADDITIONAL_BEHAVIORS) {
+    if (additionalBehaviorCount > maxAdditionalBehaviors) {
       throw new HostingError('TooManyRoutesError', {
-        message: `This distribution would create ${additionalBehaviorCount} CloudFront cache behaviors, but the maximum is ${MAX_ADDITIONAL_BEHAVIORS} (CloudFront allows ${MAX_ADDITIONAL_BEHAVIORS + 1} including the default). Each prerendered page consumes up to 2 behaviors (the \`/page/*\` subtree plus a derived bare \`/page\`).`,
+        message: `This distribution would create ${additionalBehaviorCount} additional CloudFront cache behaviors, but the maximum is ${maxAdditionalBehaviors} (CloudFront allows ${maxAdditionalBehaviors + 1} including the default). Each prerendered page consumes up to 2 behaviors (the \`/page/*\` subtree plus a derived bare \`/page\`).`,
         resolution:
-          'Reduce the number of distinctly-routed prerendered pages or custom-header/assetPrefix patterns. Pages that are not given a dedicated behavior still serve correctly through the SSR Lambda — consider prerendering fewer top-level routes, or grouping pages under a shared path prefix so one `/<prefix>/*` behavior covers them.',
+          'Reduce the number of distinctly-routed prerendered pages or custom-header/assetPrefix patterns. Pages that are not given a dedicated behavior still serve correctly through the SSR Lambda — consider prerendering fewer top-level routes, or grouping pages under a shared path prefix so one `/<prefix>/*` behavior covers them. If AWS has granted your account a higher "Cache behaviors per distribution" quota, raise the `quotas.cacheBehaviors` hosting prop to match.',
       });
     }
+
+    // Enforce the remaining tracked quotas (currently the account-wide
+    // response-headers-policy count). The behavior quota is enforced by the
+    // richer TooManyRoutesError above; this catches the others.
+    budget.assertWithinLimits();
 
     // ---- Distribution ----
     this.distribution = new Distribution(this, 'HostingDistribution', {
@@ -1517,6 +1650,165 @@ const deriveBareStaticPattern = (pattern: string): string | null => {
   // or anything containing additional wildcards (no useful bare form).
   if (bare === '' || bare === '/' || bare.includes('*')) return null;
   return bare;
+};
+
+/**
+ * Test whether a route pattern matches one of the `immutablePaths` globs the
+ * adapter declared (e.g. `_next/static/*`, `_nuxt/*`, `_astro/*`). Those
+ * globs name the framework's HASHED-asset directories — files that live in S3
+ * only, never in the SSR Lambda bundle. A behavior serving such a path must
+ * NOT be demoted to the catch-all (the Lambda can't serve the bytes).
+ *
+ * Matching is intentionally simple: globs are anchored prefixes ending in
+ * `/*` or `*`. We compare on the leading literal segment(s), basePath-aware.
+ */
+const matchesImmutableGlob = (
+  pattern: string,
+  immutableGlobs: string[],
+  basePath?: string,
+): boolean => {
+  // Normalize both sides to a leading-slash, no-trailing-wildcard prefix.
+  const stripWildcard = (p: string): string =>
+    p.replace(/\/?\*+$/, '').replace(/^\/+/, '');
+  const routeKey = stripWildcard(
+    basePath && pattern.startsWith(basePath)
+      ? pattern.slice(basePath.length)
+      : pattern,
+  );
+  return immutableGlobs.some((glob) => {
+    const globKey = stripWildcard(glob);
+    return routeKey === globKey || routeKey.startsWith(`${globKey}/`);
+  });
+};
+
+/**
+ * Classify a static route as a "prerendered page" — i.e. one that is SAFE to
+ * demote (drop its dedicated CloudFront behavior and let the bare path fall
+ * through to the catch-all SSR Lambda, which re-renders the page on demand).
+ *
+ * A static route is demote-safe ONLY when ALL hold:
+ *   - it targets S3 (`static`/`s3`),
+ *   - it is NOT a hashed-asset prefix (would 404 from the Lambda — see
+ *     {@link matchesImmutableGlob}),
+ *   - it is a simple `<name>/*` subtree (the shape the adapters emit for
+ *     prerendered pages and the only shape with a useful bare form).
+ *
+ * Edge routes, image-opt, and non-default compute targets are never static,
+ * so they are excluded by the `target` check alone.
+ */
+const isDemotablePageRoute = (
+  route: { pattern: string; target: string },
+  cfPattern: string,
+  immutableGlobs: string[],
+  basePath?: string,
+): boolean => {
+  const isStatic = route.target === 'static' || route.target === 's3';
+  if (!isStatic) return false;
+  if (deriveBareStaticPattern(cfPattern) === null) return false; // not a <name>/* subtree
+  if (matchesImmutableGlob(cfPattern, immutableGlobs, basePath)) return false;
+  return true;
+};
+
+/**
+ * Static-only budget relief: collapse co-located sibling prerendered-page
+ * behaviors that share a parent path segment into a single `<parent>/*`
+ * behavior, until the distribution fits within `maxAdditional` behaviors (or
+ * no further grouping helps).
+ *
+ * Safety: callers must invoke this ONLY for static-only deploys, where the
+ * catch-all is itself S3. There, a request under `<parent>/` resolves through
+ * S3 whether it matches the grouped behavior or falls to the catch-all, so the
+ * merge is lossless. (Under compute, an unknown `<parent>/x` the SSR Lambda
+ * would render dynamically must NOT be redirected to S3 — hence compute uses
+ * demotion, not grouping.)
+ *
+ * Grouping a parent with N child page-behaviors (each contributing a subtree
+ * pattern plus possibly a derived bare pattern) replaces all of them with ONE
+ * `<parent>/*` behavior — a net saving of (total child behaviors − 1). Parents
+ * are grouped largest-saving-first for deterministic, maximal relief.
+ *
+ * Mutates `additionalBehaviors` in place. Returns the number of parents grouped.
+ */
+const groupSiblingPageBehaviors = (
+  additionalBehaviors: Record<string, BehaviorOptions>,
+  pageBehaviors: { subtree: string; bare: string | null }[],
+  maxAdditional: number,
+  makeStaticBehavior: () => BehaviorOptions,
+): number => {
+  // Bucket page behaviors by their immediate parent path (the prefix before
+  // the last segment of the subtree pattern). `/docs/intro/*` → parent
+  // `/docs`; `/blog/*` → parent `` (root), which we skip (grouping to `/*`
+  // would shadow the catch-all).
+  const parentOf = (subtree: string): string => {
+    const bare = subtree.endsWith('/*') ? subtree.slice(0, -2) : subtree;
+    const idx = bare.lastIndexOf('/');
+    return idx > 0 ? bare.slice(0, idx) : '';
+  };
+
+  const byParent = new Map<
+    string,
+    { subtree: string; bare: string | null }[]
+  >();
+  for (const pb of pageBehaviors) {
+    const parent = parentOf(pb.subtree);
+    if (!parent) continue; // top-level page → no safe grouping target
+    const list = byParent.get(parent) ?? [];
+    list.push(pb);
+    byParent.set(parent, list);
+  }
+
+  // Order parents by descending behavior-saving so the biggest reductions
+  // happen first (and the result is deterministic regardless of Map order).
+  const behaviorsFor = (group: { subtree: string; bare: string | null }[]) =>
+    group.reduce(
+      (n, pb) =>
+        n +
+        (pb.subtree in additionalBehaviors ? 1 : 0) +
+        (pb.bare && pb.bare in additionalBehaviors ? 1 : 0),
+      0,
+    );
+  const candidates = [...byParent.entries()]
+    .map(([parent, group]) => ({ parent, group, saving: behaviorsFor(group) - 1 }))
+    .filter((c) => c.saving > 0)
+    .sort((a, b) => b.saving - a.saving || a.parent.localeCompare(b.parent));
+
+  const childPatterns = new Set(
+    pageBehaviors.flatMap((pb) => [pb.subtree, pb.bare].filter(Boolean) as string[]),
+  );
+
+  let grouped = 0;
+  for (const { parent, group } of candidates) {
+    if (Object.keys(additionalBehaviors).length <= maxAdditional) break;
+    const groupPattern = `${parent}/*`;
+    // Skip if `<parent>/*` is already a DIFFERENT behavior we don't own (e.g.
+    // a per-pattern header rule or a hashed-asset prefix). Overwriting it
+    // would silently change that path's origin/policy. Only safe to claim the
+    // pattern when it's free or already one of the page children we're merging.
+    if (
+      groupPattern in additionalBehaviors &&
+      !childPatterns.has(groupPattern)
+    ) {
+      continue;
+    }
+    // Remove every child subtree + derived bare behavior, then add the single
+    // parent wildcard (reusing a child's static behavior shape).
+    for (const pb of group) {
+      delete additionalBehaviors[pb.subtree];
+      if (pb.bare) delete additionalBehaviors[pb.bare];
+    }
+    additionalBehaviors[groupPattern] = makeStaticBehavior();
+    grouped++;
+  }
+
+  if (grouped > 0) {
+    process.stdout.write(
+      `ℹ️  Hosting: grouped prerendered pages under ${grouped} shared ` +
+        `\`<parent>/*\` behavior${grouped === 1 ? '' : 's'} to fit the CloudFront ` +
+        `behavior budget (${maxAdditional}). Co-located pages now share one ` +
+        `cache behavior; serving is unchanged (all resolve from S3).\n`,
+    );
+  }
+  return grouped;
 };
 
 /**
