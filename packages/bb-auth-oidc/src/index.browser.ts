@@ -9,6 +9,8 @@
  */
 
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
+import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -352,6 +354,10 @@ export class AuthOIDCClient<
 		const user = (body.user ?? body) as User;
 		lastUser = user;
 		notify(user, { state: pending.appState });
+		// Bridge into @aws-blocks/auth-common so its `onAuthChange` subscribers and
+		// `<AuthenticatedContent>` re-render on sign-in (same window AND other tabs),
+		// not just this client's own `onAuthStateChange` listeners.
+		broadcastAuthChange(user as unknown as AuthUser);
 		return user;
 	}
 

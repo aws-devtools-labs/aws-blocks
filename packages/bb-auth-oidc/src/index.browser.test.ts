@@ -21,6 +21,29 @@ const AUTHORIZE_URL = 'https://idp.example.com/authorize';
 let navigatedTo = '';
 let store: Map<string, string>;
 
+/**
+ * Cross-tab payloads captured from `BroadcastChannel.postMessage` so tests can
+ * assert the OIDC client bridged its sign-in into `@aws-blocks/auth-common`.
+ * Cleared (in place — the stub closes over this exact array) on each install.
+ */
+const broadcasts: unknown[] = [];
+let savedBroadcastChannel: unknown;
+
+/**
+ * A no-op `BroadcastChannel`. `auth-common`'s `broadcastAuthChange()` lazily
+ * opens a real channel via `getChannel()`; a real one is a ref'd libuv handle
+ * that keeps `node --test` alive and hangs the run. This records posts instead.
+ */
+class StubBroadcastChannel {
+	name: string;
+	onmessage: ((ev: unknown) => void) | null = null;
+	constructor(name: string) { this.name = name; }
+	postMessage(msg: unknown): void { broadcasts.push(msg); }
+	addEventListener(): void {}
+	removeEventListener(): void {}
+	close(): void {}
+}
+
 function installBrowserGlobals(currentHref: string): void {
 	const url = new URL(currentHref);
 	const locationStub = {
@@ -30,8 +53,18 @@ function installBrowserGlobals(currentHref: string): void {
 		pathname: url.pathname,
 	};
 	store = new Map<string, string>();
+	broadcasts.length = 0;
 
-	(globalThis as any).window = { location: locationStub };
+	// Back `window` with a real EventTarget so auth-common's
+	// `window.dispatchEvent(new CustomEvent('blocks-auth-change', …))` works and
+	// tests can listen for the same-window auth-change event.
+	const target = new EventTarget();
+	(globalThis as any).window = {
+		location: locationStub,
+		addEventListener: target.addEventListener.bind(target),
+		removeEventListener: target.removeEventListener.bind(target),
+		dispatchEvent: target.dispatchEvent.bind(target),
+	};
 	(globalThis as any).sessionStorage = {
 		getItem: (k: string) => store.get(k) ?? null,
 		setItem: (k: string, v: string) => { store.set(k, v); },
@@ -40,12 +73,19 @@ function installBrowserGlobals(currentHref: string): void {
 	// The client builds `redirect_uri` against window.location.href; some
 	// code paths also read the global `location`. Mirror it.
 	(globalThis as any).location = locationStub;
+
+	// Swap in the no-op BroadcastChannel before any broadcastAuthChange() call
+	// caches a (real) channel instance.
+	savedBroadcastChannel = (globalThis as any).BroadcastChannel;
+	(globalThis as any).BroadcastChannel = StubBroadcastChannel;
 }
 
 function clearBrowserGlobals(): void {
 	delete (globalThis as any).window;
 	delete (globalThis as any).sessionStorage;
 	delete (globalThis as any).location;
+	if (savedBroadcastChannel === undefined) delete (globalThis as any).BroadcastChannel;
+	else (globalThis as any).BroadcastChannel = savedBroadcastChannel;
 	navigatedTo = '';
 }
 
@@ -222,5 +262,80 @@ describe('AuthOIDCClient.handleRedirectCallback — return shape', () => {
 		await client.handleRedirectCallback();
 		assert.ok(lastExchangeBody, 'exchange should have been called');
 		assert.strictEqual('iss' in lastExchangeBody, false, 'iss should be omitted, not sent as undefined');
+	});
+});
+
+describe('AuthOIDCClient.handleRedirectCallback — @aws-blocks/auth-common bridge', () => {
+	const STATE = 'state-bridge';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google',
+			verifier: 'v',
+			state: STATE,
+			nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+			appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	function stubExchangeOk(body: unknown): void {
+		globalThis.fetch = (async () => ({ ok: true, json: async () => body })) as unknown as typeof globalThis.fetch;
+	}
+
+	test('dispatches a same-window auth-change event so on-page onAuthChange consumers re-render', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		// auth-common's broadcastAuthChange() fires a 'blocks-auth-change'
+		// CustomEvent on window; onAuthChange listeners on THIS page rely on it.
+		let detail: any = null;
+		(globalThis as any).window.addEventListener('blocks-auth-change', (e: any) => { detail = e.detail; });
+
+		const client = makeClient();
+		const user = await client.handleRedirectCallback();
+
+		assert.ok(user, 'callback should resolve a user');
+		assert.ok(detail, 'a blocks-auth-change event should have been dispatched on window');
+		assert.strictEqual(detail.type, 'auth-change');
+		assert.strictEqual(detail.user.userId, 'iss:sub');
+		assert.strictEqual(detail.user.username, 'alice');
+	});
+
+	test('posts the signed-in user across tabs via BroadcastChannel', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		const client = makeClient();
+		await client.handleRedirectCallback();
+
+		assert.strictEqual(broadcasts.length, 1, 'exactly one cross-tab post should have been made');
+		const msg = broadcasts[0] as any;
+		assert.strictEqual(msg.type, 'auth-change');
+		assert.strictEqual(msg.user.userId, 'iss:sub');
+	});
+
+	test('does NOT broadcast when the callback fails (state mismatch)', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		// Tamper the stored state so validation throws before any exchange.
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'a-different-state', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		let dispatched = false;
+		(globalThis as any).window.addEventListener('blocks-auth-change', () => { dispatched = true; });
+
+		const client = makeClient();
+		await assert.rejects(() => client.handleRedirectCallback(), /state mismatch/);
+
+		assert.strictEqual(dispatched, false, 'no auth-change event on a failed callback');
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab post on a failed callback');
 	});
 });
