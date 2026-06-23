@@ -9,6 +9,8 @@
  */
 
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
+import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -202,6 +204,14 @@ export class AuthOIDCClient<
 
 	private readonly providerConfigs?: Record<string, { authorizeUrl: string; clientId: string; scopes: string[]; kind: string }>;
 
+	/**
+	 * Per-instance dedup of in-flight (and settled) redirect-callback exchanges,
+	 * keyed by the IdP authorization `code`. Makes `handleRedirectCallback()`
+	 * idempotent under React StrictMode's double-mount (and double-clicks) so the
+	 * single-use `code` is never replayed — both callers observe the same result.
+	 */
+	private readonly _pendingCallbacks = new Map<string, Promise<User | null>>();
+
 	constructor(options: {
 		providers: readonly Provider[];
 		providerConfigs?: Record<string, { authorizeUrl: string; clientId: string; scopes: string[]; kind: string }>;
@@ -228,14 +238,35 @@ export class AuthOIDCClient<
 	 * Initiate sign-in using client-initiated PKCE. Navigates the
 	 * browser to the IdP. Call `handleRedirectCallback()` on return.
 	 *
+	 * Returns the in-flight promise so callers can observe failures
+	 * (e.g. an unreachable `authorize-params` endpoint) by awaiting or
+	 * attaching `.catch(...)`:
+	 *
+	 * ```tsx
+	 * // Fire-and-forget — failures are logged to console.error.
+	 * <button onClick={() => auth.signIn('google')}>Sign in</button>
+	 *
+	 * // Or handle the error explicitly.
+	 * try { await auth.signIn('google'); } catch (e) { showError(e); }
+	 * ```
+	 *
 	 * @param opts.state - Opaque app state, round-tripped to `onAuthStateChange`.
 	 * @param opts.redirectPath - Path (or absolute URL) the IdP redirects back to
 	 *   and that runs `handleRedirectCallback()`. Becomes the OAuth `redirect_uri`,
 	 *   so it must be a frontend-served page registered with the provider.
 	 *   Defaults to the current page.
+	 * @returns A promise that resolves once the browser is navigating to the IdP,
+	 *   or rejects if sign-in could not be initiated.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void {
-		void this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void> {
+		const pending = this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+		// Surface failures for fire-and-forget callers (`onClick={() => auth.signIn(...)}`)
+		// instead of swallowing the rejection, while still returning the promise so
+		// `await auth.signIn(...)` / `.catch(...)` observe the same error.
+		pending.catch((err) => {
+			if (typeof console !== 'undefined') console.error('[AuthOIDC] signIn failed:', err);
+		});
+		return pending;
 	}
 
 	/**
@@ -292,21 +323,43 @@ export class AuthOIDCClient<
 	/**
 	 * Complete the IdP redirect callback. Reads `code`/`state` from the URL,
 	 * verifies state, and POSTs to `/aws-blocks/auth/exchange`.
+	 *
+	 * Idempotent: a second invocation for the same authorization `code` —
+	 * React StrictMode's double-mount, a double-click, or a re-render — reuses
+	 * the in-flight (or already-settled) exchange on this client instead of
+	 * replaying the single-use `code`, which the IdP would reject. Both callers
+	 * resolve to the same user, so a StrictMode double-mount still renders
+	 * signed-in.
+	 *
 	 * @returns The authenticated user, or `null` if no pending PKCE flow.
 	 */
-	async handleRedirectCallback(): Promise<User | null> {
-		if (typeof window === 'undefined') return null;
+	handleRedirectCallback(): Promise<User | null> {
+		if (typeof window === 'undefined') return Promise.resolve(null);
 		const url = new URL(window.location.href);
 		const code = url.searchParams.get('code');
 		const returnedState = url.searchParams.get('state');
-		if (!code || !returnedState) return null;
+		if (!code || !returnedState) return Promise.resolve(null);
+
+		const existing = this._pendingCallbacks.get(code);
+		if (existing) return existing;
+
+		const flow = this._completeRedirectCallback(url, code, returnedState);
+		this._pendingCallbacks.set(code, flow);
+		return flow;
+	}
+
+	private async _completeRedirectCallback(url: URL, code: string, returnedState: string): Promise<User | null> {
 		// Forward RFC 9207 `iss` when present — the server-side exchange passes it
 		// to openid-client, which fails the exchange if the provider sent it and
 		// we drop it.
 		const iss = url.searchParams.get('iss') ?? undefined;
 
+		// Read AND consume the single-use pending PKCE state synchronously, before
+		// the first await, so a racing invocation (e.g. on a second client instance)
+		// can't read it again and replay the exchange.
 		const raw = sessionStorage.getItem(_PENDING_STORAGE_KEY);
 		if (!raw) return null;
+		sessionStorage.removeItem(_PENDING_STORAGE_KEY);
 
 		const pending = JSON.parse(raw) as {
 			provider: string;
@@ -318,7 +371,6 @@ export class AuthOIDCClient<
 		};
 
 		if (returnedState !== pending.state) {
-			sessionStorage.removeItem(_PENDING_STORAGE_KEY);
 			throw new Error('AuthOIDC: state mismatch in callback');
 		}
 
@@ -338,8 +390,6 @@ export class AuthOIDCClient<
 			}),
 		});
 
-		sessionStorage.removeItem(_PENDING_STORAGE_KEY);
-
 		if (!resp.ok) {
 			const err = await resp.json().catch(() => ({ error: 'Exchange failed' }));
 			throw new Error(`AuthOIDC exchange failed: ${(err as any).error ?? resp.status}`);
@@ -352,6 +402,9 @@ export class AuthOIDCClient<
 		const user = (body.user ?? body) as User;
 		lastUser = user;
 		notify(user, { state: pending.appState });
+		// Bridge to the shared cross-tab/same-window auth bus so `onAuthChange`,
+		// `AuthenticatedContent`, and `<Authenticator>` consumers update automatically.
+		broadcastAuthChange(user as unknown as AuthUser);
 		return user;
 	}
 
@@ -361,6 +414,9 @@ export class AuthOIDCClient<
 		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
 		lastUser = null;
 		notify(null, null);
+		// Mirror the sign-out onto the shared auth bus so `onAuthChange` consumers
+		// and other tabs drop to signed-out before this tab reloads.
+		broadcastAuthChange(null);
 		if (typeof window !== 'undefined' && window.location) {
 			window.location.reload();
 		}

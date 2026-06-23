@@ -63,6 +63,67 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 
 `redirectPath` becomes the OAuth `redirect_uri`, so it must be a page your frontend serves **and** a redirect URI registered with the provider (the stub IdP accepts any HTTPS or localhost URL, so local/sandbox needs no registration).
 
+### React SPA: handle the callback and react to auth state
+
+In a SPA the IdP redirects back to a route you own, and that route must call `handleRedirectCallback()` to finish the PKCE exchange. The method is **idempotent**, so React 18 StrictMode's double-mount (effects run twice in dev) is safe — the second call reuses the in-flight exchange and resolves to the same user instead of replaying the single-use `code`:
+
+```tsx
+import { useEffect, useState } from 'react';
+import { authApi } from 'aws-blocks';
+
+// Route mounted at the `redirectPath` you passed to signIn() (e.g. /auth-return)
+function AuthReturn() {
+	const [error, setError] = useState<Error | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			try {
+				const auth = await authApi.getClient();
+				const user = await auth.handleRedirectCallback();
+				if (!cancelled && user) {
+					window.history.replaceState({}, '', '/'); // drop ?code=…&state=… and route home
+				}
+			} catch (err) {
+				if (!cancelled) setError(err as Error);
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	if (error) return <p>Sign-in failed: {error.message}</p>;
+	return <p>Completing sign-in…</p>;
+}
+```
+
+`signIn()` returns a `Promise<void>`, so callers can surface failures (e.g. a cross-origin authorize-params fetch that fails) instead of losing them to a swallowed rejection:
+
+```tsx
+<button
+	onClick={() =>
+		auth.signIn('google', { redirectPath: '/auth-return' }).catch((err) => {
+			showToast(`Could not start sign-in: ${err.message}`);
+		})
+	}
+>
+	Sign in with Google
+</button>
+```
+
+A successful `handleRedirectCallback()` (and `signOut()`) broadcasts the new auth state on the shared bus, so `onAuthChange` listeners — and the `<Authenticator>` / `<AuthenticatedContent>` components from `@aws-blocks/auth-common/ui` — update automatically, including across tabs. No manual wiring needed:
+
+```tsx
+import { onAuthChange } from '@aws-blocks/blocks/ui';
+import { authApi } from 'aws-blocks';
+
+// Fires immediately with the current user, then on every sign-in / sign-out
+const unsubscribe = onAuthChange(authApi, (user) => {
+	setCurrentUser(user); // user is null when signed out
+});
+```
+
 ### Which flow to use
 
 - **Server-initiated** (`GET /aws-blocks/auth/signin/<provider>` — a link or the `<Authenticator>` button): the backend owns the callback and sets the session cookie. This is the default for **same-origin** apps (frontend and API on one origin: local dev, single deployed origin, or the sandbox front door).
