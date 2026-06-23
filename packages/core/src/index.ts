@@ -3,7 +3,7 @@
 
 export { ApiNamespace, type BlocksContext, type ApiHandler } from './api.js';
 export { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
-export { ApiError, isBlocksError } from './errors.js';
+export { ApiError, isBlocksError, hasAuthError } from './errors.js';
 export { Scope, type ScopeOptions, type ScopeParent, type BuildingBlockMeta } from './common/index.js';
 export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
 export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';

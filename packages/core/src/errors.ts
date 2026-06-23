@@ -70,3 +70,27 @@ export class ApiError extends Error {
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & { name: N } {
 	return e instanceof Error && e.name === name;
 }
+
+/**
+ * Type guard for branching on a failed `AuthState` (the recommended
+ * `setAuthState` client path) by its structured `errorName`.
+ *
+ * The returned state is a plain object, not a thrown `Error`, so
+ * `isBlocksError` does not apply — use this on the value returned by
+ * `setAuthState`/`getAuthState`. Match on the BB error constant, never on
+ * the human-facing `error` string.
+ *
+ * @example
+ * ```typescript
+ * const next = await authApi.setAuthState({ action: 'signIn', username, password });
+ * if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+ *   // unknown user → fall back to sign-up
+ * }
+ * ```
+ */
+export function hasAuthError<N extends string>(
+	state: { errorName?: string } | null | undefined,
+	name: N,
+): state is { errorName: N } {
+	return state?.errorName === name;
+}

@@ -75,6 +75,13 @@ export function getSdkIdentifiers(bb: {
     fullId: string;
 }): Record<string, string>;
 
+// @public
+export function hasAuthError<N extends string>(state: {
+    errorName?: string;
+} | null | undefined, name: N): state is {
+    errorName: N;
+};
+
 // @public (undocumented)
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
 

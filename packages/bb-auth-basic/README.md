@@ -126,6 +126,23 @@ try {
 | `AuthBasicErrors.SessionExpired` | `SessionExpiredException` | `requireAuth` with no/expired session |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
 
+### Branching on the `setAuthState` client path
+
+`isBlocksError` works on a **thrown** error. The recommended client path (`createApi()` → `setAuthState()`) does not throw — it returns an `AuthState` whose `errorName` carries the same structured name. Use `hasAuthError` to branch on the returned state, e.g. to fall back to sign-up for a brand-new user:
+
+```typescript
+import { hasAuthError } from '@aws-blocks/core';
+import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
+
+let next = await authApi.setAuthState({ action: 'signIn', username, password });
+if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+  // unknown or wrong-credential user → offer sign-up instead
+  next = await authApi.setAuthState({ action: 'signUp', username, password });
+}
+```
+
+Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
+
 ## UI Components
 
 This package does not include UI components. Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui`:
