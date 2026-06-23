@@ -56,8 +56,9 @@ export interface AgentToolProvider {
  * Build agent tools from a BB's tool method registry.
  * Handles include/exclude filtering, overrides, and scope injection.
  *
- * Returns `Record<string, any>` so the result can be spread directly into
- * an Agent's `tools` callback without type conflicts.
+ * Returns `Record<string, any>` — this bypasses the Agent BB's branded AgentTool type
+ * check. Core can't import the brand without a circular dep, so shape/override errors
+ * are caught at runtime, not compile time. The tool() factory remains the type-safe path.
  */
 export function buildAgentTools<TSelf extends Scope>(
 	self: TSelf,
