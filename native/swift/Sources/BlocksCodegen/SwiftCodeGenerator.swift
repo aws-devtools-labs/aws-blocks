@@ -301,9 +301,6 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)    case \(caseName)")
             }
         }
-        // TODO: Full Codable emission for nested unions (discriminated + transparent)
-        // For now, emit a minimal stub — the full logic from emitDiscriminatedCoding/emitTransparentUnionCoding
-        // will be needed for complete correctness.
         if let disc = discriminator {
             emitDiscriminatedCodingNested(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
         } else {
@@ -1120,14 +1117,14 @@ public struct SwiftCodeGenerator {
         }
     }
 
-    private func emitOperation(_ op: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
-        let fullMethodName = namespace == "_default" ? op.name : "\(namespace).\(op.name)"
-        let returnType = qualifiedSwiftTypeName(op.result.type, qualifiedNames: qualifiedNames)
-        let isTransferable = isTransferableType(op.result.type)
+    private func emitOperation(_ operation: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
+        let fullMethodName = namespace == "_default" ? operation.name : "\(namespace).\(operation.name)"
+        let returnType = qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
+        let isTransferable = isTransferableType(operation.result.type)
 
         // Build parameter list
         var paramList: [String] = []
-        for param in op.parameters {
+        for param in operation.parameters {
             let swType = qualifiedSwiftTypeName(param.type, qualifiedNames: qualifiedNames)
             let safeName = escapedSwiftName(param.name)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1141,24 +1138,24 @@ public struct SwiftCodeGenerator {
 
         let funcName: String
         if prefixNamespace && namespace != "_default" {
-            funcName = escapedSwiftName("\(namespace)\(pascalCase(op.name))")
+            funcName = escapedSwiftName("\(namespace)\(pascalCase(operation.name))")
         } else {
-            funcName = escapedSwiftName(op.name)
+            funcName = escapedSwiftName(operation.name)
         }
 
         lines.append("    /// Calls `\(fullMethodName)`.")
         lines.append("    public func \(funcName)(\(paramStr)) async throws -> \(returnType) {")
 
         // Build request
-        if op.parameters.isEmpty {
+        if operation.parameters.isEmpty {
             lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [], id: BlocksRequest.nextId())")
         } else {
-            let hasTrailingOptionals = !op.parameters.last!.required
+            let hasTrailingOptionals = !operation.parameters.last!.required
             if hasTrailingOptionals {
                 // Find the boundary: required params come first, then optional trailing ones
-                let lastRequiredIdx = op.parameters.lastIndex(where: { $0.required }) ?? -1
-                let requiredParams = op.parameters.prefix(through: max(lastRequiredIdx, -1))
-                let optionalParams = op.parameters.suffix(from: lastRequiredIdx + 1)
+                let lastRequiredIdx = operation.parameters.lastIndex(where: { $0.required }) ?? -1
+                let requiredParams = operation.parameters.prefix(through: max(lastRequiredIdx, -1))
+                let optionalParams = operation.parameters.suffix(from: lastRequiredIdx + 1)
 
                 if requiredParams.isEmpty {
                     lines.append("        var _params: [any Encodable] = []")
@@ -1175,7 +1172,7 @@ public struct SwiftCodeGenerator {
                 }
                 lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: _params, id: BlocksRequest.nextId())")
             } else {
-                let arrayElements = op.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
+                let arrayElements = operation.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
                 lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [\(arrayElements)], id: BlocksRequest.nextId())")
             }
         }
@@ -1185,7 +1182,7 @@ public struct SwiftCodeGenerator {
 
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
-            if case .transferable(let blocksType, let typeArgs) = op.result.type {
+            if case .transferable(let blocksType, let typeArgs) = operation.result.type {
                 switch blocksType {
                 case "realtime/channel":
                     let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"

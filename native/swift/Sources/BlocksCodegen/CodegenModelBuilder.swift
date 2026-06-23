@@ -352,16 +352,16 @@ public struct CodegenModelBuilder {
                 if case .union(_, let variants, let disc) = resolved {
                     let key = structuralKeyOfUnion(variants: variants, discriminator: disc)
                     for existing in typeDefinitions {
-                        if case .union(_, let ev, let ed) = existing.type,
-                           structuralKeyOfUnion(variants: ev, discriminator: ed) == key {
+                        if case .union(_, let existingVariants, let existingDisc) = existing.type,
+                           structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key {
                             let ref: ResolvedType = .typeReference(name: existing.name)
                             return hasNullMember ? .nullable(inner: ref) : ref
                         }
                     }
                     // Also check inline types for structural dedup
                     for existing in inlineTypes {
-                        if case .union(_, let ev, let ed) = existing.type,
-                           structuralKeyOfUnion(variants: ev, discriminator: ed) == key,
+                        if case .union(_, let existingVariants, let existingDisc) = existing.type,
+                           structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key,
                            existing.shortName != unionName {
                             let ref: ResolvedType = .typeReference(name: existing.shortName)
                             return hasNullMember ? .nullable(inner: ref) : ref

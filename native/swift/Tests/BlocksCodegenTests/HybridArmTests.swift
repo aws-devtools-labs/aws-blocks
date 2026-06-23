@@ -44,8 +44,8 @@ final class HybridArmTests: XCTestCase {
         let codegenModel = CodegenModelBuilder().build(from: rpcModel)
 
         // Find the input union in the operation's nested types or param type.
-        let op = codegenModel.apiNamespaces.flatMap { $0.operations }.first { $0.name == "setAuthState" }!
-        let inputType = op.parameters.first?.type
+        let operation = codegenModel.apiNamespaces.flatMap { $0.operations }.first { $0.name == "setAuthState" }!
+        let inputType = operation.parameters.first?.type
         guard case .union(_, let variants, _) = inputType else {
             XCTFail("Top-level setAuthState input is not a union")
             return

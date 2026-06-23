@@ -96,9 +96,9 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         let user = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
         XCTAssertFalse(user.userId.isEmpty, "signInRelay returned a user")
 
-        let me = try await api.oidcRequireAuth()
-        XCTAssertFalse(me.userId.isEmpty)
-        XCTAssertEqual(me.userId, user.userId)
+        let currentUser = try await api.oidcRequireAuth()
+        XCTAssertFalse(currentUser.userId.isEmpty)
+        XCTAssertEqual(currentUser.userId, user.userId)
     }
 
     func testSignOut() async throws {

@@ -106,7 +106,9 @@ final class RealtimeChannelTests: XCTestCase {
     /// Data round trip.
     func testDeserializerReceivesData() throws {
         // swiftlint:disable identifier_name
-        struct Cursor: Codable, Equatable { let x: Int; let y: Int }
+        struct Cursor: Codable, Equatable { let x: Int
+        let y: Int
+        }
         // swiftlint:enable identifier_name
 
         let json: [String: Any] = [

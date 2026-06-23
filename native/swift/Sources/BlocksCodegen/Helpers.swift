@@ -32,7 +32,7 @@ let swiftKeywords: Set<String> = [
     // Literals
     "true", "false", "nil",
     // Used as keyword in identifier position
-    "type",
+    "type"
 ]
 
 /// Type names that collide with Swift standard library, Foundation, or SwiftUI types.
@@ -55,16 +55,16 @@ let reservedTypeNames: Set<String> = [
 ///
 /// Exception: SCREAMING_SNAKE_CASE strings (all uppercase + digits + underscores)
 /// collapse underscores so `CONFIRM_SIGN_UP` → `ConfirmSignUp`.
-func pascalCase(_ s: String) -> String {
-    let isScreamingSnake = s.contains("_") && s.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "_" }
+func pascalCase(_ input: String) -> String {
+    let isScreamingSnake = input.contains("_") && input.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "_" }
     if isScreamingSnake {
-        return s.split(separator: "_")
+        return input.split(separator: "_")
             .map { segment in
                 segment.prefix(1).uppercased() + segment.dropFirst().lowercased()
             }
             .joined()
     }
-    return s.split(separator: "_", omittingEmptySubsequences: false)
+    return input.split(separator: "_", omittingEmptySubsequences: false)
      .map { underscorePart -> String in
          underscorePart.split(separator: "-")
              .flatMap { $0.split(separator: ".") }
@@ -90,16 +90,16 @@ func variantNameFromDiscriminator(fieldName: String, value: String) -> String {
     return pascalCase(value)
 }
 
-func camelCase(_ s: String) -> String {
-    let pascal = pascalCase(s)
+func camelCase(_ input: String) -> String {
+    let pascal = pascalCase(input)
     return pascal.prefix(1).lowercased() + pascal.dropFirst()
 }
 
-func singularize(_ s: String) -> String {
-    if s.hasSuffix("s") && !s.hasSuffix("ss") {
-        return String(s.dropLast())
+func singularize(_ input: String) -> String {
+    if input.hasSuffix("s") && !input.hasSuffix("ss") {
+        return String(input.dropLast())
     }
-    return s
+    return input
 }
 
 func swiftMethodName(_ rpcName: String) -> String {
@@ -127,8 +127,8 @@ func safeTypeName(_ name: String, parentName: String?) -> String {
 func isValidSwiftIdentifier(_ name: String) -> Bool {
     guard let first = name.first else { return false }
     if !(first.isLetter || first == "_") { return false }
-    for ch in name.dropFirst() {
-        if !(ch.isLetter || ch.isNumber || ch == "_") { return false }
+    for char in name.dropFirst() where !(char.isLetter || char.isNumber || char == "_") {
+        return false
     }
     return true
 }
@@ -141,9 +141,9 @@ func isValidSwiftIdentifier(_ name: String) -> Bool {
 func sanitizedSwiftName(_ name: String) -> String {
     if name.isEmpty { return "_unnamed" }
     var result = ""
-    for (i, ch) in name.enumerated() {
-        if ch.isLetter || ch == "_" || (i > 0 && ch.isNumber) {
-            result.append(ch)
+    for (idx, char) in name.enumerated() {
+        if char.isLetter || char == "_" || (idx > 0 && char.isNumber) {
+            result.append(char)
         } else {
             result.append("_")
         }

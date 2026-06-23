@@ -61,7 +61,9 @@ final class BlocksArrayParamsTests: XCTestCase {
 
     func testEncodesCodableStruct() throws {
         // swiftlint:disable identifier_name
-        struct Point: Encodable { let x: Int; let y: Int }
+        struct Point: Encodable { let x: Int
+        let y: Int
+        }
         // swiftlint:enable identifier_name
 
         let params = BlocksArrayParams([Point(x: 10, y: 20)])

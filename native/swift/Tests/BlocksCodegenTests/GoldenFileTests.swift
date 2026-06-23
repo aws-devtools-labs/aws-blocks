@@ -24,19 +24,19 @@ final class GoldenFileTests: XCTestCase {
     }
 
     func testAllFixtures() throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: fixturesURL.path) else {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: fixturesURL.path) else {
             XCTFail("codegen-fixtures directory not found at \(fixturesURL.path)")
             return
         }
 
-        let fixtures = try fm.contentsOfDirectory(at: fixturesURL, includingPropertiesForKeys: [.isDirectoryKey])
+        let fixtures = try fileManager.contentsOfDirectory(at: fixturesURL, includingPropertiesForKeys: [.isDirectoryKey])
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
         for fixture in fixtures {
             let specURL = fixture.appendingPathComponent("spec.json")
-            guard fm.fileExists(atPath: specURL.path) else { continue }
+            guard fileManager.fileExists(atPath: specURL.path) else { continue }
 
             let goldenDir = fixture.appendingPathComponent("swift")
             let specData = try Data(contentsOf: specURL)
@@ -45,12 +45,12 @@ final class GoldenFileTests: XCTestCase {
             let output = SwiftCodeGenerator().generate(from: codegenModel)
 
             if shouldRegenerate {
-                try fm.createDirectory(at: goldenDir, withIntermediateDirectories: true)
+                try fileManager.createDirectory(at: goldenDir, withIntermediateDirectories: true)
                 try output.models.write(to: goldenDir.appendingPathComponent("Models.swift"), atomically: true, encoding: .utf8)
                 try output.api.write(to: goldenDir.appendingPathComponent("Api.swift"), atomically: true, encoding: .utf8)
                 print("  ✓ regenerated \(fixture.lastPathComponent)")
             } else {
-                guard fm.fileExists(atPath: goldenDir.path) else {
+                guard fileManager.fileExists(atPath: goldenDir.path) else {
                     XCTFail("No golden files for \(fixture.lastPathComponent). Run: REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests")
                     continue
                 }
@@ -58,8 +58,8 @@ final class GoldenFileTests: XCTestCase {
                 let modelsGoldenURL = goldenDir.appendingPathComponent("Models.swift")
                 let apiGoldenURL = goldenDir.appendingPathComponent("Api.swift")
 
-                guard fm.fileExists(atPath: modelsGoldenURL.path),
-                      fm.fileExists(atPath: apiGoldenURL.path) else {
+                guard fileManager.fileExists(atPath: modelsGoldenURL.path),
+                      fileManager.fileExists(atPath: apiGoldenURL.path) else {
                     XCTFail("Golden files incomplete for \(fixture.lastPathComponent). Run: REGENERATE_FIXTURES=1 swift test --filter GoldenFileTests")
                     continue
                 }
