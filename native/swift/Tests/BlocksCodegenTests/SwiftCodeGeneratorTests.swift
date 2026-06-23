@@ -14,7 +14,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
     let generator = SwiftCodeGenerator()
 
     private func generate(from json: String) throws -> (models: String, api: String) {
-        let rpcModel = try parser.parse(data: json.data(using: .utf8)!)
+        let rpcModel = try parser.parse(data: Data(json.utf8))
         let codegenModel = builder.build(from: rpcModel)
         return generator.generate(from: codegenModel)
     }
@@ -29,7 +29,11 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "methods": [{
                 "name": "api.get",
                 "params": [],
-                "result": { "name": "Todo", "schema": { "type": "object", "properties": { "title": { "type": "string" }, "done": { "type": "boolean" } }, "required": ["title", "done"] } }
+                "result": { "name": "Todo", "schema": {
+                    "type": "object",
+                    "properties": { "title": { "type": "string" }, "done": { "type": "boolean" } },
+                    "required": ["title", "done"]
+                }}
             }]
         }
         """)
@@ -174,7 +178,12 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "methods": [{
                 "name": "api.getChannel",
                 "params": [],
-                "result": { "name": "Ch", "schema": { "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] }] } }
+                "result": { "name": "Ch", "schema": {
+                    "x-blocks-transferable": "realtime/channel",
+                    "x-blocks-type-args": [{ "type": "object",
+                        "properties": { "x": { "type": "number" } },
+                        "required": ["x"] }]
+                }}
             }]
         }
         """)
@@ -194,7 +203,12 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "methods": [{
                 "name": "api.getChannel",
                 "params": [],
-                "result": { "name": "Ch", "schema": { "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] }] } }
+                "result": { "name": "Ch", "schema": {
+                    "x-blocks-transferable": "realtime/channel",
+                    "x-blocks-type-args": [{ "type": "object",
+                        "properties": { "x": { "type": "number" } },
+                        "required": ["x"] }]
+                }}
             }]
         }
         """)
@@ -274,8 +288,12 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
             "methods": [
-                { "name": "posts.list", "params": [], "result": { "name": "PostsListResult", "schema": { "type": "array", "items": { "type": "string" } } } },
-                { "name": "users.list", "params": [], "result": { "name": "UsersListResult", "schema": { "type": "array", "items": { "type": "string" } } } }
+                { "name": "posts.list", "params": [],
+                  "result": { "name": "PostsListResult",
+                    "schema": { "type": "array", "items": { "type": "string" } } } },
+                { "name": "users.list", "params": [],
+                  "result": { "name": "UsersListResult",
+                    "schema": { "type": "array", "items": { "type": "string" } } } }
             ]
         }
         """)
@@ -291,8 +309,12 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
             "methods": [
-                { "name": "api.list", "params": [], "result": { "name": "ListResult", "schema": { "type": "array", "items": { "type": "string" } } } },
-                { "name": "api.get", "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }], "result": { "name": "GetResult", "schema": { "type": "string" } } }
+                { "name": "api.list", "params": [],
+                  "result": { "name": "ListResult",
+                    "schema": { "type": "array", "items": { "type": "string" } } } },
+                { "name": "api.get",
+                  "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }],
+                  "result": { "name": "GetResult", "schema": { "type": "string" } } }
             ]
         }
         """)
@@ -309,8 +331,14 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
             "methods": [
-                { "name": "api.create", "params": [{ "name": "title", "required": true, "schema": { "type": "string" } }], "result": { "name": "Todo", "schema": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } },
-                { "name": "api.get", "params": [{ "name": "key", "required": true, "schema": { "type": "string" } }], "result": { "name": "R", "schema": { "oneOf": [{ "type": "string" }, { "type": "null" }] } } }
+                { "name": "api.create",
+                  "params": [{ "name": "title", "required": true, "schema": { "type": "string" } }],
+                  "result": { "name": "Todo", "schema": { "type": "object",
+                    "properties": { "id": { "type": "string" } }, "required": ["id"] } } },
+                { "name": "api.get",
+                  "params": [{ "name": "key", "required": true, "schema": { "type": "string" } }],
+                  "result": { "name": "R",
+                    "schema": { "oneOf": [{ "type": "string" }, { "type": "null" }] } } }
             ]
         }
         """)
@@ -330,8 +358,15 @@ final class SwiftCodeGeneratorTests: XCTestCase {
                 "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }],
                 "result": { "name": "GetNotificationResult", "schema": {
                     "oneOf": [
-                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["email"] }, "subject": { "type": "string" }, "body": { "type": "string" } }, "required": ["type", "subject", "body"] },
-                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["sms"] }, "message": { "type": "string" } }, "required": ["type", "message"] },
+                        { "type": "object", "properties": {
+                            "type": { "type": "string", "enum": ["email"] },
+                            "subject": { "type": "string" },
+                            "body": { "type": "string" }
+                          }, "required": ["type", "subject", "body"] },
+                        { "type": "object", "properties": {
+                            "type": { "type": "string", "enum": ["sms"] },
+                            "message": { "type": "string" }
+                          }, "required": ["type", "message"] },
                         { "type": "null" }
                     ]
                 }}
@@ -357,8 +392,16 @@ final class SwiftCodeGeneratorTests: XCTestCase {
                     "type": "object",
                     "additionalProperties": {
                         "oneOf": [
-                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [true] } }, "required": ["isUpdated"] },
-                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [false] }, "nextStep": { "type": "object", "properties": { "name": { "type": "string" }, "destination": { "type": "string" } }, "required": ["name", "destination"] } }, "required": ["isUpdated", "nextStep"] },
+                            { "type": "object", "properties": {
+                                "isUpdated": { "type": "boolean", "enum": [true] }
+                              }, "required": ["isUpdated"] },
+                            { "type": "object", "properties": {
+                                "isUpdated": { "type": "boolean", "enum": [false] },
+                                "nextStep": { "type": "object", "properties": {
+                                    "name": { "type": "string" },
+                                    "destination": { "type": "string" }
+                                  }, "required": ["name", "destination"] }
+                              }, "required": ["isUpdated", "nextStep"] },
                             { "type": "null" }
                         ]
                     }

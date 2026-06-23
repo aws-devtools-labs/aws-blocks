@@ -14,7 +14,7 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - Basic Parsing
 
     func testParsesSimpleMethod() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -24,7 +24,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "GreetResult", "schema": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"] } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         XCTAssertEqual(model.methods.count, 1)
@@ -35,7 +35,7 @@ final class OpenRPCParserTests: XCTestCase {
     }
 
     func testParsesComponentSchemas() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -50,7 +50,7 @@ final class OpenRPCParserTests: XCTestCase {
                 }
             }
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         XCTAssertEqual(model.componentSchemas.count, 1)
@@ -60,7 +60,7 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - Format Handling
 
     func testParsesUUIDFormat() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -70,7 +70,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .primitive(let kind, let constraints) = model.methods[0].params[0].schema {
@@ -82,7 +82,7 @@ final class OpenRPCParserTests: XCTestCase {
     }
 
     func testParsesDateTimeFormat() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -92,7 +92,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         // Parser surfaces format-bearing strings as `.primitive(.string)` with
@@ -107,7 +107,7 @@ final class OpenRPCParserTests: XCTestCase {
     }
 
     func testParsesURIFormat() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -117,7 +117,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .primitive(let kind, let constraints) = model.methods[0].params[0].schema {
@@ -131,7 +131,7 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - Record/Map Type
 
     func testParsesRecordType() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -141,7 +141,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Scores", "schema": { "type": "object", "additionalProperties": { "type": "number" } } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .mapType(let valueType) = model.methods[0].result!.schema {
@@ -158,7 +158,7 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - Nullable
 
     func testParsesNullableOneOf() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -168,7 +168,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .nullable(let inner) = model.methods[0].params[0].schema {
@@ -185,7 +185,7 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - anyOf
 
     func testParsesAnyOfAsUnion() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -195,7 +195,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .union(let members) = model.methods[0].params[0].schema {
@@ -214,7 +214,7 @@ final class OpenRPCParserTests: XCTestCase {
     // `prefixItems` array becomes an `inlineObject` with positional fields.
 
     func testParsesConstAsSingleValueEnum() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -224,7 +224,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .unionLiteral(let values) = model.methods[0].params[0].schema {
@@ -235,7 +235,7 @@ final class OpenRPCParserTests: XCTestCase {
     }
 
     func testParsesMultiPrefixItemsAsTupleObject() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -245,7 +245,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .inlineObject(let fields, _, _) = model.methods[0].params[0].schema {
@@ -257,7 +257,7 @@ final class OpenRPCParserTests: XCTestCase {
     }
 
     func testSinglePrefixItemTreatedAsArray() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
@@ -267,7 +267,7 @@ final class OpenRPCParserTests: XCTestCase {
                 "result": { "name": "Result", "schema": { "type": "string" } }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .arrayType(let elementType, _) = model.methods[0].params[0].schema {
@@ -284,17 +284,27 @@ final class OpenRPCParserTests: XCTestCase {
     // MARK: - Transferable
 
     func testParsesTransferable() throws {
-        let spec = """
+        let spec = Data("""
         {
             "openrpc": "1.3.2",
             "info": { "title": "test", "version": "1.0.0" },
             "methods": [{
                 "name": "api.getChannel",
                 "params": [],
-                "result": { "name": "Channel", "schema": { "x-blocks-transferable": "realtime/channel", "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] }] } }
+                "result": {
+                    "name": "Channel",
+                    "schema": {
+                        "x-blocks-transferable": "realtime/channel",
+                        "x-blocks-type-args": [{
+                            "type": "object",
+                            "properties": { "x": { "type": "number" } },
+                            "required": ["x"]
+                        }]
+                    }
+                }
             }]
         }
-        """.data(using: .utf8)!
+        """.utf8)
 
         let model = try parser.parse(data: spec)
         if case .transferable(let kind, let args) = model.methods[0].result!.schema {

@@ -92,11 +92,11 @@ public class FileDownloadHandle {
             }
 
             // Move temp file to destination
-            let fm = FileManager.default
-            if fm.fileExists(atPath: fileURL.path) {
-                try fm.removeItem(at: fileURL)
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: fileURL.path) {
+                try fileManager.removeItem(at: fileURL)
             }
-            try fm.moveItem(at: tempURL, to: fileURL)
+            try fileManager.moveItem(at: tempURL, to: fileURL)
 
             logger.debug("Downloaded to \(fileURL.path)")
         } catch let error as FileBucketError {

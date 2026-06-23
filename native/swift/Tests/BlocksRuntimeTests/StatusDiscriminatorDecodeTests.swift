@@ -7,6 +7,7 @@
 
 import XCTest
 
+// swiftlint:disable nesting
 /// Runtime decode coverage for status-discriminated result unions, including a
 /// nested discriminated union in an arm — the shape the Cognito `signIn` /
 /// `confirmSignIn` RPC methods produce.
@@ -37,10 +38,12 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
         struct ContinueSignIn: Codable {
             let nextStep: NextStep
 
+            // swiftlint:disable:next type_name
             struct Confirm_Sign_In_With_Totp_Code: Codable {
                 let session: String
             }
 
+            // swiftlint:disable:next type_name
             struct Continue_Sign_In_With_Mfa_Selection: Codable {
                 let allowedMFATypes: [AllowedMFAType]
                 let session: String
@@ -54,20 +57,20 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
 
             // Nested discriminated union on `name` (representative 2-arm slice).
             enum NextStep: Codable {
-                case confirm_Sign_In_With_Totp_Code(Confirm_Sign_In_With_Totp_Code)
-                case continue_Sign_In_With_Mfa_Selection(Continue_Sign_In_With_Mfa_Selection)
+                case confirm_Sign_In_With_Totp_Code(Confirm_Sign_In_With_Totp_Code) // swiftlint:disable:this identifier_name
+                case continue_Sign_In_With_Mfa_Selection(Continue_Sign_In_With_Mfa_Selection) // swiftlint:disable:this identifier_name
 
                 enum CodingKeys: String, CodingKey { case name }
 
                 func encode(to encoder: Encoder) throws {
                     var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
-                    case .confirm_Sign_In_With_Totp_Code(let p):
+                    case .confirm_Sign_In_With_Totp_Code(let payload):
                         try container.encode("CONFIRM_SIGN_IN_WITH_TOTP_CODE", forKey: .name)
-                        try p.encode(to: encoder)
-                    case .continue_Sign_In_With_Mfa_Selection(let p):
+                        try payload.encode(to: encoder)
+                    case .continue_Sign_In_With_Mfa_Selection(let payload):
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SELECTION", forKey: .name)
-                        try p.encode(to: encoder)
+                        try payload.encode(to: encoder)
                     }
                 }
 
@@ -94,12 +97,12 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
             func encode(to encoder: Encoder) throws {
                 var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
-                case .continueSignIn(let p):
+                case .continueSignIn(let payload):
                     try container.encode("continueSignIn", forKey: .status)
-                    try p.encode(to: encoder)
-                case .signedIn(let p):
+                    try payload.encode(to: encoder)
+                case .signedIn(let payload):
                     try container.encode("signedIn", forKey: .status)
-                    try p.encode(to: encoder)
+                    try payload.encode(to: encoder)
                 }
             }
 
@@ -118,7 +121,7 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
     // MARK: - Outer discriminator (status)
 
     func testDecodesSignedInArm() throws {
-        let json = #"{"status":"signedIn","user":{"userId":"u","username":"u","userSub":"s","groups":["admins"]}}"#.data(using: .utf8)!
+        let json = Data(#"{"status":"signedIn","user":{"userId":"u","username":"u","userSub":"s","groups":["admins"]}}"#.utf8)
         let result = try JSONDecoder().decode(CognitoSignIn.Result.self, from: json)
         guard case .signedIn(let payload) = result else { return XCTFail("expected .signedIn") }
         XCTAssertEqual(payload.user.userSub, "s")
@@ -128,7 +131,7 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
     // MARK: - Nested discriminator (name) inside the continueSignIn arm
 
     func testDecodesNestedNextStepArm() throws {
-        let json = #"{"status":"continueSignIn","nextStep":{"name":"CONFIRM_SIGN_IN_WITH_TOTP_CODE","session":"sess-1"}}"#.data(using: .utf8)!
+        let json = Data(#"{"status":"continueSignIn","nextStep":{"name":"CONFIRM_SIGN_IN_WITH_TOTP_CODE","session":"sess-1"}}"#.utf8)
         let result = try JSONDecoder().decode(CognitoSignIn.Result.self, from: json)
         guard case .continueSignIn(let outer) = result else { return XCTFail("expected .continueSignIn") }
         guard case .confirm_Sign_In_With_Totp_Code(let inner) = outer.nextStep else {
@@ -138,7 +141,10 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
     }
 
     func testDecodesNestedArmWithEnumArray() throws {
-        let json = #"{"status":"continueSignIn","nextStep":{"name":"CONTINUE_SIGN_IN_WITH_MFA_SELECTION","session":"s","allowedMFATypes":["SMS","TOTP"]}}"#.data(using: .utf8)!
+        let jsonString = #"{"status":"continueSignIn","nextStep":"# +
+            #"{"name":"CONTINUE_SIGN_IN_WITH_MFA_SELECTION","# +
+            #""session":"s","allowedMFATypes":["SMS","TOTP"]}}"#
+        let json = Data(jsonString.utf8)
         let result = try JSONDecoder().decode(CognitoSignIn.Result.self, from: json)
         guard case .continueSignIn(let outer) = result,
               case .continue_Sign_In_With_Mfa_Selection(let inner) = outer.nextStep else {
@@ -166,12 +172,13 @@ final class StatusDiscriminatorDecodeTests: XCTestCase {
     }
 
     func testUnknownOuterStatusThrows() {
-        let json = #"{"status":"bogus"}"#.data(using: .utf8)!
+        let json = Data(#"{"status":"bogus"}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(CognitoSignIn.Result.self, from: json))
     }
 
     func testUnknownNestedNameThrows() {
-        let json = #"{"status":"continueSignIn","nextStep":{"name":"NOPE"}}"#.data(using: .utf8)!
+        let json = Data(#"{"status":"continueSignIn","nextStep":{"name":"NOPE"}}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(CognitoSignIn.Result.self, from: json))
     }
 }
+// swiftlint:enable nesting

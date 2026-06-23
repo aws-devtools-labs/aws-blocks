@@ -21,7 +21,7 @@ final class BlocksRequestTests: XCTestCase {
     func testEncodesAsJSONRPC() throws {
         let request = BlocksRequest(method: "api.greet", params: ["hello" as any Encodable], id: 1)
         let data = try JSONEncoder().encode(request)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         XCTAssertEqual(json["jsonrpc"] as? String, "2.0")
         XCTAssertEqual(json["method"] as? String, "api.greet")
@@ -32,7 +32,7 @@ final class BlocksRequestTests: XCTestCase {
     func testEncodesParamsAsArray() throws {
         let request = BlocksRequest(method: "api.create", params: ["title" as any Encodable, 42 as any Encodable], id: 1)
         let data = try JSONEncoder().encode(request)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let params = json["params"] as? [Any]
 
         XCTAssertNotNil(params)
@@ -44,7 +44,7 @@ final class BlocksRequestTests: XCTestCase {
     func testEncodesEmptyParams() throws {
         let request = BlocksRequest(method: "api.get", params: [], id: 1)
         let data = try JSONEncoder().encode(request)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let params = json["params"] as? [Any]
 
         XCTAssertNotNil(params)
@@ -55,7 +55,7 @@ final class BlocksRequestTests: XCTestCase {
         let optionalValue: String? = nil
         let request = BlocksRequest(method: "api.list", params: [optionalValue as any Encodable], id: 1)
         let data = try JSONEncoder().encode(request)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let params = json["params"] as? [Any]
 
         XCTAssertNotNil(params)

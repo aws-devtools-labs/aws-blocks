@@ -13,7 +13,7 @@ final class BlocksArrayParamsTests: XCTestCase {
     func testEncodesStringArray() throws {
         let params = BlocksArrayParams(["hello", "world"])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 2)
         XCTAssertEqual(arr[0] as? String, "hello")
@@ -23,7 +23,7 @@ final class BlocksArrayParamsTests: XCTestCase {
     func testEncodesIntArray() throws {
         let params = BlocksArrayParams([1, 2, 3])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 3)
         XCTAssertEqual(arr[0] as? Int, 1)
@@ -33,7 +33,7 @@ final class BlocksArrayParamsTests: XCTestCase {
     func testEncodesMixedTypes() throws {
         let params = BlocksArrayParams(["title" as any Encodable, 42 as any Encodable, true as any Encodable])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 3)
         XCTAssertEqual(arr[0] as? String, "title")
@@ -44,7 +44,7 @@ final class BlocksArrayParamsTests: XCTestCase {
     func testEncodesEmptyArray() throws {
         let params = BlocksArrayParams([])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 0)
     }
@@ -53,21 +53,20 @@ final class BlocksArrayParamsTests: XCTestCase {
         let nilValue: String? = nil
         let params = BlocksArrayParams([nilValue as any Encodable])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 1)
         XCTAssertTrue(arr[0] is NSNull)
     }
 
     func testEncodesCodableStruct() throws {
-        struct Point: Encodable {
-            let x: Int
-            let y: Int
-        }
+        // swiftlint:disable identifier_name
+        struct Point: Encodable { let x: Int; let y: Int }
+        // swiftlint:enable identifier_name
 
         let params = BlocksArrayParams([Point(x: 10, y: 20)])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 1)
         let obj = arr[0] as? [String: Any]
@@ -78,17 +77,17 @@ final class BlocksArrayParamsTests: XCTestCase {
     func testEncodesDoubleValues() throws {
         let params = BlocksArrayParams([3.14, 2.718])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr.count, 2)
-        XCTAssertEqual(arr[0] as! Double, 3.14, accuracy: 0.001)
-        XCTAssertEqual(arr[1] as! Double, 2.718, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(arr[0] as? Double), 3.14, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(arr[1] as? Double), 2.718, accuracy: 0.001)
     }
 
     func testPreservesOrder() throws {
         let params = BlocksArrayParams(["first", "second", "third"])
         let data = try JSONEncoder().encode(params)
-        let arr = try JSONSerialization.jsonObject(with: data) as! [Any]
+        let arr = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [Any])
 
         XCTAssertEqual(arr[0] as? String, "first")
         XCTAssertEqual(arr[1] as? String, "second")

@@ -220,7 +220,12 @@ indirect enum JSONSchema: Decodable {
             let exclusiveMinimum = try container.decodeIfPresent(Double.self, forKey: .exclusiveMinimum)
             let exclusiveMaximum = try container.decodeIfPresent(Double.self, forKey: .exclusiveMaximum)
             let multipleOf = try container.decodeIfPresent(Double.self, forKey: .multipleOf)
-            self = .number(format: format, minimum: minimum, maximum: maximum, exclusiveMinimum: exclusiveMinimum, exclusiveMaximum: exclusiveMaximum, multipleOf: multipleOf)
+            self = .number(
+                format: format, minimum: minimum, maximum: maximum,
+                exclusiveMinimum: exclusiveMinimum,
+                exclusiveMaximum: exclusiveMaximum,
+                multipleOf: multipleOf
+            )
 
         case "boolean":
             // Handle boolean enum (e.g. "type": "boolean", "enum": [true]) — used as discriminator
@@ -242,10 +247,10 @@ indirect enum JSONSchema: Decodable {
     /// type. Strings are taken verbatim; numbers / booleans / null are
     /// rendered with the same form they would take in the JSON wire payload.
     private static func decodeConstAsString(container: KeyedDecodingContainer<CodingKeys>) throws -> String {
-        if let s = try? container.decode(String.self, forKey: .const) { return s }
-        if let i = try? container.decode(Int.self, forKey: .const) { return String(i) }
-        if let d = try? container.decode(Double.self, forKey: .const) { return String(d) }
-        if let b = try? container.decode(Bool.self, forKey: .const) { return String(b) }
+        if let str = try? container.decode(String.self, forKey: .const) { return str }
+        if let int = try? container.decode(Int.self, forKey: .const) { return String(int) }
+        if let dbl = try? container.decode(Double.self, forKey: .const) { return String(dbl) }
+        if let bool = try? container.decode(Bool.self, forKey: .const) { return String(bool) }
         if try container.decodeNil(forKey: .const) { return "null" }
         // Fallback: re-encode the raw JSON value as text for diagnostics.
         let raw = try container.decode(RawJSON.self, forKey: .const)
@@ -293,20 +298,20 @@ struct RawJSON: Decodable {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self.encodedString = "null"
-        } else if let v = try? container.decode(Bool.self) {
-            self.encodedString = v ? "true" : "false"
-        } else if let v = try? container.decode(Int.self) {
-            self.encodedString = String(v)
-        } else if let v = try? container.decode(Double.self) {
-            self.encodedString = String(v)
-        } else if let v = try? container.decode(String.self) {
+        } else if let value = try? container.decode(Bool.self) {
+            self.encodedString = value ? "true" : "false"
+        } else if let value = try? container.decode(Int.self) {
+            self.encodedString = String(value)
+        } else if let value = try? container.decode(Double.self) {
+            self.encodedString = String(value)
+        } else if let value = try? container.decode(String.self) {
             // Re-encode as a JSON string literal so callers can inline it.
-            let data = try JSONEncoder().encode(v)
-            self.encodedString = String(data: data, encoding: .utf8) ?? "\"\(v)\""
-        } else if let v = try? container.decode([RawJSON].self) {
-            self.encodedString = "[" + v.map { $0.encodedString }.joined(separator: ",") + "]"
-        } else if let v = try? container.decode([String: RawJSON].self) {
-            let inner = v.map { "\"\($0.key)\":\($0.value.encodedString)" }.joined(separator: ",")
+            let data = try JSONEncoder().encode(value)
+            self.encodedString = String(data: data, encoding: .utf8) ?? "\"\(value)\""
+        } else if let value = try? container.decode([RawJSON].self) {
+            self.encodedString = "[" + value.map { $0.encodedString }.joined(separator: ",") + "]"
+        } else if let value = try? container.decode([String: RawJSON].self) {
+            let inner = value.map { "\"\($0.key)\":\($0.value.encodedString)" }.joined(separator: ",")
             self.encodedString = "{" + inner + "}"
         } else {
             self.encodedString = "null"

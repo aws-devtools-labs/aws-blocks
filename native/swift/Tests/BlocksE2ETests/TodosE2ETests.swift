@@ -32,11 +32,11 @@ final class TodosE2ETests: BlocksE2ETestCase {
     func testCreateAndList() async throws {
         try await signIn()
 
-        let t1 = try await api.createTodo(title: "first todo", priority: 1)
-        XCTAssertFalse(t1.todoId.isEmpty)
-        XCTAssertEqual(t1.title, "first todo")
-        XCTAssertEqual(t1.completed, false)
-        XCTAssertEqual(t1.priority, 1)
+        let firstTodo = try await api.createTodo(title: "first todo", priority: 1)
+        XCTAssertFalse(firstTodo.todoId.isEmpty)
+        XCTAssertEqual(firstTodo.title, "first todo")
+        XCTAssertEqual(firstTodo.completed, false)
+        XCTAssertEqual(firstTodo.priority, 1)
 
         let todos = try await api.listTodos(sortBy: nil)
         XCTAssertGreaterThanOrEqual(todos.count, 1)
@@ -45,8 +45,8 @@ final class TodosE2ETests: BlocksE2ETestCase {
     func testGetTodo() async throws {
         try await signIn()
 
-        let t = try await api.createTodo(title: "get me")
-        let fetched = try await api.getTodo(todoId: t.todoId)
+        let todo = try await api.createTodo(title: "get me")
+        let fetched = try await api.getTodo(todoId: todo.todoId)
         XCTAssertEqual(fetched?.title, "get me")
     }
 
@@ -59,18 +59,18 @@ final class TodosE2ETests: BlocksE2ETestCase {
 
         let byPriority = try await api.listTodos(sortBy: .priority)
         XCTAssertGreaterThanOrEqual(byPriority.count, 3)
-        for i in 0 ..< (byPriority.count - 1) {
-            XCTAssertLessThanOrEqual(byPriority[i].priority, byPriority[i + 1].priority)
+        for idx in 0 ..< (byPriority.count - 1) {
+            XCTAssertLessThanOrEqual(byPriority[idx].priority, byPriority[idx + 1].priority)
         }
     }
 
     func testUpdate() async throws {
         try await signIn()
 
-        let t = try await api.createTodo(title: "update me")
-        _ = try await api.updateTodo(todoId: t.todoId, updates: .init(completed: true, priority: nil, title: "updated"))
+        let todo = try await api.createTodo(title: "update me")
+        _ = try await api.updateTodo(todoId: todo.todoId, updates: .init(completed: true, priority: nil, title: "updated"))
 
-        let fetched = try await api.getTodo(todoId: t.todoId)
+        let fetched = try await api.getTodo(todoId: todo.todoId)
         XCTAssertEqual(fetched?.completed, true)
         XCTAssertEqual(fetched?.title, "updated")
     }
@@ -78,8 +78,8 @@ final class TodosE2ETests: BlocksE2ETestCase {
     func testDelete() async throws {
         try await signIn()
 
-        let t = try await api.createTodo(title: "delete me")
-        _ = try await api.deleteTodo(todoId: t.todoId)
+        let todo = try await api.createTodo(title: "delete me")
+        _ = try await api.deleteTodo(todoId: todo.todoId)
 
         let fetched = try await api.getTodo(todoId: t.todoId)
         XCTAssertNil(fetched)

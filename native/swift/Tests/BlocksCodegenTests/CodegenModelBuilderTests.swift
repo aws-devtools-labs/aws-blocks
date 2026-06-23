@@ -13,7 +13,7 @@ final class CodegenModelBuilderTests: XCTestCase {
     let builder = CodegenModelBuilder()
 
     private func buildModel(from json: String) throws -> CodegenModel {
-        let rpcModel = try parser.parse(data: json.data(using: .utf8)!)
+        let rpcModel = try parser.parse(data: Data(json.utf8))
         return builder.build(from: rpcModel)
     }
 
@@ -49,7 +49,17 @@ final class CodegenModelBuilderTests: XCTestCase {
             "methods": [{
                 "name": "api.get",
                 "params": [],
-                "result": { "name": "Todo", "schema": { "type": "object", "properties": { "title": { "type": "string" }, "done": { "type": "boolean" } }, "required": ["title", "done"] } }
+                "result": {
+                    "name": "Todo",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "done": { "type": "boolean" }
+                        },
+                        "required": ["title", "done"]
+                    }
+                }
             }]
         }
         """)
@@ -181,8 +191,14 @@ final class CodegenModelBuilderTests: XCTestCase {
                 "name": "api.act",
                 "params": [{ "name": "input", "required": true, "schema": {
                     "oneOf": [
-                        { "type": "object", "properties": { "action": { "type": "string", "enum": ["create"] }, "title": { "type": "string" } }, "required": ["action", "title"] },
-                        { "type": "object", "properties": { "action": { "type": "string", "enum": ["delete"] }, "id": { "type": "string" } }, "required": ["action", "id"] }
+                        { "type": "object", "properties": {
+                            "action": { "type": "string", "enum": ["create"] },
+                            "title": { "type": "string" }
+                          }, "required": ["action", "title"] },
+                        { "type": "object", "properties": {
+                            "action": { "type": "string", "enum": ["delete"] },
+                            "id": { "type": "string" }
+                          }, "required": ["action", "id"] }
                     ]
                 }}],
                 "result": { "name": "R", "schema": { "type": "boolean" } }
@@ -212,8 +228,15 @@ final class CodegenModelBuilderTests: XCTestCase {
                 "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }],
                 "result": { "name": "GetNotificationResult", "schema": {
                     "oneOf": [
-                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["email"] }, "subject": { "type": "string" }, "body": { "type": "string" } }, "required": ["type", "subject", "body"] },
-                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["sms"] }, "message": { "type": "string" } }, "required": ["type", "message"] },
+                        { "type": "object", "properties": {
+                            "type": { "type": "string", "enum": ["email"] },
+                            "subject": { "type": "string" },
+                            "body": { "type": "string" }
+                          }, "required": ["type", "subject", "body"] },
+                        { "type": "object", "properties": {
+                            "type": { "type": "string", "enum": ["sms"] },
+                            "message": { "type": "string" }
+                          }, "required": ["type", "message"] },
                         { "type": "null" }
                     ]
                 }}
@@ -249,8 +272,16 @@ final class CodegenModelBuilderTests: XCTestCase {
                     "type": "object",
                     "additionalProperties": {
                         "oneOf": [
-                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [true] } }, "required": ["isUpdated"] },
-                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [false] }, "nextStep": { "type": "object", "properties": { "name": { "type": "string" }, "destination": { "type": "string" } }, "required": ["name", "destination"] } }, "required": ["isUpdated", "nextStep"] },
+                            { "type": "object", "properties": {
+                                "isUpdated": { "type": "boolean", "enum": [true] }
+                              }, "required": ["isUpdated"] },
+                            { "type": "object", "properties": {
+                                "isUpdated": { "type": "boolean", "enum": [false] },
+                                "nextStep": { "type": "object", "properties": {
+                                    "name": { "type": "string" },
+                                    "destination": { "type": "string" }
+                                  }, "required": ["name", "destination"] }
+                              }, "required": ["isUpdated", "nextStep"] },
                             { "type": "null" }
                         ]
                     }

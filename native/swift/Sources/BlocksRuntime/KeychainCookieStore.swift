@@ -31,7 +31,7 @@ final class KeychainCookieStore {
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecMatchLimit as String: kSecMatchLimitAll
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -63,7 +63,7 @@ final class KeychainCookieStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: name,
+            kSecAttrAccount as String: name
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -71,7 +71,7 @@ final class KeychainCookieStore {
 
         let attrs: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
         let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
@@ -91,7 +91,7 @@ final class KeychainCookieStore {
     func removeAll() {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: service
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -105,7 +105,7 @@ final class KeychainCookieStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: name,
+            kSecAttrAccount as String: name
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true

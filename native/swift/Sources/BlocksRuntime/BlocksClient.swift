@@ -234,15 +234,15 @@ public final class BlocksClient {
 
                 let name = String(nameValuePart[nameValuePart.startIndex ..< eqIdx])
                     .trimmingCharacters(in: .whitespaces)
-                let val_ = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
+                let cookieValue = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
                     .trimmingCharacters(in: .whitespaces)
 
                 let cookieKey = "\(host)|\(name)"
                 let attrs = segments.count > 1 ? String(segments[1]).lowercased() : ""
-                if val_.isEmpty || attrs.contains("max-age=0") {
+                if cookieValue.isEmpty || attrs.contains("max-age=0") {
                     BlocksClient.cookieStore.remove(name: cookieKey)
                 } else {
-                    BlocksClient.cookieStore.set(name: cookieKey, value: val_)
+                    BlocksClient.cookieStore.set(name: cookieKey, value: cookieValue)
                 }
             }
         }
@@ -257,8 +257,8 @@ public final class BlocksClient {
             let semiIndex = segment.firstIndex(of: ";")
 
             let isNewCookie: Bool
-            if let eq = eqIndex {
-                isNewCookie = (semiIndex == nil || eq < semiIndex!)
+            if let equals = eqIndex {
+                isNewCookie = (semiIndex == nil || equals < semiIndex!)
             } else {
                 isNewCookie = false
             }

@@ -19,8 +19,8 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
     func testSignUpAndSignIn() async throws {
         let username = uniqueUsername("user")
 
-        let r1 = try await api.basicSignUp(username: username, password: password)
-        XCTAssertTrue(r1.success)
+        let signUpResult = try await api.basicSignUp(username: username, password: password)
+        XCTAssertTrue(signUpResult.success)
 
         let user = try await api.basicSignIn(username: username, password: password)
         XCTAssertEqual(user.username, username)

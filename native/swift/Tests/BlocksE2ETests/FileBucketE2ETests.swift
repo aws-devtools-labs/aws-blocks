@@ -36,11 +36,11 @@ final class FileBucketE2ETests: BlocksE2ETestCase {
     }
 
     func testScanWithPrefix() async throws {
-        let p = prefix
-        _ = try await api.filePut(path: "\(p)/scan/a.txt", content: "a", contentType: nil)
-        _ = try await api.filePut(path: "\(p)/scan/b.txt", content: "b", contentType: nil)
+        let pathPrefix = prefix
+        _ = try await api.filePut(path: "\(pathPrefix)/scan/a.txt", content: "a", contentType: nil)
+        _ = try await api.filePut(path: "\(pathPrefix)/scan/b.txt", content: "b", contentType: nil)
 
-        let scanned = try await api.fileScan(prefix: "\(p)/scan/")
+        let scanned = try await api.fileScan(prefix: "\(pathPrefix)/scan/")
         XCTAssertGreaterThanOrEqual(scanned.count, 2)
     }
 

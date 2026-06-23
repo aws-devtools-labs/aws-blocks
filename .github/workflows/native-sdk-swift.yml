@@ -46,10 +46,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Build for iOS
-        run: xcodebuild build -scheme aws-blocks-swift -destination 'platform=iOS Simulator,name=iPhone 16'
+        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16'
 
       - name: Run unit tests on iOS
-        run: xcodebuild test -scheme aws-blocks-swift -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
 
   swiftlint:
     name: SwiftLint

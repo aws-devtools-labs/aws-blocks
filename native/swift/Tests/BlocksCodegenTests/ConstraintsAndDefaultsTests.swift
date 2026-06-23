@@ -14,7 +14,7 @@ import XCTest
 final class ConstraintsAndDefaultsTests: XCTestCase {
 
     private func generate(_ spec: String) throws -> (models: String, api: String) {
-        let data = spec.data(using: .utf8)!
+        let data = Data(spec.utf8)
         let rpcModel = try OpenRPCParser().parse(data: data)
         let codegen = CodegenModelBuilder().build(from: rpcModel)
         return SwiftCodeGenerator().generate(from: codegen)

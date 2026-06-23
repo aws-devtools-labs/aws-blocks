@@ -11,47 +11,47 @@ import XCTest
 final class JSONValueTests: XCTestCase {
 
     func testDecodesString() throws {
-        let data = "\"hello\"".data(using: .utf8)!
+        let data = Data("\"hello\"".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        if case .string(let s) = value {
-            XCTAssertEqual(s, "hello")
+        if case .string(let str) = value {
+            XCTAssertEqual(str, "hello")
         } else {
             XCTFail("Expected string")
         }
     }
 
     func testDecodesInt() throws {
-        let data = "42".data(using: .utf8)!
+        let data = Data("42".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        if case .int(let n) = value {
-            XCTAssertEqual(n, 42)
+        if case .int(let num) = value {
+            XCTAssertEqual(num, 42)
         } else {
             XCTFail("Expected int")
         }
     }
 
     func testDecodesDouble() throws {
-        let data = "3.14".data(using: .utf8)!
+        let data = Data("3.14".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        if case .double(let n) = value {
-            XCTAssertEqual(n, 3.14, accuracy: 0.001)
+        if case .double(let num) = value {
+            XCTAssertEqual(num, 3.14, accuracy: 0.001)
         } else {
             XCTFail("Expected double")
         }
     }
 
     func testDecodesBool() throws {
-        let data = "true".data(using: .utf8)!
+        let data = Data("true".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
-        if case .bool(let b) = value {
-            XCTAssertTrue(b)
+        if case .bool(let flag) = value {
+            XCTAssertTrue(flag)
         } else {
             XCTFail("Expected bool")
         }
     }
 
     func testDecodesNull() throws {
-        let data = "null".data(using: .utf8)!
+        let data = Data("null".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         if case .null = value {
             // correct
@@ -61,7 +61,7 @@ final class JSONValueTests: XCTestCase {
     }
 
     func testDecodesArray() throws {
-        let data = "[1, \"two\", true]".data(using: .utf8)!
+        let data = Data("[1, \"two\", true]".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         if case .array(let arr) = value {
             XCTAssertEqual(arr.count, 3)
@@ -71,12 +71,12 @@ final class JSONValueTests: XCTestCase {
     }
 
     func testDecodesDictionary() throws {
-        let data = "{\"key\": \"value\"}".data(using: .utf8)!
+        let data = Data("{\"key\": \"value\"}".utf8)
         let value = try JSONDecoder().decode(JSONValue.self, from: data)
         if case .dictionary(let dict) = value {
             XCTAssertEqual(dict.count, 1)
-            if case .string(let v) = dict["key"] {
-                XCTAssertEqual(v, "value")
+            if case .string(let val) = dict["key"] {
+                XCTAssertEqual(val, "value")
             } else {
                 XCTFail("Expected string value")
             }

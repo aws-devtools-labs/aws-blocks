@@ -91,9 +91,9 @@ public class RealtimeChannel<T> {
         baseHost: String? = nil,
         deserializer: @escaping (Data) throws -> T
     ) -> RealtimeChannel<T> {
-        guard let ch = json["channel"] as? String,
+        guard let channelName = json["channel"] as? String,
               var wsUrlStr = json["wsUrl"] as? String,
-              let tok = json["token"] as? String else {
+              let tokenValue = json["token"] as? String else {
             fatalError("Invalid RealtimeChannel descriptor: missing channel, wsUrl, or token")
         }
 
@@ -101,7 +101,7 @@ public class RealtimeChannel<T> {
             wsUrlStr = wsUrlStr.replacingOccurrences(of: "://localhost", with: "://\(host)")
         }
 
-        return RealtimeChannel(channel: ch, wsUrl: wsUrlStr, token: tok, deserializer: deserializer)
+        return RealtimeChannel(channel: channelName, wsUrl: wsUrlStr, token: tokenValue, deserializer: deserializer)
     }
 
     /// Returns an `AsyncThrowingStream` that emits typed messages received on this channel.
@@ -244,4 +244,3 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         onComplete()
     }
 }
-
