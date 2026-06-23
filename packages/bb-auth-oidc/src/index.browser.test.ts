@@ -276,3 +276,73 @@ describe('AuthOIDCClient.signIn — surfaces errors instead of swallowing them',
 		assert.ok(navigatedTo.startsWith(AUTHORIZE_URL), 'should have navigated to the IdP authorize URL');
 	});
 });
+
+/**
+ * Fix (b): `handleRedirectCallback()` consumed the single-use PKCE state only
+ * AFTER the exchange await, so a React StrictMode double-mount replayed the
+ * single-use `code` and the second exchange threw — stranding the app. It is now
+ * idempotent: the in-flight (or settled) exchange is reused per `code`.
+ */
+describe('AuthOIDCClient.handleRedirectCallback — idempotent under double invocation (StrictMode)', () => {
+	const STATE = 'state-idem';
+	const BARE_USER = { userId: 'iss:sub', username: 'bob', email: 'bob@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+	let exchangeCalls: number;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code-idem&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: STATE, nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback', appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+		exchangeCalls = 0;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	/** Stub the exchange and count how many times the single-use code is sent. */
+	function stubCountingExchange(user: unknown): void {
+		globalThis.fetch = (async () => {
+			exchangeCalls += 1;
+			return { ok: true, json: async () => ({ user }) };
+		}) as unknown as typeof globalThis.fetch;
+	}
+
+	test('concurrent double-invoke exchanges ONCE and both callers get the same user', async () => {
+		stubCountingExchange(BARE_USER);
+		const client = makeClient();
+		const [a, b] = await Promise.all([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+		assert.strictEqual(exchangeCalls, 1, 'the single-use authorization code must not be replayed');
+		assert.ok(a && b, 'both invocations resolve a user (the first flow completes and renders)');
+		assert.strictEqual(a!.userId, 'iss:sub');
+		assert.strictEqual(a, b, 'both callers observe the identical resolved value');
+		assert.strictEqual(store.get('__blocks_oidc_pending'), undefined, 'pending PKCE state is consumed');
+	});
+
+	test('sequential re-invoke after resolution returns the same user without a second exchange', async () => {
+		stubCountingExchange(BARE_USER);
+		const client = makeClient();
+		const first = await client.handleRedirectCallback();
+		const second = await client.handleRedirectCallback();
+		assert.strictEqual(exchangeCalls, 1, 'the settled exchange is reused, not replayed');
+		assert.ok(first && second);
+		assert.strictEqual(first!.userId, second!.userId);
+	});
+
+	test('the second invocation never throws (StrictMode safety)', async () => {
+		stubCountingExchange(BARE_USER);
+		const client = makeClient();
+		const p1 = client.handleRedirectCallback();
+		const p2 = client.handleRedirectCallback();
+		await assert.doesNotReject(Promise.all([p1, p2]));
+	});
+});
