@@ -6,6 +6,8 @@ Structured data storage backed by DynamoDB with secondary indexes and rich query
 
 **When NOT to use:** If you only need single-key lookups, use `KVStore`. If you need full SQL (joins, aggregations), use `Database`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript

@@ -3,9 +3,11 @@
 
 import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, mkdirSync, writeFileSync, cpSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, cpSync, symlinkSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -13,6 +15,13 @@ const PKG_ROOT = join(__dirname, '..');
 const FIXTURES_SRC = join(PKG_ROOT, 'test-fixtures', 'knowledge');
 const TEST_KNOWLEDGE_NAME = 'test-knowledge-tmp';
 const TEST_KNOWLEDGE = join(process.cwd(), TEST_KNOWLEDGE_NAME);
+
+// The sibling-dir guard test spawns a subprocess that statically imports the
+// COMPILED dist/index.mock.js; skip it when the build is absent so a missing
+// dist surfaces as a skip rather than a confusing module-not-found failure.
+const SKIP_IF_UNBUILT: string | false = existsSync(join(__dirname, 'index.mock.js'))
+	? false
+	: 'compiled dist/index.mock.js not found — run `npm run build -w packages/bb-knowledge-base` first';
 
 function setupTestFixtures(): void {
 	if (existsSync(TEST_KNOWLEDGE)) rmSync(TEST_KNOWLEDGE, { recursive: true, force: true });
@@ -22,6 +31,23 @@ function setupTestFixtures(): void {
 function cleanup(): void {
 	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
 	try { rmSync(TEST_KNOWLEDGE, { recursive: true, force: true }); } catch {}
+}
+
+// Helpers for tests that build their own temporary corpora under the project
+// directory (path-guard, cache, filter, load-recovery, chunking, unicode).
+const CWD = process.cwd();
+
+function freshDir(name: string): string {
+	const p = join(CWD, name);
+	if (existsSync(p)) rmSync(p, { recursive: true, force: true });
+	mkdirSync(p, { recursive: true });
+	return p;
+}
+
+function cleanupDirs(...names: string[]): void {
+	for (const name of names) {
+		try { rmSync(join(CWD, name), { recursive: true, force: true }); } catch {}
+	}
 }
 
 beforeEach(() => {
@@ -172,23 +198,28 @@ test('RetrieveResult has all required fields with correct types', async () => {
 
 // ── Persistence ────────────────────────────────────────────────────────────
 
-test('second instance loads from chunks.json cache', async () => {
+test('second instance reuses chunks.json cache when the source is unchanged', async () => {
 	const kb1 = new KnowledgeBase({ id: 'test' }, 'persist', { source: 'test-knowledge-tmp' });
 	const results1 = await kb1.retrieve('password');
 	assert.ok(results1.length > 0);
 
-	assert.ok(
-		existsSync(join('.bb-data', 'test-persist', 'chunks.json')),
-		'chunks.json cache should exist',
-	);
+	const cachePath = join('.bb-data', 'test-persist', 'chunks.json');
+	assert.ok(existsSync(cachePath), 'chunks.json cache should exist');
 
-	// Delete the source folder to prove we're loading from cache
-	rmSync(TEST_KNOWLEDGE, { recursive: true, force: true });
+	// Overwrite the cache with a sentinel chunk while leaving the source (and its
+	// source.hash fingerprint) untouched. A second instance that reads the cache —
+	// rather than re-reading the source — will surface the sentinel, proving the
+	// cache is reused when the source is unchanged.
+	const sentinel = 'zzqxmarker unique sentinel chunk present only in the cache file content here';
+	writeFileSync(cachePath, JSON.stringify([{ text: sentinel, source: 'sentinel.md', metadata: {} }]));
 
 	const kb2 = new KnowledgeBase({ id: 'test' }, 'persist', { source: 'test-knowledge-tmp' });
-	const results2 = await kb2.retrieve('password');
-	assert.ok(results2.length > 0, 'should load from cache even without source');
-	assert.deepStrictEqual(results1[0].source, results2[0].source, 'same results from cache');
+	const results2 = await kb2.retrieve('zzqxmarker sentinel');
+	assert.ok(results2.length > 0, 'should load chunks from cache');
+	assert.ok(
+		results2[0].text.includes('zzqxmarker'),
+		'cached sentinel chunk should be returned, proving the cache was reused',
+	);
 });
 
 // ── S3 URI source ──────────────────────────────────────────────────────────
@@ -224,6 +255,16 @@ test('whitespace-only query throws ValidationError', async () => {
 		() => kb.retrieve('   '),
 		(err: Error) => err.name === KnowledgeBaseErrors.ValidationError,
 	);
+});
+
+test('non-string runtime query throws ValidationError', async () => {
+	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
+	for (const bad of [0, false, Number.NaN, null]) {
+		await assert.rejects(
+			() => kb.retrieve(bad as unknown as string),
+			(err: Error) => err.name === KnowledgeBaseErrors.ValidationError,
+		);
+	}
 });
 
 // ── Unsupported file types ─────────────────────────────────────────────────
@@ -430,6 +471,565 @@ test('metadata.json sidecar files are not indexed as documents', async () => {
 			`should not index .metadata.json files as documents, but found: ${r.source}`,
 		);
 	}
+});
+
+// ── Source path containment (path-guard) ───────────────────────────────────
+//
+// The mock must reject sources that escape the project directory. The guard
+// uses path-separator-aware comparison so a sibling directory that merely
+// shares the cwd string prefix (e.g. /a/proj-secrets vs /a/proj) is NOT
+// treated as inside the project.
+
+describe('source path containment', () => {
+	test('rejects sibling directory that shares the cwd string prefix', { skip: SKIP_IF_UNBUILT }, () => {
+		const base = freshDir('_path-guard-base');
+		const proj = join(base, 'proj');
+		mkdirSync(proj, { recursive: true });
+		const sibling = join(base, 'proj-secrets');
+		mkdirSync(sibling, { recursive: true });
+		writeFileSync(
+			join(sibling, 'secret.md'),
+			'This is a secret document that should never be accessible from the project directory.',
+		);
+
+		try {
+			// Run in a subprocess with cwd=proj so resolve(cwd) = .../proj. __dirname
+			// resolves to the compiled dist/ directory, where index.mock.js sits beside
+			// this test. Build the ESM specifier as a file:// URL so it is valid on
+			// every platform (a bare Windows path like C:\... is not a legal ESM
+			// specifier). Requires a prior `tsc` build — this test runs against dist/.
+			const distUrl = pathToFileURL(join(__dirname, 'index.mock.js')).href;
+			const script = `
+import { KnowledgeBase, KnowledgeBaseErrors } from '${distUrl}';
+try {
+	const kb = new KnowledgeBase({ id: 'app' }, 'leak', { source: '../proj-secrets' });
+	await kb.retrieve('secret document');
+	process.exit(1); // retrieve resolved — guard failed to block
+} catch (e) {
+	if (e.name === '${KnowledgeBaseErrors.InvalidSource}') {
+		process.exit(0); // correctly blocked
+	}
+	process.exit(2); // unexpected error type
+}
+`;
+			const res = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+				cwd: proj,
+				encoding: 'utf8',
+				timeout: 10000,
+			});
+
+			// Exit codes: 0 = guard blocked (pass), 1 = retrieve() resolved (guard miss), 2 = non-InvalidSource error.
+			const stderr = res.stderr ?? '';
+			assert.ok(
+				res.error == null,
+				`Subprocess could not run to completion (spawn error or timeout): ` +
+					`${res.error?.message}. Environment issue, not a guard failure.`,
+			);
+			assert.ok(
+				!/ERR_MODULE_NOT_FOUND|Cannot find (module|package)/.test(stderr),
+				`Subprocess could not import compiled dist/index.mock.js — the dist build is ` +
+					`missing or stale. Build the package first ` +
+					`(\`npm run build -w packages/bb-knowledge-base\`), then re-run. stderr: ${stderr}`,
+			);
+			assert.strictEqual(
+				res.status,
+				0,
+				`Path guard failed to block a sibling dir that shares the cwd string prefix. ` +
+					`Exit ${res.status}: 1 = retrieve() resolved (guard did not block), ` +
+					`2 = retrieve() threw a non-InvalidSource error. ` +
+					`stdout: ${res.stdout}. stderr: ${stderr}`,
+			);
+		} finally {
+			rmSync(base, { recursive: true, force: true });
+		}
+	});
+
+	test('rejects source with .. that escapes the project directory', async () => {
+		const outside = freshDir('_path-guard-outside');
+		writeFileSync(
+			join(outside, 'data.txt'),
+			'Sensitive data that lives outside the project root and must not be reachable via relative paths.',
+		);
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'escape', {
+				source: join('..', '_path-guard-outside'),
+			});
+			await assert.rejects(
+				() => kb.retrieve('sensitive data'),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+					return true;
+				},
+				'Should throw InvalidSource for paths escaping project via ..',
+			);
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	test('rejects any absolute path, even one inside the project', async () => {
+		// validateSourcePath rejects absolute paths via the leading-separator check
+		// before any filesystem access, so no on-disk fixture is needed. TEST_KNOWLEDGE
+		// is a real in-project directory, yet passing it as an absolute path is rejected.
+		const kb = new KnowledgeBase({ id: 'app' }, 'abs', { source: TEST_KNOWLEDGE });
+		await assert.rejects(
+			() => kb.retrieve('absolute path document'),
+			(err: Error) => {
+				assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+				return true;
+			},
+			'Should throw InvalidSource for any absolute path',
+		);
+	});
+
+	test('rejects a symlink whose target is outside the project', async () => {
+		// A symlink inside the project that points at a real target outside it
+		// passes lexical containment but must be rejected by the realpath check.
+		// The target lives in the OS temp dir (outside the project). Symlink
+		// creation is skipped where the platform/CI forbids it (e.g. Windows
+		// without privilege), keeping the test portable.
+		const outsideTarget = mkdtempSync(join(tmpdir(), 'kb-symlink-target-'));
+		writeFileSync(
+			join(outsideTarget, 'secret.md'),
+			'Secret content that lives outside the project and must not be reachable through a symlink.',
+		);
+		const linkName = '_symlink-escape';
+		const linkPath = join(CWD, linkName);
+		try {
+			rmSync(linkPath, { recursive: true, force: true });
+		} catch {}
+
+		let symlinkOk = true;
+		try {
+			symlinkSync(outsideTarget, linkPath, 'dir');
+		} catch (err) {
+			symlinkOk = false;
+			console.warn(`Skipping symlink test — cannot create symlink on this platform: ${(err as Error).message}`);
+		}
+
+		try {
+			if (!symlinkOk) return;
+			const kb = new KnowledgeBase({ id: 'app' }, 'symlink', { source: linkName });
+			await assert.rejects(
+				() => kb.retrieve('secret content'),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+					return true;
+				},
+				'A symlink pointing outside the project must be rejected with InvalidSource',
+			);
+		} finally {
+			rmSync(linkPath, { recursive: true, force: true });
+			rmSync(outsideTarget, { recursive: true, force: true });
+		}
+	});
+
+	test('warns (but does not throw) when source resolves to the project root', async () => {
+		// Run in an isolated temp cwd so `source: '.'` indexes a tiny tree rather
+		// than the real repo (which would walk node_modules). The warning is
+		// advisory only — retrieve() must still succeed.
+		const tmpCwd = mkdtempSync(join(tmpdir(), 'kb-root-source-'));
+		writeFileSync(
+			join(tmpCwd, 'doc.md'),
+			'Root level document about widgets and gadgets used to exercise the project-root source warning.',
+		);
+		const originalCwd = process.cwd();
+		const originalWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(' '));
+		};
+		try {
+			process.chdir(tmpCwd);
+			const kb = new KnowledgeBase({ id: 'app' }, 'root-source', { source: '.' });
+			const results = await kb.retrieve('widgets gadgets');
+			assert.ok(
+				warnings.some((w) => w.includes('resolves to the project root')),
+				`Expected a project-root warning via warn(); captured: ${JSON.stringify(warnings)}`,
+			);
+			assert.ok(results.length > 0, 'root source should still index and return results (warn, not block)');
+		} finally {
+			console.warn = originalWarn;
+			process.chdir(originalCwd);
+			rmSync(tmpCwd, { recursive: true, force: true });
+		}
+	});
+});
+
+// ── Cache invalidation ──────────────────────────────────────────────────────
+//
+// The chunks cache is keyed on the source folder's contents (path plus per-file
+// mtime/size) and the chunking config. Changing the source or the chunking
+// config must rebuild the index rather than serving stale results, and deleting
+// the source must throw rather than serving stale cache.
+
+describe('cache invalidation', () => {
+	test('switching the source folder returns new content, not stale cache', async () => {
+		const v1 = freshDir('_cache-v1');
+		writeFileSync(join(v1, 'doc.md'), 'Version one content about apples oranges and fruit orchards in the countryside.');
+		const v2 = freshDir('_cache-v2');
+		writeFileSync(join(v2, 'doc.md'), 'Version two content about spaceships rockets and interstellar galactic travel.');
+
+		try {
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'cache', { source: '_cache-v1' });
+			const r1 = await kb1.retrieve('apples oranges fruit');
+			assert.ok(r1.length > 0, 'v1 query should return results');
+			assert.ok(
+				r1[0].text.includes('apples') || r1[0].text.includes('oranges'),
+				'v1 results should contain v1 content',
+			);
+
+			// Same fullId, different source folder — must not reuse the v1 cache.
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'cache', { source: '_cache-v2' });
+			const r2 = await kb2.retrieve('spaceships rockets galactic');
+			assert.ok(r2.length > 0, 'v2 query should return results when source points to v2');
+			assert.ok(
+				r2[0].text.includes('spaceships') || r2[0].text.includes('rockets'),
+				'results should contain v2 content, not stale v1 data',
+			);
+		} finally {
+			cleanupDirs('_cache-v1', '_cache-v2');
+		}
+	});
+
+	test('editing a document in the source folder is reflected on next load', async () => {
+		const src = freshDir('_cache-edit');
+		writeFileSync(join(src, 'doc.md'), 'Original content about dinosaurs and prehistoric creatures from the Jurassic period.');
+
+		try {
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'edit', { source: '_cache-edit' });
+			const r1 = await kb1.retrieve('dinosaurs prehistoric Jurassic');
+			assert.ok(r1.length > 0, 'original query should match');
+
+			writeFileSync(join(src, 'doc.md'), 'Updated content about quantum computing and artificial intelligence breakthroughs in modern science.');
+
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'edit', { source: '_cache-edit' });
+			const r2 = await kb2.retrieve('quantum computing artificial intelligence');
+			assert.ok(r2.length > 0, 'updated content should return results after edit');
+			assert.ok(
+				r2[0].text.includes('quantum') || r2[0].text.includes('artificial'),
+				'results should reflect the edited content',
+			);
+
+			const r3 = await kb2.retrieve('dinosaurs prehistoric Jurassic');
+			assert.strictEqual(r3.length, 0, 'old content should not be returned after the document edit');
+		} finally {
+			cleanupDirs('_cache-edit');
+		}
+	});
+
+	test('deleting the source after a cached load throws InvalidSource, not stale data', async () => {
+		const srcName = '_cache-then-delete';
+		const src = freshDir(srcName);
+		writeFileSync(
+			join(src, 'doc.md'),
+			'Content about renewable energy and sustainable power generation technologies worldwide.',
+		);
+
+		try {
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'deltest', { source: srcName });
+			const r1 = await kb1.retrieve('renewable energy sustainable');
+			assert.ok(r1.length > 0, 'first load should return results');
+			assert.ok(
+				existsSync(join('.bb-data', 'app-deltest', 'chunks.json')),
+				'cache should be written after the first load',
+			);
+
+			// Remove the source folder. A fresh instance must NOT serve the stale
+			// cache — the empty source hash forces a rebuild, which throws.
+			rmSync(src, { recursive: true, force: true });
+
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'deltest', { source: srcName });
+			await assert.rejects(
+				() => kb2.retrieve('renewable energy sustainable'),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+					return true;
+				},
+				'Deleting the source must throw InvalidSource rather than serve stale cached chunks',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+
+	test('changing the chunking config for the same kb id invalidates the cache and re-chunks', async () => {
+		const srcName = '_chunk-cache-key';
+		const src = freshDir(srcName);
+		// One large no-blank-line paragraph: 'semantic' yields a single big chunk,
+		// while 'fixed' with a small chunkSize yields many small chunks.
+		const words = Array.from({ length: 400 }, (_, i) => `term${i} alpha beta gamma`).join(' ');
+		writeFileSync(join(src, 'big.md'), words);
+
+		try {
+			// First load with default (semantic) chunking under id 'chunkkey'.
+			const kb1 = new KnowledgeBase({ id: 'app' }, 'chunkkey', { source: srcName });
+			const r1 = await kb1.retrieve('term0 alpha');
+			assert.ok(r1.length > 0, 'semantic load should return results');
+			const semanticMaxLen = Math.max(...r1.map((r) => r.text.length));
+
+			// Same id + same source, but switch to fixed/small chunking. The cache key
+			// must include the chunking config, so this rebuilds rather than serving
+			// the previously-cached semantic chunks.
+			const kb2 = new KnowledgeBase({ id: 'app' }, 'chunkkey', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 30 },
+			});
+			const r2 = await kb2.retrieve('term0 alpha');
+			assert.ok(r2.length > 0, 'fixed load should return results');
+			const fixedMaxLen = Math.max(...r2.map((r) => r.text.length));
+
+			assert.ok(
+				fixedMaxLen < semanticMaxLen,
+				`Fixed chunking should re-chunk into smaller chunks (fixed max ${fixedMaxLen} < semantic max ${semanticMaxLen}). ` +
+					'If equal, the cache key ignored the chunking config and served stale semantic chunks.',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+});
+
+// ── Metadata filter completeness ────────────────────────────────────────────
+//
+// When a filter is supplied the mock scores every chunk before filtering, so a
+// matching doc is never silently dropped just because higher-scoring
+// non-matching docs would have filled the maxResults window first.
+
+describe('metadata filter completeness', () => {
+	test('filter returns all matching docs even when they rank below higher-scoring non-matching docs', async () => {
+		const src = freshDir('_filter-completeness');
+		mkdirSync(join(src, 'target'), { recursive: true });
+		mkdirSync(join(src, 'noise'), { recursive: true });
+
+		// 200 noise docs that strongly match "apple" (high TF-IDF score).
+		for (let i = 0; i < 200; i++) {
+			writeFileSync(
+				join(src, 'noise', `n${i}.md`),
+				'apple apple apple apple apple fruit orchard harvest season picking baskets cider juice.',
+			);
+		}
+		// 5 target docs in folder=target that mention "apple" with lower density.
+		for (let i = 0; i < 5; i++) {
+			writeFileSync(
+				join(src, 'target', `t${i}.md`),
+				`Target document ${i} that mentions apple once amid many other unrelated words and topics and themes and ideas and concepts here.`,
+			);
+		}
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'filtcomp', { source: '_filter-completeness' });
+			const results = await kb.retrieve('apple', {
+				maxResults: 5,
+				filter: { folder: { equals: 'target' } },
+			});
+
+			assert.strictEqual(
+				results.length,
+				5,
+				`Expected 5 results from target folder, got ${results.length}. ` +
+					'Filter must scan all matching docs regardless of score ranking.',
+			);
+			for (const r of results) {
+				assert.strictEqual(r.metadata.folder, 'target');
+			}
+		} finally {
+			cleanupDirs('_filter-completeness');
+		}
+	});
+});
+
+// ── Load recovery after a failed load ────────────────────────────────────────
+//
+// A failed load must not permanently poison the instance: the internal
+// loadPromise is reset on failure so a later retrieve() can succeed once the
+// underlying problem (e.g. a missing source folder) is resolved.
+
+describe('load recovery after failed load', () => {
+	test('instance recovers after the source folder is created following an initial failure', async () => {
+		const srcName = '_error-recovery-src';
+		cleanupDirs(srcName);
+
+		const kb = new KnowledgeBase({ id: 'app' }, 'recover', { source: srcName });
+		await assert.rejects(
+			() => kb.retrieve('test query'),
+			(err: Error) => {
+				assert.strictEqual(err.name, KnowledgeBaseErrors.InvalidSource);
+				return true;
+			},
+			'First call should fail because the source folder does not exist',
+		);
+
+		const src = freshDir(srcName);
+		writeFileSync(
+			join(src, 'doc.md'),
+			'This document contains information about recovery testing and transient failures in distributed systems.',
+		);
+
+		try {
+			const results = await kb.retrieve('recovery testing transient failures');
+			assert.ok(
+				results.length > 0,
+				'Instance should recover after the source folder is created — loadPromise must not be permanently poisoned',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+});
+
+// ── Chunking configuration ──────────────────────────────────────────────────
+//
+// The 'fixed' chunking strategy must be honored: a small chunkSize produces
+// smaller chunks than the default 'semantic' strategy, which returns a
+// blank-line-free document as a single oversized chunk.
+
+describe('chunking configuration', () => {
+	test('fixed chunking splits a blank-line-free document into multiple chunks', async () => {
+		const src = freshDir('_chunking-fixed');
+		// Single large paragraph (no blank lines) — about 500 words. The default
+		// 'semantic' strategy would return it as one oversized chunk; 'fixed' with a
+		// small chunkSize must split it into several, proving the option is honored.
+		const words = Array.from(
+			{ length: 500 },
+			(_, i) => `word${i} sentence${i % 50} paragraph content text document knowledge base`,
+		).join(' ');
+		writeFileSync(join(src, 'big.md'), words);
+
+		try {
+			const kbFixed = new KnowledgeBase({ id: 'app' }, 'chunkfix', {
+				source: '_chunking-fixed',
+				chunking: { strategy: 'fixed', chunkSize: 50 },
+			});
+			const fixedResults = await kbFixed.retrieve('word0 sentence0');
+
+			assert.ok(
+				fixedResults.length > 1,
+				`Fixed chunking (chunkSize=50) should split the single paragraph into multiple chunks ` +
+					`(got ${fixedResults.length}). The chunking option appears to be ignored.`,
+			);
+		} finally {
+			cleanupDirs('_chunking-fixed');
+		}
+	});
+
+	test('negative / over-range chunkOverlap does not drop words (clamp behavior)', async () => {
+		const srcName = '_overlap-clamp';
+		const src = freshDir(srcName);
+		// 200 words with a unique sentinel at index 120. A negative overlap in the
+		// unclamped code pushes `step` past chunkSize (100), so the window holding
+		// the sentinel (indices 100–199) is skipped entirely and the word vanishes
+		// from the index. Clamping the overlap to >= 0 keeps every word covered.
+		const parts: string[] = [];
+		for (let i = 0; i < 200; i++) {
+			parts.push(i === 120 ? 'zzsentinelword' : `filler${i}`);
+		}
+		writeFileSync(join(src, 'doc.md'), parts.join(' '));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'clampneg', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 100, chunkOverlap: -50 },
+			});
+			const results = await kb.retrieve('zzsentinelword');
+			assert.ok(
+				results.length > 0,
+				'A negative chunkOverlap must not drop the middle window — every word stays indexed after clamping',
+			);
+			assert.ok(
+				results[0].text.includes('zzsentinelword'),
+				'the sentinel word in the would-be-skipped window should still be retrievable',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+
+	test('zero overlap does not drop a short final window (tail-loss regression)', async () => {
+		const srcName = '_overlap-zero-tail';
+		const src = freshDir(srcName);
+		// 201 words, chunkSize 100, overlap 0 → step 100 → windows [0,100), [100,200),
+		// [200,201). The last window is a single short word, below the 20-char floor that
+		// filters out junk fragments. It must still be emitted so the trailing word is
+		// never lost; otherwise words[200] would never be indexed.
+		const parts: string[] = [];
+		for (let i = 0; i < 200; i++) {
+			parts.push(`filler${i}`);
+		}
+		parts.push('zztailsentinel'); // index 200 — the final word, alone in the last window
+		writeFileSync(join(src, 'doc.md'), parts.join(' '));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'zerotail', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 100, chunkOverlap: 0 },
+			});
+			const results = await kb.retrieve('zztailsentinel');
+			assert.ok(
+				results.length > 0,
+				'the final short window must be emitted even below the 20-char floor — the last word stays indexed',
+			);
+			assert.ok(
+				results[0].text.includes('zztailsentinel'),
+				'the sentinel word in the short final window should be retrievable',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+
+	test('chunkSize 0 yields no chunks and retrieve does not crash (maxTokens<=0 guard)', async () => {
+		const srcName = '_chunksize-zero';
+		const src = freshDir(srcName);
+		// A blank-line-free paragraph that 'fixed' chunking would normally split.
+		// With chunkSize 0 (→ maxTokens 0) the guard bails out: nothing is indexed,
+		// and retrieve() must return cleanly rather than throw or loop on a negative overlap.
+		const words = Array.from({ length: 200 }, (_, i) => `word${i} content text knowledge`).join(' ');
+		writeFileSync(join(src, 'doc.md'), words);
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'chunkzero', {
+				source: srcName,
+				chunking: { strategy: 'fixed', chunkSize: 0 },
+			});
+			const results = await kb.retrieve('word0 content');
+			assert.deepStrictEqual(
+				results,
+				[],
+				'chunkSize 0 must produce no chunks (maxTokens<=0 guard) and retrieve must not crash',
+			);
+		} finally {
+			cleanupDirs(srcName);
+		}
+	});
+});
+
+// ── Unicode / multilingual retrieval ─────────────────────────────────────────
+//
+// The TF-IDF tokenizer is Unicode-aware (accent folding plus CJK bigrams). This
+// end-to-end test proves non-ASCII content survives the file → chunk → index →
+// retrieve pipeline. Accent-folding specifics are unit-tested in tfidf.test.ts.
+
+describe('unicode / multilingual retrieval', () => {
+	test('CJK content is searchable end-to-end', async () => {
+		const src = freshDir('_unicode-cjk');
+		writeFileSync(
+			join(src, 'doc.md'),
+			'機械学習のアルゴリズムはデータ処理を効率化します。人工知能は未来の技術です。',
+		);
+
+		try {
+			const kb = new KnowledgeBase({ id: 'app' }, 'uni-cjk', { source: '_unicode-cjk' });
+			const results = await kb.retrieve('機械学習 人工知能');
+			assert.ok(
+				results.length > 0,
+				'CJK query should find CJK document content — tokenizer must not strip non-ASCII characters entirely',
+			);
+		} finally {
+			cleanupDirs('_unicode-cjk');
+		}
+	});
 });
 
 // ── Cleanup after all tests ────────────────────────────────────────────────

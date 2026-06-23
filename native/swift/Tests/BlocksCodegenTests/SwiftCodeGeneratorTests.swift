@@ -310,4 +310,56 @@ final class SwiftCodeGeneratorTests: XCTestCase {
 
         XCTAssertFalse(output.api.contains("!"), "Generated API should not contain force unwraps")
     }
+
+    // MARK: - Nullable Discriminated Unions
+
+    func testNullableDiscriminatedUnionGeneratesOptionalReturnType() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.getNotification",
+                "params": [{ "name": "id", "required": true, "schema": { "type": "string" } }],
+                "result": { "name": "GetNotificationResult", "schema": {
+                    "oneOf": [
+                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["email"] }, "subject": { "type": "string" }, "body": { "type": "string" } }, "required": ["type", "subject", "body"] },
+                        { "type": "object", "properties": { "type": { "type": "string", "enum": ["sms"] }, "message": { "type": "string" } }, "required": ["type", "message"] },
+                        { "type": "null" }
+                    ]
+                }}
+            }]
+        }
+        """)
+
+        XCTAssertTrue(output.api.contains("-> GetNotification.Result?"), "Return type should be optional")
+        XCTAssertTrue(output.api.contains("guard let result else { return nil }"), "Should return nil for null result")
+        XCTAssertTrue(output.api.contains("case email(Email)"), "Should have email variant")
+        XCTAssertTrue(output.api.contains("case sms(Sms)"), "Should have sms variant")
+    }
+
+    func testNullableDiscriminatedUnionInMapValue() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{
+                "name": "api.updateAttributes",
+                "params": [{ "name": "attributes", "required": true, "schema": { "type": "object", "additionalProperties": { "type": "string" } } }],
+                "result": { "name": "UpdateAttributesResult", "schema": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "oneOf": [
+                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [true] } }, "required": ["isUpdated"] },
+                            { "type": "object", "properties": { "isUpdated": { "type": "boolean", "enum": [false] }, "nextStep": { "type": "object", "properties": { "name": { "type": "string" }, "destination": { "type": "string" } }, "required": ["name", "destination"] } }, "required": ["isUpdated", "nextStep"] },
+                            { "type": "null" }
+                        ]
+                    }
+                }}
+            }]
+        }
+        """)
+
+        XCTAssertTrue(output.api.contains("[String: UpdateAttributes.ResultValue?]"), "Map value type should be optional")
+    }
 }

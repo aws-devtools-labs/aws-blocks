@@ -327,6 +327,7 @@ public struct CodegenModelBuilder {
         case .union(let members):
             let unionName = pascalCase(name)
             let myId = "\(currentParentId ?? "root").\(unionName)"
+            let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }; return false }
             let resolved = resolveUnion(
                 members: members,
                 unionName: unionName,
@@ -344,7 +345,8 @@ public struct CodegenModelBuilder {
                     for existing in typeDefinitions {
                         if case .union(_, let ev, let ed) = existing.type,
                            structuralKeyOfUnion(variants: ev, discriminator: ed) == key {
-                            return .typeReference(name: existing.name)
+                            let ref: ResolvedType = .typeReference(name: existing.name)
+                            return hasNullMember ? .nullable(inner: ref) : ref
                         }
                     }
                     // Also check inline types for structural dedup
@@ -352,7 +354,8 @@ public struct CodegenModelBuilder {
                         if case .union(_, let ev, let ed) = existing.type,
                            structuralKeyOfUnion(variants: ev, discriminator: ed) == key,
                            existing.shortName != unionName {
-                            return .typeReference(name: existing.shortName)
+                            let ref: ResolvedType = .typeReference(name: existing.shortName)
+                            return hasNullMember ? .nullable(inner: ref) : ref
                         }
                     }
                 }
@@ -367,7 +370,7 @@ public struct CodegenModelBuilder {
                     ))
                 }
             }
-            return resolved
+            return hasNullMember ? .nullable(inner: resolved) : resolved
 
         case .schemaRef(let refName, _):
             if componentSchemas[refName] != nil {

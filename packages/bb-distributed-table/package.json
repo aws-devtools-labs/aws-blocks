@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-distributed-table",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "@aws-blocks/core": "^0.1.2",
-    "@aws-blocks/bb-logger": "^0.1.1",
+    "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-sdk/client-dynamodb": "^3.0.0",
     "@aws-sdk/lib-dynamodb": "^3.0.0",
     "@standard-schema/spec": "^1.0.0"

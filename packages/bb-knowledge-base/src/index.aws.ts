@@ -9,21 +9,19 @@ import {
 } from '@aws-sdk/client-bedrock-agent-runtime';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import type {
-	KnowledgeBaseOptions,
-	RetrieveOptions,
-	RetrieveResult,
-	MetadataFilter,
-} from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 export type {
-	KnowledgeBaseOptions, SourceConfig,
-	ChunkingConfig, ChunkingStrategy,
-	RetrieveOptions, RetrieveResult,
+	KnowledgeBaseOptions,
+	SourceConfig,
+	ChunkingConfig,
+	ChunkingStrategy,
+	RetrieveOptions,
+	RetrieveResult,
 	MetadataFilter,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
@@ -45,29 +43,56 @@ function blocksError(name: string, message: string): Error {
 	return err;
 }
 
+// Match only messages that clearly indicate a metadata filter issue.
+// Default unknown ValidationExceptions to ValidationError — false negatives
+// (filter error → generic) are less harmful than false positives (content
+// block → "your filter is wrong").
+const FILTER_ERROR_PATTERNS = [
+	/field\b.*\bnot found/i,
+	// Intentionally loose. This only ever matches retrieve-time ValidationExceptions,
+	// where the user-controllable inputs reaching Bedrock are the (already non-empty)
+	// query text and the metadata filter — so a "metadata attribute" mention is almost
+	// always a filter problem (e.g. "metadata attribute ... not found"). A stricter
+	// "not found"/"key" anchor was considered but rejected: Bedrock's exact wording
+	// varies by vector store and version, so tightening risks dropping real filter
+	// errors. Anything unmatched already falls through to ValidationError below.
+	/metadata.*attribute/i,
+	/invalid.*filter|filter.*invalid/i,
+	/filter\b.*\bkey\b.*\bnot/i,
+];
+
+function isFilterRelatedValidation(message: string): boolean {
+	return FILTER_ERROR_PATTERNS.some((p) => p.test(message));
+}
+
 function mapSdkError(err: unknown): Error {
-	if (err instanceof Error) {
-		const name = err.name;
-		if (name === 'ResourceNotFoundException') {
-			return blocksError(
-				KnowledgeBaseErrors.NotReady,
-				'Knowledge base not found. Run `cdk deploy` first.',
-			);
-		}
-		if (name === 'ValidationException') {
-			return blocksError(
-				KnowledgeBaseErrors.InvalidFilter,
-				err.message,
-			);
-		}
-		// Catch-all for unrecognized SDK errors — original error name + message are preserved.
-		return blocksError(
-			KnowledgeBaseErrors.RetrievalFailed,
-			err.message,
-		);
+	// Non-Error throw (e.g., string or object) — stringify for diagnostics. There
+	// is no underlying Error to attach, so `cause` is left unset.
+	if (!(err instanceof Error)) {
+		return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
 	}
-	// Non-Error throw (e.g., string or object) — stringify for diagnostics.
-	return blocksError(KnowledgeBaseErrors.RetrievalFailed, String(err));
+
+	let mapped: Error;
+	if (err.name === 'ResourceNotFoundException') {
+		mapped = blocksError(
+			KnowledgeBaseErrors.NotReady,
+			`Knowledge base not found. Run \`cdk deploy\` first. (${err.message})`,
+		);
+	} else if (err.name === 'ValidationException' && isFilterRelatedValidation(err.message)) {
+		mapped = blocksError(KnowledgeBaseErrors.InvalidFilter, err.message);
+	} else if (err.name === 'ValidationException') {
+		mapped = blocksError(KnowledgeBaseErrors.ValidationError, err.message);
+	} else {
+		// Catch-all for unrecognized SDK errors (network, auth, throttling, etc.).
+		mapped = blocksError(KnowledgeBaseErrors.RetrievalFailed, err.message);
+	}
+
+	// Preserve the original SDK error as the standard `Error.cause` for diagnostics
+	// (keeps its original name, message, and stack). Defined NON-ENUMERABLE so
+	// `JSON.stringify(mapped)` cannot leak the SDK error's $metadata (requestId/cfId);
+	// the cause stays programmatically accessible (`mapped.cause === err`).
+	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
+	return mapped;
 }
 
 // ── Filter builder ─────────────────────────────────────────────────────────
@@ -78,7 +103,7 @@ function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
 	const keys = Object.keys(filter);
 	if (keys.length === 0) return undefined;
 
-	const filters: RetrievalFilter[] = keys.map(key => ({
+	const filters: RetrievalFilter[] = keys.map((key) => ({
 		equals: { key, value: filter[key].equals },
 	}));
 
@@ -167,11 +192,8 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query || !query.trim()) {
-			throw blocksError(
-				KnowledgeBaseErrors.ValidationError,
-				'Query must be a non-empty string.',
-			);
+		if (typeof query !== 'string' || !query.trim()) {
+			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
 		// Bedrock API limits numberOfResults to 1–100. Well within Lambda's 6 MB response payload.
@@ -180,16 +202,18 @@ export class KnowledgeBase extends Scope {
 		const knowledgeBaseId = this.ensureKbId();
 
 		try {
-			const response = await this.runtimeClient.send(new RetrieveCommand({
-				knowledgeBaseId,
-				retrievalQuery: { text: query },
-				retrievalConfiguration: {
-					vectorSearchConfiguration: {
-						numberOfResults: maxResults,
-						...(filter ? { filter } : {}),
+			const response = await this.runtimeClient.send(
+				new RetrieveCommand({
+					knowledgeBaseId,
+					retrievalQuery: { text: query },
+					retrievalConfiguration: {
+						vectorSearchConfiguration: {
+							numberOfResults: maxResults,
+							...(filter ? { filter } : {}),
+						},
 					},
-				},
-			}));
+				}),
+			);
 
 			const results: RetrieveResult[] = [];
 			for (const item of response.retrievalResults ?? []) {

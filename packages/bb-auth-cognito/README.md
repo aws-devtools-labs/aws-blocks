@@ -6,6 +6,8 @@ Authentication backed by Amazon Cognito User Pools. Ships with username/password
 
 **When NOT to use:** Prototypes or internal tools that just need username/password without Cognito — use `AuthBasic`. Direct OIDC federation without Cognito in the middle — use `AuthOIDC`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -332,7 +334,41 @@ try {
 }
 ```
 
-Error names match Cognito's wire-format exceptions (`NotAuthorizedException`, `UserNotFoundException`, `CodeMismatchException`, `AliasExistsException`, `InternalErrorException`, etc.). See `AuthCognitoErrors` in `src/types.ts` for the full list.
+Error names match Cognito's wire-format exceptions, so customers familiar with AWS encounter the same strings. `AuthCognitoErrors` maps an ergonomic constant to each wire-format `error.name` — match on the constant with `isBlocksError`, never on the raw string.
+
+| Constant | Wire-format `error.name` | Thrown when |
+|---|---|---|
+| `AuthCognitoErrors.NotAuthenticated` | `NotAuthenticatedException` | No valid session — surfaced by `requireAuth` (401). |
+| `AuthCognitoErrors.NotAuthorized` | `NotAuthorizedException` | Bad credentials, or the user is not in the group required by `requireRole` (403). |
+| `AuthCognitoErrors.UserNotFound` | `UserNotFoundException` | No user with that username/alias. |
+| `AuthCognitoErrors.UserAlreadyExists` | `UsernameExistsException` | Username already taken on sign-up. |
+| `AuthCognitoErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't satisfy the pool policy. |
+| `AuthCognitoErrors.InvalidParameter` | `InvalidParameterException` | Malformed input or an unsupported request shape. |
+| `AuthCognitoErrors.CodeMismatch` | `CodeMismatchException` | Wrong confirmation/MFA code on `RespondToAuthChallenge`. Session stays valid; retriable. |
+| `AuthCognitoErrors.ExpiredCode` | `ExpiredCodeException` | Confirmation/MFA code expired. |
+| `AuthCognitoErrors.LimitExceeded` | `LimitExceededException` | Per-user attempt limit exceeded (e.g. too many code requests). |
+| `AuthCognitoErrors.TooManyRequests` | `TooManyRequestsException` | Request rate-limited by Cognito. |
+| `AuthCognitoErrors.TooManyFailedAttempts` | `TooManyFailedAttemptsException` | Too many failed verification attempts. |
+| `AuthCognitoErrors.PasswordResetRequired` | `PasswordResetRequiredException` | Sign-in blocked — an admin requires a password reset. |
+| `AuthCognitoErrors.UserNotConfirmed` | `UserNotConfirmedException` | User hasn't confirmed sign-up yet. |
+| `AuthCognitoErrors.MFAMethodNotFound` | `MFAMethodNotFoundException` | Requested MFA method isn't configured for the user. |
+| `AuthCognitoErrors.SoftwareTokenMFANotFound` | `SoftwareTokenMFANotFoundException` | TOTP MFA isn't enabled for the user. |
+| `AuthCognitoErrors.GroupNotFound` | `ResourceNotFoundException` | Referenced user-pool group doesn't exist. **Note the non-1:1 mapping — see below.** |
+| `AuthCognitoErrors.UnsupportedUserState` | `UnsupportedUserStateException` | Operation invalid for the user's current state (e.g. force-change-password). |
+| `AuthCognitoErrors.AliasExists` | `AliasExistsException` | Email or phone alias already in use on another user in this pool. |
+| `AuthCognitoErrors.InvalidLambdaResponse` | `InvalidLambdaResponseException` | Cognito Lambda trigger returned a malformed response. |
+| `AuthCognitoErrors.UserLambdaValidation` | `UserLambdaValidationException` | Cognito Lambda trigger threw; error wrapped by Cognito. |
+| `AuthCognitoErrors.InternalError` | `InternalErrorException` | Rare Cognito-side failure. Safe to retry with backoff. |
+| `AuthCognitoErrors.EnableSoftwareTokenMFA` | `EnableSoftwareTokenMFAException` | TOTP code mismatch during `VerifySoftwareToken` (MFA setup). Distinct from `CodeMismatchException`; retriable on the same session. |
+| `AuthCognitoErrors.WebAuthnNotEnabled` | `WebAuthnNotEnabledException` | Pool has no `WebAuthnConfiguration` — passkeys disabled. |
+| `AuthCognitoErrors.WebAuthnOriginNotAllowed` | `WebAuthnOriginNotAllowedException` | Browser submitted a passkey assertion from a non-allow-listed origin. |
+| `AuthCognitoErrors.WebAuthnRelyingPartyMismatch` | `WebAuthnRelyingPartyMismatchException` | Submitted credential's rpId does not match the pool's relying-party config. |
+| `AuthCognitoErrors.WebAuthnChallengeNotFound` | `WebAuthnChallengeNotFoundException` | WebAuthn challenge expired or session lost — caller must restart. |
+| `AuthCognitoErrors.WebAuthnCredentialNotSupported` | `WebAuthnCredentialNotSupportedException` | Submitted credential type / algorithm not supported by the pool config. |
+| `AuthCognitoErrors.WebAuthnClientMismatch` | `WebAuthnClientMismatchException` | Cognito refused the assertion because the client ID does not match. |
+| `AuthCognitoErrors.WebAuthnConfigurationMissing` | `WebAuthnConfigurationMissingException` | Pool is missing required `WebAuthnConfiguration` (rpId / origins). |
+
+> **Non-obvious mapping:** `AuthCognitoErrors.GroupNotFound` resolves to `'ResourceNotFoundException'`, **not** a `GroupNotFound*` string. Cognito has no dedicated "group not found" exception, so a missing user-pool group surfaces as the generic `ResourceNotFoundException`. Always match with `isBlocksError(e, AuthCognitoErrors.GroupNotFound)` rather than the literal string so the intent stays clear.
 
 ## UI Components
 
