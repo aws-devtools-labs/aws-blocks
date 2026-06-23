@@ -81,7 +81,7 @@ final class TodosE2ETests: BlocksE2ETestCase {
         let todo = try await api.createTodo(title: "delete me")
         _ = try await api.deleteTodo(todoId: todo.todoId)
 
-        let fetched = try await api.getTodo(todoId: t.todoId)
+        let fetched = try await api.getTodo(todoId: todo.todoId)
         XCTAssertNil(fetched)
     }
 
