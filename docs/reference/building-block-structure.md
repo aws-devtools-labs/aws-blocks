@@ -440,6 +440,80 @@ export class MyBlock {
 }
 ```
 
+## Agent Tool Support (`toAgentTools`)
+
+BBs can expose their operations as agent tools by implementing `toAgentTools()`. This lets users spread BB operations directly into an Agent's `tools` callback without writing manual tool definitions.
+
+### How to Implement
+
+1. Create a shared `agent-tools.ts` file with the tool registry (used by both mock and AWS runtimes):
+
+```typescript
+// my-bb/src/agent-tools.ts
+import { buildAgentTools } from '@aws-blocks/core';
+import type { AgentToolProviderOptions, ToolMethodDef } from '@aws-blocks/core';
+import type { Scope } from '@aws-blocks/core';
+
+interface MyBBLike {
+  get(key: string): Promise<unknown>;
+  put(key: string, value: unknown): Promise<void>;
+}
+
+export const MY_BB_TOOL_METHODS: Record<string, ToolMethodDef<MyBBLike>> = {
+  get: {
+    description: 'Retrieve a value by key',
+    parameters: { type: 'object', properties: { key: { type: 'string', description: 'The key' } }, required: ['key'] },
+    handler: (self) => async ({ input }) => self.get(input.key),
+  },
+  put: {
+    description: 'Store a value',
+    parameters: { type: 'object', properties: { key: { type: 'string' }, value: {} }, required: ['key', 'value'] },
+    needsApproval: true,
+    trustable: true,
+    handler: (self) => async ({ input }) => { await self.put(input.key, input.value); return { success: true }; },
+  },
+};
+
+export function myBBToAgentTools(self: Scope & MyBBLike, options?: AgentToolProviderOptions): Record<string, any> {
+  return buildAgentTools(self, MY_BB_TOOL_METHODS, options);
+}
+```
+
+2. Add `toAgentTools()` to both runtime classes (one-liner each):
+
+```typescript
+// In index.mock.ts and index.aws.ts
+import { myBBToAgentTools } from './agent-tools.js';
+import type { AgentToolProviderOptions } from '@aws-blocks/core';
+
+export class MyBB extends Scope {
+  // ... existing methods ...
+
+  toAgentTools(options?: AgentToolProviderOptions): Record<string, any> {
+    return myBBToAgentTools(this, options);
+  }
+}
+```
+
+### Guidelines
+
+- **Parameters use JSON Schema** — avoids adding zod as a dependency to your BB. Users can override with zod via the `overrides.schema` option.
+- **Read operations** set `needsApproval: false`; **write operations** set `needsApproval: true` (and optionally `trustable: true`); **delete operations** set `needsApproval: true` and `trustable: false` (each deletion requires explicit approval).
+- **Descriptions** should be concise and tell the LLM what the tool does and when to use it.
+- **Handlers** should return JSON-serializable values. For `AsyncIterable` results (like `scan`), collect into an array with a default limit.
+- **Tool names** are generated automatically as `{bbId}__{methodName}` by `buildAgentTools`.
+- **The interface** (`MyBBLike`) ensures the tool registry stays in sync with the BB's public API.
+
+### What `buildAgentTools` Handles
+
+The `buildAgentTools` helper from `@aws-blocks/core` handles:
+- `include`/`exclude` filtering
+- `overrides` (description, needsApproval, trustable, schema, fixed)
+- `scope` injection (merges context fields into handler input)
+- Tool naming (`{bbId}__{methodName}`)
+
+You only need to define the tool registry and delegate.
+
 ## Best Practices
 
 1. **Keep interfaces consistent** - Runtime and mock should export the same interface

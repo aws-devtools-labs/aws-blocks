@@ -29,7 +29,7 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 		description: 'Delete a key',
 		parameters: { type: 'object', properties: { key: { type: 'string', description: 'The key to delete' } }, required: ['key'] },
 		needsApproval: true,
-		trustable: true,
+		trustable: false,
 		handler: (self) => async ({ input }) => { await self.delete(input.key); return { success: true }; },
 	},
 	scan: {

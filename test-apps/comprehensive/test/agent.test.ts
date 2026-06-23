@@ -203,6 +203,12 @@ export function agentTests(getApi: () => typeof apiType) {
         const { channelId } = await api.asToolStream('hello');
         assert.ok(channelId, 'should return a channelId');
       });
+
+      test('zod schema override works with BB tools — stream completes', async () => {
+        const api = getApi();
+        const { channelId } = await api.asToolZodOverrideStream('hello');
+        assert.ok(channelId, 'should return a channelId');
+      });
     });
 
 

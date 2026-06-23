@@ -395,6 +395,19 @@ const asToolAgent = new Agent(scope, 'astool', {
 });
 
 
+// Agent with toAgentTools() + zod schema override — tests that zod replaces JSON Schema parameters
+const zodOverrideAgent = new Agent(scope, 'astool-zod', {
+  removalPolicy: 'destroy',
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'You are a test agent.',
+  tools: (tool) => ({
+    ...toolStore.toAgentTools({
+      include: ['get'],
+      overrides: { get: { schema: z.object({ key: z.string().describe('The record key to look up') }) } },
+    }),
+  }),
+});
+
 // Agent with model fallback — first candidate is unreachable, should fall through to canned
 const fallbackAgent = new Agent(scope, 'fallback', {
   removalPolicy: 'destroy',
@@ -1677,6 +1690,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // toAgentTools() e2e — BB-provided tools alongside manual tools
   async asToolStream(message: string, conversationId?: string) {
     const result = await asToolAgent.stream(message, { conversationId, userId: 'test-user' });
+    return { channelId: result.channelId };
+  },
+  async asToolZodOverrideStream(message: string) {
+    const result = await zodOverrideAgent.stream(message, { userId: 'test-user' });
     return { channelId: result.channelId };
   },
 
