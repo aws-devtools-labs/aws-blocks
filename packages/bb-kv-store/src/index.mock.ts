@@ -3,6 +3,8 @@
 
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { AgentToolProviderOptions } from '@aws-blocks/core';
+import { kvToAgentTools } from './agent-tools.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
@@ -168,6 +170,12 @@ export class KVStore<T = string> extends Scope {
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	// ── Agent tools ──────────────────────────────────────────────────────
+
+	toAgentTools(options?: AgentToolProviderOptions): Record<string, any> {
+		return kvToAgentTools(this, options);
 	}
 
 	// ── Disk persistence ──────────────────────────────────────────────────

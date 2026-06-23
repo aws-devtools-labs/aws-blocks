@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 
 // Clean mock data between tests to avoid cross-contamination
@@ -214,4 +214,51 @@ test('KVStoreErrors.ItemTooLarge is a distinct name, not generic ValidationExcep
 test('fullId generation with parent', () => {
 	const store = new KVStore({ id: 'parent' } as any, 'child');
 	assert.strictEqual(store.fullId, 'parent-child');
+});
+
+// ── toAgentTools() ──────────────────────────────────────────────────────────
+
+describe('toAgentTools()', () => {
+	test('exposes get, put, delete, scan', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools();
+		assert.deepStrictEqual(Object.keys(tools).sort(), ['memory__delete', 'memory__get', 'memory__put', 'memory__scan']);
+	});
+
+	test('get handler reads from the store', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		await store.put('k', 'v');
+		const tools = store.toAgentTools();
+		const result = await tools['memory__get'].handler({ input: { key: 'k' }, context: {} });
+		assert.strictEqual(result, 'v');
+	});
+
+	test('put handler writes to the store', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools();
+		await tools['memory__put'].handler({ input: { key: 'k', value: 'v' }, context: {} });
+		assert.strictEqual(await store.get('k'), 'v');
+	});
+
+	test('scan handler collects all entries', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		await store.put('a', '1');
+		await store.put('b', '2');
+		const tools = store.toAgentTools();
+		const result = await tools['memory__scan'].handler({ input: {}, context: {} }) as any[];
+		assert.strictEqual(result.length, 2);
+	});
+
+	test('scan handler respects limit', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		for (let i = 0; i < 5; i++) await store.put(`key${i}`, `val${i}`);
+		const tools = store.toAgentTools();
+		const result = await tools['memory__scan'].handler({ input: { limit: 2 }, context: {} }) as any[];
+		assert.strictEqual(result.length, 2);
+	});
 });

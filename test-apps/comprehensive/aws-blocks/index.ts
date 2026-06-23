@@ -395,6 +395,22 @@ const presetAgents = Object.fromEntries(
 	]),
 );
 
+// Agent with toAgentTools() — tests BB-provided tools alongside manual tools
+const toolStore = new KVStore(scope, 'tool-store');
+const asToolAgent = new Agent(scope, 'astool', {
+  removalPolicy: 'destroy',
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'You are a test agent with BB-provided tools. Use tools when asked.',
+  tools: (tool) => ({
+    ...toolStore.toAgentTools({ include: ['get', 'put'], unscoped: true }),
+    manualTool: tool({
+      description: 'A manually defined echo tool',
+      parameters: z.object({ msg: z.string() }),
+      handler: async ({ input }) => ({ echo: input.msg }),
+    }),
+  }),
+});
+
 // Agent with model fallback — first candidate is unreachable, should fall through to canned
 const fallbackAgent = new Agent(scope, 'fallback', {
   removalPolicy: 'destroy',
@@ -1672,6 +1688,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   async cannedGetConversation(conversationId: string) {
     return { messages: await cannedAgent.getConversation(conversationId) };
+  },
+
+  // toAgentTools() e2e — BB-provided tools alongside manual tools
+  async asToolStream(message: string, conversationId?: string) {
+    const result = await asToolAgent.stream(message, { conversationId, userId: 'test-user' });
+    return { channelId: result.channelId };
   },
 
   async fallbackStream(message: string) {

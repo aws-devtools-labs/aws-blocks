@@ -20,3 +20,4 @@ export {
   type RegisteredRoute,
 } from './raw-route.js';
 export { RawRoute } from './raw-route.mock.js';
+export { buildAgentTools, type AgentToolProvider, type AgentToolProviderOptions, type MethodOverrides, type ToolMethodDef } from './agent-tools.js';
