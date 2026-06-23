@@ -228,14 +228,35 @@ export class AuthOIDCClient<
 	 * Initiate sign-in using client-initiated PKCE. Navigates the
 	 * browser to the IdP. Call `handleRedirectCallback()` on return.
 	 *
+	 * Returns the in-flight promise so callers can observe failures
+	 * (e.g. an unreachable `authorize-params` endpoint) by awaiting or
+	 * attaching `.catch(...)`:
+	 *
+	 * ```tsx
+	 * // Fire-and-forget — failures are logged to console.error.
+	 * <button onClick={() => auth.signIn('google')}>Sign in</button>
+	 *
+	 * // Or handle the error explicitly.
+	 * try { await auth.signIn('google'); } catch (e) { showError(e); }
+	 * ```
+	 *
 	 * @param opts.state - Opaque app state, round-tripped to `onAuthStateChange`.
 	 * @param opts.redirectPath - Path (or absolute URL) the IdP redirects back to
 	 *   and that runs `handleRedirectCallback()`. Becomes the OAuth `redirect_uri`,
 	 *   so it must be a frontend-served page registered with the provider.
 	 *   Defaults to the current page.
+	 * @returns A promise that resolves once the browser is navigating to the IdP,
+	 *   or rejects if sign-in could not be initiated.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void {
-		void this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void> {
+		const pending = this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+		// Surface failures for fire-and-forget callers (`onClick={() => auth.signIn(...)}`)
+		// instead of swallowing the rejection, while still returning the promise so
+		// `await auth.signIn(...)` / `.catch(...)` observe the same error.
+		pending.catch((err) => {
+			if (typeof console !== 'undefined') console.error('[AuthOIDC] signIn failed:', err);
+		});
+		return pending;
 	}
 
 	/**

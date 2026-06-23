@@ -224,3 +224,55 @@ describe('AuthOIDCClient.handleRedirectCallback — return shape', () => {
 		assert.strictEqual('iss' in lastExchangeBody, false, 'iss should be omitted, not sent as undefined');
 	});
 });
+
+/**
+ * Fix (a): `signIn()` was fire-and-forget (`void this._signInPKCE(...)`), so a
+ * failed authorize-params fetch was swallowed and callers couldn't react. It now
+ * returns the in-flight promise (awaitable / `.catch`-able) while still logging
+ * failures for fire-and-forget callers.
+ */
+describe('AuthOIDCClient.signIn — surfaces errors instead of swallowing them', () => {
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(CURRENT_PAGE);
+		// Resolve _getBaseUrl() deterministically so the authorize-params fetch is
+		// the only network call under test.
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	/** Client WITHOUT inlined providerConfigs → signIn hits the authorize-params fetch path. */
+	function makeNetworkClient() {
+		return new AuthOIDCClient({ providers: ['google'] });
+	}
+
+	test('returns a Promise that REJECTS when the authorize-params fetch fails', async () => {
+		globalThis.fetch = (async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof globalThis.fetch;
+		const client = makeNetworkClient();
+		// signIn logs the failure for fire-and-forget callers; silence it for clean test output.
+		const origError = console.error;
+		console.error = () => {};
+		try {
+			await assert.rejects(
+				client.signIn('google'),
+				/failed to fetch authorize params for 'google': 500/,
+			);
+		} finally {
+			console.error = origError;
+		}
+	});
+
+	test('the returned Promise is awaitable and resolves once it navigates to the IdP', async () => {
+		// providerConfigs path → no fetch; just computes PKCE and navigates.
+		const client = makeClient();
+		await client.signIn('google');
+		assert.ok(navigatedTo.startsWith(AUTHORIZE_URL), 'should have navigated to the IdP authorize URL');
+	});
+});

@@ -366,6 +366,11 @@ export interface OIDCClient<Provider extends string = string> {
 	 * Initiate client-initiated PKCE sign-in. Navigates the browser to the IdP;
 	 * call `handleRedirectCallback()` on the page the IdP returns to.
 	 *
+	 * Returns the in-flight promise so callers can surface failures (e.g. an
+	 * unreachable `authorize-params` endpoint) via `await` or `.catch(...)`.
+	 * Fire-and-forget callers (`onClick={() => auth.signIn('google')}`) still
+	 * work — failures are logged to `console.error` instead of being swallowed.
+	 *
 	 * @param opts.state - Opaque app state, round-tripped to `onAuthStateChange`.
 	 * @param opts.redirectPath - Path (or absolute URL) the IdP redirects back to
 	 *   and that runs `handleRedirectCallback()`. This becomes the OAuth
@@ -374,7 +379,7 @@ export interface OIDCClient<Provider extends string = string> {
 	 *   SPAs that handle the callback on a dedicated route rather than the
 	 *   backend's `/aws-blocks/auth/callback`.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void;
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void>;
 	handleRedirectCallback(): Promise<{ userId: string; username: string } | null>;
 	signOut(): Promise<void>;
 	onAuthStateChange(handler: (user: OIDCUser | null, meta: { state?: string } | null) => void): () => void;
