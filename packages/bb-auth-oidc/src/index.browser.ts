@@ -233,9 +233,13 @@ export class AuthOIDCClient<
 	 *   and that runs `handleRedirectCallback()`. Becomes the OAuth `redirect_uri`,
 	 *   so it must be a frontend-served page registered with the provider.
 	 *   Defaults to the current page.
+	 * @returns A promise that resolves once the browser has been navigated to the
+	 *   IdP. It **rejects** if the PKCE setup fails (e.g. the authorize-params
+	 *   fetch errors) — `await` it or attach a `.catch()` to surface the failure
+	 *   instead of letting it become a silent unhandled rejection.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void {
-		void this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void> {
+		return this._signInPKCE(provider, opts?.state, opts?.redirectPath);
 	}
 
 	/**
