@@ -711,7 +711,7 @@ Tool names follow the convention `{bbId}__{methodName}` (e.g. `memory__get`, `me
 | `description` | Describes the operation | Yes, via `overrides` |
 | `parameters` | Schema matching the BB method's input | Yes, via `overrides.schema` |
 | `needsApproval` | Read operations: `false`, write/delete: `true` | Yes, via `overrides` |
-| `trustable` | Write/delete: `true` (user can trust after first approval) | Yes, via `overrides` |
+| `trustable` | Write: `true` (agent may write without reasking); delete: `false` (each call needs approval) | Yes, via `overrides` |
 | `handler` | Calls the BB method directly | No (use a manual `tool()` for custom logic) |
 
 ### Filtering
