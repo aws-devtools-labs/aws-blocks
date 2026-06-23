@@ -62,7 +62,7 @@ public class FileDownloadHandle {
                 throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Downloaded \(data.count) bytes from \(self.url)")
+            logger.debug("Downloaded \(data.count) bytes from \(requestURL)")
             return data
         } catch let error as FileBucketError {
             throw error

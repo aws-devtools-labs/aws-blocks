@@ -73,7 +73,7 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded \(body.count) bytes to \(self.url)")
+            logger.debug("Uploaded \(body.count) bytes to \(requestURL)")
         } catch let error as FileBucketError {
             throw error
         } catch {
@@ -108,7 +108,7 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(self.url)")
+            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL)")
         } catch let error as FileBucketError {
             throw error
         } catch {
