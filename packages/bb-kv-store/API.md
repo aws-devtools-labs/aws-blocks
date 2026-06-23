@@ -4,6 +4,7 @@
 
 ```ts
 
+import type { AgentToolProviderOptions } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -44,6 +45,8 @@ export class KVStore<T = string> extends Scope {
         key: string;
         value: T;
     }>;
+    // (undocumented)
+    toAgentTools(options?: AgentToolProviderOptions): Record<string, any>;
 }
 
 // @public
