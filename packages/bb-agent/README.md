@@ -779,6 +779,8 @@ store.toAgentTools({
 
 The model's tool has no `key` parameter — it's injected server-side on every call.
 
+> **Precedence:** When the same key appears in multiple sources, `fixed` wins over `scope` which wins over model input.
+
 > **Note:** If a tool requires custom logic or many overrides, a manual `tool()` definition is often simpler and easier to read.
 
 ### Supported BBs

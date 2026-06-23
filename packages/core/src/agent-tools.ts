@@ -17,7 +17,10 @@ export interface AgentToolProviderOptions<TContext = any> {
 	exclude?: string[];
 	/** Per-method overrides of the BB's defaults, keyed by method name. */
 	overrides?: Record<string, MethodOverrides>;
-	/** Maps context fields to fixed constraints applied across all methods. */
+	/**
+	 * Injects request-scoped fields (e.g. userId) into tool input from context.
+	 * Precedence when the same key appears in multiple sources: fixed > scope > model input.
+	 */
 	scope?: (context: TContext) => Record<string, unknown>;
 }
 
@@ -37,6 +40,8 @@ export interface ToolMethodDef<TSelf = any> {
 	parameters: unknown;
 	needsApproval?: boolean;
 	trustable?: boolean;
+	// `input: any` because parameters are JSON Schema objects — no compile-time type link.
+	// Core avoids a zod dependency, so we can't derive input types from the schema.
 	handler: (self: TSelf) => (args: { input: any; context: any }) => Promise<unknown>;
 }
 

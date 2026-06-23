@@ -160,7 +160,7 @@ describe('buildAgentTools', () => {
 			assert.strictEqual(result.userId, 'real-user');
 		});
 
-		test('scope and fixed combine', async () => {
+		test('scope and fixed combine on disjoint keys', async () => {
 			const methods: Record<string, ToolMethodDef<any>> = {
 				query: {
 					description: 'Query items',
@@ -177,6 +177,25 @@ describe('buildAgentTools', () => {
 				context: { userId: 'user-123' },
 			});
 			assert.deepStrictEqual(result, { status: 'active', userId: 'user-123', limit: 10 });
+		});
+
+		test('fixed wins over scope when both target the same key', async () => {
+			const methods: Record<string, ToolMethodDef<any>> = {
+				query: {
+					description: 'Query items',
+					parameters: { type: 'object', properties: {} },
+					handler: () => async ({ input }) => input,
+				},
+			};
+			const tools = buildAgentTools(mockBB, methods, {
+				scope: (ctx: { tenant: string }) => ({ tenant: ctx.tenant }),
+				overrides: { query: { fixed: { tenant: 'pinned-tenant' } } },
+			});
+			const result = await tools['store__query'].handler({
+				input: { status: 'active' },
+				context: { tenant: 'context-tenant' },
+			});
+			assert.strictEqual(result.tenant, 'pinned-tenant');
 		});
 	});
 });
