@@ -33,7 +33,7 @@ describe('hasAuthError', () => {
   });
 
   it('does not match a state with no errorName', () => {
-    const state: { errorName?: string } = { error: 'Invalid username or password' } as { errorName?: string };
+    const state: { errorName?: string } = {};
     assert.ok(!hasAuthError(state, 'InvalidCredentialsException'));
   });
 

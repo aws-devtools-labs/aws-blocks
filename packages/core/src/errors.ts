@@ -88,9 +88,9 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
  * }
  * ```
  */
-export function hasAuthError<N extends string>(
-	state: { errorName?: string } | null | undefined,
+export function hasAuthError<T extends { errorName?: string }, N extends string>(
+	state: T | null | undefined,
 	name: N,
-): state is { errorName: N } {
+): state is T & { errorName: N } {
 	return state?.errorName === name;
 }

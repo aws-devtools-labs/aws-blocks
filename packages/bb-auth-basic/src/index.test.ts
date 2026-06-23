@@ -12,6 +12,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import type { BlocksContext } from '@aws-blocks/core';
 import { Scope, hasAuthError } from '@aws-blocks/core';
+import type { AuthStateApi } from '@aws-blocks/auth-common';
 import { AuthBasic, AuthBasicErrors, type AuthBasicOptions } from './index.js';
 
 function ctx(origin?: string): BlocksContext {
@@ -29,10 +30,16 @@ function makeAuth(options?: AuthBasicOptions): AuthBasic {
 	return new AuthBasic(scope, 'auth', options);
 }
 
+// `createApi()` returns a context-bound `ApiNamespace` callable; narrow it to
+// the public `AuthStateApi` surface the test exercises instead of `as any`.
+function apiFor(auth: AuthBasic, context: BlocksContext): AuthStateApi {
+	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(context);
+}
+
 describe('AuthBasic setAuthState errorName', () => {
 	test('signIn for an unknown user surfaces errorName = InvalidCredentials', async () => {
 		const auth = makeAuth();
-		const api = (auth.createApi() as any)(ctx());
+		const api = apiFor(auth, ctx());
 
 		const next = await api.setAuthState({ action: 'signIn', username: 'nobody', password: 'whatever1' });
 
@@ -45,7 +52,7 @@ describe('AuthBasic setAuthState errorName', () => {
 	test('signIn with a wrong password surfaces errorName = InvalidCredentials', async () => {
 		const auth = makeAuth();
 		await auth.signUp('alice', 'password123');
-		const api = (auth.createApi() as any)(ctx());
+		const api = apiFor(auth, ctx());
 
 		const next = await api.setAuthState({ action: 'signIn', username: 'alice', password: 'wrong-password' });
 
@@ -58,7 +65,7 @@ describe('AuthBasic setAuthState errorName', () => {
 		// with no `name` when codeDelivery is unset — `.name` defaults to
 		// 'ApiError', which must not leak as a meaningful errorName.
 		const auth = makeAuth();
-		const api = (auth.createApi() as any)(ctx());
+		const api = apiFor(auth, ctx());
 
 		const next = await api.setAuthState({ action: 'resetPassword', username: 'alice' });
 

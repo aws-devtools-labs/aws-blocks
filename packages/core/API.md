@@ -76,9 +76,9 @@ export function getSdkIdentifiers(bb: {
 }): Record<string, string>;
 
 // @public
-export function hasAuthError<N extends string>(state: {
+export function hasAuthError<T extends {
     errorName?: string;
-} | null | undefined, name: N): state is {
+}, N extends string>(state: T | null | undefined, name: N): state is T & {
     errorName: N;
 };
 

@@ -479,7 +479,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 				} catch (e: any) {
 					const currentUser = await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
-					const errorName = e instanceof ApiError && e.name && e.name !== 'ApiError' ? e.name : undefined;
+					const errorName = e instanceof ApiError && e.name !== 'ApiError' ? e.name : undefined;
 					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
 				}
 			},
