@@ -175,14 +175,18 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
 const AVAILABLE_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
 
-// ─── Fresh project creation ──────────────────────────────────────────────────
-
-async function createFreshProject(targetDir: string, templateName: string) {
+function validateTemplateName(templateName: string): void {
   if (!AVAILABLE_TEMPLATES.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
     console.error(`Available templates: ${AVAILABLE_TEMPLATES.join(', ')}`);
     process.exit(1);
   }
+}
+
+// ─── Fresh project creation ──────────────────────────────────────────────────
+
+async function createFreshProject(targetDir: string, templateName: string) {
+  validateTemplateName(templateName);
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -565,6 +569,7 @@ Arguments:
 
 Options:
   --template <name>      Template to use for fresh projects (default: "default")
+                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -614,6 +619,8 @@ async function create() {
       process.exit(1);
     }
   }
+
+  validateTemplateName(templateName);
 
   const templatePkgVersion: string = JSON.parse(
     await readFile(join(__dirname, '../templates', templateName, 'package.json'), 'utf-8'),

@@ -6,6 +6,8 @@ AI agent with streaming, tool calling, and conversation persistence. Powered by 
 
 **Requires:** `zod` ^4.0.0 as a peer dependency. Tool parameters use Zod schemas for validation. If you see `ZodType missing properties` errors, check your zod version.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript

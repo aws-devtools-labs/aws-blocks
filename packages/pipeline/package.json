@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/pipeline",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "CDK Pipelines-based CI/CD construct for AWS Blocks applications",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",

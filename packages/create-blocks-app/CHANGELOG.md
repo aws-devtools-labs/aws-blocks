@@ -1,5 +1,17 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.5
+
+### Patch Changes
+
+- b8a03a4: Validate unknown `--template` values before reading template metadata so the CLI reports the intended `Unknown template` message instead of a file-system error.
+
+## 0.1.4
+
+### Patch Changes
+
+- ba577bb: List the available starter templates in `create-blocks-app --help` so users can discover valid `--template` values directly from the CLI.
+
 ## 0.1.3
 
 ### Patch Changes

@@ -6,6 +6,8 @@ Full PostgreSQL database — provisions Aurora Serverless v2 by default, or conn
 
 **When NOT to use:** For simple key-value lookups, use `KVStore`. For NoSQL with secondary indexes, use `DistributedTable`. For serverless SQL without FK/RLS/triggers (multi-region, instant provisioning), use `DistributedDatabase`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
