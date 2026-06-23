@@ -156,7 +156,15 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 ```
 > Returning a live client object? Make it a Transferable (`toJSON()` → `{__blocks: 'ns/type', …}`) and register a client plugin with `scope.registerClientMiddleware`; the mock must return a functional Transferable too. `bb-realtime` is the reference.
 
-**Checklist:** conditional exports across all entry points + `prebuild` version script · `types.ts` types-only · every named export in `index.mock.ts` exists in cdk/aws/browser (enforced by `conditional-exports.test.ts` in `packages/blocks`) · ship `README.md` + `DESIGN.md` via `package.json` `"files"` · register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`) · add to the root `workspaces` · add an instance + test to `test-apps/comprehensive` (zero casts) · `npx changeset add`.
+**Checklist for a new BB:**
+- conditional exports across all entry points + `prebuild` version script
+- `types.ts` types-only
+- every named export in `index.mock.ts` exists in cdk/aws/browser (enforced by `conditional-exports.test.ts` in `packages/blocks`)
+- ship `README.md` + `DESIGN.md` via `package.json` `"files"`
+- register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
+- add to the root `workspaces`
+- add an instance + test to `test-apps/comprehensive` (zero casts)
+- `npx changeset add`.
 
 ---
 
@@ -221,4 +229,8 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - `packages/bb-kv-store/` — reference for the typical file layout & layering (its *data model* is KV-specific).
 - `packages/bb-realtime/` — reference for the full client↔server surface + the Transferable client-hydration pattern.
 - Each BB's `README.md` — the authoritative API doc for that block.
-- `docs/` — architecture and design background · `packages/hosting/README.md` — SPA/SSR frontend hosting · `bb-data` / `bb-distributed-data` READMEs — DB migrations · `native/*` — Kotlin/Swift/Dart client codegen · per-template `AGENTS.md` (via `npm create @aws-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.
+- `docs/` — architecture and design background
+- `packages/hosting/README.md` — SPA/SSR frontend hosting
+- `bb-data` / `bb-distributed-data` READMEs — DB migrations
+- `native/*` — Kotlin/Swift/Dart client codegen
+- per-template `AGENTS.md` (via `npm create @aws-blocks/blocks-app@latest my-app`) — building an app *with* AWS Blocks.
