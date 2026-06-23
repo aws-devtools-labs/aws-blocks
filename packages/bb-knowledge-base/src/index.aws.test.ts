@@ -28,8 +28,8 @@ function setKbEnv(scopeId: string, instanceId: string, kbId = 'kb-test-123') {
 
 describe('KnowledgeBase constructor validation', () => {
 	test('constructor succeeds without env var but retrieve() throws NotReady', async () => {
-		const origKb = process.env['BLOCKS_TEST_KB_KB_ID'];
-		delete process.env['BLOCKS_TEST_KB_KB_ID'];
+		const origKb = process.env.BLOCKS_TEST_KB_KB_ID;
+		delete process.env.BLOCKS_TEST_KB_KB_ID;
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: './knowledge' });
@@ -44,7 +44,7 @@ describe('KnowledgeBase constructor validation', () => {
 				},
 			);
 		} finally {
-			if (origKb !== undefined) process.env['BLOCKS_TEST_KB_KB_ID'] = origKb;
+			if (origKb !== undefined) process.env.BLOCKS_TEST_KB_KB_ID = origKb;
 		}
 	});
 });
@@ -123,6 +123,24 @@ describe('retrieve validation', () => {
 					return true;
 				},
 			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('non-string runtime query throws clean ValidationError', async () => {
+		const cleanup = setKbEnv('TEST', 'VAL3');
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'val3', { source: './knowledge' });
+			for (const bad of [0, false, Number.NaN, null]) {
+				await assert.rejects(
+					() => kb.retrieve(bad as unknown as string),
+					(err: Error) => {
+						assert.strictEqual(err.name, KnowledgeBaseErrors.ValidationError);
+						return true;
+					},
+				);
+			}
 		} finally {
 			cleanup();
 		}
@@ -335,19 +353,33 @@ describe('retrieve (SDK-mocked)', () => {
 			cleanup();
 		}
 	});
+});
 
-	test('SDK error is mapped through mapSdkError', async () => {
-		const cleanup = setKbEnv('TEST', 'R12');
-		const sdkErr = new Error('KB not found');
-		sdkErr.name = 'ResourceNotFoundException';
-		mockRuntimeSend(() => { throw sdkErr; });
+// ── Error classification — ValidationException ─────────────────────────────
+//
+// SDK exceptions are mapped to Blocks error constants based on the actual
+// cause, not just the exception name. ValidationException is especially
+// ambiguous — Bedrock throws it for invalid filters, over-long queries, and
+// malformed requests alike — so a content/query error must never be reported
+// to the caller as a filter problem.
+
+describe('error classification — ValidationException', () => {
+	test('filter-related ValidationException maps to InvalidFilter', async () => {
+		const cleanup = setKbEnv('TEST', 'ERR1');
+		const filterErr = new Error("failed to create query: Field 'category.keyword' not found. Rewrite first");
+		filterErr.name = 'ValidationException';
+		mockRuntimeSend(() => { throw filterErr; });
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'r12', { source: './knowledge' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'err1', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.retrieve('query'),
+				() => kb.retrieve('test', { filter: { category: { equals: 'x' } } }),
 				(err: Error) => {
-					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					assert.strictEqual(
+						err.name,
+						KnowledgeBaseErrors.InvalidFilter,
+						'Filter-related ValidationException should map to InvalidFilter',
+					);
 					return true;
 				},
 			);
@@ -356,18 +388,130 @@ describe('retrieve (SDK-mocked)', () => {
 		}
 	});
 
-	test('retrieve maps ValidationException to InvalidFilter', async () => {
-		const cleanup = setKbEnv('TEST', 'R13');
-		const err = new Error('Invalid filter expression');
+	test('query-length ValidationException does NOT map to InvalidFilter', async () => {
+		const cleanup = setKbEnv('TEST', 'ERR2');
+		const queryErr = new Error(
+			"1 validation error detected: Value at 'retrievalQuery.text' failed to satisfy " +
+				'constraint: Member must have length less than or equal to 1000',
+		);
+		queryErr.name = 'ValidationException';
+		mockRuntimeSend(() => { throw queryErr; });
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'err2', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.retrieve('a'.repeat(1001)),
+				(err: Error) => {
+					assert.notStrictEqual(
+						err.name,
+						KnowledgeBaseErrors.InvalidFilter,
+						'Query-length ValidationException must NOT map to InvalidFilter',
+					);
+					assert.ok(
+						err.name === KnowledgeBaseErrors.ValidationError ||
+							err.name === KnowledgeBaseErrors.RetrievalFailed,
+						`Expected ValidationError or RetrievalFailed, got: ${err.name}`,
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('original error message is preserved in the mapped error for debugging', async () => {
+		const cleanup = setKbEnv('TEST', 'ERR3');
+		const originalMsg = 'Specific validation error details from Bedrock service';
+		const err = new Error(originalMsg);
 		err.name = 'ValidationException';
 		mockRuntimeSend(() => { throw err; });
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'r13', { source: './knowledge' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'err3', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.retrieve('test query'),
+				() => kb.retrieve('test', { filter: { x: { equals: 'y' } } }),
 				(e: Error) => {
-					assert.strictEqual(e.name, KnowledgeBaseErrors.InvalidFilter);
+					assert.ok(
+						e.message.includes(originalMsg),
+						'Mapped error should preserve original message for debugging',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+// ── Error classification — other SDK exceptions ────────────────────────────
+
+describe('error classification — other SDK exceptions', () => {
+	test('ResourceNotFoundException maps to NotReady (actionable hint + original SDK message)', async () => {
+		const cleanup = setKbEnv('TEST', 'ERR4');
+		const err = new Error('No knowledge base with ID kb-xyz exists');
+		err.name = 'ResourceNotFoundException';
+		mockRuntimeSend(() => { throw err; });
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'err4', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.retrieve('query'),
+				(e: Error) => {
+					assert.strictEqual(e.name, KnowledgeBaseErrors.NotReady);
+					assert.ok(
+						e.message.includes('cdk deploy'),
+						'NotReady message should keep the actionable deploy hint',
+					);
+					assert.ok(
+						e.message.includes('No knowledge base with ID kb-xyz exists'),
+						'NotReady message should append the original SDK message',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('AccessDeniedException maps to RetrievalFailed and preserves message + original error as a non-enumerable cause', async () => {
+		const cleanup = setKbEnv('TEST', 'ERR5');
+		// Mimic the SDK error shape: $metadata carries a requestId that must never
+		// leak through JSON.stringify of the mapped (caller-facing) error.
+		const err = Object.assign(new Error('User is not authorized to perform bedrock:Retrieve'), {
+			$metadata: { requestId: 'req-abc-123' },
+		});
+		err.name = 'AccessDeniedException';
+		mockRuntimeSend(() => { throw err; });
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'err5', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.retrieve('query'),
+				(e: Error) => {
+					assert.strictEqual(e.name, KnowledgeBaseErrors.RetrievalFailed);
+					assert.ok(
+						e.message.includes('not authorized'),
+						'Error message should preserve the original SDK message',
+					);
+					assert.strictEqual(
+						e.cause,
+						err,
+						'Mapped error should attach the original SDK error as `cause`',
+					);
+					// `cause` must be NON-ENUMERABLE so JSON.stringify of the mapped
+					// error does not serialize the SDK error or leak its $metadata.
+					const serialized = JSON.stringify(e);
+					assert.ok(
+						!serialized.includes('cause'),
+						'`cause` must be non-enumerable (absent from JSON.stringify output)',
+					);
+					assert.ok(
+						!serialized.includes('req-abc-123'),
+						'SDK error $metadata/requestId must not leak through JSON.stringify',
+					);
 					return true;
 				},
 			);

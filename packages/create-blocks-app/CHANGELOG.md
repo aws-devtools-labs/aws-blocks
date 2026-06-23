@@ -1,5 +1,11 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.6
+
+### Patch Changes
+
+- 3d670a9: Report a clear error when `--template` is missing its template name instead of treating the flag as an unknown option or consuming another option as the template value.
+
 ## 0.1.5
 
 ### Patch Changes
