@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/core": minor
-"@aws-blocks/auth-common": minor
+"@aws-blocks/core": patch
+"@aws-blocks/auth-common": patch
 "@aws-blocks/bb-auth-basic": patch
 "@aws-blocks/bb-auth-cognito": patch
 ---
