@@ -117,17 +117,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
     const user = await auth.requireAuth(context);
-    
-    const indexMap = { 
-      priority: 'byPriority', 
-      title: 'byTitle', 
-      createdAt: 'byCreatedAt' 
+
+    const indexMap = {
+      priority: 'byPriority',
+      title: 'byTitle',
+      createdAt: 'byCreatedAt'
     } as const;
-    
-    const iterator = sortBy 
-      ? todos.query(indexMap[sortBy], { userId: { equals: user.username } })
-      : todos.scan();
-    
+
+    const iterator = todos.query({
+      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
+      where: { userId: { equals: user.username } }
+    });
+
     return await Array.fromAsync(iterator);
   },
 
