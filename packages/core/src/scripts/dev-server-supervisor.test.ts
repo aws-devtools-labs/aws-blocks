@@ -228,11 +228,24 @@ describe('killFrontendTree — reaps a real detached shell tree', { skip: integr
     { timeout: 30000 },
     async () => {
       const port = await getFreePort();
+      // getFreePort() closes its probe listener before this grandchild binds,
+      // so on a busy host another process can grab the port in that gap. Retry
+      // briefly on EADDRINUSE (creating a fresh server each attempt) instead of
+      // exiting on the first error, so the shell→node→port topology under test
+      // is reliably established; bail only on a non-transient error or once the
+      // retry budget (~5s) is exhausted.
       const inner =
         `const net=require('net');` +
-        `const s=net.createServer(c=>c.destroy());` +
-        `s.on('error',()=>process.exit(1));` +
-        `s.listen(${port},'127.0.0.1');` +
+        `const port=${port};` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(port,'127.0.0.1');` +
+        `})();` +
         `setInterval(()=>{},1e9);`;
       // Run node as a backgrounded child of the shell (then `wait`): this gives
       // the shell→node parent/grandchild topology of `shell: true` without any
@@ -255,7 +268,16 @@ describe('killFrontendTree — reaps a real detached shell tree', { skip: integr
         assert.ok(await staysOpen(port, 600),
           'direct child kill must NOT free the port (demonstrates the orphan bug)');
 
-        // Group kill reaps the entire tree and frees the port — the fix.
+        // The shell parent is now gone, so the group kill below is exercised as
+        // a POST-EXIT reap — the exact case the reconciled kill policy relies on:
+        // the orphaned grandchild keeps the process group alive (pgid === the
+        // exited shell's pid), so `process.kill(-pid)` still targets our group.
+        assert.ok(
+          await waitFor(async () => child.exitCode !== null || child.signalCode !== null, 5000),
+          'shell parent should have exited after SIGTERM (sets up the post-exit reap)');
+
+        // Group kill reaps the entire tree and frees the port — the fix. It
+        // works even though the shell parent has already exited (asserted above).
         killFrontendTree(child, 'SIGKILL');
         assert.ok(await waitFor(async () => !(await isPortOpen(port)), 10000),
           'group kill must free the port (the fix)');

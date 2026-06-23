@@ -365,6 +365,29 @@ export async function startDevServer(options: DevServerOptions) {
   // otherwise the orphaned grandchild keeps `:3100` and every `/` request 502s
   // forever (the proxy target is hardcoded to `frontendPort`). We also bound-
   // respawn it on unexpected death and suppress all of this during shutdown.
+  //
+  // ── POST-EXIT GROUP-KILL POLICY ─────────────────────────────────────────
+  // The exact bug this supervisor fixes is the shell *exiting* while the
+  // detached grandchild survives, orphaned, still holding `:3100`. Reaping that
+  // orphan REQUIRES a group kill (`process.kill(-pid, …)`) issued *after* the
+  // shell has already exited — so all three post-exit kill sites below agree:
+  // the respawn path, `terminateFrontend`, and the `process.on('exit')` net all
+  // group-kill rather than skip when the shell is already gone.
+  //
+  // Why this is safe against the classic `-pid` PID-reuse hazard:
+  //   1. A surviving grandchild keeps the process group non-empty, so POSIX
+  //      keeps `pid` reserved as the group id — it cannot be recycled as a new
+  //      process id while it is still a live group's id. Hence `-pid` is
+  //      guaranteed to target *our* group precisely when it matters (an orphan
+  //      is still alive in it).
+  //   2. We only ever issue the kill synchronously, the instant we observe the
+  //      shell's exit — there is no intervening `await` that could let the group
+  //      drain and the pid be recycled — so the residual window is minimal.
+  // Residual accepted risk: if the ENTIRE group is already gone *and* `pid` has
+  // since been recycled into a brand-new group leader, `-pid` could signal an
+  // unrelated group. This is an accepted best-effort trade-off — there is then
+  // nothing of ours left to reap, whereas skipping the kill would otherwise
+  // leave `:3100` wedged, which is the failure this PR exists to prevent.
   const usePosixProcessGroups = process.platform !== 'win32';
   let isShuttingDown = false;
   let frontendRestarts: number[] = [];
@@ -408,7 +431,10 @@ export async function startDevServer(options: DevServerOptions) {
       if (isShuttingDown) return;
       // Reap any orphaned grandchild left in this child's group so `:3100` is
       // free before we respawn — otherwise `--strictPort` makes the new Vite
-      // exit on bind and we'd spin until the restart budget is gone.
+      // exit on bind and we'd spin until the restart budget is gone. The shell
+      // has already exited here (we are inside its `exit` handler), so this is a
+      // post-exit group kill; it is issued synchronously in this handler and is
+      // safe against PID reuse — see POST-EXIT GROUP-KILL POLICY above.
       killFrontendTree(child, 'SIGKILL');
 
       const decision = evaluateFrontendRespawn(frontendRestarts, Date.now());
@@ -444,7 +470,15 @@ export async function startDevServer(options: DevServerOptions) {
    */
   const terminateFrontend = async (child: ChildProcess | null): Promise<void> => {
     if (!child) return;
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // The shell already exited, but a detached grandchild may still be
+      // orphaned on `:3100` — and the bounded SIGTERM→SIGKILL dance below can't
+      // run (there is no shell left to wait on). Issue one best-effort group
+      // kill so the orphan can't keep the port bound, instead of returning and
+      // leaving it — see POST-EXIT GROUP-KILL POLICY above.
+      killFrontendTree(child, 'SIGKILL');
+      return;
+    }
     const exited = new Promise<void>((res) => child.once('exit', () => res()));
     killFrontendTree(child, 'SIGTERM');
     const lingered = await Promise.race([
@@ -633,10 +667,12 @@ export async function startDevServer(options: DevServerOptions) {
   process.once('exit', () => {
     const child = frontendProcess;
     if (!child || !child.pid || child.pid <= 1 || !usePosixProcessGroups) return;
-    // Only reap a still-live child. Once it has exited (exitCode/signalCode set)
-    // the OS may recycle its PID, so kill(-pid) could signal an unrelated group
-    // — the classic PID-reuse window. Accepted here as a best-effort last resort.
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    // Reap the group even if the shell itself has already exited — a surviving
+    // grandchild could still hold `:3100`, and this net is the only thing that
+    // runs when `cleanup` was bypassed. This agrees with the respawn path and
+    // `terminateFrontend`: all three group-kill post-exit. The kill is
+    // synchronous (this is an `exit` handler), keeping the PID-reuse window
+    // minimal — see POST-EXIT GROUP-KILL POLICY above for the accepted trade-off.
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
   });
 }
