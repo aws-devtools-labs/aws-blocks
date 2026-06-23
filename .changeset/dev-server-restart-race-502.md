@@ -16,10 +16,15 @@ Fixes:
 - **Process-group kill** — the frontend is spawned `detached` on POSIX (its own
   process group) and cleanup/restart now signal the entire group via
   `process.kill(-pid, …)`, reaping the Vite grandchild and freeing `:3100`.
-  Windows (no POSIX groups) falls back to a direct child kill.
+  Windows (no POSIX groups) reaps the tree with `taskkill /T /F /PID <pid>`,
+  which walks the child tree by PID so the Vite grandchild is killed too; it
+  degrades to a direct child kill only if `taskkill` cannot be spawned.
 - **Bounded auto-respawn** — an unexpected frontend exit now respawns Vite with
   exponential backoff, capped at 5 restarts / 10s to avoid hot loops, and is
-  suppressed during intentional shutdown via an `isShuttingDown` guard.
+  suppressed during intentional shutdown via an `isShuttingDown` guard. The
+  budget counts only *consecutive failing* restarts: it resets once a respawn
+  rebinds the port, so a frontend that legitimately restarts many times (e.g.
+  editor-triggered full reloads) is never permanently left down.
 - **Robust shutdown** — cleanup is idempotent, wired to `SIGINT`/`SIGTERM`/
   `SIGHUP`, removes its own listeners, waits (bounded) for the group to die
   before exiting (SIGTERM→SIGKILL escalation), and keeps a synchronous

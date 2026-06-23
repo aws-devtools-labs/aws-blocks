@@ -8,10 +8,15 @@ import {
   evaluateFrontendRespawn,
   DEFAULT_FRONTEND_RESPAWN_POLICY,
   killFrontendTree,
+  windowsTreeKill,
   type KillableProcess,
 } from './dev-server.js';
 
 const isWindows = process.platform === 'win32';
+// The real-process integration test spawns OS processes and depends on
+// wall-clock timing; gate it behind RUN_SLOW_TESTS so the default test run
+// stays deterministic and fast. The pure unit tests below always run.
+const runSlowTests = !!process.env.RUN_SLOW_TESTS;
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -46,6 +51,18 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number): Pr
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Poll across a bounded window, returning false the instant the port closes.
+// More robust than a single post-`delay` snapshot on a busy/slow host: it
+// asserts the port stays bound for the whole window rather than at one moment.
+async function staysOpen(port: number, windowMs: number): Promise<boolean> {
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    if (!(await isPortOpen(port))) return false;
+    await delay(50);
+  }
+  return true;
+}
 
 // ── evaluateFrontendRespawn ────────────────────────────────────────────────
 describe('evaluateFrontendRespawn — bounded auto-respawn policy', () => {
@@ -126,11 +143,23 @@ describe('killFrontendTree — signal routing', () => {
     assert.deepStrictEqual(calls, []); // direct child.kill not used on POSIX
   });
 
-  it('falls back to a direct child kill on Windows (no process groups)', () => {
+  it('reaps the tree via taskkill on Windows (no POSIX group, no direct kill)', () => {
     const { child, calls } = makeChild(4242);
     let groupCalled = false;
-    killFrontendTree(child, 'SIGTERM', 'win32', () => { groupCalled = true; });
-    assert.strictEqual(groupCalled, false);
+    const winPids: number[] = [];
+    killFrontendTree(child, 'SIGTERM', 'win32',
+      () => { groupCalled = true; },
+      (pid) => { winPids.push(pid); return true; });
+    assert.strictEqual(groupCalled, false);  // POSIX group kill not used on Windows
+    assert.deepStrictEqual(winPids, [4242]); // taskkill tree-kill invoked with the pid
+    assert.deepStrictEqual(calls, []);       // no direct child.kill once taskkill succeeded
+  });
+
+  it('falls back to a direct child kill on Windows when taskkill cannot run', () => {
+    const { child, calls } = makeChild(4242);
+    killFrontendTree(child, 'SIGTERM', 'win32',
+      () => {},
+      () => false); // taskkill unavailable → must degrade to child.kill
     assert.deepStrictEqual(calls, ['SIGTERM']);
   });
 
@@ -159,10 +188,44 @@ describe('killFrontendTree — signal routing', () => {
   });
 });
 
+// ── windowsTreeKill (unit, injected runner) ─────────────────────────────────
+describe('windowsTreeKill — taskkill tree-kill command', () => {
+  it('invokes `taskkill /T /F /PID <pid>` and reports success', () => {
+    const runs: Array<[string, readonly string[]]> = [];
+    const ok = windowsTreeKill(4242, (cmd, args) => { runs.push([cmd, args]); return { status: 0 }; });
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(runs, [['taskkill', ['/T', '/F', '/PID', '4242']]]);
+  });
+
+  it('treats an already-gone tree (non-zero exit, no spawn error) as handled', () => {
+    const ok = windowsTreeKill(4242, () => ({ status: 128 })); // 128 = "process not found"
+    assert.strictEqual(ok, true);
+  });
+
+  it('reports failure when taskkill cannot be spawned (caller then falls back)', () => {
+    const ok = windowsTreeKill(4242, () => ({ status: null, error: new Error('ENOENT') }));
+    assert.strictEqual(ok, false);
+  });
+
+  it('never throws even if the runner throws', () => {
+    const ok = windowsTreeKill(4242, () => { throw new Error('boom'); });
+    assert.strictEqual(ok, false);
+  });
+});
+
 // ── killFrontendTree (integration, real shell + grandchild) ─────────────────
-describe('killFrontendTree — reaps a real detached shell tree', () => {
+// Opt-in: spawns real OS processes and relies on wall-clock timing, so it is
+// gated behind RUN_SLOW_TESTS to keep the default `npm test` deterministic.
+// POSIX-only because it asserts process-group reaping.
+const integrationSkip = !runSlowTests
+  ? 'set RUN_SLOW_TESTS=1 to run (spawns real processes)'
+  : isWindows
+    ? 'POSIX-only (relies on process groups)'
+    : false;
+
+describe('killFrontendTree — reaps a real detached shell tree', { skip: integrationSkip }, () => {
   it('frees a port held by a grandchild that survives a direct child kill',
-    { skip: isWindows, timeout: 30000 },
+    { timeout: 30000 },
     async () => {
       const port = await getFreePort();
       const inner =
@@ -187,8 +250,9 @@ describe('killFrontendTree — reaps a real detached shell tree', () => {
         // backgrounded node grandchild is orphaned, survives, and keeps the
         // port bound — this is exactly the :3100 502 leak.
         child.kill('SIGTERM');
-        await delay(600);
-        assert.strictEqual(await isPortOpen(port), true,
+        // Poll across a bounded window instead of a single post-`delay`
+        // snapshot so a slow/busy host can't race the assertion.
+        assert.ok(await staysOpen(port, 600),
           'direct child kill must NOT free the port (demonstrates the orphan bug)');
 
         // Group kill reaps the entire tree and frees the port — the fix.

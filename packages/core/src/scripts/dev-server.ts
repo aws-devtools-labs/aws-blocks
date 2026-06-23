@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
@@ -154,10 +154,24 @@ export interface RespawnDecision {
 
 /**
  * Decide whether to auto-respawn the frontend dev server after an unexpected
- * exit. Restarts outside the sliding window are forgotten; once the budget is
- * exhausted the frontend is left down (no hot restart loop). Otherwise the
- * delay grows exponentially with the number of recent restarts, capped at
- * `maxBackoffMs`.
+ * exit, given the timestamps of restarts not yet "forgiven".
+ *
+ * Semantics — the budget counts only *failing* restarts:
+ * - Timestamps older than `windowMs` are dropped from the sliding window.
+ * - If `maxRestarts` are still within the window, the budget is exhausted and
+ *   the frontend is left down (no hot restart loop) — `restart: false`.
+ * - Otherwise `restart: true` with an exponential backoff (`backoffMs` doubled
+ *   per in-window restart, capped at `maxBackoffMs`) and the new attempt
+ *   appended to `recent`.
+ *
+ * This function is pure; the *meaning* of the budget is enforced by the caller,
+ * which **resets `recentRestarts` to `[]` once a respawn demonstrably succeeds**
+ * (the frontend port becomes bound — see `announceFrontendReady`). As a result
+ * only *consecutive failing* restarts accumulate toward `maxRestarts`: a
+ * frontend that legitimately restarts many times in a burst (e.g.
+ * editor-triggered Vite full reloads) refreshes its budget on each healthy bind
+ * and is never permanently left down — only a genuine crash loop that never
+ * rebinds the port trips the limit.
  */
 export function evaluateFrontendRespawn(
   recentRestarts: number[],
@@ -178,35 +192,82 @@ export interface KillableProcess {
   kill(signal?: NodeJS.Signals | number): boolean;
 }
 
+/** Subset of {@link import('node:child_process').SpawnSyncReturns} that {@link windowsTreeKill} inspects. */
+interface TreeKillResult {
+  status: number | null;
+  error?: Error;
+}
+
+/**
+ * Force-kill an entire process tree on Windows via `taskkill /T /F /PID <pid>`.
+ *
+ * Windows has no POSIX process groups, so a bare `child.kill()` only signals the
+ * spawned shell and orphans the real dev server (the Vite grandchild), which
+ * keeps holding `:3100` — the very wedge the POSIX process-group kill fixes.
+ * `taskkill /T` walks the live child tree by PID and terminates every
+ * descendant; `/F` is required because Windows cannot deliver a graceful
+ * shutdown to a non-console subtree anyway (Node maps SIGTERM/SIGKILL to
+ * `TerminateProcess`).
+ *
+ * Returns `true` when `taskkill` actually ran — whether it reaped the tree or
+ * found it already gone (exit 128) — and `false` only when the command could
+ * not be spawned at all (e.g. not on `PATH`), signalling the caller to fall
+ * back to a direct `child.kill`. Never throws.
+ */
+export function windowsTreeKill(
+  pid: number,
+  runner: (command: string, args: readonly string[]) => TreeKillResult = (command, args) =>
+    spawnSync(command, args as string[], { stdio: 'ignore', windowsHide: true }),
+): boolean {
+  try {
+    const { error } = runner('taskkill', ['/T', '/F', '/PID', String(pid)]);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Terminate a frontend dev server spawned with `shell: true`, including its
- * descendants.
+ * descendants, on every platform.
  *
  * Under a shell the real dev server (e.g. Vite) is a **grandchild**: the direct
  * child is the shell, so signalling only the shell (`child.kill`) orphans the
  * grandchild, which keeps holding its port (`:3100`) and wedges the next
- * restart. On POSIX the frontend is spawned `detached` (its own process group,
- * pgid === child.pid), so we signal the whole group with
- * `process.kill(-pid, signal)` and every descendant dies, freeing the port.
- * Windows has no POSIX process groups, so we fall back to `child.kill`.
+ * restart.
+ *
+ * - **POSIX**: the frontend is spawned `detached` (its own process group,
+ *   pgid === child.pid), so we signal the whole group with
+ *   `process.kill(-pid, signal)` and every descendant dies, freeing the port.
+ * - **Windows**: there are no process groups, so we reap the tree with
+ *   `taskkill /T /F /PID <pid>` (see {@link windowsTreeKill}), which walks the
+ *   child tree by PID. A bare `child.kill` would leave the Vite grandchild
+ *   bound to `:3100`, reproducing the POSIX wedge.
  *
  * Best-effort and never throws: a missing/invalid pid, an already-dead group
- * (ESRCH), or a failed group signal all degrade to a direct `child.kill`.
+ * (ESRCH), a failed group signal, or an unavailable `taskkill` all degrade to a
+ * direct `child.kill`.
  */
 export function killFrontendTree(
   child: KillableProcess,
   signal: NodeJS.Signals = 'SIGTERM',
   platform: NodeJS.Platform = process.platform,
-  killFn: (pid: number, signal: NodeJS.Signals) => void = process.kill,
+  killFn: (pid: number, signal: NodeJS.Signals) => void = (p, s) => process.kill(p, s),
+  winTreeKill: (pid: number) => boolean = windowsTreeKill,
 ): void {
   const { pid } = child;
   // pid > 1 guards against signalling the whole current group (-0) or init (-1).
-  if (pid && pid > 1 && platform !== 'win32') {
-    try {
-      killFn(-pid, signal);
+  if (pid && pid > 1) {
+    if (platform !== 'win32') {
+      try {
+        killFn(-pid, signal);
+        return;
+      } catch {
+        // Group already gone or signal failed — fall through to a direct kill.
+      }
+    } else if (winTreeKill(pid)) {
+      // taskkill walked the PID tree and reaped the Vite grandchild.
       return;
-    } catch {
-      // Group already gone or signal failed — fall through to a direct kill.
     }
   }
   try {
@@ -312,6 +373,11 @@ export async function startDevServer(options: DevServerOptions) {
   const announceFrontendReady = async (suffix = ''): Promise<void> => {
     try {
       await waitForPort(frontendPort);
+      // The respawn demonstrably succeeded — the port is bound — so reset the
+      // restart budget. Only *consecutive failing* restarts should count toward
+      // the give-up threshold; a frontend that legitimately restarts many times
+      // (e.g. editor-triggered Vite full reloads) thus never gets left down.
+      frontendRestarts = [];
       console.log(`\n  ➜  http://localhost:${port}/${suffix}\n`);
     } catch (e) {
       console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
@@ -565,10 +631,13 @@ export async function startDevServer(options: DevServerOptions) {
   // exception terminating the process): synchronously reap the detached
   // frontend group so a `detached` Vite is never left orphaned on `:3100`.
   process.once('exit', () => {
-    const pid = frontendProcess?.pid;
-    if (pid && pid > 1 && usePosixProcessGroups) {
-      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
-    }
+    const child = frontendProcess;
+    if (!child || !child.pid || child.pid <= 1 || !usePosixProcessGroups) return;
+    // Only reap a still-live child. Once it has exited (exitCode/signalCode set)
+    // the OS may recycle its PID, so kill(-pid) could signal an unrelated group
+    // — the classic PID-reuse window. Accepted here as a best-effort last resort.
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
   });
 }
 
