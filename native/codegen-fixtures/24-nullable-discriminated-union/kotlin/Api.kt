@@ -42,7 +42,7 @@ public class Api(
   }
 
   public object UpdateAttributes {
-    @Serializable(with = ResultSerializer::class)
+    @Serializable(with = Result.ResultSerializer::class)
     public sealed class Result {
       public object ResultSerializer : JsonContentPolymorphicSerializer<Result>(Result::class) {
         override fun selectDeserializer(element: JsonElement): DeserializationStrategy<Result> {
