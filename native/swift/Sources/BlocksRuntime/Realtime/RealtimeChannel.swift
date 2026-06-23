@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -111,10 +118,10 @@ public class RealtimeChannel<T> {
         }
         lock.unlock()
 
-        let channelName = self.channel
-        let channelToken = self.token
-        let deserializer = self.deserializer
-        let webSocketSession = self.webSocketSession
+        let channelName = channel
+        let channelToken = token
+        let deserializer = deserializer
+        let webSocketSession = webSocketSession
 
         return AsyncThrowingStream { continuation in
             let listener = ChannelWebSocketDelegate(
@@ -201,7 +208,7 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
         """
         logger.debug("WS opened, sending: \(subscribeMsg)")
         webSocket.send(.string(subscribeMsg)) { error in
-            if let error = error {
+            if let error {
                 logger.error("Failed to send subscribe: \(error.localizedDescription)")
             }
         }

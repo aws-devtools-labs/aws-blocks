@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 // MARK: - Stage 2: Codegen Model Builder
@@ -327,7 +334,9 @@ public struct CodegenModelBuilder {
         case .union(let members):
             let unionName = pascalCase(name)
             let myId = "\(currentParentId ?? "root").\(unionName)"
-            let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }; return false }
+            let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }
+            return false
+            }
             let resolved = resolveUnion(
                 members: members,
                 unionName: unionName,
@@ -589,9 +598,11 @@ public struct CodegenModelBuilder {
 
         // Disambiguate colliding variant names
         var nameCounts: [String: Int] = [:]
-        for v in variants { nameCounts[v.name, default: 0] += 1 }
+        for v in variants {
+            nameCounts[v.name, default: 0] += 1
+        }
         var seen: [String: Int] = [:]
-        variants = variants.enumerated().map { (_, v) -> UnionVariant in
+        variants = variants.enumerated().map { _, v -> UnionVariant in
             guard (nameCounts[v.name] ?? 0) > 1 else { return v }
             let n = (seen[v.name] ?? 0) + 1
             seen[v.name] = n

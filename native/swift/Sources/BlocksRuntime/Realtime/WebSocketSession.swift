@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -27,7 +34,7 @@ public protocol WebSocketDelegate: AnyObject {
 /// registered delegates.
 ///
 /// When the last delegate is removed, the underlying WebSocket is closed.
-internal class WebSocketSession {
+class WebSocketSession {
 
     // MARK: - DispatchingListener
 
@@ -42,7 +49,7 @@ internal class WebSocketSession {
             let ws = openWebSocket
             lock.unlock()
 
-            if let ws = ws {
+            if let ws {
                 listener.onOpen(ws)
             }
         }
@@ -64,21 +71,27 @@ internal class WebSocketSession {
             openWebSocket = webSocket
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onOpen(webSocket) }
+            for l in snapshot {
+                l.onOpen(webSocket)
+            }
         }
 
         func dispatchMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
             lock.lock()
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onMessage(webSocket, text: text) }
+            for l in snapshot {
+                l.onMessage(webSocket, text: text)
+            }
         }
 
         func dispatchFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
             lock.lock()
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onFailure(webSocket, error: error) }
+            for l in snapshot {
+                l.onFailure(webSocket, error: error)
+            }
         }
 
         func dispatchClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {
@@ -86,7 +99,9 @@ internal class WebSocketSession {
             openWebSocket = nil
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onClosed(webSocket, code: code, reason: reason) }
+            for l in snapshot {
+                l.onClosed(webSocket, code: code, reason: reason)
+            }
         }
     }
 

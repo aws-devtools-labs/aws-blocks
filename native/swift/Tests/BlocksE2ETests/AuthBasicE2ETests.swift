@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -6,7 +13,7 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
     private let password = "pass1234"
 
     private func uniqueUsername(_ label: String) -> String {
-        "basic\(label)_swift_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999))"
+        "basic\(label)_swift_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1_000 ... 9_999))"
     }
 
     func testSignUpAndSignIn() async throws {

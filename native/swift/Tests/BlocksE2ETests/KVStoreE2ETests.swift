@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -66,14 +73,14 @@ final class KVStoreE2ETests: BlocksE2ETestCase {
     func testParallelWritesAndReads() async throws {
         let p = prefix
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for i in 0..<10 {
+            for i in 0 ..< 10 {
                 group.addTask {
                     _ = try await self.api.kvPut(key: "\(p)_par_\(i)", value: "val_\(i)")
                 }
             }
             try await group.waitForAll()
         }
-        for i in 0..<10 {
+        for i in 0 ..< 10 {
             let v = try await api.kvGet(key: "\(p)_par_\(i)")
             XCTAssertEqual(v, "val_\(i)")
         }

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import Security
 
@@ -8,7 +15,7 @@ import Security
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.
-internal final class KeychainCookieStore {
+final class KeychainCookieStore {
     private let service: String
 
     init(service: String = "com.aws.blocks.swift.cookies") {

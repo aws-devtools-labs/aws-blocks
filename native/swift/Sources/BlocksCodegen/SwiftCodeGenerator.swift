@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 // MARK: - Stage 3: Swift Code Generator
@@ -796,7 +803,7 @@ public struct SwiftCodeGenerator {
         if checks.isEmpty { return [] }
 
         if isOptional {
-            var out: [String] = ["if let v = \(accessor) {"]
+            var out = ["if let v = \(accessor) {"]
             out.append(contentsOf: checks.map { "    \($0)" })
             out.append("}")
             return out

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -95,7 +102,9 @@ final class RealtimeChannelTests: XCTestCase {
     /// them straight to JSONDecoder, removing the redundant Data → String →
     /// Data round trip.
     func testDeserializerReceivesData() throws {
-        struct Cursor: Codable, Equatable { let x: Int; let y: Int }
+        struct Cursor: Codable, Equatable { let x: Int
+        let y: Int
+        }
 
         let json: [String: Any] = [
             "channel": "cursors",

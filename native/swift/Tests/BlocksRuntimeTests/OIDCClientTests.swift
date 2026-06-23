@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -102,7 +109,7 @@ final class OIDCClientTests: XCTestCase {
             let body: [String: Any] = [
                 "accessToken": "access-1",
                 "refreshToken": "refresh-1",
-                "expiresIn": 3600,
+                "expiresIn": 3_600,
                 "user": ["userId": "u1", "username": "alice", "groups": ["admins"]]
             ]
             let data = try JSONSerialization.data(withJSONObject: body)
@@ -330,11 +337,15 @@ final class OIDCClientTests: XCTestCase {
         let s2 = await client.authStateChanges()
 
         let c1 = Task<OIDCAuthState?, Never> {
-            for await e in s1 { return e }
+            for await e in s1 {
+                return e
+            }
             return nil
         }
         let c2 = Task<OIDCAuthState?, Never> {
-            for await e in s2 { return e }
+            for await e in s2 {
+                return e
+            }
             return nil
         }
 

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -50,7 +57,9 @@ final class BlocksClientTests: XCTestCase {
 
         XCTAssertNotNil(result)
         // Should be decodable as a struct
-        struct User: Decodable { let name: String; let age: Int }
+        struct User: Decodable { let name: String
+        let age: Int
+        }
         let user = try JSONDecoder().decode(User.self, from: result!)
         XCTAssertEqual(user.name, "Alice")
         XCTAssertEqual(user.age, 30)

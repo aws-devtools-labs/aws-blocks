@@ -1,10 +1,17 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
 final class TodosE2ETests: BlocksE2ETestCase {
 
     private let password = "pass1234"
-    private lazy var username = "todouser_swift_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999))"
+    private lazy var username = "todouser_swift_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1_000 ... 9_999))"
 
     private func signIn() async throws {
 
@@ -52,7 +59,7 @@ final class TodosE2ETests: BlocksE2ETestCase {
 
         let byPriority = try await api.listTodos(sortBy: .priority)
         XCTAssertGreaterThanOrEqual(byPriority.count, 3)
-        for i in 0..<(byPriority.count - 1) {
+        for i in 0 ..< (byPriority.count - 1) {
             XCTAssertLessThanOrEqual(byPriority[i].priority, byPriority[i + 1].priority)
         }
     }

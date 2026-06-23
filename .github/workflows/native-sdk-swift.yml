@@ -1,0 +1,88 @@
+name: Native SDK Swift
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'native/swift/**'
+  workflow_dispatch:
+
+concurrency:
+  group: native-swift-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build
+        run: swift build
+
+      - name: Run unit tests
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+
+  build-and-test-ios:
+    name: Build & Test (iOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build for iOS
+        run: xcodebuild build -scheme aws-blocks-swift -destination 'platform=iOS Simulator,name=iPhone 16'
+
+      - name: Run unit tests on iOS
+        run: xcodebuild test -scheme aws-blocks-swift -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+
+  swiftlint:
+    name: SwiftLint
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict
+
+  swiftformat:
+    name: SwiftFormat
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install SwiftFormat
+        run: brew install swiftformat
+
+      - name: Check formatting
+        run: swiftformat --lint .

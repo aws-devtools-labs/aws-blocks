@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -62,7 +69,7 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
@@ -97,7 +104,7 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 

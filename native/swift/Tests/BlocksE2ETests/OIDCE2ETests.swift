@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 import Foundation
 @testable import BlocksRuntime
@@ -19,7 +26,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
 
     func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
         var current = authorizeURL
-        for _ in 0..<10 {
+        for _ in 0 ..< 10 {
             var request = URLRequest(url: current)
             request.httpShouldHandleCookies = false
 
@@ -28,7 +35,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
                 throw OIDCError.invalidResponse
             }
 
-            if (300..<400).contains(httpResponse.statusCode) {
+            if (300 ..< 400).contains(httpResponse.statusCode) {
                 guard let location = httpResponse.value(forHTTPHeaderField: "Location"),
                       let next = URL(string: location, relativeTo: current) else {
                     throw OIDCError.callbackError("Redirect without Location at \(current)")
