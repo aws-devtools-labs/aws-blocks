@@ -119,6 +119,103 @@ async function waitForPort(port: number, maxAttempts = 60): Promise<void> {
   throw new Error(`Frontend server on port ${port} did not start within ${maxAttempts * 500}ms`);
 }
 
+/** Bounded auto-respawn policy for the frontend dev server. */
+export interface FrontendRespawnPolicy {
+  /** Max restarts allowed within `windowMs` before giving up (prevents hot loops). */
+  maxRestarts: number;
+  /** Sliding window (ms) over which restarts are counted. */
+  windowMs: number;
+  /** Base backoff (ms); doubles for each restart already in the window. */
+  backoffMs: number;
+  /** Upper bound (ms) on any single backoff delay. */
+  maxBackoffMs: number;
+}
+
+/** Default frontend respawn budget: 5 restarts / 10s, 500ms→5s exponential backoff. */
+export const DEFAULT_FRONTEND_RESPAWN_POLICY: FrontendRespawnPolicy = {
+  maxRestarts: 5,
+  windowMs: 10_000,
+  backoffMs: 500,
+  maxBackoffMs: 5_000,
+};
+
+/** Outcome of {@link evaluateFrontendRespawn}. */
+export interface RespawnDecision {
+  /** Whether the frontend should be respawned now. */
+  restart: boolean;
+  /** Delay (ms) to wait before respawning when `restart` is true. */
+  delayMs: number;
+  /**
+   * Restart timestamps still inside the window — plus the new attempt when
+   * restarting. The caller persists this for the next decision.
+   */
+  recent: number[];
+}
+
+/**
+ * Decide whether to auto-respawn the frontend dev server after an unexpected
+ * exit. Restarts outside the sliding window are forgotten; once the budget is
+ * exhausted the frontend is left down (no hot restart loop). Otherwise the
+ * delay grows exponentially with the number of recent restarts, capped at
+ * `maxBackoffMs`.
+ */
+export function evaluateFrontendRespawn(
+  recentRestarts: number[],
+  now: number,
+  policy: FrontendRespawnPolicy = DEFAULT_FRONTEND_RESPAWN_POLICY,
+): RespawnDecision {
+  const recent = recentRestarts.filter((t) => now - t < policy.windowMs);
+  if (recent.length >= policy.maxRestarts) {
+    return { restart: false, delayMs: 0, recent };
+  }
+  const delayMs = Math.min(policy.backoffMs * 2 ** recent.length, policy.maxBackoffMs);
+  return { restart: true, delayMs, recent: [...recent, now] };
+}
+
+/** Minimal child-process surface needed to terminate a frontend dev server. */
+export interface KillableProcess {
+  pid?: number;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+/**
+ * Terminate a frontend dev server spawned with `shell: true`, including its
+ * descendants.
+ *
+ * Under a shell the real dev server (e.g. Vite) is a **grandchild**: the direct
+ * child is the shell, so signalling only the shell (`child.kill`) orphans the
+ * grandchild, which keeps holding its port (`:3100`) and wedges the next
+ * restart. On POSIX the frontend is spawned `detached` (its own process group,
+ * pgid === child.pid), so we signal the whole group with
+ * `process.kill(-pid, signal)` and every descendant dies, freeing the port.
+ * Windows has no POSIX process groups, so we fall back to `child.kill`.
+ *
+ * Best-effort and never throws: a missing/invalid pid, an already-dead group
+ * (ESRCH), or a failed group signal all degrade to a direct `child.kill`.
+ */
+export function killFrontendTree(
+  child: KillableProcess,
+  signal: NodeJS.Signals = 'SIGTERM',
+  platform: NodeJS.Platform = process.platform,
+  killFn: (pid: number, signal: NodeJS.Signals) => void = process.kill,
+): void {
+  const { pid } = child;
+  // pid > 1 guards against signalling the whole current group (-0) or init (-1).
+  if (pid && pid > 1 && platform !== 'win32') {
+    try {
+      killFn(-pid, signal);
+      return;
+    } catch {
+      // Group already gone or signal failed — fall through to a direct kill.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Process already exited; nothing to do.
+  }
+}
+
 export async function startDevServer(options: DevServerOptions) {
   const {
     port = 3000,
@@ -199,6 +296,103 @@ export async function startDevServer(options: DevServerOptions) {
     (res as ServerResponse).writeHead(502);
     (res as ServerResponse).end('Frontend server unavailable');
   });
+
+  // ── Frontend supervisor ─────────────────────────────────────────────────
+  // The frontend runs under `shell: true`, so the real dev server (Vite) is a
+  // grandchild of this process. We spawn it `detached` (its own process group)
+  // on POSIX so cleanup/restart can signal the *whole* tree and free the port;
+  // otherwise the orphaned grandchild keeps `:3100` and every `/` request 502s
+  // forever (the proxy target is hardcoded to `frontendPort`). We also bound-
+  // respawn it on unexpected death and suppress all of this during shutdown.
+  const usePosixProcessGroups = process.platform !== 'win32';
+  let isShuttingDown = false;
+  let frontendRestarts: number[] = [];
+  let respawnTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const announceFrontendReady = async (suffix = ''): Promise<void> => {
+    try {
+      await waitForPort(frontendPort);
+      console.log(`\n  ➜  http://localhost:${port}/${suffix}\n`);
+    } catch (e) {
+      console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
+      console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
+    }
+  };
+
+  const spawnFrontend = (command: string): ChildProcess => {
+    const child = spawn(command, {
+      shell: true,
+      // Own process group on POSIX so we can reap the Vite grandchild too.
+      detached: usePosixProcessGroups,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    frontendProcess = child;
+
+    // Suppress frontend output — only show errors.
+    child.stderr?.on('data', (d: Buffer) => {
+      const msg = d.toString();
+      if (!msg.includes('DeprecationWarning')) process.stderr.write(msg);
+    });
+
+    child.on('exit', (code, signal) => {
+      // Ignore exits from a process we've already replaced or torn down.
+      if (child !== frontendProcess) return;
+      frontendProcess = null;
+      if (isShuttingDown) return;
+      // Reap any orphaned grandchild left in this child's group so `:3100` is
+      // free before we respawn — otherwise `--strictPort` makes the new Vite
+      // exit on bind and we'd spin until the restart budget is gone.
+      killFrontendTree(child, 'SIGKILL');
+
+      const decision = evaluateFrontendRespawn(frontendRestarts, Date.now());
+      frontendRestarts = decision.recent;
+      const why = `code=${code ?? 'null'}, signal=${signal ?? 'null'}`;
+      if (!decision.restart) {
+        console.error(
+          `⚠️  Frontend dev server exited (${why}) and exceeded ` +
+          `${DEFAULT_FRONTEND_RESPAWN_POLICY.maxRestarts} restarts within ` +
+          `${DEFAULT_FRONTEND_RESPAWN_POLICY.windowMs / 1000}s — leaving it down. ` +
+          `Fix the error above, then restart \`npm run dev\`.`,
+        );
+        return;
+      }
+      console.error(`⚠️  Frontend dev server exited (${why}); restarting in ${decision.delayMs}ms…`);
+      respawnTimer = setTimeout(() => {
+        respawnTimer = null;
+        if (isShuttingDown) return;
+        spawnFrontend(command);
+        void announceFrontendReady('  (frontend restarted)');
+      }, decision.delayMs);
+      respawnTimer.unref?.();
+    });
+
+    return child;
+  };
+
+  /**
+   * Gracefully terminate the frontend tree and wait (bounded) for it to die so
+   * the port is actually freed before this process exits. SIGTERM the group,
+   * then escalate to SIGKILL if it lingers. tsx-watch gives us ~5s before it
+   * force-kills us, so the ~2s budget here is safe.
+   */
+  const terminateFrontend = async (child: ChildProcess | null): Promise<void> => {
+    if (!child) return;
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((res) => child.once('exit', () => res()));
+    killFrontendTree(child, 'SIGTERM');
+    const lingered = await Promise.race([
+      exited.then(() => false),
+      new Promise<boolean>((res) => { setTimeout(() => res(true), 1500).unref?.(); }),
+    ]);
+    if (lingered) {
+      killFrontendTree(child, 'SIGKILL');
+      await Promise.race([
+        exited,
+        new Promise<void>((res) => { setTimeout(res, 500).unref?.(); }),
+      ]);
+    }
+  };
 
   // ── API Gateway proxy (sandbox mode) ───────────────────────────────────
   // `changeOrigin: true` rewrites the outgoing `Host` to the execute-api target
@@ -325,29 +519,8 @@ export async function startDevServer(options: DevServerOptions) {
 
     // Spawn frontend dev server after Blocks server is ready
     if (frontendCommand) {
-      frontendProcess = spawn(frontendCommand, {
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, NODE_OPTIONS: '' },
-      });
-      // Suppress frontend output — only show errors
-      frontendProcess.stderr?.on('data', (d: Buffer) => {
-        const msg = d.toString();
-        if (!msg.includes('DeprecationWarning')) process.stderr.write(msg);
-      });
-      frontendProcess.on('exit', (code) => {
-        if (code !== 0 && code !== null) {
-          console.error(`⚠️  Frontend process exited with code ${code}`);
-        }
-      });
-
-      try {
-        await waitForPort(frontendPort);
-        console.log(`\n  ➜  http://localhost:${port}/\n`);
-      } catch (e) {
-        console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
-        console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
-      }
+      spawnFrontend(frontendCommand);
+      await announceFrontendReady();
     } else {
       console.log(`\n  ➜  http://localhost:${port}/\n`);
     }
@@ -359,9 +532,24 @@ export async function startDevServer(options: DevServerOptions) {
   });
 
   // ── Cleanup ────────────────────────────────────────────────────────────
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  let cleaningUp = false;
   const cleanup = async () => {
+    if (cleaningUp) return; // idempotent — a second signal must not re-enter
+    cleaningUp = true;
+    isShuttingDown = true; // stop the supervisor from respawning the frontend
     console.log('\nShutting down...');
-    if (frontendProcess) frontendProcess.kill('SIGTERM');
+
+    if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
+    // Detach our own listeners so repeated signals can't pile up handlers.
+    for (const sig of signals) process.removeListener(sig, cleanup);
+
+    // Kill the frontend process *group* and wait for the port to free before
+    // we exit, so a tsx-watch restart can rebind `:3100` cleanly.
+    const child = frontendProcess;
+    frontendProcess = null;
+    await terminateFrontend(child);
+
     if (typeof backend.__cleanup === 'function') {
       try { await backend.__cleanup(); } catch {}
     }
@@ -371,8 +559,17 @@ export async function startDevServer(options: DevServerOptions) {
     setTimeout(() => process.exit(0), 2000).unref();
   };
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+  for (const sig of signals) process.on(sig, cleanup);
+
+  // Last-resort safety net for paths that bypass `cleanup` (e.g. an uncaught
+  // exception terminating the process): synchronously reap the detached
+  // frontend group so a `detached` Vite is never left orphaned on `:3100`.
+  process.once('exit', () => {
+    const pid = frontendProcess?.pid;
+    if (pid && pid > 1 && usePosixProcessGroups) {
+      try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
 }
 
 // ── Local API handler ────────────────────────────────────────────────────────
