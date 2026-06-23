@@ -9,6 +9,8 @@
  */
 
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
+import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -400,6 +402,9 @@ export class AuthOIDCClient<
 		const user = (body.user ?? body) as User;
 		lastUser = user;
 		notify(user, { state: pending.appState });
+		// Bridge to the shared cross-tab/same-window auth bus so `onAuthChange`,
+		// `AuthenticatedContent`, and `<Authenticator>` consumers update automatically.
+		broadcastAuthChange(user as unknown as AuthUser);
 		return user;
 	}
 
@@ -409,6 +414,9 @@ export class AuthOIDCClient<
 		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
 		lastUser = null;
 		notify(null, null);
+		// Mirror the sign-out onto the shared auth bus so `onAuthChange` consumers
+		// and other tabs drop to signed-out before this tab reloads.
+		broadcastAuthChange(null);
 		if (typeof window !== 'undefined' && window.location) {
 			window.location.reload();
 		}

@@ -4,6 +4,37 @@
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { AuthOIDCClient, resolveApiBaseOrigin } from './index.browser.js';
+import { onAuthChange, type AuthStateApi } from '@aws-blocks/auth-common/ui';
+
+// auth-common's broadcast bus lazily creates a module-level `BroadcastChannel`
+// singleton (via getChannel()). Node's real BroadcastChannel keeps the event
+// loop alive, which would stop `node --test` from exiting. Swap in a no-op,
+// in-process shim (same approach as auth-common/ui.test.ts) before any broadcast
+// runs. The same-window delivery we assert on uses window.dispatchEvent, not the
+// channel, so an inert channel is sufficient.
+class BroadcastChannelShim {
+	name: string;
+	private listeners: ((event: MessageEvent) => void)[] = [];
+	private static channels = new Map<string, BroadcastChannelShim[]>();
+	constructor(name: string) {
+		this.name = name;
+		const group = BroadcastChannelShim.channels.get(name) ?? [];
+		group.push(this);
+		BroadcastChannelShim.channels.set(name, group);
+	}
+	postMessage(data: unknown) {
+		// BroadcastChannel delivers to OTHER instances with the same name, not self.
+		for (const ch of BroadcastChannelShim.channels.get(this.name) ?? []) {
+			if (ch !== this) for (const fn of ch.listeners) fn({ data } as MessageEvent);
+		}
+	}
+	addEventListener(_type: string, fn: (event: MessageEvent) => void) { this.listeners.push(fn); }
+	removeEventListener(_type: string, fn: (event: MessageEvent) => void) {
+		this.listeners = this.listeners.filter((f) => f !== fn);
+	}
+	close() { /* no-op */ }
+}
+(globalThis as any).BroadcastChannel = BroadcastChannelShim;
 
 /**
  * Browser-client tests for `AuthOIDCClient.signIn()` redirect-target
@@ -28,10 +59,17 @@ function installBrowserGlobals(currentHref: string): void {
 		set href(v: string) { navigatedTo = v; },
 		origin: url.origin,
 		pathname: url.pathname,
+		reload() { /* no-op for tests (signOut() calls this) */ },
 	};
 	store = new Map<string, string>();
 
-	(globalThis as any).window = { location: locationStub };
+	// Back `window` with a real EventTarget so auth-common's broadcastAuthChange()
+	// (window.dispatchEvent(new CustomEvent(...))) and onAuthChange()
+	// (window.addEventListener(...)) exercise the real same-window event path — no
+	// mocks. CustomEvent + BroadcastChannel are Node 22 globals.
+	const win = new EventTarget() as EventTarget & { location: typeof locationStub };
+	win.location = locationStub;
+	(globalThis as any).window = win;
 	(globalThis as any).sessionStorage = {
 		getItem: (k: string) => store.get(k) ?? null,
 		setItem: (k: string, v: string) => { store.set(k, v); },
@@ -344,5 +382,68 @@ describe('AuthOIDCClient.handleRedirectCallback — idempotent under double invo
 		const p1 = client.handleRedirectCallback();
 		const p2 = client.handleRedirectCallback();
 		await assert.doesNotReject(Promise.all([p1, p2]));
+	});
+});
+
+/**
+ * Fix (c): the bridge to `@aws-blocks/auth-common`'s `onAuthChange` was unwired —
+ * a successful exchange only called the module-local `notify()`. It now also calls
+ * `broadcastAuthChange(user)`, so `onAuthChange` / `AuthenticatedContent` /
+ * `<Authenticator>` consumers update automatically.
+ */
+describe('AuthOIDCClient.handleRedirectCallback — bridges to auth-common onAuthChange', () => {
+	const STATE = 'state-bcast';
+	const BARE_USER = { userId: 'iss:carol', username: 'carol' };
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code-bcast&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: STATE, nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({ ok: true, json: async () => ({ user: BARE_USER }) })) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('a successful exchange notifies real onAuthChange consumers via broadcastAuthChange', async () => {
+		// Minimal AuthStateApi for onAuthChange's shared-cache hydration (cold → signedOut).
+		const api: AuthStateApi = {
+			async getAuthState() { return { state: 'signedOut', actions: [] }; },
+			async setAuthState() { return { state: 'signedOut', actions: [] }; },
+		};
+		const received: Array<{ userId: string } | null> = [];
+		const unsub = onAuthChange(api, (user) => { received.push(user as { userId: string } | null); });
+
+		const client = makeClient();
+		const user = await client.handleRedirectCallback();
+		// Let the broadcast CustomEvent + onAuthChange microtasks flush.
+		await new Promise((r) => setTimeout(r, 5));
+
+		assert.ok(user, 'the exchange resolved a user');
+		const last = received[received.length - 1];
+		assert.ok(last, 'onAuthChange consumer should have been notified via the broadcast');
+		assert.strictEqual(last!.userId, 'iss:carol');
+		unsub();
+	});
+
+	test('dispatches a same-window blocks-auth-change event carrying the exchanged user', async () => {
+		// `any` (like `lastExchangeBody` above): the value is only ever assigned
+		// inside the listener closure, which TS control-flow can't see.
+		let detailUser: any = null;
+		const handler = (e: Event) => { detailUser = (e as CustomEvent).detail?.user ?? null; };
+		(window as unknown as EventTarget).addEventListener('blocks-auth-change', handler);
+		const client = makeClient();
+		await client.handleRedirectCallback();
+		assert.ok(detailUser, 'broadcastAuthChange should dispatch a same-window CustomEvent');
+		assert.strictEqual(detailUser.userId, 'iss:carol');
+		(window as unknown as EventTarget).removeEventListener('blocks-auth-change', handler);
 	});
 });
