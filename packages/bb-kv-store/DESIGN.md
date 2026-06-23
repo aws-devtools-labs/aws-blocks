@@ -47,7 +47,7 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 
 ### Parameters
 
-Tool parameters use JSON Schema objects (not zod). Callers can override parameters with a zod schema via `overrides: { methodName: { schema: z.object({...}) } }` — the Agent BB accepts both JSON Schema and `z.ZodType`.
+Tool parameters are defined as JSON Schema objects. Users can override with zod via `overrides: { methodName: { schema: z.object({...}) } }`.
 
 ### Scan Default Limit
 
