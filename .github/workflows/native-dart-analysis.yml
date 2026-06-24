@@ -1,0 +1,107 @@
+name: Native Dart Analysis
+
+# Static analysis for the native Dart SDK packages: format check, analyzer,
+# unit tests, and a pub.dev package score report. Path-filtered at the trigger
+# so it only runs for PRs that touch native/dart/packages/.
+#
+# No AWS / secrets needed — these run the same on fork PRs.
+
+on:
+  pull_request:
+    paths:
+      - 'native/dart/packages/**'
+  workflow_dispatch:
+
+concurrency:
+  group: native-dart-analysis-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: ${{ matrix.package-name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package-name: blocks_runtime
+            working-directory: native/dart/packages/blocks_runtime
+            tool: dart
+            runtime-override: false
+          - package-name: blocks_codegen
+            working-directory: native/dart/packages/blocks_codegen
+            tool: dart
+            runtime-override: true
+          - package-name: blocks_runtime_flutter
+            working-directory: native/dart/packages/blocks_runtime_flutter
+            tool: flutter
+            runtime-override: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup Dart
+        if: matrix.tool == 'dart'
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.11.0'
+
+      - name: Setup Flutter
+        if: matrix.tool == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # blocks_codegen and blocks_runtime_flutter depend on blocks_runtime,
+      # which is published on pub.dev — but in CI we want to analyze/test
+      # against the in-repo source, not the published version. A
+      # pubspec_overrides.yaml (gitignored in local dev) points the dependency
+      # at the sibling package. blocks_runtime sits at packages/blocks_runtime,
+      # so the relative path from each sibling is ../blocks_runtime.
+      - name: Add blocks_runtime path override
+        if: matrix.runtime-override
+        working-directory: ${{ matrix.working-directory }}
+        run: |
+          printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../blocks_runtime\n' > pubspec_overrides.yaml
+
+      - name: Get dependencies
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} pub get
+
+      # Blocking. `dart format` is provided by both the Dart and Flutter SDKs.
+      # Run after `pub get` so the resolved package_config pins the language
+      # version (3.3, from each package's sdk: ^3.3.0), making the result
+      # deterministic and matching local runs.
+      - name: Check formatting
+        working-directory: ${{ matrix.working-directory }}
+        run: dart format --output=none --set-exit-if-changed .
+
+      # Advisory for now — annotations only, non-blocking — matching the repo's
+      # existing "Lint (advisory)" convention in pr-checks.yml. The ruleset in
+      # native/dart/analysis_options.yaml still reports pre-existing findings
+      # that a follow-up `dart fix` pass will clear; flip this to blocking once
+      # the tree analyzes clean.
+      - name: Analyze (advisory — annotations only, non-blocking)
+        continue-on-error: true
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} analyze .
+
+      # Blocking.
+      - name: Run tests
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} test
+
+      # Report-only: prints the pub.dev package score and uploads the report.
+      - name: Package score
+        continue-on-error: true
+        uses: ./.github/composite_actions/package_score
+        with:
+          working-directory: ${{ matrix.working-directory }}
+          package-name: ${{ matrix.package-name }}
