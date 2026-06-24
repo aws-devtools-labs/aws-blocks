@@ -1,1 +1,94 @@
+# Static-analysis ruleset for the Blocks native Dart packages.
+#
+# Builds on the standard `package:lints/recommended.yaml` base and layers on
+# strict type-checking flags plus an opinionated set of lint rules. The rules
+# are all built into the Dart analyzer, so no extra package dependency is
+# required.
+#
+# Notes:
+#   - `public_member_api_docs`, `package_api_docs`, and `comment_references`
+#     are intentionally left off: these packages don't enforce doc comments on
+#     every public member.
+#   - Flutter-only lint rules are not included here (they would require a
+#     `flutter_lints` dependency and only apply to widget code). If a
+#     Flutter-specific overlay is ever wanted for blocks_runtime_flutter, add
+#     it via that package's own analysis_options.yaml.
 include: package:lints/recommended.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  errors:
+    depend_on_referenced_packages: error               # To prevent issues publishing.
+  exclude:
+    - '**/*.g.dart'
+    - '**/*.mocks.dart'
+    - example/lib/**                                   # generated at runtime by blocks_codegen
+
+linter:
+  rules:
+    - always_declare_return_types                      # To ensure that functions do not implicitly return dynamic.
+    - always_use_package_imports                       # To ensure consistency and prevent issues when combining with relative imports.
+    - avoid_catches_without_on_clauses                 # To encourage thoughtfulness when introducing catch clauses and to avoid catching Errors unless specifically required.
+    - avoid_classes_with_only_static_members           # To embrace Dart idioms and prefer top-level functions.
+    - avoid_dynamic_calls                              # To prevent unintentional dynamic dispatch which can lead to preventable runtime errors.
+    - avoid_equals_and_hash_code_on_mutable_classes    # To prevent issues with hash sets and maps.
+    - avoid_field_initializers_in_const_classes        # To prefer using getters over fields.
+    - avoid_js_rounded_ints                            # To prevent runtime issues when compiling to JS.
+    - avoid_multiple_declarations_per_line             # To improve code readability.
+    - avoid_positional_boolean_parameters              # To avoid function calls lacking context.
+    - avoid_print                                      # To avoid printing debug information in release mode.
+    - avoid_type_to_string                             # To avoid issues when compiling to Web and improve performance.
+    - avoid_unused_constructor_parameters              # To keep code concise and purposeful.
+    - avoid_void_async                                 # To provide context via the type system and allow the ability to await when necessary.
+    - cancel_subscriptions                             # To avoid memory leaks and to prevent code from firing after a subscription is no longer being used.
+    - cascade_invocations                              # To improve code readability.
+    - close_sinks                                      # To avoid memory leaks.
+    - conditional_uri_does_not_exist                   # To prevent accidentally referencing a nonexistent file.
+    - depend_on_referenced_packages                    # To prevent issues publishing.
+    - deprecated_consistency                           # To encourage correct usage of deprecation and provide a better DX.
+    - directives_ordering                              # To maintain visual separation of a file's imports.
+    - eol_at_end_of_file                               # To provide consistency across our repos/languages.
+    - flutter_style_todos                              # To ensure traceability of TODOs.
+    - invalid_case_patterns                            # To prevent invalid case statements.
+    - join_return_with_assignment                      # To improve code readability.
+    - missing_whitespace_between_adjacent_strings      # To prevent sentences which are smashedtogether.
+    - no_runtimeType_toString                          # To avoid issues when compiling to Web and improve performance.
+    - noop_primitive_operations                        # To prevent redundancy.
+    - omit_local_variable_types                        # To encourage conciseness and improve code readability.
+    - only_throw_errors                                # To ensure downstream exception handling always works.
+    - prefer_asserts_in_initializer_lists              # To improve code readability.
+    - prefer_asserts_with_message                      # To provide context to developers and users.
+    - prefer_const_constructors                        # To allow for compile-time optimizations.
+    - prefer_const_constructors_in_immutables          # To allow for compile-time optimizations.
+    - prefer_const_declarations                        # To utilize compile-time optimizations.
+    - prefer_const_literals_to_create_immutables       # To utilize compile-time optimizations.
+    - prefer_final_in_for_each                         # To improve code intent and avoid accidental reassignment.
+    - prefer_final_locals                              # To improve code intent and avoid accidental reassignment.
+    - prefer_if_elements_to_conditional_expressions    # To make large lists easier to read and navigate.
+    - prefer_int_literals                              # To improve code readability.
+    - prefer_null_aware_method_calls                   # To improve code readability.
+    - prefer_single_quotes                             # To encourage consistent styling.
+    - sort_constructors_first                          # To provide a consistent style for classes.
+    - sort_unnamed_constructors_first                  # To provide organization and quick exploration.
+    - sort_pub_dependencies                            # To simplify searching a large list.
+    - tighten_type_of_initializing_formals             # To catch errors at compile-time vs. runtime.
+    - type_annotate_public_apis                        # To ensure public APIs provide type safety.
+    - type_literal_in_constant_pattern                 # To prevent invalid case statements.
+    - unawaited_futures                                # To prevent accidental fire-and-forget.
+    - unnecessary_await_in_return                      # To make code more concise and to encourage mindfulness about where Futures are awaited.
+    - unnecessary_breaks                               # To simplify switch statements.
+    - unnecessary_lambdas                              # To make code more concise.
+    - unnecessary_null_checks                          # To improve code readability.
+    - use_enums                                        # To encourage use of the enhanced-enums language feature.
+    - use_if_null_to_convert_nulls_to_bools            # To improve code readability.
+    - use_late_for_private_fields_and_variables        # To improve code readability.
+    - use_named_constants                              # To improve code readability and consistency.
+    - use_raw_strings                                  # To improve code readability.
+    - use_setters_to_change_properties                 # To improve code readability and consistency.
+    - use_string_buffers                               # To improve performance.
+    - use_super_parameters                             # To improve code readability and prevent redundancy.
+    - use_test_throws_matchers                         # To improve code readability.
+    - use_to_and_as_if_applicable                      # To improve code readability.
