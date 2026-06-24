@@ -90,7 +90,7 @@ describe('scenarios.sandbox · Pool A (mfa:off)', { skip: !ENABLED }, () => {
 			const code = await pool.captureCode!(username, 'signup');
 			await auth.confirmSignUp(username, code);
 			const r = await auth.signIn(username, password, ctx());
-			assert.strictEqual(r.isSignedIn, true);
+			assert.strictEqual(r.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -106,7 +106,7 @@ describe('scenarios.sandbox · Pool A (mfa:off)', { skip: !ENABLED }, () => {
 			const code = await pool.captureCode!(username, 'forgot');
 			await auth.confirmResetPassword(username, code, 'NewPass!1');
 			const r = await auth.signIn(username, 'NewPass!1', ctx());
-			assert.strictEqual(r.isSignedIn, true);
+			assert.strictEqual(r.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -130,7 +130,7 @@ describe('scenarios.sandbox · Pool B (mfa:optional)', { skip: !ENABLED }, () =>
 		try {
 			const auth = authFor(pool, `s2-${Math.random().toString(36).slice(2, 6)}`);
 			const r = await auth.signIn(username, password, ctx());
-			assert.strictEqual(r.isSignedIn, true);
+			assert.strictEqual(r.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -150,11 +150,11 @@ describe('scenarios.sandbox · Pool B (mfa:optional)', { skip: !ENABLED }, () =>
 		try {
 			const auth = authFor(pool, `s9-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, tempPassword, ctx());
-			if (r1.isSignedIn) throw new Error('expected NEW_PASSWORD_REQUIRED');
+			if (r1.status === 'signedIn') throw new Error('expected NEW_PASSWORD_REQUIRED');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { newPassword: 'FinalPass!1' }, ctx());
-			assert.strictEqual(r2.isSignedIn, true);
+			assert.strictEqual(r2.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -178,23 +178,23 @@ describe('scenarios.sandbox · Pool C (required, TOTP only)', { skip: !ENABLED }
 		try {
 			const auth = authFor(pool, `s3-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn) throw new Error('expected TOTP setup');
+			if (r1.status === 'signedIn') throw new Error('expected TOTP setup');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
 			const sharedSecret = r1.nextStep.sharedSecret;
 			const setup = await auth.confirmSignIn(r1.nextStep.session, { code: totpNow(sharedSecret) }, ctx());
-			assert.strictEqual(setup.isSignedIn, true, 'setup completes');
+			assert.strictEqual(setup.status, 'signedIn', 'setup completes');
 
 			// Wait past current TOTP window (code reuse rejected).
 			const wait = 30 - (Math.floor(Date.now() / 1000) % 30) + 2;
 			await new Promise((r) => setTimeout(r, wait * 1000));
 
 			const r2 = await auth.signIn(username, password, ctx());
-			if (r2.isSignedIn) throw new Error('expected TOTP challenge');
+			if (r2.status === 'signedIn') throw new Error('expected TOTP challenge');
 			assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 			if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 			const done = await auth.confirmSignIn(r2.nextStep.session, { code: totpNow(sharedSecret) }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -241,12 +241,12 @@ describe('scenarios.sandbox · Pool D (required, EMAIL only)', { skip: !ENABLED 
 		try {
 			const auth = authFor(pool, `s4-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn) throw new Error('expected EMAIL challenge');
+			if (r1.status === 'signedIn') throw new Error('expected EMAIL challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -297,12 +297,12 @@ describe('scenarios.sandbox · Pool E (required, TOTP+EMAIL)', { skip: !ENABLED 
 		try {
 			const auth = authFor(pool, `s5-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn) throw new Error('expected EMAIL challenge');
+			if (r1.status === 'signedIn') throw new Error('expected EMAIL challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -335,15 +335,15 @@ describe('scenarios.sandbox · Pool E (required, TOTP+EMAIL)', { skip: !ENABLED 
 		try {
 			const auth = authFor(pool, `s6-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
+			if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'EMAIL' as 'EMAIL' }, ctx());
-			if (r2.isSignedIn || r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
+			if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
 			const newEmail = uniqueUser('s6-new');
 			const r3 = await auth.confirmSignIn(r2.nextStep.session, { email: newEmail }, ctx());
-			if (r3.isSignedIn || r3.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
+			if (r3.status !== 'continueSignIn' || r3.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 			const code = await pool.captureCode!(newEmail, 'mfa');
 			const done = await auth.confirmSignIn(r3.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -376,12 +376,12 @@ describe('scenarios.sandbox · Pool F (optional, SMS+TOTP)', { skip: !ENABLED },
 			await setMfaPreference(pool, username, { sms: { enabled: true, preferred: true } });
 			const auth = authFor(pool, `s7-${Math.random().toString(36).slice(2, 6)}`);
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn) throw new Error('expected SMS challenge');
+			if (r1.status === 'signedIn') throw new Error('expected SMS challenge');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_SMS_CODE');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_SMS_CODE') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -398,14 +398,14 @@ describe('scenarios.sandbox · Pool F (optional, SMS+TOTP)', { skip: !ENABLED },
 			// Sign in (no challenge, OPTIONAL + nothing enrolled).
 			const auth = authFor(pool, `s8-${Math.random().toString(36).slice(2, 6)}`);
 			const signIn = await auth.signIn(username, password, ctx());
-			if (!signIn.isSignedIn) throw new Error('expected direct signIn');
+			if (signIn.status === 'continueSignIn') throw new Error('expected direct signIn');
 
 			// Associate TOTP via access token.
 			const tokens = await auth.fetchAuthSession(roll(ctx()));
 			// Hack: previous ctx is gone; use a fresh signIn to get usable access token.
 			const signInCtx = ctx();
 			const fresh = await auth.signIn(username, password, signInCtx);
-			if (!fresh.isSignedIn) return;
+			if (fresh.status === 'continueSignIn') return;
 			const fetchCtx = roll(signInCtx);
 			const session = await auth.fetchAuthSession(fetchCtx);
 			const accessToken = session.tokens?.accessToken?.toString();
@@ -433,15 +433,15 @@ describe('scenarios.sandbox · Pool F (optional, SMS+TOTP)', { skip: !ENABLED },
 
 			// New sign-in hits SELECT_MFA_TYPE.
 			const r1 = await auth.signIn(username, password, ctx());
-			if (r1.isSignedIn) throw new Error('expected SELECT_MFA_TYPE');
+			if (r1.status === 'signedIn') throw new Error('expected SELECT_MFA_TYPE');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION') return;
 			assert.ok(r1.nextStep.allowedMFATypes.includes('TOTP'));
 			assert.ok(r1.nextStep.allowedMFATypes.includes('SMS'));
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'TOTP' as 'TOTP' }, ctx());
-			if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
+			if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 			const done = await auth.confirmSignIn(r2.nextStep.session, { code: totpNow(sharedSecret) }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -481,7 +481,7 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 				preferredChallenge: 'PASSWORD',
 			});
 			const r = await auth.signIn(username, password, ctx());
-			assert.strictEqual(r.isSignedIn, true);
+			assert.strictEqual(r.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -497,12 +497,12 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 				preferredChallenge: 'EMAIL_OTP',
 			});
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn) throw new Error('expected email OTP');
+			if (r1.status === 'signedIn') throw new Error('expected email OTP');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -521,12 +521,12 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 				preferredChallenge: 'SMS_OTP',
 			});
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn) throw new Error('expected SMS OTP');
+			if (r1.status === 'signedIn') throw new Error('expected SMS OTP');
 			assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP');
 			if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r1.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -539,13 +539,13 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 		try {
 			const auth = authFor(pool, `s14-${Math.random().toString(36).slice(2, 6)}`, { authFlowType: 'USER_AUTH' });
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn) throw new Error('expected SELECT_CHALLENGE');
+			if (r1.status === 'signedIn') throw new Error('expected SELECT_CHALLENGE');
 			assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION');
 			if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'PASSWORD' }, ctx());
-			if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
+			if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
 			const done = await auth.confirmSignIn(r2.nextStep.session, { password }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -558,12 +558,12 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 		try {
 			const auth = authFor(pool, `s15-${Math.random().toString(36).slice(2, 6)}`, { authFlowType: 'USER_AUTH' });
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
+			if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'EMAIL_OTP' }, ctx());
-			if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
+			if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r2.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}
@@ -579,12 +579,12 @@ describe('scenarios.sandbox · Pool G (USER_AUTH)', { skip: !ENABLED }, () => {
 		try {
 			const auth = authFor(pool, `s16-${Math.random().toString(36).slice(2, 6)}`, { authFlowType: 'USER_AUTH' });
 			const r1 = await auth.signIn(username, '', ctx());
-			if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
+			if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 			const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'SMS_OTP' }, ctx());
-			if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
+			if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
 			const code = await pool.captureCode!(username, 'mfa');
 			const done = await auth.confirmSignIn(r2.nextStep.session, { code }, ctx());
-			assert.strictEqual(done.isSignedIn, true);
+			assert.strictEqual(done.status, 'signedIn');
 		} finally {
 			await deleteUser(pool, username);
 		}

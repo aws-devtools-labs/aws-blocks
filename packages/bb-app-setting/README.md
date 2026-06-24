@@ -6,6 +6,8 @@ A single application configuration value backed by SSM Parameter Store.
 
 **When NOT to use:** If you need structured key-value data with conditional writes and queries, use `KVStore` or `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript

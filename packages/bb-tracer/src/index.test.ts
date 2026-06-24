@@ -151,6 +151,47 @@ test('samplingRate: 1 traces everything', async () => {
 	assert.strictEqual(existsSync('.bb-data/root-test/traces.json'), true);
 });
 
+// Sampling is a per-trace decision made at the root; subsegments must inherit
+// it. These tests drive a fractional samplingRate with a scripted Math.random
+// so the root and a nested segment would roll differently if sampling were
+// (incorrectly) re-evaluated per subsegment.
+function withScriptedRandom(values: number[], fn: () => Promise<void>): Promise<void> {
+	const original = Math.random;
+	let i = 0;
+	// After the script is exhausted, return 1 (>= any rate < 1 ⇒ "not sampled")
+	// so an unexpected extra roll can't accidentally sample.
+	Math.random = () => (i < values.length ? values[i++] : 1);
+	return fn().finally(() => { Math.random = original; });
+}
+
+test('a sampled trace keeps all its subsegments even when a subsegment would roll unsampled', async () => {
+	const tracer = new Tracer({ id: 'root' } as any, 'test', { samplingRate: 0.5 });
+	// Root rolls 0.1 (< 0.5 ⇒ sampled); a per-subsegment roll of 0.9 would drop
+	// the child under the buggy behavior.
+	await withScriptedRandom([0.1, 0.9], async () => {
+		await tracer.startSegment('outer', async () => {
+			await tracer.startSegment('inner', async () => {});
+		});
+	});
+	const traces = JSON.parse(readFileSync('.bb-data/root-test/traces.json', 'utf8'));
+	assert.strictEqual(traces.length, 1);
+	assert.strictEqual(traces[0].segment, 'outer');
+	assert.strictEqual(traces[0].children.length, 1);
+	assert.strictEqual(traces[0].children[0].segment, 'inner');
+});
+
+test('an unsampled trace never promotes a subsegment into its own root trace', async () => {
+	const tracer = new Tracer({ id: 'root' } as any, 'test', { samplingRate: 0.5 });
+	// Root rolls 0.9 (>= 0.5 ⇒ not sampled); a per-subsegment roll of 0.1 would
+	// spawn an orphan root trace under the buggy behavior.
+	await withScriptedRandom([0.9, 0.1], async () => {
+		await tracer.startSegment('outer', async () => {
+			await tracer.startSegment('inner', async () => {});
+		});
+	});
+	assert.strictEqual(existsSync('.bb-data/root-test/traces.json'), false);
+});
+
 // ── getTraceId ──────────────────────────────────────────────────────────────
 
 test('getTraceId returns a UUID string', () => {

@@ -30,10 +30,10 @@
             {
               "type": "object",
               "properties": {
-                "isSignedIn": {
-                  "type": "boolean",
+                "status": {
+                  "type": "string",
                   "enum": [
-                    false
+                    "continueSignIn"
                   ]
                 },
                 "nextStep": {
@@ -387,17 +387,17 @@
                 }
               },
               "required": [
-                "isSignedIn",
+                "status",
                 "nextStep"
               ]
             },
             {
               "type": "object",
               "properties": {
-                "isSignedIn": {
-                  "type": "boolean",
+                "status": {
+                  "type": "string",
                   "enum": [
-                    true
+                    "signedIn"
                   ]
                 },
                 "user": {
@@ -405,7 +405,7 @@
                 }
               },
               "required": [
-                "isSignedIn",
+                "status",
                 "user"
               ]
             }
@@ -438,10 +438,10 @@
             {
               "type": "object",
               "properties": {
-                "isSignedIn": {
-                  "type": "boolean",
+                "status": {
+                  "type": "string",
                   "enum": [
-                    false
+                    "continueSignIn"
                   ]
                 },
                 "nextStep": {
@@ -795,17 +795,17 @@
                 }
               },
               "required": [
-                "isSignedIn",
+                "status",
                 "nextStep"
               ]
             },
             {
               "type": "object",
               "properties": {
-                "isSignedIn": {
-                  "type": "boolean",
+                "status": {
+                  "type": "string",
                   "enum": [
-                    true
+                    "signedIn"
                   ]
                 },
                 "user": {
@@ -813,7 +813,7 @@
                 }
               },
               "required": [
-                "isSignedIn",
+                "status",
                 "user"
               ]
             }

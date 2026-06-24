@@ -31,6 +31,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, amplify, demo/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
   });
@@ -52,6 +53,28 @@ describe('create-blocks-app CLI argument parsing', () => {
     const result = run(['-z']);
     assert.strictEqual(result.exitCode, 1);
     assert.match(result.stderr, /Unknown option: -z/);
+  });
+
+  it('--template without a value exits 1 with error message', () => {
+    const result = run(['--template']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+
+  it('--template followed by another option exits 1 with error message', () => {
+    const result = run(['--template', '--skip-install']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+  
+  it('unknown template exits 1 with a friendly error message', () => {
+    const result = run(['--template', 'does-not-exist']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Unknown template "does-not-exist"/);
+    assert.match(result.stderr, /Available templates:/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
   });
 
   it('multiple positional args exits 1 with error message', () => {
@@ -208,6 +231,35 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
       assert.match(result.stdout, /Created aws-blocks/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('honors --template when adding to an existing project (nextjs uses next dev)', () => {
+    const tmpDir = join(__dirname, '../.test-existing-nextjs-template');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0' }));
+    try {
+      const result = run(['.', '--template', 'nextjs', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+      assert.match(serverContent, /next dev/, 'nextjs template should start the Next.js dev server');
+      assert.ok(!serverContent.includes('vite'), 'nextjs template should not start a Vite dev server');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('defaults to the default template (vite) when no --template is given for an existing project', () => {
+    const tmpDir = join(__dirname, '../.test-existing-default-template');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0' }));
+    try {
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+      assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

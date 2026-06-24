@@ -34,8 +34,6 @@ This produces the `blocks.spec.json` file that the Gradle plugin reads at build 
 
 Open this directory in IntelliJ IDEA or Android Studio (with the [KMP plugin](https://plugins.jetbrains.com/plugin/14936-kotlin-multiplatform) installed) and run the relevant target.
 
-> **Note:** See [docs/guides/local-development.md](../../docs/guides/local-development.md) for instructions on connecting to the local server from an Android emulator or device.
-
 ## Project Structure
 
 ```

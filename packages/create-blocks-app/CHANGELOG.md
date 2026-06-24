@@ -1,5 +1,47 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.8
+
+### Patch Changes
+
+- 6c7bb69: fix(create-blocks-app): respect `--template` when adding Blocks to an existing project
+
+  Adding Blocks to an existing project always copied the `aws-blocks/` workspace from
+  the `default` (Vite) template, ignoring `--template`. Running
+  `npm create @aws-blocks/blocks-app . -- --template nextjs` in a Next.js project
+  therefore generated a `scripts/server.ts` whose `frontendCommand` was `npx vite ...`
+  instead of `npx next dev ...`, so `npm run dev:server` tried to launch Vite in a
+  project without it.
+
+  The requested template now drives the copied `aws-blocks/` workspace, `cdk.json`, and
+  devDeps.
+
+## 0.1.7
+
+### Patch Changes
+
+- a98fa95: fix(create-blocks-app): bump `aws-cdk-lib` to `^2.257.0` in the react template
+
+  The react template pinned `aws-cdk-lib` to `2.245.0`, while every block (e.g. `@aws-blocks/bb-realtime`) declares a peer dependency of `aws-cdk-lib@^2.257.0`. The unmet peer caused npm to nest `@aws-blocks/bb-realtime` under `@aws-blocks/blocks/node_modules` instead of hoisting it to the top level. Because the generated `aws-blocks/client.js` imports `@aws-blocks/bb-realtime/mock-middleware` directly from the workspace, Vite failed to resolve it (`Failed to resolve import "@aws-blocks/bb-realtime/mock-middleware"`) and `npm run dev` broke. Aligning the version with the other templates (`^2.257.0`) satisfies the peer dependency so the block hoists correctly.
+
+## 0.1.6
+
+### Patch Changes
+
+- 3d670a9: Report a clear error when `--template` is missing its template name instead of treating the flag as an unknown option or consuming another option as the template value.
+
+## 0.1.5
+
+### Patch Changes
+
+- b8a03a4: Validate unknown `--template` values before reading template metadata so the CLI reports the intended `Unknown template` message instead of a file-system error.
+
+## 0.1.4
+
+### Patch Changes
+
+- ba577bb: List the available starter templates in `create-blocks-app --help` so users can discover valid `--template` values directly from the CLI.
+
 ## 0.1.3
 
 ### Patch Changes

@@ -4,13 +4,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL, URL } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
 import { ApiError } from '../errors.js';
-import { BLOCKS_RPC_PREFIX } from '../constants.js';
+import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import {
@@ -41,6 +41,35 @@ export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
  */
 export function resolveDevCorsOrigin(origin: string): string {
   return LOCALHOST_PATTERN.test(origin) ? origin : 'http://localhost:3000';
+}
+
+/** Shape of the client runtime config the browser fetches to discover the API URL. */
+export interface BlocksRuntimeConfig {
+  apiUrl: string;
+  environment: 'local' | 'sandbox';
+}
+
+/**
+ * Build the runtime config the browser fetches at `${BLOCKS_SANDBOX_PREFIX}/config.json`.
+ * In sandbox mode the browser still targets the localhost front door (the dev
+ * server proxies `/aws-blocks/api` to the deployed API), so the shape is the
+ * same in both modes — only `environment` differs.
+ */
+export function buildBlocksConfig(port: number, isSandbox: boolean): BlocksRuntimeConfig {
+  return {
+    apiUrl: `http://localhost:${port}${BLOCKS_RPC_PREFIX}`,
+    environment: isSandbox ? 'sandbox' : 'local',
+  };
+}
+
+/**
+ * True for the reserved runtime-config request the dev server answers itself
+ * (mirroring production, where CloudFront serves `${BLOCKS_SANDBOX_PREFIX}/*`
+ * statically) instead of proxying it to the framework dev server — which only
+ * serves its own static dir (Next.js `public/`, etc.) and would 404.
+ */
+export function isBlocksConfigRequest(method: string, pathname: string): boolean {
+  return method === 'GET' && pathname === `${BLOCKS_SANDBOX_PREFIX}/config.json`;
 }
 
 export interface DevServerOptions {
@@ -125,11 +154,9 @@ export async function startDevServer(options: DevServerOptions) {
   // BLOCKS_API_URL server-side, so the request still reaches the deployed Lambda.
   // This makes sandbox single-origin, matching `npm run dev` and the prod
   // CloudFront proxy; `crossDomain` stays unnecessary.
+  const blocksConfig = buildBlocksConfig(port, isSandbox);
   mkdirSync('.blocks-sandbox', { recursive: true });
-  writeFileSync('.blocks-sandbox/config.json', JSON.stringify({
-    apiUrl: `http://localhost:${port}${BLOCKS_RPC_PREFIX}`,
-    environment: isSandbox ? 'sandbox' : 'local',
-  }, null, 2));
+  writeFileSync('.blocks-sandbox/config.json', JSON.stringify(blocksConfig, null, 2));
 
   // 1. Set up global collectors for plugin discovery
   (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__ = [];
@@ -218,6 +245,21 @@ export async function startDevServer(options: DevServerOptions) {
     if (method === 'OPTIONS') {
       res.writeHead(200);
       res.end();
+      return;
+    }
+
+    // ── Blocks runtime config ──────────────────────────────────────────
+    // Reserved path: serve it from the front door so it works for every
+    // framework (Next/Nuxt/Astro/SPA all proxy through this :3000 server),
+    // mirroring production where CloudFront serves `${BLOCKS_SANDBOX_PREFIX}/*`
+    // statically. Otherwise the request is proxied to the framework dev
+    // server, which can't serve this project-root file and 404s.
+    if (isBlocksConfigRequest(method, url.pathname)) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      });
+      res.end(JSON.stringify(blocksConfig));
       return;
     }
 

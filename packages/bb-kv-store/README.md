@@ -6,6 +6,8 @@ Simple key-value storage backed by DynamoDB.
 
 **When NOT to use:** If you need to query by multiple fields or secondary indexes, use `DistributedTable`. If you need full SQL, use `Database`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript

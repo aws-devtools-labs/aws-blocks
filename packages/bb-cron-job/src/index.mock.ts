@@ -176,17 +176,31 @@ function expandField(field: string, min: number, max: number, original: string):
 	for (const part of field.split(',')) {
 		if (part.includes('/')) {
 			const [base, stepStr] = part.split('/');
-			const start = base === '*' ? min : parseInt(base, 10);
 			const step = parseInt(stepStr, 10);
-			if (isNaN(start) || isNaN(step) || step <= 0) throw scheduleError(original);
-			for (let i = start; i <= max; i += step) values.push(i);
+			// `base` may be `*` (whole field), a single value (`15` → from 15 to
+			// max), or a range (`0-30` → bounded by the range's upper end). A
+			// stepped range must stop at the range's `hi`, not run to `max`.
+			let lo: number;
+			let hi = max;
+			if (base === '*') {
+				lo = min;
+			} else if (base.includes('-')) {
+				const [loStr, hiStr] = base.split('-');
+				lo = Number(loStr);
+				hi = Number(hiStr);
+			} else {
+				lo = parseInt(base, 10);
+			}
+			if (isNaN(step) || step <= 0) throw scheduleError(original);
+			assertBounds(lo, hi, min, max, original);
+			for (let i = lo; i <= hi; i += step) values.push(i);
 		} else if (part.includes('-')) {
 			const [lo, hi] = part.split('-').map(Number);
-			if (isNaN(lo) || isNaN(hi)) throw scheduleError(original);
+			assertBounds(lo, hi, min, max, original);
 			for (let i = lo; i <= hi; i++) values.push(i);
 		} else {
 			const n = parseInt(part, 10);
-			if (isNaN(n)) throw scheduleError(original);
+			assertBounds(n, n, min, max, original);
 			values.push(n);
 		}
 	}
@@ -199,6 +213,14 @@ function expandDow(field: string, original: string): number[] {
 	const dayMap: Record<string, number> = { SUN: 1, MON: 2, TUE: 3, WED: 4, THU: 5, FRI: 6, SAT: 7 };
 	const replaced = field.replace(/SUN|MON|TUE|WED|THU|FRI|SAT/gi, m => String(dayMap[m.toUpperCase()]));
 	return expandField(replaced, 1, 7, original).map(d => (d - 1) % 7);
+}
+
+// Reject ranges that are non-numeric, inverted (`30-10`), or fall outside the
+// field's valid `[min, max]` window (e.g. minute `100`). Without this an
+// inverted range silently yields [] and an out-of-bounds upper end (`0-100`)
+// produces values EventBridge would never accept.
+function assertBounds(lo: number, hi: number, min: number, max: number, original: string): void {
+	if (isNaN(lo) || isNaN(hi) || lo > hi || lo < min || hi > max) throw scheduleError(original);
 }
 
 function range(lo: number, hi: number): number[] {

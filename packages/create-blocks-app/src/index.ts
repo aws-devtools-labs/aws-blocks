@@ -175,14 +175,18 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
 const AVAILABLE_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
 
-// ─── Fresh project creation ──────────────────────────────────────────────────
-
-async function createFreshProject(targetDir: string, templateName: string) {
+function validateTemplateName(templateName: string): void {
   if (!AVAILABLE_TEMPLATES.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
     console.error(`Available templates: ${AVAILABLE_TEMPLATES.join(', ')}`);
     process.exit(1);
   }
+}
+
+// ─── Fresh project creation ──────────────────────────────────────────────────
+
+async function createFreshProject(targetDir: string, templateName: string) {
+  validateTemplateName(templateName);
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -452,7 +456,7 @@ frontend:
 
 // ─── Init into existing project ─────────────────────────────────────────────
 
-async function integrateWithExistingProject(targetDir: string, skipConfirm = false, skipInstall = false) {
+async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
@@ -470,8 +474,10 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the default template (reuses the same source of truth)
-  const templateDir = join(__dirname, '../templates/default');
+  // 1. Copy aws-blocks/ from the requested template so framework-specific files
+  // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
+  // user's project.
+  const templateDir = join(__dirname, '../templates', templateName);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
 
@@ -564,7 +570,11 @@ Arguments:
   directory              Target directory (default: ".")
 
 Options:
-  --template <name>      Template to use for fresh projects (default: "default")
+  --template <name>      Template to use. For fresh projects it selects the
+                         starter app; when adding to an existing project it
+                         selects which aws-blocks/ workspace to copy, e.g.
+                         "nextjs" for a Next.js dev server (default: "default")
+                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -586,8 +596,14 @@ async function create() {
     if (args[i] === '--help' || args[i] === '-h') {
       printUsage();
       process.exit(0);
-    } else if (args[i] === '--template' && i + 1 < args.length) {
-      templateName = args[i + 1];
+    } else if (args[i] === '--template') {
+      const value = args[i + 1];
+      if (!value || value.startsWith('-')) {
+        console.error('Error: Missing value for --template.');
+        console.error(`Run with --help for usage information.`);
+        process.exit(1);
+      }
+      templateName = value;
       i++;
     } else if (args[i] === '--yes' || args[i] === '-y') {
       skipConfirm = true;
@@ -609,6 +625,8 @@ async function create() {
     }
   }
 
+  validateTemplateName(templateName);
+
   const templatePkgVersion: string = JSON.parse(
     await readFile(join(__dirname, '../templates', templateName, 'package.json'), 'utf-8'),
   ).version;
@@ -625,7 +643,7 @@ async function create() {
     // Mode 2: Existing project (package.json, no Amplify) — triggered when the
     // resolved directory contains a package.json (covers no-arg, ".", or named dir)
     if (await exists(join(resolvedDir, 'package.json'))) {
-      await integrateWithExistingProject(resolvedDir, skipConfirm, skipInstall);
+      await integrateWithExistingProject(resolvedDir, templateName, skipConfirm, skipInstall);
       return;
     }
 
