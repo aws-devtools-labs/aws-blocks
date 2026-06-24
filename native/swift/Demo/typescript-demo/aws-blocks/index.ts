@@ -77,7 +77,7 @@ const realtime = new Realtime(scope, 'collab', {
 });
 
 // Simple hello world API for testing CDK deployment
-export const hello = ApiNamespace('hello', (context) => ({
+export const hello = new ApiNamespace(scope, 'hello', (context) => ({
   async greet(name: string) {
     return { message: `Hello, ${name}!`, timestamp: Date.now() };
   }
@@ -85,7 +85,7 @@ export const hello = ApiNamespace('hello', (context) => ({
 
 export const authApi = auth.createApi();
 
-export const api = ApiNamespace('api', (context) => ({
+export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getValue(key: string) {
     return await store.get(key);
   },
