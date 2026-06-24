@@ -173,12 +173,13 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 }
 
-const AVAILABLE_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+const FRESH_PROJECT_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'demo'];
+const AMPLIFY_INTEGRATION_TEMPLATE = 'amplify';
 
 function validateTemplateName(templateName: string): void {
-  if (!AVAILABLE_TEMPLATES.includes(templateName)) {
+  if (!FRESH_PROJECT_TEMPLATES.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
-    console.error(`Available templates: ${AVAILABLE_TEMPLATES.join(', ')}`);
+    console.error(`Available templates: ${FRESH_PROJECT_TEMPLATES.join(', ')}`);
     process.exit(1);
   }
 }
@@ -295,7 +296,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('\n📦 Scaffolding Blocks...\n');
 
   // 1. Copy aws-blocks/ template
-  const templateDir = join(__dirname, '../templates/amplify');
+  const templateDir = join(__dirname, '../templates', AMPLIFY_INTEGRATION_TEMPLATE);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
@@ -574,7 +575,7 @@ Options:
                          starter app; when adding to an existing project it
                          selects which aws-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
-                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
+                         Available templates: ${FRESH_PROJECT_TEMPLATES.join(', ')}
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -623,6 +624,13 @@ async function create() {
       console.error(`Run with --help for usage information.`);
       process.exit(1);
     }
+  }
+
+  if (templateName === AMPLIFY_INTEGRATION_TEMPLATE) {
+    console.error('Error: The Amplify integration is auto-detected and is not a fresh project template.');
+    console.error('Run from your Amplify Gen 2 project root without --template:');
+    console.error('  npx @aws-blocks/create-blocks-app .');
+    process.exit(1);
   }
 
   validateTemplateName(templateName);

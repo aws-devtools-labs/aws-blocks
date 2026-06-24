@@ -31,7 +31,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, demo/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
   });
@@ -74,6 +74,14 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 1);
     assert.match(result.stderr, /Unknown template "does-not-exist"/);
     assert.match(result.stderr, /Available templates:/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  });
+
+  it('--template amplify exits 1 with existing-project guidance', () => {
+    const result = run(['my-app', '--template', 'amplify']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Amplify integration is auto-detected/);
+    assert.match(result.stderr, /npx @aws-blocks\/create-blocks-app \./);
     assert.doesNotMatch(result.stderr, /ENOENT/);
   });
 
