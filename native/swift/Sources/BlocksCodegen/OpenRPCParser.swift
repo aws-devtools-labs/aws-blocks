@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 // MARK: - Stage 1: OpenRPC Parser
@@ -99,13 +106,13 @@ public struct OpenRPCParser {
         case .tuple(let elements):
             // Multi-element tuples render as a positional inline-object with
             // synthesized fields `item0`, `item1`, … .
-            let fields = elements.enumerated().map { (i, element) -> Field in
-                Field(name: "item\(i)", type: mapTypeRef(element), required: true)
+            let fields = elements.enumerated().map { idx, element -> Field in
+                Field(name: "item\(idx)", type: mapTypeRef(element), required: true)
             }
             return .inlineObject(fields: fields, additionalProperties: nil, embeddedUnion: nil)
 
         case .object(let properties, let required, _, let additionalProperties):
-            let fields = (properties ?? [:]).map { (name, prop) -> Field in
+            let fields = (properties ?? [:]).map { name, prop -> Field in
                 let isRequired = (required ?? []).contains(name)
                 return Field(
                     name: name,
@@ -126,7 +133,7 @@ public struct OpenRPCParser {
             // `embeddedUnion` carries the inner alternatives. Codegen merges
             // them into a single Codable struct with discriminator-driven
             // encode/decode of the embedded variants.
-            let outerFields = (properties ?? [:]).map { (name, prop) -> Field in
+            let outerFields = (properties ?? [:]).map { name, prop -> Field in
                 let isRequired = (required ?? []).contains(name)
                 return Field(
                     name: name,
@@ -145,7 +152,9 @@ public struct OpenRPCParser {
 
         case .oneOf(let schemas):
             // Detect nullable pattern: oneOf [T, null]
-            let nonNull = schemas.filter { if case .null = $0 { return false }; return true }
+            let nonNull = schemas.filter { if case .null = $0 { return false }
+            return true
+            }
             if nonNull.count == 1, schemas.count == 2 {
                 return .nullable(inner: mapTypeRef(nonNull[0]))
             }
@@ -153,7 +162,9 @@ public struct OpenRPCParser {
 
         case .anyOf(let schemas):
             // Treat anyOf same as oneOf.
-            let nonNull = schemas.filter { if case .null = $0 { return false }; return true }
+            let nonNull = schemas.filter { if case .null = $0 { return false }
+            return true
+            }
             if nonNull.count == 1, schemas.count == 2 {
                 return .nullable(inner: mapTypeRef(nonNull[0]))
             }
