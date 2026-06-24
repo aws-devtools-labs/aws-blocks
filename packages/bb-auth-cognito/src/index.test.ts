@@ -6,7 +6,14 @@ import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { isBlocksError, hasAuthError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi, AuthField } from '@aws-blocks/auth-common';
 import { AuthCognito, AuthCognitoErrors } from './index.js';
+
+// `createApi()` returns a context-bound `ApiNamespace` callable; narrow it to
+// the public `AuthStateApi` surface instead of `as any`.
+function apiFor(auth: AuthCognito, context: BlocksContext): AuthStateApi {
+	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(context);
+}
 
 // ── Test harness ─────────────────────────────────────────────────────────────
 
@@ -910,12 +917,13 @@ describe('USER_AUTH flow', () => {
 	test('setAuthState surfaces errorName on a failed sign-in (issue #81)', async () => {
 		const { auth } = await confirmedUser('ua-err', { preferredChallenge: 'PASSWORD' });
 		const { ctx } = freshContext();
-		const api = (auth.createApi() as any)(ctx);
+		const api = apiFor(auth, ctx);
 
 		// Drive the password challenge to completion with a wrong password so
 		// the thrown ApiError carries NotAuthorizedException.
 		const s1 = await api.setAuthState({ action: 'signIn', username: 'ursula', password: '' });
-		const pwSession = s1.actions[0].fields.find((f: any) => f.name === 'session');
+		const pwSession = s1.actions[0].fields.find((f: AuthField) => f.name === 'session');
+		assert.ok(pwSession?.defaultValue, 'expected a session field with a default value');
 		const next = await api.setAuthState({ action: 'confirmSignIn', challenge: 'password', session: pwSession.defaultValue, password: 'Wrong1!Password' });
 
 		assert.strictEqual(next.state, 'signedOut');

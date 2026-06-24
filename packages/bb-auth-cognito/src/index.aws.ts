@@ -1937,7 +1937,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 							...(errorName ? { errorName } : {}),
 						};
 					}
-					return { ...baseSignedOut(message, errorName) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));

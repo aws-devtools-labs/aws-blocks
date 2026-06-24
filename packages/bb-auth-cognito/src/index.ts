@@ -1665,7 +1665,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 							...(errorName ? { errorName } : {}),
 						};
 					}
-					return { ...baseSignedOut(message, errorName) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));
