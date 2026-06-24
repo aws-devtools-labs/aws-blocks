@@ -541,17 +541,26 @@ export class Hosting extends Construct {
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
-    const primaryFunction = hosting.computeFunctions.values().next().value as cdk.aws_lambda.Function | undefined;
+    // Lambda@Edge functions (edge-runtime routes) do NOT support environment
+    // variables — they surface in computeFunctions as EdgeFunction/IVersion
+    // without an `addEnvironment` method. Skip any function that can't take
+    // env vars instead of crashing (`fn.addEnvironment is not a function`).
+    const canAddEnv = (
+      fn: unknown,
+    ): fn is cdk.aws_lambda.Function =>
+      typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
+
+    const primaryFunction = [...hosting.computeFunctions.values()].find(
+      canAddEnv,
+    );
 
     for (const [, fn] of hosting.computeFunctions) {
+      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
       if (props.api) {
-        (fn as cdk.aws_lambda.Function).addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
+        fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
       }
       if (props.backendConfig) {
-        (fn as cdk.aws_lambda.Function).addEnvironment(
-          'BLOCKS_CONFIG',
-          JSON.stringify(props.backendConfig),
-        );
+        fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
       }
     }
 

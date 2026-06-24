@@ -21,6 +21,56 @@ import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
 import { DeployManifest } from '../manifest/types.js';
+import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
+
+// ---- KVS edge-router helpers ----
+//
+// Routing is no longer expressed as per-route CloudFront cache behaviors. The
+// distribution has ONE default behavior; routing decisions live in a
+// KeyValueStore route table built by `buildKvsEntries`. Tests that used to
+// assert "pattern X → origin Y" now assert (a) the distribution carries the
+// expected stable origin ids, and (b) `buildKvsEntries` maps the pattern to
+// the right route kind ('s' static / 'c' compute / 'i' image).
+
+/** Origin ids present on the synthesized distribution (Origins[].Id). */
+const originIds = (template: Template): string[] => {
+  const dist = Object.values(
+    template.findResources('AWS::CloudFront::Distribution'),
+  )[0] as {
+    Properties: { DistributionConfig: { Origins: { Id: string }[] } };
+  };
+  return dist.Properties.DistributionConfig.Origins.map((o) => o.Id);
+};
+
+/** Additional (non-default) cache-behavior path patterns on the distribution. */
+const additionalBehaviorPatterns = (template: Template): string[] => {
+  const dist = Object.values(
+    template.findResources('AWS::CloudFront::Distribution'),
+  )[0] as {
+    Properties: {
+      DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
+    };
+  };
+  return (dist.Properties.DistributionConfig.CacheBehaviors ?? []).map(
+    (b) => b.PathPattern,
+  );
+};
+
+/**
+ * Flatten the route-table chunks (r0..rN) of a buildKvsEntries() map into a
+ * single [pattern, kind] list so tests can assert routing decisions directly.
+ */
+const routeRows = (
+  entries: Record<string, string>,
+): [string, string][] => {
+  const rows: [string, string][] = [];
+  for (const [key, value] of Object.entries(entries)) {
+    if (/^r\d+$/.test(key)) {
+      rows.push(...(JSON.parse(value) as [string, string][]));
+    }
+  }
+  return rows;
+};
 
 // ---- Test helpers ----
 
@@ -145,7 +195,7 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('creates BuildId CloudFront Function', () => {
+    void it('stores buildId in the KVS route table (not baked into the function)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -157,20 +207,30 @@ void describe('CdnConstruct', () => {
       });
 
       const template = Template.fromStack(stack);
-      template.hasResourceProperties('AWS::CloudFront::Function', {
-        FunctionCode: Match.stringLikeRegexp('test-spa-1'),
+      // The KVS edge router is build-INDEPENDENT: the buildId lives in the
+      // KeyValueStore (written by the RouteStoreKeys custom resource), not in
+      // the function source. There is one KeyValueStore and one custom
+      // resource carrying the buildId in its serialized entries.
+      template.resourceCountIs('AWS::CloudFront::KeyValueStore', 1);
+      template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
+        Entries: Match.stringLikeRegexp('test-spa-1'),
       });
+      // And the buildId is in the meta blob produced by the pure builder.
+      const entries = buildKvsEntries({
+        manifest: spaManifest,
+        buildId: 'test-spa-1',
+        hasServer: false,
+        hasImage: false,
+      });
+      assert.match(entries.meta, /test-spa-1/);
     });
 
-    void it('emits a single prefixed catch-all when manifest.assetPrefix is set (P2.7)', () => {
-      // P2.7: previous implementation emitted FOUR prefixed
-      // behaviors (`_next/static/*`, `_next/image*`, `_next/data/*`,
-      // `_next/*`) — each consuming a slot of the CloudFront 24-
-      // additional-behavior cap. Customers with even modest route
-      // counts hit the cap. Now we emit a single `<assetPrefix>/*`
-      // behavior backed by the same strip function; CloudFront's
-      // longest-prefix-wins matching is irrelevant here because
-      // there's only one pattern under the prefix.
+    void it('does NOT emit a per-prefix behavior when manifest.assetPrefix is set (single-behavior model)', () => {
+      // The legacy model emitted a dedicated `<assetPrefix>/*` cache behavior
+      // (and a prefix-strip CloudFront Function), consuming a slot of the
+      // CloudFront additional-behavior cap. The single-behavior KVS router
+      // eliminates per-prefix behaviors entirely: there is one default
+      // behavior and asset routing is data in the KVS, not infrastructure.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -180,29 +240,20 @@ void describe('CdnConstruct', () => {
         assetPrefix: '/shop-static',
       };
 
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
-        manifest: prefixedManifest,
-        securityHeadersPolicy: policy,
-      });
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: prefixedManifest,
+            securityHeadersPolicy: policy,
+          }),
+      );
 
       const template = Template.fromStack(stack);
-      // Exactly one /<prefix>/* behavior should exist on the
-      // distribution.
-      template.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          CacheBehaviors: Match.arrayWith([
-            Match.objectLike({
-              PathPattern: '/shop-static/*',
-            }),
-          ]),
-        }),
-      });
-      // Should have created the strip function with the prefix baked
-      // into its source.
-      template.hasResourceProperties('AWS::CloudFront::Function', {
-        FunctionCode: Match.stringLikeRegexp('shop-static'),
-      });
+      // Static-only deploy → exactly the S3 origin and ZERO additional
+      // behaviors (no `/shop-static/*`).
+      assert.deepEqual(originIds(template), [ORIGIN_ID.s3]);
+      assert.deepEqual(additionalBehaviorPatterns(template), []);
     });
 
     void it('uses real 404 response when manifest.errorPages declares /404.html (B15)', () => {
@@ -262,45 +313,24 @@ void describe('CdnConstruct', () => {
   // ---- Explicit spaFallback signal (multi-page static) ----
 
   void describe('explicit staticAssets.spaFallback', () => {
-    // Helper: pull the viewer-request CloudFront Function source.
-    const viewerRequestCode = (template: Template): string => {
-      const fns = template.findResources('AWS::CloudFront::Function');
-      const codes = Object.values(fns)
-        .map((f) => (f.Properties as Record<string, unknown>)?.FunctionCode)
-        .filter((c): c is string => typeof c === 'string');
-      // The build-id rewrite (viewer-request) function contains the
-      // '/builds/' prefix rewrite; the response/strip functions don't.
-      return codes.find((c) => c.includes("'/builds/'")) ?? codes.join('\n');
-    };
-
-    void it('uses directory-index resolution (not SPA fallback) when spaFallback:false', () => {
-      const stack = createStack();
-      const bucket = new Bucket(stack, 'Bucket');
-      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-
+    void it('records spaFallback:false in KVS meta (directory-index, not blanket SPA)', () => {
+      // The KVS router function is build-independent and ships BOTH the
+      // directory-index and SPA-blanket branches; which one runs is decided
+      // at request time from the `meta.spa` flag in the KVS — so the
+      // spaFallback decision is now data, asserted on buildKvsEntries() meta.
       const multiPageManifest: DeployManifest = {
         ...spaManifest,
         staticAssets: { directory: '/tmp/assets', spaFallback: false },
       };
 
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
+      const entries = buildKvsEntries({
         manifest: multiPageManifest,
-        securityHeadersPolicy: policy,
+        buildId: 'test-spa-1',
+        hasServer: false,
+        hasImage: false,
       });
-
-      const code = viewerRequestCode(Template.fromStack(stack));
-      // Directory-index mode appends '/index.html' to extensionless paths
-      // (`uri = uri + '/index.html'`) and must NOT blanket-rewrite every
-      // path to a single '/index.html' (the SPA form `uri = '/index.html'`).
-      assert.ok(
-        code.includes("uri = uri + '/index.html'"),
-        'multi-page mode should resolve <path>/index.html via directory-index',
-      );
-      assert.ok(
-        code.includes("uri = '/index.html'") === false,
-        'multi-page mode must not blanket-rewrite every path to /index.html',
-      );
+      const meta = JSON.parse(entries.meta) as { spa: number };
+      assert.equal(meta.spa, 0, 'spaFallback:false → meta.spa must be 0');
     });
 
     void it('honors explicit spaFallback:true even when errorPages are present', () => {
@@ -316,17 +346,25 @@ void describe('CdnConstruct', () => {
         errorPages: { 404: '/404.html' as const },
       };
 
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
-        manifest: spaWithErrorPages,
-        securityHeadersPolicy: policy,
-      });
-
-      const code = viewerRequestCode(Template.fromStack(stack));
-      assert.ok(
-        code.includes("uri = '/index.html'"),
-        'explicit spaFallback:true must force the SPA blanket rewrite',
+      assert.doesNotThrow(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: spaWithErrorPages,
+            securityHeadersPolicy: policy,
+          }),
       );
+
+      // The explicit spaFallback:true signal must win over the errorPages
+      // heuristic → meta.spa must be 1 (SPA blanket rewrite at the edge).
+      const entries = buildKvsEntries({
+        manifest: spaWithErrorPages,
+        buildId: 'test-spa-1',
+        hasServer: false,
+        hasImage: false,
+      });
+      const meta = JSON.parse(entries.meta) as { spa: number };
+      assert.equal(meta.spa, 1, 'explicit spaFallback:true → meta.spa must be 1');
     });
 
     void it('wires a default 404 response for multi-page static with no errorPages', () => {
@@ -569,7 +607,7 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('creates additional behaviors for static routes', () => {
+    void it('routes static routes to S3 via the KVS table (no per-route behaviors)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -583,26 +621,34 @@ void describe('CdnConstruct', () => {
         computeFunctions: new Map([['default', fn]]),
       });
 
-      // CdnConstruct sorts cache behaviors by descending specificity so
-      // that literal paths win over wildcards (CloudFront evaluates first-
-      // match-wins). `/favicon.ico` (literal, 0 wildcards) ends up before
-      // `/_next/static/*` (1 wildcard), so we assert each separately
-      // rather than rely on a relative-order arrayWith.
       const template = Template.fromStack(stack);
-      template.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          CacheBehaviors: Match.arrayWith([
-            Match.objectLike({ PathPattern: '/_next/static/*' }),
-          ]),
+      // Static routes are NOT per-route cache behaviors anymore. The only
+      // additional behaviors are the origin-binding sentinels (server here).
+      const patterns = additionalBehaviorPatterns(template);
+      assert.ok(
+        !patterns.includes('/_next/static/*') &&
+          !patterns.includes('/favicon.ico'),
+        `static routes must not be wired as behaviors; got ${JSON.stringify(patterns)}`,
+      );
+      assert.deepEqual(patterns.sort(), ['/__blocks_origin_server/*']);
+
+      // The distribution carries the S3 + server origins by stable id.
+      const ids = originIds(template);
+      assert.ok(ids.includes(ORIGIN_ID.s3));
+      assert.ok(ids.includes(ORIGIN_ID.server));
+
+      // The KVS route table maps the static patterns to the S3 ('s') kind.
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest: ssrManifest,
+          buildId: 'test-ssr-1',
+          hasServer: true,
+          hasImage: false,
         }),
-      });
-      template.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          CacheBehaviors: Match.arrayWith([
-            Match.objectLike({ PathPattern: '/favicon.ico' }),
-          ]),
-        }),
-      });
+      );
+      const kindFor = (p: string) => rows.find(([pat]) => pat === p)?.[1];
+      assert.equal(kindFor('/_next/static/*'), 's');
+      assert.equal(kindFor('/favicon.ico'), 's');
     });
 
     void it('creates 5xx error responses for SSR', () => {
@@ -794,7 +840,11 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('throws TooManyRoutesError for >24 specific routes', () => {
+    void it('synthesizes >24 static routes without throwing (behavior cap eliminated)', () => {
+      // The per-behavior cap is gone: route count is data in the KVS, not
+      // CloudFront infrastructure. 25 specific routes + catch-all that used to
+      // overflow the 24-additional-behavior cap now synth cleanly with ZERO
+      // additional behaviors (static-only → just the S3 origin).
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -813,32 +863,41 @@ void describe('CdnConstruct', () => {
         buildId: 'test-1',
       };
 
-      assert.throws(
+      assert.doesNotThrow(
         () =>
           new CdnConstruct(stack, 'Cdn', {
             bucket,
             manifest,
             securityHeadersPolicy: policy,
           }),
-        (error: unknown) => {
-          assert.ok(error instanceof HostingError);
-          assert.strictEqual(error.name, 'TooManyRoutesError');
-          return true;
-        },
       );
+      const template = Template.fromStack(stack);
+      assert.deepEqual(originIds(template), [ORIGIN_ID.s3]);
+      assert.deepEqual(additionalBehaviorPatterns(template), []);
+
+      // All 25 routes are in the KVS route table as static ('s').
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-1',
+          hasServer: false,
+          hasImage: false,
+        }),
+      );
+      assert.equal(rows.length, 25);
+      assert.ok(rows.every(([, kind]) => kind === 's'));
     });
 
-    void it('counts derived bare behaviors — throws when subtree routes double past the cap', () => {
-      // Regression (T13): the old guard counted manifest routes BEFORE the
-      // L3 derived a bare `/page` behavior from each `/page/*` route. 13
-      // subtree routes (13 ≤ 24, so the old guard passed) expand to 13
-      // subtree + 13 bare = 26 actual behaviors > 24 — which used to fail
-      // opaquely in CloudFormation. The authoritative count must catch it.
+    void it('synthesizes many subtree routes without throwing (no derived-behavior cap)', () => {
+      // The legacy model derived a bare `/page` behavior per `/page/*` route
+      // and counted both against the cap. There is no behavior derivation now:
+      // subtree routes are KVS rows. 40 of them synth with no additional
+      // behaviors and no error.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
 
-      const subtreeRoutes = Array.from({ length: 13 }, (_, i) => ({
+      const subtreeRoutes = Array.from({ length: 40 }, (_, i) => ({
         pattern: `/page-${i}/*`,
         target: 'static',
       }));
@@ -852,41 +911,6 @@ void describe('CdnConstruct', () => {
         buildId: 'test-derive-1',
       };
 
-      assert.throws(
-        () =>
-          new CdnConstruct(stack, 'Cdn', {
-            bucket,
-            manifest,
-            securityHeadersPolicy: policy,
-          }),
-        (error: unknown) => {
-          assert.ok(error instanceof HostingError);
-          assert.strictEqual(error.name, 'TooManyRoutesError');
-          return true;
-        },
-      );
-    });
-
-    void it('allows subtree routes whose derived count stays within the cap', () => {
-      // 11 subtree routes → 11 + 11 derived bare = 22 behaviors ≤ 24. OK.
-      const stack = createStack();
-      const bucket = new Bucket(stack, 'Bucket');
-      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-
-      const subtreeRoutes = Array.from({ length: 11 }, (_, i) => ({
-        pattern: `/page-${i}/*`,
-        target: 'static',
-      }));
-      subtreeRoutes.push({ pattern: '/*', target: 'static' });
-
-      const manifest: DeployManifest = {
-        version: 1,
-        compute: {},
-        staticAssets: { directory: '/tmp/assets' },
-        routes: subtreeRoutes,
-        buildId: 'test-derive-2',
-      };
-
       assert.doesNotThrow(
         () =>
           new CdnConstruct(stack, 'Cdn', {
@@ -895,12 +919,15 @@ void describe('CdnConstruct', () => {
             securityHeadersPolicy: policy,
           }),
       );
+      const template = Template.fromStack(stack);
+      assert.deepEqual(additionalBehaviorPatterns(template), []);
     });
 
-    void it('quotas.cacheBehaviors override raises the behavior cap', () => {
-      // 25 static routes = 25 additional behaviors, which exceeds the default
-      // cap of 24 → would throw. With a granted quota of 30 (29 additional),
-      // it must synth fine.
+    void it('quotas.cacheBehaviors prop is accepted but no longer gates routing', () => {
+      // The `quotas` prop still exists on CdnConstructProps (kept for type
+      // compatibility), but the single-behavior router means behavior count is
+      // fixed at 1-3 regardless of route count — there is no cap to raise.
+      // Both the unset and set forms must synth identically and not throw.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -919,18 +946,14 @@ void describe('CdnConstruct', () => {
         buildId: 'test-quota-override-1',
       };
 
-      // Default cap → throws.
-      assert.throws(
+      assert.doesNotThrow(
         () =>
           new CdnConstruct(stack, 'CdnDefault', {
             bucket,
             manifest,
             securityHeadersPolicy: policy,
           }),
-        (e: unknown) => (e as HostingError).name === 'TooManyRoutesError',
       );
-
-      // Raised quota → succeeds.
       assert.doesNotThrow(
         () =>
           new CdnConstruct(stack, 'CdnRaised', {
@@ -942,10 +965,10 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('groups co-located sibling pages under one <parent>/* behavior instead of throwing (static-only)', () => {
-      // 24 sibling pages under /docs → 24 subtree + 24 bare = 48 behaviors,
-      // far over the cap. Static-only, so they group to a single `/docs/*`
-      // behavior (lossless — all resolve from S3) and synth succeeds.
+    void it('synthesizes co-located sibling pages without grouping or throwing (static-only)', () => {
+      // 24 sibling subtree pages under /docs used to overflow the cap and
+      // force a lossy `/docs/*` grouping. Now each is just a KVS row; synth
+      // succeeds with ZERO additional behaviors and no grouping.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -971,33 +994,32 @@ void describe('CdnConstruct', () => {
           }),
       );
       const template = Template.fromStack(stack);
-      const dist = Object.values(
-        template.findResources('AWS::CloudFront::Distribution'),
-      )[0] as {
-        Properties: {
-          DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
-        };
-      };
-      const patterns = (
-        dist.Properties.DistributionConfig.CacheBehaviors ?? []
-      ).map((b) => b.PathPattern);
-      assert.ok(patterns.length <= 24, `expected ≤24 behaviors, got ${patterns.length}`);
-      assert.ok(
-        patterns.includes('/docs/*'),
-        `expected a grouped /docs/* behavior; got ${JSON.stringify(patterns)}`,
+      assert.deepEqual(additionalBehaviorPatterns(template), []);
+      // The individual /docs/page-N/* rows are preserved in the KVS table
+      // (no lossy grouping into /docs/*).
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-group-1',
+          hasServer: false,
+          hasImage: false,
+        }),
       );
+      const patterns = rows.map(([p]) => p);
+      assert.ok(patterns.includes('/docs/page-0/*'));
+      assert.ok(!patterns.includes('/docs/*'));
     });
 
-    void it('demotes prerendered pages to the SSR runtime instead of throwing when over the behavior budget (compute)', () => {
-      // 20 prerendered-page subtree routes → 20 subtree + 20 derived bare = 40
-      // behaviors, far over the cap of 24. With a catch-all SSR Lambda present,
-      // the lowest-priority pages demote to the runtime and synth succeeds.
+    void it('keeps every page on the edge under compute (no demotion to the SSR runtime)', () => {
+      // The legacy model "demoted" low-priority pages to the SSR Lambda when
+      // over the behavior budget. There is no budget now: every static route
+      // stays mapped to S3 ('s') in the KVS, regardless of count.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
       const { fn, fnUrl } = createSsrFunction(stack);
 
-      const pageRoutes = Array.from({ length: 20 }, (_, i) => ({
+      const pageRoutes = Array.from({ length: 40 }, (_, i) => ({
         pattern: `/page-${i}/*`,
         target: 'static',
       }));
@@ -1021,33 +1043,28 @@ void describe('CdnConstruct', () => {
             computeFunctions: new Map([['default', fn]]),
           }),
       );
-      // After demotion the distribution must be at/under the additional cap.
+      // Only the sentinel server binding behavior — no per-page behaviors.
       const template = Template.fromStack(stack);
-      const dist = Object.values(
-        template.findResources('AWS::CloudFront::Distribution'),
-      )[0] as {
-        Properties: { DistributionConfig: { CacheBehaviors?: unknown[] } };
-      };
-      const behaviors = dist.Properties.DistributionConfig.CacheBehaviors ?? [];
-      assert.ok(
-        behaviors.length <= 24,
-        `expected ≤24 additional behaviors after demotion, got ${behaviors.length}`,
+      assert.deepEqual(additionalBehaviorPatterns(template).sort(), [
+        '/__blocks_origin_server/*',
+      ]);
+      // Every page route remains static ('s') in the KVS table.
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-demote-1',
+          hasServer: true,
+          hasImage: false,
+        }),
       );
+      const pageRows = rows.filter(([p]) => p.startsWith('/page-'));
+      assert.equal(pageRows.length, 40);
+      assert.ok(pageRows.every(([, kind]) => kind === 's'));
     });
 
-    void it('does NOT demote a hashed-asset prefix — it must stay on the edge (S3)', () => {
-      // A hashed-asset route (_nuxt/*) is NOT demotable: the SSR Lambda can't
-      // serve those bytes. With enough pages to force demotion, the _nuxt/*
-      // behavior must survive while pages demote.
-      const stack = createStack();
-      const bucket = new Bucket(stack, 'Bucket');
-      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-      const { fn, fnUrl } = createSsrFunction(stack);
-
-      const pageRoutes = Array.from({ length: 20 }, (_, i) => ({
-        pattern: `/page-${i}/*`,
-        target: 'static',
-      }));
+    void it('keeps a hashed-asset prefix on S3 in the route table under compute', () => {
+      // _nuxt/* (hashed assets) must resolve from S3, never the SSR Lambda.
+      // In the KVS model it is simply a static ('s') row alongside the pages.
       const manifest: DeployManifest = {
         version: 1,
         compute: {
@@ -1056,34 +1073,22 @@ void describe('CdnConstruct', () => {
         staticAssets: { directory: '/tmp/assets', immutablePaths: ['_nuxt/*'] },
         routes: [
           { pattern: '/_nuxt/*', target: 'static' },
-          ...pageRoutes,
           { pattern: '/*', target: 'default' },
         ],
         buildId: 'test-demote-keep-assets',
       };
 
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
-        manifest,
-        securityHeadersPolicy: policy,
-        computeFunctionUrls: new Map([['default', fnUrl]]),
-        computeFunctions: new Map([['default', fn]]),
-      });
-      const template = Template.fromStack(stack);
-      const dist = Object.values(
-        template.findResources('AWS::CloudFront::Distribution'),
-      )[0] as {
-        Properties: {
-          DistributionConfig: { CacheBehaviors?: { PathPattern: string }[] };
-        };
-      };
-      const patterns = (
-        dist.Properties.DistributionConfig.CacheBehaviors ?? []
-      ).map((b) => b.PathPattern);
-      assert.ok(
-        patterns.includes('/_nuxt/*'),
-        `_nuxt/* must survive demotion; got ${JSON.stringify(patterns)}`,
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-demote-keep-assets',
+          hasServer: true,
+          hasImage: false,
+        }),
       );
+      const nuxt = rows.find(([p]) => p === '/_nuxt/*');
+      assert.ok(nuxt, `/_nuxt/* must be in the route table; got ${JSON.stringify(rows)}`);
+      assert.equal(nuxt[1], 's', '/_nuxt/* must route to S3 (static), not compute');
     });
 
     void it('quotas.edgeFunctions override raises the edge-function cap', () => {
@@ -1207,13 +1212,16 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('edge route behaviors use the synthesized SsrCachePolicy (honors origin Cache-Control)', () => {
+    void it('default behavior uses the synthesized SsrCachePolicy under compute (honors origin Cache-Control)', () => {
+      // Edge routes no longer get a dedicated cache behavior — they route
+      // through the single default behavior + KVS. The meaningful invariant
+      // preserved here: when compute is present, the default behavior
+      // references the synthesized SsrCachePolicy (a Ref), not the AWS-managed
+      // CACHING_DISABLED string ID.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
 
-      // Configure a regional default (so hasCompute=true and ssrCachePolicy
-      // is created) plus an edge route handled by Lambda@Edge.
       const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
         runtime: Runtime.NODEJS_20_X,
         handler: 'index.handler',
@@ -1272,31 +1280,25 @@ void describe('CdnConstruct', () => {
         string,
         unknown
       >;
-      const edgeBehavior = (
-        distConfig['CacheBehaviors'] as Array<Record<string, unknown>>
-      ).find((b) => b['PathPattern'] === '/api/edge/*');
-      assert.ok(edgeBehavior, 'edge route cache behavior present');
-      const cachePolicyId = edgeBehavior['CachePolicyId'];
+      const defaultBehavior = distConfig['DefaultCacheBehavior'] as Record<
+        string,
+        unknown
+      >;
+      const cachePolicyId = defaultBehavior['CachePolicyId'];
       assert.equal(
         typeof cachePolicyId === 'object' &&
           cachePolicyId !== null &&
           'Ref' in (cachePolicyId as Record<string, unknown>),
         true,
-        'edge route must reference the synthesized SsrCachePolicy via Ref, not the AWS-managed CACHING_DISABLED string ID',
+        'default behavior must reference the synthesized SsrCachePolicy via Ref under compute',
       );
     });
 
-    void it('orders multi-wildcard patterns above /* by literal-segment count', () => {
-      // Regression for the route-specificity formula: a pattern like
-      // /api/*/data/* (2 literal segments, 2 wildcards) must rank ABOVE
-      // /* (0 literal segments, 1 wildcard). The previous formula
-      // (length × 1000 - wildcards × 1_000_000) inverted this and let
-      // /* shadow more-specific multi-wildcard patterns.
-      const stack = createStack();
-      const bucket = new Bucket(stack, 'Bucket');
-      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-      const { fn, fnUrl } = createSsrFunction(stack);
-
+    void it('orders multi-wildcard patterns above /_next/* by literal-segment count in the KVS route table', () => {
+      // Route ordering is now done by buildKvsEntries (the router scans the
+      // table first-match-wins). A pattern like /api/*/data/* (2 literal
+      // segments) must rank ABOVE /_next/* (1 literal segment) so it is
+      // matched first — preserving the old behavior-ordering semantics.
       const manifest: DeployManifest = {
         version: 1,
         compute: {
@@ -1316,45 +1318,20 @@ void describe('CdnConstruct', () => {
         buildId: 'test-specificity',
       };
 
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
-        manifest,
-        securityHeadersPolicy: policy,
-        computeFunctionUrls: new Map([['default', fnUrl]]),
-        computeFunctions: new Map([['default', fn]]),
-      });
-
-      const template = Template.fromStack(stack);
-      // eslint-disable-next-line @typescript-eslint/naming-convention
-      const json = template.toJSON() as Record<string, unknown>;
-      const resources = json['Resources'] as Record<
-        string,
-        Record<string, unknown>
-      >;
-      const distResource = Object.values(resources).find(
-        (r) => r['Type'] === 'AWS::CloudFront::Distribution',
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-specificity',
+          hasServer: true,
+          hasImage: false,
+        }),
       );
-      assert.ok(distResource);
-      const distProps = distResource['Properties'] as Record<string, unknown>;
-      const distConfig = distProps['DistributionConfig'] as Record<
-        string,
-        unknown
-      >;
-      const cacheBehaviors = distConfig['CacheBehaviors'] as Array<
-        Record<string, unknown>
-      >;
-      const patternOrder = cacheBehaviors.map(
-        (b) => b['PathPattern'] as string,
-      );
-
+      const patternOrder = rows.map(([p]) => p);
       const idxMultiWildcard = patternOrder.indexOf('/api/*/data/*');
       const idxSingleWildcard = patternOrder.indexOf('/_next/*');
-      // /* is the catch-all and lives on the default behavior, so it
-      // doesn't appear in CacheBehaviors. The two patterns we declared
-      // as additional behaviors must be ordered by literal segments:
-      // /api/*/data/* (2 literals) before /_next/* (1 literal).
-      assert.ok(idxMultiWildcard >= 0, '/api/*/data/* behavior present');
-      assert.ok(idxSingleWildcard >= 0, '/_next/* behavior present');
+      // /* (catch-all) is implicit and not stored as a row.
+      assert.ok(idxMultiWildcard >= 0, '/api/*/data/* row present');
+      assert.ok(idxSingleWildcard >= 0, '/_next/* row present');
       assert.ok(
         idxMultiWildcard < idxSingleWildcard,
         '/api/*/data/* (2 literal segments) must rank above /_next/* (1 literal segment)',
@@ -1564,32 +1541,27 @@ void describe('CdnConstruct', () => {
 
       const template = Template.fromStack(stack);
 
-      // Verify CloudFront distribution has a /api/* cache behavior
-      template.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          CacheBehaviors: Match.arrayWith([
-            Match.objectLike({
-              PathPattern: '/api/*',
-            }),
-          ]),
+      // /api/* is NOT a dedicated cache behavior anymore — it's a KVS route
+      // row routed to the compute origin via the single default behavior.
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest: multiOriginManifest,
+          buildId: 'test-multi-origin-1',
+          hasServer: true,
+          hasImage: false,
         }),
-      });
+      );
+      const apiRow = rows.find(([p]) => p === '/api/*');
+      assert.ok(apiRow, '/api/* must be in the KVS route table');
+      assert.equal(apiRow[1], 'c', '/api/* must route to the compute origin');
 
-      // Verify there are at least 2 origins (one per compute function URL)
-      template.hasResourceProperties('AWS::CloudFront::Distribution', {
-        DistributionConfig: Match.objectLike({
-          Origins: Match.arrayWith([
-            Match.objectLike({
-              DomainName: Match.anyValue(),
-            }),
-            Match.objectLike({
-              DomainName: Match.anyValue(),
-            }),
-          ]),
-        }),
-      });
+      // The distribution carries the S3 + server origins by stable id.
+      const ids = originIds(template);
+      assert.ok(ids.includes(ORIGIN_ID.s3));
+      assert.ok(ids.includes(ORIGIN_ID.server));
 
-      // Verify the default behavior uses ALL allowed methods (compute)
+      // The single default behavior uses ALL allowed methods (compute) so the
+      // router can forward any request to the server origin.
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
           DefaultCacheBehavior: Match.objectLike({
@@ -1775,8 +1747,13 @@ void describe('CdnConstruct', () => {
 
   // ---- InvalidRoutePatternError ----
 
-  void describe('InvalidRoutePatternError', () => {
-    void it('throws for regex syntax in route pattern', () => {
+  void describe('route patterns (KVS table)', () => {
+    void it('stores route patterns verbatim in the KVS table without per-behavior validation', () => {
+      // The per-behavior CloudFront pattern validation (which rejected regex
+      // syntax because a CloudFront PathPattern can't contain it) no longer
+      // applies: patterns are KVS data scanned by the router function, not
+      // CloudFront behavior patterns. Synth must NOT throw; the pattern is
+      // simply stored (and harmlessly never matches the router's glob form).
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -1792,19 +1769,23 @@ void describe('CdnConstruct', () => {
         buildId: 'test-regex',
       };
 
-      assert.throws(
+      assert.doesNotThrow(
         () =>
           new CdnConstruct(stack, 'Cdn', {
             bucket,
             manifest,
             securityHeadersPolicy: policy,
           }),
-        (error: unknown) => {
-          assert.ok(error instanceof HostingError);
-          assert.strictEqual(error.name, 'InvalidRoutePatternError');
-          return true;
-        },
       );
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'test-regex',
+          hasServer: false,
+          hasImage: false,
+        }),
+      );
+      assert.ok(rows.some(([p]) => p === '/api/(.*)'));
     });
   });
 
@@ -1891,8 +1872,8 @@ void describe('CdnConstruct', () => {
 
   // ---- BuildId CloudFront Function ----
 
-  void describe('BuildId rewrite function', () => {
-    void it('creates CloudFront Function with build ID in code', () => {
+  void describe('BuildId rewrite (KVS-backed)', () => {
+    void it('writes the build ID into the KVS route table, not the function code', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -1909,9 +1890,21 @@ void describe('CdnConstruct', () => {
       });
 
       const template = Template.fromStack(stack);
-      template.hasResourceProperties('AWS::CloudFront::Function', {
-        FunctionCode: Match.stringLikeRegexp('custom-build-123'),
+      // The router functions are build-independent — the buildId is carried by
+      // the RouteStoreKeys custom resource that writes the KVS.
+      template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
+        Entries: Match.stringLikeRegexp('custom-build-123'),
       });
+      // And it appears in the meta blob from the pure builder.
+      const meta = JSON.parse(
+        buildKvsEntries({
+          manifest,
+          buildId: 'custom-build-123',
+          hasServer: false,
+          hasImage: false,
+        }).meta,
+      ) as { b: string };
+      assert.equal(meta.b, 'custom-build-123');
     });
   });
 
@@ -2067,8 +2060,8 @@ void describe('CdnConstruct', () => {
 
   // ---- Multi-compute TargetOriginId binding ----
 
-  void describe('multi-compute TargetOriginId binding', () => {
-    void it('api behavior TargetOriginId differs from default behavior TargetOriginId', () => {
+  void describe('multi-compute KVS routing', () => {
+    void it('routes /api/* to compute and /* (catch-all) to compute in the KVS table', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -2131,41 +2124,24 @@ void describe('CdnConstruct', () => {
         ]),
       });
 
+      // Per-route TargetOriginId no longer exists: the single default behavior
+      // forwards to the server origin and the KVS router decides per request.
+      // Assert the route table maps /api/* to compute ('c').
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest: multiOriginManifest,
+          buildId: 'test-origin-binding-1',
+          hasServer: true,
+          hasImage: false,
+        }),
+      );
+      const apiRow = rows.find(([p]) => p === '/api/*');
+      assert.ok(apiRow, '/api/* must be in the KVS route table');
+      assert.equal(apiRow[1], 'c', '/api/* must route to compute');
+
+      // The server origin is bound to the distribution by stable id.
       const template = Template.fromStack(stack);
-      const distributions = template.findResources(
-        'AWS::CloudFront::Distribution',
-      );
-      const distConfig = (
-        Object.values(distributions)[0] as Record<
-          string,
-          Record<string, unknown>
-        >
-      ).Properties.DistributionConfig as Record<string, unknown>;
-
-      const defaultBehavior = distConfig.DefaultCacheBehavior as Record<
-        string,
-        unknown
-      >;
-      const cacheBehaviors = distConfig.CacheBehaviors as Array<
-        Record<string, unknown>
-      >;
-
-      // Find the /api/* behavior
-      const apiBehavior = cacheBehaviors.find(
-        (b) => b.PathPattern === '/api/*',
-      );
-      assert.ok(apiBehavior, 'Should have a /api/* cache behavior');
-
-      const defaultOriginId = defaultBehavior.TargetOriginId;
-      const apiOriginId = apiBehavior.TargetOriginId;
-
-      assert.ok(defaultOriginId, 'Default behavior should have TargetOriginId');
-      assert.ok(apiOriginId, '/api/* behavior should have TargetOriginId');
-      assert.notStrictEqual(
-        defaultOriginId,
-        apiOriginId,
-        'Default and API behaviors must route to DIFFERENT origins',
-      );
+      assert.ok(originIds(template).includes(ORIGIN_ID.server));
     });
 
     void it('each behavior TargetOriginId matches an origin in the Origins array', () => {
@@ -2683,22 +2659,39 @@ void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
     return rules;
   };
 
-  void it('throws when an over-cap rule drops a security header (CSP)', () => {
+  void it('does NOT drop a security header over the old behavior cap (all headers live in KVS)', () => {
+    // The legacy model expressed per-pattern headers as per-behavior
+    // ResponseHeadersPolicies, capped at 24 behaviors — so an over-cap rule
+    // carrying a security header (CSP) was dropped and the build failed loud
+    // (SecurityHeaderDroppedError). Headers are now KVS rows applied by the
+    // viewer-response router function: there is no behavior cap to overflow,
+    // so 25 header rules (including a CSP one) synth cleanly.
     const stack = createStack();
     const bucket = new Bucket(stack, 'Bucket');
     const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-    assert.throws(
+    const manifest = baseStatic(
+      fill({ 'content-security-policy': "default-src 'self'" }),
+    );
+    assert.doesNotThrow(
       () =>
         new CdnConstruct(stack, 'Cdn', {
           bucket,
-          manifest: baseStatic(fill({ 'content-security-policy': "default-src 'self'" })),
+          manifest,
           securityHeadersPolicy: policy,
         }),
-      (e: Error) => {
-        assert.strictEqual(e.name, 'SecurityHeaderDroppedError');
-        return true;
-      },
     );
+    // The CSP header rule survives — it's a header row in the KVS (h0..hN).
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'test-hdrcap-1',
+      hasServer: false,
+      hasImage: false,
+    });
+    const headerJson = Object.entries(entries)
+      .filter(([k]) => /^h\d+$/.test(k))
+      .map(([, v]) => v)
+      .join('');
+    assert.match(headerJson, /content-security-policy/);
   });
 
   void it('does NOT throw when an over-cap rule drops only a cosmetic header', () => {
@@ -2736,25 +2729,28 @@ void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
     );
   });
 
-  void it('throws TooManyHeaderPoliciesError when distinct policies exceed the account RHP quota', () => {
+  void it('synthesizes many distinct header rules without a ResponseHeadersPolicy quota (headers are KVS data)', () => {
+    // The legacy model minted one ResponseHeadersPolicy per distinct header
+    // set, hitting the account RHP quota (20) and throwing
+    // TooManyHeaderPoliciesError. With the KVS router, per-pattern headers are
+    // table rows applied by the response function — no RHP resources, no
+    // quota — so 25 distinct header sets synth cleanly.
     const stack = createStack();
     const bucket = new Bucket(stack, 'Bucket');
     const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-    // 24 distinct header-value sets → 24 distinct ResponseHeadersPolicies,
-    // exceeding the default account quota of 20. Previously unguarded; now
-    // surfaced as a clear synth error instead of an opaque deploy failure.
-    assert.throws(
+    assert.doesNotThrow(
       () =>
         new CdnConstruct(stack, 'Cdn', {
           bucket,
           manifest: baseStatic(fill({ 'x-custom-cosmetic': 'value' })),
           securityHeadersPolicy: policy,
         }),
-      (e: Error) => {
-        assert.strictEqual(e.name, 'TooManyHeaderPoliciesError');
-        return true;
-      },
     );
+    // No PER-PATTERN ResponseHeadersPolicy resources are minted: only the one
+    // base security-headers policy passed in exists, regardless of how many
+    // distinct header rules the manifest declares (they're KVS rows).
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 1);
   });
 
   void it('dedupes identical header sets so they draw the RHP quota once', () => {

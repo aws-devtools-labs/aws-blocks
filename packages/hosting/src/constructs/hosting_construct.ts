@@ -686,6 +686,16 @@ export class HostingConstruct extends Construct {
           // Lambda via the SDK, never served through CloudFront), but set
           // a private directive so an accidental public read is non-cacheable.
           cacheControl: [CacheControl.fromString('private, no-store')],
+          // A large `generateStaticParams` fan-out (e.g. 1000 prerendered
+          // product pages) produces thousands of small `.cache` files. CDK's
+          // default 128 MB BucketDeployment Lambda uploads these at a crawl
+          // (low memory → low network throughput) and the sync times out at
+          // 900 s mid-upload, hanging the stack on the custom resource. More
+          // memory yields proportionally more CPU + network bandwidth, so the
+          // upload completes well within the window. Memory + timeout track
+          // the seed size; cap timeout at the 15-min Lambda max.
+          memoryLimit: 1024,
+          ephemeralStorageSize: Size.gibibytes(2),
         });
       }
 

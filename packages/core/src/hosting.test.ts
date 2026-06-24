@@ -1430,8 +1430,12 @@ describe('Hosting', () => {
   });
 
   // ── basePath prop (caller-declared source of truth) ─────────
+  // Under KVS edge routing, basePath is no longer expressed as a per-behavior
+  // PathPattern prefix — it lives in the KVS route table's `meta.bp`, which the
+  // edge router uses for the canonical 308 + static strip. So these tests read
+  // the basePath out of the RouteStoreKeys custom resource's Entries.
   describe('basePath prop', () => {
-    const prefixedPatterns = (root: string, basePath?: string): string[] => {
+    const metaBasePath = (root: string, basePath?: string): string => {
       const app = new App();
       const stack = new Stack(app, 'BasePathStack', {
         env: { account: '123456789012', region: 'us-east-1' },
@@ -1445,40 +1449,30 @@ describe('Hosting', () => {
       const tpl = Template.fromStack(stack).toJSON() as {
         Resources: Record<string, { Type: string; Properties?: any }>;
       };
-      const dist = Object.values(tpl.Resources).find(
-        (r) => r.Type === 'AWS::CloudFront::Distribution',
+      const kvKeys = Object.entries(tpl.Resources).find(
+        ([id, r]) =>
+          r.Type === 'AWS::CloudFormation::CustomResource' &&
+          /RouteStoreKeys/.test(id),
       );
-      return (dist?.Properties?.DistributionConfig?.CacheBehaviors ?? []).map(
-        (b: { PathPattern: string }) => b.PathPattern,
-      );
+      assert.ok(kvKeys, 'expected a RouteStoreKeys custom resource');
+      const entries = JSON.parse(kvKeys![1].Properties.Entries);
+      const meta = JSON.parse(entries.meta);
+      return meta.bp as string;
     };
 
-    it('prefixes CloudFront behaviors when basePath is set (SPA, no framework base)', () => {
+    it('records basePath in the KVS route table when set (SPA, no framework base)', () => {
       createSpaBuildOutput(tmpDir);
-      const patterns = prefixedPatterns(tmpDir, '/app');
-      assert.ok(
-        patterns.length > 0 && patterns.every((p) => p.startsWith('/app')),
-        `all behavior patterns should be prefixed with /app; got ${JSON.stringify(patterns)}`,
-      );
+      assert.strictEqual(metaBasePath(tmpDir, '/app'), '/app');
     });
 
     it('normalizes a trailing slash (/app/ → /app)', () => {
       createSpaBuildOutput(tmpDir);
-      const patterns = prefixedPatterns(tmpDir, '/app/');
-      assert.ok(
-        patterns.some((p) => /^\/app\//.test(p)) &&
-          !patterns.some((p) => /^\/app\/\//.test(p)),
-        `expected single-slash /app prefix; got ${JSON.stringify(patterns)}`,
-      );
+      assert.strictEqual(metaBasePath(tmpDir, '/app/'), '/app');
     });
 
     it('treats "/" as no base path', () => {
       createSpaBuildOutput(tmpDir);
-      const patterns = prefixedPatterns(tmpDir, '/');
-      assert.ok(
-        !patterns.some((p) => p.startsWith('/app')),
-        'bare "/" should not introduce a base-path prefix',
-      );
+      assert.strictEqual(metaBasePath(tmpDir, '/'), '');
     });
   });
 
