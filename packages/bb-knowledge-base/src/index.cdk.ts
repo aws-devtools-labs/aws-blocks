@@ -19,7 +19,7 @@ export type {
 	KnowledgeBaseOptions, SourceConfig,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
-	MetadataFilter,
+	MetadataFilter, WaitUntilReadyOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -176,9 +176,11 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  *
  * **Environment variables injected into the handler:**
  * - `BLOCKS_{FULLID}_KB_ID` — Bedrock Knowledge Base ID (used by the AWS runtime)
+ * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isReady()` / `waitUntilReady()`)
  *
  * **IAM grants to the handler:**
  * - `bedrock:Retrieve` — query the knowledge base at runtime
+ * - `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` — check ingestion readiness
  *
  * @param scope - Parent scope.
  * @param id - Unique identifier within the scope.
@@ -430,23 +432,34 @@ export class KnowledgeBase extends Scope {
 			startIngestion.node.addDependency(deployment);
 		}
 
-		// ── 8. Handler env vars ───────────────────────────────────────────
-		// The AWS runtime reads these to locate the Bedrock resources.
+		// ── 8. Handler config (read by the AWS runtime) ───────────────────
+		// Registered via registerConfig (not addEnvironment) so the runtime can
+		// locate the Bedrock resources. KB_ID drives retrieve(); DATA_SOURCE_ID
+		// drives the isReady()/waitUntilReady() ingestion-readiness checks.
 
 		registerConfig(this, envKey(this.fullId, 'KB_ID'), knowledgeBase.attrKnowledgeBaseId);
+		registerConfig(this, envKey(this.fullId, 'DATA_SOURCE_ID'), dataSource.attrDataSourceId);
 
 		// ── 9. Handler IAM grants ─────────────────────────────────────────
 
+		const knowledgeBaseArn = cdk.Stack.of(this).formatArn({
+			service: 'bedrock',
+			resource: 'knowledge-base',
+			resourceName: knowledgeBase.attrKnowledgeBaseId,
+			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+		});
+
 		this.handler.addToRolePolicy(new iam.PolicyStatement({
 			actions: ['bedrock:Retrieve'],
-			resources: [
-				cdk.Stack.of(this).formatArn({
-					service: 'bedrock',
-					resource: 'knowledge-base',
-					resourceName: knowledgeBase.attrKnowledgeBaseId,
-					arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
-				}),
-			],
+			resources: [knowledgeBaseArn],
+		}));
+
+		// Ingestion-job status for isReady()/waitUntilReady(). These actions are
+		// authorized at the knowledge-base resource level (the data source and
+		// ingestion jobs are sub-resources of the KB ARN).
+		this.handler.addToRolePolicy(new iam.PolicyStatement({
+			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+			resources: [knowledgeBaseArn],
 		}));
 	}
 }

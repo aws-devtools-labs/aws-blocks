@@ -1032,5 +1032,33 @@ describe('unicode / multilingual retrieval', () => {
 	});
 });
 
+// ── Readiness (local dev: no warm-up window) ────────────────────────────────
+//
+// The local corpus loads synchronously on first retrieve(), so there is no
+// asynchronous ingestion warm-up — isReady() is always true and
+// waitUntilReady() resolves immediately (options are ignored).
+
+describe('readiness', () => {
+	test('isReady() resolves true immediately', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'ready', { source: 'test-knowledge-tmp' });
+		assert.strictEqual(await kb.isReady(), true);
+	});
+
+	test('waitUntilReady() resolves immediately', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'waitready', { source: 'test-knowledge-tmp' });
+		await kb.waitUntilReady();
+	});
+
+	test('isReady() is true even for an S3 URI source (no local warm-up)', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'readys3', { source: 's3://my-docs-bucket' });
+		assert.strictEqual(await kb.isReady(), true);
+	});
+
+	test('waitUntilReady() ignores options and resolves immediately', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'waitopts', { source: 'test-knowledge-tmp' });
+		await kb.waitUntilReady({ timeoutMs: 1, pollIntervalMs: 1 });
+	});
+});
+
 // ── Cleanup after all tests ────────────────────────────────────────────────
 test('cleanup', () => { cleanup(); });

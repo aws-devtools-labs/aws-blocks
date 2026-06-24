@@ -4,12 +4,18 @@
 import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
+import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
 import { KnowledgeBaseErrors, KnowledgeBase } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────
 
 function mockRuntimeSend(fn: (cmd: unknown) => unknown) {
 	return mock.method(BedrockAgentRuntimeClient.prototype, 'send', fn);
+}
+
+// Control-plane client used by isReady()/waitUntilReady().
+function mockAgentSend(fn: (cmd: { constructor: { name: string }; input: any }) => unknown) {
+	return mock.method(BedrockAgentClient.prototype, 'send', fn as (cmd: unknown) => unknown);
 }
 
 afterEach(() => {
@@ -21,6 +27,23 @@ function setKbEnv(scopeId: string, instanceId: string, kbId = 'kb-test-123') {
 	process.env[`${prefix}_KB_ID`] = kbId;
 	return () => {
 		delete process.env[`${prefix}_KB_ID`];
+	};
+}
+
+// Sets KB_ID and (unless dataSourceId is null) DATA_SOURCE_ID, mirroring the
+// two config values the CDK layer registers. Used by readiness tests.
+function setReadyEnv(
+	scopeId: string,
+	instanceId: string,
+	opts: { kbId?: string; dataSourceId?: string | null } = {},
+) {
+	const { kbId = 'kb-test-123', dataSourceId = 'ds-test-123' } = opts;
+	const prefix = `BLOCKS_${scopeId}_${instanceId}`.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+	process.env[`${prefix}_KB_ID`] = kbId;
+	if (dataSourceId !== null) process.env[`${prefix}_DATA_SOURCE_ID`] = dataSourceId;
+	return () => {
+		delete process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_DATA_SOURCE_ID`];
 	};
 }
 
@@ -515,6 +538,264 @@ describe('error classification — other SDK exceptions', () => {
 					return true;
 				},
 			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+// ── Readiness — isReady() ──────────────────────────────────────────────────
+//
+// Ingestion runs asynchronously after deploy, so isReady() inspects the data
+// source's most recent ingestion job: COMPLETE → ready, FAILED → throws,
+// anything else (or no jobs / no data source) → not-ready (or ready when there
+// is nothing to track).
+
+describe('isReady', () => {
+	test('returns true when the latest ingestion job is COMPLETE', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY1');
+		mockAgentSend((cmd) => {
+			assert.strictEqual(cmd.constructor.name, 'ListIngestionJobsCommand');
+			return { ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy1', { source: './knowledge' });
+			assert.strictEqual(await kb.isReady(), true);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when the latest ingestion job is IN_PROGRESS', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY2');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'IN_PROGRESS' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy2', { source: './knowledge' });
+			assert.strictEqual(await kb.isReady(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when no ingestion jobs exist yet (empty list)', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY3');
+		mockAgentSend(() => ({ ingestionJobSummaries: [] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3', { source: './knowledge' });
+			assert.strictEqual(await kb.isReady(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when ingestionJobSummaries is undefined', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY3B');
+		mockAgentSend(() => ({}));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3b', { source: './knowledge' });
+			assert.strictEqual(await kb.isReady(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns true (without calling the control plane) when no data source id is configured', async () => {
+		// Imported s3:// source / pre-feature deployment: KB_ID present, DATA_SOURCE_ID absent.
+		const cleanup = setReadyEnv('TEST', 'RDY4', { dataSourceId: null });
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy4', { source: 's3://my-docs-bucket' });
+			assert.strictEqual(await kb.isReady(), true);
+			assert.strictEqual(sendCalled, false, 'should not query the control plane when there is no data source to track');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws NotReady when KB_ID env var is not set', async () => {
+		const prefix = 'BLOCKS_TEST_RDY5';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy5', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isReady(),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	test('throws IngestionFailed (with failureReasons) when the latest job FAILED', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY6');
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-x', status: 'FAILED' }] };
+			}
+			// GetIngestionJobCommand → failure detail
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['boom one', 'boom two'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy6', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isReady(),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					assert.ok(err.message.includes('boom one'), 'message should include failure reasons');
+					assert.ok(err.message.includes('boom two'));
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('queries ListIngestionJobs with the configured ids, sorted by STARTED_AT desc, maxResults 1', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY7', { kbId: 'kb-aaa', dataSourceId: 'ds-bbb' });
+		let captured: any;
+		mockAgentSend((cmd) => {
+			captured = cmd.input;
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy7', { source: './knowledge' });
+			await kb.isReady();
+			assert.strictEqual(captured.knowledgeBaseId, 'kb-aaa');
+			assert.strictEqual(captured.dataSourceId, 'ds-bbb');
+			assert.strictEqual(captured.maxResults, 1);
+			assert.strictEqual(captured.sortBy.attribute, 'STARTED_AT');
+			assert.strictEqual(captured.sortBy.order, 'DESCENDING');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('maps control-plane ResourceNotFoundException to NotReady', async () => {
+		const cleanup = setReadyEnv('TEST', 'RDY8');
+		const err = new Error('No knowledge base with ID kb-test-123 exists');
+		err.name = 'ResourceNotFoundException';
+		mockAgentSend(() => { throw err; });
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy8', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isReady(),
+				(e: Error) => {
+					assert.strictEqual(e.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+// ── Readiness — waitUntilReady() ───────────────────────────────────────────
+
+describe('waitUntilReady', () => {
+	test('resolves immediately when ingestion is already COMPLETE', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR1');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur1', { source: './knowledge' });
+			await kb.waitUntilReady({ timeoutMs: 1000, pollIntervalMs: 10 });
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('polls until the ingestion job becomes COMPLETE', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR2');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const status = calls < 3 ? 'IN_PROGRESS' : 'COMPLETE';
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur2', { source: './knowledge' });
+			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 5 });
+			assert.ok(calls >= 3, `expected at least 3 polls before COMPLETE, got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws IngestionFailed (with failureReasons) when ingestion FAILED', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR3');
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-fail', status: 'FAILED' }] };
+			}
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['S3 access denied'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur3', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 1000, pollIntervalMs: 10 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					assert.ok(err.message.includes('S3 access denied'), 'should surface failure reasons');
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws Timeout when the job never completes within the budget', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR4');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur4', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('resolves immediately when no data source id is configured', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR5', { dataSourceId: null });
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur5', { source: 's3://my-docs-bucket' });
+			await kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5 });
+			assert.strictEqual(sendCalled, false, 'should not poll the control plane when there is nothing to track');
 		} finally {
 			cleanup();
 		}

@@ -153,3 +153,21 @@ export interface RetrieveResult {
 	/** Document metadata key-value pairs. Includes auto-populated `folder` key derived from subfolder structure. */
 	metadata: Record<string, string>;
 }
+
+// ── Readiness Options ──────────────────────────────────────────────────────
+
+/**
+ * Options for the `waitUntilReady()` method.
+ *
+ * @example
+ * ```typescript
+ * // Wait up to 10 minutes, polling every 10 seconds
+ * await kb.waitUntilReady({ timeoutMs: 600_000, pollIntervalMs: 10_000 });
+ * ```
+ */
+export interface WaitUntilReadyOptions {
+	/** Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes). */
+	timeoutMs?: number;
+	/** Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms. Default: 5000 (5 seconds). */
+	pollIntervalMs?: number;
+}

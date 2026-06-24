@@ -31,6 +31,7 @@
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-blocks/core": "^0.1.2",
+    "@aws-sdk/client-bedrock-agent": "^3.0.0",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.0.0"
   },
   "devDependencies": {
