@@ -194,6 +194,15 @@ export class KnowledgeBase extends Scope {
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────
 
+		// In sandbox mode, default to DESTROY + autoDeleteObjects so a teardown
+		// can fully clean up without manual bucket emptying. An explicit
+		// `removalPolicy` from the customer always takes precedence. Computed
+		// up-front because it also drives the S3 Vectors resources' deletion
+		// policy (section 2) — keeping the data bucket and the vector store in
+		// sync on teardown.
+		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
+		const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
+
 		let dataBucket: s3.IBucket;
 		let inclusionPrefixes: string[] | undefined;
 
@@ -221,11 +230,6 @@ export class KnowledgeBase extends Scope {
 				inclusionPrefixes = [prefix.endsWith('/') ? prefix : prefix + '/'];
 			}
 		} else {
-			// In sandbox mode, default to DESTROY + autoDeleteObjects so
-			// `cdk destroy` can fully clean up without manual bucket emptying.
-			// Explicit `removalPolicy` from the customer takes precedence.
-			const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-			const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
 			dataBucket = new s3.Bucket(this, 'Data', {
 				bucketName: cdk.PhysicalName.GENERATE_IF_NEEDED,
 				blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -257,6 +261,19 @@ export class KnowledgeBase extends Scope {
 				nonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'],
 			},
 		});
+
+		// Mirror the data bucket's teardown behavior on the S3 Vectors L1
+		// resources. Unlike the L2 s3.Bucket — which defaults to RETAIN and can
+		// auto-empty via autoDeleteObjects — these CfnVectorBucket/CfnIndex
+		// resources rely solely on their CloudFormation DeletionPolicy (default:
+		// Delete). Without an explicit policy they'd be inconsistent with the
+		// data bucket on teardown. applyRemovalPolicy sets both DeletionPolicy
+		// and UpdateReplacePolicy. RETAIN by default (parity with the data
+		// bucket); DELETE only when a `removalPolicy:'destroy'` / sandbox
+		// teardown is requested, so the vector store is dropped alongside it.
+		const vectorRemovalPolicy = destroy ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN;
+		vectorBucket.applyRemovalPolicy(vectorRemovalPolicy);
+		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
 		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
