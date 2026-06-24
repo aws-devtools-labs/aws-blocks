@@ -195,6 +195,7 @@ describe('create-blocks-app auto-detection', () => {
       const namepart = parts.join('-');
       assert.ok(namepart.length <= 16, `name portion "${namepart}" should be at most 16 chars`);
       assert.strictEqual(suffix!.length, 6, 'random suffix should be 6 chars');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
