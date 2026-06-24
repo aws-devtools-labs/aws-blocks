@@ -907,7 +907,7 @@ describe('USER_AUTH flow', () => {
 		assert.strictEqual(s3.user.username, 'ursula');
 	});
 
-	test('setAuthState surfaces errorName on a failed sign-in (#81)', async () => {
+	test('setAuthState surfaces errorName on a failed sign-in (issue #81)', async () => {
 		const { auth } = await confirmedUser('ua-err', { preferredChallenge: 'PASSWORD' });
 		const { ctx } = freshContext();
 		const api = (auth.createApi() as any)(ctx);

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * setAuthState error-name propagation tests for AuthBasic (#81). The
+ * setAuthState error-name propagation tests for AuthBasic (issue #81). The
  * recommended client path catches the thrown ApiError and must surface its
  * structured `name` as `AuthState.errorName` so clients can branch with
  * `hasAuthError` instead of string-matching the human-facing message.
