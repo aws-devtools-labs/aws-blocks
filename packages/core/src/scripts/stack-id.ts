@@ -32,7 +32,7 @@ export function getStackId(projectRoot?: string): string {
 /**
  * Get or create a per-machine sandbox identifier.
  * Stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
- * Format: `<username(8)>-<random(4)>` — identifies the developer's sandbox.
+ * Format: `<username(8)>-<random(6)>` — identifies the developer's sandbox.
  */
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
@@ -41,7 +41,7 @@ export function getSandboxId(projectRoot?: string): string {
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const username = getUsername().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
-  const random = Math.random().toString(36).slice(2, 6);
+  const random = Math.random().toString(36).slice(2, 8);
   const id = `${username}-${random}`;
   writeFileSync(filePath, id);
   return id;

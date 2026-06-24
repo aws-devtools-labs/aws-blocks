@@ -412,7 +412,7 @@ CloudFormation stack names are derived from a `stackId` stored in `.blocks/confi
 
 Stack name scheme:
 - **Production:** `<stackId>-prod` (e.g., `my-app-k7x2mf-prod`)
-- **Sandbox:** `<stackId>-<username(8)>-<random(4)>` (e.g., `my-app-k7x2mf-alice-9f3a`)
+- **Sandbox:** `<stackId>-<username(8)>-<random(6)>` (e.g., `my-app-k7x2mf-alice-9f3a2b`)
 
 The sandbox identifier is generated per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
 
@@ -420,7 +420,7 @@ Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/block
 
 ### Rationale
 - **Collision avoidance:** The 6-char random suffix in `stackId` prevents two apps with the same name from overwriting each other's infrastructure in a shared account (~2.1B combinations).
-- **Per-developer sandbox isolation:** Teams sharing a test account need distinct sandbox stacks. The username prefix makes stacks identifiable in the AWS Console; the 4-char random handles multiple sandboxes per developer.
+- **Per-developer sandbox isolation:** Teams sharing a test account need distinct sandbox stacks. The username prefix makes stacks identifiable in the AWS Console; the 6-char random handles multiple sandboxes per developer and username collisions.
 - **Length control:** `name.slice(0, 16)` keeps stack names under ~37 chars total, well within CloudFormation's 128-char limit and readable in the console.
 - **Committed vs gitignored:** `stackId` is committed so the whole team and CI deploy to the same production stack. `sandbox-id.txt` is gitignored so each machine gets its own sandbox.
 
