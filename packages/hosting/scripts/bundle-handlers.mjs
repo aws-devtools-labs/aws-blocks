@@ -27,7 +27,10 @@ const pkgRoot = join(__dirname, '..');
 const handlers = [
   {
     entry: join(pkgRoot, 'src', 'constructs', 'kv_keys_handler.ts'),
-    outfile: join(pkgRoot, 'dist', 'constructs', 'kv_keys_handler.bundle.mjs'),
+    // Dotless basename: Lambda parses the `handler` string by splitting on the
+    // FIRST dot (file.export), so a dotted filename like `x.bundle.mjs` would be
+    // read as file `x`, export `bundle.handler` → "Cannot find module".
+    outfile: join(pkgRoot, 'dist', 'constructs', 'kv_keys_handler_bundle.mjs'),
   },
 ];
 

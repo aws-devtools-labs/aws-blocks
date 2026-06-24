@@ -21,7 +21,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // `node_modules/` (no package-lock), and synth fails with PathNotUnderRoot.
 // Pre-bundling removes that dependency entirely: the consumer ships a ready
 // asset and CDK just zips the directory.
-const HANDLER_BUNDLE = join(__dirname, 'kv_keys_handler.bundle.mjs');
+// Dotless basename: Lambda's `handler` string is `<file>.<export>`, split on
+// the FIRST dot — a dotted filename would mis-resolve the module.
+const HANDLER_BUNDLE = join(__dirname, 'kv_keys_handler_bundle.mjs');
 
 export type KvKeysProps = {
   /** The CloudFront KeyValueStore to write into. */
@@ -56,9 +58,9 @@ export class KvKeys extends Construct {
     const handler = new LambdaFunction(this, 'Fn', {
       code: Code.fromAsset(dirname(HANDLER_BUNDLE), {
         // Ship only the bundled handler, not the sibling source/maps in dist/.
-        exclude: ['*', '!kv_keys_handler.bundle.mjs'],
+        exclude: ['*', '!kv_keys_handler_bundle.mjs'],
       }),
-      handler: 'kv_keys_handler.bundle.handler',
+      handler: 'kv_keys_handler_bundle.handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: Duration.minutes(5),
     });
