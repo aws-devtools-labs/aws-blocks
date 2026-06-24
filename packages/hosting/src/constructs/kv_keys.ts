@@ -2,22 +2,26 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Construct } from 'constructs';
 import { CustomResource, Duration } from 'aws-cdk-lib';
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
-import { Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import type { IKeyValueStore } from 'aws-cdk-lib/aws-cloudfront';
+import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// This file lives at <repo>/packages/hosting/dist/constructs/kv_keys.js.
-// NodejsFunction requires `entry` to sit UNDER `projectRoot` and a
-// `depsLockFilePath` under it too. When this construct runs from a CONSUMING
-// app (cwd elsewhere), the default projectRoot is that app and the handler is
-// "not under root" (PathNotUnderRoot). Anchor both to the monorepo root (4
-// levels up: dist/constructs → dist → hosting → packages → repo), which is the
-// only place with a package-lock.json + node_modules for esbuild to bundle the
-// kvs SDK dep.
-const REPO_ROOT = join(__dirname, '..', '..', '..', '..');
+// The handler is PRE-BUNDLED at build time (scripts/bundle-handlers.mjs →
+// `kv_keys_handler.bundle.mjs`, with the kvs SDK + signature-v4a inlined into a
+// single self-contained file). We ship that asset and use a plain
+// `Code.fromAsset` instead of `NodejsFunction`.
+//
+// Why not NodejsFunction: it re-bundles `entry` at SYNTH time and requires the
+// entry to sit under a `projectRoot` that also has a lockfile. That only holds
+// inside this monorepo — once @aws-blocks/hosting is installed from npm this
+// file lives under the consumer's `node_modules/`, projectRoot resolves into
+// `node_modules/` (no package-lock), and synth fails with PathNotUnderRoot.
+// Pre-bundling removes that dependency entirely: the consumer ships a ready
+// asset and CDK just zips the directory.
+const HANDLER_BUNDLE = join(__dirname, 'kv_keys_handler.bundle.mjs');
 
 export type KvKeysProps = {
   /** The CloudFront KeyValueStore to write into. */
@@ -46,19 +50,17 @@ export class KvKeys extends Construct {
   constructor(scope: Construct, id: string, props: KvKeysProps) {
     super(scope, id);
 
-    // The compiled handler ships next to this file in dist/. esbuild
-    // (NodejsFunction) re-bundles it, pulling in the kvs SDK client which is
-    // not in the Lambda runtime baseline.
-    const handler = new NodejsFunction(this, 'Fn', {
-      entry: join(__dirname, 'kv_keys_handler.js'),
-      handler: 'handler',
-      runtime: Runtime.NODEJS_20_X,
+    // Pre-bundled, self-contained ESM handler (kvs SDK + signature-v4a inlined
+    // at build time). `Code.fromAsset` on the single file → CDK zips it; no
+    // synth-time bundling, no projectRoot/lockfile dependency.
+    const handler = new LambdaFunction(this, 'Fn', {
+      code: Code.fromAsset(dirname(HANDLER_BUNDLE), {
+        // Ship only the bundled handler, not the sibling source/maps in dist/.
+        exclude: ['*', '!kv_keys_handler.bundle.mjs'],
+      }),
+      handler: 'kv_keys_handler.bundle.handler',
+      runtime: DEFAULT_NODE_RUNTIME,
       timeout: Duration.minutes(5),
-      // Anchor to the monorepo root so `entry` is under `projectRoot` even when
-      // a consuming app (different cwd) instantiates this construct.
-      projectRoot: REPO_ROOT,
-      depsLockFilePath: join(REPO_ROOT, 'package-lock.json'),
-      bundling: { minify: true },
     });
 
     // Data-plane KVS access: describe/list to diff, update to apply.

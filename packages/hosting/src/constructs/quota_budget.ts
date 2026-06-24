@@ -25,8 +25,16 @@ import { HostingError } from '../hosting_error.js';
  *
  * `QuotaBudget` is the one place that knows, for each tracked quota: the limit,
  * its provenance (AWS default vs. a caller-supplied override), and the ledger
- * of who consumed how much. Consumers call {@link consume} as they allocate,
- * and {@link assertWithinLimits} is the single enforcement point.
+ * of who consumed how much.
+ *
+ * Current usage note: the KVS single-behavior migration eliminated the
+ * per-route cache-behavior and per-pattern response-headers-policy caps (route
+ * tables + header rules are now KVS DATA, not CloudFront resources), so those
+ * quotas no longer need running-total accounting. Today `cdn_construct` uses
+ * only the override-aware {@link limit} lookup, to enforce the Lambda@Edge
+ * function-count cap. The {@link consume} / {@link assertWithinLimits} ledger
+ * is retained (and unit-tested) for future multi-resource accounting, but is
+ * not on the live enforcement path — see `cdn_construct.ts`.
  *
  * Scope: this models ONLY the adjustable Service Quotas the code actively
  * enforces and that a real app realistically reaches. True hard limits (the CF

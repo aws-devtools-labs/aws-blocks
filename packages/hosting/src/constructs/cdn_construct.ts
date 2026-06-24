@@ -257,20 +257,15 @@ export class CdnConstruct extends Construct {
       hasComputeRoutes;
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
-    // Central accounting for the adjustable quotas this distribution draws on.
-    // Consumers call budget.consume() as they allocate; the authoritative
-    // budget.assertWithinLimits() runs just before the Distribution is created.
-    const budget = new QuotaBudget(props.quotas);
-
     // ---- Lambda@Edge function-count validation ----
-    // Edge functions are validated eagerly (their count is known up front and
-    // is independent of behavior allocation). The cache-behavior and
-    // header-policy budgets are consumed incrementally below and enforced by
-    // the single assertWithinLimits() call near the end.
+    // The KVS single-behavior model removed the per-route cache-behavior and
+    // response-headers-policy caps that used to need running-total accounting,
+    // so the ONLY adjustable quota this construct still enforces is the
+    // Lambda@Edge function count. We read its (possibly overridden) limit and
+    // check eagerly — the count is known up front. `QuotaBudget` is used purely
+    // for the override-aware `limit()` lookup here.
+    const budget = new QuotaBudget(props.quotas);
     const edgeRouteCount = props.routeEdgeFunctions?.size ?? 0;
-    if (edgeRouteCount > 0) {
-      budget.consume('edgeFunctions', 'edge-routes', edgeRouteCount);
-    }
     const edgeLimit = budget.limit('edgeFunctions');
     if (edgeRouteCount > edgeLimit) {
       throw new HostingError('TooManyEdgeRoutesError', {

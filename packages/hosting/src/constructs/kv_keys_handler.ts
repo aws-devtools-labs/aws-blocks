@@ -89,6 +89,10 @@ function* batches(
     bytes += sz;
   }
   for (const d of deletes) {
+    // Deletes are gated on the key COUNT only (not bytes, unlike puts above):
+    // a delete carries just the key (≤512 B, the KVS key-size limit) and no
+    // value, so a 50-key batch is at most ~25 KB — far under the 3 MB request
+    // ceiling. Tracking bytes here would never change the batching outcome.
     if (count + 1 > MAX_KEYS_PER_REQUEST) {
       yield* flush();
     }
@@ -150,16 +154,24 @@ async function listAll(kvsArn: string): Promise<Entries> {
   return out;
 }
 
+/**
+ * The set of keys to drain on a Delete. CloudFormation does NOT populate
+ * `OldResourceProperties` on Delete — the last-deployed props arrive in
+ * `ResourceProperties` — so we must read `ResourceProperties.Entries`. Reading
+ * `OldResourceProperties` here (as a previous version did) always yielded `{}`,
+ * so nothing was ever drained. Exported for unit testing.
+ */
+export function deleteDrainSet(event: Event): Entries {
+  const json = event.ResourceProperties?.Entries;
+  return json ? (JSON.parse(json) as Entries) : {};
+}
+
 export async function handler(event: Event): Promise<{ PhysicalResourceId: string }> {
   const { KvsArn, Entries: entriesJson } = event.ResourceProperties;
   const physicalId = `kvkeys-${KvsArn.split('/').pop() ?? 'store'}`;
 
   if (event.RequestType === 'Delete') {
-    // Drain only the keys we manage; leave any out-of-band keys alone.
-    const previous = event.OldResourceProperties?.Entries
-      ? (JSON.parse(event.OldResourceProperties.Entries) as Entries)
-      : {};
-    await applyUpdate(KvsArn, {}, previous);
+    await applyUpdate(KvsArn, {}, deleteDrainSet(event));
     return { PhysicalResourceId: physicalId };
   }
 

@@ -31,7 +31,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && npm run bundle:handlers",
+    "bundle:handlers": "node scripts/bundle-handlers.mjs",
     "test": "node --test dist/**/*.test.js",
     "dev": "tsc --build --watch"
   },
@@ -51,6 +52,7 @@
     "@types/node": "^20.0.0",
     "@types/parse-cache-control": "^1.0.4",
     "@types/semver": "^7.5.8",
+    "esbuild": "^0.27.0",
     "typescript": "^5.3.0"
   },
   "peerDependencies": {

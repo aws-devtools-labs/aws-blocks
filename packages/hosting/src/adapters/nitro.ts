@@ -1140,20 +1140,62 @@ const findIpxBaseURL = (projectDir: string): string | undefined => {
  * env. Conservative: matches a literal `domains: ['a', 'b']` array of string
  * literals; anything dynamic yields an empty list (fails closed).
  */
+/**
+ * Pure parser: extract `image.domains` string literals from a nuxt.config
+ * source. Exported for unit testing (esp. nested-object-before-domains).
+ */
+export const parseNuxtImageDomains = (source: string): string[] => {
+  // Scope to the `image: { … }` block. Use BRACE BALANCING (not a non-greedy
+  // `[\s\S]*?\}`, which stops at the first `}` and would truncate the scope
+  // when a nested object — e.g. `provider: { … }` — precedes `domains`,
+  // silently dropping the allowlist). Fall back to the whole source if the
+  // block can't be isolated.
+  const scope = extractImageBlock(source) ?? source;
+  const arr = scope.match(/\bdomains\s*:\s*\[([^\]]*)\]/);
+  if (!arr) return [];
+  return [...arr[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
+};
+
 const findNuxtImageDomains = (projectDir: string): string[] => {
   for (const ext of ['ts', 'mjs', 'js', 'cjs']) {
     const candidate = path.join(projectDir, `nuxt.config.${ext}`);
     if (!fs.existsSync(candidate)) continue;
     const source = fs.readFileSync(candidate, 'utf-8');
-    // Match `image: { … domains: [ … ] … }`. Keep it tight: the `domains`
-    // array must appear within an `image:` block.
-    const block = source.match(/\bimage\s*:\s*\{[\s\S]*?\}/);
-    const scope = block ? block[0] : source;
-    const arr = scope.match(/\bdomains\s*:\s*\[([^\]]*)\]/);
-    if (!arr) return [];
-    return [...arr[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
+    return parseNuxtImageDomains(source);
   }
   return [];
+};
+
+/**
+ * Return the full `image: { … }` object literal from a nuxt.config source,
+ * brace-balanced so nested objects (`provider: { … }`) don't truncate it.
+ * Returns undefined if no `image:` block is found or the braces don't balance
+ * (e.g. computed/spread config) — callers fall back to scanning the source.
+ *
+ * Note: skips `{`/`}` that appear inside string/template literals so a brace in
+ * a config value doesn't throw off the depth count.
+ */
+const extractImageBlock = (source: string): string | undefined => {
+  const m = source.match(/\bimage\s*:\s*\{/);
+  if (m?.index === undefined) return undefined;
+  const open = m.index + m[0].length - 1; // index of the opening `{`
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < source.length; i++) {
+    const c = source[i];
+    if (quote) {
+      if (c === '\\') i++; // skip escaped char
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') quote = c;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  return undefined; // unbalanced
 };
 
 /**
