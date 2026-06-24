@@ -3095,3 +3095,110 @@ void describe('HostingConstruct — BYO domain + hostedZoneId', () => {
     );
   });
 });
+
+// ================================================================
+// Cache-Control split on static asset deployments (G19)
+//
+// The single-behavior KVS model means static assets ride the same CloudFront
+// behavior as SSR, so the per-OBJECT Cache-Control headers (set on the S3
+// BucketDeployments) are what actually controls browser/edge caching. A
+// regression here silently collapses cache hit-rate. These assert the 3-tier
+// split documented in hosting_construct.ts:
+//   1. immutablePaths → `max-age=31536000, immutable`
+//   2. *.html         → `no-cache, no-store, must-revalidate`
+//   3. mutable assets → `s-maxage=31536000, max-age=0, must-revalidate`
+// ================================================================
+
+void describe('HostingConstruct — static asset Cache-Control split (G19)', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // The BucketDeployment custom resource carries the Cache-Control in its
+  // `SystemMetadata.cacheControl` (CDK lowercases the metadata key but the
+  // string is what we assert).
+  const cacheControlValues = (template: Template): string[] => {
+    const deployments = template.findResources('Custom::CDKBucketDeployment');
+    const values: string[] = [];
+    for (const res of Object.values(deployments)) {
+      const props = (res as { Properties?: Record<string, unknown> }).Properties ?? {};
+      const sysMeta = props.SystemMetadata as { 'cache-control'?: string } | undefined;
+      if (sysMeta?.['cache-control']) values.push(sysMeta['cache-control']);
+    }
+    return values;
+  };
+
+  void it('emits immutable, html-no-store, and mutable-edge-cache Cache-Control tiers', () => {
+    const staticDir = createStaticDir();
+    fs.writeFileSync(path.join(staticDir, 'app.abc123.js'), 'console.log(1)');
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {},
+        staticAssets: {
+          directory: staticDir,
+          immutablePaths: ['*.abc123.js', '_next/static/*'],
+        },
+        routes: [{ pattern: '/*', target: 'static' }],
+        buildId: 'cc-test-1',
+      },
+    });
+    const template = Template.fromStack(stack);
+    const ccs = cacheControlValues(template).join(' | ');
+
+    assert.match(ccs, /max-age=31536000, immutable/, 'immutable tier present');
+    assert.match(ccs, /no-cache, no-store, must-revalidate/, 'html no-store tier present');
+    assert.match(
+      ccs,
+      /s-maxage=31536000, max-age=0, must-revalidate/,
+      'mutable edge-cache tier present',
+    );
+  });
+
+  void it('honors a custom staticAssets.cacheControl for the mutable tier', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {},
+        staticAssets: {
+          directory: staticDir,
+          cacheControl: 'public, max-age=42',
+        },
+        routes: [{ pattern: '/*', target: 'static' }],
+        buildId: 'cc-test-2',
+      },
+    });
+    const template = Template.fromStack(stack);
+    assert.match(cacheControlValues(template).join(' | '), /public, max-age=42/);
+  });
+
+  void it('deploys all asset objects under the immutable builds/<id>/ prefix (atomic deploy)', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {},
+        staticAssets: { directory: staticDir },
+        routes: [{ pattern: '/*', target: 'static' }],
+        buildId: 'cc-test-3',
+      },
+    });
+    const template = Template.fromStack(stack);
+    const deployments = template.findResources('Custom::CDKBucketDeployment');
+    const prefixes = Object.values(deployments)
+      .map(
+        (r) =>
+          (r as { Properties?: { DestinationBucketKeyPrefix?: string } })
+            .Properties?.DestinationBucketKeyPrefix,
+      )
+      .filter((p): p is string => typeof p === 'string');
+    assert.ok(prefixes.length > 0, 'has asset deployments with a key prefix');
+    for (const p of prefixes) {
+      assert.match(p, /^builds\/cc-test-3\//, `prefix ${p} is under the build id`);
+    }
+  });
+});

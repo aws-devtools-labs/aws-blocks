@@ -2858,3 +2858,85 @@ void describe('CdnConstruct — header drop at behavior cap (P0.3)', () => {
     );
   });
 });
+
+// ================================================================
+// Sentinel-behavior guard (G21)
+//
+// The `/__blocks_origin_*/*` behaviors exist ONLY to bind the server/image
+// origins (so CDK materializes them + their OAC). They must NOT be a usable
+// route: a direct client hit would reach the SSR Lambda without the router's
+// x-forwarded-host injection, or hit the image origin directly — bypassing all
+// routing (a foot-gun / SSRF-ish surface). The construct attaches a viewer-
+// request SentinelGuard function that 403s those patterns. These assert the
+// guard is created AND bound, and that pure-static deploys create no guard.
+// ================================================================
+
+void describe('CdnConstruct — sentinel-behavior guard (G21)', () => {
+  // Returns the set of PathPatterns whose behavior has a viewer-request
+  // function association (i.e. the guard is attached).
+  const guardedPatterns = (template: Template): string[] => {
+    const dists = template.findResources('AWS::CloudFront::Distribution');
+    const out: string[] = [];
+    for (const d of Object.values(dists)) {
+      const cfg = (d as { Properties: { DistributionConfig: { CacheBehaviors?: Array<Record<string, unknown>> } } })
+        .Properties.DistributionConfig;
+      for (const b of cfg.CacheBehaviors ?? []) {
+        const assocs =
+          (b.FunctionAssociations as Array<{ EventType?: string }> | undefined) ?? [];
+        if (assocs.some((a) => a.EventType === 'viewer-request')) {
+          out.push(b.PathPattern as string);
+        }
+      }
+    }
+    return out;
+  };
+
+  void it('attaches a viewer-request guard to the server sentinel behavior', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: ssrManifest,
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+    const template = Template.fromStack(stack);
+
+    // The sentinel behavior carries a viewer-request association.
+    assert.ok(
+      guardedPatterns(template).includes('/__blocks_origin_server/*'),
+      'server sentinel behavior must have a viewer-request guard',
+    );
+
+    // A SentinelGuard CloudFront Function exists and returns 403 in its code.
+    const fns = template.findResources('AWS::CloudFront::Function');
+    const guard = Object.values(fns).find((f) =>
+      String(
+        (f as { Properties?: { FunctionCode?: string } }).Properties?.FunctionCode ?? '',
+      ).includes('statusCode: 403'),
+    );
+    assert.ok(guard, 'a SentinelGuard function returning 403 must be synthesized');
+  });
+
+  void it('does NOT create a SentinelGuard for a pure-static deploy (no sentinels)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: spaManifest, // static-only: no server/image origin → no sentinel
+      securityHeadersPolicy: policy,
+    });
+    const template = Template.fromStack(stack);
+    const fns = template.findResources('AWS::CloudFront::Function');
+    const guard = Object.values(fns).find((f) =>
+      String(
+        (f as { Properties?: { FunctionCode?: string } }).Properties?.FunctionCode ?? '',
+      ).includes('statusCode: 403'),
+    );
+    assert.ok(!guard, 'no guard function should exist without a sentinel behavior');
+  });
+});

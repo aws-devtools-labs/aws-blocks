@@ -8,6 +8,7 @@ import {
   hasExistingMiddlewareManifest,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
+  patchImageOptimizerForNext155,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
@@ -1124,6 +1125,57 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
       stat1 < PRE.length,
       `expected post-patch (${stat1}) < pre-patch (${PRE.length})`,
     );
+  });
+});
+
+void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-img-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    // image optimization disabled for this app → nothing to patch
+    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+  });
+
+  void it('inserts `void 0` so the request handler lands in the 5th slot', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i),o=await Pc.imageOptimizer(x);',
+    );
+    patchImageOptimizerForNext155(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+  });
+
+  void it('is idempotent — a second run does not double-insert', () => {
+    const bundle = writeBundle(
+      'await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    patchImageOptimizerForNext155(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerForNext155(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // exactly one `void 0` inserted into the call
+    assert.equal((twice.match(/\{\},void 0,/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when no matching call is present', () => {
+    writeBundle('export const handler = async () => ({}); // already adapted\n');
+    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
   });
 });
 
