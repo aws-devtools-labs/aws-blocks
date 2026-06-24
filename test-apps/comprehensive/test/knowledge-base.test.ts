@@ -12,35 +12,48 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
 
 /**
- * Poll kbRetrieve until at least one result is returned, indicating that
- * the knowledge-base ingestion job has completed. In local mode the mock
- * returns results immediately; in sandbox/production Bedrock ingestion is
- * async and may take a couple of minutes after deploy.
+ * Gate retrieval tests on knowledge-base ingestion readiness using the
+ * `isReady()` API (exposed here as `kbReady`). Bedrock ingests asynchronously
+ * after deploy, so during the warm-up window we poll readiness rather than
+ * probing `kbRetrieve` for results.
+ *
+ * - `kbReady() === false` is the expected transient "still ingesting" state —
+ *   we print a friendly one-liner and keep polling.
+ * - A *thrown* error is a real failure (a failed ingestion job surfaced as
+ *   `IngestionFailedException`, a `KnowledgeBaseValidationError`, or anything
+ *   unexpected) and is surfaced immediately rather than masked as warm-up.
+ *
+ * In local mode the mock reports ready immediately, so this returns on the
+ * first poll.
  */
-async function waitForIngestion(
+async function gateOnReadiness(
   api: typeof apiType,
-  query: string,
-  { timeoutMs = 180_000, intervalMs = 10_000 } = {},
+  { timeoutMs = 180_000, pollIntervalMs = 10_000 } = {},
 ): Promise<void> {
   const start = Date.now();
   const deadline = start + timeoutMs;
   let attempt = 0;
-  while (Date.now() < deadline) {
+  while (true) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
+    let ready: boolean;
     try {
-      const results = await api.kbRetrieve(query);
-      console.log(`[KB ingestion poll #${attempt}] ${results.length} results (${elapsed}s elapsed)`);
-      if (results.length > 0) return;
+      ready = await api.kbReady();
     } catch (err: any) {
-      console.log(`[KB ingestion poll #${attempt}] error: ${err.name || err.message} (${elapsed}s elapsed)`);
-      // ValidationError = real bug, throw immediately
-      if (isBlocksError(err, ValidationError)) throw err;
-      // NotReady, RetrievalFailed, etc. = KB not ready yet, keep polling
+      // Real failure (failed ingestion / validation / unexpected) — surface it.
+      console.error(`❌ KB readiness check failed: ${err.name || err.message}`);
+      throw err;
     }
-    await setTimeout(intervalMs);
+    if (ready) {
+      console.log(`✅ KB ready (ingestion complete) — ${elapsed}s elapsed`);
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`KB did not become ready within ${timeoutMs / 1000}s`);
+    }
+    console.log(`⏳ KB still warming up (ingestion in progress) — attempt #${attempt}, ${elapsed}s elapsed`);
+    await setTimeout(pollIntervalMs);
   }
-  throw new Error(`KB ingestion did not complete within ${timeoutMs / 1000}s`);
 }
 
 export function knowledgeBaseTests(getApi: () => typeof apiType) {
@@ -77,7 +90,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'getting started');
+        await gateOnReadiness(api);
       });
 
       test('returns results for a matching query', async () => {
@@ -134,7 +147,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'getting started');
+        await gateOnReadiness(api);
       });
 
       test('maxResults limits results', async () => {
@@ -172,7 +185,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'deployment');
+        await gateOnReadiness(api);
       });
 
       test('customer metadata category is present on tutorial doc', async () => {
