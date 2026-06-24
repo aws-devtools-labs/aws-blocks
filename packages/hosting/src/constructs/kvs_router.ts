@@ -267,13 +267,22 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   return entries;
 };
 
-/** Specificity score mirroring cdn_construct.routeSpecificity. */
-const specificity = (pattern: string): number => {
+/**
+ * Specificity score for a route/behavior pattern. Higher = more specific =
+ * should match first. Literal path segments dominate, then raw length. Used to
+ * order the KVS route-table scan AND (exported) to order CloudFront edge-route
+ * behaviors, which are first-match-wins with no longest-prefix preference — so
+ * a literal `/api/edge/special` must sort before a wildcard `/api/edge/*`.
+ */
+export const routeSpecificity = (pattern: string): number => {
   const literalSegments = pattern
     .split('/')
     .filter((s) => s !== '' && s !== '*').length;
   return literalSegments * 1000 + pattern.length;
 };
+
+/** @deprecated internal alias — use {@link routeSpecificity}. */
+const specificity = routeSpecificity;
 
 /**
  * Viewer-request CloudFront Function (JS 2.0). Reads the route table + metadata

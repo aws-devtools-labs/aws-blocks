@@ -1203,6 +1203,170 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('attaches includeBody on the edge origin-request association (POST/PUT body)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const edgeFn = new LambdaFunction(stack, 'EdgeBodyFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: { default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' } },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'edge-body-1',
+      };
+      new CdnConstruct(stack, 'CdnEdgeBody', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        routeEdgeFunctions: new Map([['edge1', edgeFn.currentVersion]]),
+      });
+      const template = Template.fromStack(stack);
+      const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0] as {
+        Properties: { DistributionConfig: { CacheBehaviors?: Array<Record<string, unknown>> } };
+      };
+      const b = (dist.Properties.DistributionConfig.CacheBehaviors ?? []).find(
+        (x) => x.PathPattern === '/api/edge',
+      );
+      const assoc = (b!.LambdaFunctionAssociations as Array<{ EventType?: string; IncludeBody?: boolean }>)[0];
+      assert.equal(assoc.EventType, 'origin-request');
+      assert.equal(assoc.IncludeBody, true, 'edge handler must receive the request body');
+    });
+
+    void it('orders edge behaviors by specificity (literal before wildcard) — C2 first-match-wins', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const mk = (id: string) =>
+        new LambdaFunction(stack, id, {
+          runtime: Runtime.NODEJS_20_X,
+          handler: 'index.handler',
+          code: Code.fromInline('exports.handler = async () => {};'),
+        }).currentVersion;
+      // Manifest deliberately lists the WILDCARD before the literal.
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: { default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' } },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [
+          { pattern: '/api/edge/*', target: 'edgeWild' },
+          { pattern: '/api/edge/special', target: 'edgeLit' },
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'edge-order-1',
+      };
+      new CdnConstruct(stack, 'CdnEdgeOrder', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        routeEdgeFunctions: new Map([
+          ['edgeWild', mk('EdgeWildFn')],
+          ['edgeLit', mk('EdgeLitFn')],
+        ]),
+      });
+      const template = Template.fromStack(stack);
+      const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0] as {
+        Properties: { DistributionConfig: { CacheBehaviors?: Array<Record<string, unknown>> } };
+      };
+      const patterns = (dist.Properties.DistributionConfig.CacheBehaviors ?? []).map(
+        (b) => b.PathPattern as string,
+      );
+      const litIdx = patterns.indexOf('/api/edge/special');
+      const wildIdx = patterns.indexOf('/api/edge/*');
+      assert.ok(litIdx >= 0 && wildIdx >= 0, 'both edge behaviors present');
+      assert.ok(
+        litIdx < wildIdx,
+        `literal /api/edge/special (idx ${litIdx}) must precede wildcard /api/edge/* (idx ${wildIdx})`,
+      );
+    });
+
+    void it('throws TooManyCacheBehaviorsError when edge routes exceed the behavior cap (C3)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      // 25 edge routes (each → 1 behavior) + 1 server sentinel + 1 default = 27
+      // behaviors > the 25 cap, but only 25 edge FUNCTIONS (the function cap is
+      // not exceeded). The behavior cap must catch this with a friendly error.
+      const edgeRoutes = new Map<string, IVersion>();
+      const routes: DeployManifest['routes'] = [{ pattern: '/*', target: 'default' }];
+      for (let i = 0; i < 25; i++) {
+        const v = new LambdaFunction(stack, `BehFn${i}`, {
+          runtime: Runtime.NODEJS_20_X,
+          handler: 'index.handler',
+          code: Code.fromInline('exports.handler = async () => {};'),
+        }).currentVersion;
+        edgeRoutes.set(`edge${i}`, v);
+        routes.push({ pattern: `/edge-${i}`, target: `edge${i}` });
+      }
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: { default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' } },
+        staticAssets: { directory: '/tmp/assets' },
+        routes,
+        buildId: 'edge-behavior-cap-1',
+      };
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'CdnBehCap', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            computeFunctionUrls: new Map([['default', fnUrl]]),
+            computeFunctions: new Map([['default', fn]]),
+            routeEdgeFunctions: edgeRoutes,
+          }),
+        (e: unknown) => (e as HostingError).name === 'TooManyCacheBehaviorsError',
+      );
+    });
+
+    void it('throws EdgeCatchAllUnsupportedError when an edge route is the catch-all (C5)', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const edgeFn = new LambdaFunction(stack, 'EdgeAllFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: { default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' } },
+        staticAssets: { directory: '/tmp/assets' },
+        // An edge route mapped to the catch-all (in addition to the real default).
+        routes: [
+          { pattern: '/*', target: 'edgeAll' },
+        ],
+        buildId: 'edge-catchall-1',
+      };
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'CdnEdgeAll', {
+            bucket,
+            manifest,
+            securityHeadersPolicy: policy,
+            computeFunctionUrls: new Map([['default', fnUrl]]),
+            computeFunctions: new Map([['default', fn]]),
+            routeEdgeFunctions: new Map([['edgeAll', edgeFn.currentVersion]]),
+          }),
+        (e: unknown) => (e as HostingError).name === 'EdgeCatchAllUnsupportedError',
+      );
+    });
+
     void it('throws EmptyGeoRestrictionError for empty countries', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');

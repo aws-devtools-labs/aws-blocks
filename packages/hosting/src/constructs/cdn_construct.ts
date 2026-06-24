@@ -59,6 +59,7 @@ import {
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
+  routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
 
@@ -735,26 +736,74 @@ export class CdnConstruct extends Construct {
     // only needs to be a well-formed origin. Without this the KVS router sends
     // these paths to the default server Lambda, which lacks the routes → 500.
     if (props.routeEdgeFunctions && props.routeEdgeFunctions.size > 0) {
-      for (const route of manifest.routes) {
-        const edgeVersion = props.routeEdgeFunctions.get(route.target);
-        if (!edgeVersion) continue;
-        const pattern = prependBasePath(manifest.basePath, route.pattern);
-        if (pattern === '/*' || pattern === '*') continue; // never as catch-all
+      // CloudFront evaluates additional behaviors FIRST-MATCH-WINS with no
+      // longest-prefix preference, so insert most-specific first: a literal
+      // `/api/edge/special` must precede a wildcard `/api/edge/*` or the
+      // wildcard shadows it. Sort the edge routes by specificity up front.
+      const edgeRoutes = manifest.routes
+        .filter((r) => props.routeEdgeFunctions?.has(r.target))
+        .map((r) => ({
+          route: r,
+          pattern: prependBasePath(manifest.basePath, r.pattern),
+        }))
+        .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+      for (const { route, pattern } of edgeRoutes) {
+        // An edge route mapped to the catch-all can't be expressed as a
+        // dedicated behavior (CloudFront's default behavior IS `*`, and it's
+        // bound to the KVS router → the edge bundle would never run). Fail loud
+        // instead of silently falling through to a 500 at runtime.
+        if (pattern === '/*' || pattern === '*') {
+          throw new HostingError('EdgeCatchAllUnsupportedError', {
+            message: `An edge-runtime route is mapped to the catch-all pattern "${pattern}". CloudFront's default behavior is reserved for the KVS router, so a catch-all edge function cannot be wired and would 500 at runtime.`,
+            resolution:
+              'Give the edge route a specific path pattern (e.g. `/api/edge`, ' +
+              '`/edge/*`) rather than a catch-all, or move its logic to the SSR ' +
+              'compute (non-edge) runtime.',
+          });
+        }
         additionalBehaviors[pattern] = {
           origin: s3Origin,
           viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           allowedMethods: AllowedMethods.ALLOW_ALL,
+          // Intentionally CACHING_DISABLED (not `ssrCachePolicy ?? …`): an edge
+          // function computes the response per request, so edge routes opt OUT
+          // of the SSR s-maxage caching. Keep this — don't restore ssrCachePolicy.
           cachePolicy: CachePolicy.CACHING_DISABLED,
           originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           responseHeadersPolicy: props.securityHeadersPolicy,
           edgeLambdas: [
             {
-              functionVersion: edgeVersion,
+              functionVersion: props.routeEdgeFunctions.get(route.target)!,
               eventType: LambdaEdgeEventType.ORIGIN_REQUEST,
+              // POST/PUT App Router edge handlers only receive the request body
+              // on origin-request when includeBody is set; without it the body
+              // is empty.
+              includeBody: true,
             },
           ],
         };
       }
+    }
+
+    // ---- Behavior-count cap (CloudFront hard limit, default 25) ----
+    // Every entry in `additionalBehaviors` (sentinels + edge routes) is a real
+    // CloudFront cache behavior and counts against the per-distribution cap
+    // (1 default + N additional). Edge routes can approach it before the
+    // edge-FUNCTION cap (also 25) trips, and the raw CloudFormation error is
+    // opaque — surface a friendly one here instead.
+    const additionalBehaviorCount = Object.keys(additionalBehaviors).length;
+    const totalBehaviors = 1 + additionalBehaviorCount; // +1 for the default
+    const behaviorLimit = budget.limit('cacheBehaviors');
+    if (totalBehaviors > behaviorLimit) {
+      throw new HostingError('TooManyCacheBehaviorsError', {
+        message: `This distribution needs ${totalBehaviors} CloudFront cache behaviors (1 default + ${additionalBehaviorCount} for origin-binding sentinels and edge-runtime routes), exceeding the limit of ${behaviorLimit} per distribution.`,
+        resolution:
+          'Reduce the number of `runtime: "edge"` routes (each needs its own ' +
+          'behavior), consolidate edge logic into fewer routes, raise the ' +
+          '`quotas.cacheBehaviors` hosting prop if AWS granted your account a ' +
+          'higher limit, or request a service-quota increase.',
+      });
     }
 
     // ---- Error responses ----
