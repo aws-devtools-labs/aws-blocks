@@ -63,7 +63,7 @@ describe('AuthBasic setAuthState errorName', () => {
 	test('a generic ApiError (no structured name) yields no errorName', async () => {
 		// resetPassword throws a plain ApiError('Password reset not configured')
 		// with no `name` when codeDelivery is unset — `.name` defaults to
-		// 'ApiError', which must not leak as a meaningful errorName.
+		// DEFAULT_API_ERROR_NAME, which must not leak as a meaningful errorName.
 		const auth = makeAuth();
 		const api = apiFor(auth, ctx());
 
