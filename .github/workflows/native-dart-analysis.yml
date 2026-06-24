@@ -84,10 +84,10 @@ jobs:
         run: dart format --output=none --set-exit-if-changed .
 
       # Advisory for now — annotations only, non-blocking — matching the repo's
-      # existing "Lint (advisory)" convention in pr-checks.yml. The ruleset in
-      # native/dart/analysis_options.yaml still reports pre-existing findings
-      # that a follow-up `dart fix` pass will clear; flip this to blocking once
-      # the tree analyzes clean.
+      # existing "Lint (advisory)" convention in pr-checks.yml. Each package's
+      # analysis_options.yaml still reports pre-existing findings that a
+      # follow-up `dart fix` pass will clear; flip this to blocking once the
+      # tree analyzes clean.
       - name: Analyze (advisory — annotations only, non-blocking)
         continue-on-error: true
         working-directory: ${{ matrix.working-directory }}

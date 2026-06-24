@@ -1,18 +1,20 @@
-# Static-analysis ruleset for the Blocks native Dart packages.
+# Static-analysis ruleset for this Blocks native Dart package.
 #
 # Builds on the standard `package:lints/recommended.yaml` base and layers on
-# strict type-checking flags plus an opinionated set of lint rules. The rules
-# are all built into the Dart analyzer, so no extra package dependency is
-# required.
+# strict type-checking flags plus an opinionated set of lint rules. `lints` is
+# declared as a dev_dependency so the include resolves anywhere (including on a
+# clean `dart pub publish` of this package).
+#
+# This file is intentionally self-contained (rather than including a shared
+# parent config) so it travels with the package when published — pub only
+# bundles files inside the package directory.
 #
 # Notes:
 #   - `public_member_api_docs`, `package_api_docs`, and `comment_references`
 #     are intentionally left off: these packages don't enforce doc comments on
 #     every public member.
 #   - Flutter-only lint rules are not included here (they would require a
-#     `flutter_lints` dependency and only apply to widget code). If a
-#     Flutter-specific overlay is ever wanted for blocks_runtime_flutter, add
-#     it via that package's own analysis_options.yaml.
+#     `flutter_lints` dependency and only apply to widget code).
 include: package:lints/recommended.yaml
 
 analyzer:
@@ -25,7 +27,6 @@ analyzer:
   exclude:
     - '**/*.g.dart'
     - '**/*.mocks.dart'
-    - example/lib/**                                   # generated at runtime by blocks_codegen
 
 linter:
   rules:
