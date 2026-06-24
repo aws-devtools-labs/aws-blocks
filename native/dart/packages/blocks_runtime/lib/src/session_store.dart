@@ -87,7 +87,8 @@ class PersistentSessionStore implements SessionStore {
     final raw = await _store.get(_storageKey);
     if (raw == null || raw.isEmpty) return;
     try {
-      final map = (jsonDecode(raw) as Map<String, dynamic>).cast<String, String>();
+      final map =
+          (jsonDecode(raw) as Map<String, dynamic>).cast<String, String>();
       for (final entry in map.entries) {
         _cache.setCookies('${entry.key}=${entry.value}');
       }

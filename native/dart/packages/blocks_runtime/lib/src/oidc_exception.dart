@@ -9,8 +9,9 @@ sealed class OidcException implements Exception {
   const OidcException(this.message, [this.cause]);
 
   @override
-  String toString() =>
-      cause == null ? 'OidcException: $message' : 'OidcException: $message (cause: $cause)';
+  String toString() => cause == null
+      ? 'OidcException: $message'
+      : 'OidcException: $message (cause: $cause)';
 }
 
 /// The requested provider name is not configured in the spec.
