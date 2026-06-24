@@ -22,7 +22,7 @@ export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
-export { ApiError, isBlocksError, hasAuthError } from '../errors.js';
+export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;

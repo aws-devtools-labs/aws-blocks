@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
+ * The `name` an `ApiError` falls back to when no structured error name is
+ * given. A name equal to this carries no BB-level meaning, so consumers
+ * branching on the structured identity should treat it as "no name".
+ */
+export const DEFAULT_API_ERROR_NAME = 'ApiError';
+
+/**
  * Error subclass for errors that cross the wire between server and client.
  *
  * Carries a `status` (HTTP status code) and sets `name` to the BB-level
@@ -46,7 +53,7 @@ export class ApiError extends Error {
 
 	constructor(message: string, status: number, options?: { name?: string; cause?: unknown; retriable?: boolean }) {
 		super(message, options?.cause ? { cause: options.cause } : undefined);
-		this.name = options?.name ?? 'ApiError';
+		this.name = options?.name ?? DEFAULT_API_ERROR_NAME;
 		this.status = status;
 		this.retriable = options?.retriable ?? false;
 	}

@@ -50,6 +50,7 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 	getSdkIdentifiers,
@@ -1920,7 +1921,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
-					const errorName = e instanceof ApiError && e.name !== 'ApiError' ? e.name : undefined;
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Retriable errors keep the challenge session valid. Surface
 					// the flag to the client so its Authenticator renderer can
 					// keep the user on the current step instead of resetting.

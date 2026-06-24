@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -479,7 +479,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 				} catch (e: any) {
 					const currentUser = await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
-					const errorName = e instanceof ApiError && e.name !== 'ApiError' ? e.name : undefined;
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
 				}
 			},

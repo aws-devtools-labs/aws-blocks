@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
@@ -1650,7 +1651,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
-					const errorName = e instanceof ApiError && e.name !== 'ApiError' ? e.name : undefined;
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Match the AWS runtime: retriable failures (wrong MFA
 					// code, rejected shape) emit a thin signedOut shape with
 					// `retriable: true` so the client can preserve its current
