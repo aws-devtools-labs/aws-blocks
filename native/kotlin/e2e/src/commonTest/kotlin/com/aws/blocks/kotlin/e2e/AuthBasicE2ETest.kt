@@ -1,16 +1,16 @@
 package com.aws.blocks.kotlin.e2e
 
 import com.aws.blocks.kotlin.exceptions.ApiException
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotBeBlank
+import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.Clock
-import kotlin.test.Test
-import kotlin.test.assertFailsWith
 
 class AuthBasicE2ETest {
 
@@ -84,17 +84,13 @@ class AuthBasicE2ETest {
         api.basicSignIn(username, password)
         api.basicSignOut()
 
-        assertFailsWith<ApiException> {
-            api.basicRequireAuth()
-        }
+        shouldThrow<ApiException> { api.basicRequireAuth() }
     }
 
     @Test
     fun wrongPasswordThrows() = runTest {
         api.basicSignUp(username, password)
 
-        assertFailsWith<ApiException> {
-            api.basicSignIn(username, "wrong5678")
-        }
+        shouldThrow<ApiException> { api.basicSignIn(username, "wrong5678") }
     }
 }
