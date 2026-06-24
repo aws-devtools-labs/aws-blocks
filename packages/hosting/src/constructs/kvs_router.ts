@@ -397,8 +397,18 @@ async function handler(event) {
   // Default: server if present, else static (S3).
   if (kind === null) { kind = meta.srv ? 'c' : 's'; }
 
-  // 4a. image-opt origin — keep URI, no build-id prefix.
+  // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
+  // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source
+  // path relative to its OWN base (e.g. IPX baseURL '/_ipx'), so a deployed
+  // basePath like '/myapp' must be removed first — otherwise the optimizer
+  // sees '/myapp/_ipx/...' , fails to match its prefix, and 404s. (Mirrors the
+  // basePath strip the static branch already does.)
   if (kind === 'i') {
+    if (bp && uri.indexOf(bp) === 0) {
+      uri = uri.substring(bp.length);
+      if (uri.length === 0) { uri = '/'; }
+      request.uri = uri;
+    }
     cf.selectRequestOriginById(meta.oImg);
     return request;
   }

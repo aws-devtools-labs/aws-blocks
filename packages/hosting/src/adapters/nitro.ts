@@ -374,6 +374,8 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // from a path other than the default `/_ipx`. We need the same
   // value so the CloudFront cache behavior + Lambda strip match.
   const ipxBaseURL = imageOptBundle ? findIpxBaseURL(projectDir) : undefined;
+  // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda.
+  const imageDomains = imageOptBundle ? findNuxtImageDomains(projectDir) : [];
 
   // Merge route rules from the user's nuxt.config.ts (visible in
   // nitro.json on some Nitro versions) with the rules Nitro itself
@@ -430,6 +432,7 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    imageDomains,
     basePath,
   });
 };
@@ -1127,6 +1130,33 @@ const findIpxBaseURL = (projectDir: string): string | undefined => {
 };
 
 /**
+ * Read `@nuxt/image`'s `image.domains` allowlist from nuxt.config so the IPX
+ * Lambda can be configured to fetch remote source images (it default-denies
+ * remote fetches when the allowlist is empty, to avoid an SSRF primitive).
+ *
+ * `<NuxtImg src="https://host/…">` only optimizes a remote image when its
+ * hostname is in `image.domains`; we mirror that allowlist into
+ * `manifest.imageOptimization.domains` → the Lambda's `IMAGE_ALLOWED_HOSTNAMES`
+ * env. Conservative: matches a literal `domains: ['a', 'b']` array of string
+ * literals; anything dynamic yields an empty list (fails closed).
+ */
+const findNuxtImageDomains = (projectDir: string): string[] => {
+  for (const ext of ['ts', 'mjs', 'js', 'cjs']) {
+    const candidate = path.join(projectDir, `nuxt.config.${ext}`);
+    if (!fs.existsSync(candidate)) continue;
+    const source = fs.readFileSync(candidate, 'utf-8');
+    // Match `image: { … domains: [ … ] … }`. Keep it tight: the `domains`
+    // array must appear within an `image:` block.
+    const block = source.match(/\bimage\s*:\s*\{[\s\S]*?\}/);
+    const scope = block ? block[0] : source;
+    const arr = scope.match(/\bdomains\s*:\s*\[([^\]]*)\]/);
+    if (!arr) return [];
+    return [...arr[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
+  }
+  return [];
+};
+
+/**
  * Build the DeployManifest from a known-good `.output/` layout.
  */
 const buildManifest = (input: {
@@ -1142,6 +1172,8 @@ const buildManifest = (input: {
    * `runtimeConfig.ipx.baseURL` in nuxt.config.
    */
   ipxBaseURL?: string;
+  /** `@nuxt/image` `image.domains` → IPX remote-source allowlist. */
+  imageDomains?: string[];
   /** Normalized `app.baseURL` (Nuxt), if set. Maps to `manifest.basePath`. */
   basePath?: string;
 }): DeployManifest => {
@@ -1153,6 +1185,7 @@ const buildManifest = (input: {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    imageDomains,
     basePath,
   } = input;
 
@@ -1228,6 +1261,11 @@ const buildManifest = (input: {
       // the IPX runtime accepts any size requested in the URL anyway.
       formats: ['webp', 'avif'],
       sizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+      // @nuxt/image `image.domains` → IPX Lambda remote-source allowlist
+      // (IMAGE_ALLOWED_HOSTNAMES). Empty = default-deny (local images only).
+      ...(imageDomains && imageDomains.length > 0
+        ? { domains: imageDomains }
+        : {}),
       baseURL: effectiveIpxBaseURL,
       // Forward the user-configured base URL into the Lambda so its
       // prefix-stripping regex matches whatever path CloudFront
