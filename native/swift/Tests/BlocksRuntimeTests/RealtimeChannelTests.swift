@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -11,7 +18,10 @@ final class RealtimeChannelTests: XCTestCase {
         ]
 
         let channel = RealtimeChannel<[String: Any]>.fromJSON(json) { data in
-            try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw RPCError(message: "Invalid JSON")
+            }
+            return obj
         }
 
         XCTAssertEqual(channel.channel, "cursors")
@@ -95,7 +105,11 @@ final class RealtimeChannelTests: XCTestCase {
     /// them straight to JSONDecoder, removing the redundant Data → String →
     /// Data round trip.
     func testDeserializerReceivesData() throws {
-        struct Cursor: Codable, Equatable { let x: Int; let y: Int }
+        // swiftlint:disable identifier_name
+        struct Cursor: Codable, Equatable { let x: Int
+        let y: Int
+        }
+        // swiftlint:enable identifier_name
 
         let json: [String: Any] = [
             "channel": "cursors",

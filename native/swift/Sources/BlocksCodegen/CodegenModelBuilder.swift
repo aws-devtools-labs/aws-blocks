@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 // MARK: - Stage 2: Codegen Model Builder
@@ -45,7 +52,7 @@ public struct CodegenModelBuilder {
 
         for method in rpcModel.methods {
             let parts = method.name.split(separator: ".", maxSplits: 1)
-            let ns = parts.count > 1 ? String(parts[0]) : "_default"
+            let namespaceName = parts.count > 1 ? String(parts[0]) : "_default"
             let opName = parts.count > 1 ? String(parts[1]) : method.name
 
             // Inline types for this operation are collected separately
@@ -86,7 +93,7 @@ public struct CodegenModelBuilder {
 
             let nestedTypes = buildNestedTypeNodes(from: inlineTypes)
 
-            namespaceMap[ns, default: []].append(Operation(
+            namespaceMap[namespaceName, default: []].append(Operation(
                 name: opName,
                 parameters: parameters,
                 result: OperationResult(type: resultType),
@@ -123,16 +130,16 @@ public struct CodegenModelBuilder {
         let finalType: ResolvedType
         if case .union(let unionName, let variants, let disc) = entry.type {
             let variantPrefix = "\(entry.id):variant:"
-            let variantChildEntries = allEntries.filter { e in
-                guard let pid = e.parentId else { return false }
+            let variantChildEntries = allEntries.filter { item in
+                guard let pid = item.parentId else { return false }
                 return pid.hasPrefix(variantPrefix)
             }
             if !variantChildEntries.isEmpty {
                 // Group entries by variant name
                 var variantChildrenMap: [String: [NestedTypeNode]] = [:]
-                for e in variantChildEntries {
-                    let variantName = String(e.parentId!.dropFirst(variantPrefix.count))
-                    let node = buildNode(e, allEntries: allEntries)
+                for childEntry in variantChildEntries {
+                    let variantName = String(childEntry.parentId!.dropFirst(variantPrefix.count))
+                    let node = buildNode(childEntry, allEntries: allEntries)
                     variantChildrenMap[variantName, default: []].append(node)
                 }
                 let updatedVariants = variants.map { variant -> UnionVariant in
@@ -327,7 +334,9 @@ public struct CodegenModelBuilder {
         case .union(let members):
             let unionName = pascalCase(name)
             let myId = "\(currentParentId ?? "root").\(unionName)"
-            let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }; return false }
+            let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }
+            return false
+            }
             let resolved = resolveUnion(
                 members: members,
                 unionName: unionName,
@@ -343,16 +352,16 @@ public struct CodegenModelBuilder {
                 if case .union(_, let variants, let disc) = resolved {
                     let key = structuralKeyOfUnion(variants: variants, discriminator: disc)
                     for existing in typeDefinitions {
-                        if case .union(_, let ev, let ed) = existing.type,
-                           structuralKeyOfUnion(variants: ev, discriminator: ed) == key {
+                        if case .union(_, let existingVariants, let existingDisc) = existing.type,
+                           structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key {
                             let ref: ResolvedType = .typeReference(name: existing.name)
                             return hasNullMember ? .nullable(inner: ref) : ref
                         }
                     }
                     // Also check inline types for structural dedup
                     for existing in inlineTypes {
-                        if case .union(_, let ev, let ed) = existing.type,
-                           structuralKeyOfUnion(variants: ev, discriminator: ed) == key,
+                        if case .union(_, let existingVariants, let existingDisc) = existing.type,
+                           structuralKeyOfUnion(variants: existingVariants, discriminator: existingDisc) == key,
                            existing.shortName != unionName {
                             let ref: ResolvedType = .typeReference(name: existing.shortName)
                             return hasNullMember ? .nullable(inner: ref) : ref
@@ -449,15 +458,15 @@ public struct CodegenModelBuilder {
         let discriminator = detectDiscriminator(members: members, componentSchemas: componentSchemas)
 
         var variants: [UnionVariant] = []
-        for (i, member) in members.enumerated() {
+        for (memberIdx, member) in members.enumerated() {
             if case .primitive(.void, _) = member { continue }
 
             let refName: String?
-            if case .schemaRef(let n, _) = member { refName = n } else { refName = nil }
+            if case .schemaRef(let refStr, _) = member { refName = refStr } else { refName = nil }
 
             let nestedInlineName: String? = {
                 if case .schemaRef = member { return nil }
-                return "\(unionName)_Variant\(i)"
+                return "\(unionName)_Variant\(memberIdx)"
             }()
 
             let resolveName = refName ?? nestedInlineName ?? unionName
@@ -473,12 +482,12 @@ public struct CodegenModelBuilder {
                 earlyVariantName = pascalCase(ref)
             } else if let disc = discriminator,
                       case .inlineObject(let fields, _, _) = member,
-                      let f = fields.first(where: { $0.name == disc.fieldName }),
-                      case .unionLiteral(let vals) = f.type,
-                      let dv = vals.first {
-                earlyVariantName = variantNameFromDiscriminator(fieldName: disc.fieldName, value: dv)
+                      let discField = fields.first(where: { $0.name == disc.fieldName }),
+                      case .unionLiteral(let vals) = discField.type,
+                      let discVal = vals.first {
+                earlyVariantName = variantNameFromDiscriminator(fieldName: disc.fieldName, value: discVal)
             } else {
-                earlyVariantName = "\(unionName)_Variant\(i)"
+                earlyVariantName = "\(unionName)_Variant\(memberIdx)"
             }
 
             // Use a variant-scoped parent ID for inline types found inside this variant's fields
@@ -498,7 +507,7 @@ public struct CodegenModelBuilder {
                 currentParentId: variantParentId ?? currentParentId
             )
 
-            var discValue: String? = nil
+            var discValue: String?
             if let disc = discriminator {
                 let memberFields: [Field]?
                 switch member {
@@ -514,9 +523,9 @@ public struct CodegenModelBuilder {
                     memberFields = nil
                 }
                 if let fields = memberFields,
-                   let f = fields.first(where: { $0.name == disc.fieldName }),
-                   case .unionLiteral(let vals) = f.type, let v = vals.first {
-                    discValue = v
+                   let discField = fields.first(where: { $0.name == disc.fieldName }),
+                   case .unionLiteral(let vals) = discField.type, let firstVal = vals.first {
+                    discValue = firstVal
                 }
             }
 
@@ -525,15 +534,15 @@ public struct CodegenModelBuilder {
             let variantAddProps: ResolvedType?
             var variantEmbedded: ResolvedType?
             switch resolvedMember {
-            case .record(_, let fs, let addProps, let embedded):
+            case .record(_, let recordFields, let addProps, let embedded):
                 let dropName = discriminator?.fieldName
-                variantFields = fs.filter { $0.name != dropName }
+                variantFields = recordFields.filter { $0.name != dropName }
                 payloadTypeName = refName
                 variantAddProps = addProps
                 variantEmbedded = embedded
             case .nullable(let inner):
-                if case .record(_, let fs, let addProps, let embedded) = inner {
-                    variantFields = fs
+                if case .record(_, let recordFields, let addProps, let embedded) = inner {
+                    variantFields = recordFields
                     payloadTypeName = refName
                     variantAddProps = addProps
                     variantEmbedded = embedded
@@ -548,9 +557,9 @@ public struct CodegenModelBuilder {
                 payloadTypeName = unionRefName
                 variantAddProps = nil
                 variantEmbedded = nil
-            case .typeReference(let n):
+            case .typeReference(let typeName):
                 variantFields = []
-                payloadTypeName = n
+                payloadTypeName = typeName
                 variantAddProps = nil
                 variantEmbedded = nil
             case .map, .list, .enum, .primitive, .formattedType, .transferable:
@@ -563,10 +572,10 @@ public struct CodegenModelBuilder {
             let variantBaseName: String
             if let ref = refName {
                 variantBaseName = pascalCase(ref)
-            } else if let dv = discValue, let disc = discriminator {
-                variantBaseName = variantNameFromDiscriminator(fieldName: disc.fieldName, value: dv)
+            } else if let discVal = discValue, let disc = discriminator {
+                variantBaseName = variantNameFromDiscriminator(fieldName: disc.fieldName, value: discVal)
             } else {
-                variantBaseName = "\(unionName)_Variant\(i)"
+                variantBaseName = "\(unionName)_Variant\(memberIdx)"
             }
 
             if let inner = variantEmbedded, case .union(let innerName, let innerVariants, let innerDisc) = inner {
@@ -589,20 +598,22 @@ public struct CodegenModelBuilder {
 
         // Disambiguate colliding variant names
         var nameCounts: [String: Int] = [:]
-        for v in variants { nameCounts[v.name, default: 0] += 1 }
+        for variant in variants {
+            nameCounts[variant.name, default: 0] += 1
+        }
         var seen: [String: Int] = [:]
-        variants = variants.enumerated().map { (_, v) -> UnionVariant in
-            guard (nameCounts[v.name] ?? 0) > 1 else { return v }
-            let n = (seen[v.name] ?? 0) + 1
-            seen[v.name] = n
-            let renamed = "\(v.name)_\(n)"
+        variants = variants.map { variant -> UnionVariant in
+            guard (nameCounts[variant.name] ?? 0) > 1 else { return variant }
+            let count = (seen[variant.name] ?? 0) + 1
+            seen[variant.name] = count
+            let renamed = "\(variant.name)_\(count)"
             return UnionVariant(
                 name: renamed,
-                fields: v.fields,
-                discriminatorValue: v.discriminatorValue,
-                payloadTypeName: v.payloadTypeName,
-                additionalPropertiesType: v.additionalPropertiesType,
-                embeddedUnion: v.embeddedUnion
+                fields: variant.fields,
+                discriminatorValue: variant.discriminatorValue,
+                payloadTypeName: variant.payloadTypeName,
+                additionalPropertiesType: variant.additionalPropertiesType,
+                embeddedUnion: variant.embeddedUnion
             )
         }
 
@@ -629,9 +640,9 @@ public struct CodegenModelBuilder {
             guard case .unionLiteral(let vals) = field.type, vals.count == 1 else { continue }
 
             let allHaveIt = objectMembers.allSatisfy { fields in
-                fields.contains { f in
-                    f.name == field.name && {
-                        if case .unionLiteral(let v) = f.type { return v.count == 1 }
+                fields.contains { candidate in
+                    candidate.name == field.name && {
+                        if case .unionLiteral(let values) = candidate.type { return values.count == 1 }
                         return false
                     }()
                 }
@@ -640,9 +651,9 @@ public struct CodegenModelBuilder {
             if allHaveIt {
                 var variantMap: [String: String] = [:]
                 for fields in objectMembers {
-                    if let f = fields.first(where: { $0.name == field.name }),
-                       case .unionLiteral(let v) = f.type,
-                       let val = v.first {
+                    if let matchedField = fields.first(where: { $0.name == field.name }),
+                       case .unionLiteral(let values) = matchedField.type,
+                       let val = values.first {
                         variantMap[val] = variantNameFromDiscriminator(fieldName: field.name, value: val)
                     }
                 }
@@ -665,12 +676,12 @@ public struct CodegenModelBuilder {
     private func structuralKeyOfUnion(variants: [UnionVariant], discriminator: DiscriminatorInfo?) -> String {
         let discField = discriminator?.fieldName ?? ""
         let sortedVariants = variants.sorted { ($0.discriminatorValue ?? "") < ($1.discriminatorValue ?? "") }
-        let parts = sortedVariants.map { v -> String in
-            let sortedFields = v.fields.sorted { $0.name < $1.name }
-            let fieldKeys = sortedFields.map { f in
-                "\(f.name):\(typeKey(f.type))\(f.required ? "!" : "")"
+        let parts = sortedVariants.map { variant -> String in
+            let sortedFields = variant.fields.sorted { $0.name < $1.name }
+            let fieldKeys = sortedFields.map { field in
+                "\(field.name):\(typeKey(field.type))\(field.required ? "!" : "")"
             }.joined(separator: ",")
-            return "\(v.discriminatorValue ?? ""){\(fieldKeys)}"
+            return "\(variant.discriminatorValue ?? ""){\(fieldKeys)}"
         }
         return "union[\(discField)]{\(parts.joined(separator: "|"))}"
     }

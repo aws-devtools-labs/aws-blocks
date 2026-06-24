@@ -1,6 +1,8 @@
 //
-// AuthSectionView.swift
-// Dynamic auth UI driven by AuthState.actions from the server.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI
@@ -126,13 +128,17 @@ struct AuthActionFormView: View {
         case "signUp":
             return .signUp(AuthApi.SetAuthState.SignUp(password: password, username: username, attributes: [:]))
         case "confirmSignUp":
-            return .confirmSignUp(AuthApi.SetAuthState.ConfirmSignUp(code: code, password: password, username: username))
+            return .confirmSignUp(
+                AuthApi.SetAuthState.ConfirmSignUp(code: code, password: password, username: username)
+            )
         case "signOut":
             return .signOut
         case "resetPassword":
             return .resetPassword(AuthApi.SetAuthState.ResetPassword(username: username))
         case "confirmResetPassword":
-            return .confirmResetPassword(AuthApi.SetAuthState.ConfirmResetPassword(code: code, newPassword: newPassword, username: username))
+            return .confirmResetPassword(
+                AuthApi.SetAuthState.ConfirmResetPassword(code: code, newPassword: newPassword, username: username)
+            )
         default:
             return nil
         }
