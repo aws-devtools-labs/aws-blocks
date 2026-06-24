@@ -202,7 +202,8 @@ class OidcClient implements AuthProvider {
 
     // Step 2: build the authorize URL. redirect_uri = backend HTTPS callback.
     final callbackUrl = '$_authBaseUrl$callbackPath';
-    final authorizeUri = _buildRelayAuthorizeUrl(params, callbackUrl, challenge);
+    final authorizeUri =
+        _buildRelayAuthorizeUrl(params, callbackUrl, challenge);
 
     // Step 3: open the browser and wait for the relay custom-scheme redirect.
     final resultUri = await launcher.launch(
@@ -251,7 +252,8 @@ class OidcClient implements AuthProvider {
     String csrf,
     String relayTo,
   ) async {
-    final url = '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}';
+    final url =
+        '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}';
     final response = await _httpClient.post(
       Uri.parse(url),
       headers: _jsonHeaders(),
@@ -332,7 +334,8 @@ class OidcClient implements AuthProvider {
     sessionStore.setCookies(response.headers['set-cookie']);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw OidcExchangeException('Exchange failed: HTTP ${response.statusCode}');
+      throw OidcExchangeException(
+          'Exchange failed: HTTP ${response.statusCode}');
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
