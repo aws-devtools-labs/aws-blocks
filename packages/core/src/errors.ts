@@ -70,3 +70,42 @@ export class ApiError extends Error {
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & { name: N } {
 	return e instanceof Error && e.name === name;
 }
+
+/**
+ * Native JS error constructor names. Excluded from
+ * {@link isExpectedBlocksError} because a thrown `TypeError`/`RangeError`/etc.
+ * almost always signals an unexpected bug whose stack trace is valuable.
+ */
+const NATIVE_ERROR_NAMES = new Set([
+	'Error',
+	'EvalError',
+	'RangeError',
+	'ReferenceError',
+	'SyntaxError',
+	'TypeError',
+	'URIError',
+	'AggregateError',
+]);
+
+/**
+ * Best-effort predicate for "this is an expected, typed Blocks error".
+ *
+ * Used by the dev server and Lambda handler to decide whether dumping a full
+ * multi-line stack trace adds signal: expected typed errors are already fully
+ * described by their `name` + `message`, so the stack is noise; genuinely
+ * unexpected errors (bugs) keep their stack.
+ *
+ * Conservative by design. Only errors whose `name` follows the Blocks
+ * convention — a non-native name ending in `Exception` or `Error` (e.g.
+ * `KnowledgeBaseNotReadyException`, `HandlerTimeoutError`, the `ApiError`
+ * wire base class) — are treated as expected. Anything else (plain `Error`,
+ * native subclasses like `TypeError`, or an unnamed throw) is treated as
+ * unexpected so its stack is still surfaced. When in doubt, return `false`
+ * (keep the stack).
+ */
+export function isExpectedBlocksError(e: unknown): boolean {
+	if (!(e instanceof Error)) return false;
+	const name = e.name;
+	if (!name || NATIVE_ERROR_NAMES.has(name)) return false;
+	return name.endsWith('Exception') || name.endsWith('Error');
+}

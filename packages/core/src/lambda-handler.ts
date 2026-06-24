@@ -3,7 +3,7 @@
 
 // This will be bundled with the customer's backend code
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError } from './errors.js';
+import { ApiError, isExpectedBlocksError } from './errors.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { matchRoute, lockRouteRegistry } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
@@ -571,7 +571,14 @@ function createHandler(backend: any) {
         body: successResponse(responseBody ?? result, rpcId),
       };
     } catch (error: any) {
-      console.error('Lambda Error:', error);
+      // For expected typed Blocks errors, log a concise one-liner — the name
+      // + message is sufficient signal. Genuinely unexpected errors keep the
+      // full object (with stack) so bugs remain debuggable in CloudWatch.
+      if (isExpectedBlocksError(error)) {
+        console.error('Lambda Error:', error?.name, '-', error?.message);
+      } else {
+        console.error('Lambda Error:', error);
+      }
       return {
         statusCode: 200,
         headers: rpcHeaders,

@@ -9,7 +9,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import httpProxy from 'http-proxy';
 import { writeClientCode } from './generate-client.js';
-import { ApiError } from '../errors.js';
+import { ApiError, isExpectedBlocksError } from '../errors.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
@@ -445,7 +445,11 @@ function handleApiRequest(
         const errPayload = errorResponseFromCatch(error, rpcId);
         if (!process.env.BLOCKS_DEV_QUIET) {
           console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
-          if (error?.stack) console.log(error.stack);
+          // Only dump the full stack for unexpected errors. Expected typed
+          // Blocks errors (e.g. KnowledgeBaseNotReadyException) are fully
+          // described by their name + message above; a stack trace just adds
+          // noise during normal local development.
+          if (error?.stack && !isExpectedBlocksError(error)) console.log(error.stack);
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(errPayload);
