@@ -8,7 +8,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSy
 import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy } from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy, WaitUntilReadyOptions } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -22,6 +22,7 @@ export type {
 	RetrieveOptions,
 	RetrieveResult,
 	MetadataFilter,
+	WaitUntilReadyOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -249,6 +250,33 @@ export class KnowledgeBase extends Scope {
 		}
 
 		return results;
+	}
+
+	/**
+	 * Report whether the knowledge base is ready to serve `retrieve()` calls.
+	 *
+	 * Local development has no asynchronous ingestion warm-up window — the
+	 * corpus is read and indexed synchronously on the first `retrieve()` — so
+	 * this always resolves `true`. (In production the AWS runtime polls the
+	 * Bedrock ingestion-job status, which may briefly report `false`.)
+	 *
+	 * @returns Always `true` in local development.
+	 */
+	async isReady(): Promise<boolean> {
+		return true;
+	}
+
+	/**
+	 * Resolve once the knowledge base has finished ingesting.
+	 *
+	 * Local development has no ingestion warm-up window (see {@link isReady}),
+	 * so this resolves immediately. The options are accepted for API parity
+	 * with the AWS runtime and are otherwise ignored locally.
+	 *
+	 * @param {WaitUntilReadyOptions} _options - Accepted for API parity; ignored in local development.
+	 */
+	async waitUntilReady(_options?: WaitUntilReadyOptions): Promise<void> {
+		// No-op: the local corpus loads synchronously, so there is nothing to wait for.
 	}
 
 	// ── Lazy loading ──────────────────────────────────────────────────────

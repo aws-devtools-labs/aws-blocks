@@ -7,9 +7,21 @@ import {
 	type RetrievalFilter,
 	type KnowledgeBaseRetrievalResult,
 } from '@aws-sdk/client-bedrock-agent-runtime';
+import {
+	BedrockAgentClient,
+	ListIngestionJobsCommand,
+	GetIngestionJobCommand,
+	type IngestionJobSummary,
+} from '@aws-sdk/client-bedrock-agent';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter } from './types.js';
+import type {
+	KnowledgeBaseOptions,
+	RetrieveOptions,
+	RetrieveResult,
+	MetadataFilter,
+	WaitUntilReadyOptions,
+} from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -23,6 +35,7 @@ export type {
 	RetrieveOptions,
 	RetrieveResult,
 	MetadataFilter,
+	WaitUntilReadyOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -41,6 +54,11 @@ function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
 	return err;
+}
+
+/** Resolve after `ms` milliseconds. Used to space out readiness polls in `waitUntilReady()`. */
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Match only messages that clearly indicate a metadata filter issue.
@@ -138,11 +156,13 @@ function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
  *
  * **Environment variables (injected by CDK):**
  * - `BLOCKS_{FULLID}_KB_ID` — Bedrock Knowledge Base ID
+ * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isReady()` / `waitUntilReady()`)
  */
 export class KnowledgeBase extends Scope {
 	readonly bbName = BB_NAME;
 	private readonly fullIdCached: string;
 	private readonly runtimeClient: BedrockAgentRuntimeClient;
+	private readonly agentClient: BedrockAgentClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -156,8 +176,15 @@ export class KnowledgeBase extends Scope {
 			retryMode: 'adaptive',
 			customUserAgent: this.buildUserAgentChain(),
 		});
+		// Control-plane client for ingestion-job status (readiness checks).
+		this.agentClient = new BedrockAgentClient({
+			maxAttempts: 3,
+			retryMode: 'adaptive',
+			customUserAgent: this.buildUserAgentChain(),
+		});
 		const kbId = process.env[envKey(this.fullIdCached, 'KB_ID')] ?? '';
-		registerSdkIdentifiers(this.fullId, { kbId });
+		const dataSourceId = process.env[envKey(this.fullIdCached, 'DATA_SOURCE_ID')] ?? '';
+		registerSdkIdentifiers(this.fullId, { kbId, dataSourceId });
 	}
 
 	private ensureKbId(): string {
@@ -168,6 +195,17 @@ export class KnowledgeBase extends Scope {
 			KnowledgeBaseErrors.NotReady,
 			`Environment variable ${kbEnv} is not set. Run \`cdk deploy\` first.`,
 		);
+	}
+
+	/**
+	 * Resolve the configured Bedrock data source id, or `undefined` when none
+	 * was registered. A missing data source id means there is no BB-managed
+	 * ingestion job to track (e.g. an imported `s3://` source, or a deployment
+	 * that predates the readiness API), so callers treat the KB as ready.
+	 */
+	private ensureDataSourceId(): string | undefined {
+		const dataSourceId = getSdkIdentifiers(this).dataSourceId;
+		return dataSourceId ? dataSourceId : undefined;
 	}
 
 	/**
@@ -225,6 +263,150 @@ export class KnowledgeBase extends Scope {
 			const mapped = mapSdkError(err);
 			this.log.error(mapped.message);
 			throw mapped;
+		}
+	}
+
+	/**
+	 * Report whether the knowledge base has finished ingesting and is ready to
+	 * serve `retrieve()` calls.
+	 *
+	 * Bedrock ingestion runs asynchronously after deploy (it is triggered
+	 * fire-and-forget), so during the warm-up window `retrieve()` returns an
+	 * empty array even for queries that will later match. Use `isReady()` to
+	 * distinguish "still warming up" (`false`) from "ingested, genuinely no
+	 * match" (`true` alongside an empty `retrieve()` result).
+	 *
+	 * Resolution strategy: lists the data source's ingestion jobs (most recent
+	 * first) and inspects the latest job's status — `COMPLETE` → ready,
+	 * `FAILED` → throws, anything else (`STARTING` / `IN_PROGRESS`, or no jobs
+	 * yet) → not ready. When no BB-managed data source id is configured (e.g.
+	 * an imported `s3://` source, or a deployment predating this API) there is
+	 * no ingestion job to track, so the KB is reported ready.
+	 *
+	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
+	 *   no managed data source to track); `false` while ingestion is pending.
+	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {RetrievalFailedException} For other Bedrock control-plane errors (network, auth, throttling).
+	 *
+	 * @example
+	 * ```typescript
+	 * if (await kb.isReady()) {
+	 *   const results = await kb.retrieve('how do I reset my password');
+	 * }
+	 * ```
+	 */
+	async isReady(): Promise<boolean> {
+		const knowledgeBaseId = this.ensureKbId();
+		const dataSourceId = this.ensureDataSourceId();
+		// No BB-managed ingestion to track → nothing to wait for.
+		if (!dataSourceId) return true;
+
+		const job = await this.fetchLatestIngestionJob(knowledgeBaseId, dataSourceId);
+		// No ingestion job recorded yet → ingestion has not started; still warming.
+		if (!job) return false;
+
+		if (job.status === 'COMPLETE') return true;
+		if (job.status === 'FAILED') {
+			const reasons = await this.fetchFailureReasons(knowledgeBaseId, dataSourceId, job.ingestionJobId);
+			throw blocksError(
+				KnowledgeBaseErrors.IngestionFailed,
+				`Knowledge base ingestion failed.${reasons.length ? ` Reasons: ${reasons.join('; ')}` : ''}`,
+			);
+		}
+		// STARTING | IN_PROGRESS | STOPPING | STOPPED → not ready.
+		return false;
+	}
+
+	/**
+	 * Wait until the knowledge base has finished ingesting, polling its
+	 * ingestion-job status until ready or until the timeout elapses.
+	 *
+	 * Polls {@link isReady} every `pollIntervalMs` until it returns `true`
+	 * (resolves) or the `timeoutMs` budget is exhausted (throws). If the most
+	 * recent ingestion job has `FAILED`, the underlying `IngestionFailedException`
+	 * propagates immediately rather than waiting out the timeout.
+	 *
+	 * @param {WaitUntilReadyOptions} options - Optional polling parameters.
+	 *   `timeoutMs` (default 300000) bounds the total wait; `pollIntervalMs`
+	 *   (default 5000, clamped to a minimum of 1ms) spaces out the polls.
+	 * @throws {KnowledgeBaseTimeoutException} If the KB does not become ready within `timeoutMs`.
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
+	 * @throws {RetrievalFailedException} For other Bedrock control-plane errors (network, auth, throttling).
+	 *
+	 * @example
+	 * ```typescript
+	 * // Block until the KB is queryable (e.g. right after deploy)
+	 * await kb.waitUntilReady({ timeoutMs: 600_000 });
+	 * const results = await kb.retrieve('getting started');
+	 * ```
+	 */
+	async waitUntilReady(options?: WaitUntilReadyOptions): Promise<void> {
+		const timeoutMs = Math.max(options?.timeoutMs ?? 300_000, 0);
+		const pollIntervalMs = Math.max(options?.pollIntervalMs ?? 5_000, 1);
+		const deadline = Date.now() + timeoutMs;
+
+		for (;;) {
+			// isReady() throws IngestionFailedException on a FAILED job — let it propagate.
+			if (await this.isReady()) return;
+			if (Date.now() >= deadline) {
+				throw blocksError(
+					KnowledgeBaseErrors.Timeout,
+					`Knowledge base did not become ready within ${timeoutMs}ms.`,
+				);
+			}
+			// Never sleep past the deadline.
+			await sleep(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+		}
+	}
+
+	/**
+	 * List the data source's ingestion jobs (most recent first) and return the
+	 * latest summary, or `undefined` when none exist yet. SDK errors are mapped
+	 * to Blocks error constants via {@link mapSdkError}.
+	 */
+	private async fetchLatestIngestionJob(
+		knowledgeBaseId: string,
+		dataSourceId: string,
+	): Promise<IngestionJobSummary | undefined> {
+		try {
+			const response = await this.agentClient.send(
+				new ListIngestionJobsCommand({
+					knowledgeBaseId,
+					dataSourceId,
+					sortBy: { attribute: 'STARTED_AT', order: 'DESCENDING' },
+					maxResults: 1,
+				}),
+			);
+			return response.ingestionJobSummaries?.[0];
+		} catch (err) {
+			const mapped = mapSdkError(err);
+			this.log.error(mapped.message);
+			throw mapped;
+		}
+	}
+
+	/**
+	 * Fetch the `failureReasons` for a failed ingestion job. Best-effort: the
+	 * `ListIngestionJobs` summary omits failure reasons, so this issues a
+	 * `GetIngestionJob` for the detail. Returns an empty array if the id is
+	 * missing or the lookup fails — the caller still reports the failure.
+	 */
+	private async fetchFailureReasons(
+		knowledgeBaseId: string,
+		dataSourceId: string,
+		ingestionJobId: string | undefined,
+	): Promise<string[]> {
+		if (!ingestionJobId) return [];
+		try {
+			const response = await this.agentClient.send(
+				new GetIngestionJobCommand({ knowledgeBaseId, dataSourceId, ingestionJobId }),
+			);
+			return response.ingestionJob?.failureReasons ?? [];
+		} catch (err) {
+			this.log.error(mapSdkError(err).message);
+			return [];
 		}
 	}
 }

@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult } from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilReadyOptions } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 
 export type {
 	KnowledgeBaseOptions, SourceConfig,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
-	MetadataFilter,
+	MetadataFilter, WaitUntilReadyOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -38,6 +38,14 @@ export class KnowledgeBase {
 	}
 
 	async retrieve(_query: string, _options?: RetrieveOptions): Promise<RetrieveResult[]> {
+		throw browserError();
+	}
+
+	async isReady(): Promise<boolean> {
+		throw browserError();
+	}
+
+	async waitUntilReady(_options?: WaitUntilReadyOptions): Promise<void> {
 		throw browserError();
 	}
 }
