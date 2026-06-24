@@ -1134,6 +1134,75 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('wires an OpenNext edge route to a dedicated behavior + Lambda@Edge (origin-request)', () => {
+      // Regression: under the KVS single-behavior model the edge-split bundles
+      // (edge1/edge2) were built but never attached, so /edge + /api/edge fell
+      // through to the default server Lambda (which lacks them) → 500. Each
+      // edge route must get its own cache behavior with the EdgeFunction on
+      // origin-request, AND be excluded from the KVS route table.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const edgeFn = new LambdaFunction(stack, 'EdgeRouteFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'edge-wire-1',
+      };
+
+      new CdnConstruct(stack, 'CdnEdge', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        routeEdgeFunctions: new Map([['edge1', edgeFn.currentVersion]]),
+      });
+      const template = Template.fromStack(stack);
+
+      // A dedicated /api/edge cache behavior exists with a Lambda@Edge
+      // origin-request association.
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as { Properties: { DistributionConfig: { CacheBehaviors?: Array<Record<string, unknown>> } } };
+      const behaviors = dist.Properties.DistributionConfig.CacheBehaviors ?? [];
+      const edgeBehavior = behaviors.find((b) => b.PathPattern === '/api/edge');
+      assert.ok(edgeBehavior, '/api/edge must have a dedicated cache behavior');
+      const assocs =
+        (edgeBehavior!.LambdaFunctionAssociations as Array<{ EventType?: string }> | undefined) ?? [];
+      assert.ok(
+        assocs.some((a) => a.EventType === 'origin-request'),
+        'edge behavior must attach the Lambda@Edge on origin-request',
+      );
+
+      // And /api/edge must be EXCLUDED from the KVS route table.
+      const rows = routeRows(
+        buildKvsEntries({
+          manifest,
+          buildId: 'edge-wire-1',
+          hasServer: true,
+          hasImage: false,
+          edgeTargets: new Set(['edge1']),
+        }),
+      );
+      assert.ok(
+        !rows.some(([p]) => p === '/api/edge'),
+        '/api/edge must not be in the KVS table (handled by its own behavior)',
+      );
+    });
+
     void it('throws EmptyGeoRestrictionError for empty countries', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');

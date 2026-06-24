@@ -744,6 +744,54 @@ void describe('buildKvsEntries — G15 chunking & round-trip', () => {
   });
 });
 
+void describe('buildKvsEntries — edge route exclusion', () => {
+  // OpenNext `runtime:'edge'` routes are served by dedicated CloudFront
+  // behaviors with a Lambda@Edge attached; they must NOT appear in the KVS
+  // route table, or the router would send them to the default server Lambda
+  // (which lacks the split routes) → 500.
+  void it('omits edge-target routes from the KVS table', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/edge', target: 'edge2' },
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/api/normal', target: 'default' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      edgeTargets: new Set(['edge1', 'edge2']),
+    });
+    const meta = JSON.parse(entries.meta);
+    const rows: [string, string][] = [];
+    for (let i = 0; i < meta.rc; i++) rows.push(...JSON.parse(entries[`r${i}`]));
+    const patterns = rows.map((r) => r[0]);
+    assert.ok(!patterns.includes('/edge'), '/edge must be excluded');
+    assert.ok(!patterns.includes('/api/edge'), '/api/edge must be excluded');
+    assert.ok(patterns.includes('/api/normal'), 'non-edge routes remain');
+  });
+
+  void it('keeps all routes when no edgeTargets are given (default)', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/edge', target: 'edge2' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const rows: [string, string][] = [];
+    const meta = JSON.parse(entries.meta);
+    for (let i = 0; i < meta.rc; i++) rows.push(...JSON.parse(entries[`r${i}`]));
+    assert.ok(rows.some((r) => r[0] === '/edge'), 'without edgeTargets, /edge is kept');
+  });
+});
+
 void describe('buildKvsEntries — G17 image classification', () => {
   void it("classifies target:'image-optimization' as kind 'i' when hasImage", () => {
     const entries = buildKvsEntries({

@@ -48,6 +48,7 @@ import {
   RestApi,
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
+import { prependBasePath } from '../adapters/shared/basepath.js';
 import { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { SkewProtectionConfig } from './skew_protection.js';
@@ -612,6 +613,12 @@ export class CdnConstruct extends Construct {
       comment: `Edge route table for ${this.node.path}`,
     });
 
+    // Lambda@Edge route functions (OpenNext `runtime: 'edge'` split bundles).
+    // Each gets a DEDICATED CloudFront cache behavior below; exclude them from
+    // the KVS route table so the router doesn't send them to the default
+    // server Lambda (which doesn't contain the split routes → 500).
+    const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
+
     const kvsEntries = buildKvsEntries({
       manifest,
       buildId,
@@ -619,6 +626,7 @@ export class CdnConstruct extends Construct {
       hasImage: Boolean(taggedImageOrigin),
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
+      edgeTargets,
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----
@@ -721,6 +729,37 @@ export class CdnConstruct extends Construct {
           { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
         ],
       };
+    }
+
+    // ---- Lambda@Edge route behaviors (OpenNext `runtime: 'edge'` routes) ----
+    // OpenNext SPLITS edge routes into separate bundles (edge1/edge2…) that are
+    // NOT in the default server Lambda. Each needs a DEDICATED CloudFront cache
+    // behavior (more specific than the default `*`, so it wins) with the
+    // EdgeFunction attached on origin-request: the function generates the
+    // response itself, so the behavior's origin (S3 here) is never read — it
+    // only needs to be a well-formed origin. Without this the KVS router sends
+    // these paths to the default server Lambda, which lacks the routes → 500.
+    if (props.routeEdgeFunctions && props.routeEdgeFunctions.size > 0) {
+      for (const route of manifest.routes) {
+        const edgeVersion = props.routeEdgeFunctions.get(route.target);
+        if (!edgeVersion) continue;
+        const pattern = prependBasePath(manifest.basePath, route.pattern);
+        if (pattern === '/*' || pattern === '*') continue; // never as catch-all
+        additionalBehaviors[pattern] = {
+          origin: s3Origin,
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: props.securityHeadersPolicy,
+          edgeLambdas: [
+            {
+              functionVersion: edgeVersion,
+              eventType: LambdaEdgeEventType.ORIGIN_REQUEST,
+            },
+          ],
+        };
+      }
     }
 
     // ---- Error responses ----

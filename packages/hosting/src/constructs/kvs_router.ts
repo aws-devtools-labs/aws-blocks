@@ -56,6 +56,16 @@ type BuildKvsInput = {
    * deploy would otherwise pin a visitor to a now-deleted build → 403).
    */
   skewEnabled?: boolean;
+  /**
+   * Compute names that are Lambda@Edge route functions (OpenNext `runtime:
+   * 'edge'` split bundles, e.g. `edge1`/`edge2`). Routes targeting these are
+   * served by a DEDICATED CloudFront cache behavior with the edge function
+   * attached (origin-request), which takes precedence over the single default
+   * behavior — so they must be EXCLUDED from the KVS route table. Otherwise the
+   * router would classify them as compute and send them to the default server
+   * Lambda, which does NOT contain the split edge routes → 500.
+   */
+  edgeTargets?: Set<string>;
 };
 
 /**
@@ -118,6 +128,7 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
  */
 export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> => {
   const { manifest, buildId, hasServer, hasImage } = input;
+  const edgeTargets = input.edgeTargets ?? new Set<string>();
   const basePath = manifest.basePath
     ? normalizeBasePath(manifest.basePath)
     : undefined;
@@ -130,6 +141,10 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   const rows: [string, RouteKind][] = [];
   for (const route of manifest.routes) {
     if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
+    // Lambda@Edge route functions get a dedicated CloudFront behavior that
+    // takes precedence over the default behavior — exclude them from the KVS
+    // table so the router never (mis)classifies them as default-server compute.
+    if (edgeTargets.has(route.target)) continue;
     const cf = normalizePattern(route.pattern, basePath);
     const isStatic = route.target === 'static' || route.target === 's3';
     // A route is image-opt when it targets the image origin (Next emits
