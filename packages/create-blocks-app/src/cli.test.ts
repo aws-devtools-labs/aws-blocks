@@ -2,18 +2,20 @@ import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import assert from 'node:assert';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
 
-function run(args: string[], cwd?: string): { stdout: string; stderr: string; exitCode: number } {
+function run(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execFileSync('node', [CLI_PATH, ...args], {
       encoding: 'utf-8',
       timeout: 30000,
       cwd,
+      env: env ? { ...process.env, ...env } : undefined,
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (err: any) {
@@ -32,6 +34,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
     assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
   });
@@ -260,6 +263,23 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
       assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('skips npm install when creating a fresh project with --skip-install', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-fresh-skip-install-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '-y', '--skip-install'], undefined, {
+        NPM_CONFIG_REGISTRY: 'http://127.0.0.1:9',
+      });
+      assert.strictEqual(result.exitCode, 0);
+      assert.match(result.stdout, /Blocks app created/);
+      assert.doesNotMatch(result.stdout, /Installing dependencies/);
+      assert.match(result.stdout, /\n  npm install\n/);
+      assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

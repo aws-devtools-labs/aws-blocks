@@ -185,7 +185,7 @@ function validateTemplateName(templateName: string): void {
 
 // ─── Fresh project creation ──────────────────────────────────────────────────
 
-async function createFreshProject(targetDir: string, templateName: string) {
+async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
   validateTemplateName(templateName);
 
   // Read template package.json to get template name
@@ -259,12 +259,17 @@ async function createFreshProject(targetDir: string, templateName: string) {
   cdkContent = cdkContent.replace(/my-blocks-stack/g, `${sanitizedName}-stack`);
   await writeFile(cdkPath, cdkContent);
   
-  console.log('Installing dependencies...');
-  execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  if (!skipInstall) {
+    console.log('Installing dependencies...');
+    execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  }
   
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${targetDir}`);
+  if (skipInstall) {
+    console.log(`  npm install`);
+  }
   console.log(`  npm run dev`);
   console.log(`\nThen open http://localhost:3000`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
@@ -575,6 +580,7 @@ Options:
                          selects which aws-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
                          Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
+  --skip-install         Skip installing dependencies
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -655,7 +661,7 @@ async function create() {
         const templateDisplayName = tplPkg.blocksTemplate || templateName;
         targetDir = join('blocks-demo-apps', `template-${templateDisplayName}`);
       }
-      await createFreshProject(resolve(targetDir), templateName);
+      await createFreshProject(resolve(targetDir), templateName, skipInstall);
       return;
     }
 
