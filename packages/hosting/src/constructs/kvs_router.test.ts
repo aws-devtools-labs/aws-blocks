@@ -34,6 +34,12 @@ const baseManifest = (overrides: Partial<DeployManifest> = {}): DeployManifest =
  * Evaluate a generated CloudFront Function string against a KVS map. Strips the
  * `import cf from 'cloudfront'` ESM line and injects fakes, then returns the
  * `handler`'s output. `selectedOrigin` captures cf.selectRequestOriginById.
+ *
+ * Uses `new Function(...)` deliberately to execute the generated function
+ * source end-to-end — the source is fully repo-controlled (produced by
+ * generateKvsRouterRequestCode), not external input. NOTE: under a hardened
+ * runner with `--disallow-code-generation-from-strings` these helpers would
+ * throw rather than silently no-op; the default `node --test` runner allows it.
  */
 async function runRequestFn(
   code: string,
@@ -210,6 +216,40 @@ void describe('generated request fn — glob matching (regression: mid-segment w
       cookies: {},
     });
     assert.equal(selectedOrigin, ORIGIN_ID.s3);
+  });
+
+  void it('does NOT let a single-level * cross a segment: /api/*/data ⊄ /api/foo/bar/data', async () => {
+    // Locks in the single-segment guarantee. The matched route is STATIC (S3);
+    // an unmatched path on this compute deploy falls through to the implicit
+    // default (server). So a single-segment middle resolves to S3, and a
+    // two-segment middle — if the wildcard wrongly crossed '/' — would ALSO hit
+    // S3; it must instead miss and fall through to the server origin.
+    const m = baseManifest({
+      routes: [
+        { pattern: '/api/*/data', target: 'static' },
+        { pattern: '/*', target: 'compute' }, // implicit catch-all (server)
+      ],
+    });
+    const e = buildKvsEntries({
+      manifest: m,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    // One middle segment → matches the single-level wildcard → S3.
+    const hit = await runRequestFn(code, e, {
+      uri: '/api/foo/data',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(hit.selectedOrigin, ORIGIN_ID.s3);
+    // Two middle segments → must NOT match → falls through to the server origin.
+    const miss = await runRequestFn(code, e, {
+      uri: '/api/foo/bar/data',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(miss.selectedOrigin, ORIGIN_ID.server);
   });
 });
 

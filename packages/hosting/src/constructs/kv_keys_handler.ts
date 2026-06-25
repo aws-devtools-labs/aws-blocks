@@ -14,9 +14,13 @@
  * only AFTER that build's assets are uploaded to S3 — preserving the
  * atomic-deploy cutover guarantee.
  *
- * Bundled with its SDK dependency via esbuild (NodejsFunction), because
- * `@aws-sdk/client-cloudfront-keyvaluestore` is NOT part of the Lambda runtime
- * baseline (it requires SigV4a signing).
+ * Bundling: pre-bundled at BUILD time via `scripts/bundle-handlers.mjs`
+ * (esbuild → `kv_keys_handler_bundle.mjs`) and shipped through
+ * `Code.fromAsset`, NOT bundled at synth via `NodejsFunction`. Reason:
+ * `@aws-sdk/client-cloudfront-keyvaluestore` is NOT in the Lambda runtime
+ * baseline (it requires SigV4a signing), and a synth-time `NodejsFunction`
+ * would resolve `projectRoot`/lockfile under `node_modules/` once this package
+ * is installed from npm and fail. See `kv_keys.ts` for the asset wiring.
  */
 import {
   CloudFrontKeyValueStoreClient,
@@ -58,14 +62,38 @@ const client = new CloudFrontKeyValueStoreClient({
 
 const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
 
+export type Put = { Key: string; Value: string };
+export type Delete = { Key: string };
+
+/**
+ * Pure diff of desired vs. previous entries into the puts/deletes the route-
+ * table flip needs: a put for every new-or-changed key, a delete for every key
+ * that disappeared. Exported (with {@link batches}) so the load-bearing
+ * cutover logic is unit-testable without the SDK.
+ */
+export function computeDiff(
+  desired: Entries,
+  previous: Entries,
+): { puts: Put[]; deletes: Delete[] } {
+  const puts = Object.entries(desired)
+    .filter(([k, v]) => previous[k] !== v)
+    .map(([Key, Value]) => ({ Key, Value }));
+  const deletes = Object.keys(previous)
+    .filter((k) => !(k in desired))
+    .map((Key) => ({ Key }));
+  return { puts, deletes };
+}
+
 /**
  * Split desired puts + deletes into UpdateKeys batches that respect the
- * 50-key / 3 MB-per-request ceiling.
+ * 50-key / 3 MB-per-request ceiling. Exported for unit testing of the batch
+ * boundaries (an off-by-one here would partial-apply the route table
+ * mid-cutover and surface as an opaque deploy-time failure).
  */
-function* batches(
-  puts: { Key: string; Value: string }[],
-  deletes: { Key: string }[],
-): Generator<{ puts: typeof puts; deletes: typeof deletes }> {
+export function* batches(
+  puts: Put[],
+  deletes: Delete[],
+): Generator<{ puts: Put[]; deletes: Delete[] }> {
   let curPuts: typeof puts = [];
   let curDeletes: typeof deletes = [];
   let count = 0;
@@ -115,12 +143,7 @@ async function applyUpdate(
   desired: Entries,
   previous: Entries,
 ): Promise<void> {
-  const puts = Object.entries(desired)
-    .filter(([k, v]) => previous[k] !== v)
-    .map(([Key, Value]) => ({ Key, Value }));
-  const deletes = Object.keys(previous)
-    .filter((k) => !(k in desired))
-    .map((Key) => ({ Key }));
+  const { puts, deletes } = computeDiff(desired, previous);
 
   if (puts.length === 0 && deletes.length === 0) return;
 

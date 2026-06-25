@@ -394,10 +394,13 @@ function matchPattern(uri, pattern) {
     return null;
   }
   // General path: glob with '*' anywhere (incl. mid-segment, e.g.
-  // /api/*/admin). Each '*' matches a run of any chars EXCEPT '/', mirroring
-  // CloudFront's path-pattern semantics; a trailing '*' matches the rest
-  // (including '/'). Implemented as a literal scan (no regex — CloudFront
-  // Functions JS forbids dynamic RegExp from strings reliably).
+  // /api/*/admin). This is OUR framework-route matcher, NOT CloudFront behavior
+  // selection: a non-trailing '*' matches a run of any chars EXCEPT '/' (a
+  // SINGLE path segment), so '/api/*/data' matches '/api/foo/data' but NOT
+  // '/api/foo/bar/data'. (CloudFront's own path patterns differ — there '*'
+  // crosses '/'.) A trailing '*' matches the rest, including '/'. Implemented as
+  // a literal scan (no regex — CloudFront Functions JS forbids dynamic RegExp
+  // from strings reliably).
   return globMatch(uri, pattern);
 }
 function globMatch(uri, pattern) {

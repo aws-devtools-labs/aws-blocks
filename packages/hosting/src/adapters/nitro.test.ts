@@ -31,6 +31,13 @@ const writeMinimalNitroOutput = (
      * Used to exercise the prerendered-HTML baseURL safety net.
      */
     publicFiles?: Record<string, string>;
+    /**
+     * When set, inject an `ipx: { baseURL: <value> }` block into the runtime
+     * config BEFORE the `app` block, reproducing the ordering hazard where a
+     * bare `/"baseURL"/` scan would wrongly pick up `ipx.baseURL` (default
+     * `/_ipx`) instead of `app.baseURL`. Exercises the brace-scoped read.
+     */
+    ipxBaseURLBefore?: string;
   } = {},
 ): void => {
   const outputDir = path.join(projectDir, '.output');
@@ -53,7 +60,13 @@ const writeMinimalNitroOutput = (
     extras.baseURL !== undefined
       ? ` "baseURL": ${JSON.stringify(extras.baseURL)},`
       : '';
-  const bundleSource = `// nitro server bundle\n_inlineRuntimeConfig = { app: {${baseURLBlob} }, nitro: { "routeRules": ${JSON.stringify(bundledRules)} } };\n`;
+  // Optional `ipx.baseURL` serialized BEFORE the app block — the ordering that
+  // would trip a naive whole-source `/"baseURL"/` scan.
+  const ipxBlob =
+    extras.ipxBaseURLBefore !== undefined
+      ? `ipx: { "baseURL": ${JSON.stringify(extras.ipxBaseURLBefore)} }, `
+      : '';
+  const bundleSource = `// nitro server bundle\n_inlineRuntimeConfig = { ${ipxBlob}app: {${baseURLBlob} }, nitro: { "routeRules": ${JSON.stringify(bundledRules)} } };\n`;
   fs.writeFileSync(path.join(chunksDir, 'nitro.mjs'), bundleSource);
   // Optional prerendered HTML / public files.
   for (const [rel, content] of Object.entries(extras.publicFiles ?? {})) {
@@ -896,6 +909,31 @@ void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () =>
 
   void it('leaves basePath undefined for the default baseURL "/"', () => {
     writeMinimalNitroOutput(tmpDir, { baseURL: '/' });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, undefined);
+  });
+
+  void it('reads app.baseURL even when ipx.baseURL is serialized first (brace-scoped)', () => {
+    // Ordering hazard: a bare /"baseURL"/ scan over the whole bundle would pick
+    // up ipx.baseURL (/_ipx) here and 308 the whole site. The brace-scoped read
+    // of the `app` block must still yield the real app.baseURL.
+    writeMinimalNitroOutput(tmpDir, {
+      ipxBaseURLBefore: '/_ipx',
+      baseURL: '/myapp/',
+    });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, '/myapp');
+  });
+
+  void it('does NOT mistake ipx.baseURL for a base path when app.baseURL is root', () => {
+    // ipx.baseURL=/_ipx serialized before an app block whose baseURL is "/"
+    // (root). basePath must be undefined, NOT "/_ipx".
+    writeMinimalNitroOutput(tmpDir, {
+      ipxBaseURLBefore: '/_ipx',
+      baseURL: '/',
+    });
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
     const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
     assert.strictEqual(manifest.basePath, undefined);

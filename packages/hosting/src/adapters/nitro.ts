@@ -660,8 +660,24 @@ const readBundledBaseURL = (serverDir: string): string | undefined => {
 
   for (const candidate of candidates) {
     const source = fs.readFileSync(candidate, 'utf-8');
-    // The runtime-config blob embeds it as `"baseURL": "/myapp/"`.
-    const match = source.match(/"baseURL"\s*:\s*"([^"]*)"/);
+    // Scope to the `"app":{...}` block, then read ONLY its `baseURL`. The
+    // runtime config also carries `ipx.baseURL` (default `/_ipx`) under
+    // `_inlineRuntimeConfig`; a bare `/"baseURL"/` match over the whole source
+    // is order-dependent and would silently pick up `/_ipx` if the bundle ever
+    // serialized it before `app.baseURL` — setting basePath to `/_ipx` and
+    // 308-ing the whole site. Brace-scoping to the `app` object (same approach
+    // as readBundledRouteRules) removes that ambiguity. Try both `"app":` and
+    // `app:` (un-quoted key) since the inlined literal isn't always strict JSON.
+    //
+    // No whole-source fallback: a wrong prefix is worse than a missed one (the
+    // HTML safety net catches a MISSED app.baseURL, but not a WRONG one). If the
+    // app block isn't found, return undefined and let detectBaseURLFromPrerendered
+    // Html fail loud on a genuinely missed prefix.
+    const appBlock =
+      extractJsonObjectAfter(source, '"app":') ??
+      extractJsonObjectAfter(source, 'app:');
+    if (!appBlock) continue;
+    const match = appBlock.match(/"baseURL"\s*:\s*"([^"]*)"/);
     if (match) {
       const value = match[1];
       return value === '/' ? undefined : value;
