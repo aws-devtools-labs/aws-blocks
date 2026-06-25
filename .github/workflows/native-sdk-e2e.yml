@@ -239,7 +239,8 @@ jobs:
           exit 1
 
       - name: Run E2E tests
-        # BLOCKS_URL is provided via $GITHUB_ENV from the "Pick a free port" step.
+        env:
+          BLOCKS_URL: ${{ env.BLOCKS_URL }}
         run: |
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \

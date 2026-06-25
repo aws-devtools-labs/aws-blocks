@@ -130,6 +130,45 @@ describe('AuthOIDCClient.signIn — redirect_uri construction', () => {
 	});
 });
 
+describe('AuthOIDCClient.signIn — error propagation', () => {
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(CURRENT_PAGE);
+		// Resolve the API base URL deterministically (skip the config.json fetch).
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('returns a promise that rejects when authorize-params discovery fails', async () => {
+		// No inlined providerConfig → the client fetches authorize params; make
+		// that fetch fail so the PKCE setup throws. Before the fix `signIn` did
+		// `void this._signInPKCE(...)`, swallowing this into a silent unhandled
+		// rejection that callers could neither await nor catch.
+		globalThis.fetch = (async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof globalThis.fetch;
+		const client = new AuthOIDCClient({ providers: ['google'] });
+		await assert.rejects(
+			client.signIn('google'),
+			/failed to fetch authorize params for 'google': 500/,
+			'signIn() must surface the discovery failure to the caller',
+		);
+		// A failed setup must not have navigated the browser anywhere.
+		assert.strictEqual(navigatedTo, '', 'must not navigate to the IdP on failure');
+	});
+
+	test('returns a promise that resolves once navigation to the IdP is scheduled', async () => {
+		const client = makeClient();
+		await assert.doesNotReject(client.signIn('google'), 'happy-path signIn() should resolve');
+		assert.ok(navigatedTo.startsWith(AUTHORIZE_URL), 'should have navigated to the IdP');
+	});
+});
+
 describe('AuthOIDCClient.handleRedirectCallback — return shape', () => {
 	const STATE = 'state-123';
 	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };

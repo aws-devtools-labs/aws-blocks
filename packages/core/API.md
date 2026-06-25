@@ -56,6 +56,9 @@ export interface BuildingBlockMeta {
 // @public
 export function clearRouteRegistry(): void;
 
+// @public
+export const DEFAULT_API_ERROR_NAME = "ApiError";
+
 // Warning: (ae-forgotten-export) The symbol "ResourceEntry" needs to be exported by the entry point index.d.ts
 //
 // @public
@@ -74,6 +77,13 @@ export function getRegisteredRoutes(): readonly RegisteredRoute[];
 export function getSdkIdentifiers(bb: {
     fullId: string;
 }): Record<string, string>;
+
+// @public
+export function hasAuthError<T extends {
+    errorName?: string;
+}, N extends string>(state: T | null | undefined, name: N): state is T & {
+    errorName: N;
+};
 
 // @public (undocumented)
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
