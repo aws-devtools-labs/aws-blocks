@@ -15,6 +15,10 @@ permissions:
   id-token: write
   contents: write
 
+concurrency:
+  group: publish-kotlin-maven
+  cancel-in-progress: false
+
 jobs:
   publish:
     # Publish on a manual dispatch, or when a release/kotlin-* PR is merged.
@@ -90,6 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           VERSION=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
           TAG="kotlin@${VERSION}"
 
@@ -98,11 +103,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$TAG"
-          git push origin "$TAG"
-
+          # Extract release notes BEFORE pushing the tag, so a missing/malformed
+          # changelog entry fails here rather than stranding a tag with no release.
           NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"
 
           PRERELEASE=""
@@ -110,6 +112,11 @@ jobs:
           if [ "$MAJOR" = "0" ]; then
             PRERELEASE="--prerelease"
           fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
 
           gh release create "$TAG" \
             --title "Kotlin SDK ${VERSION}" \
