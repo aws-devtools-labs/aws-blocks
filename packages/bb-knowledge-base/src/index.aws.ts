@@ -285,9 +285,13 @@ export class KnowledgeBase extends Scope {
 	 *
 	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
 	 *   no managed data source to track); `false` while ingestion is pending.
-	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
-	 * @throws {RetrievalFailedException} For other Bedrock control-plane errors (network, auth, throttling).
+	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
+	 *   For mapped Bedrock control-plane errors. The `KB_ID` env var being unset, and a
+	 *   control-plane `ResourceNotFoundException`, both map to `NotReady`; a control-plane
+	 *   `ValidationException` maps to `KnowledgeBaseValidationError` (or `InvalidFilterException`);
+	 *   any other SDK error (network, auth, throttling) maps to `RetrievalFailedException`.
+	 *   This is the same mapping {@link mapSdkError} applies to `retrieve()`.
 	 *
 	 * @example
 	 * ```typescript
@@ -332,8 +336,11 @@ export class KnowledgeBase extends Scope {
 	 *   (default 5000, clamped to a minimum of 1ms) spaces out the polls.
 	 * @throws {KnowledgeBaseTimeoutException} If the KB does not become ready within `timeoutMs`.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
-	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
-	 * @throws {RetrievalFailedException} For other Bedrock control-plane errors (network, auth, throttling).
+	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
+	 *   Propagated from {@link isReady} for mapped Bedrock control-plane errors — see its docs
+	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
+	 *   `ValidationException` → `KnowledgeBaseValidationError`/`InvalidFilterException`,
+	 *   other SDK errors → `RetrievalFailedException`).
 	 *
 	 * @example
 	 * ```typescript

@@ -38,6 +38,8 @@ const kb = new KnowledgeBase(scope, id, options)
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `retrieve(query, options?)` | `Promise<RetrieveResult[]>` | Search for relevant document chunks. Returns results ranked by relevance score. |
+| `isReady()` | `Promise<boolean>` | Whether async ingestion has finished and the KB can serve `retrieve()`. `true` once the latest ingestion job is `COMPLETE` (or there is no BB-managed data source to track). Throws `IngestionFailed` if the latest job failed. |
+| `waitUntilReady(options?)` | `Promise<void>` | Poll `isReady()` until the KB is ready or the timeout elapses. Throws `Timeout` if it does not become ready in time. |
 
 ### Options
 
@@ -103,6 +105,23 @@ chunking: { strategy: 'fixed', chunkSize: 500, chunkOverlap: 10 }
 | `source` | `string` | Source document path or URL. |
 | `metadata` | `Record<string, string>` | Document metadata. Includes auto-populated `folder` from subfolders. |
 
+### Readiness
+
+Bedrock ingestion runs asynchronously after deploy, so immediately after `cdk deploy` the knowledge base may not yet be queryable — `retrieve()` returns an empty array even for queries that will later match. Use `isReady()` / `waitUntilReady()` to gate on ingestion completion:
+
+```typescript
+// Block until the KB is queryable (e.g. right after deploy), then query
+await kb.waitUntilReady({ timeoutMs: 600_000 });
+const results = await kb.retrieve('getting started');
+
+// Or check without blocking
+if (await kb.isReady()) {
+  const results = await kb.retrieve('getting started');
+}
+```
+
+`waitUntilReady(options?)` accepts `timeoutMs` (default `300_000`) and `pollIntervalMs` (default `5_000`). For an imported `s3://` source there is no BB-managed data source to track, so `isReady()` returns `true` immediately. In local development the mock is always ready.
+
 ## Metadata Filtering
 
 Filter results by document metadata. All conditions use AND semantics:
@@ -147,6 +166,8 @@ try {
 |---|---|---|
 | `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
 | `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
+| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed (message includes `failureReasons`) — thrown by `isReady()` / `waitUntilReady()` |
+| `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilReady()` exceeded its timeout before ingestion completed |
 | `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
 | `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |
 | `KnowledgeBaseErrors.ValidationError` | `KnowledgeBaseValidationError` | Empty or invalid query |
@@ -154,7 +175,7 @@ try {
 
 ## Deploy Behavior
 
-`cdk deploy` automatically triggers document ingestion (fire-and-forget). Ingestion runs asynchronously after the deploy completes. Check the AWS console to monitor ingestion progress.
+`cdk deploy` automatically triggers document ingestion (fire-and-forget). Ingestion runs asynchronously after the deploy completes. Check the AWS console to monitor ingestion progress, or call [`isReady()` / `waitUntilReady()`](#readiness) from your code to gate queries on ingestion completion.
 
 ## Scaling & Cost (AWS)
 
