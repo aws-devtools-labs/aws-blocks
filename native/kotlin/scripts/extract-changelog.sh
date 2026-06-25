@@ -18,7 +18,7 @@ BODY="$(awk -v ver="$VERSION" '
 
 if [ -z "${BODY//[$' \t\n']/}" ]; then
   # Distinguish "version not found" from "found but empty". Re-scan for the heading.
-  if ! grep -qF "## $VERSION" "$CHANGELOG"; then
+  if ! grep -qxF "## $VERSION" "$CHANGELOG"; then
     echo "ERROR: version $VERSION not found in $CHANGELOG" >&2
     exit 1
   fi

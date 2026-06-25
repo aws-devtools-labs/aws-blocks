@@ -51,4 +51,9 @@ if bash "$EXTRACT" "$WORK/CHANGELOG.md" 5.5.5 2>/dev/null; then
   fail "Case 3: unknown version should exit non-zero"
 fi
 
+# --- Case 4: a version that is only a substring of a real heading exits non-zero ---
+if bash "$EXTRACT" "$WORK/CHANGELOG.md" 0.1 2>/dev/null; then
+  fail "Case 4: partial version 0.1 should not match ## 0.1.0"
+fi
+
 echo "PASS: extract-changelog.test.sh"
