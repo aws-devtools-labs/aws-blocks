@@ -1434,36 +1434,44 @@ const buildRoutes = (
       addRoute({ pattern, target: 'static' });
     }
 
-    // Walk for prerendered HTML pages and emit a *subtree* route for each.
+    // Walk for prerendered HTML pages and emit BOTH the bare route and its
+    // subtree as static → S3:
+    //   - `/<route>`   → so the canonical bare URL serves the FROZEN prerendered
+    //     HTML from S3 (the build-id rewrite's directory-index branch appends
+    //     `/index.html` to any extensionless path → `builds/{id}/<route>/index.html`,
+    //     which is exactly how Nuxt prerenders `/about` → `about/index.html`).
+    //   - `/<route>/*` → so sibling assets the framework prefetches
+    //     (`_payload.json`, etc.) also resolve from S3.
     //
-    // We deliberately do NOT emit a bare `/<route>` static route — the
-    // CloudFront build-ID rewrite Function only appends `index.html` when
-    // the URI ends with `/`, so `/about` would resolve to the S3 key
-    // `builds/{id}/about` (no such object → 403). Instead we route
-    // `/<route>/*` to S3 (so `_payload.json` and other sibling assets the
-    // framework prefetches resolve), and let the bare `/<route>` flow
-    // through the catch-all to the SSR Lambda, which re-renders the page
-    // from the bundled component on demand.
+    // (Historically only `/<route>/*` was emitted and bare `/<route>` fell
+    // through to the SSR Lambda — which re-rendered a `prerender: true` page on
+    // every request, breaking the "frozen, served from S3, no Lambda" contract.
+    // The router's directory-index rewrite now handles bare extensionless paths,
+    // so the bare route resolves correctly from S3.)
     for (const htmlFile of walkHtmlFiles(publicDir)) {
       const rel = path.relative(publicDir, htmlFile).replace(/\\/g, '/');
       const urlPath = htmlFileToUrlPath(rel);
       if (urlPath === '/') continue;
+      addRoute({ pattern: urlPath, target: 'static' });
       addRoute({ pattern: `${urlPath}/*`, target: 'static' });
     }
   }
 
   // Honour route rules with `prerender: true` even if the build hasn't
-  // emitted a file at that path yet. We emit the subtree pattern only
-  // (e.g. `/about/*` not bare `/about`) for the same reason the
-  // filesystem walk above does — the build-ID rewriter can't resolve a
-  // bare prerendered path to its index.html.
+  // emitted a file at that path yet. Emit BOTH the bare route and its subtree
+  // as static (the router's directory-index rewrite resolves the bare
+  // extensionless path to its `index.html` on S3 — see the filesystem walk
+  // above), so a `prerender: true` page is served frozen from S3 rather than
+  // re-rendered by the SSR Lambda.
   for (const [routePattern, rule] of Object.entries(routeRules)) {
     if (rule.prerender) {
       const normalized = normalizeRulePattern(routePattern);
-      const subtree = normalized.endsWith('/*')
-        ? normalized
-        : `${normalized}/*`;
-      addRoute({ pattern: subtree, target: 'static' });
+      if (normalized.endsWith('/*')) {
+        addRoute({ pattern: normalized, target: 'static' });
+      } else {
+        addRoute({ pattern: normalized, target: 'static' });
+        addRoute({ pattern: `${normalized}/*`, target: 'static' });
+      }
     }
   }
 

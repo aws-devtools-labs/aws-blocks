@@ -585,6 +585,38 @@ void describe('request fn — G8 directory-index (spa=0)', () => {
   });
 });
 
+void describe('request fn — bare prerendered route under basePath → S3 (Issue 1)', () => {
+  // Regression: a Nuxt `prerender: true` page (e.g. /about) under basePath
+  // /myapp must serve the FROZEN prerendered HTML from S3, not be re-rendered
+  // by the SSR Lambda. The adapter now emits a bare `/about` static route (+
+  // `/about/*`); the router strips basePath, classifies it static, and the
+  // directory-index branch resolves the extensionless bare path to
+  // /builds/<id>/about/index.html (how Nuxt prerenders it).
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      staticAssets: { directory: '/tmp', spaFallback: false },
+      routes: [
+        { pattern: '/about', target: 'static' },
+        { pattern: '/about/*', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+  void it('routes bare /myapp/about to S3 + rewrites to the frozen index.html', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/myapp/about'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/about/index.html');
+  });
+});
+
 void describe('request fn — G10 fail-open when meta is missing', () => {
   void it('returns the request unchanged (no origin selected) if KVS has no meta', async () => {
     const { output, selectedOrigin } = await runRequestFn(reqCode, {}, req('/x'));
