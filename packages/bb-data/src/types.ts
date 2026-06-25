@@ -44,4 +44,19 @@ export interface DatabaseOptions {
  */
 export type ExternalDatabaseRef =
   | { host: string; port?: number; database: string; secretArn: string }
-  | { connectionString: string | { get(): Promise<string> } };
+  | {
+      connectionString: string | { get(): Promise<string> };
+      /**
+       * TLS settings for the connection. When omitted, the server certificate is
+       * **verified by default** (the engine uses `{ rejectUnauthorized: true }`).
+       *
+       * Managed Postgres providers (Supabase, Neon, RDS) present certificates
+       * signed by a provider-specific CA that is not in Node's built-in trust
+       * store, so verification requires pinning that CA via `ca`. For Supabase,
+       * download `prod-ca-2021.crt` from Database Settings → SSL Configuration.
+       *
+       * Set `rejectUnauthorized: false` only if you accept the man-in-the-middle
+       * risk (encrypted but unauthenticated); prefer pinning the CA instead.
+       */
+      ssl?: { rejectUnauthorized?: boolean; ca?: string };
+    };

@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PgClientEngine } from '../engines/pg-client-engine.js';
+import { externalDbSsl } from '../external-ssl.js';
 
 /** The baseline migration filename. Lexicographically first so it applies before deltas. */
 export const BASELINE_FILE = '000_baseline.sql';
@@ -100,7 +101,7 @@ export async function generateBaseline(opts: GenerateBaselineOptions): Promise<G
   // Version-check pg_dump against the server (pg_dump must be >= server major).
   const engine = new PgClientEngine({
     connectionString: opts.connectionString,
-    ssl: { rejectUnauthorized: false },
+    ssl: externalDbSsl(),
     poolSize: 1,
   });
   let serverMajor: number;

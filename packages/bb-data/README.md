@@ -152,6 +152,31 @@ const db = new Database(scope, 'external', {
 });
 ```
 
+### TLS certificate verification
+
+The server's TLS certificate is **verified by default**. Managed providers
+(Supabase, Neon, RDS) present a certificate signed by a provider-specific CA
+that is not in Node's built-in trust store, so verification requires pinning
+that CA. For Supabase, download `prod-ca-2021.crt` from your project's
+**Database Settings → SSL Configuration** and pass it via `ssl.ca`:
+
+```typescript
+const db = new Database(scope, 'external', {
+  connection: fromExisting({
+    connectionString: process.env.DATABASE_URL!,
+    ssl: { ca: process.env.DATABASE_CA_CERT }, // inline PEM or file contents
+  }),
+});
+```
+
+`bb-data pull` wires this for you: it prompts for your CA certificate and commits
+it to `aws-blocks/database.ca.ts` (a public, non-secret cert that is bundled into
+your deployed function), so the connection is **verified by default** — including
+in the deployed Lambda, with no runtime configuration. `DATABASE_CA_CERT` (inline
+PEM or a file path) overrides the committed cert. If neither is available the
+connection falls back to `ssl: { rejectUnauthorized: false }` — **encrypted but
+unauthenticated** (exposed to man-in-the-middle). Provide the CA for production.
+
 ## Migrating from Supabase
 
 Already have a Supabase app? `bb-data pull` connects to your existing Supabase database and generates a complete, type-safe backend — keeping your tables, data, and RLS policies exactly as they are.

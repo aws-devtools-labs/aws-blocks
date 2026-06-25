@@ -126,3 +126,24 @@ test('PgClientEngine: accepts postgres:// and postgresql:// URLs', () => {
   assert.doesNotThrow(() => new PgClientEngine({ connectionString: 'postgres://u:p@h:5432/d' }));
   assert.doesNotThrow(() => new PgClientEngine({ connectionString: 'postgresql://u:p@h:6543/d' }));
 });
+
+test('PgClientEngine: verifies the server certificate by default (ssl omitted)', () => {
+  // Security default: when no ssl is supplied the pool must reject an
+  // unverified certificate. The runtime/generated paths rely on this default.
+  const engine = new PgClientEngine({ connectionString: 'postgres://u:p@h:5432/d' });
+  assert.deepStrictEqual((engine as any).pool.options.ssl, { rejectUnauthorized: true });
+});
+
+test('PgClientEngine: respects an explicit ssl config (CA pin / opt-out)', () => {
+  const pinned = new PgClientEngine({
+    connectionString: 'postgres://u:p@h:5432/d',
+    ssl: { rejectUnauthorized: true, ca: 'my-ca-pem' },
+  });
+  assert.deepStrictEqual((pinned as any).pool.options.ssl, { rejectUnauthorized: true, ca: 'my-ca-pem' });
+
+  const optedOut = new PgClientEngine({
+    connectionString: 'postgres://u:p@h:5432/d',
+    ssl: { rejectUnauthorized: false },
+  });
+  assert.deepStrictEqual((optedOut as any).pool.options.ssl, { rejectUnauthorized: false });
+});

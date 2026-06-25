@@ -30,6 +30,7 @@ export {
   generateTypesFile,
   generateMetaFile,
   generateIndexFile,
+  generateCaFile,
   generateMigrationGuide,
   parseExistingMetaSingulars,
   selectEligibleTables,

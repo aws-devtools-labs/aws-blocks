@@ -13,6 +13,7 @@
 import pg from 'pg';
 import type { ColumnInfo, IntrospectionResult, TableInfo } from './types.js';
 import { SUPABASE_AUTH } from './supabase.js';
+import { externalDbSsl } from '../external-ssl.js';
 
 /**
  * Decide whether a column's DEFAULT clause indicates the value is server-managed
@@ -65,10 +66,15 @@ export async function introspect(connectionString: string): Promise<Introspectio
     );
   }
 
-  // Strip sslmode from connection string — pg v8+ treats sslmode=require as verify-full,
-  // which rejects Supavisor's self-signed cert. We provide ssl config explicitly instead.
+  // Strip sslmode from the connection string so our explicit ssl config takes
+  // effect: node `pg` treats `sslmode=require` (and stricter) as verify-full
+  // against the system trust store and ignores a programmatic `ssl.ca`. Supabase's pooler/direct
+  // endpoints present a cert signed by Supabase's private CA ("prod-ca-2021"),
+  // which is not in the system store — so verification needs that CA pinned
+  // (via DATABASE_CA_CERT); externalDbSsl() handles that, falling back to an
+  // unverified connection for this ephemeral, operator-driven introspection.
   const connStr = connectionString.replace(/[?&]sslmode=[^&]*/g, '').replace(/\?$/, '');
-  const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
+  const pool = new pg.Pool({ connectionString: connStr, ssl: externalDbSsl() });
 
   try {
     // Get columns

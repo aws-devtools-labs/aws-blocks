@@ -40,20 +40,24 @@ export class Database extends Scope {
     this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
     if (options?.connection && isConnectionString(options.connection)) {
-      // External database via connection string — connect directly
+      // External database via connection string — connect directly.
+      // Local dev defaults to NOT verifying the certificate (self-signed local
+      // databases are common); a caller-supplied `ssl` (e.g. the `db pull`-generated
+      // wiring pinning the provider CA) overrides this.
       const engine = new PgClientEngine({
         connectionString: options.connection.connectionString,
-        ssl: { rejectUnauthorized: false },
+        ssl: options.connection.ssl ?? { rejectUnauthorized: false },
       });
       this.base = new RLSEnabledDatabase(engine);
     } else if (options?.connection && 'connectionString' in options.connection && typeof options.connection.connectionString !== 'string') {
       // External database via AppSetting — in local dev, AppSetting
       // reads from .env.local so we resolve it during initialization.
+      const ssl = options.connection.ssl ?? { rejectUnauthorized: false };
       const connectionString = options.connection.connectionString;
       const initPromise = connectionString.get().then(connStr => {
         this.base = new RLSEnabledDatabase(new PgClientEngine({
           connectionString: connStr,
-          ssl: { rejectUnauthorized: false },
+          ssl,
         }));
       });
       this.migrationsRun = initPromise;
@@ -131,7 +135,9 @@ export class Database extends Scope {
   }
 }
 
-function isConnectionString(ref: ExternalDatabaseRef): ref is { connectionString: string } {
+function isConnectionString(
+  ref: ExternalDatabaseRef,
+): ref is { connectionString: string; ssl?: { rejectUnauthorized?: boolean; ca?: string } } {
   return 'connectionString' in ref && typeof ref.connectionString === 'string';
 }
 
