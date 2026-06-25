@@ -79,6 +79,7 @@ export type SourceConfig = string;
 export interface WaitUntilReadyOptions {
     maxConsecutiveTransientErrors?: number;
     pollIntervalMs?: number;
+    signal?: AbortSignal;
     timeoutMs?: number;
 }
 

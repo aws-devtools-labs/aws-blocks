@@ -604,7 +604,11 @@ describe('isReady', () => {
 	});
 
 	test('returns true (without calling the control plane) when no data source id is configured', async () => {
-		// Imported s3:// source / pre-feature deployment: KB_ID present, DATA_SOURCE_ID absent.
+		// A deployment that predates the readiness API: KB_ID present, but no
+		// DATA_SOURCE_ID was injected, so there is no ingestion job to track. (The
+		// CDK layer now always registers a DATA_SOURCE_ID for both folder and
+		// imported s3:// sources — see DESIGN.md D-KB-2 — so this is purely the
+		// pre-feature case, not a source-type distinction.)
 		const cleanup = setReadyEnv('TEST', 'RDY4', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {
@@ -613,7 +617,7 @@ describe('isReady', () => {
 		});
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'rdy4', { source: 's3://my-docs-bucket' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy4', { source: './knowledge' });
 			assert.strictEqual(await kb.isReady(), true);
 			assert.strictEqual(sendCalled, false, 'should not query the control plane when there is no data source to track');
 		} finally {
@@ -785,6 +789,9 @@ describe('waitUntilReady', () => {
 	});
 
 	test('resolves immediately when no data source id is configured', async () => {
+		// Pre-readiness-API deployment: no DATA_SOURCE_ID injected, so there is
+		// nothing to poll. (Not a source-type distinction — the CDK layer registers
+		// DATA_SOURCE_ID for folder and imported s3:// sources alike; see DESIGN.md D-KB-2.)
 		const cleanup = setReadyEnv('TEST', 'WUR5', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {
@@ -793,7 +800,7 @@ describe('waitUntilReady', () => {
 		});
 
 		try {
-			const kb = new KnowledgeBase({ id: 'test' }, 'wur5', { source: 's3://my-docs-bucket' });
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur5', { source: './knowledge' });
 			await kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5 });
 			assert.strictEqual(sendCalled, false, 'should not poll the control plane when there is nothing to track');
 		} finally {
@@ -922,6 +929,149 @@ describe('waitUntilReady', () => {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur10', { source: './knowledge' });
 			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 1 });
 			assert.strictEqual(i, 4, 'should consume the full transient/clean/transient/complete sequence');
+		} finally {
+			cleanup();
+		}
+	});
+
+	// Cause-based transient classification: a control-plane ResourceNotFoundException
+	// (the KB/data source not yet visible in the post-deploy window) maps to NotReady
+	// WITH a `cause`, and is tolerated as transient — whereas an unset-KB_ID NotReady
+	// (thrown directly by ensureKbId, no `cause`) stays terminal.
+
+	test('tolerates a transient control-plane ResourceNotFoundException (KB not yet visible), then resolves once COMPLETE', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR11');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				// Post-deploy window: the freshly-created KB/data source has not
+				// propagated yet, so the control plane 404s. mapSdkError maps this to
+				// NotReady with cause.name === 'ResourceNotFoundException' → transient.
+				const e = new Error('No knowledge base with ID kb-test-123 exists');
+				e.name = 'ResourceNotFoundException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur11', { source: './knowledge' });
+			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1 });
+			assert.ok(calls >= 2, `expected a retry after the not-yet-visible blip, got ${calls} call(s)`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws once consecutive control-plane ResourceNotFound errors exceed the tolerance', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR12');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const e = new Error('No knowledge base with ID kb-test-123 exists');
+			e.name = 'ResourceNotFoundException'; // → NotReady (transient, carries cause) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur12', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					assert.strictEqual(
+						(err.cause as Error | undefined)?.name,
+						'ResourceNotFoundException',
+						'the rethrown NotReady should still carry the originating SDK error as cause',
+					);
+					return true;
+				},
+			);
+			// tolerance 2 → polls 1 & 2 absorbed, poll 3 exceeds the limit and rethrows.
+			assert.strictEqual(calls, 3, `expected 3 polls (2 tolerated + 1 over the limit), got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('does NOT retry an unset-KB_ID NotReady (config error has no cause → terminal)', async () => {
+		const prefix = 'BLOCKS_TEST_WUR13';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur13', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					// The cause-based classification hinges on this: ensureKbId() throws
+					// NotReady directly, so there is no `cause` (unlike a not-yet-visible
+					// ResourceNotFoundException) — which keeps the config error terminal.
+					assert.strictEqual(err.cause, undefined, 'a config NotReady must carry no cause');
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'a missing-KB config error fails before any poll and must not be retried');
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	// Cancellation via AbortSignal — checked before each poll and during the inter-poll sleep.
+
+	test('rejects immediately when the signal is already aborted (no polling)', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR14');
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur14', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 5, signal: AbortSignal.abort() }),
+				(err: Error) => {
+					assert.strictEqual(err.name, 'AbortError', 'default abort reason is a DOMException named AbortError');
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'an already-aborted signal must reject before any poll');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('aborts during the inter-poll delay and rejects with the supplied abort reason', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR15');
+		const controller = new AbortController();
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			// Always "still warming" so the wait reaches the inter-poll sleep, where
+			// the abort fired below interrupts it.
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur15', { source: './knowledge' });
+			const reason = new Error('caller cancelled');
+			setTimeout(() => controller.abort(reason), 20).unref?.();
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 60_000, pollIntervalMs: 50, signal: controller.signal }),
+				(err: Error) => {
+					assert.strictEqual(err, reason, 'should reject with the exact reason passed to abort()');
+					return true;
+				},
+			);
+			assert.ok(calls >= 1, 'should have polled at least once before being aborted');
 		} finally {
 			cleanup();
 		}

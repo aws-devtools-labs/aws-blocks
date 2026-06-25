@@ -56,9 +56,42 @@ function blocksError(name: string, message: string): Error {
 	return err;
 }
 
-/** Resolve after `ms` milliseconds. Used to space out readiness polls in `waitUntilReady()`. */
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Resolve after `ms` milliseconds. Used to space out readiness polls in
+ * `waitUntilReady()`. If an {@link AbortSignal} is supplied and fires (or is
+ * already aborted), the returned promise rejects promptly with the signal's
+ * abort reason instead of waiting out the full delay.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason);
+			return;
+		}
+		let onAbort: (() => void) | undefined;
+		const timer = setTimeout(() => {
+			if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+		if (signal) {
+			onAbort = () => {
+				clearTimeout(timer);
+				reject(signal.reason);
+			};
+			signal.addEventListener('abort', onAbort, { once: true });
+		}
+	});
+}
+
+/**
+ * Apply ±20% random jitter to a poll interval so that many knowledge bases
+ * polling after a shared deploy do not synchronize into lockstep. Only the
+ * delay *between* polls varies — never the number of polls — and the caller
+ * still clamps the result to the remaining time budget.
+ */
+function jitterInterval(ms: number): number {
+	const factor = 1 + (Math.random() * 2 - 1) * 0.2; // 0.8–1.2
+	return Math.round(ms * factor);
 }
 
 // Match only messages that clearly indicate a metadata filter issue.
@@ -115,15 +148,35 @@ function mapSdkError(err: unknown): Error {
 
 /**
  * Whether a mapped readiness error is a *transient* control-plane failure worth
- * a bounded retry in {@link KnowledgeBase.waitUntilReady}. True only for
- * `RetrievalFailedException` — the bucket {@link mapSdkError} uses for network
- * errors, throttling, and other unrecognized SDK failures. Terminal errors
- * (`IngestionFailedException`, `KnowledgeBaseNotReadyException`, and the
- * validation errors) map to other names and are intentionally excluded so they
- * short-circuit the wait immediately.
+ * a bounded retry in {@link KnowledgeBase.waitUntilReady}, rather than a terminal
+ * one that should short-circuit the wait.
+ *
+ * Two cases are transient:
+ * - `RetrievalFailedException` — the bucket {@link mapSdkError} uses for network
+ *   errors, throttling, and other unrecognized SDK failures.
+ * - A *not-yet-visible* knowledge base. During the post-deploy window the control
+ *   plane can briefly return `ResourceNotFoundException` (the KB or data source
+ *   isn't visible yet); {@link mapSdkError} maps that to `KnowledgeBaseNotReadyException`
+ *   **with the original SDK error attached as the non-enumerable `cause`**. Detect
+ *   it via `cause.name === 'ResourceNotFoundException'` and ride it out — that is
+ *   the entire purpose of `waitUntilReady()`.
+ *
+ * Everything else is terminal and short-circuits immediately: the `NotReady`
+ * raised for an unset `KB_ID` config is thrown directly by `ensureKbId()` (so it
+ * carries **no** `cause`, which is exactly how we tell it apart from the transient
+ * not-yet-visible case above); `IngestionFailedException` (the job failed); and
+ * the validation errors all map to other names.
  */
 function isTransientControlPlaneError(err: unknown): boolean {
-	return err instanceof Error && err.name === KnowledgeBaseErrors.RetrievalFailed;
+	if (!(err instanceof Error)) return false;
+	if (err.name === KnowledgeBaseErrors.RetrievalFailed) return true;
+	// A control-plane ResourceNotFoundException is mapped to NotReady WITH the SDK
+	// error attached as `cause`; the unset-KB_ID NotReady is thrown directly and has
+	// none. Only the former — a KB not yet visible post-deploy — is transient.
+	return (
+		err.name === KnowledgeBaseErrors.NotReady &&
+		(err.cause as Error | undefined)?.name === 'ResourceNotFoundException'
+	);
 }
 
 // ── Filter builder ─────────────────────────────────────────────────────────
@@ -211,14 +264,17 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
-	 * Resolve the configured Bedrock data source id, or `undefined` when none
-	 * was registered. Both folder and imported `s3://` sources register a
-	 * BB-managed data source id at deploy time, so this normally returns a value
-	 * for either source type. It is `undefined` only for deployments that predate
-	 * the readiness API (no `DATA_SOURCE_ID` injected) — in which case there is no
-	 * ingestion job to track and callers treat the KB as ready.
+	 * Resolve the configured Bedrock data source id, or `undefined` when none was
+	 * registered. Named `get*` rather than `ensure*` because — unlike
+	 * {@link KnowledgeBase.ensureKbId}, which throws when the id is missing — a
+	 * missing data source id is a valid state that this simply reports as
+	 * `undefined`. Both folder and imported `s3://` sources register a BB-managed
+	 * data source id at deploy time, so this normally returns a value for either
+	 * source type. It is `undefined` only for deployments that predate the readiness
+	 * API (no `DATA_SOURCE_ID` injected) — in which case there is no ingestion job
+	 * to track and callers treat the KB as ready.
 	 */
-	private ensureDataSourceId(): string | undefined {
+	private getDataSourceId(): string | undefined {
 		const dataSourceId = getSdkIdentifiers(this).dataSourceId;
 		return dataSourceId ? dataSourceId : undefined;
 	}
@@ -303,11 +359,15 @@ export class KnowledgeBase extends Scope {
 	 *   no managed data source to track); `false` while ingestion is pending.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
-	 *   For mapped Bedrock control-plane errors. The `KB_ID` env var being unset, and a
-	 *   control-plane `ResourceNotFoundException`, both map to `NotReady`; a control-plane
-	 *   `ValidationException` maps to `KnowledgeBaseValidationError` (or `InvalidFilterException`);
-	 *   any other SDK error (network, auth, throttling) maps to `RetrievalFailedException`.
-	 *   This is the same mapping {@link mapSdkError} applies to `retrieve()`.
+	 *   For mapped Bedrock control-plane errors. Two distinct conditions map to `NotReady`:
+	 *   the `KB_ID` env var being unset (a *config* error thrown directly, so it carries no
+	 *   `cause`), and a control-plane `ResourceNotFoundException` (a *not-yet-visible* KB,
+	 *   mapped with the SDK error as `cause`). {@link waitUntilReady} relies on that
+	 *   distinction: it rides out the not-yet-visible case as transient but treats the
+	 *   unset-`KB_ID` config error as terminal. A control-plane `ValidationException` maps to
+	 *   `KnowledgeBaseValidationError` (or `InvalidFilterException`); any other SDK error
+	 *   (network, auth, throttling) maps to `RetrievalFailedException`. This is the same
+	 *   mapping {@link mapSdkError} applies to `retrieve()`.
 	 *
 	 * @example
 	 * ```typescript
@@ -318,7 +378,7 @@ export class KnowledgeBase extends Scope {
 	 */
 	async isReady(): Promise<boolean> {
 		const knowledgeBaseId = this.ensureKbId();
-		const dataSourceId = this.ensureDataSourceId();
+		const dataSourceId = this.getDataSourceId();
 		// No BB-managed ingestion to track → nothing to wait for.
 		if (!dataSourceId) return true;
 
@@ -348,47 +408,71 @@ export class KnowledgeBase extends Scope {
 	 * propagates immediately rather than waiting out the timeout.
 	 *
 	 * Because this method exists for the noisy post-deploy window, it tolerates a
-	 * bounded run of *transient* control-plane errors (throttling / transient
-	 * network failures, mapped to `RetrievalFailedException`) rather than aborting
-	 * on the first blip: up to `maxConsecutiveTransientErrors` consecutive transient
+	 * bounded run of *transient* control-plane errors rather than aborting on the
+	 * first blip: up to `maxConsecutiveTransientErrors` consecutive transient
 	 * failures are absorbed and retried, and any clean poll resets that counter.
+	 * Two kinds of error are transient — `RetrievalFailedException` (throttling /
+	 * transient network failures) and a *not-yet-visible* KB, where the control
+	 * plane briefly returns `ResourceNotFoundException` while the freshly-deployed
+	 * KB or data source has not propagated yet (mapped to `KnowledgeBaseNotReadyException`).
+	 * Riding out that window is the whole point of this method.
+	 *
 	 * Terminal errors still short-circuit immediately — a `FAILED` job
-	 * (`IngestionFailedException`) and a missing-KB config error
-	 * (`KnowledgeBaseNotReadyException`, e.g. `KB_ID` unset) are never retried.
+	 * (`IngestionFailedException`) and a *config* missing-KB error (`KB_ID` unset,
+	 * which `ensureKbId()` throws directly with no `cause`, distinct from the
+	 * transient not-yet-visible case above) are never retried.
+	 *
+	 * The delay between polls carries ±20% jitter so that many knowledge bases
+	 * polling after a shared deploy do not synchronize; jitter only varies the
+	 * sleep duration, never the number of polls, and is clamped to the deadline.
+	 * Pass `options.signal` to cancel the wait — it is checked before each poll
+	 * and during the inter-poll delay, rejecting promptly with the signal's abort
+	 * reason (default: a `DOMException` named `'AbortError'`).
 	 *
 	 * @param {WaitUntilReadyOptions} options - Optional polling parameters.
 	 *   `timeoutMs` (default 300000) bounds the total wait; `pollIntervalMs`
-	 *   (default 5000, clamped to a minimum of 1ms) spaces out the polls;
-	 *   `maxConsecutiveTransientErrors` (default 3, minimum 0) bounds how many
-	 *   consecutive transient control-plane errors are tolerated before giving up.
+	 *   (default 5000, clamped to a minimum of 1ms, ±20% jitter) spaces out the
+	 *   polls; `maxConsecutiveTransientErrors` (default 3, minimum 0) bounds how
+	 *   many consecutive transient control-plane errors are tolerated before
+	 *   giving up; `signal` (optional `AbortSignal`) cancels the wait.
 	 * @throws {KnowledgeBaseTimeoutException} If the KB does not become ready within `timeoutMs`.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   Propagated from {@link isReady} for mapped Bedrock control-plane errors — see its docs
 	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
 	 *   `ValidationException` → `KnowledgeBaseValidationError`/`InvalidFilterException`,
-	 *   other SDK errors → `RetrievalFailedException`). Transient `RetrievalFailedException`s
-	 *   are retried up to `maxConsecutiveTransientErrors` times before being rethrown.
+	 *   other SDK errors → `RetrievalFailedException`). Transient errors (a `RetrievalFailedException`,
+	 *   or a `NotReady` caused by a not-yet-visible `ResourceNotFoundException`) are retried up
+	 *   to `maxConsecutiveTransientErrors` times before being rethrown.
+	 * @throws The `signal`'s abort reason (default `DOMException` `'AbortError'`) if `options.signal` fires.
 	 *
 	 * @example
 	 * ```typescript
 	 * // Block until the KB is queryable (e.g. right after deploy)
 	 * await kb.waitUntilReady({ timeoutMs: 600_000 });
 	 * const results = await kb.retrieve('getting started');
+	 *
+	 * // With cancellation (e.g. an overall request deadline)
+	 * await kb.waitUntilReady({ signal: AbortSignal.timeout(120_000) });
 	 * ```
 	 */
 	async waitUntilReady(options?: WaitUntilReadyOptions): Promise<void> {
 		const timeoutMs = Math.max(options?.timeoutMs ?? 300_000, 0);
 		const pollIntervalMs = Math.max(options?.pollIntervalMs ?? 5_000, 1);
 		const maxConsecutiveTransientErrors = Math.max(options?.maxConsecutiveTransientErrors ?? 3, 0);
+		const signal = options?.signal;
 		const deadline = Date.now() + timeoutMs;
 
 		let consecutiveTransientErrors = 0;
 		for (;;) {
+			// Cancellation: bail out before doing any work on each iteration. An
+			// already-aborted signal throws here on the very first pass (no poll).
+			signal?.throwIfAborted();
 			try {
 				// isReady() resolves true (ready) / false (still warming), throws
 				// IngestionFailedException on a FAILED job, NotReady when the KB is
-				// not deployed, or RetrievalFailedException for transient blips.
+				// not deployed (or briefly not-yet-visible), or RetrievalFailedException
+				// for transient blips.
 				if (await this.isReady()) return;
 				// A clean poll clears any transient-error streak.
 				consecutiveTransientErrors = 0;
@@ -409,8 +493,9 @@ export class KnowledgeBase extends Scope {
 					`Knowledge base did not become ready within ${timeoutMs}ms.`,
 				);
 			}
-			// Never sleep past the deadline.
-			await sleep(Math.min(pollIntervalMs, Math.max(deadline - Date.now(), 0)));
+			// Jitter the interval to avoid lockstep, but never sleep past the
+			// deadline; the sleep is abortable via the signal.
+			await sleep(Math.min(jitterInterval(pollIntervalMs), Math.max(deadline - Date.now(), 0)), signal);
 		}
 	}
 

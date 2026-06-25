@@ -39,7 +39,7 @@ const kb = new KnowledgeBase(scope, id, options)
 |--------|---------|-------------|
 | `retrieve(query, options?)` | `Promise<RetrieveResult[]>` | Search for relevant document chunks. Returns results ranked by relevance score. |
 | `isReady()` | `Promise<boolean>` | Whether async ingestion has finished and the KB can serve `retrieve()`. `true` once the latest ingestion job is `COMPLETE` (or there is no BB-managed data source to track). Throws `IngestionFailed` if the latest job failed. |
-| `waitUntilReady(options?)` | `Promise<void>` | Poll `isReady()` until the KB is ready or the timeout elapses. Throws `Timeout` if it does not become ready in time. |
+| `waitUntilReady(options?)` | `Promise<void>` | Poll `isReady()` until the KB is ready or the timeout elapses. Throws `Timeout` if it does not become ready in time. Accepts an optional `AbortSignal` to cancel the wait. |
 
 ### Options
 
@@ -118,9 +118,16 @@ const results = await kb.retrieve('getting started');
 if (await kb.isReady()) {
   const results = await kb.retrieve('getting started');
 }
+
+// Cancel the wait with an AbortSignal (e.g. an overall request deadline)
+await kb.waitUntilReady({ signal: AbortSignal.timeout(120_000) });
 ```
 
-`waitUntilReady(options?)` accepts `timeoutMs` (default `300_000`), `pollIntervalMs` (default `5_000`, clamped to a 1ms minimum), and `maxConsecutiveTransientErrors` (default `3`, minimum `0`) — the number of *consecutive* transient control-plane errors (throttling / transient network failures) tolerated before giving up. The counter resets on any clean poll, and terminal errors (a `FAILED` ingestion job, or a missing-KB config) always short-circuit immediately regardless of that limit. Both local-folder and imported `s3://` sources register a BB-managed data source, so readiness reflects that data source's ingestion job in either case. (A deployment predating this readiness API has no data source id injected, so `isReady()` returns `true` immediately — there is nothing to track.) In local development the mock is always ready.
+`waitUntilReady(options?)` accepts `timeoutMs` (default `300_000`), `pollIntervalMs` (default `5_000`, clamped to a 1ms minimum), `maxConsecutiveTransientErrors` (default `3`, minimum `0`), and an optional `signal` (`AbortSignal`). The poll interval carries a small amount of random jitter (±20%) so that many knowledge bases polling after a shared deploy don't fall into lockstep — the jitter only varies the delay *between* polls and never pushes a sleep past `timeoutMs`.
+
+`maxConsecutiveTransientErrors` is the number of *consecutive* transient control-plane errors tolerated before giving up; the counter resets on any clean poll. Two conditions are treated as transient and ridden out: throttling / transient network failures, **and** a *not-yet-visible* knowledge base — in the post-deploy window the control plane can briefly return `ResourceNotFoundException` (the freshly-created KB or data source hasn't propagated yet), which `waitUntilReady()` absorbs rather than giving up on. Terminal errors always short-circuit immediately regardless of the limit: a `FAILED` ingestion job, and a *missing-KB config* error (the `KB_ID` env var is unset — distinct from the transient not-yet-visible case). When `signal` is provided, the wait is cancelled promptly (checked before each poll and during the inter-poll delay), rejecting with the signal's abort reason (by default a `DOMException` named `'AbortError'`).
+
+Both local-folder and imported `s3://` sources register a BB-managed data source, so readiness reflects that data source's ingestion job in either case. (A deployment predating this readiness API has no data source id injected, so `isReady()` returns `true` immediately — there is nothing to track.) In local development the mock is always ready.
 
 ## Metadata Filtering
 

@@ -168,21 +168,42 @@ export interface RetrieveResult {
 export interface WaitUntilReadyOptions {
 	/** Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes). */
 	timeoutMs?: number;
-	/** Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms. Default: 5000 (5 seconds). */
+	/**
+	 * Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms.
+	 * A small amount of random jitter (±20%) is applied to each delay so that many
+	 * knowledge bases polling after a shared deploy do not fall into lockstep — the
+	 * jitter only varies the wait *between* polls (never the number of polls) and is
+	 * still clamped so a sleep never overruns `timeoutMs`. Default: 5000 (5 seconds).
+	 */
 	pollIntervalMs?: number;
 	/**
 	 * Maximum number of *consecutive* transient control-plane errors to tolerate
-	 * before giving up, instead of aborting the wait on the first blip. A transient
-	 * error is one mapped to `RetrievalFailedException` — the catch-all for network
-	 * failures, throttling, and other unrecognized SDK errors during a readiness
-	 * poll. Each clean poll (ingestion still in progress, or ready) resets the
-	 * counter, so only an unbroken run of failures counts toward the limit.
+	 * before giving up, instead of aborting the wait on the first blip. Two kinds
+	 * of error are treated as transient during a readiness poll:
+	 * - `RetrievalFailedException` — the catch-all for network failures, throttling,
+	 *   and other unrecognized SDK errors.
+	 * - A *not-yet-visible* knowledge base: in the post-deploy window the control
+	 *   plane can briefly return `ResourceNotFoundException` (the KB or data source
+	 *   isn't visible yet), which surfaces as `KnowledgeBaseNotReadyException`. Only
+	 *   this control-plane variant is transient — riding it out is the whole point
+	 *   of `waitUntilReady()`.
+	 *
+	 * Each clean poll (ingestion still in progress, or ready) resets the counter,
+	 * so only an unbroken run of failures counts toward the limit.
 	 *
 	 * Terminal errors always short-circuit immediately regardless of this value:
-	 * `IngestionFailedException` (the job failed), `KnowledgeBaseNotReadyException`
-	 * (the KB is not deployed / `KB_ID` is unset), and validation errors. Set to `0`
-	 * to fail fast on the first transient error. Clamped to a minimum of 0.
-	 * Default: 3.
+	 * `IngestionFailedException` (the job failed), a *config* `KnowledgeBaseNotReadyException`
+	 * (the `KB_ID` env var is unset — distinct from the transient not-yet-visible case
+	 * above), and validation errors. Set to `0` to fail fast on the first transient
+	 * error. Clamped to a minimum of 0. Default: 3.
 	 */
 	maxConsecutiveTransientErrors?: number;
+	/**
+	 * Optional {@link AbortSignal} to cancel the wait. When the signal is aborted,
+	 * `waitUntilReady()` rejects promptly — checked before each poll and during the
+	 * inter-poll delay — with the signal's abort reason (by default a `DOMException`
+	 * named `'AbortError'`, or whatever value was passed to `AbortController.abort(reason)`).
+	 * An already-aborted signal rejects immediately, before any polling.
+	 */
+	signal?: AbortSignal;
 }
