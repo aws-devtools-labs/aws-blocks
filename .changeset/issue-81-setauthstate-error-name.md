@@ -4,6 +4,7 @@
 "@aws-blocks/bb-auth-basic": patch
 "@aws-blocks/bb-auth-cognito": patch
 "@aws-blocks/bb-auth-oidc": patch
+"@aws-blocks/blocks": patch
 ---
 
 fix(auth): propagate the structured error name through `setAuthState()`
