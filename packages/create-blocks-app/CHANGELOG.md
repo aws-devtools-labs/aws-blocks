@@ -1,5 +1,11 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.9
+
+### Patch Changes
+
+- 95efe42: Honor `--skip-install` when creating a fresh project so scaffolding can complete without running `npm install`.
+
 ## 0.1.8
 
 ### Patch Changes

@@ -70,7 +70,8 @@ class RealtimeChannel<T> {
         final json = jsonDecode(data as String) as Map<String, dynamic>;
         if (json['type'] != 'message') return;
         // AWS uses 'data', mock uses 'payload'
-        final payload = (json['data'] ?? json['payload']) as Map<String, dynamic>;
+        final payload =
+            (json['data'] ?? json['payload']) as Map<String, dynamic>;
         controller.add(_deserializer(payload));
       },
       onError: controller.addError,
