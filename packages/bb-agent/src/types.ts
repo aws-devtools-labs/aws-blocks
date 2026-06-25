@@ -267,13 +267,22 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 /**
  * Returned by stream(). Provides the channelId and server-side convenience methods.
  *
- * Safe to return directly from API methods — `toJSON()` ensures only `{ channelId }`
- * is serialized over the wire. The `channel` and `complete()` helpers are server-side only.
+what  * Safe to return directly from API methods — `toJSON()` serializes to
+ * `{ channelId, channel: null }`. Only `channelId` is meaningful client-side;
+ * `channel` is explicitly `null` to signal the live handle is server-side only,
+ * and the `complete()` helper is dropped (functions don't serialize).
  */
 export interface AgentStreamResult {
 	/** Realtime channel ID where chunks are published. */
 	channelId: string;
-	/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
+	/**
+	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
+	 *
+	 * @remarks
+	 * Unlike `RealtimeChannel.toJSON()` which produces a hydratable descriptor, this is nulled
+	 * because it's a `Promise` that can't round-trip. Clients reconstruct a subscribe-only
+	 * channel from `channelId` via the `useChat` `subscribe` callback.
+	 */
 	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
 	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
 	complete: () => Promise<AgentStreamChunk>;
