@@ -105,6 +105,12 @@ void describe('nextjsAdapter', () => {
 
     // Static assets directory
     assert.strictEqual(manifest.staticAssets.directory, assetsDir);
+
+    // The adapter does NOT hardcode invalidationPaths — deploy-time
+    // invalidation is scoped on `hasCompute` in the L3 (it is not
+    // Next-specific; Nuxt swr/isr and Astro SSR hit the same stale-HTML 403).
+    // The field is reserved for adapter overrides/opt-out only.
+    assert.strictEqual(manifest.invalidationPaths, undefined);
   });
 
   void it('detects ISR cache when not disabled', () => {

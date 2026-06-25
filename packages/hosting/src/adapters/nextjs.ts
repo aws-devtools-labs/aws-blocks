@@ -237,6 +237,14 @@ export const nextjsAdapter = (
     { prefix: '_next/data/', days: 30 },
   ];
 
+  // NOTE: deploy-time CloudFront invalidation (to clear edge-cached SSG/ISR
+  // HTML that references the previous build's chunk hashes → 403) is NOT set
+  // here. It is not Next-specific — any compute-backed deploy can edge-cache
+  // stale HTML (Nuxt `routeRules` swr/isr, Astro SSR) — so the L3 issues the
+  // invalidation for ANY deploy with a compute origin (gated on `hasCompute`,
+  // default `['/*']`). Adapters set `manifest.invalidationPaths` only to
+  // override/opt out. See the field doc in manifest/types.ts.
+
   return manifest;
 };
 

@@ -965,10 +965,12 @@ void describe('CdnConstruct', () => {
       );
     });
 
-    void it('synthesizes co-located sibling pages without grouping or throwing (static-only)', () => {
-      // 24 sibling subtree pages under /docs used to overflow the cap and
-      // force a lossy `/docs/*` grouping. Now each is just a KVS row; synth
-      // succeeds with ZERO additional behaviors and no grouping.
+    void it('coalesces co-located sibling pages into one parent wildcard (static-only)', () => {
+      // 24 sibling subtree pages under /docs synth with ZERO additional
+      // behaviors. Because they share parent /docs and one kind (static), the
+      // KVS builder coalesces them into a single `/docs/*` row — bounding the
+      // per-request edge scan so a large SSG fan-out can't trip the CloudFront
+      // Function instruction limit. All 24 still route to S3 via `/docs/*`.
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -995,8 +997,8 @@ void describe('CdnConstruct', () => {
       );
       const template = Template.fromStack(stack);
       assert.deepEqual(additionalBehaviorPatterns(template), []);
-      // The individual /docs/page-N/* rows are preserved in the KVS table
-      // (no lossy grouping into /docs/*).
+      // The sibling /docs/page-N/* rows are coalesced into a single /docs/*
+      // wildcard (same kind), so the route table stays small.
       const rows = routeRows(
         buildKvsEntries({
           manifest,
@@ -1006,8 +1008,8 @@ void describe('CdnConstruct', () => {
         }),
       );
       const patterns = rows.map(([p]) => p);
-      assert.ok(patterns.includes('/docs/page-0/*'));
-      assert.ok(!patterns.includes('/docs/*'));
+      assert.ok(patterns.includes('/docs/*'));
+      assert.ok(!patterns.includes('/docs/page-0/*'));
     });
 
     void it('keeps every page on the edge under compute (no demotion to the SSR runtime)', () => {
@@ -3171,5 +3173,134 @@ void describe('CdnConstruct — sentinel-behavior guard (G21)', () => {
       ).includes('statusCode: 403'),
     );
     assert.ok(!guard, 'no guard function should exist without a sentinel behavior');
+  });
+});
+
+// ================================================================
+// Deploy-time CloudFront invalidation (hasCompute-scoped)
+// ================================================================
+//
+// Any compute-backed deploy can edge-cache HTML that references the previous
+// build's hashed assets and 403s after a redeploy — Next SSG/ISR, Nuxt
+// routeRules swr/isr, Astro SSR. So the L3 issues `/*` for ANY deploy with a
+// compute origin (default), nothing for pure-static, and honors
+// `manifest.invalidationPaths` as an override/opt-out. The invalidation is an
+// AwsCustomResource that synthesizes as `Custom::AWS`.
+void describe('CdnConstruct — deploy-time invalidation', () => {
+  void it('creates a Custom::AWS createInvalidation by default for a compute deploy', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: ssrManifest, // compute, no explicit invalidationPaths
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('Custom::AWS', 1);
+    // The Create/Update payload is an Fn::Join (the DistributionId is a CFN
+    // token); JSON.stringify the whole thing to assert the createInvalidation
+    // call, the build-id CallerReference, and the default `/*` path.
+    const customAws = Object.values(template.findResources('Custom::AWS'))[0] as {
+      Properties: { Create?: unknown; Update?: unknown };
+    };
+    const blob = JSON.stringify(
+      customAws.Properties.Update ?? customAws.Properties.Create ?? '',
+    );
+    assert.match(blob, /createInvalidation/);
+    assert.match(blob, /blocks-test-ssr-1/); // CallerReference keyed on buildId
+    assert.match(blob, /\\"Items\\":\[\\"\/\*\\"\]/);
+  });
+
+  void it('grants only cloudfront:CreateInvalidation to the invalidation resource', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: ssrManifest,
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+
+    const template = Template.fromStack(stack);
+    // The AwsCustomResource provider policy carries exactly the one action.
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'cloudfront:CreateInvalidation',
+            Effect: 'Allow',
+            Resource: '*',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  void it('honors an explicit invalidationPaths override on a compute deploy', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: { ...ssrManifest, invalidationPaths: ['/blog/*'] },
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('Custom::AWS', 1);
+    const customAws = Object.values(template.findResources('Custom::AWS'))[0] as {
+      Properties: { Create?: unknown; Update?: unknown };
+    };
+    const blob = JSON.stringify(
+      customAws.Properties.Update ?? customAws.Properties.Create ?? '',
+    );
+    assert.match(blob, /\\"Items\\":\[\\"\/blog\/\*\\"\]/);
+  });
+
+  void it('does NOT create an invalidation for a pure-static deploy (no compute)', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: spaManifest, // static-only: HTML served from S3 with no-cache
+      securityHeadersPolicy: policy,
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('Custom::AWS', 0);
+  });
+
+  void it('lets a compute deploy opt out with invalidationPaths: []', () => {
+    const stack = createStack();
+    const bucket = new Bucket(stack, 'Bucket');
+    const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+    const { fn, fnUrl } = createSsrFunction(stack);
+
+    new CdnConstruct(stack, 'Cdn', {
+      bucket,
+      manifest: { ...ssrManifest, invalidationPaths: [] },
+      securityHeadersPolicy: policy,
+      computeFunctionUrls: new Map([['default', fnUrl]]),
+      computeFunctions: new Map([['default', fn]]),
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('Custom::AWS', 0);
   });
 });

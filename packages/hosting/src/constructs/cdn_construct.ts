@@ -62,6 +62,11 @@ import {
   routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
+import {
+  AwsCustomResource,
+  AwsCustomResourcePolicy,
+  PhysicalResourceId,
+} from 'aws-cdk-lib/custom-resources';
 
 // ---- Constants ----
 
@@ -1050,6 +1055,68 @@ export class CdnConstruct extends Construct {
         value: primaryDomain,
         description: 'Custom domain name for the hosted site',
       });
+    }
+
+    // ---- Deploy-time CloudFront invalidation (adapter-declared) ----
+    // Scoped on `hasCompute`, NOT on the framework. Any compute-backed deploy
+    // can edge-cache HTML that goes stale after a redeploy: the shared SSR
+    // cache policy honors the origin's `Cache-Control`, so HTML served by the
+    // compute origin with a long `s-maxage` is edge-cached keyed on the viewer
+    // path (not the build-id prefix) and ends up referencing the previous
+    // build's hashed assets → 403. This is not Next-specific — it also hits
+    // Nuxt `routeRules` swr/isr and Astro SSR (see the field doc in
+    // manifest/types.ts). Pure-static deploys (no compute) serve HTML from S3
+    // with `no-cache`, so they need no invalidation and get none.
+    //
+    // Default: `['/*']` for any deploy with compute; nothing for pure-static.
+    // `manifest.invalidationPaths` OVERRIDES the default — set explicit
+    // patterns to narrow it, or `[]` to opt out.
+    //
+    // Ordering: the invalidation MUST run after the KvKeys atomic cutover
+    // (which is itself asset-gated via addBuildAssetDependency). That way it
+    // only flushes the PREVIOUS build's cached pages; the new build's
+    // `builds/<id>/...` objects were never cached, so `/*` is effectively free
+    // and cannot evict the not-yet-requested new prefix. `wait: false` is
+    // implied — AwsCustomResource does not poll the invalidation to completion,
+    // matching SST's non-blocking model (a brief propagation window where a
+    // first-time/cookieless visitor may still receive stale HTML is accepted).
+    const invalidationPaths = manifest.invalidationPaths ??
+      (hasCompute ? ['/*'] : []);
+    if (invalidationPaths.length > 0) {
+      const invalidation = new AwsCustomResource(this, 'DeployInvalidation', {
+        // CallerReference keyed on buildId so a NEW deploy (new buildId) issues
+        // a fresh invalidation, while an unchanged buildId is a no-op (CFN sees
+        // identical props → no Update → no duplicate invalidation cost).
+        onUpdate: {
+          service: 'CloudFront',
+          action: 'createInvalidation',
+          parameters: {
+            DistributionId: this.distribution.distributionId,
+            InvalidationBatch: {
+              CallerReference: `blocks-${buildId}`,
+              Paths: {
+                Quantity: invalidationPaths.length,
+                Items: invalidationPaths,
+              },
+            },
+          },
+          physicalResourceId: PhysicalResourceId.of(
+            `invalidation-${buildId}`,
+          ),
+        },
+        // createInvalidation is not resource-scopable in IAM; the action must
+        // be granted on `*` (the distribution ARN is not a valid resource for
+        // this action). Scope the policy to the single action.
+        policy: AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ['cloudfront:CreateInvalidation'],
+            resources: ['*'],
+          }),
+        ]),
+      });
+      // Gate AFTER the atomic KVS cutover so we only flush the previous build's
+      // pages (see ordering note above).
+      invalidation.node.addDependency(kvKeys.resource);
     }
 
     // ---- Self-enforcing atomic-deploy guard ----
