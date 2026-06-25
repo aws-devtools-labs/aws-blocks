@@ -19,6 +19,7 @@ const CURRENT_PAGE = 'http://localhost:3000/dashboard';
 const AUTHORIZE_URL = 'https://idp.example.com/authorize';
 
 let navigatedTo = '';
+let reloaded = false;
 let store: Map<string, string>;
 
 /**
@@ -33,6 +34,13 @@ let savedBroadcastChannel: unknown;
  * A no-op `BroadcastChannel`. `auth-common`'s `broadcastAuthChange()` lazily
  * opens a real channel via `getChannel()`; a real one is a ref'd libuv handle
  * that keeps `node --test` alive and hangs the run. This records posts instead.
+ *
+ * `auth-common` caches that channel in a module-level singleton it never resets,
+ * so whichever test triggers the first `broadcastAuthChange()` pins the live
+ * instance for the rest of the run. Every stub instance posts to the SAME
+ * module-level `broadcasts` array (emptied per test in `installBrowserGlobals`),
+ * so the captured posts stay correct regardless of which describe block ran
+ * first — preserve that shared-array invariant if this stub is refactored.
  */
 class StubBroadcastChannel {
 	name: string;
@@ -51,9 +59,11 @@ function installBrowserGlobals(currentHref: string): void {
 		set href(v: string) { navigatedTo = v; },
 		origin: url.origin,
 		pathname: url.pathname,
+		reload() { reloaded = true; },
 	};
 	store = new Map<string, string>();
 	broadcasts.length = 0;
+	reloaded = false;
 
 	// Back `window` with a real EventTarget so auth-common's
 	// `window.dispatchEvent(new CustomEvent('blocks-auth-change', …))` works and
@@ -337,5 +347,48 @@ describe('AuthOIDCClient.handleRedirectCallback — @aws-blocks/auth-common brid
 
 		assert.strictEqual(dispatched, false, 'no auth-change event on a failed callback');
 		assert.strictEqual(broadcasts.length, 0, 'no cross-tab post on a failed callback');
+	});
+});
+
+describe('AuthOIDCClient.signOut — @aws-blocks/auth-common bridge', () => {
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals('http://localhost:3000/dashboard');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+		// The /aws-blocks/auth/signout POST just needs to resolve OK.
+		globalThis.fetch = (async () => ({ ok: true, json: async () => ({}) })) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('posts a signed-out (null) user across tabs via BroadcastChannel', async () => {
+		const client = makeClient();
+		await client.signOut();
+
+		assert.strictEqual(broadcasts.length, 1, 'exactly one cross-tab post should have been made');
+		const msg = broadcasts[0] as any;
+		assert.strictEqual(msg.type, 'auth-change');
+		assert.strictEqual(msg.user, null, 'sign-out broadcasts a null user so other tabs re-render');
+	});
+
+	test('dispatches a same-window auth-change(null) event before reloading', async () => {
+		// Other tabs rely on the cross-tab post above; same-tab onAuthChange
+		// consumers rely on this same-window event. The page then reloads.
+		let detail: any = 'unset';
+		(globalThis as any).window.addEventListener('blocks-auth-change', (e: any) => { detail = e.detail; });
+
+		const client = makeClient();
+		await client.signOut();
+
+		assert.notStrictEqual(detail, 'unset', 'a blocks-auth-change event should have been dispatched on window');
+		assert.strictEqual(detail.type, 'auth-change');
+		assert.strictEqual(detail.user, null);
+		assert.strictEqual(reloaded, true, 'signOut should reload the page after broadcasting');
 	});
 });

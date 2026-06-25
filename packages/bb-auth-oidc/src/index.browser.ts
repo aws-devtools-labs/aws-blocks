@@ -357,6 +357,18 @@ export class AuthOIDCClient<
 		// Bridge into @aws-blocks/auth-common so its `onAuthChange` subscribers and
 		// `<AuthenticatedContent>` re-render on sign-in (same window AND other tabs),
 		// not just this client's own `onAuthStateChange` listeners.
+		//
+		// We broadcast rather than write auth-common's state directly — two known,
+		// non-blocking consequences:
+		//   - It doesn't prime auth-common's shared cache (keyed by AuthStateApi and
+		//     written via a private `updateState`; this client holds no such handle),
+		//     so a component that subscribes via `onAuthChange` *after* this fires
+		//     paints `null` for one frame, then self-corrects on its `getAuthState()`.
+		//   - A same-tab `<Authenticator>` listens only on the cross-tab
+		//     BroadcastChannel (which never fires in the originating tab), so it
+		//     won't react here; `onAuthChange` / `<AuthenticatedContent>` do.
+		// Cast: the generic `User` is unconstrained at this boundary, but every
+		// exchange response is a superset of AuthUser's { userId, username }.
 		broadcastAuthChange(user as unknown as AuthUser);
 		return user;
 	}
@@ -367,6 +379,12 @@ export class AuthOIDCClient<
 		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
 		lastUser = null;
 		notify(null, null);
+		// Bridge the sign-out into @aws-blocks/auth-common too, symmetrically with
+		// handleRedirectCallback(). The reload below only repaints THIS tab, and
+		// BroadcastChannel.postMessage never fires in the originating tab, so other
+		// open tabs' onAuthChange / <AuthenticatedContent> consumers would keep
+		// rendering the signed-in user until their own next reload without this.
+		broadcastAuthChange(null);
 		if (typeof window !== 'undefined' && window.location) {
 			window.location.reload();
 		}

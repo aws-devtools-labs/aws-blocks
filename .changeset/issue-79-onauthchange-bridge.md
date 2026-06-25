@@ -11,7 +11,8 @@ never heard about the sign-in, so a React SPA wouldn't re-render after
 completing the redirect exchange (only server-initiated sign-in updated them).
 
 `handleRedirectCallback()` now also calls `broadcastAuthChange(user)` on success,
-firing the same-window `blocks-auth-change` event and the cross-tab
-`BroadcastChannel`, so every auth-common consumer (and other open tabs) re-render.
+and `signOut()` calls `broadcastAuthChange(null)`, firing the same-window
+`blocks-auth-change` event and the cross-tab `BroadcastChannel`, so every
+auth-common consumer (and other open tabs) re-render on both sign-in and sign-out.
 The README documents the `onAuthChange`/`broadcastAuthChange` wiring and adds an
 OIDC + React SPA example.
