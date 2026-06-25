@@ -85,6 +85,23 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
       });
     });
 
+    // --- Readiness: cover the wired waitUntilReady() endpoint end-to-end ---
+    // The retrieval suites gate on isReady() (via kbReady); this exercises the
+    // separate waitUntilReady() polling path. Locally the mock resolves on the
+    // first poll; on AWS we give it the same budget as gateOnReadiness so a
+    // still-ingesting KB is waited out rather than surfaced as a failure.
+    describe('waitUntilReady', () => {
+      test('resolves once the KB is ready', async () => {
+        const api = getApi();
+        const result = await api.kbWaitUntilReady(
+          isLocal
+            ? { timeoutMs: 5_000, pollIntervalMs: 50 }
+            : { timeoutMs: 180_000, pollIntervalMs: 10_000 },
+        );
+        assert.deepStrictEqual(result, { success: true });
+      });
+    });
+
     // --- Retrieval tests: wait for ingestion before running ---
     describe('retrieve', () => {
 

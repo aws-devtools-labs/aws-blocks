@@ -286,7 +286,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * Full docs: `README.md` in the package directory above.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilReadyOptions } from '@aws-blocks/bb-knowledge-base';
 
 /**
  * **Distributed tracing backed by AWS X-Ray.**

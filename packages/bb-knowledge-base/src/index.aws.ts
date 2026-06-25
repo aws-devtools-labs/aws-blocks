@@ -212,9 +212,11 @@ export class KnowledgeBase extends Scope {
 
 	/**
 	 * Resolve the configured Bedrock data source id, or `undefined` when none
-	 * was registered. A missing data source id means there is no BB-managed
-	 * ingestion job to track (e.g. an imported `s3://` source, or a deployment
-	 * that predates the readiness API), so callers treat the KB as ready.
+	 * was registered. Both folder and imported `s3://` sources register a
+	 * BB-managed data source id at deploy time, so this normally returns a value
+	 * for either source type. It is `undefined` only for deployments that predate
+	 * the readiness API (no `DATA_SOURCE_ID` injected) — in which case there is no
+	 * ingestion job to track and callers treat the KB as ready.
 	 */
 	private ensureDataSourceId(): string | undefined {
 		const dataSourceId = getSdkIdentifiers(this).dataSourceId;
@@ -292,9 +294,10 @@ export class KnowledgeBase extends Scope {
 	 * Resolution strategy: lists the data source's ingestion jobs (most recent
 	 * first) and inspects the latest job's status — `COMPLETE` → ready,
 	 * `FAILED` → throws, anything else (`STARTING` / `IN_PROGRESS`, or no jobs
-	 * yet) → not ready. When no BB-managed data source id is configured (e.g.
-	 * an imported `s3://` source, or a deployment predating this API) there is
-	 * no ingestion job to track, so the KB is reported ready.
+	 * yet) → not ready. Both folder and imported `s3://` sources register a
+	 * BB-managed data source id, so both are tracked here; the "no data source
+	 * id configured → reported ready" shortcut applies only to deployments that
+	 * predate this API (no `DATA_SOURCE_ID` injected — nothing to track).
 	 *
 	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
 	 *   no managed data source to track); `false` while ingestion is pending.

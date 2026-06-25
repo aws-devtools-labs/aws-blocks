@@ -53,7 +53,7 @@ export type { FileBucketOptions, PutOptions as FBPutOptions, GetUrlOptions, PutU
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilReadyOptions } from '@aws-blocks/bb-knowledge-base';
 export { Tracer } from '@aws-blocks/bb-tracer';
 export type { TracerOptions, Segment, AnnotationValue } from '@aws-blocks/bb-tracer';
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';

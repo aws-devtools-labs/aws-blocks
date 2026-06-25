@@ -120,7 +120,7 @@ if (await kb.isReady()) {
 }
 ```
 
-`waitUntilReady(options?)` accepts `timeoutMs` (default `300_000`) and `pollIntervalMs` (default `5_000`). For an imported `s3://` source there is no BB-managed data source to track, so `isReady()` returns `true` immediately. In local development the mock is always ready.
+`waitUntilReady(options?)` accepts `timeoutMs` (default `300_000`), `pollIntervalMs` (default `5_000`, clamped to a 1ms minimum), and `maxConsecutiveTransientErrors` (default `3`, minimum `0`) — the number of *consecutive* transient control-plane errors (throttling / transient network failures) tolerated before giving up. The counter resets on any clean poll, and terminal errors (a `FAILED` ingestion job, or a missing-KB config) always short-circuit immediately regardless of that limit. Both local-folder and imported `s3://` sources register a BB-managed data source, so readiness reflects that data source's ingestion job in either case. (A deployment predating this readiness API has no data source id injected, so `isReady()` returns `true` immediately — there is nothing to track.) In local development the mock is always ready.
 
 ## Metadata Filtering
 
