@@ -320,6 +320,7 @@ export class AuthOIDCClient<
 	 * single-use code, so both callers resolve to the same user.
 	 *
 	 * @returns The authenticated user, or `null` if no pending PKCE flow.
+	 * @throws {Error} On state mismatch or a failed `/aws-blocks/auth/exchange` (both concurrent callers reject with the same Error).
 	 */
 	handleRedirectCallback(): Promise<User | null> {
 		if (typeof window === 'undefined') return Promise.resolve(null);
