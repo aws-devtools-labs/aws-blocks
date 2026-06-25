@@ -267,7 +267,7 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 /**
  * Returned by stream(). Provides the channelId and server-side convenience methods.
  *
-what  * Safe to return directly from API methods — `toJSON()` serializes to
+ * Safe to return directly from API methods — `toJSON()` serializes to
  * `{ channelId, channel: null }`. Only `channelId` is meaningful client-side;
  * `channel` is explicitly `null` to signal the live handle is server-side only,
  * and the `complete()` helper is dropped (functions don't serialize).
