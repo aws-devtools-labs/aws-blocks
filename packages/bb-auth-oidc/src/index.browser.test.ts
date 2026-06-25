@@ -265,9 +265,10 @@ describe('AuthOIDCClient.handleRedirectCallback — idempotency under double inv
 		const client = makeClient();
 		let notifyCount = 0;
 		client.onAuthStateChange(() => { notifyCount++; });
-		// Discard the synchronous fire-on-subscribe (carries the module-level
-		// lastUser from earlier tests); we only care about callback-driven notifies.
-		notifyCount = 0;
+		// onAuthStateChange fires synchronously on subscribe with the last-known
+		// state; capture that baseline so the assertion below measures only the
+		// callback-driven notify as a delta, independent of cross-test module state.
+		const notifyBaseline = notifyCount;
 
 		// Fire twice WITHOUT awaiting the first — the double-mount race.
 		const [r1, r2] = await Promise.all([
@@ -280,7 +281,7 @@ describe('AuthOIDCClient.handleRedirectCallback — idempotency under double inv
 		assert.strictEqual(r1!.userId, 'iss:sub');
 		assert.strictEqual(r2!.userId, 'iss:sub');
 		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once');
-		assert.strictEqual(notifyCount, 1, 'subscribers should be notified exactly once');
+		assert.strictEqual(notifyCount - notifyBaseline, 1, 'callback should notify subscribers exactly once');
 		assert.strictEqual(store.get('__blocks_oidc_pending'), undefined, 'pending entry should be consumed');
 	});
 
