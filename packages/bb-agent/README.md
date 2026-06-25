@@ -209,6 +209,8 @@ const agent = new Agent(scope, 'agent', {
 | `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
 | `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
 
+> **Migrating?** `DEFAULT` → `BALANCED` (or `SMART` for highest capability). `BUDGET`/`MICRO` → `FAST`. The old presets are still available but deprecated. Please consider upgrading!
+
 Override inference settings with spread:
 ```typescript
 model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }

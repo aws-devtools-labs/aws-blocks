@@ -11,4 +11,4 @@ New presets:
 
 All presets use `global.` inference profiles for region-agnostic deployment.
 
-Deprecated (non-breaking): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`.
+Deprecated (non-removing): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`. Note this changes the underlying model for existing callers — `DEFAULT` moves from Opus to Sonnet, and `BUDGET`/`MICRO` move from Amazon Nova Pro/Lite to Claude Haiku, so cost and latency profiles differ. The symbols still resolve (no type break), but migrate to `BALANCED`/`FAST` (or a region-scoped profile) explicitly to pin the model you want.

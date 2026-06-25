@@ -378,15 +378,18 @@ const cannedAgent = new Agent(scope, 'canned', {
 });
 
 
-// Preset agents — one per BedrockModels preset, used to verify presets work e2e
+// Preset agents — one per live BedrockModels preset, used to verify presets work e2e.
+// Skip the deprecated aliases (DEFAULT/BUDGET/MICRO) so we don't provision dead
+// agents that the suite never exercises.
+const LIVE_PRESETS = ['BALANCED', 'SMART', 'FAST'] as const;
 
 const presetAgents = Object.fromEntries(
-	Object.entries(BedrockModels).map(([name, config]) => [
+	LIVE_PRESETS.map((name) => [
 		name,
 		new Agent(scope, `preset-${name.toLowerCase()}`, {
 			removalPolicy: 'destroy',
 			inferenceOnly: true,
-			model: { deployed: config, local: { provider: 'canned' } },
+			model: { deployed: BedrockModels[name], local: { provider: 'canned' } },
 			systemPrompt: 'Reply with exactly one word.',
 		}),
 	]),
