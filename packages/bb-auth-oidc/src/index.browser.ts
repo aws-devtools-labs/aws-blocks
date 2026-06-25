@@ -170,16 +170,25 @@ const subscribers = new Set<AuthStateHandler<unknown>>();
 let lastUser: unknown | null = null;
 
 /**
- * In-flight `handleRedirectCallback` guard, keyed by the single-use PKCE
- * `code`. A double invocation — e.g. React StrictMode's mount → unmount →
- * mount, which fires the callback effect twice synchronously — shares this
- * one promise instead of racing to exchange the code twice. The second
- * exchange of a single-use code would fail (or find the pending entry already
- * consumed and return `null`), stranding the app on a signed-out screen
- * despite a successful sign-in. The guard is released once the exchange
- * settles so a genuinely new flow on the same page is never blocked.
+ * In-flight `handleRedirectCallback` guard, keyed by `(exchangePath, code)`.
+ *
+ * Scoped to same-tab, in-process concurrency: a double invocation — e.g. React
+ * StrictMode's mount → unmount → mount, which fires the callback effect twice
+ * synchronously — shares this one promise instead of racing to exchange the
+ * single-use code twice. The second exchange would fail (or find the pending
+ * entry already consumed and return `null`), stranding the app on a signed-out
+ * screen despite a successful sign-in.
+ *
+ * This module variable does not survive a real page reload; cross-reload
+ * coordination falls back to the up-front `sessionStorage` removal in
+ * `_exchangeCallback` (a late caller finds no pending entry and resolves
+ * `null`). Keying on `exchangePath` keeps two clients with distinct exchange
+ * endpoints from sharing each other's in-flight exchange.
+ *
+ * The guard is released once the exchange settles (success or failure) so a
+ * genuinely new flow on the same page is never blocked.
  */
-let _callbackInflight: { code: string; promise: Promise<unknown> } | null = null;
+let _callbackInflight: { exchangePath: string; code: string; promise: Promise<unknown> } | null = null;
 
 function notify(user: unknown | null, meta: AuthStateMeta | null): void {
 	for (const sub of subscribers) {
@@ -314,19 +323,23 @@ export class AuthOIDCClient<
 	 */
 	handleRedirectCallback(): Promise<User | null> {
 		if (typeof window === 'undefined') return Promise.resolve(null);
-		const url = new URL(window.location.href);
-		const code = url.searchParams.get('code');
-		const returnedState = url.searchParams.get('state');
+		const { searchParams } = new URL(window.location.href);
+		const code = searchParams.get('code');
+		const returnedState = searchParams.get('state');
 		if (!code || !returnedState) return Promise.resolve(null);
 
-		// Share an in-flight exchange for this code so a concurrent/double
-		// invocation can't consume the single-use code twice.
-		if (_callbackInflight && _callbackInflight.code === code) {
+		// Share an in-flight exchange for this endpoint + code so a concurrent/
+		// double invocation can't consume the single-use code twice.
+		if (_callbackInflight && _callbackInflight.code === code && _callbackInflight.exchangePath === this.exchangePath) {
 			return _callbackInflight.promise as Promise<User | null>;
 		}
 
-		const promise = this._exchangeCallback(url, code, returnedState);
-		_callbackInflight = { code, promise };
+		// Forward RFC 9207 `iss` when present — the server-side exchange passes
+		// it to openid-client, which fails the exchange if the provider sent it
+		// and we drop it.
+		const iss = searchParams.get('iss') ?? undefined;
+		const promise = this._exchangeCallback(code, returnedState, iss);
+		_callbackInflight = { exchangePath: this.exchangePath, code, promise };
 		return promise;
 	}
 
@@ -334,14 +347,12 @@ export class AuthOIDCClient<
 	 * Perform the one-shot PKCE code exchange. Consumes the pending entry up
 	 * front (so a late duplicate can't replay it) and releases the in-flight
 	 * guard once settled.
+	 *
+	 * @param iss - RFC 9207 issuer read from the callback URL (forwarded to the
+	 *   server-side exchange), or `undefined` when the provider sent none.
 	 */
-	private async _exchangeCallback(url: URL, code: string, returnedState: string): Promise<User | null> {
+	private async _exchangeCallback(code: string, returnedState: string, iss: string | undefined): Promise<User | null> {
 		try {
-			// Forward RFC 9207 `iss` when present — the server-side exchange passes
-			// it to openid-client, which fails the exchange if the provider sent it
-			// and we drop it.
-			const iss = url.searchParams.get('iss') ?? undefined;
-
 			// Consume the single-use pending PKCE entry up front. Removing it before
 			// the network round-trip (rather than after) means a duplicate call that
 			// somehow misses the in-flight guard still can't start a second exchange.
@@ -394,7 +405,9 @@ export class AuthOIDCClient<
 		} finally {
 			// Release the guard once this exchange settles (success or failure) so a
 			// brand-new flow on the same page is never blocked by a stale entry.
-			if (_callbackInflight?.code === code) _callbackInflight = null;
+			if (_callbackInflight?.code === code && _callbackInflight?.exchangePath === this.exchangePath) {
+				_callbackInflight = null;
+			}
 		}
 	}
 

@@ -327,4 +327,54 @@ describe('AuthOIDCClient.handleRedirectCallback — idempotency under double inv
 		assert.ok(second, 'second independent flow resolves — guard released after the first settled');
 		assert.strictEqual(exchangeCalls, 2, 'the second flow runs its own exchange');
 	});
+
+	test('error path under concurrent double invocation rejects both callers identically and releases the guard', async () => {
+		// The guard must propagate ONE shared rejection to both callers and
+		// release on failure. Without this, a refactor that mishandled the shared
+		// rejection (stranding the page) or failed to release the guard (blocking
+		// a same-page retry) would keep the success-path tests green.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			// Settle on a later tick so both calls are genuinely in flight together.
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: false, json: async () => ({ error: 'invalid_grant' }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+
+		// Fire twice WITHOUT awaiting the first; allSettled captures both outcomes.
+		const [s1, s2] = await Promise.allSettled([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+
+		assert.strictEqual(s1.status, 'rejected', 'first call must reject when the exchange fails');
+		assert.strictEqual(s2.status, 'rejected', 'second (concurrent) call must reject too — never resolve null');
+		// Both callers share the one in-flight promise, so the rejection is the
+		// identical Error instance — not two independently-thrown errors.
+		const reason1 = (s1 as PromiseRejectedResult).reason;
+		const reason2 = (s2 as PromiseRejectedResult).reason;
+		assert.strictEqual(reason1, reason2, 'both callers must reject with the identical shared error');
+		assert.match(reason1.message, /exchange failed/i);
+		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once, even on failure');
+
+		// The finally must release the guard on failure: a fresh-code flow on the
+		// same page runs its own exchange instead of being blocked by a stale entry.
+		installBrowserGlobals('http://localhost:3000/spa-callback?code=auth-code-retry&state=state-retry');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'state-retry', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const retry = await client.handleRedirectCallback();
+		assert.ok(retry, 'a fresh-code flow resolves — the guard was released after the failure');
+		assert.strictEqual(retry!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 2, 'the fresh flow runs its own second exchange');
+	});
 });
