@@ -369,14 +369,19 @@ const applyNextImageConfig = (
   }
 };
 
-const REDIRECT_CAP_NEXTJS = 100;
-
 /**
  * Read every Next.js manifest that lists routable URLs and emit
  * canonical-form redirects honoring the user's `trailingSlash`
- * setting. Caps at 100 entries (matches the CloudFront Function size
- * budget); user-declared redirects from `liftSimpleRoutesManifest`
- * get appended *afterwards* with the same cap split.
+ * setting. User-declared redirects from `liftSimpleRoutesManifest` are
+ * already present and these are appended afterwards.
+ *
+ * No count cap: under KVS edge routing redirects are DATA (chunked `d{n}`
+ * KVS entries the viewer-request function reads at runtime), not literals
+ * inlined into the function source — so the old 10 KB-CloudFront-Function
+ * code limit no longer applies. The real bound is the KVS store/chunk budget
+ * enforced centrally in `buildKvsEntries` (kvs_router.ts), which throws a
+ * friendly `TooManyRoutesError` / `RouteTableTooLargeError` if a deploy's
+ * tables genuinely exceed the safe per-request read budget.
  *
  * Sources read (P1.8 — previously only prerender-manifest):
  *   - `.next/prerender-manifest.json#routes` — pages prerendered via
@@ -487,21 +492,9 @@ const applyTrailingSlashRedirects = (
   const ts = emitTrailingSlashRedirects(Array.from(allPaths), mode);
   if (ts.length === 0) return;
   const existing = manifest.redirects ?? [];
-  const remaining = REDIRECT_CAP_NEXTJS - existing.length;
-  if (remaining <= 0) {
-    process.stderr.write(
-      `⚠️  ${ts.length} trailing-slash redirect(s) skipped — Next.js redirect cap of ${REDIRECT_CAP_NEXTJS} ` +
-        `already filled by user-declared redirects.\n`,
-    );
-    return;
-  }
-  if (ts.length > remaining) {
-    process.stderr.write(
-      `⚠️  ${ts.length} trailing-slash redirects requested; only ${remaining} fit ` +
-        `under the ${REDIRECT_CAP_NEXTJS}-redirect CloudFront Function cap.\n`,
-    );
-  }
-  manifest.redirects = [...existing, ...ts.slice(0, remaining)];
+  // Append ALL trailing-slash redirects — no count cap. The KVS store/chunk
+  // budget in buildKvsEntries is the authoritative limit (see comment above).
+  manifest.redirects = [...existing, ...ts];
 };
 
 /**
