@@ -113,6 +113,19 @@ function mapSdkError(err: unknown): Error {
 	return mapped;
 }
 
+/**
+ * Whether a mapped readiness error is a *transient* control-plane failure worth
+ * a bounded retry in {@link KnowledgeBase.waitUntilReady}. True only for
+ * `RetrievalFailedException` — the bucket {@link mapSdkError} uses for network
+ * errors, throttling, and other unrecognized SDK failures. Terminal errors
+ * (`IngestionFailedException`, `KnowledgeBaseNotReadyException`, and the
+ * validation errors) map to other names and are intentionally excluded so they
+ * short-circuit the wait immediately.
+ */
+function isTransientControlPlaneError(err: unknown): boolean {
+	return err instanceof Error && err.name === KnowledgeBaseErrors.RetrievalFailed;
+}
+
 // ── Filter builder ─────────────────────────────────────────────────────────
 
 function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
@@ -331,16 +344,28 @@ export class KnowledgeBase extends Scope {
 	 * recent ingestion job has `FAILED`, the underlying `IngestionFailedException`
 	 * propagates immediately rather than waiting out the timeout.
 	 *
+	 * Because this method exists for the noisy post-deploy window, it tolerates a
+	 * bounded run of *transient* control-plane errors (throttling / transient
+	 * network failures, mapped to `RetrievalFailedException`) rather than aborting
+	 * on the first blip: up to `maxConsecutiveTransientErrors` consecutive transient
+	 * failures are absorbed and retried, and any clean poll resets that counter.
+	 * Terminal errors still short-circuit immediately — a `FAILED` job
+	 * (`IngestionFailedException`) and a missing-KB config error
+	 * (`KnowledgeBaseNotReadyException`, e.g. `KB_ID` unset) are never retried.
+	 *
 	 * @param {WaitUntilReadyOptions} options - Optional polling parameters.
 	 *   `timeoutMs` (default 300000) bounds the total wait; `pollIntervalMs`
-	 *   (default 5000, clamped to a minimum of 1ms) spaces out the polls.
+	 *   (default 5000, clamped to a minimum of 1ms) spaces out the polls;
+	 *   `maxConsecutiveTransientErrors` (default 3, minimum 0) bounds how many
+	 *   consecutive transient control-plane errors are tolerated before giving up.
 	 * @throws {KnowledgeBaseTimeoutException} If the KB does not become ready within `timeoutMs`.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   Propagated from {@link isReady} for mapped Bedrock control-plane errors — see its docs
 	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
 	 *   `ValidationException` → `KnowledgeBaseValidationError`/`InvalidFilterException`,
-	 *   other SDK errors → `RetrievalFailedException`).
+	 *   other SDK errors → `RetrievalFailedException`). Transient `RetrievalFailedException`s
+	 *   are retried up to `maxConsecutiveTransientErrors` times before being rethrown.
 	 *
 	 * @example
 	 * ```typescript
@@ -352,11 +377,29 @@ export class KnowledgeBase extends Scope {
 	async waitUntilReady(options?: WaitUntilReadyOptions): Promise<void> {
 		const timeoutMs = Math.max(options?.timeoutMs ?? 300_000, 0);
 		const pollIntervalMs = Math.max(options?.pollIntervalMs ?? 5_000, 1);
+		const maxConsecutiveTransientErrors = Math.max(options?.maxConsecutiveTransientErrors ?? 3, 0);
 		const deadline = Date.now() + timeoutMs;
 
+		let consecutiveTransientErrors = 0;
 		for (;;) {
-			// isReady() throws IngestionFailedException on a FAILED job — let it propagate.
-			if (await this.isReady()) return;
+			try {
+				// isReady() resolves true (ready) / false (still warming), throws
+				// IngestionFailedException on a FAILED job, NotReady when the KB is
+				// not deployed, or RetrievalFailedException for transient blips.
+				if (await this.isReady()) return;
+				// A clean poll clears any transient-error streak.
+				consecutiveTransientErrors = 0;
+			} catch (err) {
+				// Terminal errors (FAILED job, missing-KB config, validation) short-circuit.
+				if (!isTransientControlPlaneError(err)) throw err;
+				// Transient control-plane blip: absorb a bounded run, then give up.
+				consecutiveTransientErrors += 1;
+				if (consecutiveTransientErrors > maxConsecutiveTransientErrors) throw err;
+				this.log.warn(
+					`waitUntilReady: tolerating transient control-plane error ` +
+						`(${consecutiveTransientErrors}/${maxConsecutiveTransientErrors}), retrying: ${(err as Error).message}`,
+				);
+			}
 			if (Date.now() >= deadline) {
 				throw blocksError(
 					KnowledgeBaseErrors.Timeout,
@@ -410,7 +453,16 @@ export class KnowledgeBase extends Scope {
 			const response = await this.agentClient.send(
 				new GetIngestionJobCommand({ knowledgeBaseId, dataSourceId, ingestionJobId }),
 			);
-			return response.ingestionJob?.failureReasons ?? [];
+			const reasons = response.ingestionJob?.failureReasons ?? [];
+			if (reasons.length === 0) {
+				// A FAILED job with no reported reasons is unusual — surface a hint so
+				// the otherwise reason-less IngestionFailedException is easier to diagnose.
+				this.log.warn(
+					`Ingestion job ${ingestionJobId} is FAILED but reported no failureReasons; ` +
+						`the surfaced error will not include a cause.`,
+				);
+			}
+			return reasons;
 		} catch (err) {
 			this.log.error(mapSdkError(err).message);
 			return [];

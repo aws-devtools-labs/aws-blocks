@@ -800,4 +800,130 @@ describe('waitUntilReady', () => {
 			cleanup();
 		}
 	});
+
+	test('tolerates a transient control-plane error, then resolves once COMPLETE', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR6');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				// Unrecognized SDK error → mapSdkError classifies it as RetrievalFailed (transient).
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur6', { source: './knowledge' });
+			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1 });
+			assert.ok(calls >= 2, `expected a retry after the transient blip, got ${calls} call(s)`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws once consecutive transient errors exceed the tolerance', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR7');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const e = new Error('Rate exceeded');
+			e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur7', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.RetrievalFailed);
+					return true;
+				},
+			);
+			// tolerance 2 → polls 1 & 2 absorbed, poll 3 exceeds the limit and rethrows.
+			assert.strictEqual(calls, 3, `expected 3 polls (2 tolerated + 1 over the limit), got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('short-circuits immediately on IngestionFailed (never retried as transient)', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR8');
+		let listCalls = 0;
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				listCalls += 1;
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-fail', status: 'FAILED' }] };
+			}
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['boom'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur8', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					return true;
+				},
+			);
+			assert.strictEqual(listCalls, 1, 'a FAILED job is terminal — it must short-circuit, not poll again');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('short-circuits immediately on NotReady (unset KB_ID is not retried forever)', async () => {
+		const prefix = 'BLOCKS_TEST_WUR9';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur9', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'a missing-KB config error fails before any poll and must not be retried');
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	test('resets the transient-error counter after a clean poll', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR10');
+		// transient → clean (IN_PROGRESS) → transient → COMPLETE. With tolerance 1 this
+		// only succeeds if the counter resets after the clean poll — otherwise the second
+		// transient error would be the 2nd consecutive failure and exceed the limit.
+		const seq = ['throw', 'IN_PROGRESS', 'throw', 'COMPLETE'];
+		let i = 0;
+		mockAgentSend(() => {
+			const step = seq[i++] ?? 'COMPLETE';
+			if (step === 'throw') {
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: step }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur10', { source: './knowledge' });
+			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 1 });
+			assert.strictEqual(i, 4, 'should consume the full transient/clean/transient/complete sequence');
+		} finally {
+			cleanup();
+		}
+	});
 });

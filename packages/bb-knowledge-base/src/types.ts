@@ -170,4 +170,19 @@ export interface WaitUntilReadyOptions {
 	timeoutMs?: number;
 	/** Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms. Default: 5000 (5 seconds). */
 	pollIntervalMs?: number;
+	/**
+	 * Maximum number of *consecutive* transient control-plane errors to tolerate
+	 * before giving up, instead of aborting the wait on the first blip. A transient
+	 * error is one mapped to `RetrievalFailedException` — the catch-all for network
+	 * failures, throttling, and other unrecognized SDK errors during a readiness
+	 * poll. Each clean poll (ingestion still in progress, or ready) resets the
+	 * counter, so only an unbroken run of failures counts toward the limit.
+	 *
+	 * Terminal errors always short-circuit immediately regardless of this value:
+	 * `IngestionFailedException` (the job failed), `KnowledgeBaseNotReadyException`
+	 * (the KB is not deployed / `KB_ID` is unset), and validation errors. Set to `0`
+	 * to fail fast on the first transient error. Clamped to a minimum of 0.
+	 * Default: 3.
+	 */
+	maxConsecutiveTransientErrors?: number;
 }
