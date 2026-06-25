@@ -43,6 +43,10 @@ jobs:
           fi
 
       - name: Apply version bump
+        # @changesets/changelog-github calls the GitHub API to build changelog
+        # links, so `changeset version` needs a token (matches publish-packages.yml).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx changeset version
 
       - name: Sync Gradle version
