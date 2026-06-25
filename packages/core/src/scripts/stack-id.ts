@@ -16,21 +16,6 @@ function randomSuffix(length: number): string {
 }
 
 /**
- * Generate a new stackId from a project name.
- * Format: `<sanitizedName>.slice(0,16)-<random(6)>` — always CDK/CFN-safe.
- */
-export function generateStackId(name: string): string {
-  const sanitized = name
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '')
-    .slice(0, 16)
-    .replace(/-$/, '') || 'blocks-app';
-  return `${sanitized}-${randomSuffix(6)}`;
-}
-
-/**
  * Get the stackId from `.blocks/config.json` in the project root.
  * This is the stable project identifier used as the base for CloudFormation stack names.
  */

@@ -7,33 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { generateStackId, getStackId, getSandboxId } from './stack-id.js';
-
-describe('generateStackId', () => {
-  it('produces a CDK-safe id with 6-char suffix', () => {
-    const id = generateStackId('my-app');
-    assert.match(id, /^my-app-[a-f0-9]{6}$/);
-  });
-
-  it('sanitizes special characters', () => {
-    const id = generateStackId('@scope/my_app.test');
-    assert.match(id, /^[a-z][a-z0-9-]*-[a-f0-9]{6}$/i);
-  });
-
-  it('truncates long names to 16 chars before suffix', () => {
-    const id = generateStackId('this-is-a-very-long-application-name');
-    const parts = id.split('-');
-    const suffix = parts.pop()!;
-    const name = parts.join('-');
-    assert.ok(name.length <= 16);
-    assert.strictEqual(suffix.length, 6);
-  });
-
-  it('handles empty/invalid names', () => {
-    const id = generateStackId('---');
-    assert.match(id, /^app-[a-f0-9]{6}$/);
-  });
-});
+import { getStackId, getSandboxId } from './stack-id.js';
 
 describe('getStackId', () => {
   let tmpDir: string;
