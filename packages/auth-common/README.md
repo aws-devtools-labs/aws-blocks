@@ -2,6 +2,8 @@
 
 Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use this package to build provider-agnostic auth UI, or import the types when authoring a custom auth Building Block.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Exports
 
 | Export Path | What it provides |

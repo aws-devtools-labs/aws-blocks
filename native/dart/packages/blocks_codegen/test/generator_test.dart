@@ -8,12 +8,20 @@ void main() {
   group('basic generation', () {
     test('generates Blocks class with namespace accessors', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [
           Namespace(name: 'api', operations: [
-            Operation(name: 'greet', fullName: 'api.greet',
-              params: [OperationParam(name: 'name', type: const PrimitiveType('String'), isRequired: true)],
-              result: const PrimitiveType('String')),
+            Operation(
+                name: 'greet',
+                fullName: 'api.greet',
+                params: [
+                  OperationParam(
+                      name: 'name',
+                      type: const PrimitiveType('String'),
+                      isRequired: true)
+                ],
+                result: const PrimitiveType('String')),
           ]),
         ],
         types: {},
@@ -28,14 +36,20 @@ void main() {
   group('sealed class generation', () {
     test('generates sealed class with fromJson switch', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [],
         types: {
-          'Input': SealedClassType(name: 'Input', discriminant: 'action', variants: [
+          'Input':
+              SealedClassType(name: 'Input', discriminant: 'action', variants: [
             SealedVariant(discriminantValue: 'a', className: 'AInput', fields: [
-              RecordField(name: 'x', type: const PrimitiveType('String'), isRequired: true),
+              RecordField(
+                  name: 'x',
+                  type: const PrimitiveType('String'),
+                  isRequired: true),
             ]),
-            SealedVariant(discriminantValue: 'b', className: 'BInput', fields: []),
+            SealedVariant(
+                discriminantValue: 'b', className: 'BInput', fields: []),
           ]),
         },
       ));
@@ -50,43 +64,66 @@ void main() {
   group('transferable hydration', () {
     test('emits RealtimeChannel.fromJson for realtime/channel', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [
           Namespace(name: 'api', operations: [
-            Operation(name: 'getChannel', fullName: 'api.getChannel', params: [],
-              result: TransferableType(blocksType: 'realtime/channel', typeArgs: [const PrimitiveType('dynamic')])),
+            Operation(
+                name: 'getChannel',
+                fullName: 'api.getChannel',
+                params: [],
+                result: TransferableType(
+                    blocksType: 'realtime/channel',
+                    typeArgs: [const PrimitiveType('dynamic')])),
           ]),
         ],
         types: {},
       ));
       expect(output, contains('Future<RealtimeChannel<dynamic>> getChannel()'));
-      expect(output, contains('RealtimeChannel.fromJson(result as Map<String, dynamic>'));
+      expect(output,
+          contains('RealtimeChannel.fromJson(result as Map<String, dynamic>'));
     });
 
     test('emits FileDownloadHandle.fromJson for file-bucket/download', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [
           Namespace(name: 'api', operations: [
-            Operation(name: 'download', fullName: 'api.download', params: [],
-              result: const TransferableType(blocksType: 'file-bucket/download')),
+            Operation(
+                name: 'download',
+                fullName: 'api.download',
+                params: [],
+                result:
+                    const TransferableType(blocksType: 'file-bucket/download')),
           ]),
         ],
         types: {},
       ));
       expect(output, contains('Future<FileDownloadHandle> download()'));
-      expect(output, contains('FileDownloadHandle.fromJson(result as Map<String, dynamic>)'));
+      expect(
+          output,
+          contains(
+              'FileDownloadHandle.fromJson(result as Map<String, dynamic>)'));
     });
   });
 
   group('tuple generation', () {
     test('emits Dart record type for TupleType', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [
           Namespace(name: 'api', operations: [
-            Operation(name: 'getCoords', fullName: 'api.getCoords', params: [],
-              result: TupleType([const PrimitiveType('num'), const PrimitiveType('num'), const PrimitiveType('String')])),
+            Operation(
+                name: 'getCoords',
+                fullName: 'api.getCoords',
+                params: [],
+                result: TupleType([
+                  const PrimitiveType('num'),
+                  const PrimitiveType('num'),
+                  const PrimitiveType('String')
+                ])),
           ]),
         ],
         types: {},
@@ -99,12 +136,23 @@ void main() {
 
     test('emits tuple toJson as list for params', () {
       final output = gen.generate(CodegenModel(
-        title: 'test', version: '1.0',
+        title: 'test',
+        version: '1.0',
         namespaces: [
           Namespace(name: 'api', operations: [
-            Operation(name: 'setCoords', fullName: 'api.setCoords',
-              params: [OperationParam(name: 'coords', type: TupleType([const PrimitiveType('num'), const PrimitiveType('String')]), isRequired: true)],
-              result: const PrimitiveType('void')),
+            Operation(
+                name: 'setCoords',
+                fullName: 'api.setCoords',
+                params: [
+                  OperationParam(
+                      name: 'coords',
+                      type: TupleType([
+                        const PrimitiveType('num'),
+                        const PrimitiveType('String')
+                      ]),
+                      isRequired: true)
+                ],
+                result: const PrimitiveType('void')),
           ]),
         ],
         types: {},

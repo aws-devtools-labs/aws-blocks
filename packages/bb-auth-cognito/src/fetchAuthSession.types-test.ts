@@ -39,4 +39,55 @@ function createApiReturnsAuthStateApi() {
 	void api;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SignInResult — `status` string discriminator (added for native codegen)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `status` is a string-literal union, so it stays fully type-safe end to end:
+// narrowing on it works and bogus values are rejected. These are compile-time
+// assertions — the `@ts-expect-error` lines must stay errors. See
+// {@link SignInResult}.
+
+async function signInStatusNarrows() {
+	const r = await auth.signIn('user', 'pass', ctx);
+
+	// Narrowing on the string discriminator reaches the signed-in payload.
+	if (r.status === 'signedIn') {
+		const user = r.user;
+		void user;
+	}
+	// Narrowing on the other arm reaches `nextStep`.
+	if (r.status === 'continueSignIn') {
+		const next = r.nextStep;
+		void next;
+	}
+}
+
+async function confirmSignInStatusNarrows() {
+	// `confirmSignIn` shares the same `SignInResult` shape.
+	const r = await auth.confirmSignIn('session', '123456', ctx);
+	if (r.status === 'continueSignIn') {
+		void r.nextStep;
+	}
+}
+
+async function signInStatusNegative() {
+	const r = await auth.signIn('user', 'pass', ctx);
+	// @ts-expect-error — 'loggedIn' is not a valid status value (proves it's a
+	// literal union, not wide `string`).
+	if (r.status === 'loggedIn') { /* unreachable */ }
+	// @ts-expect-error — the old boolean discriminator is gone; only `status`
+	// distinguishes the arms now.
+	void r.isSignedIn;
+	if (r.status === 'continueSignIn') {
+		// @ts-expect-error — `user` only exists on the signedIn arm.
+		void r.user;
+	}
+	if (r.status === 'signedIn') {
+		// @ts-expect-error — `nextStep` only exists on the nextStep arm.
+		void r.nextStep;
+	}
+}
+
 void payloadIsUnknown; void forgetDeviceRequiresKey; void createApiReturnsAuthStateApi;
+void signInStatusNarrows; void confirmSignInStatusNarrows; void signInStatusNegative;

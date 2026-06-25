@@ -5,8 +5,8 @@ import 'src/builder.dart' as codegen_builder;
 import 'src/generator.dart';
 
 /// Factory for the build_runner builder.
-Builder blocksCodegenBuilder(BuilderOptions options) =>
-    _BlocksCodegenBuilder(options.config['fail_on_collision'] as bool? ?? false);
+Builder blocksCodegenBuilder(BuilderOptions options) => _BlocksCodegenBuilder(
+    options.config['fail_on_collision'] as bool? ?? false);
 
 class _BlocksCodegenBuilder extends Builder {
   /// When true, collisions are a hard error instead of auto-suffixed + warned.
@@ -35,7 +35,8 @@ class _BlocksCodegenBuilder extends Builder {
 
     // .spec.json → .blocks.dart (strip both extensions)
     final path = inputId.path;
-    final outputPath = path.substring(0, path.length - '.spec.json'.length) + '.blocks.dart';
+    final outputPath =
+        path.substring(0, path.length - '.spec.json'.length) + '.blocks.dart';
     final outputId = AssetId(inputId.package, outputPath);
     await buildStep.writeAsString(outputId, output);
   }

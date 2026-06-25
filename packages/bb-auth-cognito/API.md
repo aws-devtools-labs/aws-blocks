@@ -460,10 +460,10 @@ export interface SignInOptions {
 
 // @public
 export type SignInResult<O extends AuthCognitoOptions = AuthCognitoOptions> = {
-    isSignedIn: true;
+    status: 'signedIn';
     user: CognitoUser<O>;
 } | {
-    isSignedIn: false;
+    status: 'continueSignIn';
     nextStep: SignInNextStep;
 };
 

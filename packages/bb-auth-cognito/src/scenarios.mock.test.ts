@@ -68,7 +68,7 @@ describe('scenarios.mock', () => {
 		await auth.signUp('u1@test.example', 'Password!1', { attributes: { email: 'u1@test.example' } });
 		await auth.confirmSignUp('u1@test.example', lastCode());
 		const r = await auth.signIn('u1@test.example', 'Password!1', ctx());
-		assert.strictEqual(r.isSignedIn, true);
+		assert.strictEqual(r.status, 'signedIn');
 	});
 
 	test('2: mfa:optional — self sign-up → confirm → direct sign-in (no factors enrolled)', async () => {
@@ -80,7 +80,7 @@ describe('scenarios.mock', () => {
 		await auth.signUp('u2@test.example', 'Password!1', { attributes: { email: 'u2@test.example' } });
 		await auth.confirmSignUp('u2@test.example', lastCode());
 		const r = await auth.signIn('u2@test.example', 'Password!1', ctx());
-		assert.strictEqual(r.isSignedIn, true);
+		assert.strictEqual(r.status, 'signedIn');
 	});
 
 	test('3: mfa:required + [TOTP] — MFA_SETUP TOTP → enrolled, then re-sign-in challenges TOTP', async () => {
@@ -92,19 +92,19 @@ describe('scenarios.mock', () => {
 		await auth.signUp('u3@test.example', 'Password!1', { attributes: { email: 'u3@test.example' } });
 		await auth.confirmSignUp('u3@test.example', lastCode());
 		const r1 = await auth.signIn('u3@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected TOTP setup');
+		if (r1.status === 'signedIn') throw new Error('expected TOTP setup');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
 		const setup = await auth.confirmSignIn(r1.nextStep.session, { code: '123456' }, ctx());
-		assert.strictEqual(setup.isSignedIn, true);
+		assert.strictEqual(setup.status, 'signedIn');
 
 		// Second sign-in hits the TOTP challenge path (not setup).
 		const r2 = await auth.signIn('u3@test.example', 'Password!1', ctx());
-		if (r2.isSignedIn) throw new Error('expected TOTP challenge');
+		if (r2.status === 'signedIn') throw new Error('expected TOTP challenge');
 		assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 		if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: '654321' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('4: mfa:required + [EMAIL] — address-first setup → code → signed in', async () => {
@@ -123,15 +123,15 @@ describe('scenarios.mock', () => {
 		(auth as any).flushToDisk();
 
 		const r1 = await auth.signIn('u4@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected email setup');
+		if (r1.status === 'signedIn') throw new Error('expected email setup');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { email: 'u4-new@test.example' }, ctx());
-		if (r2.isSignedIn) throw new Error('expected code challenge');
+		if (r2.status === 'signedIn') throw new Error('expected code challenge');
 		assert.strictEqual(r2.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 		if (r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('5: mfa:required + [TOTP,EMAIL] — setup selection → pick TOTP', async () => {
@@ -148,15 +148,15 @@ describe('scenarios.mock', () => {
 		(auth as any).flushToDisk();
 
 		const r1 = await auth.signIn('u5@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected setup selection');
+		if (r1.status === 'signedIn') throw new Error('expected setup selection');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'TOTP' as 'TOTP' }, ctx());
-		if (r2.isSignedIn) throw new Error('expected TOTP setup step');
+		if (r2.status === 'signedIn') throw new Error('expected TOTP setup step');
 		assert.strictEqual(r2.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 		if (r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: '123456' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('6: mfa:required + [TOTP,EMAIL] — setup selection → pick EMAIL', async () => {
@@ -172,13 +172,13 @@ describe('scenarios.mock', () => {
 		(auth as any).flushToDisk();
 
 		const r1 = await auth.signIn('u6@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
+		if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'EMAIL' as 'EMAIL' }, ctx());
-		if (r2.isSignedIn || r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
+		if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
 		const r3 = await auth.confirmSignIn(r2.nextStep.session, { email: 'u6-new@test.example' }, ctx());
-		if (r3.isSignedIn || r3.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
+		if (r3.status !== 'continueSignIn' || r3.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 		const done = await auth.confirmSignIn(r3.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('7: mfa:optional, user with verified phone → SMS challenge → code → signed in', async () => {
@@ -193,11 +193,11 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u7@test.example', lastCode());
 		// confirmSignUp auto-verifies phone_number when present.
 		const r1 = await auth.signIn('u7@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected SMS challenge');
+		if (r1.status === 'signedIn') throw new Error('expected SMS challenge');
 		assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_SMS_CODE');
 		if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_SMS_CODE') return;
 		const done = await auth.confirmSignIn(r1.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('8: enrolled TOTP + verified-SMS user → SELECT_MFA_TYPE → pick TOTP', async () => {
@@ -217,15 +217,15 @@ describe('scenarios.mock', () => {
 		(auth as any).flushToDisk();
 
 		const r1 = await auth.signIn('u8@test.example', 'Password!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected SELECT_MFA_TYPE');
+		if (r1.status === 'signedIn') throw new Error('expected SELECT_MFA_TYPE');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION') return;
 		assert.ok(r1.nextStep.allowedMFATypes.includes('TOTP'));
 		assert.ok(r1.nextStep.allowedMFATypes.includes('SMS'));
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'TOTP' as 'TOTP' }, ctx());
-		if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
+		if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: '111222' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('9: NEW_PASSWORD_REQUIRED — admin-created user with temp password → new password', async () => {
@@ -246,11 +246,11 @@ describe('scenarios.mock', () => {
 		(auth as any).flushToDisk();
 
 		const r1 = await auth.signIn('u9@test.example', 'TempPw!1', ctx());
-		if (r1.isSignedIn) throw new Error('expected NEW_PASSWORD_REQUIRED');
+		if (r1.status === 'signedIn') throw new Error('expected NEW_PASSWORD_REQUIRED');
 		assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED');
 		if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') return;
 		const done = await auth.confirmSignIn(r1.nextStep.session, { newPassword: 'Permanent!1' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('10: forgot password → code → new password → sign in', async () => {
@@ -265,7 +265,7 @@ describe('scenarios.mock', () => {
 		const resetCode = lastCode();
 		await auth.confirmResetPassword('u10@test.example', resetCode, 'NewPass!1');
 		const done = await auth.signIn('u10@test.example', 'NewPass!1', ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	// ─── USER_AUTH ────────────────────────────────────────────────────
@@ -285,11 +285,11 @@ describe('scenarios.mock', () => {
 		// the follow-up call because the mock doesn't support the combined
 		// InitiateAuth shape — matches the state-machine flow users see).
 		const r1 = await auth.signIn('u11@test.example', '', ctx());
-		if (r1.isSignedIn) throw new Error('expected password step');
+		if (r1.status === 'signedIn') throw new Error('expected password step');
 		assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_PASSWORD');
 		if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
 		const done = await auth.confirmSignIn(r1.nextStep.session, { password: 'Password!1' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('12: USER_AUTH preferredChallenge=EMAIL_OTP → passwordless sign-in', async () => {
@@ -303,11 +303,11 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u12@test.example', lastCode());
 
 		const r1 = await auth.signIn('u12@test.example', '', ctx());
-		if (r1.isSignedIn) throw new Error('expected email-OTP step');
+		if (r1.status === 'signedIn') throw new Error('expected email-OTP step');
 		assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 		if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 		const done = await auth.confirmSignIn(r1.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('13: USER_AUTH preferredChallenge=SMS_OTP → passwordless sign-in', async () => {
@@ -323,11 +323,11 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u13@test.example', lastCode());
 
 		const r1 = await auth.signIn('u13@test.example', '', ctx());
-		if (r1.isSignedIn) throw new Error('expected SMS-OTP step');
+		if (r1.status === 'signedIn') throw new Error('expected SMS-OTP step');
 		assert.strictEqual(r1.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP');
 		if (r1.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
 		const done = await auth.confirmSignIn(r1.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('14: USER_AUTH no preference → SELECT_CHALLENGE → pick PASSWORD → signed in', async () => {
@@ -340,13 +340,13 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u14@test.example', lastCode());
 
 		const r1 = await auth.signIn('u14@test.example', '', ctx());
-		if (r1.isSignedIn) throw new Error('expected picker');
+		if (r1.status === 'signedIn') throw new Error('expected picker');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'PASSWORD' }, ctx());
-		if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
+		if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { password: 'Password!1' }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('15: USER_AUTH no preference → pick EMAIL_OTP → code → signed in', async () => {
@@ -359,11 +359,11 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u15@test.example', lastCode());
 
 		const r1 = await auth.signIn('u15@test.example', '', ctx());
-		if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
+		if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'EMAIL_OTP' }, ctx());
-		if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
+		if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('16: USER_AUTH no preference → pick SMS_OTP → code → signed in', async () => {
@@ -378,11 +378,11 @@ describe('scenarios.mock', () => {
 		await auth.confirmSignUp('u16@test.example', lastCode());
 
 		const r1 = await auth.signIn('u16@test.example', '', ctx());
-		if (r1.isSignedIn || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
+		if (r1.status !== 'continueSignIn' || r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') return;
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { firstFactor: 'SMS_OTP' }, ctx());
-		if (r2.isSignedIn || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
+		if (r2.status !== 'continueSignIn' || r2.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP') return;
 		const done = await auth.confirmSignIn(r2.nextStep.session, { code: lastCode() }, ctx());
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 });
 

@@ -6,6 +6,8 @@ Distributed tracing backed by AWS X-Ray.
 
 **When NOT to use:** If you need structured log output, use `Logging`. If you need numeric measurements over time, use `Metrics`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Installation
 
 ```bash

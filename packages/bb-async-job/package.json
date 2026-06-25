@@ -1,12 +1,13 @@
 {
   "name": "@aws-blocks/bb-async-job",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
   "files": [
     "dist",
     "README.md",
+    "DESIGN.md",
     "src",
     "LICENSE"
   ],
@@ -28,7 +29,7 @@
     "test": "node --test --test-force-exit dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.1",
+    "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-blocks/core": "^0.1.1",
     "@aws-sdk/client-sqs": "^3.0.0"
   },

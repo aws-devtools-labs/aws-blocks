@@ -138,6 +138,20 @@ export type HostingConstructProps = {
     timeout?: Duration | number;
     reservedConcurrency?: number;
     /**
+     * Reserved concurrent executions for the image-optimization Lambda.
+     * Default: undefined (no reservation).
+     *
+     * Historically this was hardcoded to 10, which broke `cdk deploy` on
+     * fresh AWS accounts: the default account-level unreserved-concurrency
+     * limit is 10, so reserving all 10 for image-opt drops the account
+     * below its required minimum and Lambda rejects the stack with a 400.
+     * Defaulting to no reservation keeps deploys working out of the box
+     * while still letting operators cap image-opt explicitly.
+     */
+    imageOptimization?: {
+      reservedConcurrency?: number;
+    };
+    /**
      * Provisioned concurrency for the SSR Lambda (cold-start elimination).
      * When > 0, the construct creates a `live` alias with this many
      * always-warm execution environments and points the SSR REST API
@@ -695,7 +709,11 @@ export class HostingConstruct extends Construct {
           memorySize: 1024,
           timeout: 25,
         },
-        reservedConcurrency: 10,
+        // No reservation by default. Reserving concurrency here used to be
+        // hardcoded to 10, which made deploys fail on fresh accounts whose
+        // account-level unreserved limit is also 10. Operators who need to
+        // cap image-opt can set `compute.imageOptimization.reservedConcurrency`.
+        reservedConcurrency: props.compute?.imageOptimization?.reservedConcurrency,
         // Propagate the SSR Lambda's logRetention to image-opt so a
         // user who bumped retention for debugability gets the same
         // window for image-opt logs (intermittent SVG/SSRF rejects

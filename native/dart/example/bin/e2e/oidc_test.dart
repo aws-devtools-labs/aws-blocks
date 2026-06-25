@@ -93,13 +93,15 @@ class HttpRelayLauncher implements BrowserLauncher {
 /// (/auth/*) are mounted at. Handles both the deployed (`/aws-blocks/api`) and
 /// the local dev (`/aws-blocks`) layouts.
 String _deriveOidcBase(String blocksUrl) {
-  var base = blocksUrl.trim();
-  for (final suffix in const ['/aws-blocks/api', '/aws-blocks']) {
-    if (base.endsWith(suffix)) {
-      base = base.substring(0, base.length - suffix.length);
-      break;
-    }
-  }
+  final uri = Uri.parse(blocksUrl.trim());
+  // The auth routes (/auth/*) mount at the API *origin* (scheme://host plus any
+  // API Gateway stage prefix like `/prod`), NOT under the JSON-RPC path. Strip
+  // everything from the first `/aws-blocks` segment onward, so this is robust to
+  // a path containing `/aws-blocks/api` once, multiple times (a doubled
+  // BLOCKS_URL), or just `/aws-blocks` — all collapse to the same origin+stage.
+  final idx = uri.path.indexOf('/aws-blocks');
+  final stagePath = idx >= 0 ? uri.path.substring(0, idx) : uri.path;
+  final base = '${uri.scheme}://${uri.authority}$stagePath';
   return base.replaceAll(RegExp(r'/+$'), '');
 }
 

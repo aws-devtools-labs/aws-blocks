@@ -29,9 +29,9 @@ class RealtimeChannel<T>(
             val obj = element.jsonObject
             val ch = obj["channel"]!!.jsonPrimitive.content
             val baseWsUrl = obj["wsUrl"]!!.jsonPrimitive.content
-            val connectToken = obj["connectToken"]!!.jsonPrimitive.content
+            val connectToken = obj["connectToken"]?.jsonPrimitive?.content
             val token = obj["token"]!!.jsonPrimitive.content
-            val wsUrl = "$baseWsUrl?token=${connectToken}"
+            val wsUrl = if (connectToken != null) "$baseWsUrl?token=$connectToken" else baseWsUrl
             return RealtimeChannel(channel = ch, wsUrl = wsUrl, token = token, deserializer = deserializer)
         }
     }

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import SwiftUI
 import BlocksRuntime
 
@@ -7,28 +14,28 @@ import BlocksRuntime
 
 struct CursorTrackingView: View {
     @EnvironmentObject var appState: AppState
-    @StateObject private var vm = CursorTrackingViewModel()
+    @StateObject private var viewModel = CursorTrackingViewModel()
 
     var body: some View {
         VStack(spacing: 0) {
             // Status bar
             HStack {
                 Circle()
-                    .fill(vm.isConnected ? Color.green : Color.red)
+                    .fill(viewModel.isConnected ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
-                Text(vm.statusText)
+                Text(viewModel.statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("You: \(vm.userId)")
+                Text("You: \(viewModel.userId)")
                     .font(.caption)
-                    .foregroundStyle(Color(hex: vm.myColor))
+                    .foregroundStyle(Color(hex: viewModel.myColor))
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
 
             // Tracking area
-            GeometryReader { geo in
+            GeometryReader { _ in
                 ZStack {
                     // Background
                     RoundedRectangle(cornerRadius: 12)
@@ -39,12 +46,12 @@ struct CursorTrackingView: View {
                         )
 
                     // Other users' cursors
-                    ForEach(vm.remoteCursors) { cursor in
+                    ForEach(viewModel.remoteCursors) { cursor in
                         CursorView(cursor: cursor)
                     }
 
                     // Hint text when no cursors
-                    if vm.remoteCursors.isEmpty {
+                    if viewModel.remoteCursors.isEmpty {
                         Text("Drag here to broadcast your cursor.\nOther users' cursors appear in real time.")
                             .multilineTextAlignment(.center)
                             .font(.subheadline)
@@ -55,9 +62,9 @@ struct CursorTrackingView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            vm.publishCursor(
-                                x: value.location.x,
-                                y: value.location.y,
+                            viewModel.publishCursor(
+                                xPos: value.location.x,
+                                yPos: value.location.y,
                                 api: appState.api
                             )
                         }
@@ -66,10 +73,10 @@ struct CursorTrackingView: View {
             .padding()
         }
         .task {
-            await vm.connect(api: appState.api)
+            await viewModel.connect(api: appState.api)
         }
         .onDisappear {
-            vm.disconnect()
+            viewModel.disconnect()
         }
     }
 }
@@ -93,9 +100,9 @@ struct CursorView: View {
                 .foregroundStyle(.white)
                 .clipShape(Capsule())
         }
-        .position(x: cursor.x, y: cursor.y)
-        .animation(.easeOut(duration: 0.1), value: cursor.x)
-        .animation(.easeOut(duration: 0.1), value: cursor.y)
+        .position(x: cursor.xPos, y: cursor.yPos)
+        .animation(.easeOut(duration: 0.1), value: cursor.xPos)
+        .animation(.easeOut(duration: 0.1), value: cursor.yPos)
     }
 }
 
@@ -119,20 +126,20 @@ final class CursorTrackingViewModel: ObservableObject {
     private static let colors = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#f9ca24", "#6c5ce7", "#a29bfe", "#fd79a8", "#00b894"]
 
     init() {
-        myColor = Self.colors.randomElement()!
+        self.myColor = Self.colors.randomElement()!
     }
 
     func connect(api: Api) async {
         do {
-            let ch = try await api.getCursorChannel()
-            self.channel = ch
+            let cursorChannel = try await api.getCursorChannel()
+            channel = cursorChannel
             isConnected = true
             statusText = "Connected as \(userId)"
 
             // Start receiving cursor updates
             subscribeTask = Task {
                 do {
-                    for try await msg in ch.subscribe() {
+                    for try await msg in cursorChannel.subscribe() {
                         guard msg.userId != userId else { continue }
                         await MainActor.run {
                             updateCursor(msg)
@@ -167,13 +174,13 @@ final class CursorTrackingViewModel: ObservableObject {
         isConnected = false
     }
 
-    func publishCursor(x: Double, y: Double, api: Api) {
+    func publishCursor(xPos: Double, yPos: Double, api: Api) {
         // Throttle to 50ms (same as the web app)
         let now = Date()
         guard now.timeIntervalSince(lastPublish) > 0.05 else { return }
         lastPublish = now
 
-        let cursor = Cursor(color: myColor, userId: userId, x: x, y: y)
+        let cursor = Cursor(color: myColor, userId: userId, x: xPos, y: yPos)
         Task {
             _ = try? await api.publishCursor(cursor: cursor)
         }
@@ -183,11 +190,11 @@ final class CursorTrackingViewModel: ObservableObject {
         lastSeen[msg.userId] = Date()
 
         if let idx = remoteCursors.firstIndex(where: { $0.userId == msg.userId }) {
-            remoteCursors[idx].x = msg.x
-            remoteCursors[idx].y = msg.y
+            remoteCursors[idx].xPos = msg.x
+            remoteCursors[idx].yPos = msg.y
             remoteCursors[idx].color = msg.color
         } else {
-            remoteCursors.append(RemoteCursor(userId: msg.userId, x: msg.x, y: msg.y, color: msg.color))
+            remoteCursors.append(RemoteCursor(userId: msg.userId, xPos: msg.x, yPos: msg.y, color: msg.color))
         }
     }
 
@@ -206,15 +213,15 @@ final class CursorTrackingViewModel: ObservableObject {
 struct RemoteCursor: Identifiable {
     let id: String
     var userId: String
-    var x: Double
-    var y: Double
+    var xPos: Double
+    var yPos: Double
     var color: String
 
-    init(userId: String, x: Double, y: Double, color: String) {
+    init(userId: String, xPos: Double, yPos: Double, color: String) {
         self.id = userId
         self.userId = userId
-        self.x = x
-        self.y = y
+        self.xPos = xPos
+        self.yPos = yPos
         self.color = color
     }
 }
@@ -226,9 +233,9 @@ extension Color {
         let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         var int: UInt64 = 0
         Scanner(string: hex).scanHexInt64(&int)
-        let r = Double((int >> 16) & 0xFF) / 255
-        let g = Double((int >> 8) & 0xFF) / 255
-        let b = Double(int & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
+        let red = Double((int >> 16) & 0xff) / 255
+        let green = Double((int >> 8) & 0xff) / 255
+        let blue = Double(int & 0xff) / 255
+        self.init(red: red, green: green, blue: blue)
     }
 }

@@ -71,8 +71,29 @@ export type ComputeConfig = {
    * ```
    */
   timeout?: cdk.Duration | number;
-  /** Reserved concurrent executions. Default: undefined (no reservation). */
+  /** Reserved concurrent executions for the SSR Lambda. Default: undefined (no reservation). */
   reservedConcurrency?: number;
+  /**
+   * Overrides for the image-optimization Lambda.
+   *
+   * `reservedConcurrency` defaults to undefined (no reservation). It is left
+   * unreserved so deploys succeed on fresh AWS accounts, whose default
+   * account-level unreserved-concurrency limit is 10 — reserving any
+   * concurrency there can drop the account below its required minimum and
+   * cause Lambda to reject the stack with a 400. Set this only if you have
+   * headroom and want to cap image-opt throughput.
+   *
+   * @example
+   * ```ts
+   * compute: {
+   *   imageOptimization: { reservedConcurrency: 5 },
+   * }
+   * ```
+   */
+  imageOptimization?: {
+    /** Reserved concurrent executions. Default: undefined (no reservation). */
+    reservedConcurrency?: number;
+  };
   /** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
   logRetention?: cdk.aws_logs.RetentionDays;
 };

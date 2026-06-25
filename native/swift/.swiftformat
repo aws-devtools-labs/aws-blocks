@@ -1,0 +1,151 @@
+# file options
+
+--swiftversion 5.9
+--exclude .build
+
+# rules with format options
+
+--enable braces
+--allman false
+
+--enable elseOnSameLine
+--elseposition same-line
+
+--enable fileHeader
+--header "//\n// Copyright Amazon.com Inc. or its affiliates.\n// All Rights Reserved.\n//\n// SPDX-License-Identifier: Apache-2.0\n//"
+
+--disable hoistPatternLet
+--patternlet inline
+
+--disable indent
+--ifdef outdent
+--indent 4
+--indentcase false
+--xcodeindentation disabled
+
+--enable linebreaks
+--linebreaks lf
+
+--enable numberFormatting
+--binarygrouping none
+--decimalgrouping 3
+--exponentcase lowercase
+--exponentgrouping disabled
+--fractiongrouping disabled
+--hexgrouping none
+--hexliteralcase lowercase
+--octalgrouping none
+
+--enable spaceAroundOperators
+--operatorfunc spaced
+
+--enable redundantSelf
+--self init-only
+--selfrequired
+
+--enable semicolons
+--semicolons never
+
+--disable sortedImports
+--importgrouping testable-bottom
+
+--enable spaceAroundOperators
+--operatorfunc spaced
+
+--enable trailingClosures
+--trailingclosures
+
+--disable trailingCommas
+--commas inline
+
+--enable trailingSpace
+--trimwhitespace always
+
+--disable unusedArguments
+--stripunusedargs closure-only
+
+--enable void
+--empty void
+
+--disable wrapArguments
+--closingparen balanced
+--wraparguments before-first
+--wrapcollections before-first
+--wrapconditions preserve
+
+# standalone rules
+
+--disable preferKeyPath
+--disable conditionalAssignment
+--disable wrapMultilineConditionalAssignment
+--disable wrapMultilineStatementBraces
+--disable andOperator
+--disable anyObjectProtocol
+--disable blankLinesAroundMark
+--disable blankLinesAtEndOfScope
+--disable blankLinesAtStartOfScope
+--disable blankLinesBetweenScopes
+--disable consecutiveBlankLines
+--disable consecutiveSpaces
+--disable duplicateImports
+--disable emptyBraces
+--enable isEmpty
+--enable leadingDelimiters
+--enable linebreakAtEndOfFile
+--enable redundantBackticks
+--enable redundantBreak
+--enable redundantExtensionACL
+--enable redundantFileprivate
+--enable redundantGet
+--disable redundantInit
+--enable redundantLet
+--enable redundantLetError
+--enable redundantNilInit
+--enable redundantObjc
+--enable redundantParens
+--disable redundantPattern
+--enable redundantRawValues
+--disable redundantReturn
+--enable redundantVoidReturnType
+--disable spaceAroundBraces
+--enable spaceAroundBrackets
+--enable spaceAroundComments
+--enable spaceAroundGenerics
+--enable spaceAroundParens
+--disable spaceInsideBraces
+--enable spaceInsideBrackets
+--disable spaceInsideComments
+--enable spaceInsideGenerics
+--disable spaceInsideParens
+--disable specifiers
+--enable strongOutlets
+--enable strongifiedSelf
+--disable todos
+--enable typeSugar
+--enable yodaConditions
+--disable blankLinesBetweenImports
+--disable docComments
+--disable redundantVariable
+--disable sortImports
+--disable wrapPropertyBodies
+--disable wrapFunctionBodies
+--disable simplifyGenericConstraints
+--disable redundantThrows
+--disable noForceUnwrapInTests
+--disable noForceTryInTests
+--disable hoistTry
+--disable hoistAwait
+--disable redundantAsync
+--enable redundantOptionalBinding
+--enable redundantPublic
+--enable redundantInternal
+--enable redundantStaticSelf
+--enable redundantType
+--disable redundantEquatable
+--disable redundantSendable
+--disable redundantMemberwiseInit
+--disable opaqueGenericParameters
+--enable extensionAccessControl
+--disable preferForLoop
+--enable emptyExtensions
+--disable environmentEntry
