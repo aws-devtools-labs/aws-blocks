@@ -233,6 +233,16 @@ equivalent). \`DATABASE_CA_CERT\` (inline PEM or a file path) overrides it if yo
 prefer to supply the cert via the environment. Optionally enable **Enforce SSL** in
 Database Settings so the server also rejects any non-TLS connection.
 
+> **Keep \`database.ca.ts\` committed.** It holds a public certificate (no private
+> key) and is bundled into your deployed function so verification works there. Do
+> not add it to \`.gitignore\`; if it isn't deployed, the connection falls back to
+> unverified.
+>
+> **Separate production project?** \`db pull\` captures the CA from the project you
+> pulled. If your production database is a different project (recommended) and it
+> presents a different CA, re-capture it for production — or set \`DATABASE_CA_CERT\`
+> — so verification succeeds against the production server.
+
 ## Deploy to Production
 
 \`db pull\` generated \`.env.local\` for local dev. Promote in stages: **local → AWS sandbox → production**.

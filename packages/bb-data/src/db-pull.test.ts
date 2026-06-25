@@ -8,6 +8,7 @@ import {
   generateMetaFile,
   generateIndexFile,
   generateCaFile,
+  resolveCaFileWrite,
   generateMigrationGuide,
   isServerManagedDefault,
   parseExistingMetaSingulars,
@@ -230,6 +231,32 @@ describe('generateCaFile', () => {
     assert.ok(out.includes('\\`'), 'backtick escaped');
     assert.ok(out.includes('\\${evil}'), 'interpolation escaped');
     assert.ok(out.includes('\\\\'), 'backslash escaped');
+  });
+});
+
+// ── resolveCaFileWrite ─────────────────────────────────────────────────
+
+describe('resolveCaFileWrite', () => {
+  test('writes the provided CA (first pull or rotation refresh)', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----';
+    const out = resolveCaFileWrite(pem, false);
+    assert.ok(out !== null);
+    assert.ok(out!.includes('AAA'));
+
+    const refreshed = resolveCaFileWrite(pem, true);
+    assert.ok(refreshed !== null && refreshed.includes('AAA'));
+  });
+
+  test('writes an empty stub on first pull when no CA is provided', () => {
+    const out = resolveCaFileWrite(undefined, false);
+    assert.ok(out !== null);
+    assert.ok(out!.includes('export const DATABASE_CA_CERT = ``;'));
+  });
+
+  test('preserves an existing file when no CA is provided (no silent downgrade on re-pull)', () => {
+    // Regression guard: a re-pull that skips the CA prompt must NOT overwrite a
+    // previously-populated database.ca.ts (which would turn off verification).
+    assert.strictEqual(resolveCaFileWrite(undefined, true), null);
   });
 });
 

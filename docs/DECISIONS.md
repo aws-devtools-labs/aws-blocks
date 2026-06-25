@@ -305,7 +305,15 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
 ### Known limitation — TLS verification on the DDL/baseline path
-The host-side migration, baseline (`pg_dump`), and `--url` CLI connections currently use `ssl: { rejectUnauthorized: false }` — the same posture the runtime engine has historically used for `fromExisting`. #806 is enforcing verify-by-default (with an `ssl: { ca }` override to pin a provider CA) on the runtime/dev paths; this PR's DDL paths do not consume that override yet. **Accepted interim risk:** unverified TLS to the pooler on the deploy/CI host. **Fast-follow:** have these paths adopt #806's `ssl`/CA override (verify, or explicitly pin the CA) once it lands, rather than introducing a separate mechanism here.
+The host-side migration, baseline (`pg_dump`), and `--url` CLI connections originally used
+`ssl: { rejectUnauthorized: false }` — the same posture the runtime engine historically used for
+`fromExisting`. **Resolved (fast-follow landed):** `fromExisting` now accepts an `ssl` option and the
+runtime verifies by default; the DDL/baseline/`--url` paths now resolve TLS through the shared
+`externalDbSsl()` helper, which pins a CA from `DATABASE_CA_CERT` (inline PEM or file path) and strips
+`sslmode` so the CA takes effect. **Residual:** when `DATABASE_CA_CERT` is not set, these operator-host,
+ephemeral connections still fall back to `rejectUnauthorized: false` (the operator is connecting to a
+database they own with a string they just supplied). Unlike the deployed runtime — which pins the CA
+committed in `database.ca.ts` by `db pull` — the operational paths read the CA from the environment only.
 
 ## D-010: `--telemetry-file` flag writes regardless of opt-out status
 

@@ -31,6 +31,7 @@ export {
   generateMetaFile,
   generateIndexFile,
   generateCaFile,
+  resolveCaFileWrite,
   generateMigrationGuide,
   parseExistingMetaSingulars,
   selectEligibleTables,

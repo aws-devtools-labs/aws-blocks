@@ -113,6 +113,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
 | No RDS Proxy behavior | Connection pinning, failover not simulated | Transparent to app code |
+| TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
 
 ## Relationship to data-common

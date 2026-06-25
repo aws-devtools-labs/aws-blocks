@@ -51,10 +51,11 @@ export function isServerManagedDefault(columnDefault: string | null): boolean {
   );
 }
 
-export async function introspect(connectionString: string): Promise<IntrospectionResult> {
+export async function introspect(connectionString: string, caCert?: string): Promise<IntrospectionResult> {
   // Validate the URL is parseable before handing to pg.
+  let parsed: URL;
   try {
-    new URL(connectionString);
+    parsed = new URL(connectionString);
   } catch {
     throw new Error(
       `Could not parse connection string.\n` +
@@ -66,15 +67,18 @@ export async function introspect(connectionString: string): Promise<Introspectio
     );
   }
 
-  // Strip sslmode from the connection string so our explicit ssl config takes
-  // effect: node `pg` treats `sslmode=require` (and stricter) as verify-full
-  // against the system trust store and ignores a programmatic `ssl.ca`. Supabase's pooler/direct
-  // endpoints present a cert signed by Supabase's private CA ("prod-ca-2021"),
-  // which is not in the system store — so verification needs that CA pinned
-  // (via DATABASE_CA_CERT); externalDbSsl() handles that, falling back to an
-  // unverified connection for this ephemeral, operator-driven introspection.
-  const connStr = connectionString.replace(/[?&]sslmode=[^&]*/g, '').replace(/\?$/, '');
-  const pool = new pg.Pool({ connectionString: connStr, ssl: externalDbSsl() });
+  // Strip sslmode so our explicit ssl config takes effect: node `pg` treats
+  // `sslmode=require` (and stricter) as verify-full against the system trust
+  // store and ignores a programmatic `ssl.ca`. Supabase's pooler/direct
+  // endpoints present a cert signed by Supabase's private CA, which is not in
+  // the system store — so verification needs that CA pinned. When the caller
+  // provides one (e.g. the CA captured by `db pull`), verify against it;
+  // otherwise externalDbSsl() applies DATABASE_CA_CERT or an unverified fallback
+  // for this ephemeral, operator-driven introspection.
+  parsed.searchParams.delete('sslmode');
+  const connStr = parsed.toString();
+  const ssl = caCert ? { ca: caCert, rejectUnauthorized: true } : externalDbSsl();
+  const pool = new pg.Pool({ connectionString: connStr, ssl });
 
   try {
     // Get columns

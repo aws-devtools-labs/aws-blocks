@@ -144,6 +144,24 @@ export function generateCaFile(caPem?: string): string {
 
 // ── supabase.ts (generated wiring file) ────────────────────────────────
 
+/**
+ * Decide whether `db pull` should (re)write `database.ca.ts`, given the CA the
+ * caller supplied (if any) and whether the file already exists.
+ *
+ * - A CA was provided → write it (also refreshes a rotated CA).
+ * - No CA + file missing → write the empty stub so the wiring's import resolves.
+ * - No CA + file exists → **preserve** it (return `null`), so a routine re-pull
+ *   (e.g. refreshing types after a schema change) does not silently downgrade a
+ *   previously-verified app to unverified.
+ *
+ * Returns the file content to write, or `null` to leave the existing file alone.
+ */
+export function resolveCaFileWrite(providedCa: string | undefined, fileExists: boolean): string | null {
+  if (providedCa !== undefined) return generateCaFile(providedCa);
+  if (!fileExists) return generateCaFile();
+  return null;
+}
+
 export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: string; runtimeConnString: string }): string {
   const hasRls = tables.some(t => t.hasRls);
   const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';

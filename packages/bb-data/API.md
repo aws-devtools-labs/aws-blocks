@@ -109,6 +109,10 @@ export type ExternalDatabaseRef = {
     connectionString: string | {
         get(): Promise<string>;
     };
+    ssl?: {
+        rejectUnauthorized?: boolean;
+        ca?: string;
+    };
 };
 
 // @public

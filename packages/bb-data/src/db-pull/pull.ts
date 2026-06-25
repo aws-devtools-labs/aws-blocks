@@ -16,6 +16,7 @@ import { introspect } from './introspect.js';
 import {
   generateIndexFile,
   generateCaFile,
+  resolveCaFileWrite,
   generateMigrationGuide,
   readExistingSingulars,
   selectEligibleTables,
@@ -39,7 +40,7 @@ function grantStatement(tableName: string): string {
 
 export async function dbPull(opts: DbPullOptions): Promise<void> {
   console.log('✓ Connecting to database...');
-  const { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims } = await introspect(opts.connectionString);
+  const { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims } = await introspect(opts.connectionString, opts.caCert);
 
   if (allTables.length === 0) {
     console.error('✗ No tables found in public schema.');
@@ -169,15 +170,14 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   writeTypesAndMeta(outputDir, tables, existingSingulars);
 
   // database.ca.ts — the project CA pinned by the generated wiring for TLS
-  // verification. Write it when a CA is provided (also refreshes a rotated CA).
-  // When none is provided, PRESERVE an existing one rather than silently
-  // downgrading a previously-verified app to unverified on a routine re-pull;
-  // only emit the empty stub on first pull so the wiring's import resolves.
+  // verification. Write it when a CA is provided (also refreshes a rotated CA);
+  // preserve an existing one when none is supplied (so a routine re-pull doesn't
+  // downgrade a verified app); emit the empty stub on first pull so the import
+  // resolves. Decision logic is `resolveCaFileWrite` (unit-tested).
   const caFilePath = path.join(outputDir, 'database.ca.ts');
-  if (opts.caCert !== undefined) {
-    fs.writeFileSync(caFilePath, generateCaFile(opts.caCert));
-  } else if (!fs.existsSync(caFilePath)) {
-    fs.writeFileSync(caFilePath, generateCaFile());
+  const caFileContent = resolveCaFileWrite(opts.caCert, fs.existsSync(caFilePath));
+  if (caFileContent !== null) {
+    fs.writeFileSync(caFilePath, caFileContent);
   }
 
   const indexContent = generateIndexFile(tables, { projectRef: opts.projectRef, runtimeConnString: connString });

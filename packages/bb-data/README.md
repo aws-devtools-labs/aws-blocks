@@ -157,14 +157,17 @@ const db = new Database(scope, 'external', {
 The server's TLS certificate is **verified by default**. Managed providers
 (Supabase, Neon, RDS) present a certificate signed by a provider-specific CA
 that is not in Node's built-in trust store, so verification requires pinning
-that CA. For Supabase, download `prod-ca-2021.crt` from your project's
-**Database Settings → SSL Configuration** and pass it via `ssl.ca`:
+that CA. `ssl.ca` takes the certificate **contents** (a PEM string), not a path —
+for Supabase, download `prod-ca-2021.crt` from your project's **Database Settings
+→ SSL Configuration**:
 
 ```typescript
+import { readFileSync } from 'node:fs';
+
 const db = new Database(scope, 'external', {
   connection: fromExisting({
     connectionString: process.env.DATABASE_URL!,
-    ssl: { ca: process.env.DATABASE_CA_CERT }, // inline PEM or file contents
+    ssl: { ca: readFileSync('./supabase-ca.crt', 'utf8') },
   }),
 });
 ```

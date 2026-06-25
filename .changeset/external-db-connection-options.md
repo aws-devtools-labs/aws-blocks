@@ -14,3 +14,11 @@ deployed Lambda — with no runtime configuration. `DATABASE_CA_CERT` (inline PE
 file path) overrides the committed cert; without any CA the connection falls back to
 a visible, editable `rejectUnauthorized: false`. Local dev keeps the previous
 unverified default for self-signed local databases.
+
+Upgrade note: if you call `fromExisting({ connectionString })` **directly** (not via
+`db pull`-generated code) with no `ssl` option, the connection now verifies the
+server certificate. Providers that use a private CA (e.g. Supabase) require pinning
+it — pass `ssl: { ca }` (the certificate contents) — otherwise the connection will
+fail to validate. Pass `ssl: { rejectUnauthorized: false }` to keep the previous
+behavior explicitly. `db pull`-generated apps are unaffected in default
+connectivity.
