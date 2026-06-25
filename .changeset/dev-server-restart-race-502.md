@@ -22,13 +22,22 @@ Fixes:
 - **Bounded auto-respawn** — an unexpected frontend exit now respawns Vite with
   exponential backoff, capped at 5 restarts / 10s to avoid hot loops, and is
   suppressed during intentional shutdown via an `isShuttingDown` guard. The
-  budget counts only *consecutive failing* restarts: it resets once a respawn
-  rebinds the port, so a frontend that legitimately restarts many times (e.g.
-  editor-triggered full reloads) is never permanently left down.
+  budget counts only *consecutive failing* restarts: it resets only when **our
+  own** freshly spawned child is the process now bound to the port. A liveness
+  probe alone cannot tell our Vite from a foreign listener (a leftover Vite or a
+  second dev server), and crediting a foreign one would make every
+  `--strictPort`-failing respawn look successful, neutralizing the cap and
+  hot-looping forever. A frontend that legitimately restarts many times (e.g.
+  editor-triggered full reloads) is still never permanently left down.
 - **Robust shutdown** — cleanup is idempotent, wired to `SIGINT`/`SIGTERM`/
-  `SIGHUP`, removes its own listeners, waits (bounded) for the group to die
-  before exiting (SIGTERM→SIGKILL escalation), and keeps a synchronous
-  `process.on('exit')` safety net so a detached Vite is never left orphaned.
+  `SIGHUP`, removes its own listeners, and waits (bounded) for the group to die
+  **and for `:3100` to actually be released** before exiting: SIGTERM→SIGKILL
+  escalation, then a port-free poll that runs on *both* the live and the
+  already-exited paths (the post-exit path previously skipped it, so a relaunch
+  could race the kernel's socket teardown into `--strictPort` `EADDRINUSE`). A
+  synchronous `process.on('exit')` safety net remains for paths that bypass
+  cleanup — now routed through the shared tree-kill so it reaps on Windows
+  (`taskkill`) too instead of early-returning and leaking the Vite tree.
 - **Consistent post-exit reaping** — the failure being fixed is the *shell
   exiting while the detached grandchild survives*, so every post-exit path
   (the respawn handler, graceful shutdown, and the `exit` safety net) now
@@ -38,6 +47,18 @@ Fixes:
   issued synchronously on observing the exit to keep the PID-reuse window
   minimal. The single rationale lives next to the supervisor as the
   "POST-EXIT GROUP-KILL POLICY" so all three sites stay in agreement.
+- **Sandbox entrypoint parity** — `sandbox.ts` (the sibling dev entrypoint) now
+  spawns the dev server in its own process group and `await`s a bounded group
+  teardown on `SIGINT`/`SIGTERM`, replacing the synchronous `kill()` +
+  `process.exit(0)` that signalled only the shell and exited immediately. The
+  drain gives the dev server time to run its own shutdown and reap the
+  *detached* Vite great-grandchild, so the next `npm run sandbox` no longer
+  races a survivor on `:3100`.
+- **Single tree-kill primitive** — the POSIX group-kill, the Windows `taskkill`
+  tree-kill, and the bounded SIGTERM→SIGKILL teardown now live in one shared
+  `process-tree.ts` module used by every entrypoint (dev server, respawn
+  handler, `exit` net, and sandbox), so the reaping behavior can no longer drift
+  between hand-rolled copies.
 
 `--strictPort` is intentionally retained: the proxy target is hardcoded to
 `:3100`, so the port is reliably freed rather than letting Vite drift to another

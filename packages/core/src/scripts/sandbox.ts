@@ -11,6 +11,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
+import { terminateProcessTree } from './process-tree.js';
 
 /**
  * Import the backend definition to populate the Scope BB registry.
@@ -166,6 +167,12 @@ export async function startSandbox(options: SandboxOptions) {
   const devServer = spawnCommand(cmd, args, {
     stdio: "inherit",
     shell: true,
+    // Own process group on POSIX so cleanup can signal the whole dev-server
+    // tree (shell → tsx → node). The node dev server then runs its own SIGTERM
+    // handler — the ~2s terminateFrontend drain that reaps the *detached* Vite
+    // great-grandchild — which a bare `devServer.kill()` (the shell only) never
+    // triggers. Windows has no groups; terminateProcessTree reaps via taskkill.
+    detached: process.platform !== 'win32',
     env: { 
       ...process.env,
       NODE_OPTIONS: '',
@@ -173,12 +180,21 @@ export async function startSandbox(options: SandboxOptions) {
     },
   });
 
-  const cleanup = () => {
+  let cleaningUp = false;
+  const cleanup = async () => {
+    if (cleaningUp) return; // idempotent — a second signal must not re-enter
+    cleaningUp = true;
     console.log("\n\n🛑 Stopping local processes...");
     console.log("   (AWS resources are still running)");
     console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
     cdkWatch.kill();
-    devServer.kill();
+    // The dev server owns a *detached* Vite tree that only its own SIGTERM
+    // handler reaps (a ~2s terminateFrontend drain). Killing just the shell and
+    // exiting immediately would orphan Vite on :3100 and wedge the next run with
+    // --strictPort/502, so signal the dev-server process group and AWAIT that
+    // drain. Bounded at 6s (> the ~2s drain): a hung dev server escalates to a
+    // tree SIGKILL and we exit regardless, so shutdown can never wedge.
+    await terminateProcessTree(devServer, 6000);
     process.exit(0);
   };
 

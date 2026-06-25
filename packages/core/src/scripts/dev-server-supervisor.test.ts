@@ -7,10 +7,16 @@ import { createConnection, createServer } from 'node:net';
 import {
   evaluateFrontendRespawn,
   DEFAULT_FRONTEND_RESPAWN_POLICY,
+  waitForPortFree,
+  shouldCreditFrontendReady,
+} from './dev-server.js';
+import {
   killFrontendTree,
   windowsTreeKill,
+  terminateProcessTree,
   type KillableProcess,
-} from './dev-server.js';
+  type AwaitableChild,
+} from './process-tree.js';
 
 const isWindows = process.platform === 'win32';
 // The real-process integration test spawns OS processes and depends on
@@ -286,4 +292,130 @@ describe('killFrontendTree — reaps a real detached shell tree', { skip: integr
         if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
       }
     });
+});
+
+// ── shouldCreditFrontendReady (unit) ────────────────────────────────────────
+// Guards the restart-budget reset: a liveness-only port probe must not credit a
+// foreign listener, or the maxRestarts cap is neutralized and Vite hot-loops.
+describe('shouldCreditFrontendReady — credit only our own live child', () => {
+  const liveChild = () => ({ exitCode: null as number | null, signalCode: null as NodeJS.Signals | null });
+
+  it('credits the probe when our spawned child is still the live frontend', () => {
+    const child = liveChild();
+    assert.strictEqual(shouldCreditFrontendReady(child, child), true);
+  });
+
+  it('does NOT credit a foreign listener (a different or absent current child)', () => {
+    const child = liveChild();
+    assert.strictEqual(shouldCreditFrontendReady(child, liveChild()), false);
+    assert.strictEqual(shouldCreditFrontendReady(child, null), false);
+  });
+
+  it('does NOT credit a child that already exited (lost the --strictPort bind race)', () => {
+    const exited = { exitCode: 1 as number | null, signalCode: null as NodeJS.Signals | null };
+    assert.strictEqual(shouldCreditFrontendReady(exited, exited), false);
+    const killed = { exitCode: null as number | null, signalCode: 'SIGKILL' as NodeJS.Signals | null };
+    assert.strictEqual(shouldCreditFrontendReady(killed, killed), false);
+  });
+
+  it('does NOT credit when there is no child', () => {
+    assert.strictEqual(shouldCreditFrontendReady(null, null), false);
+  });
+});
+
+// ── terminateProcessTree (unit, injected killTree + sleep) ──────────────────
+// The shared SIGTERM->SIGKILL escalation used by both the dev server and the
+// sandbox entrypoint. Dependencies are injected so the policy is exercised
+// without spawning real processes or real timers.
+describe('terminateProcessTree — escalation + post-exit reap', () => {
+  const immediate = (_ms: number): Promise<void> => Promise.resolve();
+  const never = (_ms: number): Promise<void> => new Promise<void>(() => {});
+
+  function makeAwaitableChild(
+    initial: { exitCode?: number | null; signalCode?: NodeJS.Signals | null } = {},
+  ): { child: AwaitableChild; fireExit: (code?: number | null, signal?: NodeJS.Signals | null) => void } {
+    let exitListener: (() => void) | null = null;
+    const child: AwaitableChild = {
+      pid: 4242,
+      exitCode: initial.exitCode ?? null,
+      signalCode: initial.signalCode ?? null,
+      kill() { return true; },
+      once(_event: 'exit', listener: () => void) { exitListener = listener; return child; },
+    };
+    const fireExit = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
+      child.exitCode = code;
+      child.signalCode = signal;
+      exitListener?.();
+    };
+    return { child, fireExit };
+  }
+
+  it('issues a single best-effort group SIGKILL when the child already exited', async () => {
+    const { child } = makeAwaitableChild({ exitCode: 0 });
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never);
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(sent, ['SIGKILL']); // post-exit reap: no SIGTERM, no await
+  });
+
+  it('SIGTERMs the tree and resolves without escalating when it exits in time', async () => {
+    const { child, fireExit } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => {
+      sent.push(s);
+      if (s === 'SIGTERM') fireExit(0, null); // clean exit wins the grace race
+    }, never);
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(sent, ['SIGTERM']);
+  });
+
+  it('escalates to a tree SIGKILL when the child lingers past the grace window', async () => {
+    const { child, fireExit } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => {
+      sent.push(s);
+      if (s === 'SIGKILL') fireExit(null, 'SIGKILL'); // dies only on SIGKILL
+    }, immediate);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    assert.strictEqual(ok, true);
+  });
+
+  it('reports false when the child is still alive after the SIGKILL grace', async () => {
+    const { child } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, immediate);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    assert.strictEqual(ok, false);
+  });
+});
+
+// ── waitForPortFree (real sockets, fast + deterministic) ────────────────────
+// Asserts the "wait for the port to free before exiting" invariant that the
+// post-exit terminate path used to drop.
+describe('waitForPortFree — waits for the listener to release the port', () => {
+  it('returns promptly when nothing holds the port', async () => {
+    const port = await getFreePort();
+    const t0 = Date.now();
+    await waitForPortFree(port, 2000);
+    assert.ok(Date.now() - t0 < 1000, 'should return quickly when the port is already free');
+  });
+
+  it('keeps polling while the port is held, then resolves once it closes', async () => {
+    const port = await getFreePort();
+    const srv = createServer((c) => c.destroy());
+    await new Promise<void>((res) => srv.listen(port, '127.0.0.1', () => res()));
+
+    // A short bounded wait must consume ~its whole budget while the port is held;
+    // it can only return early if it (wrongly) sees the held port as free.
+    const t0 = Date.now();
+    await waitForPortFree(port, 300);
+    assert.ok(Date.now() - t0 >= 250, 'must keep polling while the port is held');
+
+    await new Promise<void>((res) => srv.close(() => res()));
+
+    // Once free, a generous-timeout call returns promptly.
+    const t1 = Date.now();
+    await waitForPortFree(port, 3000);
+    assert.ok(Date.now() - t1 < 1500, 'should resolve soon after the port frees');
+  });
 });
