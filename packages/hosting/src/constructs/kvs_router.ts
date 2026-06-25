@@ -119,6 +119,79 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
 };
 
 /**
+ * The viewer-request CloudFront Function scans the route table SEQUENTIALLY per
+ * request — for an unmatched/catch-all path (the worst case: the site root) it
+ * reads + `JSON.parse`s every `r{n}` chunk before falling through to the
+ * default origin. CloudFront Functions cap per-invocation compute, so a table
+ * with many rows (→ many chunks → many parses) trips `RangeError: Instruction
+ * limit exceeded` and the distribution 503s on EVERY route (the function runs
+ * before any origin). SSG sites are the trigger: a framework emits one static
+ * route per prerendered page (`/blog/post-1`, `/blog/post-2`, … hundreds), and
+ * Nuxt additionally emits a `/<page>/*` subtree route per page — so 100 pages
+ * became 200 rows / 7 chunks and tipped the limit.
+ *
+ * Coalesce sibling routes that share a parent directory AND a single kind into
+ * one `parent/*` wildcard, collapsing those hundreds of rows to one. The scan
+ * mirrors CloudFront's first-match-on-specificity ordering, so this preserves
+ * matching for every EXISTING path: a request that hit `/blog/post-5` (exact)
+ * now hits `/blog/*` with the same kind; a deeper, differently-kinded route
+ * (e.g. `/blog/post-5/admin` = compute) keeps its own row and still sorts
+ * BEFORE the broader wildcard (more literal segments), so it matches first.
+ *
+ * Semantic note (intentional, documented): for a compute-backed deploy where
+ * the unmatched default is the SSR origin, a request to a NON-existent child of
+ * a coalesced STATIC group (e.g. `/blog/never-generated`) now routes to S3 (→
+ * 404/403 from the bucket) instead of the SSR Lambda's framework 404 page. For
+ * prerendered content a miss is a 404 either way; only the 404 styling differs.
+ * Coalescing a COMPUTE group, or any group in a static-only deploy, is a pure
+ * no-op (the wildcard kind equals the default), so this only affects static
+ * routes in a compute deploy — exactly the SSG fan-out we need to bound.
+ */
+export const coalesceRoutes = (
+  rows: [string, RouteKind][],
+): [string, RouteKind][] => {
+  // Group by parent directory: strip a trailing '/*', then take everything up
+  // to the last '/'. Both `/blog/p` and `/blog/p/*` → parent `/blog`.
+  const groups = new Map<string, [string, RouteKind][]>();
+  const order: string[] = [];
+  for (const r of rows) {
+    let p = r[0];
+    if (p.endsWith('/*')) p = p.slice(0, -2);
+    const slash = p.lastIndexOf('/');
+    const parent = slash > 0 ? p.substring(0, slash) : '';
+    if (!groups.has(parent)) {
+      groups.set(parent, []);
+      order.push(parent);
+    }
+    groups.get(parent)!.push(r);
+  }
+  const out: [string, RouteKind][] = [];
+  for (const parent of order) {
+    const members = groups.get(parent)!;
+    const uniformKind = members.every((m) => m[1] === members[0][1]);
+    // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
+    // A non-empty parent guarantees the wildcard is scoped to a subtree and
+    // never becomes a bare `/*` that would swallow the whole site.
+    if (members.length >= 2 && uniformKind && parent.length > 0) {
+      out.push([`${parent}/*`, members[0][1]]);
+    } else {
+      out.push(...members);
+    }
+  }
+  // Dedupe identical [pattern, kind] rows. Frameworks that emit BOTH a bare
+  // `/<page>` and a `/<page>/*` subtree per page (Nuxt) coalesce each form to
+  // the SAME `<parent>/*` wildcard, producing duplicate rows; collapse them so
+  // the table stays minimal.
+  const seen = new Set<string>();
+  return out.filter(([p, k]) => {
+    const key = `${p} ${k}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+/**
  * Build the KVS key/value map for a deploy. Keys:
  *   - `meta`  : metadata blob (buildId, basePath, spaFallback, image prefix,
  *               origin ids, chunk counts).
@@ -159,9 +232,16 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     const kind: RouteKind = isImage ? 'i' : isStatic ? 's' : 'c';
     rows.push([cf, kind]);
   }
+  // Coalesce SSG fan-out (many sibling pages under one parent, one kind) into a
+  // single `parent/*` wildcard so the per-request edge scan stays bounded and
+  // never trips the CloudFront Function instruction limit. See coalesceRoutes.
+  const coalesced = coalesceRoutes(rows);
+
   // Sort by descending specificity (literal segments, then length) so the
-  // function's first-match scan mirrors CloudFront's old behavior ordering.
-  rows.sort((a, b) => specificity(b[0]) - specificity(a[0]));
+  // function's first-match scan mirrors CloudFront's old behavior ordering. A
+  // coalesced `/blog/*` (1 literal seg) sorts AFTER any retained deeper route
+  // (e.g. `/blog/x/admin`, 3 segs), preserving first-match correctness.
+  coalesced.sort((a, b) => specificity(b[0]) - specificity(a[0]));
 
   // ---- redirects (basePath-prefixed, unbounded — no 100 cap) ----
   const redirects = manifest.redirects ?? [];
@@ -178,7 +258,7 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     manifest.headers ?? []
   ).map((h) => [normalizePattern(h.source, basePath), h.headers]);
 
-  const routeChunks = chunkRows(rows);
+  const routeChunks = chunkRows(coalesced);
   const redirectChunks = chunkRows(redirectRows);
   const headerChunks = chunkRows(headerRows);
 

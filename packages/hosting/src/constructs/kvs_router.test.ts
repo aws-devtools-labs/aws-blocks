@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildKvsEntries,
+  coalesceRoutes,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
@@ -859,5 +860,113 @@ void describe('buildKvsEntries — G17 image classification', () => {
     const rows = JSON.parse(entries.r0) as [string, string][];
     const img = rows.find((r) => r[0] === '/_next/image*');
     assert.ok(img && img[1] !== 'i', "must not be kind 'i' when no image origin");
+  });
+});
+
+void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
+  void it('collapses many same-kind siblings under one parent into parent/*', () => {
+    const rows: [string, 's'][] = Array.from({ length: 100 }, (_, i) => [
+      `/stress/${i}/*`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0], ['/stress/*', 's']);
+  });
+
+  void it('also collapses the bare + subtree pair Nuxt emits per page', () => {
+    // Nuxt emits BOTH `/stress/N` and `/stress/N/*` per prerendered page.
+    const rows: [string, 's'][] = [];
+    for (let i = 0; i < 50; i++) {
+      rows.push([`/stress/${i}`, 's']);
+      rows.push([`/stress/${i}/*`, 's']);
+    }
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0], ['/stress/*', 's']);
+  });
+
+  void it('dedupes the duplicate wildcard from coalescing bare + subtree forms', () => {
+    // Nuxt emits `/stress/N` AND `/stress/N/*`; both forms coalesce to
+    // `/stress/*`, so the result must contain it exactly ONCE.
+    const rows: [string, 's'][] = [
+      ['/stress/0', 's'],
+      ['/stress/0/*', 's'],
+      ['/stress/1', 's'],
+      ['/stress/1/*', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.deepEqual(out, [['/stress/*', 's']]);
+  });
+
+  void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
+    const rows: [string, 's' | 'c'][] = [
+      ['/mix/a', 's'],
+      ['/mix/b', 'c'],
+      ['/mix/c', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    // Mixed kind under /mix → left as individual rows (no lossy wildcard).
+    assert.equal(out.length, 3);
+    assert.ok(!out.some(([p]) => p === '/mix/*'));
+  });
+
+  void it('retains a deeper differently-kinded route alongside a coalesced group', () => {
+    // /blog/* (static pages) coalesces, but /blog/x/admin (compute) is under a
+    // DIFFERENT parent (/blog/x) so it is never folded in, and its extra
+    // literal segment sorts it ahead of /blog/* in buildKvsEntries.
+    const rows: [string, 's' | 'c'][] = [
+      ['/blog/p1', 's'],
+      ['/blog/p2', 's'],
+      ['/blog/p3', 's'],
+      ['/blog/x/admin', 'c'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.ok(out.some(([p, k]) => p === '/blog/*' && k === 's'));
+    assert.ok(out.some(([p, k]) => p === '/blog/x/admin' && k === 'c'));
+  });
+
+  void it('leaves a single route untouched (no spurious wildcard)', () => {
+    const rows: [string, 's'][] = [['/about', 's']];
+    const out = coalesceRoutes(rows);
+    assert.deepEqual(out, [['/about', 's']]);
+  });
+
+  void it('never coalesces top-level routes into a site-wide /*', () => {
+    // Root-level siblings (parent === '') must NOT become `/*` — that would
+    // swallow every path. They stay as individual rows.
+    const rows: [string, 's'][] = [
+      ['/about', 's'],
+      ['/contact', 's'],
+      ['/pricing', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 3);
+    assert.ok(!out.some(([p]) => p === '/*'));
+  });
+
+  void it('bounds the route-chunk count for a large SSG deploy (regression)', () => {
+    // 200 prerendered pages under /stress used to need ~7 r-chunks → 7
+    // JSON.parse per request → instruction-limit 503 on the root path. After
+    // coalescing they are one row → one chunk.
+    const routes = [
+      ...Array.from({ length: 200 }, (_, i) => ({
+        pattern: `/stress/${i}/*`,
+        target: 'static',
+      })),
+      { pattern: '/*', target: 'compute' },
+    ];
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        compute: { default: { type: 'handler', bundle: '/tmp', handler: 'h', placement: 'regional' } },
+        staticAssets: { directory: '/tmp', spaFallback: false },
+        routes,
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const meta = JSON.parse(entries.meta) as { rc: number };
+    assert.equal(meta.rc, 1, 'coalesced SSG fan-out must fit in a single route chunk');
   });
 });
