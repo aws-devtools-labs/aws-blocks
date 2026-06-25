@@ -392,3 +392,70 @@ describe('AuthOIDCClient.signOut — @aws-blocks/auth-common bridge', () => {
 		assert.strictEqual(reloaded, true, 'signOut should reload the page after broadcasting');
 	});
 });
+
+describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)', () => {
+	let originalFetch: typeof globalThis.fetch;
+	let savedWindow: unknown;
+	let savedLocation: unknown;
+	let savedSessionStorage: unknown;
+	let savedBroadcastChannelGlobal: unknown;
+	let signoutPosted: boolean;
+
+	beforeEach(() => {
+		// Emulate SSR: strip the browser globals that broadcastAuthChange() (a
+		// BroadcastChannel + window.dispatchEvent) and the reload depend on.
+		// Snapshot first so a sibling describe that installed them isn't disturbed.
+		// Note: Node ships a real global BroadcastChannel, so it must be removed
+		// too — otherwise an un-guarded broadcast would open a live channel.
+		savedWindow = (globalThis as any).window;
+		savedLocation = (globalThis as any).location;
+		savedSessionStorage = (globalThis as any).sessionStorage;
+		savedBroadcastChannelGlobal = (globalThis as any).BroadcastChannel;
+		delete (globalThis as any).window;
+		delete (globalThis as any).location;
+		delete (globalThis as any).sessionStorage;
+		delete (globalThis as any).BroadcastChannel;
+
+		// Reset the shared capture state (installBrowserGlobals normally does this)
+		// so the assertions below can't observe a sibling test's broadcast/reload.
+		broadcasts.length = 0;
+		reloaded = false;
+
+		// _getBaseUrl() resolves from this without touching window.
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+		signoutPosted = false;
+		globalThis.fetch = (async (url: any, init?: any) => {
+			if (String(url).endsWith('/aws-blocks/auth/signout') && init?.method === 'POST') {
+				signoutPosted = true;
+			}
+			return { ok: true, json: async () => ({}) };
+		}) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		// Restore exactly what we snapshotted so sibling tests are unaffected.
+		if (savedWindow === undefined) delete (globalThis as any).window;
+		else (globalThis as any).window = savedWindow;
+		if (savedLocation === undefined) delete (globalThis as any).location;
+		else (globalThis as any).location = savedLocation;
+		if (savedSessionStorage === undefined) delete (globalThis as any).sessionStorage;
+		else (globalThis as any).sessionStorage = savedSessionStorage;
+		if (savedBroadcastChannelGlobal === undefined) delete (globalThis as any).BroadcastChannel;
+		else (globalThis as any).BroadcastChannel = savedBroadcastChannelGlobal;
+	});
+
+	test('completes the server-side sign-out without a window and never broadcasts', async () => {
+		const client = makeClient();
+		// Pre-fix this rejected: broadcastAuthChange(null) ran before the window
+		// guard, so getChannel()/window.dispatchEvent threw a ReferenceError after
+		// the sign-out POST had already completed — stranding the returned promise.
+		await assert.doesNotReject(() => client.signOut());
+
+		assert.strictEqual(signoutPosted, true, 'the server-side sign-out POST should still run');
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab broadcast should be attempted with no window');
+		assert.strictEqual(reloaded, false, 'no page reload server-side');
+	});
+});

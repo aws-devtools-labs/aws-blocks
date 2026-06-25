@@ -384,8 +384,13 @@ export class AuthOIDCClient<
 		// BroadcastChannel.postMessage never fires in the originating tab, so other
 		// open tabs' onAuthChange / <AuthenticatedContent> consumers would keep
 		// rendering the signed-in user until their own next reload without this.
-		broadcastAuthChange(null);
+		//
+		// broadcastAuthChange() opens a BroadcastChannel and dispatches a window
+		// event, so it needs the same browser globals as the reload — guard both
+		// together so a server-side sign-out (no window) doesn't throw a
+		// ReferenceError after the sign-out POST above has already succeeded.
 		if (typeof window !== 'undefined' && window.location) {
+			broadcastAuthChange(null);
 			window.location.reload();
 		}
 	}
