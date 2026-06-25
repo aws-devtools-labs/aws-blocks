@@ -214,4 +214,18 @@ describe('create-blocks-app auto-detection', () => {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  it('generates .blocks/config.json with stackId for fresh project scaffolding', () => {
+    const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
+    try {
+      const result = run([tmpDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
+      assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });

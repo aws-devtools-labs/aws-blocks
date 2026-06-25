@@ -4,10 +4,30 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 interface BlocksConfig {
   stackId?: string;
   [key: string]: unknown;
+}
+
+function randomSuffix(length: number): string {
+  return randomBytes(length).toString('hex').slice(0, length);
+}
+
+/**
+ * Generate a new stackId from a project name.
+ * Format: `<sanitizedName>.slice(0,16)-<random(6)>` — always CDK/CFN-safe.
+ */
+export function generateStackId(name: string): string {
+  const sanitized = name
+    .replace(/[^A-Za-z0-9-]/g, '-')
+    .replace(/^[^A-Za-z]+/, 'app-')
+    .replace(/-+/g, '-')
+    .replace(/-$/, '')
+    .slice(0, 16)
+    .replace(/-$/, '') || 'blocks-app';
+  return `${sanitized}-${randomSuffix(6)}`;
 }
 
 /**
@@ -40,8 +60,8 @@ export function getSandboxId(projectRoot?: string): string {
   if (existsSync(filePath)) return readFileSync(filePath, 'utf-8').trim();
   const dir = dirname(filePath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const username = getUsername().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
-  const random = Math.random().toString(36).slice(2, 8);
+  const username = getUsername().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'dev';
+  const random = randomSuffix(6);
   const id = `${username}-${random}`;
   writeFileSync(filePath, id);
   return id;

@@ -8,4 +8,4 @@ fix: generate unique stackId in .blocks/config.json, export getStackId/getSandbo
 Stack names are now derived from a `stackId` in `.blocks/config.json`, generated at scaffold time as `<name>.slice(0,16)-<random6>`. Templates import `getStackId()` and `getSandboxId()` from `@aws-blocks/blocks/scripts` — no more inline filesystem logic in `index.cdk.ts`.
 
 Production: `<stackId>-prod`
-Sandbox: `<stackId>-<username(8)>-<random(4)>` (per-machine, gitignored)
+Sandbox: `<stackId>-<username(8)>-<random(6)>` (per-machine, gitignored)

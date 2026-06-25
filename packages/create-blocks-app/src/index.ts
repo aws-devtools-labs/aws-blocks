@@ -7,9 +7,21 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function generateStackId(name: string): string {
+  const sanitized = name
+    .replace(/[^A-Za-z0-9-]/g, '-')
+    .replace(/^[^A-Za-z]+/, 'app-')
+    .replace(/-+/g, '-')
+    .replace(/-$/, '')
+    .slice(0, 16)
+    .replace(/-$/, '') || 'blocks-app';
+  return `${sanitized}-${randomBytes(4).toString('hex').slice(0, 6)}`;
+}
 
 // npm `file:` installs a single package without resolving its nested
 // `@aws-blocks/*` deps from the monorepo — it expects them to be
@@ -245,7 +257,7 @@ async function createFreshProject(targetDir: string, templateName: string) {
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
   // Generate .blocks/config.json with a unique stackId
-  const stackId = appName.slice(0, 16).replace(/-$/, '') + '-' + Math.random().toString(36).slice(2, 8);
+  const stackId = generateStackId(appName);
   const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
@@ -479,9 +491,8 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
 
   // Generate blocks/config.json with a unique stackId
   const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
-  const baseName = (existingPkg.name || basename(resolve(targetDir)))
-    .replace(/[^A-Za-z0-9-]/g, '-').replace(/^[^A-Za-z]+/, 'app-').replace(/-+/g, '-').replace(/-$/, '') || 'blocks-app';
-  const stackId = baseName.slice(0, 16).replace(/-$/, '') + '-' + Math.random().toString(36).slice(2, 8);
+  const baseName = (existingPkg.name || basename(resolve(targetDir)));
+  const stackId = generateStackId(baseName);
   const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));

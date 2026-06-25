@@ -427,3 +427,6 @@ Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/block
 ### References
 - PR #51; `.blocks/config.json` is also used by telemetry (`telemetry.projectId`).
 - Code: `packages/core/src/scripts/stack-id.ts`
+
+### Migration scope
+This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set their `stackId` in `.blocks/config.json` to their current production stack name (e.g., `my-blocks-stack`) — otherwise CDK will deploy a new stack and orphan the existing one.
