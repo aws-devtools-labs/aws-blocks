@@ -7,6 +7,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: prepare-kotlin-release
+  cancel-in-progress: false
+
 jobs:
   prepare:
     name: Version bump + release PR
@@ -18,11 +22,15 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          # Use a PAT (not the default GITHUB_TOKEN) so the pushed branch and the
+          # PR it opens trigger downstream CI on the release PR.
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
       - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: native/kotlin/package-lock.json
 
       - run: npm ci
 
