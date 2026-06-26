@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-knowledge-base": minor
+"@aws-blocks/blocks": minor
 ---
 
 Add `isReady()` / `waitUntilReady()` ingestion-readiness API to KnowledgeBase.
@@ -10,3 +11,5 @@ Bedrock ingestion runs asynchronously after deploy, so during the warm-up window
 - `waitUntilReady(options?: { timeoutMs?: number; pollIntervalMs?: number; maxConsecutiveTransientErrors?: number; signal?: AbortSignal }): Promise<void>` — polls until ready (defaults: `timeoutMs` 300000, `pollIntervalMs` 5000, `maxConsecutiveTransientErrors` 3), throwing a typed `KnowledgeBaseTimeoutException` on timeout or propagating `IngestionFailedException` on a failed job. Up to `maxConsecutiveTransientErrors` *consecutive* transient control-plane errors are tolerated (the counter resets on a clean poll); terminal errors short-circuit immediately. Transient covers both throttling / transient network failures **and** a *not-yet-visible* knowledge base — during the post-deploy window the control plane can briefly return `ResourceNotFoundException` (the freshly-created KB/data source hasn't propagated yet), which is ridden out rather than treated as terminal; a *missing-KB config* error (`KB_ID` unset) stays terminal. The poll interval carries ±20% jitter (only the delay between polls varies, never the poll count or the deadline) so many KBs don't poll in lockstep. Pass an optional `signal` (`AbortSignal`) to cancel the wait — checked before each poll and during the inter-poll delay — which rejects with the signal's abort reason (default: a `DOMException` named `'AbortError'`).
 
 Purely additive — `retrieve()` and all existing signatures are unchanged. The local mock reports ready immediately (no warm-up window in local dev).
+
+The umbrella `@aws-blocks/blocks` package now also re-exports the new `WaitUntilReadyOptions` type (alongside the existing `KnowledgeBase` re-exports) from both its runtime and CDK entry points, so consumers importing from `@aws-blocks/blocks` can reference it directly.
