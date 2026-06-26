@@ -70,7 +70,7 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 - **`auth.onAuthStateChange(cb)`** — this OIDC client's own listener. Fires for this client instance on `signIn()` kickoff, on a successful `handleRedirectCallback()`, and on `signOut()`.
 - **`onAuthChange(authApi, cb)`** from `aws-blocks/ui` — the shared `@aws-blocks/auth-common` subscription that also backs `<AuthenticatedContent>`. It updates **across components and browser tabs**.
 
-A successful `handleRedirectCallback()` notifies **both**: it calls the local listeners *and* bridges into `@aws-blocks/auth-common` by calling `broadcastAuthChange(user)` for you, so `onAuthChange` consumers (and `<AuthenticatedContent>`) re-render on client-PKCE sign-in — not just on server-initiated sign-in. You don't call `broadcastAuthChange()` yourself for sign-in; the client does.
+A successful `handleRedirectCallback()` notifies **both**: it calls the local listeners *and* bridges into `@aws-blocks/auth-common` by calling `broadcastAuthChange(user)` for you, so `onAuthChange` consumers (and `<AuthenticatedContent>`) re-render on client-PKCE sign-in — not just on server-initiated sign-in. You don't call `broadcastAuthChange()` yourself for sign-in; the client does. Because it fires both, a component that subscribes to **both** `auth.onAuthStateChange()` and `onAuthChange()` will have its handler invoked twice on a single client-PKCE sign-in — harmless if your handler is idempotent, but prefer one per component.
 
 ```tsx
 import { useEffect, useState } from 'react';
@@ -106,7 +106,7 @@ export function SignInButton() {
 }
 ```
 
-`onAuthChange` invokes your callback **synchronously** with the current user (from a shared cache) for the first paint, then again whenever auth state changes, and returns an unsubscribe function — return it from `useEffect` to wire up cleanup. The same broadcast also reaches other open tabs, so signing in (or out) in one tab updates them all.
+`onAuthChange` invokes your callback **synchronously** with the current user (from a shared cache) for the first paint, then again whenever auth state changes, and returns an unsubscribe function — return it from `useEffect` to wire up cleanup. The same broadcast also reaches other open tabs, so signing in (or out) in one tab updates them all. In the dedicated-callback pattern above, though, `handleRedirectCallback()` *broadcasts* the sign-in rather than priming that shared cache, so a `useUser()` that mounts **after** the callback fired starts from a cache miss: it paints once as signed-out, then self-corrects when its own async `getAuthState()` resolves — an expected, transient flash.
 
 ### Which flow to use
 

@@ -188,7 +188,7 @@ function notify(user: unknown | null, meta: AuthStateMeta | null): void {
  */
 export class AuthOIDCClient<
 	Provider extends string = string,
-	User = { userId: string; username: string },
+	User extends AuthUser = { userId: string; username: string },
 > {
 	readonly providers: readonly Provider[];
 
@@ -367,9 +367,9 @@ export class AuthOIDCClient<
 		//   - A same-tab `<Authenticator>` listens only on the cross-tab
 		//     BroadcastChannel (which never fires in the originating tab), so it
 		//     won't react here; `onAuthChange` / `<AuthenticatedContent>` do.
-		// Cast: the generic `User` is unconstrained at this boundary, but every
-		// exchange response is a superset of AuthUser's { userId, username }.
-		broadcastAuthChange(user as unknown as AuthUser);
+		// The `User` generic is constrained to `extends AuthUser`, so the exchange
+		// response is structurally a superset of AuthUser's { userId, username }.
+		broadcastAuthChange(user);
 		return user;
 	}
 
