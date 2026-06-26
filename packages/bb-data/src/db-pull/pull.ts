@@ -532,7 +532,12 @@ async function dbPullDevInteractive(outputDir: string): Promise<void> {
   if (caPath) {
     try {
       caCert = fs.readFileSync(caPath, 'utf-8');
-      console.log('  ✓ CA certificate captured — the connection will be verified.\n');
+      const caRel = path.join(path.basename(outputDir), 'database.ca.ts');
+      console.log(`  ✓ CA captured. It will be written to ${caRel} (a public cert, committed with`);
+      console.log(`    your app). The generated connection (resolveDbSsl in supabase.ts) pins it, so`);
+      console.log(`    your database's TLS certificate is verified — both with \`npm run dev\` and in the`);
+      console.log(`    deployed function (the file is bundled). Re-run \`bb-data pull\` to refresh a`);
+      console.log(`    rotated CA. Details: MIGRATION_GUIDE.md → "Securing the connection (TLS)".\n`);
     } catch (e) {
       console.warn(`  ⚠ Could not read CA at "${caPath}": ${(e as Error).message}`);
       console.warn('    Continuing without it — the connection will be encrypted but UNVERIFIED.');

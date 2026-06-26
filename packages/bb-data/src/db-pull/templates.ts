@@ -112,12 +112,14 @@ export const WIRING_RESOLVE_SSL_FN = `function resolveDbSsl(): { ca?: string; re
     : (DATABASE_CA_CERT || undefined);
   if (ca) {
     // Pin the provider CA → fully verified (sslmode=verify-full equivalent).
+    console.log('[bb-data] DB TLS: verifying the server certificate against the pinned CA (verify-full equivalent).');
     return { ca, rejectUnauthorized: true };
   }
   // ⚠️ No CA available: the connection is encrypted but the server certificate is
   // NOT verified (no man-in-the-middle protection). Download your Supabase CA
   // ('prod-ca-2021.crt' from Database Settings → SSL Configuration) and re-run
   // \`npx bb-data pull\` to capture it (or set DATABASE_CA_CERT). See MIGRATION_GUIDE.md.
+  console.warn('[bb-data] DB TLS: server certificate NOT verified — encrypted only (no CA). Run bb-data pull to capture your CA, or set DATABASE_CA_CERT. See MIGRATION_GUIDE.md.');
   return { rejectUnauthorized: false };
 }
 
