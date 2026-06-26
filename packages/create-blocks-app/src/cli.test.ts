@@ -181,7 +181,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('replaces my-blocks-stack placeholder in generated aws-blocks/index.cdk.ts', () => {
+  it('generates .blocks/config.json with stackId and uses getStackId in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -191,35 +191,37 @@ describe('create-blocks-app auto-detection', () => {
       const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
-        'generated index.cdk.ts should not contain the placeholder "my-blocks-stack"'
+        'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('-stack'),
-        'generated index.cdk.ts should contain the derived stack name'
+        cdkContent.includes('getStackId'),
+        'generated index.cdk.ts should import getStackId from @aws-blocks/blocks/scripts'
       );
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
+      assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('sanitizes directory names with special characters for CDK stack IDs', () => {
+  it('truncates long names to 16 chars in stackId', () => {
     const tmpDir = join(__dirname, '../.test-sanitize-stack-name');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: '@scope/my_app.test', version: '1.0.0' }));
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
-      assert.ok(
-        !cdkContent.includes('my-blocks-stack'),
-        'placeholder should be replaced'
-      );
-      // Stack name should only contain [A-Za-z][A-Za-z0-9-]* characters
-      const stackNameMatch = cdkContent.match(/`([^`]+)-\$\{getSandboxId/);
-      assert.ok(stackNameMatch, 'regex should match stack name pattern in CDK output');
-      if (stackNameMatch) {
-        assert.match(stackNameMatch[1], /^[A-Za-z][A-Za-z0-9-]*$/, 'stack name should be CDK-safe');
-      }
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      // Name part (before the random suffix) should be at most 16 chars
+      const parts = config.stackId.split('-');
+      const suffix = parts.pop();
+      const namepart = parts.join('-');
+      assert.ok(namepart.length <= 16, `name portion "${namepart}" should be at most 16 chars`);
+      assert.strictEqual(suffix!.length, 6, 'random suffix should be 6 chars');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -234,6 +236,20 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
       assert.match(result.stdout, /Created aws-blocks/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('generates .blocks/config.json with stackId for fresh project scaffolding', () => {
+    const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
+    try {
+      const result = run([tmpDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
+      assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
