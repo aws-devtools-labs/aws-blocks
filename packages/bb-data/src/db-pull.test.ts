@@ -188,6 +188,9 @@ describe('generateIndexFile', () => {
     // Visible, commented opt-out fallback when no CA is available.
     assert.ok(output.includes('rejectUnauthorized: false'));
     assert.ok(output.includes('prod-ca-2021'));
+    // In the deployed function a missing CA must fail closed, not connect unverified.
+    assert.ok(output.includes('AWS_LAMBDA_FUNCTION_NAME'));
+    assert.ok(output.includes('refusing to connect'));
     // Logs the resolved TLS mode so success isn't silent.
     assert.ok(output.includes('DB TLS: verifying'));
     assert.ok(output.includes('DB TLS: server certificate NOT verified'));

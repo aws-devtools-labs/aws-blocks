@@ -37,21 +37,42 @@ async function resolveConnString(): Promise<string> {
   return u.toString();
 }
 
+function readCaFile(p: string): string {
+  // Read a CA file at startup, surfacing a TLS-specific error instead of a bare
+  // ENOENT cold-start crash, and reject a file that is not a PEM certificate.
+  let pem: string;
+  try {
+    pem = readFileSync(p, 'utf8');
+  } catch (err) {
+    throw new Error('[bb-data] DB TLS: could not read the CA at DATABASE_CA_CERT=' + p + ': ' + (err as Error).message + '. See MIGRATION_GUIDE.md.');
+  }
+  if (!pem.includes('-----BEGIN CERTIFICATE-----')) {
+    throw new Error('[bb-data] DB TLS: DATABASE_CA_CERT=' + p + ' is empty or not a PEM certificate (missing -----BEGIN CERTIFICATE-----).');
+  }
+  return pem;
+}
+
 function resolveDbSsl(): { ca?: string; rejectUnauthorized: boolean } {
   // DATABASE_CA_CERT (inline PEM or a file path) overrides the committed cert.
+  // An inline PEM contains the certificate marker; anything else is a file path.
   const envCa = process.env.DATABASE_CA_CERT;
   const ca = envCa
-    ? (envCa.includes('-----BEGIN') ? envCa : readFileSync(envCa, 'utf8'))
+    ? (envCa.includes('-----BEGIN CERTIFICATE-----') ? envCa : readCaFile(envCa))
     : (DATABASE_CA_CERT || undefined);
   if (ca) {
     // Pin the provider CA → fully verified (sslmode=verify-full equivalent).
     console.log('[bb-data] DB TLS: verifying the server certificate against the pinned CA (verify-full equivalent).');
     return { ca, rejectUnauthorized: true };
   }
-  // ⚠️ No CA available: the connection is encrypted but the server certificate is
-  // NOT verified (no man-in-the-middle protection). Download your Supabase CA
-  // ('prod-ca-2021.crt' from Database Settings → SSL Configuration) and re-run
-  // `npx bb-data pull` to capture it (or set DATABASE_CA_CERT). See MIGRATION_GUIDE.md.
+  // No CA available. In the deployed function, fail CLOSED rather than connect
+  // unverified — a missing CA in production is a misconfiguration, not a default.
+  if (process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    throw new Error('[bb-data] DB TLS: no CA certificate available (database.ca.ts is empty and DATABASE_CA_CERT is unset) — refusing to connect without verifying the database server certificate. Run bb-data pull to capture your CA, or set DATABASE_CA_CERT. See MIGRATION_GUIDE.md.');
+  }
+  // ⚠️ Local dev only: encrypted but the server certificate is NOT verified (no
+  // man-in-the-middle protection). Download your Supabase CA ('prod-ca-2021.crt'
+  // from Database Settings → SSL Configuration) and re-run bb-data pull to capture
+  // it (or set DATABASE_CA_CERT). See MIGRATION_GUIDE.md.
   console.warn('[bb-data] DB TLS: server certificate NOT verified — encrypted only (no CA). Run bb-data pull to capture your CA, or set DATABASE_CA_CERT. See MIGRATION_GUIDE.md.');
   return { rejectUnauthorized: false };
 }

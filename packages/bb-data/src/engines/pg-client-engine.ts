@@ -12,8 +12,8 @@ import { DatabaseErrors } from '../errors.js';
 export interface PgClientEngineConfig {
   /** PostgreSQL connection URI (e.g. postgresql://user:pass@host:5432/db). */
   connectionString: string;
-  /** SSL configuration. Defaults to `{ rejectUnauthorized: true }`. */
-  ssl?: { rejectUnauthorized?: boolean; ca?: string };
+  /** SSL configuration. Defaults to `{ rejectUnauthorized: true }`. A TLS 1.2 floor (`minVersion: 'TLSv1.2'`) is applied unless overridden here. */
+  ssl?: { rejectUnauthorized?: boolean; ca?: string; minVersion?: 'TLSv1.2' | 'TLSv1.3' };
   /** Maximum number of clients in the pool. @default 5 */
   poolSize?: number;
   /** Milliseconds to wait for a connection before erroring. Unset = wait indefinitely. */
@@ -51,10 +51,16 @@ export class PgClientEngine implements DatabaseEngine {
 
   constructor(config: PgClientEngineConfig) {
     assertPostgresUrl(config.connectionString);
+    // Enforce a TLS 1.2 floor on every connection regardless of caller. Node 18+
+    // already negotiates TLS 1.2+ by default, but pinning `minVersion` makes the
+    // floor explicit and independent of the runtime's default — and it applies to
+    // the unverified opt-out path too (TLS version is orthogonal to cert
+    // verification). A caller-supplied `minVersion` still wins.
+    const baseSsl = config.ssl ?? { rejectUnauthorized: true };
     this.pool = new pg.Pool({
       connectionString: config.connectionString,
       max: config.poolSize ?? 5,
-      ssl: config.ssl ?? { rejectUnauthorized: true },
+      ssl: { minVersion: 'TLSv1.2', ...baseSsl },
       ...(config.connectionTimeoutMillis !== undefined && {
         connectionTimeoutMillis: config.connectionTimeoutMillis,
       }),

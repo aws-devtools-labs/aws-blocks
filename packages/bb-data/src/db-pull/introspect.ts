@@ -74,10 +74,12 @@ export async function introspect(connectionString: string, caCert?: string): Pro
   // the system store — so verification needs that CA pinned. When the caller
   // provides one (e.g. the CA captured by `db pull`), verify against it;
   // otherwise externalDbSsl() applies DATABASE_CA_CERT or an unverified fallback
-  // for this ephemeral, operator-driven introspection.
+  // for this ephemeral, operator-driven introspection. First-pull introspection
+  // runs *before* a CA has been captured, so it explicitly tolerates the
+  // unverified fallback even in CI (unlike the migration/DDL paths).
   parsed.searchParams.delete('sslmode');
   const connStr = parsed.toString();
-  const ssl = caCert ? { ca: caCert, rejectUnauthorized: true } : externalDbSsl();
+  const ssl = caCert ? { ca: caCert, rejectUnauthorized: true } : externalDbSsl({ allowUnverifiedInCi: true });
   const pool = new pg.Pool({ connectionString: connStr, ssl });
 
   try {

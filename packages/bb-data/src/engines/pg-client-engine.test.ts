@@ -131,7 +131,7 @@ test('PgClientEngine: verifies the server certificate by default (ssl omitted)',
   // Security default: when no ssl is supplied the pool must reject an
   // unverified certificate. The runtime/generated paths rely on this default.
   const engine = new PgClientEngine({ connectionString: 'postgres://u:p@h:5432/d' });
-  assert.deepStrictEqual((engine as any).pool.options.ssl, { rejectUnauthorized: true });
+  assert.deepStrictEqual((engine as any).pool.options.ssl, { minVersion: 'TLSv1.2', rejectUnauthorized: true });
 });
 
 test('PgClientEngine: respects an explicit ssl config (CA pin / opt-out)', () => {
@@ -139,11 +139,21 @@ test('PgClientEngine: respects an explicit ssl config (CA pin / opt-out)', () =>
     connectionString: 'postgres://u:p@h:5432/d',
     ssl: { rejectUnauthorized: true, ca: 'my-ca-pem' },
   });
-  assert.deepStrictEqual((pinned as any).pool.options.ssl, { rejectUnauthorized: true, ca: 'my-ca-pem' });
+  assert.deepStrictEqual((pinned as any).pool.options.ssl, { minVersion: 'TLSv1.2', rejectUnauthorized: true, ca: 'my-ca-pem' });
 
   const optedOut = new PgClientEngine({
     connectionString: 'postgres://u:p@h:5432/d',
     ssl: { rejectUnauthorized: false },
   });
-  assert.deepStrictEqual((optedOut as any).pool.options.ssl, { rejectUnauthorized: false });
+  // The TLS 1.2 floor applies even on the unverified opt-out path (TLS version is
+  // orthogonal to certificate verification).
+  assert.deepStrictEqual((optedOut as any).pool.options.ssl, { minVersion: 'TLSv1.2', rejectUnauthorized: false });
+});
+
+test('PgClientEngine: applies a TLS 1.2 floor a caller can override', () => {
+  const engine = new PgClientEngine({
+    connectionString: 'postgres://u:p@h:5432/d',
+    ssl: { rejectUnauthorized: true, minVersion: 'TLSv1.3' },
+  });
+  assert.deepStrictEqual((engine as any).pool.options.ssl, { minVersion: 'TLSv1.3', rejectUnauthorized: true });
 });

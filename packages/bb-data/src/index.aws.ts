@@ -195,6 +195,6 @@ export { PgClientEngine } from './engines/pg-client-engine.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
-export type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
 export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';

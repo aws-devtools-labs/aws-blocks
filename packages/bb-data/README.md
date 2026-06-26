@@ -176,9 +176,10 @@ const db = new Database(scope, 'external', {
 it to `aws-blocks/database.ca.ts` (a public, non-secret cert that is bundled into
 your deployed function), so the connection is **verified by default** — including
 in the deployed Lambda, with no runtime configuration. `DATABASE_CA_CERT` (inline
-PEM or a file path) overrides the committed cert. If neither is available the
-connection falls back to `ssl: { rejectUnauthorized: false }` — **encrypted but
-unauthenticated** (exposed to man-in-the-middle). Provide the CA for production.
+PEM or a file path) overrides the committed cert. If neither is available, the
+generated wiring falls back to `ssl: { rejectUnauthorized: false }` (**encrypted but
+unauthenticated**) in local dev only; the **deployed function fails closed**
+(refuses to connect) rather than running unverified. Provide the CA for production.
 
 ## Migrating from Supabase
 

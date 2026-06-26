@@ -521,7 +521,7 @@ async function dbPullDevInteractive(outputDir: string): Promise<void> {
   // unverified). The CA is a public, non-secret cert; it is committed to
   // database.ca.ts and bundled into the deployed function.
   const caFilePath = path.join(outputDir, 'database.ca.ts');
-  const hasExistingCa = fs.existsSync(caFilePath) && fs.readFileSync(caFilePath, 'utf-8').includes('-----BEGIN');
+  const hasExistingCa = fs.existsSync(caFilePath) && fs.readFileSync(caFilePath, 'utf-8').includes('-----BEGIN CERTIFICATE-----');
   console.log('TLS verification (recommended): download your CA certificate from the Supabase');
   console.log('dashboard → Database Settings → SSL Configuration (prod-ca-2021.crt).');
   const promptText = hasExistingCa

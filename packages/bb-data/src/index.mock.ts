@@ -8,7 +8,7 @@ import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import { createCrudHandlers } from './crud/index.js';
-import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+import type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 import type { Transaction, SqlQuery } from '@aws-blocks/data-common';
 import type { TableSchema, CrudOptions, CrudMethods, TableTypeMeta } from './crud/types.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -46,13 +46,13 @@ export class Database extends Scope {
       // wiring pinning the provider CA) overrides this.
       const engine = new PgClientEngine({
         connectionString: options.connection.connectionString,
-        ssl: options.connection.ssl ?? { rejectUnauthorized: false },
+        ssl: mockExternalSsl(options.connection.ssl),
       });
       this.base = new RLSEnabledDatabase(engine);
     } else if (options?.connection && 'connectionString' in options.connection && typeof options.connection.connectionString !== 'string') {
       // External database via AppSetting — in local dev, AppSetting
       // reads from .env.local so we resolve it during initialization.
-      const ssl = options.connection.ssl ?? { rejectUnauthorized: false };
+      const ssl = mockExternalSsl(options.connection.ssl);
       const connectionString = options.connection.connectionString;
       const initPromise = connectionString.get().then(connStr => {
         this.base = new RLSEnabledDatabase(new PgClientEngine({
@@ -137,8 +137,29 @@ export class Database extends Scope {
 
 function isConnectionString(
   ref: ExternalDatabaseRef,
-): ref is { connectionString: string; ssl?: { rejectUnauthorized?: boolean; ca?: string } } {
+): ref is { connectionString: string; ssl?: ExternalSslOptions } {
   return 'connectionString' in ref && typeof ref.connectionString === 'string';
+}
+
+/**
+ * Resolve the local-dev TLS policy for an external connection.
+ *
+ * Local dev intentionally defaults to NOT verifying the certificate (self-signed
+ * local databases are common), whereas the deployed runtime verifies by default.
+ * That asymmetry means a hand-written `fromExisting({ connectionString })` with no
+ * `ssl` connects fine locally but can fail on deploy against a private-CA provider
+ * (e.g. Supabase) — and only after deploying. Warn when `ssl` is omitted so the
+ * gap surfaces during local development rather than in production.
+ */
+function mockExternalSsl(ssl: ExternalSslOptions | undefined): ExternalSslOptions {
+  if (ssl) return ssl;
+  console.warn(
+    '[bb-data] DB TLS (local dev): this external connection has no `ssl` set — connecting WITHOUT ' +
+    'certificate verification locally, but the deployed runtime verifies by default. Pin your ' +
+    'provider CA via `ssl: { ca }` (or set `ssl: { rejectUnauthorized: false }` explicitly) so local ' +
+    'and deploy behave the same. See MIGRATION_GUIDE.md.',
+  );
+  return { rejectUnauthorized: false };
 }
 
 export { fromExisting } from './from-existing.js';
@@ -149,6 +170,6 @@ export { PgClientEngine } from './engines/pg-client-engine.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
-export type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
 export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';

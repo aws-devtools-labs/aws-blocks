@@ -109,10 +109,15 @@ export type ExternalDatabaseRef = {
     connectionString: string | {
         get(): Promise<string>;
     };
-    ssl?: {
-        rejectUnauthorized?: boolean;
-        ca?: string;
-    };
+    ssl?: ExternalSslOptions;
+};
+
+// @public
+export type ExternalSslOptions = {
+    rejectUnauthorized?: true;
+    ca?: string;
+} | {
+    rejectUnauthorized: false;
 };
 
 // @public
@@ -151,6 +156,7 @@ export interface PgClientEngineConfig {
     ssl?: {
         rejectUnauthorized?: boolean;
         ca?: string;
+        minVersion?: 'TLSv1.2' | 'TLSv1.3';
     };
 }
 

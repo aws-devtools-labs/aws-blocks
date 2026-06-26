@@ -58,5 +58,24 @@ export type ExternalDatabaseRef =
        * Set `rejectUnauthorized: false` only if you accept the man-in-the-middle
        * risk (encrypted but unauthenticated); prefer pinning the CA instead.
        */
-      ssl?: { rejectUnauthorized?: boolean; ca?: string };
+      ssl?: ExternalSslOptions;
     };
+
+/**
+ * TLS policy for an external database connection.
+ *
+ * Modeled as a discriminated union on `rejectUnauthorized` so that a misleading
+ * combination is a **compile-time error**: a pinned `ca` is only meaningful when
+ * the certificate is actually verified, and node `pg` silently ignores `ca` when
+ * `rejectUnauthorized: false`. Expressing `{ ca, rejectUnauthorized: false }` —
+ * which looks secure but is not — therefore won't type-check.
+ *
+ * - `{ rejectUnauthorized?: true; ca?: string }` — verify the server certificate
+ *   (the default). Omit `ca` to verify against Node's built-in trust store
+ *   (publicly-trusted certs); supply `ca` to pin a provider's private CA.
+ * - `{ rejectUnauthorized: false }` — do NOT verify (encrypted but
+ *   man-in-the-middle-exposed). A `ca` is not accepted here because it would be ignored.
+ */
+export type ExternalSslOptions =
+  | { rejectUnauthorized?: true; ca?: string }
+  | { rejectUnauthorized: false };
