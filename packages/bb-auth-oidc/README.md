@@ -68,14 +68,14 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 `signIn()` and `handleRedirectCallback()` drive the OIDC exchange; to make your app re-render once it completes, subscribe to auth-state changes. Two complementary hooks are available:
 
 - **`auth.onAuthStateChange(cb)`** — this OIDC client's own listener. Fires for this client instance on `signIn()` kickoff, on a successful `handleRedirectCallback()`, and on `signOut()`.
-- **`onAuthChange(authApi, cb)`** from `aws-blocks/ui` — the shared `@aws-blocks/auth-common` subscription that also backs `<AuthenticatedContent>`. It updates **across components and browser tabs**.
+- **`onAuthChange(authApi, cb)`** from `@aws-blocks/blocks/ui` — the shared `@aws-blocks/auth-common` subscription that also backs `<AuthenticatedContent>`. It updates **across components and browser tabs**.
 
 A successful `handleRedirectCallback()` notifies **both**: it calls the local listeners *and* bridges into `@aws-blocks/auth-common` by calling `broadcastAuthChange(user)` for you, so `onAuthChange` consumers (and `<AuthenticatedContent>`) re-render on client-PKCE sign-in — not just on server-initiated sign-in. You don't call `broadcastAuthChange()` yourself for sign-in; the client does. Because it fires both, a component that subscribes to **both** `auth.onAuthStateChange()` and `onAuthChange()` will have its handler invoked twice on a single client-PKCE sign-in — harmless if your handler is idempotent, but prefer one per component.
 
 ```tsx
 import { useEffect, useState } from 'react';
 import { authApi } from 'aws-blocks';
-import { onAuthChange } from 'aws-blocks/ui';
+import { onAuthChange } from '@aws-blocks/blocks/ui';
 
 // Dedicated callback route (e.g. /auth-return) — completes the PKCE exchange.
 export function AuthCallback() {
