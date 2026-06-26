@@ -115,6 +115,17 @@ const defaultSleep = (ms: number): Promise<void> =>
   });
 
 /**
+ * Grace (ms) we wait for the child's `exit` event *after* SIGKILL before giving
+ * up and reporting its last-known exit state. Deliberately shorter than — and
+ * intentionally decoupled from — the injectable SIGTERM `graceMs`: SIGKILL
+ * cannot be caught, blocked, or handled, so the child is already being
+ * force-terminated; we only need a brief beat to observe the `exit` event, not a
+ * full, tunable shutdown window. Fixed (not a parameter) because no caller needs
+ * to tune it — the injected `sleep` is the test seam.
+ */
+export const KILL_GRACE_MS = 500;
+
+/**
  * Terminate a child process *tree* and wait — bounded — for the child to exit,
  * escalating SIGTERM → SIGKILL. Reuses {@link killFrontendTree} so every
  * entrypoint reaps the same way (POSIX process-group kill / Windows `taskkill`)
@@ -126,8 +137,16 @@ const defaultSleep = (ms: number): Promise<void> =>
  * "POST-EXIT GROUP-KILL POLICY". Otherwise we SIGTERM the tree, wait up to
  * `graceMs` for a clean exit, then SIGKILL the tree and wait a short grace.
  *
- * Resolves `true` once the child has exited (or was already gone), `false` if it
- * was still alive when the budget elapsed. Dependencies are injected for tests.
+ * Return value — IMPORTANT: the boolean reflects only the **direct child's**
+ * exit state (its `exitCode`/`signalCode`), NOT whole-group teardown or port
+ * release. On POSIX the SIGKILL is delivered to the whole group (`-pid`), but a
+ * surviving *detached grandchild* can outlive the awaited child and keep holding
+ * a port even after this resolves `true`. So `true` means only "the child we
+ * awaited has exited (or was already gone)" and `false` means "it was still
+ * alive when the budget elapsed" — neither guarantees the port is free. Callers
+ * that need a freed port MUST follow this with a bounded port-free wait (see
+ * `waitForPortFree` in dev-server.ts, which the dev-server child's own SIGTERM
+ * handler runs). Dependencies are injected for tests.
  */
 export async function terminateProcessTree(
   child: AwaitableChild,
@@ -149,6 +168,8 @@ export async function terminateProcessTree(
   ]);
   if (exitedCleanly) return true;
   killTree(child, 'SIGKILL');
-  await Promise.race([exited, sleep(500)]);
+  // Shorter, fixed grace after SIGKILL (vs. the injectable SIGTERM graceMs):
+  // SIGKILL is uncatchable, so we only need a brief beat to observe `exit`.
+  await Promise.race([exited, sleep(KILL_GRACE_MS)]);
   return child.exitCode !== null || child.signalCode !== null;
 }

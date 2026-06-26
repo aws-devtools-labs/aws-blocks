@@ -28,7 +28,13 @@ Fixes:
   second dev server), and crediting a foreign one would make every
   `--strictPort`-failing respawn look successful, neutralizing the cap and
   hot-looping forever. A frontend that legitimately restarts many times (e.g.
-  editor-triggered full reloads) is still never permanently left down.
+  editor-triggered full reloads) is still never permanently left down. Before
+  each relaunch the supervisor now also waits (bounded) for `:3100` to be
+  released — the same port-free drain the graceful shutdown path uses — so a slow
+  socket teardown can't hand the relaunched `--strictPort` Vite an `EADDRINUSE`
+  and burn a restart-budget slot; that wait re-checks the `isShuttingDown` guard,
+  so a shutdown arriving mid-wait still cancels the relaunch (and the budget is
+  debited once, at exit time, so the wait never double-counts a restart).
 - **Robust shutdown** — cleanup is idempotent, wired to `SIGINT`/`SIGTERM`/
   `SIGHUP`, removes its own listeners, and waits (bounded) for the group to die
   **and for `:3100` to actually be released** before exiting: SIGTERM→SIGKILL
@@ -48,17 +54,27 @@ Fixes:
   minimal. The single rationale lives next to the supervisor as the
   "POST-EXIT GROUP-KILL POLICY" so all three sites stay in agreement.
 - **Sandbox entrypoint parity** — `sandbox.ts` (the sibling dev entrypoint) now
-  spawns the dev server in its own process group and `await`s a bounded group
-  teardown on `SIGINT`/`SIGTERM`, replacing the synchronous `kill()` +
-  `process.exit(0)` that signalled only the shell and exited immediately. The
-  drain gives the dev server time to run its own shutdown and reap the
-  *detached* Vite great-grandchild, so the next `npm run sandbox` no longer
-  races a survivor on `:3100`.
+  spawns **both** long-running children — the dev server *and* `cdk watch` — in
+  their own process groups and `await`s a bounded group teardown for each
+  (run concurrently) on `SIGINT`/`SIGTERM`, replacing the synchronous
+  `cdkWatch.kill()` + single dev-server `kill()` + `process.exit(0)` that
+  signalled only the npx/shell parents and exited immediately. A bare
+  `cdkWatch.kill()` could orphan the real `cdk watch` node process
+  (npx → cdk → node) — the same shell-only-kill leak this PR fixes for the dev
+  server — so it now routes through the shared `terminateProcessTree` too. Only
+  the dev-server drain (the longer 6s budget) owns the `:3100` port-free wait, via
+  its own SIGTERM handler, so the next `npm run sandbox` no longer races a
+  survivor on `:3100`.
 - **Single tree-kill primitive** — the POSIX group-kill, the Windows `taskkill`
   tree-kill, and the bounded SIGTERM→SIGKILL teardown now live in one shared
   `process-tree.ts` module used by every entrypoint (dev server, respawn
   handler, `exit` net, and sandbox), so the reaping behavior can no longer drift
-  between hand-rolled copies.
+  between hand-rolled copies. Its bounded teardown documents that its boolean
+  reflects only the **direct child's** exit (not whole-group teardown or port
+  release — callers needing a freed port must follow with `waitForPortFree`), and
+  its post-SIGKILL grace is a named `KILL_GRACE_MS` constant kept deliberately
+  shorter than the injectable SIGTERM grace (SIGKILL is uncatchable, so only a
+  brief beat is needed to observe the exit).
 
 `--strictPort` is intentionally retained: the proxy target is hardcoded to
 `:3100`, so the port is reliably freed rather than letting Vite drift to another

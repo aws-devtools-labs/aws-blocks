@@ -14,6 +14,7 @@ import {
   killFrontendTree,
   windowsTreeKill,
   terminateProcessTree,
+  KILL_GRACE_MS,
   type KillableProcess,
   type AwaitableChild,
 } from './process-tree.js';
@@ -294,6 +295,71 @@ describe('killFrontendTree — reaps a real detached shell tree', { skip: integr
     });
 });
 
+// ── terminateProcessTree (integration, detached NON-shell tree) ─────────────
+// Mirrors the sandbox `cdk watch` topology (npx → cdk → node, no shell) that
+// finding #1 switched from a bare `cdkWatch.kill()` to `terminateProcessTree`.
+// Opt-in + POSIX-only for the same reasons as the shell-tree test above.
+describe('terminateProcessTree — reaps a detached non-shell tree (cdk-watch shape)', { skip: integrationSkip }, () => {
+  it('group-reaps an npx-style parent whose grandchild holds a port, even post-exit',
+    { timeout: 30000 },
+    async () => {
+      const port = await getFreePort();
+      // Grandchild (stands in for cdk-watch's node): binds the port and idles.
+      // Retry on EADDRINUSE like the shell-tree test, since getFreePort()
+      // releases its probe listener before this grandchild can rebind.
+      const inner =
+        `const net=require('net');` +
+        `const port=${port};` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(port,'127.0.0.1');` +
+        `})();` +
+        `setInterval(()=>{},1e9);`;
+      // Parent (stands in for `npx`): spawns the port-binding grandchild as a
+      // normal (NON-detached) child, then idles. No shell anywhere — the
+      // cdk-watch shape. Spawning the PARENT `detached` makes it a process-group
+      // leader (pgid === parent.pid) that the grandchild inherits, so a single
+      // `process.kill(-pid)` reaches both.
+      const parent =
+        `const cp=require('child_process');` +
+        `cp.spawn(process.execPath,['-e',${JSON.stringify(inner)}],{stdio:'ignore'});` +
+        `setInterval(()=>{},1e9);`;
+      const child = spawn(process.execPath, ['-e', parent], { detached: true, stdio: 'ignore' });
+
+      try {
+        assert.ok(await waitFor(() => isPortOpen(port), 10000),
+          'grandchild should bind the port');
+
+        // A direct kill of ONLY the parent (what the old bare `cdkWatch.kill()`
+        // did) orphans the grandchild, which survives still holding the port —
+        // the exact shell/parent-only-kill leak finding #1 eliminates.
+        child.kill('SIGTERM');
+        assert.ok(await staysOpen(port, 600),
+          'direct parent kill must NOT free the port (demonstrates the orphan)');
+        assert.ok(
+          await waitFor(async () => child.exitCode !== null || child.signalCode !== null, 5000),
+          'parent should have exited after SIGTERM (sets up the post-exit reap)');
+
+        // terminateProcessTree now takes the post-exit branch (parent already
+        // gone) and issues a group SIGKILL via the shared killFrontendTree,
+        // reaping the orphaned grandchild and freeing the port — what the new
+        // `terminateProcessTree(cdkWatch, …)` call guarantees in sandbox.ts.
+        const reaped = await terminateProcessTree(child, 2000);
+        assert.strictEqual(reaped, true, 'post-exit terminateProcessTree resolves true');
+        assert.ok(await waitFor(async () => !(await isPortOpen(port)), 10000),
+          'group kill must free the port held by the grandchild (the fix)');
+      } finally {
+        // Belt-and-suspenders: never leak the grandchild if an assert throws.
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+      }
+    });
+});
+
 // ── shouldCreditFrontendReady (unit) ────────────────────────────────────────
 // Guards the restart-budget reset: a liveness-only port probe must not credit a
 // foreign listener, or the maxRestarts cap is neutralized and Vite hot-loops.
@@ -386,6 +452,22 @@ describe('terminateProcessTree — escalation + post-exit reap', () => {
     const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, immediate);
     assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
     assert.strictEqual(ok, false);
+  });
+
+  it('waits graceMs for the SIGTERM grace and the shorter KILL_GRACE_MS after SIGKILL', async () => {
+    const { child } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const slept: number[] = [];
+    // Resolve every sleep immediately (so both grace races resolve) but record
+    // the requested durations to prove which grace each escalation step uses.
+    const recordingSleep = (ms: number): Promise<void> => { slept.push(ms); return Promise.resolve(); };
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, recordingSleep);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    // First grace == the injectable SIGTERM graceMs; second == the fixed,
+    // deliberately shorter post-SIGKILL grace constant.
+    assert.deepStrictEqual(slept, [1500, KILL_GRACE_MS]);
+    assert.ok(KILL_GRACE_MS < 1500, 'the post-SIGKILL grace must be shorter than the SIGTERM grace');
+    assert.strictEqual(ok, false); // child never fired exit
   });
 });
 

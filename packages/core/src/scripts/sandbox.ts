@@ -148,6 +148,12 @@ export async function startSandbox(options: SandboxOptions) {
     `--app`, `npm exec tsx -- -C cdk ${backendPath}`
   ], {
     stdio: ["ignore", "pipe", "pipe"],
+    // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
+    // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
+    // bare kill() would orphan the real cdk-watch node process, the same
+    // shell-only-kill leak this PR eliminates for the dev server. Windows has no
+    // groups; terminateProcessTree reaps the tree via taskkill.
+    detached: process.platform !== 'win32',
     env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
   });
 
@@ -187,14 +193,23 @@ export async function startSandbox(options: SandboxOptions) {
     console.log("\n\n🛑 Stopping local processes...");
     console.log("   (AWS resources are still running)");
     console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
-    cdkWatch.kill();
-    // The dev server owns a *detached* Vite tree that only its own SIGTERM
-    // handler reaps (a ~2s terminateFrontend drain). Killing just the shell and
-    // exiting immediately would orphan Vite on :3100 and wedge the next run with
-    // --strictPort/502, so signal the dev-server process group and AWAIT that
-    // drain. Bounded at 6s (> the ~2s drain): a hung dev server escalates to a
-    // tree SIGKILL and we exit regardless, so shutdown can never wedge.
-    await terminateProcessTree(devServer, 6000);
+    // Reap BOTH child trees the way the dev server reaps Vite — a process-group
+    // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
+    // kill() that signals only the npx/shell parent and orphans the real
+    // grandchild (cdk-watch's node, or the dev server's detached Vite). Run them
+    // concurrently so the cdk-watch teardown doesn't serialize on top of the dev
+    // server's longer drain.
+    //
+    // Only the dev-server child owns the `:3100` port-free wait: its own SIGTERM
+    // handler runs terminateFrontend (a ~2s drain that reaps the detached Vite
+    // great-grandchild AND polls until the port frees), so we give it the longer
+    // 6s budget (> that ~2s drain) — a hung dev server still escalates to a tree
+    // SIGKILL and we exit regardless, so shutdown can never wedge. cdk watch
+    // holds no local port, so a bounded tree-kill is all it needs.
+    await Promise.all([
+      terminateProcessTree(cdkWatch, 2000),
+      terminateProcessTree(devServer, 6000),
+    ]);
     process.exit(0);
   };
 

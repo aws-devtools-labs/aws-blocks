@@ -420,8 +420,21 @@ export async function startDevServer(options: DevServerOptions) {
       respawnTimer = setTimeout(() => {
         respawnTimer = null;
         if (isShuttingDown) return;
-        const child = spawnFrontend(command);
-        void announceFrontendReady(child, '  (frontend restarted)');
+        // Before relaunching, wait (bounded) for `:3100` to actually free —
+        // mirroring the graceful `terminateFrontend` path. The synchronous
+        // post-exit SIGKILL above only *initiates* teardown of the orphaned
+        // group; the kernel can still hold the listening socket for a beat, and a
+        // relaunched `--strictPort` Vite would then hit `EADDRINUSE` and burn a
+        // restart-budget slot on a race that isn't a real crash. The budget was
+        // already debited above, so this never double-counts a restart; re-check
+        // `isShuttingDown` after the await, since a shutdown signal can land while
+        // we wait (`waitForPortFree` is bounded, so it can't deadlock shutdown).
+        void (async () => {
+          await waitForPortFree(frontendPort);
+          if (isShuttingDown) return;
+          const next = spawnFrontend(command);
+          await announceFrontendReady(next, '  (frontend restarted)');
+        })();
       }, decision.delayMs);
       respawnTimer.unref?.();
     });
