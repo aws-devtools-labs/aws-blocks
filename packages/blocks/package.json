@@ -45,7 +45,8 @@
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"
-    }
+    },
+    "./docs/*": "./docs/*"
   },
   "scripts": {
     "prebuild": "node ../../scripts/sync-block-docs.mjs",

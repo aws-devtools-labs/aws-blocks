@@ -109,7 +109,7 @@ onAuthChange(authApi, (user) => {
 
 ## Building Blocks
 
-Each block is its own package; full per-block docs ship in this package under **`docs/<package-name>.md`**, and **`docs/index.md`** has a decision tree to help you pick.
+Each block is its own package; full per-block docs ship in this package under **`docs/<block>/`** (start with `README.md`, then `API.md` / `DESIGN.md`), and the catalog + decision tree in **`docs/README.md`** helps you pick.
 
 | Building Block | Import | Use it for |
 |---|---|---|
@@ -133,7 +133,18 @@ Each block is its own package; full per-block docs ship in this package under **
 | `Logger` / `Metrics` / `Tracer` / `Dashboard` | `@aws-blocks/blocks` | Observability — structured logs, metrics, traces, CloudWatch dashboard |
 | `Hosting` | `@aws-blocks/blocks` | Deploy a frontend (SPA / static / Next.js SSR) on CloudFront + S3 |
 
-> **Not sure which data block?** Start with `DistributedTable` (DynamoDB). Reach for SQL only when you need joins across records, many-dimensional filtering, large transactions, or an existing Postgres database — `DistributedDatabase` for serverless Postgres, `Database` for full Aurora Postgres (FKs, RLS, triggers; carries idle cost / cold starts the other two don't). The full rationale is in `docs/index.md`.
+> **Not sure which data block?** Start with `DistributedTable` (DynamoDB). Reach for SQL only when you need joins across records, many-dimensional filtering, large transactions, or an existing Postgres database — `DistributedDatabase` for serverless Postgres, `Database` for full Aurora Postgres (FKs, RLS, triggers; carries idle cost / cold starts the other two don't). The full rationale is in `docs/README.md`.
+
+### Per-block documentation
+
+Every Building Block ships its full docs under `docs/<block>/` in this package. Read them in this order:
+
+- **`<block>/README.md`** — overview + common usage. **Start here.**
+- **`<block>/API.md`** — full API reference. Read when you need exact method signatures or option types.
+- **`<block>/DESIGN.md`** — architecture & rationale. Read when extending a block, debugging unexpected behavior, or making a non-trivial design decision.
+- **block-specific guides** (e.g. `CUSTOMIZING-AUTH-UI.md`) — read when doing that specific task.
+
+The catalog + decision tree in `docs/README.md` help you pick a block in the first place.
 
 ## Local development and deploying
 
@@ -183,7 +194,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 ## Reference
 
-- **Per-block documentation:** `docs/<package-name>.md` (e.g. `docs/bb-distributed-table.md`); `docs/index.md` for the catalog + decision tree.
+- **Per-block documentation:** `docs/<block>/README.md` (overview), `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 over a single endpoint — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).

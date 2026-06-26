@@ -3,10 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Assembles `packages/blocks/docs/` from all Building Block READMEs.
+ * Assembles `packages/blocks/docs/` from every Building Block's root markdown.
  * Run at build/publish time (not customer-side). Produces:
- *   packages/blocks/docs/index.md   — decision tree + catalog
- *   packages/blocks/docs/<pkg>.md   — one per block
+ *   packages/blocks/docs/README.md        — dev guide + decision tree + catalog
+ *   packages/blocks/docs/<pkg>/README.md  — per-block overview
+ *   packages/blocks/docs/<pkg>/API.md     — per-block API reference (when present)
+ *   packages/blocks/docs/<pkg>/DESIGN.md  — per-block design notes (when present)
+ *   packages/blocks/docs/<pkg>/<other>.md — any other block-specific doc (when present)
+ *
+ * Inclusion rule: every package under packages/ that has a README.md and is not
+ * in EXCLUDED. For each included package, mirror every root-level *.md EXCEPT the
+ * ones in SKIP_MARKDOWN (CHANGELOG.md) — so block-specific docs are picked up
+ * automatically without listing them here.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from 'node:fs';
@@ -16,36 +24,40 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packagesDir = join(__dirname, '..', 'packages');
 const outDir = join(packagesDir, 'blocks', 'docs');
+const devGuidePath = join(packagesDir, 'blocks', 'README.md');
 
 const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
+
+// Root-level markdown that should NOT be mirrored into the per-block doc folder.
+const SKIP_MARKDOWN = new Set(['CHANGELOG.md']);
 
 const DECISION_TREE = `# AWS Blocks — Building Block Catalog
 
 Start from what you need:
 
 - **Store data**
-  - Simple key → value (caches, flags, user prefs) → \`KVStore\` ([bb-kv-store](./bb-kv-store.md))
-  - Structured records with indexes and queries → \`DistributedTable\` ([bb-distributed-table](./bb-distributed-table.md)) — **default for most data**
+  - Simple key → value (caches, flags, user prefs) → \`KVStore\` ([bb-kv-store](./bb-kv-store/README.md))
+  - Structured records with indexes and queries → \`DistributedTable\` ([bb-distributed-table](./bb-distributed-table/README.md)) — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
-  - Files, blobs, uploads, static assets → \`FileBucket\` ([bb-file-bucket](./bb-file-bucket.md))
-  - A single config value or secret → \`AppSetting\` ([bb-app-setting](./bb-app-setting.md))
+  - Files, blobs, uploads, static assets → \`FileBucket\` ([bb-file-bucket](./bb-file-bucket/README.md))
+  - A single config value or secret → \`AppSetting\` ([bb-app-setting](./bb-app-setting/README.md))
 - **Authenticate users**
-  - Username/password, prototypes/MVPs → \`AuthBasic\` ([bb-auth-basic](./bb-auth-basic.md))
-  - Cognito user pools, MFA, groups → \`AuthCognito\` ([bb-auth-cognito](./bb-auth-cognito.md))
-  - External identity provider (OIDC) → \`AuthOIDC\` ([bb-auth-oidc](./bb-auth-oidc.md))
+  - Username/password, prototypes/MVPs → \`AuthBasic\` ([bb-auth-basic](./bb-auth-basic/README.md))
+  - Cognito user pools, MFA, groups → \`AuthCognito\` ([bb-auth-cognito](./bb-auth-cognito/README.md))
+  - External identity provider (OIDC) → \`AuthOIDC\` ([bb-auth-oidc](./bb-auth-oidc/README.md))
 - **Run work outside the request/response**
-  - Fire-and-forget background jobs → \`AsyncJob\` ([bb-async-job](./bb-async-job.md))
-  - Scheduled / recurring tasks → \`CronJob\` ([bb-cron-job](./bb-cron-job.md))
-- **Push live updates to browsers** (chat, presence, dashboards) → \`Realtime\` ([bb-realtime](./bb-realtime.md))
+  - Fire-and-forget background jobs → \`AsyncJob\` ([bb-async-job](./bb-async-job/README.md))
+  - Scheduled / recurring tasks → \`CronJob\` ([bb-cron-job](./bb-cron-job/README.md))
+- **Push live updates to browsers** (chat, presence, dashboards) → \`Realtime\` ([bb-realtime](./bb-realtime/README.md))
 - **Build AI features**
-  - Agent with tool use + conversation → \`Agent\` ([bb-agent](./bb-agent.md))
-  - Semantic document retrieval (RAG) → \`KnowledgeBase\` ([bb-knowledge-base](./bb-knowledge-base.md))
-- **Send transactional email** → \`EmailClient\` ([bb-email-client](./bb-email-client.md))
+  - Agent with tool use + conversation → \`Agent\` ([bb-agent](./bb-agent/README.md))
+  - Semantic document retrieval (RAG) → \`KnowledgeBase\` ([bb-knowledge-base](./bb-knowledge-base/README.md))
+- **Send transactional email** → \`EmailClient\` ([bb-email-client](./bb-email-client/README.md))
 - **Observe and operate**
-  - Structured logs → \`Logger\` ([bb-logger](./bb-logger.md))
-  - Custom metrics → \`Metrics\` ([bb-metrics](./bb-metrics.md))
-  - Distributed traces → \`Tracer\` ([bb-tracer](./bb-tracer.md))
-  - Auto CloudWatch dashboard → \`Dashboard\` ([bb-dashboard](./bb-dashboard.md))
+  - Structured logs → \`Logger\` ([bb-logger](./bb-logger/README.md))
+  - Custom metrics → \`Metrics\` ([bb-metrics](./bb-metrics/README.md))
+  - Distributed traces → \`Tracer\` ([bb-tracer](./bb-tracer/README.md))
+  - Auto CloudWatch dashboard → \`Dashboard\` ([bb-dashboard](./bb-dashboard/README.md))
 
 ### Choosing a data block
 
@@ -67,13 +79,27 @@ const packages = readdirSync(packagesDir).filter(
 const catalog = [];
 
 for (const pkg of packages) {
-  const content = readFileSync(join(packagesDir, pkg, 'README.md'), 'utf-8');
-  writeFileSync(join(outDir, `${pkg}.md`), content);
-  catalog.push({ pkg, blurb: extractBlurb(content), keywords: extractKeywords(content) });
+  const pkgDir = join(packagesDir, pkg);
+  const blockOutDir = join(outDir, pkg);
+  mkdirSync(blockOutDir, { recursive: true });
+
+  // Mirror every root-level markdown file (README.md, API.md, DESIGN.md, and any
+  // block-specific docs) except the skipped ones, so new docs ship automatically.
+  const mdFiles = readdirSync(pkgDir, { withFileTypes: true }).filter(
+    (entry) => entry.isFile() && entry.name.endsWith('.md') && !SKIP_MARKDOWN.has(entry.name),
+  );
+  for (const entry of mdFiles) {
+    writeFileSync(join(blockOutDir, entry.name), readFileSync(join(pkgDir, entry.name), 'utf-8'));
+  }
+
+  const readme = readFileSync(join(pkgDir, 'README.md'), 'utf-8');
+  catalog.push({ pkg, blurb: extractBlurb(readme), keywords: extractKeywords(readme) });
 }
 
 catalog.sort((a, b) => a.pkg.localeCompare(b.pkg));
-writeFileSync(join(outDir, 'index.md'), renderIndex(catalog));
+
+const devGuide = readFileSync(devGuidePath, 'utf-8');
+writeFileSync(join(outDir, 'README.md'), renderReadme(devGuide, catalog));
 
 console.log(`Synced ${catalog.length} block docs → packages/blocks/docs/`);
 
@@ -98,20 +124,25 @@ function extractKeywords(content) {
   return match ? match[1].trim() : '';
 }
 
-function renderIndex(catalog) {
+function renderReadme(devGuide, catalog) {
+  // docs/README.md is generated — the authored dev guide (packages/blocks/README.md)
+  // followed by the catalog + decision tree. Edit those sources, not docs/README.md.
+  return [devGuide.trimEnd(), '', '', renderCatalog(catalog), ''].join('\n');
+}
+
+function renderCatalog(catalog) {
   const rows = catalog.map(
-    (e) => `| [${e.pkg}](./${e.pkg}.md) | ${e.blurb || '—'} | ${e.keywords || '—'} |`,
+    (e) => `| [${e.pkg}](./${e.pkg}/README.md) | ${e.blurb || '—'} | ${e.keywords || '—'} |`,
   );
   return [
     DECISION_TREE,
     '',
     '## Catalog',
     '',
-    'One page per Building Block. Read the linked doc before using a block.',
+    'One folder per Building Block under `docs/<block>/`: start with its `README.md`, then read `API.md` for exact signatures and `DESIGN.md` for architecture & rationale.',
     '',
     '| Block | What it does | Keywords |',
     '|-------|--------------|----------|',
     ...rows,
-    '',
   ].join('\n');
 }
