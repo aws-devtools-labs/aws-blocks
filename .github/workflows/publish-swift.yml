@@ -1,0 +1,181 @@
+name: Publish Swift SDK
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish-swift
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build
+
+      - name: Run unit tests
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests"
+
+      - name: Build for iOS
+        run: xcodebuild build -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16'
+
+      - name: Run unit tests on iOS
+        run: xcodebuild test -scheme aws-blocks-swift-Package -destination 'platform=iOS Simulator,name=iPhone 16' -only-testing BlocksCodegenTests -only-testing BlocksRuntimeTests
+
+  create-release-prs:
+    name: Create Release PRs
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/swift
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.OPS_GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: native/swift/package-lock.json
+
+      - name: Install changeset CLI
+        run: npm ci
+
+      - name: Verify pending changesets
+        run: npx changeset status --since=origin/main
+
+      - name: Run changeset version
+        env:
+          GITHUB_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: npx changeset version
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Swift SDK version: $VERSION"
+
+      - name: Guard against existing release branch
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if git ls-remote --heads origin "release/swift-${VERSION}" | grep -q .; then
+            echo "::error::Release branch release/swift-${VERSION} already exists."
+            exit 1
+          fi
+
+      - name: Read CHANGELOG entry
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ENTRY=$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")
+          echo "entry<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$ENTRY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create monorepo release PR
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        working-directory: .
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="release/swift-${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore(swift): release ${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore(swift): release ${VERSION}" \
+            --body "$(cat <<EOF
+          ## Swift SDK Release ${VERSION}
+
+          ${{ steps.changelog.outputs.entry }}
+
+          On merge, this will be tagged \`swift@${VERSION}\` and synced to aws-blocks-swift.
+          EOF
+          )"
+
+      - name: Checkout aws-blocks-swift
+        uses: actions/checkout@v4
+        with:
+          repository: aws-devtools-labs/aws-blocks-swift
+          path: target-repo
+          token: ${{ secrets.OPS_GITHUB_TOKEN }}
+
+      - name: Sync files to aws-blocks-swift
+        run: |
+          # Remove synced content (preserve repo-only files)
+          find ../../target-repo -maxdepth 1 \
+            -not -name '.git' \
+            -not -name '.github' \
+            -not -name 'LICENSE' \
+            -not -name 'NOTICE' \
+            -not -name 'CODE_OF_CONDUCT.md' \
+            -not -name 'CONTRIBUTING.md' \
+            -not -name '.' \
+            -not -name '..' \
+            -exec rm -rf {} +
+
+          # Copy native/swift contents to target repo root
+          rsync -a --exclude='.changeset' \
+                   --exclude='node_modules' \
+                   --exclude='.build' \
+                   --exclude='package.json' \
+                   --exclude='package-lock.json' \
+                   --exclude='Demo/typescript-demo/node_modules' \
+                   ./ ../../target-repo/
+
+      - name: Create aws-blocks-swift release PR
+        working-directory: target-repo
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="release/${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "::error::No changes to sync"
+            exit 1
+          fi
+
+          git commit -m "chore: release ${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: release ${VERSION}" \
+            --body "$(cat <<EOF
+          ## Release ${VERSION}
+
+          ${{ steps.changelog.outputs.entry }}
+
+          Synced from aws-blocks monorepo branch \`release/swift-${VERSION}\`.
+
+          On merge, a git tag \`${VERSION}\` will be created automatically and a GitHub Release published. Swift Package Manager will pick up the new version via the tag.
+          EOF
+          )"

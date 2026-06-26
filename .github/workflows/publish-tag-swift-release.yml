@@ -1,0 +1,36 @@
+name: Tag Swift Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Tag swift@x.y.z
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/swift-')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from branch name
+        id: version
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#release/swift-}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tagging swift@${VERSION}"
+
+      - name: Create tag
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git config user.name "AWS Blocks Team"
+          git config user.email "aws-blocks-team@amazon.com"
+          git tag "swift@${VERSION}" -m "Swift SDK ${VERSION}"
+          git push origin "swift@${VERSION}"
