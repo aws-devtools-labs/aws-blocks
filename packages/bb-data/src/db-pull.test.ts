@@ -135,8 +135,8 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes("Auth not configured"));
   });
 
-  test('includes stage-scoped AppSetting name (ref-independent)', () => {
-    assert.ok(output.includes("dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox')"));
+  test('includes stack-scoped AppSetting name (ref-independent)', () => {
+    assert.ok(output.includes("dbConnectionParameterName(process.cwd(), { sandbox: (process.env.BLOCKS_STAGE ?? 'sandbox') !== 'production' })"));
     assert.ok(output.includes("from '@aws-blocks/core/db-naming'"));
   });
 

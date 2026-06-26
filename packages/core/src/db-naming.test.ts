@@ -1,8 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { extractDbRef, dbConnectionParameterName } from './db-naming.js';
 
 describe('extractDbRef', () => {
@@ -39,10 +42,50 @@ describe('extractDbRef', () => {
 });
 
 describe('dbConnectionParameterName', () => {
-  test('composes the stage into the SSM name', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function withConfig(stackId: string): string {
+    tmpDir = mkdtempSync(join(tmpdir(), 'db-naming-'));
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId }));
+    return tmpDir;
+  }
+
+  test('production name is stack-scoped (/<stackId>-prod-db-url)', () => {
+    const root = withConfig('my-app-k7x2mf');
     assert.strictEqual(
-      dbConnectionParameterName('production'),
-      '/blocks/production/db-connection-string',
+      dbConnectionParameterName(root, { sandbox: false }),
+      '/my-app-k7x2mf-prod-db-url',
     );
+  });
+
+  test('sandbox name embeds the per-machine sandbox id', () => {
+    const root = withConfig('my-app-k7x2mf');
+    mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
+    writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-0d7e1c');
+    assert.strictEqual(
+      dbConnectionParameterName(root, { sandbox: true }),
+      '/my-app-k7x2mf-alice-0d7e1c-db-url',
+    );
+  });
+
+  test('two apps (distinct stackIds) get distinct names — no collision', () => {
+    const a = dbConnectionParameterName(withConfig('app-a-111111'), { sandbox: false });
+    rmSync(tmpDir, { recursive: true, force: true });
+    const b = dbConnectionParameterName(withConfig('app-b-222222'), { sandbox: false });
+    assert.notStrictEqual(a, b);
+  });
+
+  test('does not derive from any connection string', () => {
+    // Same stackId yields the same name regardless of which DB it points at —
+    // the discriminator is the app's stack identity, never the connection string.
+    const root = withConfig('my-app-k7x2mf');
+    const name1 = dbConnectionParameterName(root, { sandbox: false });
+    const name2 = dbConnectionParameterName(root, { sandbox: false });
+    assert.strictEqual(name1, name2);
   });
 });

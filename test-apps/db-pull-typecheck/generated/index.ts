@@ -8,7 +8,7 @@ import { dbConnectionParameterName } from '@aws-blocks/core/db-naming';
 const scope = new Scope('supabase');
 
 const dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL
-  ?? dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox');
+  ?? dbConnectionParameterName(process.cwd(), { sandbox: (process.env.BLOCKS_STAGE ?? 'sandbox') !== 'production' });
 const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });
 
 async function resolveConnString(): Promise<string> {
@@ -31,6 +31,14 @@ async function resolveConnString(): Promise<string> {
   return u.toString();
 }
 
+/**
+ * Database instance connected to your Supabase Postgres.
+ *
+ * RLS caveat: db.crud() (via supabaseCrud()) always enforces RLS.
+ * Raw db.query() / db.execute() / db.transaction() BYPASS RLS.
+ * For hand-written queries, use db.withRLS({ userId }) to enforce
+ * row-level security — otherwise all rows are visible.
+ */
 export const db = new Database(scope, 'db', {
   connection: fromExisting({ connectionString: { get: resolveConnString } }),
   rlsPolicy: 'enforce',

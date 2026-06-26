@@ -203,10 +203,10 @@ fail silently in production with an opaque OIDC error.
   // Inside a handler — the AppSetting instance resolves the same SSM parameter
   await mySecret.put('your-real-secret-value');
   \`\`\`
-- **AWS CLI** — write directly to the SSM parameter (name is in your deploy output,
-  \`BLOCKS_SSM_PARAM_<ID>\`):
+- **AWS CLI** — write directly to the SSM parameter (its name is in your deploy
+  output, \`BLOCKS_SSM_PARAM_<ID>\`):
   \`\`\`sh
-  aws ssm put-parameter --name "/blocks/production/..." --type SecureString --value "..." --overwrite
+  aws ssm put-parameter --name "<the BLOCKS_SSM_PARAM_… value from your deploy output>" --type SecureString --value "..." --overwrite
   \`\`\`
 
 The value **persists across redeploys** (the bulk-init uses \`Overwrite: false\`, so it
@@ -223,7 +223,7 @@ Add your deployed app's sign-in callback URL to the allowed redirect URIs in you
 npm run deploy
 \`\`\`
 
-\`.env.production\` is gitignored. Your connection string is written to an encrypted SSM SecureString parameter (\`/blocks/production/db-connection-string\`) — never committed, never placed in the CloudFormation template; the deployed Lambda reads it from SSM at runtime. If you have pending migrations in \`./migrations/\`, they are applied to the production database during deploy (see [Evolving Your Schema](#evolving-your-schema)).
+\`.env.production\` is gitignored. Your connection string is written to an encrypted SSM SecureString parameter scoped to your app's stack (its name appears in the deploy output as \`BLOCKS_SSM_PARAM_DB_URL\`, e.g. \`/my-app-k7x2mf-prod-db-url\`) — never committed, never placed in the CloudFormation template; the deployed Lambda reads it from SSM at runtime. If you have pending migrations in \`./migrations/\`, they are applied to the production database during deploy (see [Evolving Your Schema](#evolving-your-schema)).
 
 ### 6. Verify production
 

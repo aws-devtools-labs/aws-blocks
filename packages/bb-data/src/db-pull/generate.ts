@@ -125,19 +125,23 @@ export function generateIndexFile(tables: TableInfo[], opts: { projectRef?: stri
   const rlsLine = hasRls ? `  rlsPolicy: 'enforce',\n` : '';
 
   // Parameter name resolution differs by phase:
-  //  - At deploy/synth, BLOCKS_STAGE is set, so compute the stage-scoped name
-  //    (/blocks/{stage}/db-connection-string). The parameter itself is created+seeded
-  //    out-of-band by `ensureSecrets` before deploy (it's the real connection string),
-  //    so we use `AppSetting.fromExisting` — CDK does NOT create/seed/tag/delete it,
-  //    it only grants the Lambda read access and stamps the name into blocks-config as
-  //    BLOCKS_SSM_PARAM_DB_URL (the key is derived from this AppSetting's id 'db-url').
-  //  - At Lambda runtime, BLOCKS_STAGE is NOT injected, so recomputing would
-  //    wrongly default to 'sandbox' and request a parameter the Lambda has no
-  //    grant for (AccessDenied). Instead, read the name CDK already stamped —
-  //    loadConfigToProcessEnv() places it in process.env before this module imports.
+  //  - At deploy/synth, BLOCKS_STAGE is set and process.cwd() is the project root
+  //    (cdk runs there), so compute the stack-scoped name
+  //    (/<stackName>-db-url) from the committed .blocks/config.json — the SAME
+  //    `dbConnectionParameterName(projectRoot, { sandbox })` the deploy script's
+  //    `ensureSecrets` uses to WRITE the value, so written name == read name. The
+  //    parameter itself is created+seeded out-of-band by `ensureSecrets` before
+  //    deploy (it's the real connection string), so we use `AppSetting.fromExisting`
+  //    — CDK does NOT create/seed/tag/delete it, it only grants the Lambda read
+  //    access and stamps the name into blocks-config as BLOCKS_SSM_PARAM_DB_URL.
+  //  - At Lambda runtime, BLOCKS_STAGE is NOT injected and there is no project
+  //    root on disk, so recomputing is impossible. Instead, read the name CDK
+  //    already stamped — loadConfigToProcessEnv() places BLOCKS_SSM_PARAM_DB_URL
+  //    in process.env before this module imports, so the ?? fallback never runs
+  //    at runtime.
   const paramBlock =
     `const dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL\n` +
-    `  ?? dbConnectionParameterName(process.env.BLOCKS_STAGE ?? 'sandbox');\n` +
+    `  ?? dbConnectionParameterName(process.cwd(), { sandbox: (process.env.BLOCKS_STAGE ?? 'sandbox') !== 'production' });\n` +
     `const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });\n\n`;
 
   const dbBlock =

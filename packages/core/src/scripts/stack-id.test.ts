@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { getStackId, getSandboxId } from './stack-id.js';
+import { getStackId, getSandboxId, getStackName } from './stack-id.js';
 
 describe('getStackId', () => {
   let tmpDir: string;
@@ -59,5 +59,35 @@ describe('getSandboxId', () => {
     mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-abc123');
     assert.strictEqual(getSandboxId(tmpDir), 'alice-abc123');
+  });
+});
+
+describe('getStackName', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('production is <stackId>-prod', () => {
+    tmpDir = join(tmpdir(), `stack-name-prod-${Date.now()}`);
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app-k7x2mf' }));
+    assert.strictEqual(getStackName(tmpDir, { sandbox: false }), 'my-app-k7x2mf-prod');
+  });
+
+  it('sandbox is <stackId>-<sandboxId>', () => {
+    tmpDir = join(tmpdir(), `stack-name-sbx-${Date.now()}`);
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app-k7x2mf' }));
+    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-0d7e1c');
+    assert.strictEqual(getStackName(tmpDir, { sandbox: true }), 'my-app-k7x2mf-alice-0d7e1c');
+  });
+
+  it('throws actionable error when config is missing (fail fast, no silent fallback)', () => {
+    tmpDir = join(tmpdir(), `stack-name-missing-${Date.now()}`);
+    mkdirSync(tmpDir, { recursive: true });
+    assert.throws(() => getStackName(tmpDir, { sandbox: false }), /\.blocks\/config\.json not found/);
   });
 });

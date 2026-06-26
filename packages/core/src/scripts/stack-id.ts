@@ -52,6 +52,25 @@ export function getSandboxId(projectRoot?: string): string {
   return id;
 }
 
+/**
+ * The full CloudFormation stack name for a deployment.
+ *
+ * Single source of truth for the stack-name scheme (D-012): production is
+ * `<stackId>-prod`; a sandbox is `<stackId>-<sandboxId>`. The CDK templates name
+ * the stack with this function, and the external-DB connection-string parameter
+ * name (`dbConnectionParameterName`) is derived from it — so a deployed stack and
+ * the parameter holding its database credentials can never use divergent names.
+ *
+ * Inputs come only from committed/local state (`.blocks/config.json`,
+ * `.blocks-sandbox/sandbox-id.txt`), never from the construct tree or the
+ * connection string, so the same `(projectRoot, { sandbox })` yields the same
+ * name on the pre-deploy write side and the synth side.
+ */
+export function getStackName(projectRoot: string | undefined, opts: { sandbox: boolean }): string {
+  const base = getStackId(projectRoot);
+  return opts.sandbox ? `${base}-${getSandboxId(projectRoot)}` : `${base}-prod`;
+}
+
 function getUsername(): string {
   try {
     return execSync('git config user.name', { encoding: 'utf-8' }).trim();
