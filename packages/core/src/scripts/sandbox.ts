@@ -6,6 +6,7 @@ import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
+import { getSandboxId } from './stack-id.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -47,6 +48,11 @@ export async function startSandbox(options: SandboxOptions) {
   }
 
   process.env.BLOCKS_STAGE = 'sandbox';
+
+  // Materialize the per-machine sandbox id before anything derives the stack
+  // name from it. getStackName / ensureSecrets are read-only (they throw if the
+  // id is missing); the sandbox orchestrator owns creation, so we create it here.
+  getSandboxId(process.cwd());
 
   // Provision connection string to SSM SecureString.
   // On first deploy, creates the parameter. On subsequent deploys, updates if changed.

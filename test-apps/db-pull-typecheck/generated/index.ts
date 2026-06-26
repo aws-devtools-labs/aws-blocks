@@ -4,12 +4,18 @@ import { tableMeta, type TableMeta } from './database.meta.js';
 import { Scope } from '@aws-blocks/core';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { dbConnectionParameterName } from '@aws-blocks/core/db-naming';
+import { getStackName } from '@aws-blocks/core/scripts';
 
 const scope = new Scope('supabase');
 
-const dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL
-  ?? dbConnectionParameterName(process.cwd(), { sandbox: (process.env.BLOCKS_STAGE ?? 'sandbox') !== 'production' });
-const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName, secret: true });
+// At Lambda runtime, the parameter name is stamped by CDK into process.env.
+// At synth/deploy, BLOCKS_STAGE is set and we compute it from committed config.
+// At local dev, neither is set — the mock reads from .env.local, so the name is unused.
+let dbParameterName = process.env.BLOCKS_SSM_PARAM_DB_URL;
+if (!dbParameterName && process.env.BLOCKS_STAGE) {
+  dbParameterName = dbConnectionParameterName(getStackName({ sandbox: process.env.BLOCKS_STAGE !== 'production' }));
+}
+const dbUrl = AppSetting.fromExisting(scope, 'db-url', { name: dbParameterName ?? 'local', secret: true });
 
 async function resolveConnString(): Promise<string> {
   const raw = await dbUrl.get();

@@ -10,16 +10,12 @@
  * deployment's stack name), so two Blocks apps in the same account + region +
  * stage get distinct names and cannot overwrite each other's credentials.
  *
- * Two call sites compute the name with this function: the pre-deploy writer
- * (`ensure-secrets`) and the `db pull` generated wiring at synth (which records
- * the resolved name so the deployed Lambda can read it). They produce the same
- * name because the deploy command gives both the same inputs (`projectRoot` and
- * `sandbox`), and the name is derived from committed config — never from the
- * connection string. The runtime Lambda does not call this function; it reads
- * the name recorded at synth. So written name, recorded name, and read name
- * agree as long as the two call sites receive the same inputs.
+ * Two call sites compute the name: the pre-deploy writer (`ensure-secrets`) and
+ * the `db pull` generated wiring at synth. Both pass the result of
+ * `getStackName({ sandbox, projectRoot })` into this function, so they produce
+ * the same name by construction. The runtime Lambda does not call this function;
+ * it reads the name recorded at synth.
  */
-import { getStackName } from './scripts/stack-id.js';
 
 /**
  * Extract a stable identifier from a Postgres connection string.
@@ -46,18 +42,12 @@ export function extractDbRef(connectionString: string): string {
 }
 
 /**
- * SSM SecureString parameter name that stores this app's external database
- * connection string for a deployment.
+ * SSM SecureString parameter name for a deployment's external database
+ * connection string.
  *
- * Stack-scoped via {@link getStackName}: `/<stackName>-db-url`
- * (e.g. `/my-app-k7x2mf-prod-db-url`). The discriminator is the app's own stack
- * identity from committed config — never the connection string or a database
- * ref — so it is computed identically on the pre-deploy write side and the
- * synth side, and is unique per app.
+ * Pure string transform: `/<stackName>-db-url`. The caller is responsible for
+ * computing the stack name via `getStackName({ sandbox, projectRoot })`.
  */
-export function dbConnectionParameterName(
-  projectRoot: string | undefined,
-  opts: { sandbox: boolean },
-): string {
-  return `/${getStackName(projectRoot, opts)}-db-url`;
+export function dbConnectionParameterName(stackName: string): string {
+  return `/${stackName}-db-url`;
 }

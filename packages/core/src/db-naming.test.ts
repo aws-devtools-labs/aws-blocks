@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { extractDbRef, dbConnectionParameterName } from './db-naming.js';
+import { getStackName } from './scripts/stack-id.js';
 
 describe('extractDbRef', () => {
   test('pooler form (postgres.{ref}@) yields ref', () => {
@@ -42,50 +43,51 @@ describe('extractDbRef', () => {
 });
 
 describe('dbConnectionParameterName', () => {
+  test('formats stack name into parameter path', () => {
+    assert.strictEqual(dbConnectionParameterName('my-app-k7x2mf-prod'), '/my-app-k7x2mf-prod-db-url');
+  });
+
+  test('two distinct stack names produce distinct parameter names', () => {
+    assert.notStrictEqual(
+      dbConnectionParameterName('app-a-111111-prod'),
+      dbConnectionParameterName('app-b-222222-prod'),
+    );
+  });
+});
+
+describe('cross-site invariant: write name == read name', () => {
   let tmpDir: string;
+  let originalCwd: string;
 
   afterEach(() => {
+    if (originalCwd) process.chdir(originalCwd);
     if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function withConfig(stackId: string): string {
-    tmpDir = mkdtempSync(join(tmpdir(), 'db-naming-'));
+  function setupProject(stackId: string, sandboxId: string): string {
+    tmpDir = mkdtempSync(join(tmpdir(), 'cross-site-'));
     mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId }));
+    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), sandboxId);
     return tmpDir;
   }
 
-  test('production name is stack-scoped (/<stackId>-prod-db-url)', () => {
-    const root = withConfig('my-app-k7x2mf');
-    assert.strictEqual(
-      dbConnectionParameterName(root, { sandbox: false }),
-      '/my-app-k7x2mf-prod-db-url',
-    );
+  test('write-side name == read-side name (sandbox)', () => {
+    const root = setupProject('my-app-k7x2mf', 'alice-0d7e1c');
+    const writeName = dbConnectionParameterName(getStackName({ sandbox: true, projectRoot: root }));
+    originalCwd = process.cwd();
+    process.chdir(root);
+    const readName = dbConnectionParameterName(getStackName({ sandbox: true }));
+    assert.strictEqual(writeName, readName);
   });
 
-  test('sandbox name embeds the per-machine sandbox id', () => {
-    const root = withConfig('my-app-k7x2mf');
-    mkdirSync(join(root, '.blocks-sandbox'), { recursive: true });
-    writeFileSync(join(root, '.blocks-sandbox', 'sandbox-id.txt'), 'alice-0d7e1c');
-    assert.strictEqual(
-      dbConnectionParameterName(root, { sandbox: true }),
-      '/my-app-k7x2mf-alice-0d7e1c-db-url',
-    );
-  });
-
-  test('two apps (distinct stackIds) get distinct names — no collision', () => {
-    const a = dbConnectionParameterName(withConfig('app-a-111111'), { sandbox: false });
-    rmSync(tmpDir, { recursive: true, force: true });
-    const b = dbConnectionParameterName(withConfig('app-b-222222'), { sandbox: false });
-    assert.notStrictEqual(a, b);
-  });
-
-  test('does not derive from any connection string', () => {
-    // Same stackId yields the same name regardless of which DB it points at —
-    // the discriminator is the app's stack identity, never the connection string.
-    const root = withConfig('my-app-k7x2mf');
-    const name1 = dbConnectionParameterName(root, { sandbox: false });
-    const name2 = dbConnectionParameterName(root, { sandbox: false });
-    assert.strictEqual(name1, name2);
+  test('write-side name == read-side name (production)', () => {
+    const root = setupProject('my-app-k7x2mf', 'alice-0d7e1c');
+    const writeName = dbConnectionParameterName(getStackName({ sandbox: false, projectRoot: root }));
+    originalCwd = process.cwd();
+    process.chdir(root);
+    const readName = dbConnectionParameterName(getStackName({ sandbox: false }));
+    assert.strictEqual(writeName, readName);
   });
 });

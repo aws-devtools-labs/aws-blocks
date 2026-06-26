@@ -136,8 +136,10 @@ describe('generateIndexFile', () => {
   });
 
   test('includes stack-scoped AppSetting name (ref-independent)', () => {
-    assert.ok(output.includes("dbConnectionParameterName(process.cwd(), { sandbox: (process.env.BLOCKS_STAGE ?? 'sandbox') !== 'production' })"));
+    assert.ok(output.includes("if (!dbParameterName && process.env.BLOCKS_STAGE)"));
+    assert.ok(output.includes("dbConnectionParameterName(getStackName({ sandbox: process.env.BLOCKS_STAGE !== 'production' }))"));
     assert.ok(output.includes("from '@aws-blocks/core/db-naming'"));
+    assert.ok(output.includes("import { getStackName } from '@aws-blocks/core/scripts'"));
   });
 
   test('resolves SSM parameter name from blocks-config at runtime (not BLOCKS_STAGE)', () => {
@@ -145,8 +147,9 @@ describe('generateIndexFile', () => {
     // deploy-stamped BLOCKS_SSM_PARAM_DB_URL or the prod Lambda requests the
     // sandbox parameter and gets AccessDenied.
     assert.ok(output.includes('process.env.BLOCKS_SSM_PARAM_DB_URL'));
-    // The deploy-time fallback (?? ...) still computes the stage-scoped name.
-    assert.ok(output.includes('?? dbConnectionParameterName('));
+    // The deploy-time fallback computes the stage-scoped name only when BLOCKS_STAGE is set.
+    assert.ok(output.includes('process.env.BLOCKS_STAGE'));
+    assert.ok(output.includes('dbConnectionParameterName('));
   });
 
   test('derives the connection port per environment at runtime', () => {

@@ -35,9 +35,26 @@ export function getStackId(projectRoot?: string): string {
 }
 
 /**
+ * Read the per-machine sandbox identifier without creating it.
+ * Returns the id if `.blocks-sandbox/sandbox-id.txt` exists, throws otherwise.
+ * Use this in pure name-derivation paths that must not mutate the filesystem.
+ */
+export function readSandboxId(projectRoot?: string): string {
+  const root = projectRoot || process.cwd();
+  const filePath = join(root, '.blocks-sandbox', 'sandbox-id.txt');
+  if (existsSync(filePath)) return readFileSync(filePath, 'utf-8').trim();
+  throw new Error(
+    `Sandbox id not found at ${filePath} — run \`npm run sandbox\` to initialize it.`,
+  );
+}
+
+/**
  * Get or create a per-machine sandbox identifier.
  * Stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
  * Format: `<username(8)>-<random(6)>` — identifies the developer's sandbox.
+ *
+ * NOTE: This function WRITES the file if absent (side effect). Use only in the
+ * sandbox orchestrator. For pure name derivation, use {@link readSandboxId}.
  */
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
@@ -61,14 +78,14 @@ export function getSandboxId(projectRoot?: string): string {
  * name (`dbConnectionParameterName`) is derived from it — so a deployed stack and
  * the parameter holding its database credentials can never use divergent names.
  *
- * Inputs come only from committed/local state (`.blocks/config.json`,
- * `.blocks-sandbox/sandbox-id.txt`), never from the construct tree or the
- * connection string, so the same `(projectRoot, { sandbox })` yields the same
- * name on the pre-deploy write side and the synth side.
+ * This function is **pure / read-only**: it reads from committed config
+ * (`.blocks/config.json`) and the sandbox id file (`.blocks-sandbox/sandbox-id.txt`)
+ * but never creates or writes files. If the sandbox id file is absent, it throws —
+ * the sandbox orchestrator is responsible for creating it via {@link getSandboxId}.
  */
-export function getStackName(projectRoot: string | undefined, opts: { sandbox: boolean }): string {
-  const base = getStackId(projectRoot);
-  return opts.sandbox ? `${base}-${getSandboxId(projectRoot)}` : `${base}-prod`;
+export function getStackName(opts: { sandbox: boolean; projectRoot?: string }): string {
+  const base = getStackId(opts.projectRoot);
+  return opts.sandbox ? `${base}-${readSandboxId(opts.projectRoot)}` : `${base}-prod`;
 }
 
 function getUsername(): string {

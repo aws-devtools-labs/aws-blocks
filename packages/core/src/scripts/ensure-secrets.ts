@@ -17,6 +17,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dbConnectionParameterName } from '../db-naming.js';
+import { getStackName } from './stack-id.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 
@@ -42,7 +43,7 @@ export function findConnectionString(): { name: string; value: string } | null {
  * commands pass it explicitly) so the written name equals the name the app reads.
  */
 export async function ensureSecrets(
-  stage?: 'sandbox' | 'production',
+  stage?: string,
   projectRoot?: string,
 ): Promise<EnsureSecretsResult> {
   const result: EnsureSecretsResult = { created: [], updated: [], unchanged: [] };
@@ -50,13 +51,13 @@ export async function ensureSecrets(
   const conn = findConnectionString();
   if (!conn) return result;
 
-  const resolvedStage = stage ?? (process.env.BLOCKS_STAGE as 'sandbox' | 'production') ?? 'sandbox';
+  const resolvedStage = stage ?? process.env.BLOCKS_STAGE ?? 'sandbox';
 
   const { SSMClient, GetParameterCommand, PutParameterCommand } =
     await import('@aws-sdk/client-ssm');
 
   const client = new SSMClient();
-  const parameterName = dbConnectionParameterName(projectRoot, { sandbox: resolvedStage !== 'production' });
+  const parameterName = dbConnectionParameterName(getStackName({ sandbox: resolvedStage !== 'production', projectRoot }));
 
   let isNew = false;
   try {

@@ -501,6 +501,22 @@ behavior. The staging-copy spike was the only variant that made the write atomic
 with the stack; that property is consciously traded for the removal of all
 write-back/staging machinery.
 
+### Compatibility
+
+- **Breaking signature change:** `dbConnectionParameterName` now takes a
+  `stackName` string (was `(stage: string)`). `getStackName` now takes a single
+  options object `{ sandbox, projectRoot? }` (was `(projectRoot, { sandbox })`).
+  The package is pre-1.0 (preview) and no external consumer has committed old-form
+  wiring, so this ships as a patch. Apps with stale generated `supabase.ts` must
+  run `npx bb-data pull` to regenerate.
+- **Prerequisite (D-012):** `getStackName` reads `stackId` from
+  `.blocks/config.json`; it throws if absent. Pre-PR #51 apps migrating to this
+  version must first set `stackId` in `.blocks/config.json` (see D-012 "Migration
+  scope" for instructions) or deploys will fail at the `ensureSecrets` step.
+- The previous stage-only parameter (`/blocks/{stage}/db-connection-string`) is
+  orphaned and self-heals on the next deploy — the old value remains in SSM but is
+  no longer read or written.
+
 ### References
 
 - Supersedes the stage-only `dbConnectionParameterName(stage)`.

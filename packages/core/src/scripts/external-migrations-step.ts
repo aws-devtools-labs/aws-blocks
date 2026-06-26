@@ -27,6 +27,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { findConnectionString } from './ensure-secrets.js';
 import { extractDbRef, dbConnectionParameterName } from '../db-naming.js';
+import { getStackName } from './stack-id.js';
 import { runSync } from './run-command.js';
 
 const DEFAULT_MIGRATIONS_DIR = './migrations';
@@ -171,7 +172,7 @@ async function productionRefs(devRef: string): Promise<Set<string>> {
     const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
     const res = await new SSMClient().send(
       new GetParameterCommand({
-        Name: dbConnectionParameterName(undefined, { sandbox: false }),
+        Name: dbConnectionParameterName(getStackName({ sandbox: false })),
         WithDecryption: true,
       }),
     );
