@@ -34,10 +34,15 @@ interface TreeKillResult {
  * shutdown to a non-console subtree anyway (Node maps SIGTERM/SIGKILL to
  * `TerminateProcess`).
  *
- * Returns `true` when `taskkill` actually ran — whether it reaped the tree or
- * found it already gone (exit 128) — and `false` only when the command could
- * not be spawned at all (e.g. not on `PATH`), signalling the caller to fall
- * back to a direct `child.kill`. Never throws.
+ * Returns `true` only when `taskkill` ran AND reported the tree handled — exit
+ * `0` (reaped the tree) or `128` (`"process not found"`, i.e. already gone).
+ * Returns `false` when the command could not be spawned at all (e.g. not on
+ * `PATH`) OR when it ran but returned any other status (e.g. `1` = access
+ * denied): such a run did NOT reap the tree, so the caller must fall back to a
+ * direct `child.kill` rather than treat the leak as handled. (`child.kill`
+ * cannot reap the orphaned grandchild either, but the fallback is cheap and
+ * strictly correct — we never silently swallow a failed tree-kill.) Never
+ * throws.
  */
 export function windowsTreeKill(
   pid: number,
@@ -45,8 +50,14 @@ export function windowsTreeKill(
     spawnSync(command, args as string[], { stdio: 'ignore', windowsHide: true }),
 ): boolean {
   try {
-    const { error } = runner('taskkill', ['/T', '/F', '/PID', String(pid)]);
-    return !error;
+    const { status, error } = runner('taskkill', ['/T', '/F', '/PID', String(pid)]);
+    // Couldn't even spawn taskkill (e.g. not on PATH) → not handled; fall back.
+    if (error) return false;
+    // taskkill ran: only exit 0 (reaped the tree) or 128 ("process not found",
+    // already gone) mean the tree is handled. Any other non-null status (e.g.
+    // 1 = access denied) means taskkill ran but did NOT reap the tree, so report
+    // not-handled and let the caller fall back to a direct child.kill.
+    return status === 0 || status === 128;
   } catch {
     return false;
   }
@@ -126,6 +137,43 @@ const defaultSleep = (ms: number): Promise<void> =>
 export const KILL_GRACE_MS = 500;
 
 /**
+ * Probe whether a detached process *group* still has at least one live member,
+ * **without signalling it**. Used to scope the post-exit group SIGKILL in
+ * {@link terminateProcessTree} to the only window where the `-pid` group signal
+ * is PID-reuse-safe.
+ *
+ * The hazard: {@link killFrontendTree}'s POSIX reap is `process.kill(-pid, …)`,
+ * which targets the process group whose gid is `pid`. That is safe only while a
+ * group member is still alive — a survivor keeps the kernel from recycling
+ * `pid` as a brand-new (unrelated) group leader. Once the whole group has
+ * drained, `pid` is eligible for reuse and a blind `-pid` kill could land on an
+ * unrelated group. So before a *post-exit* reap we probe here and skip when the
+ * group has already drained (there is then nothing of ours left to reap).
+ *
+ * - **POSIX**: `kill(-pid, 0)` sends no signal — it only checks the group
+ *   exists and is signallable. Success or `EPERM` (exists but owned by another
+ *   user) ⇒ alive. `ESRCH` (or anything else) ⇒ treat as drained.
+ * - **Windows**: there are no process groups and the reap path
+ *   (`taskkill /T /F /PID`) walks the live PID tree, so there is no `-pid`
+ *   recycle hazard — always allow the reap (`true`).
+ *
+ * Never throws. `platform`/`kill` are injected for tests.
+ */
+export function isProcessGroupAlive(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  kill: (pid: number, signal: number) => void = (p, s) => process.kill(p, s),
+): boolean {
+  if (platform === 'win32') return true;
+  try {
+    kill(-pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
  * Terminate a child process *tree* and wait — bounded — for the child to exit,
  * escalating SIGTERM → SIGKILL. Reuses {@link killFrontendTree} so every
  * entrypoint reaps the same way (POSIX process-group kill / Windows `taskkill`)
@@ -133,9 +181,15 @@ export const KILL_GRACE_MS = 500;
  *
  * Post-exit policy: if the child has *already* exited, a detached grandchild may
  * still be orphaned (still holding a port), so we issue one best-effort group
- * SIGKILL to reap it rather than returning blind — see the dev server's
- * "POST-EXIT GROUP-KILL POLICY". Otherwise we SIGTERM the tree, wait up to
- * `graceMs` for a clean exit, then SIGKILL the tree and wait a short grace.
+ * SIGKILL to reap it — but ONLY when the group still has a live member
+ * ({@link isProcessGroupAlive}). When the whole group has already drained (the
+ * common healthy shutdown — Vite was already gone), `pid` is eligible for
+ * recycling and a blind `-pid` signal could hit an unrelated, newly created
+ * group; since there is also nothing of ours left to reap, we skip the kill.
+ * See the dev server's "POST-EXIT GROUP-KILL POLICY" for the full rationale and
+ * the accepted residual (the synchronous probe→kill window). Otherwise we
+ * SIGTERM the tree, wait up to `graceMs` for a clean exit, then SIGKILL the tree
+ * and wait a short grace.
  *
  * Return value — IMPORTANT: the boolean reflects only the **direct child's**
  * exit state (its `exitCode`/`signalCode`), NOT whole-group teardown or port
@@ -153,11 +207,27 @@ export async function terminateProcessTree(
   graceMs = 2000,
   killTree: (c: KillableProcess, signal: NodeJS.Signals) => void = killFrontendTree,
   sleep: (ms: number) => Promise<void> = defaultSleep,
+  isGroupAlive: (pid: number) => boolean = isProcessGroupAlive,
 ): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
-    // Shell already exited — a detached grandchild may still hold its port, so
-    // reap the group best-effort instead of returning blind.
-    killTree(child, 'SIGKILL');
+    // ── POST-EXIT GROUP-KILL (scoped) ──────────────────────────────────────
+    // The direct child has already exited, but a detached *grandchild* (e.g. an
+    // orphaned Vite) may still be alive in its process group, still holding a
+    // port — reap it with one best-effort group SIGKILL.
+    //
+    // SCOPING: only reap when the group still has a live member. killFrontendTree's
+    // `-pid` group signal is PID-reuse-safe ONLY while a member keeps `pid`
+    // reserved as the group id; once the whole group has drained `pid` can be
+    // recycled and a blind `process.kill(-pid)` could hit an unrelated group. So
+    // we probe first (isProcessGroupAlive; POSIX signal 0) and skip when already
+    // drained — there is then nothing of ours to reap. The residual synchronous
+    // probe→kill window is the accepted trade-off documented in dev-server.ts
+    // "POST-EXIT GROUP-KILL POLICY", cross-referenced here so the risk is
+    // discoverable at this shared primitive.
+    const { pid } = child;
+    if (pid && pid > 1 && isGroupAlive(pid)) {
+      killTree(child, 'SIGKILL');
+    }
     return true;
   }
   const exited = new Promise<void>((res) => child.once('exit', () => res()));

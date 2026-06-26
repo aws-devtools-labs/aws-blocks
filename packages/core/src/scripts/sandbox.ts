@@ -206,6 +206,12 @@ export async function startSandbox(options: SandboxOptions) {
     // 6s budget (> that ~2s drain) — a hung dev server still escalates to a tree
     // SIGKILL and we exit regardless, so shutdown can never wedge. cdk watch
     // holds no local port, so a bounded tree-kill is all it needs.
+    //
+    // That a group SIGTERM (terminateProcessTree → killFrontendTree's
+    // `process.kill(-pid, 'SIGTERM')`) actually reaches the *nested* node dev
+    // server and runs its own SIGTERM handler — the load-bearing assumption of
+    // the 6s budget above — is verified by the "group SIGTERM reaches a nested
+    // node child" integration test in dev-server-supervisor.test.ts.
     await Promise.all([
       terminateProcessTree(cdkWatch, 2000),
       terminateProcessTree(devServer, 6000),

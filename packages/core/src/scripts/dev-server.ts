@@ -348,6 +348,15 @@ export async function startDevServer(options: DevServerOptions) {
   // unrelated group. This is an accepted best-effort trade-off — there is then
   // nothing of ours left to reap, whereas skipping the kill would otherwise
   // leave `:3100` wedged, which is the failure this PR exists to prevent.
+  //
+  // Where each post-exit kill site lands on this trade-off: the two sites *in
+  // this file* — the respawn reap (in the child's `exit` handler) and the
+  // `process.on('exit')` net — fire synchronously the instant we observe the
+  // exit, so they lean on point (2) above and stay unconditional. The third
+  // path, `terminateFrontend` → `terminateProcessTree` (process-tree.ts), can
+  // run outside that minimal synchronous window, so it additionally PROBES group
+  // liveness (POSIX signal 0) and skips the reap once the group has fully
+  // drained — see its "POST-EXIT GROUP-KILL (scoped)" comment.
   const usePosixProcessGroups = process.platform !== 'win32';
   let isShuttingDown = false;
   let frontendRestarts: number[] = [];
@@ -436,6 +445,14 @@ export async function startDevServer(options: DevServerOptions) {
           await announceFrontendReady(next, '  (frontend restarted)');
         })();
       }, decision.delayMs);
+      // INTENTIONAL unref: the listening HTTP `server` (created below) owns this
+      // process's lifetime — the backoff timer must NOT, by itself, keep the
+      // event loop alive. Without unref a pending respawn timer would hold the
+      // process up during shutdown (or after the server has closed), delaying or
+      // blocking a clean exit. This never drops a legitimately-needed respawn:
+      // `cleanup` explicitly clears this timer, and both the timer body and the
+      // awaited relaunch re-check `isShuttingDown`. Do NOT remove the unref to
+      // "fix" a perceived missed restart — it would reintroduce that shutdown hang.
       respawnTimer.unref?.();
     });
 

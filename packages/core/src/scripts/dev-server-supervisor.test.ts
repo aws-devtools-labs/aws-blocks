@@ -4,6 +4,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { createConnection, createServer } from 'node:net';
+import { readFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   evaluateFrontendRespawn,
   DEFAULT_FRONTEND_RESPAWN_POLICY,
@@ -14,6 +17,7 @@ import {
   killFrontendTree,
   windowsTreeKill,
   terminateProcessTree,
+  isProcessGroupAlive,
   KILL_GRACE_MS,
   type KillableProcess,
   type AwaitableChild,
@@ -214,9 +218,50 @@ describe('windowsTreeKill — taskkill tree-kill command', () => {
     assert.strictEqual(ok, false);
   });
 
+  it('reports failure when taskkill runs but returns a non-zero, non-128 status', () => {
+    // taskkill spawned fine (no error) but FAILED to reap the tree — e.g. exit 1
+    // = access denied. It must NOT be treated as handled, or the caller skips
+    // its child.kill fallback and silently leaks the tree.
+    assert.strictEqual(windowsTreeKill(4242, () => ({ status: 1 })), false);
+    // A taskkill killed by a signal (status null, no spawn error) is likewise
+    // not a successful reap.
+    assert.strictEqual(windowsTreeKill(4242, () => ({ status: null })), false);
+  });
+
   it('never throws even if the runner throws', () => {
     const ok = windowsTreeKill(4242, () => { throw new Error('boom'); });
     assert.strictEqual(ok, false);
+  });
+});
+
+// ── isProcessGroupAlive (unit, injected kill + platform) ────────────────────
+// Scopes the post-exit group SIGKILL: a `-pid` signal is only PID-reuse-safe
+// while a group member is still alive, so terminateProcessTree probes here and
+// skips the reap once the group has drained.
+describe('isProcessGroupAlive — group-liveness probe (signal 0)', () => {
+  const esrch = () => { throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }); };
+  const eperm = () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+
+  it('probes the GROUP with signal 0 (negative pid, no real signal) and reports alive on success', () => {
+    const calls: Array<[number, number]> = [];
+    const alive = isProcessGroupAlive(4242, 'linux', (pid, sig) => { calls.push([pid, sig]); });
+    assert.strictEqual(alive, true);
+    assert.deepStrictEqual(calls, [[-4242, 0]]); // group probe, signal 0 = existence check only
+  });
+
+  it('reports drained (false) when the group is gone (ESRCH)', () => {
+    assert.strictEqual(isProcessGroupAlive(4242, 'linux', esrch), false);
+  });
+
+  it('reports alive (true) when the group exists but is not ours to signal (EPERM)', () => {
+    assert.strictEqual(isProcessGroupAlive(4242, 'linux', eperm), true);
+  });
+
+  it('always reports alive on Windows (no process groups; taskkill is PID-tree-scoped)', () => {
+    let probed = false;
+    const alive = isProcessGroupAlive(4242, 'win32', () => { probed = true; });
+    assert.strictEqual(alive, true);
+    assert.strictEqual(probed, false); // never probes on Windows
   });
 });
 
@@ -360,6 +405,68 @@ describe('terminateProcessTree — reaps a detached non-shell tree (cdk-watch sh
     });
 });
 
+// ── group SIGTERM → nested node handler (sandbox dev-server teardown) ────────
+// Verifies the load-bearing claim in sandbox.ts: a *group* SIGTERM (what
+// killFrontendTree issues on POSIX, via terminateProcessTree) actually reaches
+// the nested node dev server so its OWN SIGTERM handler (the :3100 drain) runs —
+// not merely that the tree gets reaped. Opt-in + POSIX-only like the reaping
+// tests above.
+describe('group SIGTERM reaches a nested node child and runs its SIGTERM handler', { skip: integrationSkip }, () => {
+  it('delivers a group SIGTERM to a detached shell→node child whose node handler observes it',
+    { timeout: 30000 },
+    async () => {
+      const port = await getFreePort();
+      const marker = join(tmpdir(), `blocks-sigterm-${process.pid}-${Date.now()}.flag`);
+      // node grandchild: install a SIGTERM handler that RECORDS it observed the
+      // signal (writes the marker) before exiting, THEN bind the port to
+      // announce readiness. Installing the handler before binding guarantees the
+      // test never sends SIGTERM before the handler exists (which would
+      // default-terminate node and flake the assertion). Retry on EADDRINUSE
+      // like the reaping tests, since getFreePort() releases its probe listener.
+      const inner =
+        `const net=require('net'),fs=require('fs');` +
+        `process.on('SIGTERM',()=>{try{fs.writeFileSync(${JSON.stringify(marker)},'sigterm');}catch{}process.exit(0);});` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(${port},'127.0.0.1');` +
+        `})();` +
+        `setInterval(()=>{},1e9);`;
+      // shell → node grandchild, backgrounded with `& wait` so the shell stays
+      // the live group leader — the exact `shell: true` + detached topology the
+      // dev server uses, where a group signal must fan out to the nested node.
+      const cmd = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inner)} & wait`;
+      const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });
+
+      try {
+        assert.ok(await waitFor(() => isPortOpen(port), 10000),
+          'nested node should install its SIGTERM handler then bind the port (ready)');
+        assert.ok(child.pid && child.pid > 1, 'child must have a real pid to group-signal');
+
+        // The group SIGTERM under test: exactly what killFrontendTree does on
+        // POSIX (`process.kill(-pid, 'SIGTERM')`) and what the sandbox dev-server
+        // teardown relies on to trigger the node's own terminateFrontend handler.
+        // The `if (child.pid)` guard (asserted above) narrows the type without a
+        // non-null assertion — matching the finally-block pattern used in this file.
+        if (child.pid) process.kill(-child.pid, 'SIGTERM');
+
+        // Assert the node handler OBSERVED the signal (wrote the marker) — i.e.
+        // the group SIGTERM reached the *nested* node, not just the shell.
+        const observed = await waitFor(async () => {
+          try { return readFileSync(marker, 'utf8') === 'sigterm'; } catch { return false; }
+        }, 10000);
+        assert.ok(observed, 'the nested node SIGTERM handler must run on a group SIGTERM');
+      } finally {
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+        try { unlinkSync(marker); } catch { /* never created */ }
+      }
+    });
+});
+
 // ── shouldCreditFrontendReady (unit) ────────────────────────────────────────
 // Guards the restart-budget reset: a liveness-only port probe must not credit a
 // foreign listener, or the maxRestarts cap is neutralized and Vite hot-loops.
@@ -416,12 +523,23 @@ describe('terminateProcessTree — escalation + post-exit reap', () => {
     return { child, fireExit };
   }
 
-  it('issues a single best-effort group SIGKILL when the child already exited', async () => {
+  it('issues a single best-effort group SIGKILL when the child already exited and its group is still alive', async () => {
     const { child } = makeAwaitableChild({ exitCode: 0 });
     const sent: NodeJS.Signals[] = [];
-    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never);
+    // Group still has a live member (an orphaned grandchild) → reap it.
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never, () => true);
     assert.strictEqual(ok, true);
     assert.deepStrictEqual(sent, ['SIGKILL']); // post-exit reap: no SIGTERM, no await
+  });
+
+  it('skips the post-exit group SIGKILL when the whole group has already drained', async () => {
+    const { child } = makeAwaitableChild({ exitCode: 0 });
+    const sent: NodeJS.Signals[] = [];
+    // The group has fully drained: a `-pid` SIGKILL risks signalling a recycled,
+    // unrelated group, and there is nothing of ours left to reap — so skip it.
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never, () => false);
+    assert.strictEqual(ok, true);     // still resolves true (the child has exited)
+    assert.deepStrictEqual(sent, []); // no signal sent into the drained group
   });
 
   it('SIGTERMs the tree and resolves without escalating when it exits in time', async () => {
