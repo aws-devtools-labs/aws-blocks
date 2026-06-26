@@ -257,6 +257,12 @@ equivalent). \`DATABASE_CA_CERT\` (inline PEM or a file path) overrides it if yo
 prefer to supply the cert via the environment. Optionally enable **Enforce SSL** in
 Database Settings so the server also rejects any non-TLS connection.
 
+> **Upgrading an existing app?** If your \`aws-blocks/supabase.ts\` was generated
+> before TLS verification was added, it has no \`resolveDbSsl()\` and connects
+> **without verifying the certificate**. Re-running \`npx bb-data pull\` regenerates
+> the wiring with verification and prompts for your CA — until you re-pull, the
+> existing file stays unverified.
+
 > **Keep \`database.ca.ts\` committed.** It holds a public certificate (no private
 > key) and is bundled into your deployed function so verification works there. Do
 > not add it to \`.gitignore\`; if it isn't deployed, the deployed function fails
