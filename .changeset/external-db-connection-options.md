@@ -27,3 +27,10 @@ it — pass `ssl: { ca }` (the certificate contents) — otherwise the connectio
 fail to validate. Pass `ssl: { rejectUnauthorized: false }` to keep the previous
 behavior explicitly. `db pull`-generated apps are unaffected in default
 connectivity.
+
+CI note: the `bb-data` CLI and migration paths (migrate status, generate-types,
+baseline, external migrations) now **fail closed in non-interactive runs** (`CI`
+set, excluding `CI=false`/`0`) when no CA is available. If you run these in CI/CD,
+set `DATABASE_CA_CERT` to your provider CA (inline PEM or a file path); otherwise
+they will throw instead of connecting unverified. Interactive (local) runs keep the
+warned, encrypted-but-unverified fallback.

@@ -48,6 +48,19 @@ test('externalDbSsl: no CA in CI but allowUnverifiedInCi → unverified fallback
   }
 });
 
+test('externalDbSsl: CI=false / CI=0 is treated as interactive (not fail-closed)', () => {
+  // Some environments set CI=false explicitly; that must not trip the fail-closed guard.
+  delete process.env.DATABASE_CA_CERT;
+  for (const v of ['false', '0']) {
+    process.env.CI = v;
+    try {
+      assert.deepStrictEqual(externalDbSsl(), { rejectUnauthorized: false }, `CI=${v}`);
+    } finally {
+      restore();
+    }
+  }
+});
+
 test('externalDbSsl: inline PEM → pins CA and verifies', () => {
   const pem = '-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----';
   process.env.DATABASE_CA_CERT = pem;

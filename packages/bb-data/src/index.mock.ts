@@ -153,14 +153,19 @@ function isConnectionString(
  */
 function mockExternalSsl(ssl: ExternalSslOptions | undefined): ExternalSslOptions {
   if (ssl) return ssl;
-  console.warn(
-    '[bb-data] DB TLS (local dev): this external connection has no `ssl` set — connecting WITHOUT ' +
-    'certificate verification locally, but the deployed runtime verifies by default. Pin your ' +
-    'provider CA via `ssl: { ca }` (or set `ssl: { rejectUnauthorized: false }` explicitly) so local ' +
-    'and deploy behave the same. See MIGRATION_GUIDE.md.',
-  );
+  if (!warnedMockSslOmitted) {
+    warnedMockSslOmitted = true;
+    console.warn(
+      '[bb-data] DB TLS (local dev): this external connection has no `ssl` set — connecting WITHOUT ' +
+      'certificate verification locally, but the deployed runtime verifies by default. Pin your ' +
+      'provider CA via `ssl: { ca }` (or set `ssl: { rejectUnauthorized: false }` explicitly) so local ' +
+      'and deploy behave the same. See MIGRATION_GUIDE.md.',
+    );
+  }
   return { rejectUnauthorized: false };
 }
+/** Warn at most once per process that an external connection omitted `ssl`. */
+let warnedMockSslOmitted = false;
 
 export { fromExisting } from './from-existing.js';
 export { RLSEnabledDatabase } from './database.js';

@@ -310,10 +310,16 @@ The host-side migration, baseline (`pg_dump`), and `--url` CLI connections origi
 `fromExisting`. **Resolved (fast-follow landed):** `fromExisting` now accepts an `ssl` option and the
 runtime verifies by default; the DDL/baseline/`--url` paths now resolve TLS through the shared
 `externalDbSsl()` helper, which pins a CA from `DATABASE_CA_CERT` (inline PEM or file path) and strips
-`sslmode` so the CA takes effect. **Residual:** when `DATABASE_CA_CERT` is not set, these operator-host,
-ephemeral connections still fall back to `rejectUnauthorized: false` (the operator is connecting to a
-database they own with a string they just supplied). Unlike the deployed runtime — which pins the CA
-committed in `database.ca.ts` by `db pull` — the operational paths read the CA from the environment only.
+`sslmode` so the CA takes effect. **Residual:** when `DATABASE_CA_CERT` is not set, these
+operator-host, ephemeral connections fall back to `rejectUnauthorized: false` in an interactive run
+(the operator is connecting to a database they own with a string they just supplied) — but in a
+**non-interactive run** (`CI` set, excluding `CI=false`/`0`) they now **fail closed** rather than run a
+privileged DDL/migration unverified. First-pull `db pull` introspection is the one exception (it runs
+before a CA is captured) and opts into the unverified fallback explicitly. Limitation: this gate keys
+off the conventional `CI` env var, so a pipeline or deploy host that does not set `CI` is treated as
+interactive — set `DATABASE_CA_CERT` to guarantee verification in any automated run. Unlike the
+deployed runtime — which pins the CA committed in `database.ca.ts` by `db pull` and fails closed when
+it is absent — the operational paths read the CA from the environment only.
 
 ## D-010: `--telemetry-file` flag writes regardless of opt-out status
 

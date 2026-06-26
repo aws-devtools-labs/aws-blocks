@@ -34,6 +34,22 @@ import { readFileSync } from 'node:fs';
  */
 const PEM_CERT_MARKER = '-----BEGIN CERTIFICATE-----';
 
+/**
+ * Whether we're running in a non-interactive automation context (CI/CD), where a
+ * privileged DB operation must not silently run unverified.
+ *
+ * Detection is best-effort and based on the conventional `CI` env var (set by
+ * GitHub Actions, GitLab, CircleCI, etc.), explicitly treating the common
+ * `CI=false` / `CI=0` opt-out strings as interactive. Limitation: a pipeline or
+ * deploy host that does not set `CI` is treated as interactive, so the unverified
+ * fallback still applies there — set `DATABASE_CA_CERT` to guarantee verification
+ * in any automated run.
+ */
+function isNonInteractive(): boolean {
+  const ci = process.env.CI;
+  return !!ci && ci !== 'false' && ci !== '0';
+}
+
 /** Read a CA file, surfacing a TLS-specific error instead of a bare ENOENT. */
 function readCaFile(filePath: string): string {
   let pem: string;
@@ -71,7 +87,7 @@ export function externalDbSsl(opts: { allowUnverifiedInCi?: boolean } = {}): { c
   }
   // No CA available. Fail closed in non-interactive automation (DDL/migrations
   // must not run against an unverified server), unless the caller opts in.
-  if (process.env.CI && !opts.allowUnverifiedInCi) {
+  if (isNonInteractive() && !opts.allowUnverifiedInCi) {
     throw new Error(
       '[bb-data] DB TLS: no CA certificate available (DATABASE_CA_CERT unset) in a non-interactive ' +
       'run, refusing to open an unverified connection for a privileged database operation. ' +
