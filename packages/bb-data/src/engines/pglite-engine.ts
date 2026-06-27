@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PGlite } from '@electric-sql/pglite';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError } from '../errors.js';
@@ -12,6 +12,15 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 /** PostgreSQL error code class for connection exceptions. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
+const PGLITE_REQUIRED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global'];
+const PGLITE_DATA_DIR_MARKERS = [
+  ...PGLITE_REQUIRED_DATA_DIR_ENTRIES,
+  'pg_wal',
+  'postgresql.conf',
+  'pg_hba.conf',
+  'pg_ident.conf',
+  'postmaster.pid',
+];
 
 /**
  * Translate a PGlite/PostgreSQL error to a standardized DatabaseErrors name.
@@ -53,6 +62,22 @@ function cleanStaleLock(dataDir: string): void {
   }
 }
 
+function hasInitializedPgliteDataDir(dataDir: string): boolean {
+  return PGLITE_REQUIRED_DATA_DIR_ENTRIES.every((entry) => existsSync(join(dataDir, entry)));
+}
+
+function recoverIncompletePgliteDataDir(dataDir: string): void {
+  const entries = readdirSync(dataDir);
+  if (entries.length === 0 || hasInitializedPgliteDataDir(dataDir)) return;
+
+  const looksLikePgliteInit = entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
+  if (!looksLikePgliteInit) return;
+
+  rmSync(dataDir, { recursive: true, force: true });
+  mkdirSync(dataDir, { recursive: true });
+  console.warn(`[PGliteEngine] Recreated incomplete PGlite data directory ${dataDir}`);
+}
+
 /**
  * DatabaseEngine implementation using PGlite (WASM PostgreSQL).
  * Used for local development. Data persists in the specified directory.
@@ -73,6 +98,7 @@ export class PGliteEngine implements DatabaseEngine {
     // boot. Create the full path up front (matches DsqlMockEngine).
     mkdirSync(dataDir, { recursive: true });
     cleanStaleLock(dataDir);
+    recoverIncompletePgliteDataDir(dataDir);
     this.db = new PGlite(dataDir);
   }
 
