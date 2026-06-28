@@ -186,6 +186,8 @@ One folder per Building Block under `docs/<block>/`: start with its `README.md`,
 | Data | persists to `.bb-data/` (delete to reset) | lives in AWS |
 | Use for | rapid iteration, tests | pre-production validation against real services |
 
+> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
+
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
 
 ## Testing
