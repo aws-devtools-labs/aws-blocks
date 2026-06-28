@@ -25,6 +25,8 @@ node -e "console.log(require.resolve('@aws-blocks/blocks/docs/bb-distributed-tab
 
 Swap `bb-distributed-table` for the block you need; the catalog in `docs/README.md` lists every block.
 
+> **Resolve, don't follow links.** The relative markdown links inside the docs (e.g. `./docs/<block>/README.md`) are for humans browsing on GitHub/npm — always locate a doc with `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` rather than treating those links as filesystem paths.
+
 **Fallback — if resolution fails**, read the files directly:
 
 - Dev guide + catalog + decision tree: `node_modules/@aws-blocks/blocks/docs/README.md`

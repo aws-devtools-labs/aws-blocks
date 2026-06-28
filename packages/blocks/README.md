@@ -147,6 +147,8 @@ If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible quer
 
 One folder per Building Block under `docs/<block>/`: start with its `README.md`, then read `API.md` for exact signatures and `DESIGN.md` for architecture & rationale. The catalog below is generated — run `npm run sync-docs` after adding or removing a block.
 
+> **Tools & agents:** locate a doc programmatically with `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (or `require.resolve('@aws-blocks/blocks/docs/README.md')` for this catalog) rather than assuming a `node_modules/` path. The relative links below are for humans browsing on GitHub/npm.
+
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
 |-------|--------------|----------|
@@ -220,6 +222,19 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
 - **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC to a single `POST /aws-blocks/api`; use the typed import instead.
+
+## Security Considerations
+
+- Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
+- Use `new AppSetting(scope, id, { secret: true })` for API keys and credentials — never hardcode or use `.env` files
+- Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
+- Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
+- Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
+- Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
+- For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
+- Enable `monitoring: { enabled: true, snsTopicArn: '...' }` on Hosting for production alerts
+- Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
+- Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 
 ## Reference
 
