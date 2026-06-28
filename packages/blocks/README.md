@@ -112,28 +112,28 @@ onAuthChange(authApi, (user) => {
 Start from what you need:
 
 - **Store data**
-  - Simple key → value (caches, flags, user prefs) → `KVStore` ([bb-kv-store](./docs/bb-kv-store/README.md))
-  - Structured records with indexes and queries → `DistributedTable` ([bb-distributed-table](./docs/bb-distributed-table/README.md)) — **default for most data**
+  - Simple key → value (caches, flags, user prefs) → `KVStore` (bb-kv-store)
+  - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
   - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
-  - Files, blobs, uploads, static assets → `FileBucket` ([bb-file-bucket](./docs/bb-file-bucket/README.md))
-  - A single config value or secret → `AppSetting` ([bb-app-setting](./docs/bb-app-setting/README.md))
+  - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
+  - A single config value or secret → `AppSetting` (bb-app-setting)
 - **Authenticate users**
-  - Username/password, prototypes/MVPs → `AuthBasic` ([bb-auth-basic](./docs/bb-auth-basic/README.md))
-  - Cognito user pools, MFA, groups → `AuthCognito` ([bb-auth-cognito](./docs/bb-auth-cognito/README.md))
-  - External identity provider (OIDC) → `AuthOIDC` ([bb-auth-oidc](./docs/bb-auth-oidc/README.md))
+  - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
+  - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
+  - External identity provider (OIDC) → `AuthOIDC` (bb-auth-oidc)
 - **Run work outside the request/response**
-  - Fire-and-forget background jobs → `AsyncJob` ([bb-async-job](./docs/bb-async-job/README.md))
-  - Scheduled / recurring tasks → `CronJob` ([bb-cron-job](./docs/bb-cron-job/README.md))
-- **Push live updates to browsers** (chat, presence, dashboards) → `Realtime` ([bb-realtime](./docs/bb-realtime/README.md))
+  - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
+  - Scheduled / recurring tasks → `CronJob` (bb-cron-job)
+- **Push live updates to browsers** (chat, presence, dashboards) → `Realtime` (bb-realtime)
 - **Build AI features**
-  - Agent with tool use + conversation → `Agent` ([bb-agent](./docs/bb-agent/README.md))
-  - Semantic document retrieval (RAG) → `KnowledgeBase` ([bb-knowledge-base](./docs/bb-knowledge-base/README.md))
-- **Send transactional email** → `EmailClient` ([bb-email-client](./docs/bb-email-client/README.md))
+  - Agent with tool use + conversation → `Agent` (bb-agent)
+  - Semantic document retrieval (RAG) → `KnowledgeBase` (bb-knowledge-base)
+- **Send transactional email** → `EmailClient` (bb-email-client)
 - **Observe and operate**
-  - Structured logs → `Logger` ([bb-logger](./docs/bb-logger/README.md))
-  - Custom metrics → `Metrics` ([bb-metrics](./docs/bb-metrics/README.md))
-  - Distributed traces → `Tracer` ([bb-tracer](./docs/bb-tracer/README.md))
-  - Auto CloudWatch dashboard → `Dashboard` ([bb-dashboard](./docs/bb-dashboard/README.md))
+  - Structured logs → `Logger` (bb-logger)
+  - Custom metrics → `Metrics` (bb-metrics)
+  - Distributed traces → `Tracer` (bb-tracer)
+  - Auto CloudWatch dashboard → `Dashboard` (bb-dashboard)
 
 ### Choosing a data block
 
@@ -143,38 +143,42 @@ Reach for one of the SQL blocks when you need to filter or join results across m
 
 If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible querying. Use `Database` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
 
-### Catalog
+## Building Block documentation
 
-One folder per Building Block under `docs/<block>/`: start with its `README.md`, then read `API.md` for exact signatures and `DESIGN.md` for architecture & rationale. The catalog below is generated — run `npm run sync-docs` after adding or removing a block.
+Every Building Block ships its full docs — `README.md`, `API.md`, and `DESIGN.md` — inside the `@aws-blocks/blocks` package under `docs/<block>/`. To read them, locate the bundled folder:
 
-> **Tools & agents:** locate a doc programmatically with `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (or `require.resolve('@aws-blocks/blocks/docs/README.md')` for this catalog) rather than assuming a `node_modules/` path. The relative links below are for humans browsing on GitHub/npm.
+```bash
+node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
+```
+
+If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`) plus one subfolder per block; the catalog below lists every block.
 
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
 |-------|--------------|----------|
-| [auth-common](./docs/auth-common/README.md) | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
-| [bb-agent](./docs/bb-agent/README.md) | AI agent with streaming, tool calling, and conversation persistence. | — |
-| [bb-app-setting](./docs/bb-app-setting/README.md) | A single application configuration value backed by SSM Parameter Store. | — |
-| [bb-async-job](./docs/bb-async-job/README.md) | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, SQS |
-| [bb-auth-basic](./docs/bb-auth-basic/README.md) | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
-| [bb-auth-cognito](./docs/bb-auth-cognito/README.md) | Authentication backed by Amazon Cognito User Pools. | — |
-| [bb-auth-oidc](./docs/bb-auth-oidc/README.md) | OIDC sign-in gate for AWS Blocks applications. | — |
-| [bb-cron-job](./docs/bb-cron-job/README.md) | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
-| [bb-dashboard](./docs/bb-dashboard/README.md) | Auto-generated CloudWatch Dashboard for application observability. | — |
-| [bb-data](./docs/bb-data/README.md) | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
-| [bb-distributed-data](./docs/bb-distributed-data/README.md) | Serverless SQL database backed by Amazon Aurora DSQL. | — |
-| [bb-distributed-table](./docs/bb-distributed-table/README.md) | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
-| [bb-email-client](./docs/bb-email-client/README.md) | Transactional email sending via Amazon SES. | — |
-| [bb-file-bucket](./docs/bb-file-bucket/README.md) | File storage backed by Amazon S3. | — |
-| [bb-knowledge-base](./docs/bb-knowledge-base/README.md) | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
-| [bb-kv-store](./docs/bb-kv-store/README.md) | Simple key-value storage backed by DynamoDB. | — |
-| [bb-logger](./docs/bb-logger/README.md) | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
-| [bb-metrics](./docs/bb-metrics/README.md) | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
-| [bb-realtime](./docs/bb-realtime/README.md) | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
-| [bb-tracer](./docs/bb-tracer/README.md) | Distributed tracing backed by AWS X-Ray. | — |
-| [core](./docs/core/README.md) | Core primitives for building full-stack applications with the AWS Blocks. | — |
-| [hosting](./docs/hosting/README.md) | Low-level CDK L3 constructs for deploying web applications on AWS | — |
-| [pipeline](./docs/pipeline/README.md) | CDK Pipelines-based CI/CD construct for AWS Blocks applications. | — |
+| auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
+| bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
+| bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
+| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, SQS |
+| bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
+| bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
+| bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
+| bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
+| bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
+| bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
+| bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
+| bb-email-client | Transactional email sending via Amazon SES. | — |
+| bb-file-bucket | File storage backed by Amazon S3. | — |
+| bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
+| bb-kv-store | Simple key-value storage backed by DynamoDB. | — |
+| bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
+| bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
+| bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
+| bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
+| core | Core primitives for building full-stack applications with the AWS Blocks. | — |
+| hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
+| pipeline | CDK Pipelines-based CI/CD construct for AWS Blocks applications. | — |
 <!-- END:block-catalog -->
 
 ## Local development and deploying

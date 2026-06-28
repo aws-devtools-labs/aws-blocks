@@ -103,9 +103,7 @@ function buildCatalog(pkgs) {
 }
 
 function renderCatalogTable(entries) {
-  const rows = entries.map(
-    (e) => `| [${e.pkg}](./docs/${e.pkg}/README.md) | ${e.blurb || '—'} | ${e.keywords || '—'} |`,
-  );
+  const rows = entries.map((e) => `| ${e.pkg} | ${e.blurb || '—'} | ${e.keywords || '—'} |`);
   return ['| Block | What it does | Keywords |', '|-------|--------------|----------|', ...rows].join('\n');
 }
 

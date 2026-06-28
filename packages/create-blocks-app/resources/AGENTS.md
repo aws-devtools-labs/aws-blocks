@@ -5,32 +5,7 @@
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
-- **Docs (dev guide + block catalog + decision tree, then per-block API/DESIGN):** bundled in `@aws-blocks/blocks` — see [Reading the Building Block docs](#reading-the-building-block-docs).
-
-## Reading the Building Block docs
-
-The `@aws-blocks/blocks` package ships its full documentation under `docs/`. Locate it by **resolution first** (version-correct, independent of where the package is installed), and fall back to a hard-coded `node_modules` path only if resolution fails.
-
-**Primary — resolve, then read.** The dev guide (architecture, workflow, best practices, common mistakes) plus the block catalog and decision tree all live in one file:
-
-```bash
-node -e "console.log(require.resolve('@aws-blocks/blocks/docs/README.md'))"
-```
-
-Read the path it prints. For a specific block, resolve its docs the same way and read them in order — `README.md` (overview, start here), then `API.md` (exact method signatures / option types) and `DESIGN.md` (architecture & rationale) as needed:
-
-```bash
-node -e "console.log(require.resolve('@aws-blocks/blocks/docs/bb-distributed-table/README.md'))"
-```
-
-Swap `bb-distributed-table` for the block you need; the catalog in `docs/README.md` lists every block.
-
-> **Resolve, don't follow links.** The relative markdown links inside the docs (e.g. `./docs/<block>/README.md`) are for humans browsing on GitHub/npm — always locate a doc with `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` rather than treating those links as filesystem paths.
-
-**Fallback — if resolution fails**, read the files directly:
-
-- Dev guide + catalog + decision tree: `node_modules/@aws-blocks/blocks/docs/README.md`
-- Per-block: `node_modules/@aws-blocks/blocks/docs/<block>/{README,API,DESIGN}.md`
+- **AWS Blocks docs** ship inside the `@aws-blocks/blocks` package. Find the docs folder once: `node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"` (fallback: `node_modules/@aws-blocks/blocks/docs`). Read everything relative to it: `README.md` (dev guide + catalog + decision tree — start here), then `<block>/README.md`, `<block>/API.md`, `<block>/DESIGN.md`.
 
 ## Workflow
 
@@ -42,7 +17,7 @@ Swap `bb-distributed-table` for the block you need; the catalog in `docs/README.
 ## Rules
 
 - **Use Building Blocks** for all persistence and cloud abstractions — never local files, in-memory arrays, or local databases.
-- **Read block docs** before using a block — resolve `@aws-blocks/blocks/docs/<block>/README.md` (see [Reading the Building Block docs](#reading-the-building-block-docs)), then `API.md` / `DESIGN.md` as needed.
+- **Read block docs** before using a block — start with its `README.md`, then `API.md` / `DESIGN.md` as needed (see the **AWS Blocks docs** bullet above for where the docs folder lives).
 - **The JSON-RPC transport is invisible** — do not construct RPC payloads manually. Import and call the typed API directly.
 
 ## Deploying (requires AWS credentials)
