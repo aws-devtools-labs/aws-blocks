@@ -19,4 +19,4 @@ jobs:
         with:
           node-version-file: '.nvmrc'
       - name: Verify Building Block catalog is in sync
-        run: node scripts/sync-block-docs.mjs --check
+        run: node scripts/sync-catalog.mjs --check
