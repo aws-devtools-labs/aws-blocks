@@ -1,0 +1,22 @@
+name: Block Catalog Check
+
+# Fails the PR if the generated Building Block catalog table in
+# packages/blocks/README.md is out of date. The script only reads the committed
+# package READMEs + root README (Node builtins, zero deps), so no `npm ci` needed.
+# On failure its stderr tells the engineer to run `npm run sync-docs` and commit.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Catalog in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+      - name: Verify Building Block catalog is in sync
+        run: node scripts/sync-block-docs.mjs --check

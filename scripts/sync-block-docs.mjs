@@ -3,18 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Assembles `packages/blocks/docs/` from every Building Block's root markdown.
- * Run at build/publish time (not customer-side). Produces:
- *   packages/blocks/docs/README.md        — dev guide + decision tree + catalog
- *   packages/blocks/docs/<pkg>/README.md  — per-block overview
- *   packages/blocks/docs/<pkg>/API.md     — per-block API reference (when present)
- *   packages/blocks/docs/<pkg>/DESIGN.md  — per-block design notes (when present)
- *   packages/blocks/docs/<pkg>/<other>.md — any other block-specific doc (when present)
+ * Keeps the Building Block catalog and the shipped `docs/` artifact in sync with
+ * the per-block READMEs. Three modes:
  *
- * Inclusion rule: every package under packages/ that has a README.md and is not
- * in EXCLUDED. For each included package, mirror every root-level *.md EXCEPT the
- * ones in SKIP_MARKDOWN (CHANGELOG.md) — so block-specific docs are picked up
- * automatically without listing them here.
+ *   --write  (default; `npm run sync-docs`, run MANUALLY when adding/removing a block)
+ *     1. Regenerate ONLY the catalog table between the
+ *        `<!-- BEGIN:block-catalog -->` / `<!-- END:block-catalog -->` markers in
+ *        packages/blocks/README.md (everything else, incl. the static decision-tree
+ *        prose, is preserved).
+ *     2. Generate the per-block docs folders under packages/blocks/docs/<pkg>/
+ *        (mirror every root *.md except CHANGELOG.md).
+ *     3. Write packages/blocks/docs/README.md as a copy of the (now catalog-containing)
+ *        packages/blocks/README.md.
+ *
+ *   --check  (CI / PR gate)
+ *     Regenerate the catalog table in memory and compare it to what is committed
+ *     between the markers in packages/blocks/README.md. Exit 1 with an actionable
+ *     message if they differ or the markers are missing; exit 0 if in sync. Writes
+ *     nothing.
+ *
+ *   --docs-only  (build/publish `prebuild` hook)
+ *     Generate ONLY the gitignored docs/ artifact — per-block folders + docs/README.md
+ *     (a verbatim copy of the committed packages/blocks/README.md). Never modifies the
+ *     committed packages/blocks/README.md, so builds don't dirty a tracked file.
+ *
+ * Inclusion rule: every package under packages/ that has a README.md and is not in
+ * EXCLUDED. For each included package, mirror every root-level *.md EXCEPT the ones in
+ * SKIP_MARKDOWN (CHANGELOG.md) — so block-specific docs are picked up automatically.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from 'node:fs';
@@ -24,86 +39,151 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const packagesDir = join(__dirname, '..', 'packages');
 const outDir = join(packagesDir, 'blocks', 'docs');
-const devGuidePath = join(packagesDir, 'blocks', 'README.md');
+const readmePath = join(packagesDir, 'blocks', 'README.md');
 
 const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
 
 // Root-level markdown that should NOT be mirrored into the per-block doc folder.
 const SKIP_MARKDOWN = new Set(['CHANGELOG.md']);
 
-const DECISION_TREE = `# AWS Blocks — Building Block Catalog
+const BEGIN_MARKER = '<!-- BEGIN:block-catalog -->';
+const END_MARKER = '<!-- END:block-catalog -->';
 
-Start from what you need:
+const SYNC_HINT = 'Run `npm run sync-docs` and commit the result.';
 
-- **Store data**
-  - Simple key → value (caches, flags, user prefs) → \`KVStore\` ([bb-kv-store](./bb-kv-store/README.md))
-  - Structured records with indexes and queries → \`DistributedTable\` ([bb-distributed-table](./bb-distributed-table/README.md)) — **default for most data**
-  - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
-  - Files, blobs, uploads, static assets → \`FileBucket\` ([bb-file-bucket](./bb-file-bucket/README.md))
-  - A single config value or secret → \`AppSetting\` ([bb-app-setting](./bb-app-setting/README.md))
-- **Authenticate users**
-  - Username/password, prototypes/MVPs → \`AuthBasic\` ([bb-auth-basic](./bb-auth-basic/README.md))
-  - Cognito user pools, MFA, groups → \`AuthCognito\` ([bb-auth-cognito](./bb-auth-cognito/README.md))
-  - External identity provider (OIDC) → \`AuthOIDC\` ([bb-auth-oidc](./bb-auth-oidc/README.md))
-- **Run work outside the request/response**
-  - Fire-and-forget background jobs → \`AsyncJob\` ([bb-async-job](./bb-async-job/README.md))
-  - Scheduled / recurring tasks → \`CronJob\` ([bb-cron-job](./bb-cron-job/README.md))
-- **Push live updates to browsers** (chat, presence, dashboards) → \`Realtime\` ([bb-realtime](./bb-realtime/README.md))
-- **Build AI features**
-  - Agent with tool use + conversation → \`Agent\` ([bb-agent](./bb-agent/README.md))
-  - Semantic document retrieval (RAG) → \`KnowledgeBase\` ([bb-knowledge-base](./bb-knowledge-base/README.md))
-- **Send transactional email** → \`EmailClient\` ([bb-email-client](./bb-email-client/README.md))
-- **Observe and operate**
-  - Structured logs → \`Logger\` ([bb-logger](./bb-logger/README.md))
-  - Custom metrics → \`Metrics\` ([bb-metrics](./bb-metrics/README.md))
-  - Distributed traces → \`Tracer\` ([bb-tracer](./bb-tracer/README.md))
-  - Auto CloudWatch dashboard → \`Dashboard\` ([bb-dashboard](./bb-dashboard/README.md))
+const mode = process.argv.includes('--check')
+  ? 'check'
+  : process.argv.includes('--docs-only')
+    ? 'docs-only'
+    : 'write';
 
-### Choosing a data block
+const packages = getPackages();
+const catalog = buildCatalog(packages);
+const table = renderCatalogTable(catalog);
 
-Default to \`DistributedTable\` for your data models unless your domain specifically requires SQL engine capabilities.
-
-Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
-
-If you need SQL, prefer \`DistributedDatabase\` for basic Postgres-compatible querying. Use \`Database\` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.`;
-
-// Clean and recreate
-rmSync(outDir, { recursive: true, force: true });
-mkdirSync(outDir, { recursive: true });
-
-// Gather all @aws-blocks packages with READMEs
-const packages = readdirSync(packagesDir).filter(
-  (name) => !name.startsWith('.') && !EXCLUDED.has(name) && existsSync(join(packagesDir, name, 'README.md')),
-);
-
-const catalog = [];
-
-for (const pkg of packages) {
-  const pkgDir = join(packagesDir, pkg);
-  const blockOutDir = join(outDir, pkg);
-  mkdirSync(blockOutDir, { recursive: true });
-
-  // Mirror every root-level markdown file (README.md, API.md, DESIGN.md, and any
-  // block-specific docs) except the skipped ones, so new docs ship automatically.
-  const mdFiles = readdirSync(pkgDir, { withFileTypes: true }).filter(
-    (entry) => entry.isFile() && entry.name.endsWith('.md') && !SKIP_MARKDOWN.has(entry.name),
-  );
-  for (const entry of mdFiles) {
-    writeFileSync(join(blockOutDir, entry.name), readFileSync(join(pkgDir, entry.name), 'utf-8'));
-  }
-
-  const readme = readFileSync(join(pkgDir, 'README.md'), 'utf-8');
-  catalog.push({ pkg, blurb: extractBlurb(readme), keywords: extractKeywords(readme) });
+if (mode === 'check') {
+  runCheck();
+} else {
+  runGenerate(mode);
 }
 
-catalog.sort((a, b) => a.pkg.localeCompare(b.pkg));
+// ─── Modes ───────────────────────────────────────────────────────────────────
 
-const devGuide = readFileSync(devGuidePath, 'utf-8');
-writeFileSync(join(outDir, 'README.md'), renderReadme(devGuide, catalog));
+function runCheck() {
+  const readme = readFileSync(readmePath, 'utf-8');
+  const current = extractBetweenMarkers(readme);
 
-console.log(`Synced ${catalog.length} block docs → packages/blocks/docs/`);
+  if (current === null) {
+    process.stderr.write(
+      `❌ Building Block catalog markers (${BEGIN_MARKER} / ${END_MARKER}) not found in packages/blocks/README.md. ${SYNC_HINT}\n`,
+    );
+    process.exit(1);
+  }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+  if (current.trim() !== table.trim()) {
+    process.stderr.write(
+      `❌ Building Block catalog in packages/blocks/README.md is out of date. ${SYNC_HINT}\n`,
+    );
+    process.exit(1);
+  }
+
+  console.log('✅ Building Block catalog in packages/blocks/README.md is up to date.');
+  process.exit(0);
+}
+
+function runGenerate(currentMode) {
+  const readme = readFileSync(readmePath, 'utf-8');
+
+  // --write injects the fresh catalog into the committed README; --docs-only must
+  // never touch the committed README, so it copies it verbatim into docs/.
+  let docsReadme = readme;
+  if (currentMode === 'write') {
+    const updated = injectCatalog(readme, table);
+    if (updated !== readme) writeFileSync(readmePath, updated);
+    docsReadme = updated;
+  }
+
+  generatePerBlockDocs();
+  writeFileSync(join(outDir, 'README.md'), docsReadme);
+
+  const where =
+    currentMode === 'write'
+      ? 'packages/blocks/README.md catalog + packages/blocks/docs/'
+      : 'packages/blocks/docs/';
+  console.log(`Synced ${catalog.length} block docs → ${where}`);
+}
+
+// ─── Catalog ─────────────────────────────────────────────────────────────────
+
+function getPackages() {
+  return readdirSync(packagesDir).filter(
+    (name) => !name.startsWith('.') && !EXCLUDED.has(name) && existsSync(join(packagesDir, name, 'README.md')),
+  );
+}
+
+function buildCatalog(pkgs) {
+  const entries = pkgs.map((pkg) => {
+    const readme = readFileSync(join(packagesDir, pkg, 'README.md'), 'utf-8');
+    return { pkg, blurb: extractBlurb(readme), keywords: extractKeywords(readme) };
+  });
+  entries.sort((a, b) => a.pkg.localeCompare(b.pkg));
+  return entries;
+}
+
+function renderCatalogTable(entries) {
+  const rows = entries.map(
+    (e) => `| [${e.pkg}](./docs/${e.pkg}/README.md) | ${e.blurb || '—'} | ${e.keywords || '—'} |`,
+  );
+  return ['| Block | What it does | Keywords |', '|-------|--------------|----------|', ...rows].join('\n');
+}
+
+// ─── docs/ artifact ──────────────────────────────────────────────────────────
+
+function generatePerBlockDocs() {
+  // Clean and recreate so removed blocks/files don't linger.
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+
+  for (const pkg of packages) {
+    const pkgDir = join(packagesDir, pkg);
+    const blockOutDir = join(outDir, pkg);
+    mkdirSync(blockOutDir, { recursive: true });
+
+    // Mirror every root-level markdown file (README.md, API.md, DESIGN.md, and any
+    // block-specific docs) except the skipped ones, so new docs ship automatically.
+    const mdFiles = readdirSync(pkgDir, { withFileTypes: true }).filter(
+      (entry) => entry.isFile() && entry.name.endsWith('.md') && !SKIP_MARKDOWN.has(entry.name),
+    );
+    for (const entry of mdFiles) {
+      writeFileSync(join(blockOutDir, entry.name), readFileSync(join(pkgDir, entry.name), 'utf-8'));
+    }
+  }
+}
+
+// ─── Marker helpers ──────────────────────────────────────────────────────────
+
+function injectCatalog(readme, catalogTable) {
+  const begin = readme.indexOf(BEGIN_MARKER);
+  const end = readme.indexOf(END_MARKER);
+  if (begin === -1 || end === -1 || end < begin) {
+    throw new Error(
+      `Building Block catalog markers (${BEGIN_MARKER} / ${END_MARKER}) not found in packages/blocks/README.md. ` +
+        'Add them where the catalog table should live, then re-run.',
+    );
+  }
+  const before = readme.slice(0, begin + BEGIN_MARKER.length);
+  const after = readme.slice(end);
+  return `${before}\n${catalogTable}\n${after}`;
+}
+
+function extractBetweenMarkers(readme) {
+  const begin = readme.indexOf(BEGIN_MARKER);
+  const end = readme.indexOf(END_MARKER);
+  if (begin === -1 || end === -1 || end < begin) return null;
+  return readme.slice(begin + BEGIN_MARKER.length, end);
+}
+
+// ─── README parsing ──────────────────────────────────────────────────────────
 
 function extractBlurb(content) {
   const lines = content.split('\n');
@@ -122,27 +202,4 @@ function extractBlurb(content) {
 function extractKeywords(content) {
   const match = content.match(/\*\*Keywords?:\*\*\s*(.+)/i);
   return match ? match[1].trim() : '';
-}
-
-function renderReadme(devGuide, catalog) {
-  // docs/README.md is generated — the authored dev guide (packages/blocks/README.md)
-  // followed by the catalog + decision tree. Edit those sources, not docs/README.md.
-  return [devGuide.trimEnd(), '', '', renderCatalog(catalog), ''].join('\n');
-}
-
-function renderCatalog(catalog) {
-  const rows = catalog.map(
-    (e) => `| [${e.pkg}](./${e.pkg}/README.md) | ${e.blurb || '—'} | ${e.keywords || '—'} |`,
-  );
-  return [
-    DECISION_TREE,
-    '',
-    '## Catalog',
-    '',
-    'One folder per Building Block under `docs/<block>/`: start with its `README.md`, then read `API.md` for exact signatures and `DESIGN.md` for architecture & rationale.',
-    '',
-    '| Block | What it does | Keywords |',
-    '|-------|--------------|----------|',
-    ...rows,
-  ].join('\n');
 }
