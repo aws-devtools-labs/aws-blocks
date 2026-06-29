@@ -576,6 +576,33 @@ export class CdnConstruct extends Construct {
         })
       : undefined;
 
+    // The default behavior's cache policy:
+    //   - compute deploys → `ssrCachePolicy` (honors origin Cache-Control, keys
+    //     on the Next.js router headers).
+    //   - pure-static deploys (`hasCompute === false`) → the AWS-managed
+    //     `CACHING_OPTIMIZED`. Without this the static default behavior would
+    //     fall back to `CACHING_DISABLED`, which ignores the origin's
+    //     `Cache-Control` and turns every immutable hashed asset
+    //     (`/_next/static/*`, `/_astro/*`, `/_nuxt/*`, carrying
+    //     `max-age=31536000, immutable`) into an edge MISS to S3. This restores
+    //     the edge caching the pre-KVS model gave via `makeStaticBehavior`,
+    //     which also used `CACHING_OPTIMIZED`.
+    //
+    // Why the AWS-MANAGED `CACHING_OPTIMIZED` and not a custom `minTtl: 0`
+    // policy: AWS-managed policies don't count against the per-account
+    // "cache policies" quota (default 20), so a custom policy per static
+    // distribution would burn that scarce account-wide limit (and fails to
+    // deploy once the account is at the cap). `CACHING_OPTIMIZED` honors the
+    // origin `Cache-Control` (immutable assets cache up to 1y); its `minTtl: 1s`
+    // can briefly edge-cache the `no-cache` HTML, but that is SAFE across
+    // deploys: every static request — HTML included — is rewritten to
+    // `/builds/<buildId>/...` BEFORE the cache lookup, so the cache key is
+    // build-scoped and a redeploy (new buildId) yields a new key rather than
+    // serving the old build's HTML. Hashed asset filenames are content-addressed
+    // on top. Within a build the HTML is identical, so the 1s window is benign.
+    const defaultCachePolicy =
+      ssrCachePolicy ?? CachePolicy.CACHING_OPTIMIZED;
+
     // ════════════════════════════════════════════════════════════════
     // KVS edge routing (single behavior + CloudFront Function + KVS).
     //
@@ -686,7 +713,7 @@ export class CdnConstruct extends Construct {
       origin: s3Origin,
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: ssrCachePolicy ?? CachePolicy.CACHING_DISABLED,
+      cachePolicy: defaultCachePolicy,
       compress: true,
       originRequestPolicy: hasCompute
         ? OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER

@@ -607,6 +607,63 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('uses CACHING_OPTIMIZED on a pure-static deploy so immutable assets edge-cache (Finding 1)', () => {
+      // Regression: a static deploy (no compute) used to fall back to the
+      // AWS-managed CACHING_DISABLED on the single default behavior, ignoring
+      // origin Cache-Control and turning every immutable hashed asset into an
+      // edge MISS. It must instead use CACHING_OPTIMIZED (the same managed
+      // policy the pre-KVS makeStaticBehavior used), which honors origin
+      // Cache-Control (immutable assets cache up to 1y). We use the MANAGED
+      // policy — not a custom minTtl:0 policy — so it costs zero against the
+      // 20-per-account custom-cache-policy quota.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest, // pure static: no compute origin
+        securityHeadersPolicy: policy,
+      });
+
+      const template = Template.fromStack(stack);
+      // No custom SSR CachePolicy is synthesized on a static deploy.
+      const customPolicies = template.findResources(
+        'AWS::CloudFront::CachePolicy',
+      );
+      assert.equal(
+        Object.keys(customPolicies).length,
+        0,
+        'static deploy must not synthesize a custom CachePolicy (would burn the 20/account quota)',
+      );
+
+      // The default behavior must reference the AWS-managed CACHING_OPTIMIZED
+      // policy ID (a string literal), NOT CACHING_DISABLED.
+      const CACHING_OPTIMIZED_ID = '658327ea-f89d-4fab-a63d-7e88639e58f6';
+      const CACHING_DISABLED_ID = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: {
+            DefaultCacheBehavior: { CachePolicyId: unknown };
+          };
+        };
+      };
+      const cachePolicyId =
+        dist.Properties.DistributionConfig.DefaultCacheBehavior.CachePolicyId;
+      assert.equal(
+        cachePolicyId,
+        CACHING_OPTIMIZED_ID,
+        'static default behavior must use the managed CACHING_OPTIMIZED policy',
+      );
+      assert.notEqual(
+        cachePolicyId,
+        CACHING_DISABLED_ID,
+        'static default behavior must NOT fall back to CACHING_DISABLED',
+      );
+    });
+
     void it('routes static routes to S3 via the KVS table (no per-route behaviors)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
