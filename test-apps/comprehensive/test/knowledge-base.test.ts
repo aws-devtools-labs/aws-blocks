@@ -3,7 +3,6 @@
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert';
-import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
@@ -12,52 +11,39 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
 
 /**
- * Gate retrieval tests on knowledge-base ingestion readiness using the
- * `isReady()` API (exposed here as `kbReady`). Bedrock ingests asynchronously
- * after deploy, so during the warm-up window we poll readiness rather than
- * probing `kbRetrieve` for results.
+ * Gate retrieval tests on knowledge-base ingestion readiness.
  *
- * - `kbReady() === false` is the expected transient "still ingesting" state —
- *   we print a friendly one-liner and keep polling.
- * - A *thrown* error is a real failure (a failed ingestion job surfaced as
- *   `IngestionFailedException`, a `KnowledgeBaseValidationError`, or anything
- *   unexpected) and is surfaced immediately rather than masked as warm-up.
+ * Bedrock ingests asynchronously after deploy, so during the warm-up window we
+ * wait for the KB to become queryable before probing `kbRetrieve`. We delegate
+ * to the wired `waitUntilReady()` endpoint (exposed here as `kbWaitUntilReady`)
+ * rather than hand-rolling a poll loop over `isReady()` (`kbReady`):
+ * `waitUntilReady()` owns the deadline AND rides out transient control-plane
+ * blips — throttling, a `RetrievalFailed`, or a brief not-yet-visible
+ * `ResourceNotFoundException` during the post-deploy poll — that a per-poll
+ * `isReady()` would otherwise surface as a hard suite failure.
  *
- * In local mode the mock reports ready immediately, so this returns on the
- * first poll.
+ * A *thrown* error here is therefore a real failure (a failed ingestion job
+ * surfaced as `IngestionFailedException`, a `KnowledgeBaseValidationError`, the
+ * readiness timeout, or anything unexpected) and is surfaced immediately rather
+ * than masked as warm-up.
+ *
+ * In local mode the mock resolves immediately, so this returns on the first poll.
  */
 async function gateOnReadiness(
   api: typeof apiType,
   { timeoutMs = 180_000, pollIntervalMs = 10_000 } = {},
 ): Promise<void> {
   const start = Date.now();
-  const deadline = start + timeoutMs;
-  let attempt = 0;
-  // Intentionally unbounded: the only exits are a ready KB (return), a thrown
-  // readiness error, or the mid-loop `Date.now() >= deadline` check below — that
-  // check is the sole timeout path (it must run after a poll, so the throw, not
-  // a loop-condition exit, is what bounds the wait).
-  while (true) {
-    attempt++;
-    const elapsed = Math.round((Date.now() - start) / 1000);
-    let ready: boolean;
-    try {
-      ready = await api.kbReady();
-    } catch (err: any) {
-      // Real failure (failed ingestion / validation / unexpected) — surface it.
-      console.error(`❌ KB readiness check failed: ${err.name || err.message}`);
-      throw err;
-    }
-    if (ready) {
-      console.log(`✅ KB ready (ingestion complete) — ${elapsed}s elapsed`);
-      return;
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`KB did not become ready within ${timeoutMs / 1000}s`);
-    }
-    console.log(`⏳ KB still warming up (ingestion in progress) — attempt #${attempt}, ${elapsed}s elapsed`);
-    await setTimeout(pollIntervalMs);
+  console.log('⏳ Waiting for KB ingestion readiness (warming up if needed)…');
+  try {
+    await api.kbWaitUntilReady({ timeoutMs, pollIntervalMs });
+  } catch (err: any) {
+    // Real failure (failed ingestion / validation / timeout / unexpected) — surface it.
+    console.error(`❌ KB readiness check failed: ${err.name || err.message}`);
+    throw err;
   }
+  const elapsed = Math.round((Date.now() - start) / 1000);
+  console.log(`✅ KB ready (ingestion complete) — ${elapsed}s elapsed`);
 }
 
 export function knowledgeBaseTests(getApi: () => typeof apiType) {

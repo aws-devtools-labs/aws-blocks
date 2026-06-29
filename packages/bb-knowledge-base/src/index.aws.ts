@@ -476,14 +476,17 @@ export class KnowledgeBase extends Scope {
 				consecutiveTransientErrors = 0;
 			} catch (err) {
 				// Terminal errors (FAILED job, missing-KB config, validation) short-circuit.
-				if (!isTransientControlPlaneError(err)) throw err;
+				// isTransientControlPlaneError() only returns true after its own
+				// `instanceof Error` guard, so pairing it with one here narrows `err` to
+				// `Error` for the rest of the catch — no per-use `as Error` casts needed.
+				if (!(err instanceof Error) || !isTransientControlPlaneError(err)) throw err;
 				// Transient control-plane blip: absorb a bounded run, then give up.
 				consecutiveTransientErrors += 1;
-				lastTransient = err as Error;
+				lastTransient = err;
 				if (consecutiveTransientErrors > maxConsecutiveTransientErrors) throw err;
 				this.log.warn(
 					`waitUntilReady: tolerating transient control-plane error ` +
-						`(${consecutiveTransientErrors}/${maxConsecutiveTransientErrors}), retrying: ${(err as Error).message}`,
+						`(${consecutiveTransientErrors}/${maxConsecutiveTransientErrors}), retrying: ${err.message}`,
 				);
 			}
 			if (Date.now() >= deadline) {
