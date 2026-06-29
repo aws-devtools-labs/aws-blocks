@@ -2,22 +2,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK-side teardown tests for KnowledgeBase.
+ * CDK-side tests for KnowledgeBase.
  *
- * History: the data `s3.Bucket` paired `RemovalPolicy.DESTROY` with
+ * Teardown: the data `s3.Bucket` paired `RemovalPolicy.DESTROY` with
  * `autoDeleteObjects` on a `destroy`/sandbox teardown, but the S3 Vectors L1
  * resources (`CfnVectorBucket` + `CfnIndex`) relied solely on their default
- * CloudFormation `DeletionPolicy` and leaked. These tests pin the fix: the
+ * CloudFormation `DeletionPolicy` and leaked. Those tests pin the fix: the
  * vector resources now mirror the data bucket's removal policy.
+ *
+ * Ingestion readiness: the handler role must be able to read ingestion-job
+ * status (`bedrock:GetIngestionJob` / `bedrock:ListIngestionJobs`) — scoped to
+ * the KB ARN like the existing `bedrock:Retrieve` grant — and the
+ * `DATA_SOURCE_ID` config the runtime readiness checks rely on must be
+ * registered and surface in the synthesized template.
+ *
+ * Synth guards: the runtime methods (`retrieve` / `isReady` / `waitUntilReady`)
+ * are stubbed on the CDK construct so an accidental synth-time call throws an
+ * actionable error instead of a cryptic `TypeError: not a function`.
  */
 import { test } from 'node:test';
+import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry } from '@aws-blocks/core/cdk';
 import { KnowledgeBase } from './index.cdk.js';
 
 // Real local-folder source so BucketDeployment + sidecar generation synth.
@@ -46,17 +57,24 @@ class StubBlocksStack extends cdk.Stack {
   }
 }
 
-function synth(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: boolean } = {}): Template {
+function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: boolean } = {}): {
+  stack: StubBlocksStack;
+  kb: KnowledgeBase;
+} {
   const app = new cdk.App(options.sandbox ? { context: { sandboxMode: 'true' } } : undefined);
   // S3 bucket names must be lowercase; the data bucket derives its name from
   // the scope chain, so keep ids lowercase.
   const stack = new StubBlocksStack(app, 'teststack');
   const parent = new Scope('app');
-  new KnowledgeBase(parent, 'docs', {
+  const kb = new KnowledgeBase(parent, 'docs', {
     source: FIXTURES,
     ...(options.removalPolicy ? { removalPolicy: options.removalPolicy } : {}),
   });
-  return Template.fromStack(stack);
+  return { stack, kb };
+}
+
+function synth(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: boolean } = {}): Template {
+  return Template.fromStack(buildStack(options).stack);
 }
 
 test("CDK: removalPolicy 'destroy' makes the data bucket + vector store deletable and adds auto-delete", () => {
@@ -89,4 +107,102 @@ test('CDK: sandboxMode context defaults the data bucket + vector store to destro
 
   template.hasResource(VECTOR_BUCKET_TYPE, { DeletionPolicy: 'Delete' });
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Delete' });
+});
+
+test('CDK: handler role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
+  const template = synth();
+
+  // isReady()/waitUntilReady() poll ingestion-job status — the handler role
+  // needs both actions, granted as Allow.
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+
+  // ...and that grant is scoped to the SAME knowledge-base ARN as the existing
+  // bedrock:Retrieve grant (not a wildcard) — ingestion jobs are sub-resources
+  // of the KB ARN.
+  const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+    (policy) => policy.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>,
+  );
+  const retrieveStmt = statements.find((s) => s.Action === 'bedrock:Retrieve');
+  const ingestionStmt = statements.find(
+    (s) => Array.isArray(s.Action) && (s.Action as string[]).includes('bedrock:GetIngestionJob'),
+  );
+  assert.ok(retrieveStmt, 'bedrock:Retrieve grant is present');
+  assert.ok(ingestionStmt, 'ingestion-status grant is present');
+  assert.deepStrictEqual(
+    ingestionStmt.Resource,
+    retrieveStmt.Resource,
+    'ingestion-status grant is scoped to the same KB ARN as bedrock:Retrieve',
+  );
+});
+
+test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and surfaces it in the synthesized template', () => {
+  const { stack } = buildStack();
+
+  // registerConfig records BLOCKS_{FULLID}_DATA_SOURCE_ID on the stack's config
+  // registry, bound to the Bedrock data source's id — the runtime readiness
+  // checks read it back at cold start. (Mirrors bb-app-setting's CDK test.)
+  const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+    | { entries: Map<string, unknown> }
+    | undefined;
+  assert.ok(registry, 'config registry exists on the stack');
+
+  const dataSourceKey = [...registry.entries.keys()].find((k) => k.endsWith('_DATA_SOURCE_ID'));
+  assert.ok(dataSourceKey, 'a *_DATA_SOURCE_ID config key is registered');
+  assert.match(dataSourceKey, /^BLOCKS_.+_DATA_SOURCE_ID$/);
+
+  const resolvedValue = stack.resolve(registry.entries.get(dataSourceKey)) as {
+    'Fn::GetAtt'?: [string, string];
+  };
+  assert.ok(resolvedValue['Fn::GetAtt'], 'config value is a CDK token (Fn::GetAtt)');
+  assert.strictEqual(
+    resolvedValue['Fn::GetAtt'][1],
+    'DataSourceId',
+    'config value is wired to the data source id',
+  );
+
+  // finalizeConfigRegistry serializes the registry into blocks-config.json via a
+  // BucketDeployment; the rendered config blob in the synthesized template
+  // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
+  // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
+  finalizeConfigRegistry(stack, stack.handler);
+  const template = Template.fromStack(stack);
+
+  const configBlob = JSON.stringify(
+    Object.values(template.findResources('Custom::CDKBucketDeployment')),
+  );
+  assert.match(configBlob, /BLOCKS_[A-Z0-9_]+_DATA_SOURCE_ID/);
+  assert.ok(
+    configBlob.includes('DataSourceId'),
+    'config blob binds the DATA_SOURCE_ID key to the data source id',
+  );
+
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Environment: Match.objectLike({
+      Variables: Match.objectLike({
+        BLOCKS_CONFIG_BUCKET: Match.anyValue(),
+        BLOCKS_CONFIG_KEY: 'blocks-config.json',
+      }),
+    }),
+  });
+});
+
+test('CDK: calling a runtime method throws an actionable synth-time error (not a cryptic TypeError)', () => {
+  const { kb } = buildStack();
+  const construct = kb as unknown as Record<string, (...args: unknown[]) => unknown>;
+  for (const method of ['retrieve', 'isReady', 'waitUntilReady']) {
+    assert.throws(
+      () => construct[method]('x'),
+      /cannot be called during CDK synth/,
+      `${method}() should throw the actionable synth-time error`,
+    );
+  }
 });

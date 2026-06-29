@@ -8,7 +8,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
 import * as path from 'node:path';
@@ -479,4 +479,14 @@ export class KnowledgeBase extends Scope {
 			resources: [knowledgeBaseArn],
 		}));
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` a KnowledgeBase resolves to this construct, which
+	// only provisions infrastructure. The data/readiness methods (retrieve/
+	// isReady/waitUntilReady) live in the runtime build. Calling them at module
+	// top-level (which runs during synth) would otherwise fail with a cryptic
+	// `X is not a function`; these stubs turn that into an actionable message.
+	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
+	isReady(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isReady'); }
+	waitUntilReady(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilReady'); }
 }
