@@ -465,22 +465,37 @@ async function handler(event) {
     }
   }
 
-  // 2. basePath canonical 308
   var bp = meta.bp;
+
+  // 2. assetPrefix strip — MUST run BEFORE the basePath 308 below.
+  //
+  // Next.js does NOT prefix assetPrefix with basePath: with basePath='/app' and
+  // assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*
+  // (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with
+  // basePath. So we strip the assetPrefix and, when a basePath is also set,
+  // RE-MAP the asset into the basePath form (/cdn-static/_next/* ->
+  // /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)
+  // basePath asset already has, so it matches the basePath-prefixed route table,
+  // the basePath 308 below does NOT fire (it is now under basePath), and the
+  // static branch (4c) strips basePath back off before the build-id rewrite.
+  //
+  // Ordering matters: if the basePath 308 ran first it would see /cdn-static/...
+  // (not under /app) and 308 to /app/cdn-static/... -> 404 -> the browser
+  // rejects the HTML 404 as a non-executable script (the reported bug).
+  if (meta.aP && (uri === meta.aP || uri.indexOf(meta.aP + '/') === 0)) {
+    uri = uri.substring(meta.aP.length);
+    if (uri.length === 0) { uri = '/'; }
+    if (bp && uri !== bp && uri.indexOf(bp + '/') !== 0) {
+      uri = uri === '/' ? bp + '/' : bp + uri;
+    }
+  }
+
+  // 2b. basePath canonical 308.
   if (bp) {
     if (uri !== bp && uri.indexOf(bp + '/') !== 0) {
       var target = uri === '/' ? bp + '/' : bp + uri;
       return { statusCode: 308, statusDescription: 'Permanent Redirect', headers: { location: { value: target } } };
     }
-  }
-
-  // 2b. assetPrefix strip BEFORE classification. With assetPrefix='/cdn-static'
-  // the browser requests /cdn-static/_next/static/*; the route table keys are
-  // unprefixed (/_next/static/*). Strip the prefix up front so the request
-  // classifies (and later S3-rewrites) against the real asset path.
-  if (meta.aP && (uri === meta.aP || uri.indexOf(meta.aP + '/') === 0)) {
-    uri = uri.substring(meta.aP.length);
-    if (uri.length === 0) { uri = '/'; }
   }
 
   // 3. origin selection: scan route table for first match. Also try the

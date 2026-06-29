@@ -454,6 +454,58 @@ void describe('request fn — G2 basePath canonical 308', () => {
   });
 });
 
+void describe('request fn — G2b basePath + non-nested assetPrefix (PR review #2)', () => {
+  // Regression: Next.js does NOT prefix assetPrefix with basePath. With
+  // basePath '/myapp' + assetPrefix '/cdn-static' the browser fetches
+  // /cdn-static/_next/static/* (no /myapp). The basePath 308 used to fire on
+  // that (it isn't under /myapp) and redirect to /myapp/cdn-static/... → 404 →
+  // browser rejects the HTML 404 as a non-executable script. The assetPrefix
+  // strip must run FIRST and the stripped asset must SKIP the basePath 308.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      assetPrefix: '/cdn-static',
+      routes: [
+        { pattern: '/_next/static/*', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+
+  void it('serves a prefixed asset from S3 (NO 308) when basePath is also set', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/cdn-static/_next/static/chunks/main.js'),
+    );
+    // The bug: this used to be a 308 to /myapp/cdn-static/... (or /myapp/_next).
+    assert.notEqual(
+      output.statusCode,
+      308,
+      'prefixed asset must NOT be basePath-redirected',
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/main.js');
+    assert.ok(!output.uri.includes('/cdn-static'));
+    assert.ok(!output.uri.includes('/myapp'));
+  });
+
+  void it('still 308-redirects a normal off-base page to the basePath', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/about'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/about');
+  });
+
+  void it('still 308-redirects the bare root to /myapp/', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/');
+  });
+});
+
 void describe('request fn — G3 redirects (exact + wildcard tail splice)', () => {
   const entries = buildKvsEntries({
     manifest: baseManifest({
