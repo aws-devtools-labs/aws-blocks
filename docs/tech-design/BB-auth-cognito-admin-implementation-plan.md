@@ -193,6 +193,73 @@ Port Appendix A into the repo convention (compile-is-the-test, `@ts-expect-error
 4. `test-apps/comprehensive` + `test-apps/native-bindings` typecheck after Step 5 fixes.
 5. `npm run build --workspace @aws-blocks/bb-auth-cognito` green.
 
+## Task list (implementation order)
+
+Each task is independently committable. T5 (`const O`) is isolated so it can be dropped if review pushes back without unwinding the rest.
+
+| # | Task | Files | Depends on |
+|---|---|---|---|
+| T1 | Add admin types + gate (`AdminOptions`, `AdminActionsOf`, `AdminSurface`, `AdminDisabled`, `AdminGetterOf`, `GroupAdmin`, `LifecycleAdmin`, `AdminUser`, `AdminCreateInit`); add `admin?` to `AuthCognitoOptions` | `src/types.ts` | — |
+| T2 | `admin.types-test.ts` (Appendix A) — land FIRST after T1 so the gate is locked before any runtime code | `src/admin.types-test.ts` | T1 |
+| T3 | Mock runtime `#admin` + `get admin()` + mutators on live `this.state` | `src/index.ts` | T1 |
+| T4 | AWS runtime `#admin` + getter against SDK `Admin*` commands | `src/index.aws.ts` | T1 |
+| T5 | `const O` migration on all four entries + fix the 2 `requireRole` call sites *(separable commit)* | `src/index*.ts`, `test-apps/*` | T1 |
+| T6 | Browser stub throwing `get admin()` | `src/index.browser.ts` | T1 |
+| T7 | CDK second `PolicyStatement` gated on `admin`, scoped by `actions` | `src/index.cdk.ts` | T1 |
+| T8 | Mock unit tests | `src/admin.test.ts` | T3 |
+| T9 | CDK grant unit tests | `src/index.cdk.test.ts` | T7 |
+| T10 | Integration: exercise `auth.admin` through the deployed Lambda backend | `test-apps/comprehensive/*` | T3,T4,T7 |
+| T11 | README: opt-in, narrowing, gating, session-freshness | `README.md` | T3,T4,T7 |
+
+## Verify list
+
+### Unit (no AWS account; runs in CI)
+Pattern mirrors the existing four test layers in this package.
+
+**Type tests** — `src/admin.types-test.ts` (compile-is-the-test, `@ts-expect-error`; run by `tsc --build`):
+- [ ] No `admin` opt-in ⇒ `auth.admin` member access is a compile error.
+- [ ] `admin: {}` ⇒ both `GroupAdmin` + `LifecycleAdmin` present.
+- [ ] `actions: ['groups']` ⇒ lifecycle methods are compile errors; group methods OK.
+- [ ] `actions: ['lifecycle']` ⇒ group methods are compile errors; lifecycle OK.
+- [ ] `const O` ⇒ group typo (`'editor'`) rejected **without** `as const`.
+- [ ] `admin: true` ⇒ construction is a compile error.
+- [ ] Default `O` ⇒ admin disabled; `requireRole('nope')` still rejected (const-O regression guard).
+
+**Mock behavior** — `src/admin.test.ts` (`node:test`, real mock instance, in-memory):
+- [ ] `addUserToGroup` writes to `state.groups`; visible to the same instance's next `requireRole`.
+- [ ] `addUserToGroup` to an unseeded group throws `GroupNotFound`.
+- [ ] `removeUserFromGroup` filters membership.
+- [ ] `createUser` mirrors `signUp` (custom-attr prefixing, password policy); `deleteUser` removes record **and** strips from every group array.
+- [ ] `disableUser`/`enableUser` toggle `MockUserRecord.disabled`; **regression:** `signIn` still rejects a disabled user (existing `index.ts:474` behavior unchanged).
+- [ ] `resetUserPassword`/`setUserPassword` set the existing `forcePasswordChange` flag (no new `forceChangePassword`).
+- [ ] `revokeUserSessions` deletes session records.
+- [ ] `scan`/`listUsersInGroup` paginate via `AsyncIterable`.
+- [ ] Getter throws the named error when `admin` not enabled (runtime guard for untyped JS callers).
+
+**CDK** — `src/index.cdk.test.ts` (`Template.fromStack` + `hasResourceProperties`):
+- [ ] No `admin` ⇒ synthesized handler role has **no** `Admin*` statement (byte-identical to today).
+- [ ] `actions: ['groups']` ⇒ exactly the 4 group actions, scoped to the pool ARN.
+- [ ] `actions: ['lifecycle']` ⇒ exactly the lifecycle/list actions.
+- [ ] `admin: {}` (omitted actions) ⇒ union of both sets.
+
+**Cross-cutting**:
+- [ ] `tsc --build` clean across all four entries + `admin.types-test.ts`.
+- [ ] `conditional-exports.test.ts` (`packages/blocks/src/`) green — confirms no new subpath/export-parity work.
+- [ ] `npm run build --workspace @aws-blocks/bb-auth-cognito` green.
+- [ ] `test-apps/comprehensive` + `test-apps/native-bindings` typecheck after the T5 call-site fixes.
+
+### Integration (live AWS; sandbox-gated)
+Exercises the real deployed surface through the Lambda backend, the way `test-apps/comprehensive/test/sandbox-admin-e2e.ts` already does for client methods. **Prereqs:** deployed `bb-test-*` sandbox, `AWS_PROFILE` with Cognito admin + CFN-describe perms, run from `test-apps/comprehensive`.
+- [ ] Deploy comprehensive backend with `admin: { actions: ['groups','lifecycle'] }` on the pool; CFN synth/deploy succeeds and the handler role carries the admin statement.
+- [ ] `auth.admin.createUser` → real Cognito user appears (`AdminGetUser` confirms).
+- [ ] `auth.admin.addUserToGroup` → then `signIn` + `requireRole('admins')` succeeds (membership took effect on fresh token).
+- [ ] Group change on an **existing** session is NOT retroactive until refresh; `revokeUserSessions` forces re-auth and the new claim appears (session-freshness contract).
+- [ ] `auth.admin.disableUser` → subsequent `signIn` returns `NotAuthorizedException`; `enableUser` restores it.
+- [ ] `setUserPassword(permanent:true)` → `signIn` with the new password succeeds, no `NEW_PASSWORD_REQUIRED`.
+- [ ] `scan` paginates across a >1-page user set.
+- [ ] **Negative least-privilege:** a pool deployed WITHOUT `admin` → calling an admin route 500s with an IAM `AccessDenied` server-side (no grant), proving the opt-in gates the grant.
+- [ ] Teardown via existing `sandbox-destroy.ts`.
+
 ## Open questions (carried from the counter-proposal)
 1. Property name: `admin` vs a louder `adminApi`.
 2. `actions` granularity: `'groups' | 'lifecycle'` vs 1:1 mapping to individual `Admin*` actions.
