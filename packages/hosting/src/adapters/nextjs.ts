@@ -1981,12 +1981,24 @@ const mapBehaviorsToRoutes = (
  *   `/api/edge/[slug]`            → `/api/edge/*`
  *   `/api/edge/catch/[...path]`   → `/api/edge/catch/*`
  *   `/products/[id]/reviews/[r]`  → `/products/*\/reviews/*`
+ *   `app//edge`                   → `/app/edge`   (basePath join + leading slash)
+ * @internal exported for unit testing.
  */
-const nextPatternToCloudFront = (pattern: string): string => {
+export const nextPatternToCloudFront = (pattern: string): string => {
   // Collapse catch-all `[...name]` (must come first; it's a superset).
   let out = pattern.replace(/\[\.\.\..+?\]/g, '*');
   // Collapse single dynamic segments `[name]`.
   out = out.replace(/\[[^/\]]+?\]/g, '*');
+  // Normalize slashes. With a configured basePath, OpenNext emits behavior
+  // patterns with the base joined WITHOUT a separator-collapse — e.g. basePath
+  // `/app` + route `/edge` becomes `app//edge` (no leading slash, DOUBLE inner
+  // slash). A `//` in a CloudFront path pattern matches the literal `//` URL,
+  // never the browser's single-slash `/app/edge`, so the dedicated edge-route
+  // behavior never matches → the request falls through to the default KVS
+  // router → the split edge bundle never runs → 500. Collapse repeated slashes
+  // and guarantee a single leading slash so the pattern matches the real URL.
+  out = out.replace(/\/{2,}/g, '/');
+  if (!out.startsWith('/')) out = `/${out}`;
   return out;
 };
 

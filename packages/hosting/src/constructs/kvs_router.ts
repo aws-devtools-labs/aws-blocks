@@ -444,6 +444,11 @@ function globMatch(uri, pattern) {
   }
   return ui === uri.length ? { tail: '' } : null;
 }
+function buildQueryString(request) {
+  return request.querystring && Object.keys(request.querystring).length > 0
+    ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
+    : '';
+}
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;
@@ -461,9 +466,7 @@ async function handler(event) {
   // 0b. www <-> apex canonical 301 (runs before everything else).
   if (meta.ww) {
     var host = request.headers.host && request.headers.host.value;
-    var qs = request.querystring && Object.keys(request.querystring).length > 0
-      ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
-      : '';
+    var qs = buildQueryString(request);
     if (meta.ww === 'toApex' && host && host.indexOf('www.') === 0) {
       return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: 'https://' + host.substring(4) + uri + qs } } };
     }
@@ -512,11 +515,15 @@ async function handler(event) {
     }
   }
 
-  // 2b. basePath canonical 308.
+  // 2b. basePath canonical 308. MUST preserve the query string — e.g.
+  // /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query
+  // hits the image optimizer with no url param -> 400 "url parameter is
+  // required" (and any ?ms=/?tag= API param is likewise lost). Mirror the www
+  // 301 above and append the rebuilt query string.
   if (bp) {
     if (uri !== bp && uri.indexOf(bp + '/') !== 0) {
       var target = uri === '/' ? bp + '/' : bp + uri;
-      return { statusCode: 308, statusDescription: 'Permanent Redirect', headers: { location: { value: target } } };
+      return { statusCode: 308, statusDescription: 'Permanent Redirect', headers: { location: { value: target + buildQueryString(request) } } };
     }
   }
 

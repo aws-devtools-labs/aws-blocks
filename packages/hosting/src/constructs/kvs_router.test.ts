@@ -452,6 +452,24 @@ void describe('request fn — G2 basePath canonical 308', () => {
     assert.notEqual(output.statusCode, 308);
     assert.equal(selectedOrigin, ORIGIN_ID.s3);
   });
+
+  // Regression (image 400 / dropped query): the 308 MUST carry the query string.
+  // /_next/image?url=...&w=64 redirecting to /myapp/_next/image WITHOUT the query
+  // hits the optimizer with no `url` → 400 "url parameter is required".
+  void it('preserves the query string in the basePath 308', async () => {
+    const { output } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/_next/image', {
+        querystring: { url: { value: '%2Fphoto.png' }, w: { value: '64' } },
+      }),
+    );
+    assert.equal(output.statusCode, 308);
+    assert.equal(
+      output.headers.location.value,
+      '/myapp/_next/image?url=%2Fphoto.png&w=64',
+    );
+  });
 });
 
 void describe('request fn — G2b basePath + non-nested assetPrefix (PR review #2)', () => {

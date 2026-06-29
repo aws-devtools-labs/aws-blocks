@@ -93,4 +93,18 @@ void describe('prependBasePath', () => {
     const once = prependBasePath('/app', '/foo/*');
     assert.strictEqual(prependBasePath('/app', once), once);
   });
+
+  // Slash normalization (edge 500 safety net) — the result never contains `//`.
+  void it('collapses a double slash in an already-prefixed pattern', () => {
+    assert.strictEqual(prependBasePath('/app', '/app//edge'), '/app/edge');
+  });
+
+  void it('collapses double slashes when basePath is undefined', () => {
+    assert.strictEqual(prependBasePath(undefined, '/app//edge'), '/app/edge');
+  });
+
+  void it('never emits // when joining basePath and a leading-slash pattern', () => {
+    // basePath + pattern must not produce /app//foo even for odd inputs.
+    assert.strictEqual(prependBasePath('/app', 'foo//bar'), '/app/foo/bar');
+  });
 });

@@ -14,6 +14,7 @@ import {
   stripNextInternalLocale,
   stripBasePathPrefix,
   stripBakedBasePath,
+  nextPatternToCloudFront,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -1913,5 +1914,39 @@ void describe('stripBakedBasePath', () => {
     ];
     stripBakedBasePath(m);
     assert.strictEqual(m.headers[0].source, '/secure-headers');
+  });
+});
+
+void describe('nextPatternToCloudFront', () => {
+  void it('collapses [...catchall] and [dynamic] segments', () => {
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/[slug]'),
+      '/api/edge/*',
+    );
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/catch/[...path]'),
+      '/api/edge/catch/*',
+    );
+  });
+
+  // Regression (edge 500): OpenNext joins basePath without collapsing the
+  // separator → `app//edge`. A `//` pattern matches the literal `//` URL, never
+  // the browser's `/app/edge`, so the dedicated edge behavior misses → the
+  // request falls to the default KVS router → split edge bundle never runs → 500.
+  void it('collapses an OpenNext double-slash basePath join', () => {
+    assert.strictEqual(nextPatternToCloudFront('app//edge'), '/app/edge');
+    assert.strictEqual(
+      nextPatternToCloudFront('app//api/edge'),
+      '/app/api/edge',
+    );
+  });
+
+  void it('guarantees a single leading slash', () => {
+    assert.strictEqual(nextPatternToCloudFront('app/edge'), '/app/edge');
+  });
+
+  void it('leaves a clean pattern unchanged', () => {
+    assert.strictEqual(nextPatternToCloudFront('/api/edge'), '/api/edge');
+    assert.strictEqual(nextPatternToCloudFront('/*'), '/*');
   });
 });
