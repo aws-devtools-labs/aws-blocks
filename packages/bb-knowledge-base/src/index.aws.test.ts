@@ -830,6 +830,47 @@ describe('waitUntilReady', () => {
 		}
 	});
 
+	test('Timeout message stays plain when an early transient blip was cleared by later clean polls', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR17');
+		// Inverse of the mid-streak case (WUR16): the transient blip happens on the
+		// FIRST poll, but every later poll is a clean IN_PROGRESS, so the streak (and
+		// the remembered error) reset well before the deadline. The Timeout that
+		// eventually fires must read as a plain "still ingesting" timeout — the stale
+		// transient from the already-cleared streak must never be folded into it.
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on the first poll only
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur17', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 40, pollIntervalMs: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(calls >= 2, `expected clean polls after the initial blip, got ${calls} call(s)`);
+					assert.ok(
+						!err.message.includes('last transient error'),
+						'a transient blip cleared by later clean polls must not leak into the timeout message',
+					);
+					assert.ok(
+						!err.message.includes('Rate exceeded'),
+						'the stale transient detail from the cleared streak must not appear',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
 	test('resolves immediately when no data source id is configured', async () => {
 		// Pre-readiness-API deployment: no DATA_SOURCE_ID injected, so there is
 		// nothing to poll. (Not a source-type distinction — the CDK layer registers

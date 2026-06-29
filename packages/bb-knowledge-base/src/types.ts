@@ -166,7 +166,14 @@ export interface RetrieveResult {
  * ```
  */
 export interface WaitUntilReadyOptions {
-	/** Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes). */
+	/**
+	 * Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes).
+	 *
+	 * `timeoutMs: 0` is a one-shot check, not a no-poll fast-fail: the deadline is
+	 * evaluated *after* the first readiness poll, so exactly one `isReady()` poll
+	 * always runs (and can resolve the wait) before a `KnowledgeBaseTimeoutException`
+	 * is thrown. Clamped to a minimum of 0.
+	 */
 	timeoutMs?: number;
 	/**
 	 * Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms.

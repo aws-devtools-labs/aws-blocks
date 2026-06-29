@@ -91,7 +91,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  */
 function jitterInterval(ms: number): number {
 	const factor = 1 + (Math.random() * 2 - 1) * 0.2; // 0.8–1.2
-	return Math.round(ms * factor);
+	return Math.max(1, Math.round(ms * factor));
 }
 
 // Match only messages that clearly indicate a metadata filter issue.
@@ -472,8 +472,12 @@ export class KnowledgeBase extends Scope {
 				// not deployed (or briefly not-yet-visible), or RetrievalFailedException
 				// for transient blips.
 				if (await this.isReady()) return;
-				// A clean poll clears any transient-error streak.
+				// A clean poll clears any transient-error streak — reset the remembered
+				// error alongside the counter so a later Timeout can only ever fold in a
+				// transient from the streak still in flight at the deadline, never a stale
+				// one from an earlier streak that clean polls already rode out.
 				consecutiveTransientErrors = 0;
+				lastTransient = undefined;
 			} catch (err) {
 				// Terminal errors (FAILED job, missing-KB config, validation) short-circuit.
 				// isTransientControlPlaneError() only returns true after its own
