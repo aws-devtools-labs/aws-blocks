@@ -98,7 +98,7 @@ function buildCatalog(pkgs) {
     const readme = readFileSync(join(packagesDir, pkg, 'README.md'), 'utf-8');
     return { pkg, blurb: extractBlurb(readme), keywords: extractKeywords(readme) };
   });
-  entries.sort((a, b) => a.pkg.localeCompare(b.pkg));
+  entries.sort((a, b) => (a.pkg < b.pkg ? -1 : a.pkg > b.pkg ? 1 : 0));
   return entries;
 }
 
