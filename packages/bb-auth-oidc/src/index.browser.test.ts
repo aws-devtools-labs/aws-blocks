@@ -263,3 +263,158 @@ describe('AuthOIDCClient.handleRedirectCallback — return shape', () => {
 		assert.strictEqual('iss' in lastExchangeBody, false, 'iss should be omitted, not sent as undefined');
 	});
 });
+
+describe('AuthOIDCClient.handleRedirectCallback — idempotency under double invocation', () => {
+	const STATE = 'state-dbl';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code-dbl&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google',
+			verifier: 'v',
+			state: STATE,
+			nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+			appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('concurrent double invocation shares one exchange and both resolve to the same user', async () => {
+		// React StrictMode mounts → unmounts → mounts, firing the callback effect
+		// twice synchronously. Count the exchange POSTs to prove the single-use
+		// PKCE code is exchanged exactly once and neither caller is stranded.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			// Settle on a later tick so both calls are genuinely in flight together.
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		let notifyCount = 0;
+		client.onAuthStateChange(() => { notifyCount++; });
+		// onAuthStateChange fires synchronously on subscribe with the last-known
+		// state; capture that baseline so the assertion below measures only the
+		// callback-driven notify as a delta, independent of cross-test module state.
+		const notifyBaseline = notifyCount;
+
+		// Fire twice WITHOUT awaiting the first — the double-mount race.
+		const [r1, r2] = await Promise.all([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+
+		assert.ok(r1, 'first call must resolve a user');
+		assert.ok(r2, 'second (concurrent) call must resolve a user — not null/throw');
+		assert.strictEqual(r1!.userId, 'iss:sub');
+		assert.strictEqual(r2!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once');
+		assert.strictEqual(notifyCount - notifyBaseline, 1, 'callback should notify subscribers exactly once');
+		assert.strictEqual(store.get('__blocks_oidc_pending'), undefined, 'pending entry should be consumed');
+	});
+
+	test('a sequential double invocation also shares the in-flight result', async () => {
+		// Same race, expressed as two calls captured before awaiting either.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		const p1 = client.handleRedirectCallback();
+		const p2 = client.handleRedirectCallback();
+		const r1 = await p1;
+		const r2 = await p2;
+		assert.strictEqual(r1!.userId, 'iss:sub');
+		assert.strictEqual(r2!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 1, 'only one exchange for the shared in-flight code');
+	});
+
+	test('releases the guard after settling so a fresh flow on the same page can run', async () => {
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		const first = await client.handleRedirectCallback();
+		assert.ok(first, 'first flow resolves');
+		assert.strictEqual(exchangeCalls, 1);
+
+		// Simulate a brand-new flow (new code/state + freshly stored pending blob).
+		installBrowserGlobals('http://localhost:3000/spa-callback?code=auth-code-2&state=state-2');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'state-2', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+
+		const second = await client.handleRedirectCallback();
+		assert.ok(second, 'second independent flow resolves — guard released after the first settled');
+		assert.strictEqual(exchangeCalls, 2, 'the second flow runs its own exchange');
+	});
+
+	test('error path under concurrent double invocation rejects both callers identically and releases the guard', async () => {
+		// The guard must propagate ONE shared rejection to both callers and
+		// release on failure. Without this, a refactor that mishandled the shared
+		// rejection (stranding the page) or failed to release the guard (blocking
+		// a same-page retry) would keep the success-path tests green.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			// Settle on a later tick so both calls are genuinely in flight together.
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: false, json: async () => ({ error: 'invalid_grant' }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+
+		// Fire twice WITHOUT awaiting the first; allSettled captures both outcomes.
+		const [s1, s2] = await Promise.allSettled([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+
+		assert.strictEqual(s1.status, 'rejected', 'first call must reject when the exchange fails');
+		assert.strictEqual(s2.status, 'rejected', 'second (concurrent) call must reject too — never resolve null');
+		// Both callers share the one in-flight promise, so the rejection is the
+		// identical Error instance — not two independently-thrown errors.
+		const reason1 = (s1 as PromiseRejectedResult).reason;
+		const reason2 = (s2 as PromiseRejectedResult).reason;
+		assert.strictEqual(reason1, reason2, 'both callers must reject with the identical shared error');
+		assert.match(reason1.message, /exchange failed/i);
+		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once, even on failure');
+
+		// The finally must release the guard on failure: a fresh-code flow on the
+		// same page runs its own exchange instead of being blocked by a stale entry.
+		installBrowserGlobals('http://localhost:3000/spa-callback?code=auth-code-retry&state=state-retry');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'state-retry', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const retry = await client.handleRedirectCallback();
+		assert.ok(retry, 'a fresh-code flow resolves — the guard was released after the failure');
+		assert.strictEqual(retry!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 2, 'the fresh flow runs its own second exchange');
+	});
+});
