@@ -7,9 +7,21 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function generateStackId(name: string): string {
+  const sanitized = name
+    .replace(/[^A-Za-z0-9-]/g, '-')
+    .replace(/^[^A-Za-z]+/, 'app-')
+    .replace(/-+/g, '-')
+    .replace(/-$/, '')
+    .slice(0, 16)
+    .replace(/-$/, '') || 'blocks-app';
+  return `${sanitized}-${randomBytes(4).toString('hex').slice(0, 6)}`;
+}
 
 // npm `file:` installs a single package without resolving its nested
 // `@aws-blocks/*` deps from the monorepo — it expects them to be
@@ -185,7 +197,7 @@ function validateTemplateName(templateName: string): void {
 
 // ─── Fresh project creation ──────────────────────────────────────────────────
 
-async function createFreshProject(targetDir: string, templateName: string) {
+async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
   validateTemplateName(templateName);
 
   // Read template package.json to get template name
@@ -248,23 +260,23 @@ async function createFreshProject(targetDir: string, templateName: string) {
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Update stack name in CDK file — sanitize for CDK-safe IDs
-  const cdkPath = join(targetDir, 'aws-blocks/index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  let sanitizedName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${sanitizedName}-stack`);
-  await writeFile(cdkPath, cdkContent);
+  // Generate .blocks/config.json with a unique stackId
+  const stackId = generateStackId(appName);
+  const blocksConfigDir = join(targetDir, '.blocks');
+  await mkdir(blocksConfigDir, { recursive: true });
+  await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  console.log('Installing dependencies...');
-  execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  if (!skipInstall) {
+    console.log('Installing dependencies...');
+    execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  }
   
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${targetDir}`);
+  if (skipInstall) {
+    console.log(`  npm install`);
+  }
   console.log(`  npm run dev`);
   console.log(`\nThen open http://localhost:3000`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
@@ -488,18 +500,13 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
 
-  // Derive a CDK-safe app name from the directory basename for stack naming.
-  // CDK stack IDs must match /^[A-Za-z][A-Za-z0-9-]*$/.
-  let appName = basename(resolve(targetDir));
-  appName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  const cdkPath = join(awsBlocksDest, 'index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${appName}-stack`);
-  await writeFile(cdkPath, cdkContent);
+  // Generate blocks/config.json with a unique stackId
+  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  const baseName = (existingPkg.name || basename(resolve(targetDir)));
+  const stackId = generateStackId(baseName);
+  const blocksConfigDir = join(targetDir, '.blocks');
+  await mkdir(blocksConfigDir, { recursive: true });
+  await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
 
   console.log('  ✓ Created aws-blocks/');
 
@@ -575,6 +582,7 @@ Options:
                          selects which aws-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
                          Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
+  --skip-install         Skip installing dependencies
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -655,7 +663,7 @@ async function create() {
         const templateDisplayName = tplPkg.blocksTemplate || templateName;
         targetDir = join('blocks-demo-apps', `template-${templateDisplayName}`);
       }
-      await createFreshProject(resolve(targetDir), templateName);
+      await createFreshProject(resolve(targetDir), templateName, skipInstall);
       return;
     }
 

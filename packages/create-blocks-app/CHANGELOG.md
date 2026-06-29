@@ -1,5 +1,38 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.10
+
+### Patch Changes
+
+- f42c604: fix: generate unique stackId in .blocks/config.json, export getStackId/getSandboxId from @aws-blocks/blocks/scripts
+
+  Stack names are now derived from a `stackId` in `.blocks/config.json`, generated at scaffold time as `<name>.slice(0,16)-<random6>`. Templates import `getStackId()` and `getSandboxId()` from `@aws-blocks/blocks/scripts` — no more inline filesystem logic in `index.cdk.ts`.
+
+  Production: `<stackId>-prod`
+  Sandbox: `<stackId>-<username(8)>-<random(6)>` (per-machine, gitignored)
+
+## 0.1.9
+
+### Patch Changes
+
+- 95efe42: Honor `--skip-install` when creating a fresh project so scaffolding can complete without running `npm install`.
+
+## 0.1.8
+
+### Patch Changes
+
+- 6c7bb69: fix(create-blocks-app): respect `--template` when adding Blocks to an existing project
+
+  Adding Blocks to an existing project always copied the `aws-blocks/` workspace from
+  the `default` (Vite) template, ignoring `--template`. Running
+  `npm create @aws-blocks/blocks-app . -- --template nextjs` in a Next.js project
+  therefore generated a `scripts/server.ts` whose `frontendCommand` was `npx vite ...`
+  instead of `npx next dev ...`, so `npm run dev:server` tried to launch Vite in a
+  project without it.
+
+  The requested template now drives the copied `aws-blocks/` workspace, `cdk.json`, and
+  devDeps.
+
 ## 0.1.7
 
 ### Patch Changes

@@ -22,6 +22,7 @@ import {
 import { redactToJson } from '../redact.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
+import { killFrontendTree, terminateProcessTree } from './process-tree.js';
 
 function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
   if (!text) return null;
@@ -119,6 +120,123 @@ async function waitForPort(port: number, maxAttempts = 60): Promise<void> {
   throw new Error(`Frontend server on port ${port} did not start within ${maxAttempts * 500}ms`);
 }
 
+/** Bounded auto-respawn policy for the frontend dev server. */
+export interface FrontendRespawnPolicy {
+  /** Max restarts allowed within `windowMs` before giving up (prevents hot loops). */
+  maxRestarts: number;
+  /** Sliding window (ms) over which restarts are counted. */
+  windowMs: number;
+  /** Base backoff (ms); doubles for each restart already in the window. */
+  backoffMs: number;
+  /** Upper bound (ms) on any single backoff delay. */
+  maxBackoffMs: number;
+}
+
+/** Default frontend respawn budget: 5 restarts / 10s, 500ms→5s exponential backoff. */
+export const DEFAULT_FRONTEND_RESPAWN_POLICY: FrontendRespawnPolicy = {
+  maxRestarts: 5,
+  windowMs: 10_000,
+  backoffMs: 500,
+  maxBackoffMs: 5_000,
+};
+
+/** Outcome of {@link evaluateFrontendRespawn}. */
+export interface RespawnDecision {
+  /** Whether the frontend should be respawned now. */
+  restart: boolean;
+  /** Delay (ms) to wait before respawning when `restart` is true. */
+  delayMs: number;
+  /**
+   * Restart timestamps still inside the window — plus the new attempt when
+   * restarting. The caller persists this for the next decision.
+   */
+  recent: number[];
+}
+
+/**
+ * Decide whether to auto-respawn the frontend dev server after an unexpected
+ * exit, given the timestamps of restarts not yet "forgiven".
+ *
+ * Semantics — the budget counts only *failing* restarts:
+ * - Timestamps older than `windowMs` are dropped from the sliding window.
+ * - If `maxRestarts` are still within the window, the budget is exhausted and
+ *   the frontend is left down (no hot restart loop) — `restart: false`.
+ * - Otherwise `restart: true` with an exponential backoff (`backoffMs` doubled
+ *   per in-window restart, capped at `maxBackoffMs`) and the new attempt
+ *   appended to `recent`.
+ *
+ * This function is pure; the *meaning* of the budget is enforced by the caller,
+ * which **resets `recentRestarts` to `[]` once a respawn demonstrably succeeds**
+ * (the frontend port becomes bound — see `announceFrontendReady`). As a result
+ * only *consecutive failing* restarts accumulate toward `maxRestarts`: a
+ * frontend that legitimately restarts many times in a burst (e.g.
+ * editor-triggered Vite full reloads) refreshes its budget on each healthy bind
+ * and is never permanently left down — only a genuine crash loop that never
+ * rebinds the port trips the limit.
+ */
+export function evaluateFrontendRespawn(
+  recentRestarts: number[],
+  now: number,
+  policy: FrontendRespawnPolicy = DEFAULT_FRONTEND_RESPAWN_POLICY,
+): RespawnDecision {
+  const recent = recentRestarts.filter((t) => now - t < policy.windowMs);
+  if (recent.length >= policy.maxRestarts) {
+    return { restart: false, delayMs: 0, recent };
+  }
+  const delayMs = Math.min(policy.backoffMs * 2 ** recent.length, policy.maxBackoffMs);
+  return { restart: true, delayMs, recent: [...recent, now] };
+}
+
+/**
+ * Wait (bounded) for a TCP port to STOP accepting connections, i.e. for the
+ * listener to actually release the socket. Used after killing the frontend so a
+ * `tsx watch` relaunch can rebind `:3100` cleanly instead of racing the kernel's
+ * socket teardown and hitting `--strictPort` `EADDRINUSE`. Resolves as soon as
+ * the port is free, or once `timeoutMs` elapses (never rejects).
+ */
+export async function waitForPortFree(port: number, timeoutMs = 2000): Promise<void> {
+  const { setTimeout: sleep } = await import('node:timers/promises');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const open = await new Promise<boolean>((resolve) => {
+      const socket = createConnection({ port, host: 'localhost' }, () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.on('error', () => { socket.destroy(); resolve(false); });
+      socket.setTimeout(200, () => { socket.destroy(); resolve(false); });
+    });
+    if (!open) return;
+    await sleep(100);
+  }
+}
+
+/**
+ * Decide whether a "frontend is listening" probe should be *credited* as a
+ * successful (re)spawn — and thus reset the restart budget.
+ *
+ * `waitForPort` only proves *something* is listening on `:3100`; it cannot tell
+ * our Vite apart from a foreign listener (a leftover Vite, or a second dev
+ * server). Crediting any listener would let a foreign process on `:3100` make
+ * every `--strictPort`-failing respawn look successful, neutralizing the
+ * `maxRestarts` cap and hot-looping forever. So we credit the probe only when
+ * **our** spawned child is still the live frontend process — same identity and
+ * not yet exited. A child that already exited (e.g. it lost the `--strictPort`
+ * bind race to the foreign listener) is no longer `current`, so it is not
+ * credited and its failed attempt still counts toward the budget.
+ */
+export function shouldCreditFrontendReady(
+  child: { exitCode: number | null; signalCode: NodeJS.Signals | null } | null,
+  current: unknown,
+): boolean {
+  return (
+    !!child &&
+    child === current &&
+    child.exitCode === null &&
+    child.signalCode === null
+  );
+}
+
 export async function startDevServer(options: DevServerOptions) {
   const {
     port = 3000,
@@ -199,6 +317,168 @@ export async function startDevServer(options: DevServerOptions) {
     (res as ServerResponse).writeHead(502);
     (res as ServerResponse).end('Frontend server unavailable');
   });
+
+  // ── Frontend supervisor ─────────────────────────────────────────────────
+  // The frontend runs under `shell: true`, so the real dev server (Vite) is a
+  // grandchild of this process. We spawn it `detached` (its own process group)
+  // on POSIX so cleanup/restart can signal the *whole* tree and free the port;
+  // otherwise the orphaned grandchild keeps `:3100` and every `/` request 502s
+  // forever (the proxy target is hardcoded to `frontendPort`). We also bound-
+  // respawn it on unexpected death and suppress all of this during shutdown.
+  //
+  // ── POST-EXIT GROUP-KILL POLICY ─────────────────────────────────────────
+  // The exact bug this supervisor fixes is the shell *exiting* while the
+  // detached grandchild survives, orphaned, still holding `:3100`. Reaping that
+  // orphan REQUIRES a group kill (`process.kill(-pid, …)`) issued *after* the
+  // shell has already exited — so all three post-exit kill sites below agree:
+  // the respawn path, `terminateFrontend`, and the `process.on('exit')` net all
+  // group-kill rather than skip when the shell is already gone.
+  //
+  // Why this is safe against the classic `-pid` PID-reuse hazard:
+  //   1. A surviving grandchild keeps the process group non-empty, so POSIX
+  //      keeps `pid` reserved as the group id — it cannot be recycled as a new
+  //      process id while it is still a live group's id. Hence `-pid` is
+  //      guaranteed to target *our* group precisely when it matters (an orphan
+  //      is still alive in it).
+  //   2. We only ever issue the kill synchronously, the instant we observe the
+  //      shell's exit — there is no intervening `await` that could let the group
+  //      drain and the pid be recycled — so the residual window is minimal.
+  // Residual accepted risk: if the ENTIRE group is already gone *and* `pid` has
+  // since been recycled into a brand-new group leader, `-pid` could signal an
+  // unrelated group. This is an accepted best-effort trade-off — there is then
+  // nothing of ours left to reap, whereas skipping the kill would otherwise
+  // leave `:3100` wedged, which is the failure this PR exists to prevent.
+  //
+  // Where each post-exit kill site lands on this trade-off: the two sites *in
+  // this file* — the respawn reap (in the child's `exit` handler) and the
+  // `process.on('exit')` net — fire synchronously the instant we observe the
+  // exit, so they lean on point (2) above and stay unconditional. The third
+  // path, `terminateFrontend` → `terminateProcessTree` (process-tree.ts), can
+  // run outside that minimal synchronous window, so it additionally PROBES group
+  // liveness (POSIX signal 0) and skips the reap once the group has fully
+  // drained — see its "POST-EXIT GROUP-KILL (scoped)" comment.
+  const usePosixProcessGroups = process.platform !== 'win32';
+  let isShuttingDown = false;
+  let frontendRestarts: number[] = [];
+  let respawnTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const announceFrontendReady = async (child: ChildProcess | null, suffix = ''): Promise<void> => {
+    try {
+      await waitForPort(frontendPort);
+      // Reset the restart budget only when OUR child is the one now bound to
+      // `:3100`. `waitForPort` is a liveness-only probe — it cannot tell our
+      // Vite from a foreign listener (a leftover Vite or a second dev server),
+      // and crediting a foreign listener would make every `--strictPort`-failing
+      // respawn look successful, neutralizing the `maxRestarts` cap and
+      // hot-looping forever (see {@link shouldCreditFrontendReady}). Only
+      // *consecutive failing* restarts should count toward the give-up
+      // threshold, so a frontend that legitimately restarts many times (e.g.
+      // editor-triggered Vite full reloads) still never gets left down.
+      if (shouldCreditFrontendReady(child, frontendProcess)) {
+        frontendRestarts = [];
+      }
+      console.log(`\n  ➜  http://localhost:${port}/${suffix}\n`);
+    } catch (e) {
+      console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
+      console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
+    }
+  };
+
+  const spawnFrontend = (command: string): ChildProcess => {
+    const child = spawn(command, {
+      shell: true,
+      // Own process group on POSIX so we can reap the Vite grandchild too.
+      detached: usePosixProcessGroups,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    frontendProcess = child;
+
+    // Suppress frontend output — only show errors.
+    child.stderr?.on('data', (d: Buffer) => {
+      const msg = d.toString();
+      if (!msg.includes('DeprecationWarning')) process.stderr.write(msg);
+    });
+
+    child.on('exit', (code, signal) => {
+      // Ignore exits from a process we've already replaced or torn down.
+      if (child !== frontendProcess) return;
+      frontendProcess = null;
+      if (isShuttingDown) return;
+      // Reap any orphaned grandchild left in this child's group so `:3100` is
+      // free before we respawn — otherwise `--strictPort` makes the new Vite
+      // exit on bind and we'd spin until the restart budget is gone. The shell
+      // has already exited here (we are inside its `exit` handler), so this is a
+      // post-exit group kill; it is issued synchronously in this handler and is
+      // safe against PID reuse — see POST-EXIT GROUP-KILL POLICY above.
+      killFrontendTree(child, 'SIGKILL');
+
+      const decision = evaluateFrontendRespawn(frontendRestarts, Date.now());
+      frontendRestarts = decision.recent;
+      const why = `code=${code ?? 'null'}, signal=${signal ?? 'null'}`;
+      if (!decision.restart) {
+        console.error(
+          `⚠️  Frontend dev server exited (${why}) and exceeded ` +
+          `${DEFAULT_FRONTEND_RESPAWN_POLICY.maxRestarts} restarts within ` +
+          `${DEFAULT_FRONTEND_RESPAWN_POLICY.windowMs / 1000}s — leaving it down. ` +
+          `Fix the error above, then restart \`npm run dev\`.`,
+        );
+        return;
+      }
+      console.error(`⚠️  Frontend dev server exited (${why}); restarting in ${decision.delayMs}ms…`);
+      respawnTimer = setTimeout(() => {
+        respawnTimer = null;
+        if (isShuttingDown) return;
+        // Before relaunching, wait (bounded) for `:3100` to actually free —
+        // mirroring the graceful `terminateFrontend` path. The synchronous
+        // post-exit SIGKILL above only *initiates* teardown of the orphaned
+        // group; the kernel can still hold the listening socket for a beat, and a
+        // relaunched `--strictPort` Vite would then hit `EADDRINUSE` and burn a
+        // restart-budget slot on a race that isn't a real crash. The budget was
+        // already debited above, so this never double-counts a restart; re-check
+        // `isShuttingDown` after the await, since a shutdown signal can land while
+        // we wait (`waitForPortFree` is bounded, so it can't deadlock shutdown).
+        void (async () => {
+          await waitForPortFree(frontendPort);
+          if (isShuttingDown) return;
+          const next = spawnFrontend(command);
+          await announceFrontendReady(next, '  (frontend restarted)');
+        })();
+      }, decision.delayMs);
+      // INTENTIONAL unref: the listening HTTP `server` (created below) owns this
+      // process's lifetime — the backoff timer must NOT, by itself, keep the
+      // event loop alive. Without unref a pending respawn timer would hold the
+      // process up during shutdown (or after the server has closed), delaying or
+      // blocking a clean exit. This never drops a legitimately-needed respawn:
+      // `cleanup` explicitly clears this timer, and both the timer body and the
+      // awaited relaunch re-check `isShuttingDown`. Do NOT remove the unref to
+      // "fix" a perceived missed restart — it would reintroduce that shutdown hang.
+      respawnTimer.unref?.();
+    });
+
+    return child;
+  };
+
+  /**
+   * Gracefully terminate the frontend tree and wait (bounded) for the port to
+   * actually free before this process exits, so a `tsx watch` relaunch can
+   * rebind `:3100` cleanly. SIGTERM the group, escalate to SIGKILL if it lingers
+   * (via the shared {@link terminateProcessTree}), then poll until `:3100` is
+   * released. tsx-watch gives us ~5s before it force-kills us, so this budget is
+   * safe. Crucially the port-free wait runs on *both* paths — including when the
+   * shell has already exited — so the post-exit branch no longer drops the
+   * "wait for the port to free" guarantee.
+   */
+  const terminateFrontend = async (child: ChildProcess | null): Promise<void> => {
+    if (!child) return;
+    // SIGTERM→SIGKILL the whole tree, reaping the detached Vite grandchild even
+    // when the shell has already exited (post-exit group kill — see policy).
+    await terminateProcessTree(child, 1500);
+    // Then wait (bounded) for `:3100` to be released. The old post-exit branch
+    // returned right after SIGKILL with no port poll, so a relaunch could race
+    // the kernel's socket teardown and hit `--strictPort` `EADDRINUSE`.
+    await waitForPortFree(frontendPort);
+  };
 
   // ── API Gateway proxy (sandbox mode) ───────────────────────────────────
   // `changeOrigin: true` rewrites the outgoing `Host` to the execute-api target
@@ -325,29 +605,8 @@ export async function startDevServer(options: DevServerOptions) {
 
     // Spawn frontend dev server after Blocks server is ready
     if (frontendCommand) {
-      frontendProcess = spawn(frontendCommand, {
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, NODE_OPTIONS: '' },
-      });
-      // Suppress frontend output — only show errors
-      frontendProcess.stderr?.on('data', (d: Buffer) => {
-        const msg = d.toString();
-        if (!msg.includes('DeprecationWarning')) process.stderr.write(msg);
-      });
-      frontendProcess.on('exit', (code) => {
-        if (code !== 0 && code !== null) {
-          console.error(`⚠️  Frontend process exited with code ${code}`);
-        }
-      });
-
-      try {
-        await waitForPort(frontendPort);
-        console.log(`\n  ➜  http://localhost:${port}/\n`);
-      } catch (e) {
-        console.error(`⚠️  Frontend did not start: ${(e as Error).message}`);
-        console.log(`\n  ➜  http://localhost:${port}/  (API only — frontend unavailable)\n`);
-      }
+      const child = spawnFrontend(frontendCommand);
+      await announceFrontendReady(child);
     } else {
       console.log(`\n  ➜  http://localhost:${port}/\n`);
     }
@@ -359,9 +618,24 @@ export async function startDevServer(options: DevServerOptions) {
   });
 
   // ── Cleanup ────────────────────────────────────────────────────────────
+  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  let cleaningUp = false;
   const cleanup = async () => {
+    if (cleaningUp) return; // idempotent — a second signal must not re-enter
+    cleaningUp = true;
+    isShuttingDown = true; // stop the supervisor from respawning the frontend
     console.log('\nShutting down...');
-    if (frontendProcess) frontendProcess.kill('SIGTERM');
+
+    if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
+    // Detach our own listeners so repeated signals can't pile up handlers.
+    for (const sig of signals) process.removeListener(sig, cleanup);
+
+    // Kill the frontend process *group* and wait for the port to free before
+    // we exit, so a tsx-watch restart can rebind `:3100` cleanly.
+    const child = frontendProcess;
+    frontendProcess = null;
+    await terminateFrontend(child);
+
     if (typeof backend.__cleanup === 'function') {
       try { await backend.__cleanup(); } catch {}
     }
@@ -371,8 +645,23 @@ export async function startDevServer(options: DevServerOptions) {
     setTimeout(() => process.exit(0), 2000).unref();
   };
 
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+  for (const sig of signals) process.on(sig, cleanup);
+
+  // Last-resort safety net for paths that bypass `cleanup` (e.g. an uncaught
+  // exception terminating the process): synchronously reap the frontend tree so
+  // a `detached` Vite is never left orphaned on `:3100`. Reuses
+  // `killFrontendTree`, so unlike the old hand-rolled `process.kill(-pid)` it
+  // also reaps on Windows (via `taskkill`) instead of early-returning and
+  // leaking the Vite tree, and stays in lockstep with the other kill sites. Both
+  // the POSIX group kill and the Windows `taskkill` are synchronous, so this is
+  // legal in an `exit` handler; it reaps even when the shell has already exited
+  // (a surviving grandchild keeps the group alive) — see POST-EXIT GROUP-KILL
+  // POLICY above.
+  process.once('exit', () => {
+    const child = frontendProcess;
+    if (!child) return;
+    killFrontendTree(child, 'SIGKILL');
+  });
 }
 
 // ── Local API handler ────────────────────────────────────────────────────────

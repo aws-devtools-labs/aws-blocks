@@ -281,6 +281,8 @@ catch (e) {
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
+
 ## Cognito-mediated federation
 
 Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verification, MFA, and brute-force protection. Your Lambda only exchanges the code and reads the session.
