@@ -1,5 +1,7 @@
 # BB: AuthCognitoAdmin (Implementation-Ready)
 
+> **⚠️ SUPERSEDED (direction changed).** We are no longer shipping a separate `@aws-blocks/bb-auth-cognito-admin` package. The admin surface will be an opt-in handle (`auth.admin`) on the existing `AuthCognito` class. See [`BB-auth-cognito-admin-implementation-plan.md`](./BB-auth-cognito-admin-implementation-plan.md). This document is retained for the API surface, error model, and mock-parity research, which the handle reuses.
+
 > **STATUS — Implementation-ready.** API surface, error model, per-runtime implementation, mock parity, and naming have been validated against the shipped `bb-auth-cognito` code and the binding guidelines (API Design Guidelines, Building Block Architecture, [DECISIONS D-004](../DECISIONS.md)). The design was independently reviewed and every claim verified against source. Open items remaining are explicitly listed at the end and are non-blocking for a v1 build.
 
 **Package:** `@aws-blocks/bb-auth-cognito-admin`
