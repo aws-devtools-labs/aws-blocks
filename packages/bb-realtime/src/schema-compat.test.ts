@@ -12,7 +12,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Realtime } from './index.js';
