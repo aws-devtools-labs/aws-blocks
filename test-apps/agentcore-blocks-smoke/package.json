@@ -1,0 +1,27 @@
+{
+  "name": "example-agentcore-blocks-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deploy smoke test for the custom AgentCore blocks (Memory, Gateway, Identity).",
+  "scripts": {
+    "test": "echo 'agentcore-blocks-smoke: deploy-only example'",
+    "synth": "cdk synth --quiet",
+    "deploy": "cdk deploy --require-approval never --outputs-file ./cdk.outputs.json",
+    "destroy": "cdk destroy --force"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/core": "*",
+    "@aws-blocks/bb-agentcore-memory": "*",
+    "@aws-blocks/bb-agentcore-gateway": "*",
+    "@aws-blocks/bb-agentcore-identity": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk-lib": "2.257.0",
+    "constructs": "^10.6.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.0"
+  }
+}
