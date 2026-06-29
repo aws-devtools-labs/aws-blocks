@@ -16,6 +16,7 @@ import {
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
+  generateEdgeBasePathStripCode,
   ORIGIN_ID,
 } from './kvs_router.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -370,6 +371,36 @@ void describe('generateSentinelGuardCode', () => {
     const handler = factory();
     const out = handler({ request: { uri: '/__blocks_origin_server/x' } });
     assert.equal(out.statusCode, 403);
+  });
+});
+
+void describe('generateEdgeBasePathStripCode', () => {
+  // OpenNext edge bundles route on basePath-RELATIVE regexes (^/edge$,
+  // ^/api/edge$); the dedicated edge behavior forwards /app/edge → "No route
+  // found" → 503. This viewer-request fn strips basePath before the Lambda@Edge.
+  const run = (basePath: string, uri: string): string => {
+    const code = generateEdgeBasePathStripCode(basePath);
+    const handler = new Function(`${code}\nreturn handler;`)();
+    return handler({ request: { uri } }).uri;
+  };
+
+  void it('strips basePath from an edge route path', () => {
+    assert.equal(run('/app', '/app/edge'), '/edge');
+    assert.equal(run('/app', '/app/api/edge'), '/api/edge');
+  });
+
+  void it('maps the bare basePath to /', () => {
+    assert.equal(run('/app', '/app'), '/');
+  });
+
+  void it('leaves a path not under basePath unchanged', () => {
+    // Defensive: the behavior only matches edge patterns, but the fn must not
+    // mangle an unexpected path.
+    assert.equal(run('/app', '/edge'), '/edge');
+  });
+
+  void it('is boundary-safe (does not strip a shared-prefix substring)', () => {
+    assert.equal(run('/app', '/application/edge'), '/application/edge');
   });
 });
 

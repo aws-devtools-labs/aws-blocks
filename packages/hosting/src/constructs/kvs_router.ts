@@ -619,6 +619,40 @@ export const generateSentinelGuardCode = (): string => `function handler(event) 
 }`;
 
 /**
+ * Viewer-request CloudFront Function for the Lambda@Edge route behaviors
+ * (`runtime: 'edge'`) when a basePath is configured.
+ *
+ * OpenNext compiles each edge bundle's internal route table basePath-RELATIVE
+ * (e.g. `_ROUTES=[{regex:["^/edge$"]}]`, `["^/api/edge$"]`) and matches it
+ * against the FULL request path. Under a deployed basePath the dedicated edge
+ * behavior forwards `/app/edge`, which the bundle's `^/edge$` regex does not
+ * match → it throws `No route found` → CloudFront returns 503. The KVS router
+ * already strips basePath before forwarding to the static/image/compute
+ * origins; the edge behaviors bypass the KVS router (they have their own
+ * behavior), so they need the same strip here, at viewer-request, before the
+ * Lambda@Edge origin-request function runs.
+ *
+ * The basePath is BAKED INTO the function source (not read from KVS) because
+ * this runs on a dedicated edge behavior that never consults the KVS router.
+ * Generated only when basePath is set; behaviors without a basePath attach no
+ * such function. A bare `${basePath}` (no trailing segment) maps to `/`.
+ */
+export const generateEdgeBasePathStripCode = (basePath: string): string => {
+  const bp = JSON.stringify(basePath);
+  return `function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  var bp = ${bp};
+  if (uri === bp) {
+    request.uri = '/';
+  } else if (uri.indexOf(bp + '/') === 0) {
+    request.uri = uri.substring(bp.length);
+  }
+  return request;
+}`;
+};
+
+/**
  * Viewer-response CloudFront Function (JS 2.0). Two jobs:
  *   1. Skew protection: set `__dpl` cookie to the active buildId on successful
  *      HTML responses (status-gated, per the original semantics).

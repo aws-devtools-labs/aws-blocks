@@ -59,6 +59,7 @@ import {
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
+  generateEdgeBasePathStripCode,
   routeSpecificity,
 } from './kvs_router.js';
 import { KvKeys } from './kv_keys.js';
@@ -780,6 +781,27 @@ export class CdnConstruct extends Construct {
         }))
         .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
 
+      // basePath strip for edge behaviors. OpenNext compiles each edge bundle's
+      // internal route table basePath-RELATIVE (regex `^/edge$`, `^/api/edge$`)
+      // and matches it against the FULL request path. Under a deployed basePath
+      // the behavior forwards `/app/edge`, which `^/edge$` does not match → the
+      // bundle throws `No route found` → 503. These behaviors bypass the KVS
+      // router (which strips basePath for the other origins), so attach a
+      // viewer-request CloudFront Function that strips basePath before the
+      // Lambda@Edge origin-request function runs. Created once, shared by every
+      // edge behavior; only when a basePath is actually configured.
+      let edgeBasePathStripFn: CloudFrontFunction | undefined;
+      if (manifest.basePath) {
+        edgeBasePathStripFn = new CloudFrontFunction(this, 'EdgeBasePathStrip', {
+          code: FunctionCode.fromInline(
+            generateEdgeBasePathStripCode(manifest.basePath),
+          ),
+          runtime: CLOUDFRONT_FUNCTION_RUNTIME,
+          comment: `Strip basePath ${manifest.basePath} before edge-runtime Lambda@Edge`,
+        });
+        edgeBasePathStripFn.node.addDependency(routerResponseFn); // serialize creates
+      }
+
       for (const { route, pattern } of edgeRoutes) {
         // An edge route mapped to the catch-all can't be expressed as a
         // dedicated behavior (CloudFront's default behavior IS `*`, and it's
@@ -814,6 +836,19 @@ export class CdnConstruct extends Construct {
               includeBody: true,
             },
           ],
+          // Strip basePath at viewer-request (before the Lambda@Edge) so the
+          // OpenNext edge bundle's basePath-relative route regex matches. Only
+          // attached when a basePath is configured (see edgeBasePathStripFn).
+          ...(edgeBasePathStripFn
+            ? {
+                functionAssociations: [
+                  {
+                    function: edgeBasePathStripFn,
+                    eventType: FunctionEventType.VIEWER_REQUEST,
+                  },
+                ],
+              }
+            : {}),
         };
       }
     }
