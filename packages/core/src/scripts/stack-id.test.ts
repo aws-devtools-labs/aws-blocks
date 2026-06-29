@@ -3,11 +3,11 @@
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { getStackId, getSandboxId, readSandboxId, getStackName } from './stack-id.js';
+import { getStackId, getSandboxId, getStackName } from './stack-id.js';
 
 describe('getStackId', () => {
   let tmpDir: string;
@@ -92,42 +92,32 @@ describe('getStackName', () => {
   });
 });
 
-describe('readSandboxId', () => {
+describe('getStackName sandbox id (get-or-create)', () => {
   let tmpDir: string;
 
   afterEach(() => {
     if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns existing sandbox id without writing', () => {
-    tmpDir = join(tmpdir(), `read-sandbox-id-${Date.now()}`);
-    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
-    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'bob-f1a2b3');
-    assert.strictEqual(readSandboxId(tmpDir), 'bob-f1a2b3');
-  });
-
-  it('throws when sandbox id file is absent (does NOT create it)', () => {
-    tmpDir = join(tmpdir(), `read-sandbox-id-absent-${Date.now()}`);
-    mkdirSync(tmpDir, { recursive: true });
-    assert.throws(() => readSandboxId(tmpDir), /Sandbox id not found/);
-    // Verify no file was created
-    assert.ok(!existsSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt')));
-  });
-});
-
-describe('getStackName purity (R1)', () => {
-  let tmpDir: string;
-
-  afterEach(() => {
-    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('does NOT create sandbox-id.txt when called with sandbox:true (read-only)', () => {
-    tmpDir = join(tmpdir(), `stack-name-purity-${Date.now()}`);
+  it('creates and persists sandbox-id.txt on first call when missing', () => {
+    tmpDir = join(tmpdir(), `stack-name-getorcreate-${Date.now()}`);
     mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'test-app' }));
-    // No .blocks-sandbox dir — getStackName should throw, NOT create the file
-    assert.throws(() => getStackName({ sandbox: true, projectRoot: tmpDir }), /Sandbox id not found/);
-    assert.ok(!existsSync(join(tmpDir, '.blocks-sandbox')));
+    // No .blocks-sandbox dir yet — getStackName creates the id rather than throwing.
+    const name = getStackName({ sandbox: true, projectRoot: tmpDir });
+    assert.match(name, /^test-app-[a-z0-9]+-[a-f0-9]{6}$/);
+    // Persisted so later callers/processes resolve the identical name.
+    const stored = readFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), 'utf-8').trim();
+    assert.strictEqual(name, `test-app-${stored}`);
+  });
+
+  it('reuses the same id across calls', () => {
+    tmpDir = join(tmpdir(), `stack-name-getorcreate-idem-${Date.now()}`);
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId: 'test-app' }));
+    assert.strictEqual(
+      getStackName({ sandbox: true, projectRoot: tmpDir }),
+      getStackName({ sandbox: true, projectRoot: tmpDir }),
+    );
   });
 });

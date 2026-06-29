@@ -19,4 +19,4 @@ export {
   type BuildAndSendEventOptions,
 } from '../telemetry/index.js';
 export { telemetry, type TelemetryOptions } from './telemetry.js';
-export { getStackId, getSandboxId, readSandboxId, getStackName } from './stack-id.js';
+export { getStackId, getSandboxId, getStackName } from './stack-id.js';
