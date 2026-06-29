@@ -159,6 +159,20 @@ test('PgClientEngine: applies a TLS 1.2 floor a caller can override', () => {
   assert.deepStrictEqual((engine as any).pool.options.ssl, { minVersion: 'TLSv1.3', rejectUnauthorized: true });
 });
 
+test('PgClientEngine: strips sslmode from the URL so a pinned CA takes effect', () => {
+  // node `pg` ignores a programmatic `ssl.ca` when `sslmode` is in the URL, which
+  // would silently defeat the documented `fromExisting({ ssl: { ca } })` escape
+  // hatch. The engine must strip it so the pinned CA is honored.
+  const engine = new PgClientEngine({
+    connectionString: 'postgres://u:p@h:5432/d?sslmode=require&application_name=x',
+    ssl: { rejectUnauthorized: true, ca: 'pem' },
+  });
+  const cs = (engine as any).pool.options.connectionString as string;
+  assert.ok(!/sslmode/i.test(cs), `expected sslmode stripped, got: ${cs}`);
+  assert.match(cs, /application_name=x/); // unrelated params are preserved
+  assert.deepStrictEqual((engine as any).pool.options.ssl, { minVersion: 'TLSv1.2', rejectUnauthorized: true, ca: 'pem' });
+});
+
 // --- tlsConnectionMessage (post-handshake confirmation) ---
 
 describe('tlsConnectionMessage', () => {

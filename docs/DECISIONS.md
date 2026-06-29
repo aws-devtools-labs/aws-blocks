@@ -304,7 +304,11 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
-### Known limitation — TLS verification on the DDL/baseline path
+### TLS verification on the external-DB paths — see D-012
+
+> The full TLS posture (verify-by-default, the `ssl` option, committed-CA delivery, and the
+> fail-closed-in-CI/Lambda policy) is recorded as its own decision, **D-012**. The notes below are
+> retained for context on the DDL/baseline path specifically.
 The host-side migration, baseline (`pg_dump`), and `--url` CLI connections originally used
 `ssl: { rejectUnauthorized: false }` — the same posture the runtime engine historically used for
 `fromExisting`. **Resolved (fast-follow landed):** `fromExisting` now accepts an `ssl` option and the
@@ -414,3 +418,78 @@ earlier planning decisions and removed a released behavior:
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
+
+
+## D-012: External-DB connections verify TLS by default; CA committed via `db pull`
+
+**Date:** 2026-06-29
+**Authors:** mehrishi
+
+### Context
+
+`fromExisting({ connectionString })` historically hardcoded `ssl: { rejectUnauthorized: false }` on
+every path (runtime, mock, CLI, migrations, introspection) — encrypted but with **no** server-
+certificate verification (CWE-295), exposing the connection (including the JWT claims forwarded for
+RLS) to an active man-in-the-middle. There was also no supported way for a caller to configure TLS.
+Managed providers (Supabase, Neon, RDS) present a certificate signed by a private CA not in Node's
+trust store, so "just flip the default to verify" breaks connectivity unless the CA is supplied.
+
+### Decision
+
+1. **Verify by default.** The runtime engine defaults to `{ rejectUnauthorized: true }`; no path
+   hardcodes `false`. A TLS 1.2 floor is enforced on every connection.
+2. **Public `ssl` option as a discriminated union.** `ExternalDatabaseRef`'s connection-string
+   variant gains `ssl?: ExternalSslOptions` = `{ rejectUnauthorized?: true; ca?: string } | { rejectUnauthorized: false }`,
+   so the misleading `{ ca, rejectUnauthorized: false }` (a pinned CA `pg` would ignore) is a
+   compile-time error. The same union is reused by `PgClientEngineConfig` and the generated wiring.
+3. **CA delivered by committing it.** `db pull` prompts for the provider CA and writes it to a
+   generated, committed `database.ca.ts` (a public cert — public key + issuer metadata, no private
+   key). The generated `resolveDbSsl()` pins it. Because it is a bundled JS import (not a runtime
+   file/env read), verification works in the deployed Lambda with no env/SSM/CDK plumbing.
+   `DATABASE_CA_CERT` (inline PEM or path) overrides it.
+4. **Fail closed where a silent downgrade is dangerous; fail open where it is safe.**
+   - Deployed Lambda with no CA → **throws** (a missing CA in prod is a misconfiguration).
+   - Non-interactive (`CI` set) CLI/migration/baseline runs with no CA → **throw** (privileged DDL
+     must not run unverified). First-pull introspection is the one explicit exception (it runs before
+     a CA exists).
+   - Interactive operator runs with no CA → encrypted-but-unverified fallback, with a warning.
+   - Local dev (mock) defaults to unverified (self-signed local DBs are common) but warns when `ssl`
+     is omitted, so the dev/deploy asymmetry surfaces locally.
+5. **`sslmode` is stripped centrally in `PgClientEngine`** so a programmatic `ssl.ca` is never
+   silently ignored (node `pg` drops `ssl.ca` when `sslmode` is present in the URL).
+
+Released as a `minor` with an upgrade note: a hand-written `fromExisting` with no `ssl` now verifies;
+private-CA providers require pinning via `ssl: { ca }`, or `ssl: { rejectUnauthorized: false }` to opt
+out explicitly. `db pull`-generated apps are unaffected in default connectivity.
+
+### Rationale
+
+- The CA is **not secret** (it is presented to every client on every handshake and is freely
+  downloadable), so committing + bundling it is the simplest mechanism that verifies in production. An
+  env-var-only CA was rejected: `.env.*` is loaded on the deploy host, never injected into the Lambda,
+  so it would leave the highest-exposure path (deployed runtime) unverified.
+- A discriminated union shifts the `{ ca, rejectUnauthorized: false }` mistake to compile time (T1).
+
+### Alternatives Considered
+
+1. **Hardcode a "universal" provider root CA** — rejected (region/rotation variance can't be assumed;
+   use the customer's actual downloaded cert). For the Supabase pooler the cert is in fact a wildcard
+   over a shared root (verified empirically), but per-customer capture stays the safe default.
+2. **Route the CA through SSM / AppSetting** — rejected: extra provisioning for a non-secret value.
+3. **Flip the engine default to verify without delivering a CA** — rejected: breaks the generated
+   path (private CA not in the trust store); the server-side enforce-SSL toggle does not help.
+
+### Known limitation
+
+The non-interactive gate keys off the conventional `CI` env var (excluding `CI=false`/`0`). A pipeline
+or deploy host (e.g. CodeBuild/CodePipeline) that does not set `CI` is treated as interactive, so a
+privileged migration there can fall back to unverified — set `DATABASE_CA_CERT` to guarantee
+verification in any automated run. A more robust signal (verify-unless-TTY, or an explicit opt-in env)
+is a candidate follow-up.
+
+### References
+
+- PR #107 (this change). Supersedes the SSL posture of D-009's TLS note.
+- Code: `packages/bb-data/src/{types.ts, external-ssl.ts, index.aws.ts, index.mock.ts}`,
+  `engines/pg-client-engine.ts`, `db-pull/{templates.ts, introspect.ts, pull.ts}`,
+  `migrations/baseline.ts`.

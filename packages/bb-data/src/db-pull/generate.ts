@@ -322,6 +322,10 @@ export async function regenerateTypesAndMeta(opts: {
 }): Promise<RegenerateTypesResult> {
   // Introspect on the 5432 session port (same as the migrate path), not the 6543
   // transaction pooler — the runtime string stored for dev is 6543.
+  // Type-refresh introspection is read-only and dev-loop-scoped (it applies no
+  // DDL), so it inherits introspect()'s `allowUnverifiedInCi` tolerance — unlike
+  // the migrate step, which fails closed in CI. It also doesn't read the committed
+  // database.ca.ts; the operational paths resolve a CA from DATABASE_CA_CERT.
   const intro = await introspect(toSessionPortUrl(opts.connectionString));
   const tables = selectEligibleTables(intro);
   writeTypesAndMeta(opts.outputDir, tables, readExistingSingulars(opts.outputDir));

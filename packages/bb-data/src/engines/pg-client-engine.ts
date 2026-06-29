@@ -53,6 +53,28 @@ function assertPostgresUrl(connectionString: string): void {
 }
 
 /**
+ * Remove `sslmode` from the connection URL so the engine's programmatic `ssl`
+ * config is authoritative. node `pg` honors `sslmode` in the URL and **ignores a
+ * programmatic `ssl.ca`** when it is present — so a caller pinning a CA (the
+ * documented `fromExisting({ ssl: { ca } })` escape hatch) would have it silently
+ * dropped, verifying against the system trust store instead (which a provider's
+ * private CA, e.g. Supabase's, is not in). The engine always passes an `ssl`
+ * object, so `sslmode` in the URL is never the right control surface here.
+ *
+ * Best-effort: an unparseable URL (e.g. an unencoded password) is left unchanged.
+ */
+function stripSslmode(connectionString: string): string {
+  try {
+    const u = new URL(connectionString);
+    if (!u.searchParams.has('sslmode')) return connectionString;
+    u.searchParams.delete('sslmode');
+    return u.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
+/**
  * Build the post-handshake TLS confirmation message for a successful connection.
  *
  * Pure (no I/O) so it can be unit-tested. Called from the pool's `connect` event,
@@ -92,6 +114,11 @@ export class PgClientEngine implements DatabaseEngine {
 
   constructor(config: PgClientEngineConfig) {
     assertPostgresUrl(config.connectionString);
+    // Make the programmatic `ssl` config authoritative regardless of any
+    // `sslmode` in the URL (see stripSslmode). Centralizing here means every
+    // path — deployed runtime, local mock, CLI, migrations, introspection — gets
+    // it, including a hand-written `fromExisting({ connectionString, ssl: { ca } })`.
+    const connectionString = stripSslmode(config.connectionString);
     // Enforce a TLS 1.2 floor on every connection regardless of caller. Node 18+
     // already negotiates TLS 1.2+ by default, but pinning `minVersion` makes the
     // floor explicit and independent of the runtime's default — and it applies to
@@ -99,7 +126,7 @@ export class PgClientEngine implements DatabaseEngine {
     // verification). A caller-supplied `minVersion` still wins.
     const baseSsl = config.ssl ?? { rejectUnauthorized: true };
     this.pool = new pg.Pool({
-      connectionString: config.connectionString,
+      connectionString,
       max: config.poolSize ?? 5,
       ssl: { minVersion: 'TLSv1.2', ...baseSsl },
       ...(config.connectionTimeoutMillis !== undefined && {

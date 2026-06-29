@@ -86,13 +86,10 @@ function readCaFile(filePath: string): string {
  * inline-PEM-vs-path handling can't drift between the two.
  */
 export function resolveCaPem(source: string): string {
-  const pem = source.includes(PEM_CERT_MARKER) ? source : readCaFile(source);
-  if (!pem.includes(PEM_CERT_MARKER)) {
-    throw new Error(
-      `[bb-data] DB TLS: the CA certificate is empty or not a PEM certificate (missing "${PEM_CERT_MARKER}").`,
-    );
-  }
-  return pem;
+  // Inline PEM (contains the marker) is returned as-is; anything else is treated
+  // as a file path and read via readCaFile, which itself validates the marker —
+  // so the result is always a marker-bearing PEM.
+  return source.includes(PEM_CERT_MARKER) ? source : readCaFile(source);
 }
 
 export function externalDbSsl(opts: { allowUnverifiedInCi?: boolean } = {}): ExternalSslOptions {
