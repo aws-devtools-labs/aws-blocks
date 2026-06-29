@@ -319,7 +319,7 @@ export async function startDevServer(options: DevServerOptions) {
   }
 
   // ── Start listening ────────────────────────────────────────────────────
-  server.listen(port, '127.0.0.1', async () => {
+  server.listen(port, async () => {
     console.log(`AWS Blocks local server running on http://localhost:${port}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
