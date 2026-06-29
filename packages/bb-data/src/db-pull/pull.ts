@@ -250,7 +250,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   // pull finish — existing environments still work without the baseline.
   const migrationsDir = path.join(path.dirname(outputDir), 'migrations');
   try {
-    let baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir });
+    let baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir, caCert: opts.caCert });
     while (baseline.warning) {
       console.warn(`\n⚠️  Schema baseline not generated: ${baseline.warning}`);
       console.warn(`    New/empty environments can't be built from migrations until the baseline exists.`);
@@ -260,7 +260,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       }
       const choice = await prompt('\n  [U]pgrade pg_dump in another terminal, then retry / [C]ontinue without baseline (u/C) ');
       if (choice.toLowerCase() === 'u') {
-        baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir });
+        baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir, caCert: opts.caCert });
         continue;
       }
       break;
