@@ -5,6 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Database } from './index.aws.js';
+import type { DatabaseOptions } from './types.js';
 
 /**
  * AWS-layer guard for the deployed runtime's TLS posture.
@@ -25,7 +26,7 @@ import { Database } from './index.aws.js';
 describe('Database (aws runtime): _initBase forwards conn.ssl to the pool', () => {
   const CONN = 'postgres://u:p@db.example.com:5432/postgres';
 
-  async function poolSslFor(connection: any): Promise<unknown> {
+  async function poolSslFor(connection: DatabaseOptions['connection']): Promise<unknown> {
     const scope = new Scope('tls-test-' + Math.random().toString(36).slice(2));
     const db = new Database(scope, 'db', { connection });
     const engine = await db.getEngine();
