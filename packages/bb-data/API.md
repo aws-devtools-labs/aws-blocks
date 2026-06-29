@@ -153,9 +153,7 @@ export interface PgClientEngineConfig {
     connectionString: string;
     connectionTimeoutMillis?: number;
     poolSize?: number;
-    ssl?: {
-        rejectUnauthorized?: boolean;
-        ca?: string;
+    ssl?: ExternalSslOptions & {
         minVersion?: 'TLSv1.2' | 'TLSv1.3';
     };
 }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFileSync } from 'node:fs';
+import type { ExternalSslOptions } from './types.js';
 
 /**
  * TLS config for the library's **operational** (non-runtime) connections to an
@@ -71,19 +72,35 @@ function readCaFile(filePath: string): string {
   return pem;
 }
 
-export function externalDbSsl(opts: { allowUnverifiedInCi?: boolean } = {}): { ca?: string; rejectUnauthorized: boolean } {
+/**
+ * Resolve a CA *source* — either an inline PEM string or a path to a `.crt`/`.pem`
+ * file — to PEM text, validating it is actually a certificate.
+ *
+ * An inline PEM contains the certificate marker; anything else is treated as a
+ * file path. We match the full `-----BEGIN CERTIFICATE-----` (not a looser
+ * `-----BEGIN`) so a stray CSR or private key isn't mistaken for a CA. Throws a
+ * TLS-specific error if the file can't be read or the contents aren't a PEM cert.
+ *
+ * Shared by `externalDbSsl()` (operational paths, reads `DATABASE_CA_CERT`) and
+ * `db pull` schema introspection (reads the CA the operator just supplied) so the
+ * inline-PEM-vs-path handling can't drift between the two.
+ */
+export function resolveCaPem(source: string): string {
+  const pem = source.includes(PEM_CERT_MARKER) ? source : readCaFile(source);
+  if (!pem.includes(PEM_CERT_MARKER)) {
+    throw new Error(
+      `[bb-data] DB TLS: the CA certificate is empty or not a PEM certificate (missing "${PEM_CERT_MARKER}").`,
+    );
+  }
+  return pem;
+}
+
+export function externalDbSsl(opts: { allowUnverifiedInCi?: boolean } = {}): ExternalSslOptions {
   const source = process.env.DATABASE_CA_CERT;
   if (source && source.trim() !== '') {
-    // An inline PEM contains the certificate marker; anything else is treated as
-    // a file path (`-----BEGIN CERTIFICATE-----`, not a looser `-----BEGIN`, so a
-    // stray CSR/private key is not mistaken for a CA).
-    const pem = source.includes(PEM_CERT_MARKER) ? source : readCaFile(source);
-    if (!pem.includes(PEM_CERT_MARKER)) {
-      throw new Error(
-        `[bb-data] DB TLS: DATABASE_CA_CERT does not contain a PEM certificate (missing "${PEM_CERT_MARKER}").`,
-      );
-    }
-    return { ca: pem, rejectUnauthorized: true };
+    // DATABASE_CA_CERT may be an inline PEM or a path to a cert file; resolveCaPem
+    // handles both and validates the contents are an actual certificate.
+    return { ca: resolveCaPem(source), rejectUnauthorized: true };
   }
   // No CA available. Fail closed in non-interactive automation (DDL/migrations
   // must not run against an unverified server), unless the caller opts in.

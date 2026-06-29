@@ -5,6 +5,7 @@ import pg from 'pg';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { translatePgError } from './pg-error-translator.js';
 import { DatabaseErrors } from '../errors.js';
+import type { ExternalSslOptions } from '../types.js';
 
 /**
  * Configuration for connecting to a PostgreSQL-compatible database.
@@ -12,8 +13,18 @@ import { DatabaseErrors } from '../errors.js';
 export interface PgClientEngineConfig {
   /** PostgreSQL connection URI (e.g. postgresql://user:pass@host:5432/db). */
   connectionString: string;
-  /** SSL configuration. Defaults to `{ rejectUnauthorized: true }`. A TLS 1.2 floor (`minVersion: 'TLSv1.2'`) is applied unless overridden here. */
-  ssl?: { rejectUnauthorized?: boolean; ca?: string; minVersion?: 'TLSv1.2' | 'TLSv1.3' };
+  /**
+   * SSL configuration. Defaults to `{ rejectUnauthorized: true }` (verify the
+   * server certificate). A TLS 1.2 floor (`minVersion: 'TLSv1.2'`) is applied
+   * unless a caller overrides it here.
+   *
+   * Reuses the public {@link ExternalSslOptions} discriminated union so the
+   * misleading `{ ca, rejectUnauthorized: false }` combination is a compile error
+   * for direct engine callers too (not only `fromExisting`): a pinned `ca` is
+   * honored only when the certificate is actually verified, and node `pg`
+   * silently ignores `ca` when `rejectUnauthorized: false`.
+   */
+  ssl?: ExternalSslOptions & { minVersion?: 'TLSv1.2' | 'TLSv1.3' };
   /** Maximum number of clients in the pool. @default 5 */
   poolSize?: number;
   /** Milliseconds to wait for a connection before erroring. Unset = wait indefinitely. */
