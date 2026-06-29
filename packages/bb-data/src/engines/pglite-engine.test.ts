@@ -5,7 +5,7 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
-import { rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TEST_DIR = '.bb-data-test-' + process.pid;
@@ -189,4 +189,8 @@ test('constructor recovers an incomplete PGlite init directory', async () => {
   assert.deepStrictEqual(rows, [{ id: 'ok' }]);
   assert.strictEqual(existsSync(join(partial, 'base')), true);
   assert.strictEqual(existsSync(join(partial, 'global')), true);
+
+  const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('partial-init.corrupt-'));
+  assert.strictEqual(corruptDirs.length, 1);
+  assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'PG_VERSION')), true);
 });
