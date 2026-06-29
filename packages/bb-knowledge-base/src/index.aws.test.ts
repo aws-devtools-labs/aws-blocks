@@ -781,6 +781,47 @@ describe('waitUntilReady', () => {
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
 					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
+					// Every poll was a clean IN_PROGRESS (no transient errors), so the
+					// message stays the plain form — no transient detail appended.
+					assert.ok(
+						!err.message.includes('last transient error'),
+						'a clean (non-transient) timeout must not claim a transient error',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('Timeout message surfaces the last transient error when the budget runs out mid-streak', async () => {
+		const cleanup = setReadyEnv('TEST', 'WUR16');
+		// Every poll throws a transient (throttling → RetrievalFailed) error, but the
+		// tolerance is high enough that the deadline — not the transient budget — ends
+		// the wait. The Timeout message must then surface the last transient error so a
+		// caller can't mistake it for a healthy KB that merely never finished ingesting.
+		mockAgentSend(() => {
+			const e = new Error('Rate exceeded');
+			e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur16', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5, maxConsecutiveTransientErrors: 1000 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
+					assert.ok(
+						err.message.includes('last transient error'),
+						'timeout message should flag that the final polls were failing transiently',
+					);
+					assert.ok(
+						err.message.includes('Rate exceeded'),
+						'timeout message should include the underlying transient detail',
+					);
 					return true;
 				},
 			);

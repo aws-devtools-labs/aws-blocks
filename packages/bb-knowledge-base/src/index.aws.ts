@@ -461,6 +461,7 @@ export class KnowledgeBase extends Scope {
 		const deadline = Date.now() + timeoutMs;
 
 		let consecutiveTransientErrors = 0;
+		let lastTransient: Error | undefined;
 		for (;;) {
 			// Cancellation: bail out before doing any work on each iteration. An
 			// already-aborted signal throws here on the very first pass (no poll).
@@ -478,6 +479,7 @@ export class KnowledgeBase extends Scope {
 				if (!isTransientControlPlaneError(err)) throw err;
 				// Transient control-plane blip: absorb a bounded run, then give up.
 				consecutiveTransientErrors += 1;
+				lastTransient = err as Error;
 				if (consecutiveTransientErrors > maxConsecutiveTransientErrors) throw err;
 				this.log.warn(
 					`waitUntilReady: tolerating transient control-plane error ` +
@@ -485,9 +487,16 @@ export class KnowledgeBase extends Scope {
 				);
 			}
 			if (Date.now() >= deadline) {
+				// If the budget ran out while we were still absorbing transient
+				// control-plane errors, fold the most recent one into the message.
+				// Otherwise a timeout reads like a healthy KB that just never finished
+				// ingesting, hiding that the final polls were actually failing transiently.
+				const base = `Knowledge base did not become ready within ${timeoutMs}ms`;
 				throw blocksError(
 					KnowledgeBaseErrors.Timeout,
-					`Knowledge base did not become ready within ${timeoutMs}ms.`,
+					consecutiveTransientErrors > 0 && lastTransient
+						? `${base} (last transient error: ${lastTransient.message})`
+						: `${base}.`,
 				);
 			}
 			// Jitter the interval to avoid lockstep, but never sleep past the

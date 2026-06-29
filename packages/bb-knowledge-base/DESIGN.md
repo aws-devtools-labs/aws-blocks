@@ -108,7 +108,7 @@ Creates the following resources:
 
 7. **AwsCustomResource (StartIngestionJob)** — Fires `bedrock:StartIngestionJob` on Create/Update. Ingestion runs asynchronously. Depends on both the data source and bucket deployment (when present) so documents are in S3 before ingestion starts.
 
-**Environment variables injected:** `BLOCKS_{FULLID}_KB_ID`, `BLOCKS_{FULLID}_DATA_SOURCE_ID` (the data source id drives the `isReady()` / `waitUntilReady()` readiness checks)
+**Handler config** (registered via `registerConfig`, surfaced to the runtime as env vars): `BLOCKS_{FULLID}_KB_ID`, `BLOCKS_{FULLID}_DATA_SOURCE_ID` (the data source id drives the `isReady()` / `waitUntilReady()` readiness checks)
 **IAM grants to handler:** `bedrock:Retrieve`, `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` on the knowledge base ARN (the ingestion-job actions back the readiness checks; the data source and its ingestion jobs are sub-resources of the KB ARN)
 
 ## Mock Implementation
