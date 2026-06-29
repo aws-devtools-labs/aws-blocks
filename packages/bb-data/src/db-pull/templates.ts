@@ -119,7 +119,7 @@ export const WIRING_RESOLVE_SSL_FN = `function readCaFile(p: string): string {
   return pem;
 }
 
-function resolveDbSsl(): { ca?: string; rejectUnauthorized: boolean } {
+function resolveDbSsl(): { rejectUnauthorized?: true; ca?: string } | { rejectUnauthorized: false } {
   // DATABASE_CA_CERT (inline PEM or a file path) overrides the committed cert.
   // An inline PEM contains the certificate marker; anything else is a file path.
   const envCa = process.env.DATABASE_CA_CERT;
