@@ -506,6 +506,107 @@ void describe('request fn — G2b basePath + non-nested assetPrefix (PR review #
   });
 });
 
+void describe('request fn — G2c basePath route table is single-prefixed & not over-coalesced', () => {
+  // Regression (basePath double-prefix + coalesce-shadow): when the adapter
+  // already emits basePath-relative patterns, buildKvsEntries must (a) prepend
+  // basePath EXACTLY ONCE (never /app/app/...) and (b) coalesce on the RELATIVE
+  // patterns so root-level Next routes (/_next/*, /blocks-logo.png, /BUILD_ID —
+  // root parent '') are NOT collapsed into a single /app/* static wildcard that
+  // would shadow every dynamic SSR page under basePath. See kvs_router.ts.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/app',
+      routes: [
+        { pattern: '/_next/image*', target: 'image-optimization' },
+        { pattern: '/_next/data/*', target: 'compute' },
+        { pattern: '/_next/*', target: 'static' },
+        { pattern: '/blocks-logo.png', target: 'static' },
+        { pattern: '/BUILD_ID', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: true,
+  });
+
+  void it('prepends basePath exactly once (no /app/app/ double prefix)', () => {
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    for (const [pattern] of rows) {
+      assert.ok(
+        pattern.startsWith('/app/'),
+        `row ${pattern} must be under /app`,
+      );
+      assert.ok(
+        !pattern.startsWith('/app/app/'),
+        `row ${pattern} must NOT be double-prefixed`,
+      );
+    }
+  });
+
+  void it('keeps individual root-level static rows (no /app/* over-coalesce)', () => {
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    const patterns = rows.map(([p]) => p);
+    // The bug would collapse all of these into one `/app/*` static row.
+    assert.ok(!patterns.includes('/app/*'), 'must not collapse to /app/*');
+    assert.ok(patterns.includes('/app/_next/*'));
+    assert.ok(patterns.includes('/app/blocks-logo.png'));
+  });
+
+  void it('serves a basePath asset from S3 (the reported 404 path)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/app/_next/static/chunks/webpack.js'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/webpack.js');
+  });
+
+  void it('routes a dynamic SSR page under basePath to COMPUTE (not shadowed by static)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/app/api/echo'),
+    );
+    assert.equal(
+      selectedOrigin,
+      ORIGIN_ID.server,
+      'dynamic route must reach the SSR origin, not S3',
+    );
+    assert.equal(output.uri, '/app/api/echo');
+  });
+
+  void it('still coalesces a genuine SSG fan-out under basePath (instruction-limit guard)', () => {
+    const many = baseManifest({
+      basePath: '/app',
+      routes: [
+        ...Array.from({ length: 50 }, (_, i) => ({
+          pattern: `/blog/post-${i}`,
+          target: 'static' as const,
+        })),
+        { pattern: '/*', target: 'compute' as const },
+      ],
+    });
+    const e = buildKvsEntries({
+      manifest: many,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const rows = JSON.parse(e.r0) as [string, string][];
+    const patterns = rows.map(([p]) => p);
+    assert.ok(
+      patterns.includes('/app/blog/*'),
+      'SSG fan-out must coalesce to /app/blog/*',
+    );
+    assert.ok(
+      !patterns.includes('/app/blog/post-5'),
+      'individual fan-out rows must be collapsed',
+    );
+  });
+});
+
 void describe('request fn — G3 redirects (exact + wildcard tail splice)', () => {
   const entries = buildKvsEntries({
     manifest: baseManifest({

@@ -39,6 +39,18 @@ export const normalizeBasePath = (
  * - `('foo')` → `'/app/foo'`
  *
  * When `basePath` is `undefined`, the pattern is returned unchanged.
+ *
+ * IDEMPOTENT: a pattern that is ALREADY under `basePath` (equals it, or starts
+ * with `basePath + '/'`) is returned unchanged rather than prefixed a second
+ * time. The contract is that adapters emit basePath-RELATIVE patterns and the
+ * L3 prefixes once — but Next.js bakes its `basePath` into the OpenNext output
+ * and `routes-manifest.json` (route patterns AND redirect/header sources), so
+ * those arrive pre-prefixed. Without this guard they double-prefix to
+ * `/app/app/...`, which matches nothing in the route table → every asset routes
+ * to the SSR Lambda → 404. The `+ '/'` boundary keeps a coincidental relative
+ * pattern like `/application/*` (basePath `/app`) from being treated as already
+ * prefixed. This guard is the cross-adapter safety net; the Next adapter ALSO
+ * strips the baked-in prefix up front (defense in depth).
  */
 export const prependBasePath = (
   basePath: string | undefined,
@@ -46,6 +58,10 @@ export const prependBasePath = (
 ): string => {
   if (!basePath) return pattern;
   if (pattern === '' || pattern === '/') return `${basePath}/`;
+  // Already under basePath? Leave it (idempotent — see doc above).
+  if (pattern === basePath || pattern.startsWith(`${basePath}/`)) {
+    return pattern;
+  }
   const withLeading = pattern.startsWith('/') ? pattern : `/${pattern}`;
   return `${basePath}${withLeading}`;
 };

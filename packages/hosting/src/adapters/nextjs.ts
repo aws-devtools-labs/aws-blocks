@@ -245,7 +245,82 @@ export const nextjsAdapter = (
   // default `['/*']`). Adapters set `manifest.invalidationPaths` only to
   // override/opt out. See the field doc in manifest/types.ts.
 
+  // Strip Next's baked-in basePath from every pattern/source BEFORE returning,
+  // so the manifest honors the cross-framework contract (adapters emit
+  // basePath-RELATIVE patterns; the L3 prepends basePath exactly once). Next is
+  // the lone framework that bakes basePath into its build artifacts — see
+  // stripBakedBasePath. MUST run after applyAssetPrefix (which sets
+  // manifest.basePath and appends trailing-slash redirects).
+  stripBakedBasePath(manifest);
+
   return manifest;
+};
+
+/**
+ * Remove a single leading `basePath` segment from a pattern/source.
+ *
+ * - `('/app', 'app/_next/*')`     → `'/_next/*'`   (no-leading-slash OpenNext form)
+ * - `('/app', '/app/legacy')`     → `'/legacy'`
+ * - `('/app', '/app')`            → `'/'`          (the basePath root itself)
+ * - `('/app', '/about')`          → `'/about'`     (not under basePath — unchanged)
+ * - `('/app', 'https://x/y')`     → `'https://x/y'`(external — unchanged)
+ *
+ * Boundary-safe: `/application/*` under basePath `/app` is NOT stripped (it does
+ * not start with `'/app/'`). The inverse of {@link prependBasePath}.
+ * @internal
+ */
+export const stripBasePathPrefix = (
+  basePath: string,
+  pattern: string,
+): string => {
+  const withLeading = pattern.startsWith('/') ? pattern : `/${pattern}`;
+  if (withLeading === basePath) return '/';
+  if (withLeading.startsWith(`${basePath}/`)) {
+    return withLeading.substring(basePath.length);
+  }
+  return pattern; // not under basePath — leave exactly as-is
+};
+
+/**
+ * Strip Next's baked-in `basePath` from route patterns and redirect/header
+ * sources (and redirect destinations) so the manifest carries basePath-RELATIVE
+ * patterns, matching the contract every other adapter (Astro `base`, Nuxt
+ * `app.baseURL`) already follows.
+ *
+ * WHY: Next.js bakes its configured `basePath` into the OpenNext behavior
+ * patterns (`app/_next/*`) AND into `routes-manifest.json` redirect/header
+ * sources + destinations (`/app/legacy-home` → `/app`). The L3
+ * (`buildKvsEntries`) then prepends `manifest.basePath` to every emitted
+ * pattern — producing the DOUBLE prefix `/app/app/_next/*`, `/app/app/legacy`,
+ * which matches nothing in the route table at request time, so every asset
+ * falls through to the SSR Lambda and 404s (the reported bug). Stripping here
+ * makes the single L3 prepend land correctly.
+ *
+ * No-op when `manifest.basePath` is unset (the common case). Idempotent:
+ * stripping an already-relative pattern leaves it unchanged, and
+ * `prependBasePath` is itself idempotent as a second safety net.
+ * @internal
+ */
+export const stripBakedBasePath = (manifest: DeployManifest): void => {
+  const bp = manifest.basePath;
+  if (!bp) return;
+
+  if (manifest.routes) {
+    for (const route of manifest.routes) {
+      route.pattern = stripBasePathPrefix(bp, route.pattern);
+    }
+  }
+  if (manifest.redirects) {
+    for (const r of manifest.redirects) {
+      r.source = stripBasePathPrefix(bp, r.source);
+      r.destination = stripBasePathPrefix(bp, r.destination);
+    }
+  }
+  if (manifest.headers) {
+    for (const h of manifest.headers) {
+      h.source = stripBasePathPrefix(bp, h.source);
+    }
+  }
 };
 
 /**

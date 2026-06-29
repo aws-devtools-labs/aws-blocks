@@ -12,8 +12,11 @@ import {
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
+  stripBasePathPrefix,
+  stripBakedBasePath,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
+import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
   let tmpDir: string;
@@ -1814,5 +1817,101 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       !stderrChunks.some((c) => c.includes('outside the version range')),
       `should not warn when @opennextjs/aws is absent; stderr was: ${stderrChunks.join('')}`,
     );
+  });
+});
+
+void describe('stripBasePathPrefix', () => {
+  void it('strips a leading basePath segment (no-leading-slash OpenNext form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', 'app/_next/*'), '/_next/*');
+  });
+
+  void it('strips a leading basePath segment (slash-prefixed form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/legacy'), '/legacy');
+  });
+
+  void it('maps the basePath root itself to "/"', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app'), '/');
+  });
+
+  void it('leaves a pattern that is not under basePath unchanged', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/about'), '/about');
+  });
+
+  void it('is boundary-safe: does not strip a shared-prefix substring', () => {
+    // `/application/*` is NOT under `/app` (no `/app/` boundary).
+    assert.strictEqual(
+      stripBasePathPrefix('/app', '/application/*'),
+      '/application/*',
+    );
+  });
+
+  void it('leaves an external/absolute destination unchanged', () => {
+    assert.strictEqual(
+      stripBasePathPrefix('/app', 'https://cdn.example.com/x'),
+      'https://cdn.example.com/x',
+    );
+  });
+
+  void it('round-trips: strip(prepend(x)) === x for a relative pattern', () => {
+    // /app + /foo/* -> /app/foo/*  then strip -> /foo/*
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/foo/*'), '/foo/*');
+  });
+});
+
+void describe('stripBakedBasePath', () => {
+  const baseManifest = (): DeployManifest => ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory: '/tmp/static' },
+    routes: [],
+  });
+
+  void it('is a no-op when basePath is unset', () => {
+    const m = baseManifest();
+    m.routes = [{ pattern: '/app/_next/*', target: 'static' }];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.routes[0].pattern, '/app/_next/*');
+  });
+
+  void it('strips baked basePath from route patterns so the L3 prepends exactly once', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.routes = [
+      { pattern: 'app/_next/image*', target: 'image-optimization' },
+      { pattern: 'app/_next/data/*', target: 'default' },
+      { pattern: 'app/_next/*', target: 's3' },
+      { pattern: '/*', target: 'default' }, // catch-all is not under basePath
+      // a blocks-injected relative route must be untouched
+      { pattern: '/.blocks-sandbox/*', target: 'static' },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(
+      m.routes.map((r) => r.pattern),
+      ['/_next/image*', '/_next/data/*', '/_next/*', '/*', '/.blocks-sandbox/*'],
+    );
+  });
+
+  void it('strips baked basePath from redirect source AND destination', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.redirects = [
+      { source: '/app/legacy-home', destination: '/app', statusCode: 308 },
+      { source: '/app/r/old-0', destination: '/app/r/new-0', statusCode: 308 },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(m.redirects, [
+      { source: '/legacy-home', destination: '/', statusCode: 308 },
+      { source: '/r/old-0', destination: '/r/new-0', statusCode: 308 },
+    ]);
+  });
+
+  void it('strips baked basePath from header sources', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.headers = [
+      { source: '/app/secure-headers', headers: { 'x-frame-options': 'DENY' } },
+    ];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.headers[0].source, '/secure-headers');
   });
 });

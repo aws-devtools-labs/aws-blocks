@@ -68,4 +68,29 @@ void describe('prependBasePath', () => {
   void it('handles nested basePath', () => {
     assert.strictEqual(prependBasePath('/foo/bar', '/baz'), '/foo/bar/baz');
   });
+
+  // Idempotency guard — a pattern ALREADY under basePath is not prefixed twice.
+  // Next.js bakes basePath into its OpenNext patterns + routes-manifest sources,
+  // so they arrive pre-prefixed; double-prefixing to /app/app/* breaks routing.
+  void it('does not double-prefix a pattern already under basePath', () => {
+    assert.strictEqual(prependBasePath('/app', '/app/_next/*'), '/app/_next/*');
+  });
+
+  void it('does not double-prefix the basePath root itself', () => {
+    assert.strictEqual(prependBasePath('/app', '/app'), '/app');
+  });
+
+  void it('still prefixes a relative pattern that shares a prefix substring (boundary-safe)', () => {
+    // `/application/*` is NOT under basePath `/app` (no `/app/` boundary), so it
+    // must still be prefixed rather than mistaken for already-prefixed.
+    assert.strictEqual(
+      prependBasePath('/app', '/application/*'),
+      '/app/application/*',
+    );
+  });
+
+  void it('is idempotent: prepending twice equals prepending once', () => {
+    const once = prependBasePath('/app', '/foo/*');
+    assert.strictEqual(prependBasePath('/app', once), once);
+  });
 });

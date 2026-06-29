@@ -184,7 +184,7 @@ export const coalesceRoutes = (
   // the table stays minimal.
   const seen = new Set<string>();
   return out.filter(([p, k]) => {
-    const key = `${p} ${k}`;
+    const key = `${p} ${k}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -211,6 +211,17 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // Each static/compute/image route becomes one [pattern, kind] row. Image-opt
   // and server routes are recorded so the function can pick their origin; every
   // other path falls through to: server (if hasServer) else S3.
+  //
+  // IMPORTANT — patterns are kept basePath-RELATIVE through coalescing, then
+  // basePath is prepended ONCE afterwards. Coalescing groups routes by parent
+  // directory and a non-root parent (`parent.length > 0`) of one kind collapses
+  // to `parent/*`. If basePath were prepended FIRST, root-level routes like
+  // `/_next/*`, `/blocks-logo.png`, `/BUILD_ID` (parent `''`, never coalesced)
+  // would instead become `/app/_next/*`, `/app/blocks-logo.png` (parent `/app`)
+  // and collapse into a single `/app/*` STATIC wildcard — which shadows EVERY
+  // dynamic SSR route under basePath (`/app/api/echo` → S3 → 404). Coalescing
+  // relative keeps the root parent at `''` so the behavior is identical to the
+  // no-basePath case, just shifted under the prefix.
   const rows: [string, RouteKind][] = [];
   for (const route of manifest.routes) {
     if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
@@ -218,24 +229,35 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     // takes precedence over the default behavior — exclude them from the KVS
     // table so the router never (mis)classifies them as default-server compute.
     if (edgeTargets.has(route.target)) continue;
-    const cf = normalizePattern(route.pattern, basePath);
+    // basePath-RELATIVE pattern (no prefix yet — see note above).
+    const rel = normalizePattern(route.pattern);
     const isStatic = route.target === 'static' || route.target === 's3';
     // A route is image-opt when it targets the image origin (Next emits
     // target 'image-optimization' for `/_next/image*`) OR when it matches the
     // configured IPX prefix (Nuxt's `/_ipx/*`). Gate only on `hasImage` (the
     // origin must exist) — NOT on `imagePrefix`, which Next never sets.
+    // Compare against the RELATIVE image prefix (imagePrefix is itself stored
+    // basePath-relative), matching the relative `rel` pattern above.
     const isImage =
       hasImage &&
       (route.target === 'image-optimization' ||
         (imagePrefix !== undefined &&
-          cf === normalizePattern(`${imagePrefix}/*`, basePath)));
+          rel === normalizePattern(`${imagePrefix}/*`)));
     const kind: RouteKind = isImage ? 'i' : isStatic ? 's' : 'c';
-    rows.push([cf, kind]);
+    rows.push([rel, kind]);
   }
   // Coalesce SSG fan-out (many sibling pages under one parent, one kind) into a
   // single `parent/*` wildcard so the per-request edge scan stays bounded and
   // never trips the CloudFront Function instruction limit. See coalesceRoutes.
-  const coalesced = coalesceRoutes(rows);
+  // Runs on RELATIVE patterns (see note above); basePath is prepended next.
+  const coalescedRel = coalesceRoutes(rows);
+
+  // Prepend basePath ONCE, after coalescing. prependBasePath is idempotent, so
+  // a pattern that somehow already carries the prefix is left intact.
+  const coalesced: [string, RouteKind][] = coalescedRel.map(([p, k]) => [
+    prependBasePath(basePath, p),
+    k,
+  ]);
 
   // Sort by descending specificity (literal segments, then length) so the
   // function's first-match scan mirrors CloudFront's old behavior ordering. A
