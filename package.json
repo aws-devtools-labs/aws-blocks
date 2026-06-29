@@ -80,6 +80,8 @@
     "create-demo": "node packages/create-blocks-app/dist/index.js --template demo",
     "update-template": "tsx scripts/update-template-from-demo.ts",
     "build:tech-design-pdf": "node scripts/build-tech-design-pdf.mjs",
+    "sync-docs": "node scripts/sync-catalog.mjs --write",
+    "sync-docs:check": "node scripts/sync-catalog.mjs --check",
     "review-pr": "bash scripts/review-pr.sh",
     "publish:dry-run": "tsx scripts/publish/publish.ts",
     "publish:npm": "tsx scripts/publish/publish-npm.ts",
