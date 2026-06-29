@@ -192,7 +192,7 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes('AWS_LAMBDA_FUNCTION_NAME'));
     assert.ok(output.includes('refusing to connect'));
     // Logs the resolved TLS mode so success isn't silent.
-    assert.ok(output.includes('DB TLS: verifying'));
+    assert.ok(output.includes('DB TLS: will verify'));
     assert.ok(output.includes('DB TLS: server certificate NOT verified'));
   });
 

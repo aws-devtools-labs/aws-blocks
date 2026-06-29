@@ -5,6 +5,7 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { mock } from 'node:test';
 import { PgClientEngine } from './pg-client-engine.js';
+import { tlsConnectionMessage } from './pg-client-engine.js';
 
 // We test PgClientEngine by verifying it correctly delegates to pg.Pool.
 // Since pg is an external dep, we mock at the module level.
@@ -156,4 +157,42 @@ test('PgClientEngine: applies a TLS 1.2 floor a caller can override', () => {
     ssl: { rejectUnauthorized: true, minVersion: 'TLSv1.3' },
   });
   assert.deepStrictEqual((engine as any).pool.options.ssl, { minVersion: 'TLSv1.3', rejectUnauthorized: true });
+});
+
+// --- tlsConnectionMessage (post-handshake confirmation) ---
+
+describe('tlsConnectionMessage', () => {
+  const CONN = 'postgres://u:p@db.example.com:5432/postgres';
+
+  test('pinned CA → log level, names the pinned CA and the host', () => {
+    const { level, message } = tlsConnectionMessage({ rejectUnauthorized: true, ca: 'pem' }, CONN);
+    assert.strictEqual(level, 'log');
+    assert.match(message, /verified against the pinned CA/);
+    assert.match(message, /db\.example\.com:5432/);
+  });
+
+  test('no CA (verify against trust store) → log level, names the built-in trust store', () => {
+    const { level, message } = tlsConnectionMessage({ rejectUnauthorized: true }, CONN);
+    assert.strictEqual(level, 'log');
+    assert.match(message, /Node's built-in trust store/);
+  });
+
+  test('undefined ssl is treated as verifying (engine default)', () => {
+    const { level, message } = tlsConnectionMessage(undefined, CONN);
+    assert.strictEqual(level, 'log');
+    assert.match(message, /verified/);
+  });
+
+  test('opt-out (rejectUnauthorized: false) → warn level, says NOT verified', () => {
+    const { level, message } = tlsConnectionMessage({ rejectUnauthorized: false }, CONN);
+    assert.strictEqual(level, 'warn');
+    assert.match(message, /NOT verified/);
+    assert.match(message, /man-in-the-middle/);
+  });
+
+  test('an unparseable connection string simply omits the host (no throw)', () => {
+    const { message } = tlsConnectionMessage({ rejectUnauthorized: true }, 'not a url');
+    assert.doesNotMatch(message, / to /);
+    assert.match(message, /verified/);
+  });
 });

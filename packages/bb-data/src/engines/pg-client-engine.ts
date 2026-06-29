@@ -53,6 +53,36 @@ function assertPostgresUrl(connectionString: string): void {
 }
 
 /**
+ * Build the post-handshake TLS confirmation message for a successful connection.
+ *
+ * Pure (no I/O) so it can be unit-tested. Called from the pool's `connect` event,
+ * where the TLS handshake has already succeeded — so when verification is enabled
+ * (`rejectUnauthorized !== false`) the server certificate has been validated.
+ *
+ * The host (no credentials) is included for context; an unparseable connection
+ * string (e.g. an unencoded password) simply omits it.
+ */
+export function tlsConnectionMessage(
+  ssl: ExternalSslOptions | undefined,
+  connectionString: string,
+): { level: 'log' | 'warn'; message: string } {
+  let host = '';
+  try { host = new URL(connectionString).host; } catch { /* unparseable — omit host */ }
+  const where = host ? ` to ${host}` : '';
+  if (ssl?.rejectUnauthorized === false) {
+    return {
+      level: 'warn',
+      message: `[bb-data] DB TLS: connected${where} — server certificate NOT verified (encrypted only, no protection against an active man-in-the-middle).`,
+    };
+  }
+  const against = ssl?.ca ? 'the pinned CA' : "Node's built-in trust store";
+  return {
+    level: 'log',
+    message: `[bb-data] DB TLS: connected${where} — server certificate verified against ${against}. ✓`,
+  };
+}
+
+/**
  * DatabaseEngine implementation using the `pg` library.
  * Connects to any PostgreSQL-compatible database (Supabase, Neon, DSQL, etc.)
  * via a connection pool.
@@ -75,6 +105,21 @@ export class PgClientEngine implements DatabaseEngine {
       ...(config.connectionTimeoutMillis !== undefined && {
         connectionTimeoutMillis: config.connectionTimeoutMillis,
       }),
+    });
+
+    // Positive, truthful TLS confirmation on the FIRST successful connection.
+    // The TLS handshake is lazy (it happens when the pool opens its first
+    // connection, i.e. on the first query), so a config-time "verifying…" log only
+    // states intent. Reaching the pool's `connect` event means the socket — and
+    // thus the TLS handshake — succeeded; with `rejectUnauthorized !== false` that
+    // means the server certificate validated. Log it once so success is visible
+    // instead of left for the caller to infer.
+    let tlsConfirmed = false;
+    this.pool.on('connect', () => {
+      if (tlsConfirmed) return;
+      tlsConfirmed = true;
+      const { level, message } = tlsConnectionMessage(baseSsl, config.connectionString);
+      console[level](message);
     });
   }
 

@@ -127,8 +127,9 @@ function resolveDbSsl(): { ca?: string; rejectUnauthorized: boolean } {
     ? (envCa.includes('-----BEGIN CERTIFICATE-----') ? envCa : readCaFile(envCa))
     : (DATABASE_CA_CERT || undefined);
   if (ca) {
-    // Pin the provider CA → fully verified (sslmode=verify-full equivalent).
-    console.log('[bb-data] DB TLS: verifying the server certificate against the pinned CA (verify-full equivalent).');
+    // Pin the provider CA → fully verified (sslmode=verify-full equivalent). The
+    // actual handshake is lazy (first query); bb-data confirms success on connect.
+    console.log('[bb-data] DB TLS: will verify the server certificate against the pinned CA on connect (verify-full).');
     return { ca, rejectUnauthorized: true };
   }
   // No CA available. In the deployed function, fail CLOSED rather than connect
