@@ -607,8 +607,9 @@ describe('isReady', () => {
 		// A deployment that predates the readiness API: KB_ID present, but no
 		// DATA_SOURCE_ID was injected, so there is no ingestion job to track. (The
 		// CDK layer now always registers a DATA_SOURCE_ID for both folder and
-		// imported s3:// sources — see DESIGN.md D-KB-2 — so this is purely the
-		// pre-feature case, not a source-type distinction.)
+		// imported s3:// sources — see DESIGN.md, the "Source coverage (folder and
+		// imported s3://)" note — so this is purely the pre-feature case, not a
+		// source-type distinction.)
 		const cleanup = setReadyEnv('TEST', 'RDY4', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {
@@ -791,7 +792,8 @@ describe('waitUntilReady', () => {
 	test('resolves immediately when no data source id is configured', async () => {
 		// Pre-readiness-API deployment: no DATA_SOURCE_ID injected, so there is
 		// nothing to poll. (Not a source-type distinction — the CDK layer registers
-		// DATA_SOURCE_ID for folder and imported s3:// sources alike; see DESIGN.md D-KB-2.)
+		// DATA_SOURCE_ID for folder and imported s3:// sources alike; see DESIGN.md,
+		// the "Source coverage (folder and imported s3://)" note.)
 		const cleanup = setReadyEnv('TEST', 'WUR5', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {

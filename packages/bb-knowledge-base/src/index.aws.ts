@@ -228,7 +228,10 @@ export class KnowledgeBase extends Scope {
 	readonly bbName = BB_NAME;
 	private readonly fullIdCached: string;
 	private readonly runtimeClient: BedrockAgentRuntimeClient;
-	private readonly agentClient: BedrockAgentClient;
+	// Control-plane client for ingestion-job status (readiness checks). Created
+	// lazily on first readiness call via getAgentClient() so instances that only
+	// ever retrieve() (or never check readiness) don't allocate it.
+	private agentClient?: BedrockAgentClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -238,12 +241,6 @@ export class KnowledgeBase extends Scope {
 		this.log = _options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fullIdCached = this.fullId;
 		this.runtimeClient = new BedrockAgentRuntimeClient({
-			maxAttempts: 3,
-			retryMode: 'adaptive',
-			customUserAgent: this.buildUserAgentChain(),
-		});
-		// Control-plane client for ingestion-job status (readiness checks).
-		this.agentClient = new BedrockAgentClient({
 			maxAttempts: 3,
 			retryMode: 'adaptive',
 			customUserAgent: this.buildUserAgentChain(),
@@ -500,6 +497,24 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
+	 * Lazily construct (and memoize) the Bedrock control-plane client used for
+	 * ingestion-job status during readiness checks. Built on first use rather
+	 * than in the constructor so instances that only ever call {@link retrieve}
+	 * — or never check readiness at all — don't allocate a client they won't use.
+	 * Subsequent calls return the cached instance.
+	 */
+	private getAgentClient(): BedrockAgentClient {
+		if (!this.agentClient) {
+			this.agentClient = new BedrockAgentClient({
+				maxAttempts: 3,
+				retryMode: 'adaptive',
+				customUserAgent: this.buildUserAgentChain(),
+			});
+		}
+		return this.agentClient;
+	}
+
+	/**
 	 * List the data source's ingestion jobs (most recent first) and return the
 	 * latest summary, or `undefined` when none exist yet. SDK errors are mapped
 	 * to Blocks error constants via {@link mapSdkError}.
@@ -509,7 +524,7 @@ export class KnowledgeBase extends Scope {
 		dataSourceId: string,
 	): Promise<IngestionJobSummary | undefined> {
 		try {
-			const response = await this.agentClient.send(
+			const response = await this.getAgentClient().send(
 				new ListIngestionJobsCommand({
 					knowledgeBaseId,
 					dataSourceId,
@@ -538,7 +553,7 @@ export class KnowledgeBase extends Scope {
 	): Promise<string[]> {
 		if (!ingestionJobId) return [];
 		try {
-			const response = await this.agentClient.send(
+			const response = await this.getAgentClient().send(
 				new GetIngestionJobCommand({ knowledgeBaseId, dataSourceId, ingestionJobId }),
 			);
 			const reasons = response.ingestionJob?.failureReasons ?? [];

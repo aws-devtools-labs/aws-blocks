@@ -33,6 +33,10 @@ async function gateOnReadiness(
   const start = Date.now();
   const deadline = start + timeoutMs;
   let attempt = 0;
+  // Intentionally unbounded: the only exits are a ready KB (return), a thrown
+  // readiness error, or the mid-loop `Date.now() >= deadline` check below — that
+  // check is the sole timeout path (it must run after a poll, so the throw, not
+  // a loop-condition exit, is what bounds the wait).
   while (true) {
     attempt++;
     const elapsed = Math.round((Date.now() - start) / 1000);
