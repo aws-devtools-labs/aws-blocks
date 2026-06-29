@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
@@ -1510,13 +1511,14 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 
 	createApi(): AuthStateApi {
 		const enablePasskeys = this.options.enablePasskeys === true;
-		const baseSignedOut = (error?: string): AuthState =>
+		const baseSignedOut = (error?: string, errorName?: string): AuthState =>
 			signedOut({
 				selfSignUp: this.options.selfSignUp ?? true,
 				userAttributes: this.options.userAttributes ?? [],
 				enablePasskeys,
 				signInWith: this.options.signInWith,
 				error,
+				errorName,
 			});
 		const baseSignedIn = (user: CognitoUser<O>): AuthState =>
 			signedInState(user, { enablePasskeys });
@@ -1649,14 +1651,21 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Match the AWS runtime: retriable failures (wrong MFA
 					// code, rejected shape) emit a thin signedOut shape with
 					// `retriable: true` so the client can preserve its current
 					// challenge form instead of tearing it down.
 					if (e instanceof ApiError && e.retriable) {
-						return { state: 'signedOut', actions: [], error: message, retriable: true };
+						return {
+							state: 'signedOut',
+							actions: [],
+							error: message,
+							retriable: true,
+							...(errorName ? { errorName } : {}),
+						};
 					}
-					return { ...baseSignedOut(message) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));

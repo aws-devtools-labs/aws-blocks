@@ -1,5 +1,22 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.10
+
+### Patch Changes
+
+- f42c604: fix: generate unique stackId in .blocks/config.json, export getStackId/getSandboxId from @aws-blocks/blocks/scripts
+
+  Stack names are now derived from a `stackId` in `.blocks/config.json`, generated at scaffold time as `<name>.slice(0,16)-<random6>`. Templates import `getStackId()` and `getSandboxId()` from `@aws-blocks/blocks/scripts` — no more inline filesystem logic in `index.cdk.ts`.
+
+  Production: `<stackId>-prod`
+  Sandbox: `<stackId>-<username(8)>-<random(6)>` (per-machine, gitignored)
+
+## 0.1.9
+
+### Patch Changes
+
+- 95efe42: Honor `--skip-install` when creating a fresh project so scaffolding can complete without running `npm install`.
+
 ## 0.1.8
 
 ### Patch Changes

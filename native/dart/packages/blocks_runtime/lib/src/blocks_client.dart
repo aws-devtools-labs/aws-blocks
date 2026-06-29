@@ -42,7 +42,8 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<http.Response> _doCall(String method, Map<String, dynamic> params) async {
+  Future<http.Response> _doCall(
+      String method, Map<String, dynamic> params) async {
     final id = _nextId++;
     final body = jsonEncode({
       'jsonrpc': '2.0',

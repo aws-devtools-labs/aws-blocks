@@ -370,6 +370,22 @@ Error names match Cognito's wire-format exceptions, so customers familiar with A
 
 > **Non-obvious mapping:** `AuthCognitoErrors.GroupNotFound` resolves to `'ResourceNotFoundException'`, **not** a `GroupNotFound*` string. Cognito has no dedicated "group not found" exception, so a missing user-pool group surfaces as the generic `ResourceNotFoundException`. Always match with `isBlocksError(e, AuthCognitoErrors.GroupNotFound)` rather than the literal string so the intent stays clear.
 
+### Branching on the `setAuthState` client path
+
+`isBlocksError` works on a **thrown** error. The recommended client path (`createApi()` → `setAuthState()`) does not throw — it returns an `AuthState` whose `errorName` carries the same structured name. Use `hasAuthError` to branch on the returned state:
+
+```typescript
+import { hasAuthError } from '@aws-blocks/core';
+import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+
+const next = await authApi.setAuthState({ action: 'signIn', username, password });
+if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
+  // wrong username or password
+}
+```
+
+Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
+
 ## UI Components
 
 Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui` — same shape as for `AuthBasic`:

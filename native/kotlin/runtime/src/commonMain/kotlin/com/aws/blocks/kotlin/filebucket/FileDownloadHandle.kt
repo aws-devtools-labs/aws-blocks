@@ -16,7 +16,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class FileDownloadHandle(
-    private val url: String,
+    val url: String,
     private val httpClient: HttpClient = defaultHttpClient()
 ) {
 
@@ -27,8 +27,6 @@ class FileDownloadHandle(
             return FileDownloadHandle(url)
         }
     }
-
-    fun getUrl(): String = url
 
     suspend fun download(): ByteArray = try {
         val response = httpClient.get(url)

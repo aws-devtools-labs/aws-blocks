@@ -8,10 +8,13 @@ import 'package:blocks_codegen/src/generator.dart';
 void main(List<String> args) {
   final parser = ArgParser()
     ..addOption('spec', abbr: 's', help: 'Path to the OpenRPC spec file')
-    ..addOption('output', abbr: 'o', help: 'Output path for the generated Dart file (stdout if omitted)')
+    ..addOption('output',
+        abbr: 'o',
+        help: 'Output path for the generated Dart file (stdout if omitted)')
     ..addFlag('fail-on-collision',
         negatable: false,
-        help: 'Treat inline-type name collisions that survive qualification as a '
+        help:
+            'Treat inline-type name collisions that survive qualification as a '
             'hard error. By default they are auto-disambiguated with a '
             'deterministic suffix and reported as a warning.')
     ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage');
@@ -22,13 +25,15 @@ void main(List<String> args) {
   } on FormatException catch (e) {
     stderr.writeln('Error: ${e.message}');
     stderr.writeln();
-    stderr.writeln('Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+    stderr.writeln(
+        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
     stderr.writeln(parser.usage);
     exit(1);
   }
 
   if (results['help'] as bool) {
-    stdout.writeln('Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+    stdout.writeln(
+        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
     stdout.writeln();
     stdout.writeln(parser.usage);
     exit(0);
@@ -38,7 +43,8 @@ void main(List<String> args) {
   if (specPath == null) {
     stderr.writeln('Error: --spec is required');
     stderr.writeln();
-    stderr.writeln('Usage: dart run blocks_codegen --spec <path> [--output <path>]');
+    stderr.writeln(
+        'Usage: dart run blocks_codegen --spec <path> [--output <path>]');
     stderr.writeln(parser.usage);
     exit(1);
   }

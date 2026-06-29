@@ -34,15 +34,14 @@ class OpenRpcParser {
       }
       return _parseMethod(m, schemas);
     }).toList();
-    final servers = (spec['servers'] as List<dynamic>?)
-        ?.map((s) {
+    final servers = (spec['servers'] as List<dynamic>?)?.map((s) {
           final server = s as Map<String, dynamic>;
           return Server(
             name: server['name'] as String,
             url: server['url'] as String,
           );
-        })
-        .toList() ?? [];
+        }).toList() ??
+        [];
     return RpcModel(
       title: info['title'] as String,
       version: info['version'] as String,
@@ -61,7 +60,8 @@ class OpenRpcParser {
         MapEntry(name, _parseTypeRef(schema as Map<String, dynamic>)));
   }
 
-  RpcMethod _parseMethod(Map<String, dynamic> method, Map<String, TypeRef> schemas) {
+  RpcMethod _parseMethod(
+      Map<String, dynamic> method, Map<String, TypeRef> schemas) {
     final params = (method['params'] as List<dynamic>).map((p) {
       final param = p as Map<String, dynamic>;
       return RpcParam(
@@ -106,8 +106,8 @@ class OpenRpcParser {
 
     // Check for oneOf (nullable or discriminated union)
     if (schema.containsKey('oneOf')) {
-      final oneOf = (schema['oneOf'] as List<dynamic>)
-          .cast<Map<String, dynamic>>();
+      final oneOf =
+          (schema['oneOf'] as List<dynamic>).cast<Map<String, dynamic>>();
       return _parseOneOf(oneOf);
     }
 
@@ -123,7 +123,8 @@ class OpenRpcParser {
     // instead (a plain `bool`), matching the Swift and Kotlin generators which
     // both ignore the enum constraint on non-string primitives.
     if (schema.containsKey('enum') && (type == null || type == 'string')) {
-      return UnionLiteralRef((schema['enum'] as List<dynamic>).map((v) => v.toString()).toList());
+      return UnionLiteralRef(
+          (schema['enum'] as List<dynamic>).map((v) => v.toString()).toList());
     }
 
     // Array (check before primitives since arrays have a 'type')
@@ -138,7 +139,9 @@ class OpenRpcParser {
       }
       // Regular array (or array-form items as tuple)
       final items = schema['items'];
-      if (items == null) return ArrayRef(PrimitiveRef('dynamic'), constraints: _parseConstraints(schema));
+      if (items == null)
+        return ArrayRef(PrimitiveRef('dynamic'),
+            constraints: _parseConstraints(schema));
       if (items is List<dynamic>) {
         final tupleItems = items
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
@@ -147,8 +150,11 @@ class OpenRpcParser {
         return TupleRef(tupleItems);
       }
       final itemsMap = items as Map<String, dynamic>;
-      if (itemsMap.isEmpty) return ArrayRef(PrimitiveRef('dynamic'), constraints: _parseConstraints(schema));
-      return ArrayRef(_parseTypeRef(itemsMap), constraints: _parseConstraints(schema));
+      if (itemsMap.isEmpty)
+        return ArrayRef(PrimitiveRef('dynamic'),
+            constraints: _parseConstraints(schema));
+      return ArrayRef(_parseTypeRef(itemsMap),
+          constraints: _parseConstraints(schema));
     }
 
     // Object with additionalProperties (Map<String, T>)
@@ -173,10 +179,8 @@ class OpenRpcParser {
       }
       final parsedProps = props
           .map((k, v) => MapEntry(k, _parseTypeRef(v as Map<String, dynamic>)));
-      final required = (schema['required'] as List<dynamic>?)
-              ?.cast<String>()
-              .toSet() ??
-          {};
+      final required =
+          (schema['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
       TypeRef? additionalProps;
       if (schema.containsKey('additionalProperties')) {
         final ap = schema['additionalProperties'];
@@ -186,11 +190,15 @@ class OpenRpcParser {
           additionalProps = _parseTypeRef(ap);
         }
       }
-      return InlineObjectRef(properties: parsedProps, required: required, additionalProperties: additionalProps);
+      return InlineObjectRef(
+          properties: parsedProps,
+          required: required,
+          additionalProperties: additionalProps);
     }
 
     // Primitives
-    return PrimitiveRef(_mapPrimitive(type), constraints: _parseConstraints(schema));
+    return PrimitiveRef(_mapPrimitive(type),
+        constraints: _parseConstraints(schema));
   }
 
   TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf) {
@@ -204,27 +212,30 @@ class OpenRpcParser {
     }
 
     // Check discriminated union: all objects with a shared single-value enum field
-    if (oneOf.every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
+    if (oneOf
+        .every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
       final discriminant = _findDiscriminant(oneOf);
       if (discriminant != null) {
         final variants = oneOf.map((v) {
-          final props = (v['properties'] as Map<String, dynamic>)
-              .map((k, val) => MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
-          final required = (v['required'] as List<dynamic>?)
-                  ?.cast<String>()
-                  .toSet() ??
-              {};
+          final props = (v['properties'] as Map<String, dynamic>).map(
+              (k, val) =>
+                  MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
+          final required =
+              (v['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
           final discValue =
               ((v['properties'] as Map<String, dynamic>)[discriminant]
                   as Map<String, dynamic>)['enum'][0] as String;
           // Remove discriminant from properties
-          final filteredProps = Map<String, TypeRef>.from(props)..remove(discriminant);
-          final filteredRequired = Set<String>.from(required)..remove(discriminant);
+          final filteredProps = Map<String, TypeRef>.from(props)
+            ..remove(discriminant);
+          final filteredRequired = Set<String>.from(required)
+            ..remove(discriminant);
 
           // Check for nested oneOf (hybrid arm: properties + embedded union)
           DiscriminatedUnionRef? embeddedUnion;
           if (v.containsKey('oneOf')) {
-            final nestedOneOf = (v['oneOf'] as List<dynamic>).cast<Map<String, dynamic>>();
+            final nestedOneOf =
+                (v['oneOf'] as List<dynamic>).cast<Map<String, dynamic>>();
             final parsed = _parseOneOf(nestedOneOf);
             if (parsed is DiscriminatedUnionRef) {
               embeddedUnion = parsed;
@@ -238,7 +249,8 @@ class OpenRpcParser {
             embeddedUnion: embeddedUnion,
           );
         }).toList();
-        return DiscriminatedUnionRef(discriminant: discriminant, variants: variants);
+        return DiscriminatedUnionRef(
+            discriminant: discriminant, variants: variants);
       }
     }
 

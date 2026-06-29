@@ -6,11 +6,22 @@ void main() {
   group('namespace grouping', () {
     test('splits dotted names into namespaces', () {
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
-          RpcMethod(name: 'api.create', params: [], result: const PrimitiveRef('String')),
-          RpcMethod(name: 'api.delete', params: [], result: const PrimitiveRef('String')),
-          RpcMethod(name: 'auth.login', params: [], result: const PrimitiveRef('String')),
+          RpcMethod(
+              name: 'api.create',
+              params: [],
+              result: const PrimitiveRef('String')),
+          RpcMethod(
+              name: 'api.delete',
+              params: [],
+              result: const PrimitiveRef('String')),
+          RpcMethod(
+              name: 'auth.login',
+              params: [],
+              result: const PrimitiveRef('String')),
         ],
       ));
       expect(model.namespaces.length, 2);
@@ -23,31 +34,51 @@ void main() {
   group('type resolution', () {
     test('resolves SchemaRefRef to SchemaReference', () {
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1',
-        schemas: {'Todo': const InlineObjectRef(properties: {'id': PrimitiveRef('String')}, required: {'id'})},
+        title: 't',
+        version: '1',
+        schemas: {
+          'Todo': const InlineObjectRef(
+              properties: {'id': PrimitiveRef('String')}, required: {'id'})
+        },
         methods: [
-          RpcMethod(name: 'api.get', params: [], result: const SchemaRefRef('Todo')),
+          RpcMethod(
+              name: 'api.get', params: [], result: const SchemaRefRef('Todo')),
         ],
       ));
       expect(model.namespaces[0].operations[0].result, isA<SchemaReference>());
-      expect((model.namespaces[0].operations[0].result as SchemaReference).name, 'Todo');
+      expect((model.namespaces[0].operations[0].result as SchemaReference).name,
+          'Todo');
     });
   });
 
   group('discriminated union', () {
     test('produces SealedClassType with variants', () {
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
-          RpcMethod(name: 'api.set', params: [
-            RpcParam(name: 'input', isRequired: true, schema: const DiscriminatedUnionRef(
-              discriminant: 'type',
-              variants: [
-                UnionVariant(discriminantValue: 'a', properties: {'x': PrimitiveRef('String')}, required: {'x'}),
-                UnionVariant(discriminantValue: 'b', properties: {'y': PrimitiveRef('num')}, required: {'y'}),
+          RpcMethod(
+              name: 'api.set',
+              params: [
+                RpcParam(
+                    name: 'input',
+                    isRequired: true,
+                    schema: const DiscriminatedUnionRef(
+                      discriminant: 'type',
+                      variants: [
+                        UnionVariant(
+                            discriminantValue: 'a',
+                            properties: {'x': PrimitiveRef('String')},
+                            required: {'x'}),
+                        UnionVariant(
+                            discriminantValue: 'b',
+                            properties: {'y': PrimitiveRef('num')},
+                            required: {'y'}),
+                      ],
+                    )),
               ],
-            )),
-          ], result: const PrimitiveRef('void')),
+              result: const PrimitiveRef('void')),
         ],
       ));
       final paramType = model.namespaces[0].operations[0].params[0].type;
@@ -62,18 +93,32 @@ void main() {
     test('structurally identical sealed unions dedup to a single type', () {
       // Main lacks sealed-class dedup entirely; the port merges identical unions.
       const union = DiscriminatedUnionRef(discriminant: 'type', variants: [
-        UnionVariant(discriminantValue: 'a', properties: {'x': PrimitiveRef('String')}, required: {'x'}),
-        UnionVariant(discriminantValue: 'b', properties: {'y': PrimitiveRef('int')}, required: {'y'}),
+        UnionVariant(
+            discriminantValue: 'a',
+            properties: {'x': PrimitiveRef('String')},
+            required: {'x'}),
+        UnionVariant(
+            discriminantValue: 'b',
+            properties: {'y': PrimitiveRef('int')},
+            required: {'y'}),
       ]);
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
-          RpcMethod(name: 'api.first', params: [
-            RpcParam(name: 'input', isRequired: true, schema: union),
-          ], result: const PrimitiveRef('void')),
-          RpcMethod(name: 'api.second', params: [
-            RpcParam(name: 'data', isRequired: true, schema: union),
-          ], result: const PrimitiveRef('void')),
+          RpcMethod(
+              name: 'api.first',
+              params: [
+                RpcParam(name: 'input', isRequired: true, schema: union),
+              ],
+              result: const PrimitiveRef('void')),
+          RpcMethod(
+              name: 'api.second',
+              params: [
+                RpcParam(name: 'data', isRequired: true, schema: union),
+              ],
+              result: const PrimitiveRef('void')),
         ],
       ));
       final ops = model.namespaces.expand((n) => n.operations).toList();
@@ -88,14 +133,19 @@ void main() {
     test('honors declared result name as the inline result type identity', () {
       // Bug repro: api.get with result content-descriptor named "Todo".
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
           RpcMethod(
             name: 'api.get',
             params: [],
             resultName: 'Todo',
             result: const InlineObjectRef(
-              properties: {'title': PrimitiveRef('String'), 'done': PrimitiveRef('bool')},
+              properties: {
+                'title': PrimitiveRef('String'),
+                'done': PrimitiveRef('bool')
+              },
               required: {'title', 'done'},
             ),
           ),
@@ -111,13 +161,18 @@ void main() {
 
     test('falls back to {Method}Result when no name is declared', () {
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
           RpcMethod(
             name: 'api.get',
             params: [],
             result: const InlineObjectRef(
-              properties: {'title': PrimitiveRef('String'), 'done': PrimitiveRef('bool')},
+              properties: {
+                'title': PrimitiveRef('String'),
+                'done': PrimitiveRef('bool')
+              },
               required: {'title', 'done'},
             ),
           ),
@@ -130,7 +185,9 @@ void main() {
     test('declared name wins over generic shape-based renaming', () {
       // Shape {success: bool} would normally be renamed to SuccessResult.
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
           RpcMethod(
             name: 'api.doThing',
@@ -151,7 +208,9 @@ void main() {
     test('distinct declared names keep cross-namespace results distinct', () {
       // On main (no namespace prefix) both would synthesize "ListResult".
       final model = CodegenModelBuilder().build(RpcModel(
-        title: 't', version: '1', schemas: {},
+        title: 't',
+        version: '1',
+        schemas: {},
         methods: [
           RpcMethod(
             name: 'users.list',

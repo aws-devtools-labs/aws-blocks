@@ -304,10 +304,10 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
-### TLS verification on the external-DB paths — see D-012
+### TLS verification on the external-DB paths — see D-013
 
 > The full TLS posture (verify-by-default, the `ssl` option, committed-CA delivery, and the
-> fail-closed-in-CI/Lambda policy) is recorded as its own decision, **D-012**. The notes below are
+> fail-closed-in-CI/Lambda policy) is recorded as its own decision, **D-013**. The notes below are
 > retained for context on the DDL/baseline path specifically.
 The host-side migration, baseline (`pg_dump`), and `--url` CLI connections originally used
 `ssl: { rejectUnauthorized: false }` — the same posture the runtime engine historically used for
@@ -419,8 +419,38 @@ earlier planning decisions and removed a released behavior:
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
 
+## D-012: CloudFormation stack naming uses a generated `stackId` with per-machine sandbox isolation
 
-## D-012: External-DB connections verify TLS by default; CA committed via `db pull`
+**Date**: 2026-06-19
+**Authors:** wirej
+
+### Decision
+
+CloudFormation stack names are derived from a `stackId` stored in `.blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
+
+Stack name scheme:
+- **Production:** `<stackId>-prod` (e.g., `my-app-9f3a2b-prod`)
+- **Sandbox:** `<stackId>-<username(8)>-<random(6)>` (e.g., `my-app-9f3a2b-alice-0d7e1c`)
+
+The sandbox identifier is generated per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
+
+Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
+
+### Rationale
+- **Collision avoidance:** The 6-char hex suffix in `stackId` provides ~16.8M combinations (16⁶), making accidental collisions between same-named apps in a shared account negligible.
+- **Per-developer sandbox isolation:** Teams sharing a test account need distinct sandbox stacks. The username prefix makes stacks identifiable in the AWS Console; the 6-char hex suffix handles multiple sandboxes per developer and username collisions.
+- **Length control:** `name.slice(0, 16)` keeps stack names under ~37 chars total, well within CloudFormation's 128-char limit and readable in the console.
+- **Committed vs gitignored:** `stackId` is committed so the whole team and CI deploy to the same production stack. `sandbox-id.txt` is gitignored so each machine gets its own sandbox.
+
+### References
+- PR #51; `.blocks/config.json` is also used by telemetry (`telemetry.projectId`).
+- Code: `packages/core/src/scripts/stack-id.ts`
+
+### Migration scope
+This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set `stackId` in `.blocks/config.json` to their current production stack name **with the `-prod` suffix removed** — since the template appends `-prod` automatically. For example, if your existing stack is `my-blocks-stack-prod`, set `stackId` to `my-blocks-stack`.
+
+
+## D-013: External-DB connections verify TLS by default; CA committed via `db pull`
 
 **Date:** 2026-06-29
 **Authors:** mehrishi
@@ -493,3 +523,4 @@ is a candidate follow-up.
 - Code: `packages/bb-data/src/{types.ts, external-ssl.ts, index.aws.ts, index.mock.ts}`,
   `engines/pg-client-engine.ts`, `db-pull/{templates.ts, introspect.ts, pull.ts}`,
   `migrations/baseline.ts`.
+

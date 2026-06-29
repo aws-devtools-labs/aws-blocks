@@ -155,6 +155,15 @@ export type HostingProps = {
     timeout?: Duration | number;
     /** Reserved concurrent executions. Default: undefined (no reservation). */
     reservedConcurrency?: number;
+    /**
+     * Image-optimization Lambda overrides. `reservedConcurrency` defaults to
+     * undefined (no reservation) — see the note in the L3 construct on why
+     * the old hardcoded value of 10 broke deploys on fresh AWS accounts.
+     */
+    imageOptimization?: {
+      /** Reserved concurrent executions. Default: undefined (no reservation). */
+      reservedConcurrency?: number;
+    };
     /** Provisioned concurrency for cold-start elimination. Default: undefined (no provisioning). */
     provisionedConcurrency?: number;
     /** CloudWatch log retention for the SSR Lambda. Default: ONE_MONTH. */
