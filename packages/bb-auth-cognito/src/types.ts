@@ -270,10 +270,142 @@ export type MfaTypeOf<O extends AuthCognitoOptions> =
 			: 'SMS' | 'TOTP' | 'EMAIL'
 		: 'SMS' | 'TOTP' | 'EMAIL';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin surface (opt-in `auth.admin` handle)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The server-side admin operations (group membership + user lifecycle) live on
+// an opt-in handle, `auth.admin`, rather than a separate class/package. The
+// handle is gated by the `admin` options object so:
+//
+//   - a pool that never opts in gets NO `Admin*` IAM grant (least privilege),
+//     and `auth.admin` is a compile error whose message names the fix;
+//   - `admin.actions` scopes the IAM grant (CDK) to just the group or just the
+//     lifecycle actions.
+//
+// Group names on the admin methods narrow via `GroupOf<O>`, mirroring the
+// literal-tuple projection style of `GroupOf` / `MfaTypeOf` above.
+
+/**
+ * Opt-in configuration for the admin surface. Presence of this object on
+ * `AuthCognitoOptions.admin` enables `auth.admin` and the matching IAM grant.
+ */
+export interface AdminOptions {
+	/**
+	 * Scopes the IAM grant. Omit to grant everything. `['groups']` grants only
+	 * the group-membership `Admin*` actions; `['lifecycle']` grants only the
+	 * user-lifecycle actions.
+	 *
+	 * Note: `actions` scopes the **IAM grant**, not the typed method set —
+	 * `auth.admin` always exposes the full surface (see {@link AdminSurface}
+	 * for why narrowing the type by `actions` is not possible without breaking
+	 * `AuthCognito<O>` variance). A method whose action wasn't granted fails at
+	 * runtime with an IAM `AccessDenied`.
+	 */
+	actions?: readonly ('groups' | 'lifecycle')[];
+}
+
+/**
+ * Group-membership admin operations. Group names narrow via `GroupOf<O>`, so
+ * `addUserToGroup(user, 'typo')` is a compile error on a narrowed pool.
+ */
+export interface GroupAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	addUserToGroup(username: string, group: GroupOf<O>): Promise<void>;
+	removeUserFromGroup(username: string, group: GroupOf<O>): Promise<void>;
+	listGroupsForUser(username: string): Promise<GroupOf<O>[]>;
+	listUsersInGroup(group: GroupOf<O>): Promise<AdminUser[]>;
+}
+
+/**
+ * User-lifecycle admin operations — create/delete/enable/disable, password
+ * management, enumeration, and session revocation.
+ */
+export interface LifecycleAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+	createUser(username: string, init?: AdminCreateInit): Promise<AdminUser>;
+	deleteUser(username: string): Promise<void>;
+	disableUser(username: string): Promise<void>;
+	enableUser(username: string): Promise<void>;
+	resetUserPassword(username: string): Promise<void>;
+	setUserPassword(username: string, password: string, permanent: boolean): Promise<void>;
+	getUser(username: string): Promise<AdminUser | null>;
+	scan(): AsyncIterable<AdminUser>;
+	revokeUserSessions(username: string): Promise<void>;
+}
+
+/**
+ * The typed `auth.admin` surface for a given pool config — the full set of
+ * group + lifecycle operations. Group names still narrow via `GroupOf<O>`.
+ *
+ * **Why not narrow the method set by `actions`?** An earlier design hid the
+ * lifecycle methods when `actions: ['groups']` (and vice-versa) via a
+ * conditional type over `O`. A conditional type over the class's own generic
+ * parameter, used as a *property* type, forces TypeScript to treat
+ * `AuthCognito<O>` as **invariant** in `O` — which breaks the long-standing
+ * contract that `AuthCognito<NarrowOpts>` is assignable to
+ * `AuthCognito<AuthCognitoOptions>` (relied on across the codebase, e.g.
+ * helpers typed `auth: AuthCognito`). Verified empirically: the conditional
+ * form regressed 14 existing call sites. `actions` therefore scopes the **IAM
+ * grant** (CDK) only; the typed surface is always the full set. Calling a
+ * method whose action wasn't granted fails at runtime with an IAM
+ * `AccessDenied`, the same outcome a separate-package design would give a
+ * client route that imported the admin block.
+ */
+export type AdminSurface<O extends AuthCognitoOptions = AuthCognitoOptions> =
+	GroupAdmin<O> & LifecycleAdmin<O>;
+
+/**
+ * Returned by `auth.admin` when the pool did NOT opt in. Touching any member
+ * is a compile error whose key text names the fix — friendlier than a bare
+ * `never`.
+ */
+export type AdminDisabled = {
+	readonly __adminNotEnabled: 'construct AuthCognito with { admin: {} }';
+};
+
+/**
+ * The `auth.admin` getter's return type — the gate.
+ *
+ * - The check is `{ admin: object }`, NOT `{ admin: any }`: a primitive like
+ *   `admin: true` fails the gate, so the opt-in MUST be an object (`admin: {}`).
+ * - The gate condition tests a **fixed shape** and the positive branch is a
+ *   plain generic interface (`AdminSurface<O>`), so `AuthCognito<O>` stays
+ *   covariant in `O`. (Do not reintroduce a conditional over `O` inside
+ *   `AdminSurface` — see its doc comment.)
+ */
+export type AdminGetterOf<O extends AuthCognitoOptions> =
+	O extends { admin: object } ? AdminSurface<O> : AdminDisabled;
+
+/** A user as seen by the admin surface (group + lifecycle reads). */
+export interface AdminUser {
+	username: string;
+	userSub: string;
+	enabled: boolean;
+	attributes: Record<string, string>;
+	groups?: string[];
+}
+
+/** Initial state for {@link LifecycleAdmin.createUser}. */
+export interface AdminCreateInit {
+	/** Temporary password. When omitted, the runtime generates one. */
+	temporaryPassword?: string;
+	/** Standard / `custom:`-prefixed attributes to seed on the new user. */
+	attributes?: Record<string, string>;
+	/** Suppress the Cognito invitation email/SMS (AWS runtime only). */
+	suppressInvite?: boolean;
+}
+
 /**
  * Options for `AuthCognito`.
  */
 export interface AuthCognitoOptions {
+	/**
+	 * Enables the server-side admin surface (`auth.admin`) and grants the
+	 * matching `Admin*` / `List*` IAM on the pool. Omit for the client-only
+	 * surface with no admin grant — the default, byte-identical to today's
+	 * synthesized role. See {@link AdminOptions} to scope which actions are
+	 * exposed and granted.
+	 */
+	admin?: AdminOptions;
 	/** MFA mode. Default: `'off'`. */
 	mfa?: 'off' | 'optional' | 'required';
 	/**

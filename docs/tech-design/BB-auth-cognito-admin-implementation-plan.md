@@ -5,6 +5,15 @@
 **Adopts:** [Chorus counter-proposal — "Alternative to PR #38: in-package admin surface for `bb-auth-cognito`"](https://chorus.aws.dev/doc/8Cdonf9Y6RdR/Alternative-to-PR-38-in-package-admin-surface-for-bb-auth-co).
 **Guiding tenet:** **type safety first.** Every conditional type below was compiled under `tsc --strict` (TS 5.9) with positive and `@ts-expect-error` negative cases before this plan was written. The proof is reproduced in Appendix A and lands in-repo as `admin.types-test.ts` (Step 7).
 
+## ⚠️ Implementation finding — `actions` scopes the IAM grant, not the typed surface
+
+During implementation the compiler surfaced a **variance regression** that revised the type design:
+
+- The original plan had `actions: ['groups']` *hide* the lifecycle methods at the type level (via a conditional type over `O` inside `AdminSurface`).
+- A conditional type over the class's own generic `O`, used as a **property/getter type**, forces TypeScript to treat `AuthCognito<O>` as **invariant in `O`**. That breaks the long-standing contract that `AuthCognito<NarrowOpts>` is assignable to `AuthCognito<AuthCognitoOptions>` — relied on across the repo (e.g. helpers typed `auth: AuthCognito`). Verified: the conditional form regressed **14 existing `index.test.ts` call sites**; the gate-only form (`O extends { admin: object } ? AdminSurface<O> : AdminDisabled`, where `AdminSurface = GroupAdmin<O> & LifecycleAdmin<O>` is a plain generic interface) keeps the class covariant and builds clean.
+
+**Resolved design:** `auth.admin` always exposes the **full** surface (group + lifecycle), with group names still narrowed via `GroupOf<O>`. `admin.actions` scopes the **IAM grant** only. A method whose action wasn't granted fails at runtime with an IAM `AccessDenied` — the same outcome a separate-package design gives a client route that imports the admin block. The compile-time gate (opt-in required) and group-name narrowing are both preserved.
+
 ## Decision
 
 Expose the admin surface as an **opt-in handle on the existing `AuthCognito` class** (`auth.admin`), gated by an `admin` options object — **not** a second package/class. This deletes the `/internal` subpath, the `CognitoMockAdminPort` (11-method) indirection, the second construct, and the live-reference wiring, while preserving the API separation the original design valued.
