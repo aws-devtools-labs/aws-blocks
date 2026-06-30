@@ -54,28 +54,42 @@ function cleanStaleLock(dataDir: string): void {
 }
 
 /**
+ * Top-level entries that, when present in a directory, affirmatively mark that
+ * directory as being *itself* a PGlite/PostgreSQL data dir (as opposed to a
+ * parent that merely contains data dirs). `postmaster.opts`/`postmaster.pid`
+ * are written by PGlite's own boot, and `global`/`base` are PostgreSQL's own
+ * data-dir subdirectories. None of these appear at the top level of a directory
+ * like `.bb-data` that only contains child data dirs (e.g. `.bb-data/main`).
+ */
+const PGLITE_DATA_DIR_ARTIFACTS = ['postmaster.opts', 'postmaster.pid', 'global', 'base'];
+
+/**
  * Detect and repair a half-written PGlite data directory left behind when a
  * previous boot was killed mid-`initdb` — e.g. `tsx watch` SIGTERMs (then, after
  * its grace period, SIGKILLs) the dev server while a `Database` block is still
  * running first-boot `initdb`/migrations.
  *
  * A complete PGlite/PostgreSQL data directory always contains both `PG_VERSION`
- * and `global/pg_control`. A directory that exists and is non-empty but is
- * missing either marker is a partially-initialized data dir: `new PGlite(dir)`
- * aborts on it with `Aborted()` (initdb refuses a non-empty dir; an existing-DB
- * open fails the control-file check). Before this guard that abort rejected the
- * dev server's local-deploy phase *before* it ever called `listen()`, so the
- * port never bound and the app stayed unreachable until `.bb-data` was deleted
- * by hand (issue #98).
+ * and `global/pg_control`. A directory that *is itself* a data dir (it carries
+ * PGlite-own-level artifacts — `postmaster.opts`/`postmaster.pid`/`global`/`base`)
+ * but is missing either completeness marker is a partially-initialized data dir:
+ * `new PGlite(dir)` aborts on it with `Aborted()` (initdb refuses a non-empty
+ * dir; an existing-DB open fails the control-file check). Before this guard that
+ * abort rejected the dev server's local-deploy phase *before* it ever called
+ * `listen()`, so the port never bound and the app stayed unreachable until
+ * `.bb-data` was deleted by hand (issue #98).
  *
- * Recovery is to re-initialize the leaf directory rather than abort: a partial
- * dir holds no recoverable data (initdb never finished), so wiping it and
- * letting PGlite re-init on the next line is deterministic and loses nothing.
- * A fully-initialized dir — even one with only a stale `postmaster.pid`, which
- * is handled separately by {@link cleanStaleLock} — has both markers and is
- * never touched, so real local data is preserved across restarts.
+ * Contract: this function only ever re-initializes a directory that is *itself*
+ * a partial PGlite data dir (artifacts present, completeness markers absent). It
+ * NEVER deletes a directory that is complete, that contains complete child data
+ * dirs (e.g. the `.bb-data` root the CLI opens, which holds `main/`), or that is
+ * non-empty for any other reason. Recovery wipes only a leaf partial dir, which
+ * holds no recoverable data (initdb never finished), so re-initializing it is
+ * deterministic and loses nothing. Any non-empty directory that is neither
+ * complete nor affirmatively partial is left untouched — PGlite/initdb proceeds
+ * (or fails loudly) rather than this code destroying data it does not own.
  */
-function recoverIncompleteDataDir(dataDir: string): void {
+export function recoverIncompleteDataDir(dataDir: string): void {
   let entries: string[];
   try {
     entries = readdirSync(dataDir);
@@ -84,13 +98,26 @@ function recoverIncompleteDataDir(dataDir: string): void {
   }
   // Empty dir: a fresh checkout or post-`rm -rf` — PGlite will run initdb cleanly.
   if (entries.length === 0) return;
+  // Complete data dir (both markers present): real data — never touch it.
   const initialized =
     existsSync(join(dataDir, 'PG_VERSION')) && existsSync(join(dataDir, 'global', 'pg_control'));
   if (initialized) return;
+  // Affirmatively decide whether this directory is itself a partial data dir.
+  // Without this check a parent that merely *contains* complete data dirs (the
+  // `.bb-data` root the CLI opens, holding `main/`) would match "non-empty +
+  // markers absent" and get recursively wiped — destroying every local database
+  // (issue #98 review). Only a dir carrying PGlite-own-level artifacts at its
+  // own level is a data dir we may re-initialize.
+  const isPartialDataDir = entries.some((entry) => PGLITE_DATA_DIR_ARTIFACTS.includes(entry));
+  if (!isPartialDataDir) {
+    // Non-empty, not complete, and not a data dir of its own — e.g. a parent of
+    // child data dirs, or unrelated user files. Leave it alone.
+    return;
+  }
   console.warn(
     `[PGliteEngine] Data directory ${dataDir} is incompletely initialized ` +
-      `(missing PG_VERSION/global/pg_control) — re-initializing. A previous boot was ` +
-      `likely interrupted mid-initdb (e.g. a dev-server restart).`,
+      `(PGlite artifacts present but missing PG_VERSION/global/pg_control) — re-initializing. ` +
+      `A previous boot was likely interrupted mid-initdb (e.g. a dev-server restart).`,
   );
   rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });

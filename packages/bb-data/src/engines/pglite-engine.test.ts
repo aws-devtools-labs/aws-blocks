@@ -3,7 +3,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { PGliteEngine } from './pglite-engine.js';
+import { PGliteEngine, recoverIncompleteDataDir } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
 import { rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -214,4 +214,52 @@ test('preserves a fully-initialized data directory across restart', async () => 
   engine = new PGliteEngine(TEST_DIR);
   const rows = await engine.query<{ id: string; value: string }>('SELECT * FROM t');
   assert.deepStrictEqual(rows, [{ id: 'a', value: 'one' }]);
+});
+
+// --- Regression (#98 review): never wipe a PARENT of a complete data dir ---
+// index.mock.ts opens leaf dirs (`.bb-data/<id>`), but cli.ts constructs
+// `new PGliteEngine('.bb-data')` on the ROOT. After a normal dev run the root is
+// non-empty (it holds a complete child like `main/`) yet has no root-level
+// PG_VERSION — the original recovery treated "non-empty + markers absent" as
+// "partial" and recursively wiped the root, destroying every local database.
+// Recovery must affirmatively detect a partial data dir and leave a parent of
+// real data dirs untouched. (We exercise recoverIncompleteDataDir directly: a
+// parent dir is not a valid PGlite data dir, so `new PGlite(parent)` would abort
+// the process — the very crash callers must never reach by wiping it.)
+test('does not wipe a parent directory that contains a complete child data dir', async () => {
+  // Build a complete child data dir with persisted data (mirrors `.bb-data/main`).
+  const child = join(TEST_DIR, 'main');
+  const childEngine = new PGliteEngine(child);
+  await childEngine.execute('CREATE TABLE t (id TEXT PRIMARY KEY, value TEXT)');
+  await childEngine.execute("INSERT INTO t (id, value) VALUES ('a', 'one')");
+  await childEngine.destroy();
+  // Sanity: the child is a complete data dir and the parent has no root markers.
+  assert.strictEqual(existsSync(join(child, 'PG_VERSION')), true);
+  assert.strictEqual(existsSync(join(TEST_DIR, 'PG_VERSION')), false);
+
+  // Run recovery against the PARENT like the CLI's `new PGliteEngine('.bb-data')`
+  // would. It must NOT wipe the parent or the child.
+  recoverIncompleteDataDir(TEST_DIR);
+
+  // The child data dir and its data must survive untouched.
+  assert.strictEqual(existsSync(join(child, 'PG_VERSION')), true);
+  const survivor = new PGliteEngine(child);
+  const rows = await survivor.query<{ id: string; value: string }>('SELECT * FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'a', value: 'one' }]);
+  await survivor.destroy();
+});
+
+test('does not wipe a non-empty directory with no PGlite artifacts', async () => {
+  // Unrelated user files in a directory that is not a data dir at all: recovery
+  // must leave them alone rather than recursively deleting the directory.
+  mkdirSync(TEST_DIR, { recursive: true });
+  writeFileSync(join(TEST_DIR, 'README.txt'), 'not a database\n');
+  mkdirSync(join(TEST_DIR, 'notes'), { recursive: true });
+  writeFileSync(join(TEST_DIR, 'notes', 'todo.txt'), 'keep me\n');
+
+  recoverIncompleteDataDir(TEST_DIR);
+
+  // The user files must still be present.
+  assert.strictEqual(existsSync(join(TEST_DIR, 'README.txt')), true);
+  assert.strictEqual(existsSync(join(TEST_DIR, 'notes', 'todo.txt')), true);
 });
