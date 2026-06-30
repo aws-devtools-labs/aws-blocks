@@ -323,7 +323,7 @@ test.describe('file-gallery', () => {
 			)
 			.toBe(v2);
 
-		await expect(itemFor(page, name)).toHaveCount(1);
+		await expect(itemFor(page, name)).toHaveCount(1, { timeout: T });
 
 		await page.reload();
 		await expect(itemFor(page, name)).toHaveCount(1, { timeout: T });

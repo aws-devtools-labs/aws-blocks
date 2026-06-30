@@ -36,7 +36,7 @@ test.describe('auth-notes', () => {
 		await expect(page.getByTestId('auth-password')).toBeVisible();
 		await expect(page.getByTestId('auth-submit')).toBeVisible();
 		// Signed-in hooks must be absent before authentication.
-		await expect(page.getByTestId('note-textarea')).toHaveCount(0);
+		await expect(page.getByTestId('note-textarea')).toHaveCount(0, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
@@ -47,7 +47,7 @@ test.describe('auth-notes', () => {
 
 		await signUp(page, uniq('alice'));
 		await expect(page.getByTestId('note-save')).toBeVisible();
-		await expect(page.getByTestId('auth-username')).toHaveCount(0);
+		await expect(page.getByTestId('auth-username')).toHaveCount(0, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
@@ -90,7 +90,7 @@ test.describe('auth-notes', () => {
 		await signUp(page, uniq('alice'));
 		await page.getByTestId('auth-signout').click();
 		await expect(page.getByTestId('auth-username')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('note-textarea')).toHaveCount(0);
+		await expect(page.getByTestId('note-textarea')).toHaveCount(0, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});

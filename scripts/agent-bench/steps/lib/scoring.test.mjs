@@ -13,6 +13,7 @@ import {
 	AGENT_FAIL_REASON,
 	buildCapDecision,
 	classifyCell,
+	COMMON_DIMENSIONS,
 	composite,
 	compositeBand,
 	HARNESS_FAIL_REASONS,
@@ -240,6 +241,17 @@ describe('testStats / testRate', () => {
 		});
 	});
 
+	it('NUMERIC-LOOKING strings are still rejected (num() takes raw numbers only)', () => {
+		// Pins the intentional contract: the workflow passes tests_passed/failed as
+		// BARE JSON numbers (see agent-bench.yml EVIDENCE), so num() deliberately
+		// rejects strings — a stringified count must NOT silently count.
+		assert.deepEqual(testStats({ tests_passed: '5', tests_failed: '0' }), {
+			passed: 0,
+			failed: 0,
+			denom: 0,
+		});
+	});
+
 	it('pass-rate is passed/denom, and 0 when no tests ran', () => {
 		assert.equal(testRate({ passed: 3, denom: 4 }), 0.75);
 		assert.equal(testRate({ passed: 0, denom: 0 }), 0);
@@ -326,5 +338,19 @@ describe('buildCapDecision(ev) — the build-cap is for REAL build failures only
 		// build_succeeded, so a real failure still caps.
 		assert.equal(buildCapDecision({ build_status: 'weird', build_succeeded: 'false' }).cap, true);
 		assert.equal(buildCapDecision({ build_status: 'weird', build_succeeded: 'true' }).cap, false);
+	});
+});
+
+describe('COMMON_DIMENSIONS — the pinned judge rubric dimension set', () => {
+	it('is exactly the five shared dimensions, including blocks_fidelity', () => {
+		// Single-sourced in scoring.mjs and re-exported by prompts.ts. This pins
+		// the set so blocks_fidelity (the anti-mock dimension) cannot be silently
+		// dropped or reordered without failing here.
+		assert.deepEqual(
+			[...COMMON_DIMENSIONS],
+			['functional_completeness', 'selector_contract', 'persistence', 'code_quality', 'blocks_fidelity'],
+		);
+		assert.equal(COMMON_DIMENSIONS.length, 5);
+		assert.ok(COMMON_DIMENSIONS.includes('blocks_fidelity'));
 	});
 });

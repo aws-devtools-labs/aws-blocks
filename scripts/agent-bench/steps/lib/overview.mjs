@@ -43,6 +43,8 @@ export function cellComposite(r) {
 export function meanComposite(cells) {
 	const scored = (cells ?? []).filter((c) => isScoredCell(c));
 	if (scored.length === 0) return null;
+	// cellComposite re-checks isScoredCell, but every `c` here already passed the
+	// filter above, so that guard is a defensive no-op on this path (never null).
 	const sum = scored.reduce((acc, c) => acc + cellComposite(c), 0);
 	return round1(sum / scored.length);
 }

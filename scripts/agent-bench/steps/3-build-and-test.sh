@@ -102,7 +102,14 @@ else
   ' || echo "::warning::failed to record dev_log_tail on result.json"
 fi
 
-cd "$WORKSPACE"
+cd "$WORKSPACE" || {
+  # A missing workspace (e.g. the agent never produced bench-app) must not hard-abort
+  # this step: the pessimistic defaults written to $GITHUB_OUTPUT above already record
+  # build_status=failed / dev_server_started=false / tests_*=0, so honour the step's
+  # exit-0 green-regardless guarantee rather than masking it as a job failure.
+  echo "::warning::workspace missing at $WORKSPACE — recording pessimistic build/test signals and skipping"
+  exit 0
+}
 
 # Build detection (scoring correctness). Some templates (e.g. backend/tsx) ship
 # NO `build` script, so a bare `npm run build` prints `npm error Missing script:

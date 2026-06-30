@@ -53,11 +53,14 @@ if (status === 'scored' && sawSkip) {
 }
 
 let r;
+let resultFileMissing = false;
 try {
 	r = JSON.parse(readFileSync(RESULT_PATH, 'utf-8'));
 } catch (err) {
-	// Baseline never written (e.g., 0-init-result itself failed).
+	// Baseline never written (e.g., 0-init-result itself failed, or npm ci
+	// failed before any tracked step ran so result.json was never created).
 	// Reconstruct a minimal envelope so the cell still appears in the table.
+	resultFileMissing = true;
 	r = {
 		template: process.env.TEMPLATE ?? '',
 		task: process.env.TASK ?? '',
@@ -66,6 +69,14 @@ try {
 		git_sha: process.env.GITHUB_SHA ?? '',
 		notes: [`finalize-result couldn't read ${RESULT_PATH}: ${err?.message ?? err}`],
 	};
+}
+
+// A cell whose result.json was never written cannot be 'scored' regardless of
+// the recorded step outcomes — synthesize a pessimistic status so a missing
+// artifact (e.g. npm ci failed pre-OIDC) is never mistaken for a graded run.
+if (resultFileMissing && status === 'scored') {
+	status = 'error';
+	failedAt = failedAt ?? 'pre-oidc';
 }
 
 // ── Fold the builder's partial envelope (SIGTERM / wall-clock-timeout path) ──

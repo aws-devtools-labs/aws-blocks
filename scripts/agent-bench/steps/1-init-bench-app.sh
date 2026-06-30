@@ -48,7 +48,7 @@ EOF
 # from real usage metrics. Both create-blocks-app and @aws-blocks/core read
 # ~/.blocks/telemetry/installation-id and reuse it when present, so seeding it
 # once here tags every event from the scaffold, build, and runtime as a canary.
-# (Mirrors PreAmp PR #215.)
+# Tag bench traffic as a telemetry canary so it's excluded from real usage metrics.
 mkdir -p "$HOME/.blocks/telemetry"
 echo '00000000-0000-0000-0000-00000000bec0' > "$HOME/.blocks/telemetry/installation-id"
 

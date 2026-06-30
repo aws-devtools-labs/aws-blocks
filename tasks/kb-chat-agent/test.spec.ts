@@ -87,6 +87,12 @@ test.describe('kb-chat-agent', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
+		// Neither the tool-use indicator nor a citation may be present before any
+		// answer lands — guards against always-rendered chrome passing these
+		// vacuously via the global `.first()` lookups below.
+		await expect(page.getByTestId('tool-indicator')).toHaveCount(0);
+		await expect(page.getByTestId('citation')).toHaveCount(0);
+
 		await ask(page, 'What does the knowledge base say about the return and refund policy?');
 
 		// Wait for the assistant's REPLY to land — an assistant-role bubble, not the
@@ -103,6 +109,10 @@ test.describe('kb-chat-agent', () => {
 	test('an order question returns the deterministic tool output (proves tool use)', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
+
+		// No tool indicator may be present before the tool runs — guards the
+		// global `.first()` lookup below against always-rendered chrome.
+		await expect(page.getByTestId('tool-indicator')).toHaveCount(0);
 
 		// This routes to a fixed-output tool whose tracking code is computable and
 		// constant, so the exact string must appear in the answer regardless of how

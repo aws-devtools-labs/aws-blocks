@@ -195,6 +195,7 @@ jobs:
       # gets a row for failed cells too.
       - name: Finalize result
         if: always()
+        continue-on-error: true
         run: node scripts/agent-bench/steps/finalize-result.mjs
         env:
           RESULT_PATH: /tmp/result.json
@@ -236,8 +237,7 @@ jobs:
             !bench-app/**/.git/**
             !bench-app/**/dist/**
             !bench-app/**/.blocks-sandbox/**
-            !bench-app/**/.env
-            !bench-app/**/.env.*
+            !bench-app/**/.env*
             !bench-app/**/*.pem
             !bench-app/**/.aws/**
           retention-days: 14
@@ -346,7 +346,8 @@ jobs:
           # summary.mjs writes the compact aggregate (per-cell composites + mean)
           # here; the persist step below uploads it as this commit's baseline.
           AGGREGATE_PATH: ${{ github.workspace }}/bench-aggregate.json
-          # Vestigial parity file for the (disabled) PR-comment step; unread today.
+          # Parity file written by summary.mjs for the (currently disabled)
+          # PR-comment step; kept so that step stays valid if it is re-enabled.
           SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
 
       # Persist this run's aggregate (per-cell composites + mean) as the

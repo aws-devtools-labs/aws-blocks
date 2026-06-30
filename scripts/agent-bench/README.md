@@ -6,7 +6,7 @@ Playwright grades the result, and a judge agent scores against the rubric.
 
 ## Architecture
 
-Six steps per cell, all on the GitHub runner:
+Seven steps per cell, all on the GitHub runner:
 
 0. **Init result** — write a baseline `result.json` before any AWS call, so
    even an OIDC failure still produces a cell row in the summary
@@ -19,6 +19,10 @@ Six steps per cell, all on the GitHub runner:
 4. **Judge** — Strands + Bedrock; two read-only tools (`view`, `list`). Scores
    source only; objective signals are applied as caps afterward, not shown to it.
 5. **Upload result** — JSON artifact + S3 archive (best-effort)
+6. **Upload source** — uploads the generated `bench-app` as
+   `bench-source-<task>-<template>` for post-run auditing, excluding deps/build
+   output and anything credential-shaped (`node_modules`, `.git`, `dist`,
+   `.env*`, `*.pem`, `.aws`)
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge use different models

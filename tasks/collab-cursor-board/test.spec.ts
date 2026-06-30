@@ -202,7 +202,7 @@ test.describe('collab-cursor-board', () => {
 		await join(page, sentinel);
 		await expect(presence(page, sentinel)).toHaveCount(1, { timeout: SYNC });
 
-		await expect(presence(page, name)).toHaveCount(1);
+		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});

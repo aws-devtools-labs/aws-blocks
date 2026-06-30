@@ -13,6 +13,18 @@
 // Plain .mjs (no TS): summary.mjs/finalize-result.mjs run under bare `node` in
 // CI, which can't import a .ts module without a loader.
 
+// The judge rubric's shared (task-independent) dimensions, scored 0-10 and
+// averaged equally. This lives HERE (plain .mjs) rather than in prompts.ts so
+// the bare `node --test` scoring suite can pin it without a TS loader; prompts.ts
+// imports + re-exports it, keeping ONE source of truth for the dimension set.
+export const COMMON_DIMENSIONS = [
+	'functional_completeness',
+	'selector_contract',
+	'persistence',
+	'code_quality',
+	'blocks_fidelity',
+];
+
 // Steps whose failure means the cell never produced a gradeable artifact AND
 // the fault is the harness's, not the agent's. Such cells are classed
 // `harness_error` and EXCLUDED from the headline mean — a flaky runner can't

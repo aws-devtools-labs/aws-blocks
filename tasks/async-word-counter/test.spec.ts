@@ -36,6 +36,9 @@ test.describe('async-word-counter', () => {
 
 		await expect(page.getByTestId('wc-input')).toBeVisible();
 		await expect(page.getByTestId('wc-submit')).toBeVisible();
+		// Enforce the wc-list container contract (in the PROMPT selector table)
+		// so an impl can't omit the list wrapper and still pass.
+		await expect(page.getByTestId('wc-list')).toBeVisible();
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});

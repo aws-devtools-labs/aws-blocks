@@ -83,6 +83,9 @@ test.describe('sql-kb-catalog', () => {
 		await page.goto(BASE);
 
 		// The PROMPT requires a seeded FAQ doc covering the return/refund policy.
+		// Guard: no result is rendered before a search runs, so an impl that
+		// shows results on load (ignoring the query) fails here.
+		await expect(page.getByTestId('kb-result')).toHaveCount(0);
 		await searchFaq(page, 'return refund policy');
 		await expect(page.getByTestId('kb-result').first()).toBeVisible({ timeout: T });
 
@@ -93,6 +96,7 @@ test.describe('sql-kb-catalog', () => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
+		await expect(page.getByTestId('kb-result')).toHaveCount(0);
 		await searchFaq(page, 'refund');
 		await expect(page.getByTestId('kb-result').first()).toBeVisible({ timeout: T });
 

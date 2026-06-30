@@ -40,7 +40,11 @@ You grade SOURCE you cannot run. Do NOT award full \`functional_completeness\` t
 // are hard to justify scientifically). The orchestrator applies objective caps
 // (build/test/scaffold) deterministically after the judge. Shape is enforced
 // by the Zod schema 4-judge.ts builds from these keys.
-export const COMMON_DIMENSIONS = ['functional_completeness', 'selector_contract', 'persistence', 'code_quality', 'blocks_fidelity'] as const;
+// COMMON_DIMENSIONS is defined in steps/lib/scoring.mjs (plain .mjs) so the
+// bare `node --test` scoring suite can pin the dimension list without a TS
+// loader. Import + re-export it here to keep ONE source of truth.
+import { COMMON_DIMENSIONS } from './steps/lib/scoring.mjs';
+export { COMMON_DIMENSIONS };
 
 const COMMON_RUBRIC_LINES: Record<(typeof COMMON_DIMENSIONS)[number], string> = {
 	functional_completeness: 'Does the source implement everything the prompt asks for?',
