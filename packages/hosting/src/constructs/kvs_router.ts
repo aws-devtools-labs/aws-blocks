@@ -482,8 +482,14 @@ async function handler(event) {
       var m = matchPattern(uri, drows[j][0]);
       if (m) {
         var dest = drows[j][1];
-        if (m.tail && dest.charAt(dest.length - 1) === '*') {
-          dest = dest.substring(0, dest.length - 1) + m.tail;
+        // Splice the captured tail into a wildcard destination. Guard on the
+        // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact
+        // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')
+        // yields tail '' , and a truthiness guard would skip the splice and leak
+        // the literal '*' into Location (-> '/new/*'). Always strip the trailing
+        // '*' and append the tail (empty string included).
+        if (dest.charAt(dest.length - 1) === '*') {
+          dest = dest.substring(0, dest.length - 1) + (m.tail || '');
         }
         return { statusCode: drows[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };
       }

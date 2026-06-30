@@ -683,6 +683,24 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
     assert.equal(output.headers.location.value, '/modern/a/b');
   });
 
+  // Regression (Finding 3): a request hitting the wildcard prefix with an EMPTY
+  // tail (e.g. exactly '/legacy/') must NOT leak the literal '*' into Location.
+  // The old `if (m.tail && …)` guard skipped the splice on '' → '/modern/*'.
+  void it('does NOT leak a literal * when the captured tail is empty', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/legacy/'));
+    assert.equal(output.statusCode, 301);
+    assert.equal(output.headers.location.value, '/modern/');
+    assert.ok(
+      !output.headers.location.value.includes('*'),
+      'Location must not contain a literal asterisk',
+    );
+  });
+
+  void it('splices a single-segment tail after the wildcard prefix', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/legacy/x'));
+    assert.equal(output.headers.location.value, '/modern/x');
+  });
+
   void it('preserves a 302 (temporary) status code', async () => {
     const { output } = await runRequestFn(reqCode, entries, req('/temp'));
     assert.equal(output.statusCode, 302);
