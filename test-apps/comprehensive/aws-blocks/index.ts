@@ -83,6 +83,9 @@ const authC = new AuthCognito(scope, 'authC', {
   passwordPolicy: { minLength: 8, requireDigits: true },
   userAttributes: [{ name: 'department' }],
   groups: ['admins', 'readers'],
+  // Enable the opt-in admin surface (auth.admin) for the sandbox admin e2e
+  // suite. Grants the Admin*/List* IAM on this pool's handler role.
+  admin: {},
   mfa: 'off',
   mfaTypes: ['SMS', 'TOTP', 'EMAIL'],
   selfSignUp: true,
@@ -957,6 +960,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // requireRole's param the literal union 'admins' | 'readers'.
     const user = await authC.requireRole(context, role as Parameters<typeof authC.requireRole>[1]);
     return user;
+  },
+
+  // ── Admin surface (auth.admin) — exercised by sandbox-admin-e2e ────────────
+  // In a real app these would be gated by `requireRole`; the e2e harness drives
+  // them directly to verify the admin grant + behavior end-to-end.
+  async authCAdminCreateUser(username: string, temporaryPassword: string) {
+    const u = await authC.admin.createUser(username, { temporaryPassword });
+    return { username: u.username, enabled: u.enabled };
+  },
+  async authCAdminSetPassword(username: string, password: string) {
+    await authC.admin.setUserPassword(username, password, true);
+    return { success: true };
+  },
+  async authCAdminAddToGroup(username: string, group: string) {
+    await authC.admin.addUserToGroup(username, group as Parameters<typeof authC.admin.addUserToGroup>[1]);
+    return { success: true };
+  },
+  async authCAdminListGroupsForUser(username: string) {
+    return await authC.admin.listGroupsForUser(username);
+  },
+  async authCAdminDisableUser(username: string) {
+    await authC.admin.disableUser(username);
+    return { success: true };
+  },
+  async authCAdminEnableUser(username: string) {
+    await authC.admin.enableUser(username);
+    return { success: true };
+  },
+  async authCAdminDeleteUser(username: string) {
+    await authC.admin.deleteUser(username);
+    return { success: true };
+  },
+  async authCAdminRevokeSessions(username: string) {
+    await authC.admin.revokeUserSessions(username);
+    return { success: true };
   },
 
   async authCFetchUserAttributes() {
