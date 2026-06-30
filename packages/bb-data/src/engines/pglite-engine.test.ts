@@ -5,7 +5,7 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
-import { rmSync, existsSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TEST_DIR = '.bb-data-test-' + process.pid;
@@ -174,4 +174,44 @@ test('constructor does not crash when parent directory is missing', async () => 
   await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
   const rows = await engine.query('SELECT * FROM t');
   assert.deepStrictEqual(rows, []);
+});
+
+// --- Regression (#98): recover from an interrupted initdb ---
+// When `tsx watch` SIGTERMs/SIGKILLs the dev server while a `Database` block is
+// still running first-boot initdb, the data dir is left half-written: it exists
+// and is non-empty but lacks the PG_VERSION / global/pg_control markers a
+// complete data dir has. `new PGlite(dir)` then aborts on it, the dev server's
+// local-deploy phase rejects before `listen()`, and the port never binds. The
+// engine must detect this and re-initialize the leaf dir instead of aborting.
+
+test('recovers from an incompletely-initialized data directory (interrupted initdb)', async () => {
+  // Simulate a half-written initdb: a non-empty dir with no PG_VERSION. Opening
+  // this with PGlite aborts the process (verified manually) — the constructor
+  // must wipe and re-init it instead.
+  mkdirSync(join(TEST_DIR, 'global'), { recursive: true });
+  writeFileSync(join(TEST_DIR, 'postmaster.opts'), 'half-written\n');
+  assert.strictEqual(existsSync(join(TEST_DIR, 'PG_VERSION')), false);
+
+  engine = new PGliteEngine(TEST_DIR);
+  // A successful query proves the dir was re-initialized rather than aborting.
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY, value TEXT)');
+  const rows = await engine.query('SELECT * FROM t');
+  assert.deepStrictEqual(rows, []);
+  // The recovered dir is now a complete data directory.
+  assert.strictEqual(existsSync(join(TEST_DIR, 'PG_VERSION')), true);
+});
+
+test('preserves a fully-initialized data directory across restart', async () => {
+  // A complete dir (PG_VERSION + global/pg_control present) must NOT be wiped by
+  // the recovery path — data persists across dev-server restarts as before.
+  engine = new PGliteEngine(TEST_DIR);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY, value TEXT)');
+  await engine.execute("INSERT INTO t (id, value) VALUES ('a', 'one')");
+  await engine.destroy();
+
+  // Reopen the same directory — recovery must treat it as initialized and leave
+  // the data intact.
+  engine = new PGliteEngine(TEST_DIR);
+  const rows = await engine.query<{ id: string; value: string }>('SELECT * FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'a', value: 'one' }]);
 });

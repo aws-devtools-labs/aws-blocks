@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PGlite } from '@electric-sql/pglite';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError } from '../errors.js';
@@ -54,6 +54,49 @@ function cleanStaleLock(dataDir: string): void {
 }
 
 /**
+ * Detect and repair a half-written PGlite data directory left behind when a
+ * previous boot was killed mid-`initdb` — e.g. `tsx watch` SIGTERMs (then, after
+ * its grace period, SIGKILLs) the dev server while a `Database` block is still
+ * running first-boot `initdb`/migrations.
+ *
+ * A complete PGlite/PostgreSQL data directory always contains both `PG_VERSION`
+ * and `global/pg_control`. A directory that exists and is non-empty but is
+ * missing either marker is a partially-initialized data dir: `new PGlite(dir)`
+ * aborts on it with `Aborted()` (initdb refuses a non-empty dir; an existing-DB
+ * open fails the control-file check). Before this guard that abort rejected the
+ * dev server's local-deploy phase *before* it ever called `listen()`, so the
+ * port never bound and the app stayed unreachable until `.bb-data` was deleted
+ * by hand (issue #98).
+ *
+ * Recovery is to re-initialize the leaf directory rather than abort: a partial
+ * dir holds no recoverable data (initdb never finished), so wiping it and
+ * letting PGlite re-init on the next line is deterministic and loses nothing.
+ * A fully-initialized dir — even one with only a stale `postmaster.pid`, which
+ * is handled separately by {@link cleanStaleLock} — has both markers and is
+ * never touched, so real local data is preserved across restarts.
+ */
+function recoverIncompleteDataDir(dataDir: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dataDir);
+  } catch {
+    return; // unreadable/missing — mkdirSync in the constructor handles creation
+  }
+  // Empty dir: a fresh checkout or post-`rm -rf` — PGlite will run initdb cleanly.
+  if (entries.length === 0) return;
+  const initialized =
+    existsSync(join(dataDir, 'PG_VERSION')) && existsSync(join(dataDir, 'global', 'pg_control'));
+  if (initialized) return;
+  console.warn(
+    `[PGliteEngine] Data directory ${dataDir} is incompletely initialized ` +
+      `(missing PG_VERSION/global/pg_control) — re-initializing. A previous boot was ` +
+      `likely interrupted mid-initdb (e.g. a dev-server restart).`,
+  );
+  rmSync(dataDir, { recursive: true, force: true });
+  mkdirSync(dataDir, { recursive: true });
+}
+
+/**
  * DatabaseEngine implementation using PGlite (WASM PostgreSQL).
  * Used for local development. Data persists in the specified directory.
  *
@@ -72,6 +115,10 @@ export class PGliteEngine implements DatabaseEngine {
     // a fresh checkout or `rm -rf .bb-data` would otherwise ENOENT on first
     // boot. Create the full path up front (matches DsqlMockEngine).
     mkdirSync(dataDir, { recursive: true });
+    // Repair a half-written data dir from an interrupted initdb BEFORE opening
+    // it, so a single interrupted boot is recoverable instead of permanently
+    // fatal (the dev-server port would otherwise never bind — see #98).
+    recoverIncompleteDataDir(dataDir);
     cleanStaleLock(dataDir);
     this.db = new PGlite(dataDir);
   }
