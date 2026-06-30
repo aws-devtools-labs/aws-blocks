@@ -6,6 +6,8 @@ File storage backed by Amazon S3.
 
 **When NOT to use:** If you need structured key-value data with conditional writes, use `KVStore`. If you need queryable records with indexes, use `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript
@@ -45,6 +47,39 @@ const bucket = new FileBucket(scope, id, options?)
 | `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
 | `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
 | `cacheControl` | `string` | Cache-Control header value. |
+
+### CorsRule
+
+CORS configuration for browser-based access. Supplied via the `corsRules` option.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `allowedOrigins` | `string[]` | Origins permitted to make cross-origin requests (e.g., `['https://app.example.com']`). |
+| `allowedMethods` | `('GET' \| 'PUT' \| 'POST' \| 'DELETE' \| 'HEAD')[]` | HTTP methods permitted for cross-origin requests. |
+| `allowedHeaders` | `string[]` | Optional. Request headers permitted in the actual request. |
+| `exposedHeaders` | `string[]` | Optional. Response headers exposed to the browser. |
+| `maxAge` | `number` | Optional. Seconds the browser may cache the preflight response. |
+
+### LifecycleRule
+
+Lifecycle configuration for automatic expiration or storage-class transitions. Supplied via the `lifecycleRules` option.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prefix` | `string` | Optional. Prefix filter — the rule applies only to keys starting with this prefix. Omit to apply to all objects. |
+| `expirationDays` | `number` | Optional. Days after creation to expire (delete) objects. |
+| `transitionToIaDays` | `number` | Optional. Days after creation to transition objects to Infrequent Access storage. |
+
+### FileVersionInfo
+
+Returned by `listVersions()` — one entry per object version, newest first.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `versionId` | `string` | The version identifier. |
+| `lastModified` | `Date` | When this version was created. |
+| `size` | `number` | Size in bytes. |
+| `isCurrent` | `boolean` | Whether this is the current (latest) version. |
 
 ### Error Handling
 

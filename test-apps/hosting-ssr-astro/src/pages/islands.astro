@@ -1,0 +1,20 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Islands architecture demo. The page is static HTML; each interactive
+// island opts into hydration with a different client:* directive. Only
+// hydrated islands ship JavaScript.
+import Layout from '../layouts/Layout.astro';
+import Counter from '../components/Counter.tsx';
+---
+
+<Layout title="Astro on Blocks — Islands">
+  <h1 data-testid="page-id">Islands</h1>
+  <p data-testid="islands-marker">
+    Static-by-default rendering with selective, per-component hydration.
+  </p>
+
+  <Counter label="client:load — hydrates immediately" testid="counter-load" client:load />
+  <Counter label="client:visible — hydrates when scrolled into view" testid="counter-visible" client:visible />
+</Layout>

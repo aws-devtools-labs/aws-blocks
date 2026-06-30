@@ -5,3 +5,12 @@
 222222222222
 333333333333
 123456789012
+
+# Pre-existing transitive dependency (@graphql-tools, already on main — NOT
+# introduced by this change) whose package name trips the internal-tooling
+# "[aA]pollo" guard. git-secrets' pre-commit hook scans staged lockfile
+# hunks with surrounding context, so a large package-lock.json insertion
+# drags these unchanged lines into the scan and blocks the commit. These
+# are public npm packages, not Amazon-internal references — allow them.
+@graphql-tools/apollo-engine-loader
+apollo-engine-loader

@@ -10,7 +10,7 @@ In your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/aws-amplify/aws-blocks-swift.git", from: "0.1.0"),
+    .package(url: "https://github.com/aws-devtools-labs/aws-blocks-swift.git", from: "0.1.0"),
 ],
 targets: [
     .target(
@@ -40,22 +40,18 @@ The build plugin generates `Models.swift` and `API.swift` into the target's deri
 ```swift
 import BlocksRuntime
 
-let client = BlocksClient(url: URL(string: "https://api.example.com")!)
+// Each API namespace becomes its own class with a built-in BlocksClient.
+// Pass a custom server or use the default from the spec.
+let auth = AuthApi(server: BlocksServer(name: "prod", url: "https://api.example.com"))
 
 // Sign in
-let state = try await client.setAuthState(input: .signIn(SignIn(
+let state = try await auth.setAuthState(input: .signIn(SetAuthState.SignIn(
     username: "alice",
     password: "P@ss1"
 )))
 
-// Confirm a Cognito challenge — discriminated, type-safe per challenge shape
-let confirmed = try await client.setAuthState(input: .confirmSignIn(ConfirmSignIn(
-    session: state.actions[0].fields.first { $0.name == "session" }!.defaultValue!,
-    challenge: .code(Code(code: "123456"))
-)))
-
 // Open-shape Cognito sign-up with custom attributes
-_ = try await client.setAuthState(input: .signUp(SignUp(
+_ = try await auth.setAuthState(input: .signUp(SetAuthState.SignUp(
     username: "alice",
     password: "P@ss1",
     attributes: ["email": "alice@example.com", "custom:department": "platform"]
@@ -81,7 +77,7 @@ The build plugin discovers `blocks.spec.json` automatically next to your target.
 swift run swift-code-generator path/to/blocks.spec.json path/to/output-dir
 ```
 
-This emits two files into the output directory: `Models.swift` (types) and `API.swift` (the `extension BlocksClient { … }` with the typed methods).
+This emits two files into the output directory: `Models.swift` (shared types) and `API.swift` (one class per API namespace with typed `async throws` methods).
 
 ## Targets
 
@@ -106,10 +102,6 @@ Linux / watchOS / tvOS are not currently targeted — the runtime relies on Foun
 
 - Swift 5.9+
 - Xcode 15+ (for iOS / macOS app builds)
-
-## Status
-
-See [`ROADMAP.md`](ROADMAP.md) for planned features.
 
 ## License
 

@@ -1,6 +1,8 @@
 //
-// ResultMessage.swift
-// Simple model for displaying success/error messages in test views.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import Foundation

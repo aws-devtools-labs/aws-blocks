@@ -788,6 +788,86 @@ void describe('HostingConstruct — Image optimization', () => {
     );
   });
 
+  void it('does not reserve concurrency on the image optimization Lambda by default', () => {
+    // Regression: a hardcoded reservedConcurrency of 10 broke `cdk deploy`
+    // on fresh AWS accounts (account-level unreserved limit is also 10).
+    // No reservation must be emitted unless the user opts in.
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const imgDir = path.join(tmpDir, 'image-fn');
+    fs.mkdirSync(imgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(imgDir, 'index.mjs'),
+      'export const handler = async () => {};',
+    );
+
+    const stack = createStack();
+
+    const manifest: DeployManifest = {
+      ...ssrManifest(staticDir, bundleDir),
+      imageOptimization: {
+        bundle: imgDir,
+        handler: 'index.handler',
+        formats: ['webp', 'avif'],
+        sizes: [640, 1080],
+      },
+    };
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest,
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    // No Lambda in the stack should carry a reservation by default.
+    const functions = template.findResources('AWS::Lambda::Function');
+    for (const [id, fn] of Object.entries(functions)) {
+      const props = (fn as Record<string, unknown>)['Properties'] as Record<
+        string,
+        unknown
+      >;
+      assert.strictEqual(
+        props['ReservedConcurrentExecutions'],
+        undefined,
+        `Function ${id} should not reserve concurrency by default`,
+      );
+    }
+  });
+
+  void it('reserves concurrency on the image optimization Lambda when configured', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const imgDir = path.join(tmpDir, 'image-fn');
+    fs.mkdirSync(imgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(imgDir, 'index.mjs'),
+      'export const handler = async () => {};',
+    );
+
+    const stack = createStack();
+
+    const manifest: DeployManifest = {
+      ...ssrManifest(staticDir, bundleDir),
+      imageOptimization: {
+        bundle: imgDir,
+        handler: 'index.handler',
+        formats: ['webp', 'avif'],
+        sizes: [640, 1080],
+      },
+    };
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest,
+      skipRegionValidation: true,
+      compute: { imageOptimization: { reservedConcurrency: 5 } },
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      ReservedConcurrentExecutions: 5,
+    });
+  });
+
   void it('uses default x86_64 architecture for image optimization Lambda', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();

@@ -6,6 +6,8 @@ Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 
 **When NOT to use:** If you need structured key-value lookups, use `KVStore`. If you need relational queries, use `Database`. If you need full-text keyword search only (no semantic understanding), roll your own with `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -166,13 +168,16 @@ try {
 
 ## Local Development
 
-In local dev mode, KnowledgeBase reads documents from the source folder, chunks by paragraphs, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts.
+In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and the chunking configuration, and is rebuilt automatically when documents are added, edited, or removed, or the chunking settings change.
 
 **Parity notes:**
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
+- The TF-IDF tokenizer is Unicode-aware: accents are normalized (so `resume` matches `résumé`) and CJK text is matched via character bigrams.
+- Chunking is approximated locally: `'fixed'` uses word-count windows (`chunkSize`/`chunkOverlap`), `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
+- `chunkOverlap` is a **percentage** of `chunkSize` in both environments: locally the mock overlaps by `chunkSize × chunkOverlap / 100` words, and the CDK layer maps it to Bedrock's `overlapPercentage` (1–99). The value is directly transferable between local dev and production.
 - The API contract (method signatures, error types, result shape) is identical to AWS.
-- Metadata filtering and `maxResults` work identically.
-- S3 URI sources are not supported in local development — use a local folder path.
+- `maxResults` works identically. Metadata filtering uses the same `equals`/AND semantics, with one asymmetry: in production an unknown or invalid filter key is *typically* rejected server-side by Bedrock (surfaced as `InvalidFilterException` when the service flags the filter), whereas locally the mock silently matches nothing and returns an empty result set.
+- `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`. S3 URI sources are not supported in local development — use a local folder path.
 
 Wipe cached data with `rm -rf .bb-data`.
 

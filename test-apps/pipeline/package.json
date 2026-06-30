@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@aws-blocks/core": "*",
+    "@aws-blocks/pipeline": "*",
     "aws-cdk-lib": "2.257.0",
     "constructs": "^10.6.0"
   },

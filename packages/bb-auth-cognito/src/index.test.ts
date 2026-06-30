@@ -4,9 +4,16 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError, hasAuthError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthStateApi, AuthField } from '@aws-blocks/auth-common';
 import { AuthCognito, AuthCognitoErrors } from './index.js';
+
+// `createApi()` returns a context-bound `ApiNamespace` callable; narrow it to
+// the public `AuthStateApi` surface instead of `as any`.
+function apiFor(auth: AuthCognito, context: BlocksContext): AuthStateApi {
+	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(context);
+}
 
 // ── Test harness ─────────────────────────────────────────────────────────────
 
@@ -129,6 +136,68 @@ describe('signUp / confirmSignUp / resendSignUpCode', () => {
 	});
 });
 
+// ─── `status` discriminator on SignInResult ─────────────────────────────────
+//
+// `SignInResult` is a discriminated union on the string `status` field
+// ('signedIn' | 'continueSignIn') — the discriminator native-client codegen keys off.
+// These tests assert the right `status` (and the matching payload field) is
+// returned on both the direct-sign-in and the challenge paths, for `signIn`
+// and `confirmSignIn`.
+
+describe('status discriminator on SignInResult', () => {
+	async function signUpAndConfirm(auth: AuthCognito, username: string) {
+		let code = '';
+		(auth as any).options.codeDelivery = async (_u: string, c: string) => { code = c; };
+		await auth.signUp(username, 'Password!1', { attributes: { email: `${username}@x.com` } });
+		await auth.confirmSignUp(username, code);
+	}
+
+	test("signIn returns status 'signedIn' (+ user) on the direct happy path", async () => {
+		const auth = new AuthCognito(ROOT, unique('status-1'), { passwordPolicy: { minLength: 8 } });
+		await signUpAndConfirm(auth, 'sigrid');
+		const { ctx } = freshContext();
+		const r = await auth.signIn('sigrid', 'Password!1', ctx);
+		assert.strictEqual(r.status, 'signedIn');
+		// The signedIn arm carries `user` and no `nextStep`.
+		if (r.status !== 'signedIn') throw new Error('unreachable');
+		assert.strictEqual(r.user.username, 'sigrid');
+		assert.ok(!('nextStep' in r));
+	});
+
+	test("signIn returns status 'continueSignIn' (+ nextStep) when a challenge is required", async () => {
+		const auth = new AuthCognito(ROOT, unique('status-2'), {
+			passwordPolicy: { minLength: 8 },
+			mfa: 'required',
+			mfaTypes: ['TOTP'],
+		});
+		await signUpAndConfirm(auth, 'nadia');
+		const { ctx } = freshContext();
+		const r = await auth.signIn('nadia', 'Password!1', ctx);
+		assert.strictEqual(r.status, 'continueSignIn');
+		// The nextStep arm carries `nextStep` and no `user`.
+		if (r.status !== 'continueSignIn') throw new Error('unreachable');
+		assert.ok(r.nextStep.name.length > 0);
+		assert.ok(!('user' in r));
+	});
+
+	test('confirmSignIn carries status through to the final signed-in result', async () => {
+		const auth = new AuthCognito(ROOT, unique('status-3'), {
+			passwordPolicy: { minLength: 8 },
+			mfa: 'required',
+			mfaTypes: ['TOTP'],
+		});
+		await signUpAndConfirm(auth, 'omar');
+		const { ctx } = freshContext();
+		const challenge = await auth.signIn('omar', 'Password!1', ctx);
+		assert.strictEqual(challenge.status, 'continueSignIn');
+		if (challenge.status !== 'continueSignIn') return;
+		if (challenge.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
+		// Mock accepts any 6-digit code.
+		const done = await auth.confirmSignIn(challenge.nextStep.session, { code: '123456' }, ctx);
+		assert.strictEqual(done.status, 'signedIn');
+	});
+});
+
 // ─── Sign-in happy path + error cases ───────────────────────────────────────
 
 describe('signIn / signOut / getCurrentUser / requireAuth / checkAuth', () => {
@@ -144,7 +213,7 @@ describe('signIn / signOut / getCurrentUser / requireAuth / checkAuth', () => {
 		await signUpAndConfirm(auth, 'alice');
 		const { ctx } = freshContext();
 		const r = await auth.signIn('alice', 'Password!1', ctx);
-		assert.ok(r.isSignedIn);
+		assert.strictEqual(r.status, 'signedIn');
 		const current = await auth.getCurrentUser(ctx);
 		assert.ok(current);
 		assert.strictEqual(current!.username, 'alice');
@@ -296,8 +365,8 @@ describe('MFA challenge + confirmSignIn', () => {
 		await setupUserWithTotp(auth, 'grace');
 		const { ctx } = freshContext();
 		const r = await auth.signIn('grace', 'Password!1', ctx);
-		assert.strictEqual(r.isSignedIn, false);
-		if (!r.isSignedIn) {
+		assert.strictEqual(r.status, 'continueSignIn');
+		if (r.status === 'continueSignIn') {
 			assert.strictEqual(r.nextStep.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 			assert.ok(r.nextStep.session);
 		}
@@ -312,10 +381,10 @@ describe('MFA challenge + confirmSignIn', () => {
 		await setupUserWithTotp(auth, 'hugo');
 		const { ctx } = freshContext();
 		const challenge = await auth.signIn('hugo', 'Password!1', ctx);
-		if (challenge.isSignedIn) throw new Error('expected challenge');
+		if (challenge.status === 'signedIn') throw new Error('expected challenge');
 		const session = (challenge.nextStep as { session: string }).session;
 		const r = await auth.confirmSignIn(session, '123456', ctx);
-		assert.ok(r.isSignedIn);
+		assert.strictEqual(r.status, 'signedIn');
 		assert.strictEqual(await auth.checkAuth(ctx), true);
 	});
 
@@ -328,7 +397,7 @@ describe('MFA challenge + confirmSignIn', () => {
 		await setupUserWithTotp(auth, 'ivy');
 		const { ctx } = freshContext();
 		const challenge = await auth.signIn('ivy', 'Password!1', ctx);
-		if (challenge.isSignedIn) throw new Error('expected challenge');
+		if (challenge.status === 'signedIn') throw new Error('expected challenge');
 		const session = (challenge.nextStep as { session: string }).session;
 		await assert.rejects(
 			() => auth.confirmSignIn(session, 'abc', ctx),
@@ -345,7 +414,7 @@ describe('MFA challenge + confirmSignIn', () => {
 		await setupUserWithTotp(auth, 'jay');
 		const { ctx } = freshContext();
 		const challenge = await auth.signIn('jay', 'Password!1', ctx);
-		if (challenge.isSignedIn) throw new Error('expected challenge');
+		if (challenge.status === 'signedIn') throw new Error('expected challenge');
 		const session = (challenge.nextStep as { session: string }).session;
 		// Force expiry.
 		const entry = (auth as any).challenges.get(session);
@@ -368,8 +437,8 @@ describe('MFA challenge + confirmSignIn', () => {
 		await auth.confirmSignUp('kim', code);
 		const { ctx } = freshContext();
 		const r = await auth.signIn('kim', 'Password!1', ctx);
-		assert.strictEqual(r.isSignedIn, false);
-		if (!r.isSignedIn) {
+		assert.strictEqual(r.status, 'continueSignIn');
+		if (r.status === 'continueSignIn') {
 			assert.strictEqual(r.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 		}
 	});
@@ -386,13 +455,13 @@ describe('MFA challenge + confirmSignIn', () => {
 		await auth.confirmSignUp('lee', code);
 		const { ctx } = freshContext();
 		const r = await auth.signIn('lee', 'Password!1', ctx);
-		if (r.isSignedIn) throw new Error('expected TOTP setup challenge');
+		if (r.status === 'signedIn') throw new Error('expected TOTP setup challenge');
 		assert.strictEqual(r.nextStep.name, 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP');
 		if (r.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP') return;
 		assert.ok(r.nextStep.sharedSecret.length > 0, 'shared secret emitted');
 		// Mock accepts any 6-digit code (see DESIGN.md "Mock vs AWS Parity Gaps").
 		const done = await auth.confirmSignIn(r.nextStep.session, { code: '123456' }, ctx);
-		assert.strictEqual(done.isSignedIn, true);
+		assert.strictEqual(done.status, 'signedIn');
 	});
 
 	test('MFA EMAIL setup: address submit → code round-trip signs in', async () => {
@@ -416,23 +485,23 @@ describe('MFA challenge + confirmSignIn', () => {
 		const { ctx } = freshContext();
 		// First login → setup selection (only TOTP + EMAIL can be enrolled).
 		const r1 = await auth.signIn('morgan', 'Password!1', ctx);
-		if (r1.isSignedIn) throw new Error('expected setup selection');
+		if (r1.status === 'signedIn') throw new Error('expected setup selection');
 		assert.strictEqual(r1.nextStep.name, 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION');
 		if (r1.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION') return;
 		// Pick EMAIL → asks for an address.
 		const r2 = await auth.confirmSignIn(r1.nextStep.session, { mfaType: 'EMAIL' as 'EMAIL' }, ctx);
-		if (r2.isSignedIn) throw new Error('expected email-setup step');
+		if (r2.status === 'signedIn') throw new Error('expected email-setup step');
 		assert.strictEqual(r2.nextStep.name, 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP');
 		if (r2.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP') return;
 		// Submit address → code is delivered + EMAIL_CODE challenge follows.
 		lastCode = '';
 		const r3 = await auth.confirmSignIn(r2.nextStep.session, { email: 'morgan-new@x.com' }, ctx);
-		if (r3.isSignedIn) throw new Error('expected follow-up code challenge');
+		if (r3.status === 'signedIn') throw new Error('expected follow-up code challenge');
 		assert.strictEqual(r3.nextStep.name, 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
 		if (r3.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE') return;
 		assert.ok(lastCode.length > 0, 'code generated after address submission');
 		const r4 = await auth.confirmSignIn(r3.nextStep.session, { code: lastCode }, ctx);
-		assert.strictEqual(r4.isSignedIn, true);
+		assert.strictEqual(r4.status, 'signedIn');
 	});
 });
 
@@ -774,8 +843,8 @@ describe('USER_AUTH flow', () => {
 		const { auth } = await confirmedUser('ua-1');
 		const { ctx } = freshContext();
 		const r = await auth.signIn('ursula', '', ctx);
-		assert.strictEqual(r.isSignedIn, false);
-		if (!r.isSignedIn) {
+		assert.strictEqual(r.status, 'continueSignIn');
+		if (r.status === 'continueSignIn') {
 			assert.strictEqual(r.nextStep.name, 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION');
 			if (r.nextStep.name === 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') {
 				assert.deepStrictEqual(
@@ -790,39 +859,39 @@ describe('USER_AUTH flow', () => {
 		const { auth } = await confirmedUser('ua-2', { preferredChallenge: 'PASSWORD' });
 		const { ctx } = freshContext();
 		const r = await auth.signIn('ursula', '', ctx);
-		if (r.isSignedIn) throw new Error('expected challenge');
+		if (r.status === 'signedIn') throw new Error('expected challenge');
 		assert.strictEqual(r.nextStep.name, 'CONFIRM_SIGN_IN_WITH_PASSWORD');
 		if (r.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') return;
 		// Completing the password leg signs the user in.
 		const confirmed = await auth.confirmSignIn(r.nextStep.session, { password: 'Password!1' }, ctx);
-		assert.strictEqual(confirmed.isSignedIn, true);
+		assert.strictEqual(confirmed.status, 'signedIn');
 	});
 
 	test('preferredChallenge=EMAIL_OTP → passwordless sign-in via code', async () => {
 		const { auth, codeHolder } = await confirmedUser('ua-3', { preferredChallenge: 'EMAIL_OTP' });
 		const { ctx } = freshContext();
 		const r = await auth.signIn('ursula', '', ctx);
-		if (r.isSignedIn) throw new Error('expected challenge');
+		if (r.status === 'signedIn') throw new Error('expected challenge');
 		assert.strictEqual(r.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 		if (r.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 		const confirmed = await auth.confirmSignIn(r.nextStep.session, { code: codeHolder() }, ctx);
-		assert.strictEqual(confirmed.isSignedIn, true);
+		assert.strictEqual(confirmed.status, 'signedIn');
 	});
 
 	test('SELECT_CHALLENGE → pick EMAIL_OTP → passwordless sign-in', async () => {
 		const { auth, codeHolder } = await confirmedUser('ua-4');
 		const { ctx } = freshContext();
 		const r = await auth.signIn('ursula', '', ctx);
-		if (r.isSignedIn) throw new Error('expected challenge');
+		if (r.status === 'signedIn') throw new Error('expected challenge');
 		if (r.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') {
 			throw new Error(`unexpected step: ${r.nextStep.name}`);
 		}
 		const picked = await auth.confirmSignIn(r.nextStep.session, { firstFactor: 'EMAIL_OTP' }, ctx);
-		if (picked.isSignedIn) throw new Error('expected follow-up challenge');
+		if (picked.status === 'signedIn') throw new Error('expected follow-up challenge');
 		assert.strictEqual(picked.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 		if (picked.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP') return;
 		const confirmed = await auth.confirmSignIn(picked.nextStep.session, { code: codeHolder() }, ctx);
-		assert.strictEqual(confirmed.isSignedIn, true);
+		assert.strictEqual(confirmed.status, 'signedIn');
 	});
 
 	test('state-machine dispatch: SELECT_CHALLENGE → PASSWORD → signed in', async () => {
@@ -844,6 +913,23 @@ describe('USER_AUTH flow', () => {
 		assert.strictEqual(s3.state, 'signedIn');
 		assert.strictEqual(s3.user.username, 'ursula');
 	});
+
+	test('setAuthState surfaces errorName on a failed sign-in (issue #81)', async () => {
+		const { auth } = await confirmedUser('ua-err', { preferredChallenge: 'PASSWORD' });
+		const { ctx } = freshContext();
+		const api = apiFor(auth, ctx);
+
+		// Drive the password challenge to completion with a wrong password so
+		// the thrown ApiError carries NotAuthorizedException.
+		const s1 = await api.setAuthState({ action: 'signIn', username: 'ursula', password: '' });
+		const pwSession = s1.actions[0].fields.find((f: AuthField) => f.name === 'session');
+		assert.ok(pwSession?.defaultValue, 'expected a session field with a default value');
+		const next = await api.setAuthState({ action: 'confirmSignIn', challenge: 'password', session: pwSession.defaultValue, password: 'Wrong1!Password' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.errorName, AuthCognitoErrors.NotAuthorized);
+		assert.ok(hasAuthError(next, AuthCognitoErrors.NotAuthorized));
+	});
 });
 
 // ─── Passkeys (mock) ────────────────────────────────────────────────────────
@@ -864,12 +950,12 @@ describe('Passkeys', () => {
 		// Sign the user in via PASSWORD first factor so the access token
 		// cookie is on `ctx`. Subsequent passkey calls use that session.
 		const r = await auth.signIn('paula', '', ctx, { preferredChallenge: 'PASSWORD' });
-		if (r.isSignedIn) throw new Error('expected PASSWORD challenge');
+		if (r.status === 'signedIn') throw new Error('expected PASSWORD challenge');
 		if (r.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_PASSWORD') {
 			throw new Error(`unexpected step: ${r.nextStep.name}`);
 		}
 		const final = await auth.confirmSignIn(r.nextStep.session, { password: 'Password!1' }, ctx);
-		assert.strictEqual(final.isSignedIn, true);
+		assert.strictEqual(final.status, 'signedIn');
 		return { auth, ctx };
 	}
 
@@ -935,7 +1021,7 @@ describe('Passkeys', () => {
 		await auth.signOut(ctx);
 		const { ctx: ctx2 } = freshContext();
 		const r = await auth.signIn('paula', '', ctx2, { preferredChallenge: 'WEB_AUTHN' });
-		if (r.isSignedIn) throw new Error('expected WebAuthn challenge');
+		if (r.status === 'signedIn') throw new Error('expected WebAuthn challenge');
 		assert.strictEqual(r.nextStep.name, 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN');
 		if (r.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN') return;
 		const opts = JSON.parse(r.nextStep.credentialRequestOptions);
@@ -946,7 +1032,7 @@ describe('Passkeys', () => {
 			{ credential: JSON.stringify({ id: 'cred-known', response: {} }) },
 			ctx2,
 		);
-		assert.strictEqual(confirmed.isSignedIn, true);
+		assert.strictEqual(confirmed.status, 'signedIn');
 	});
 
 	test('passkey sign-in rejects unknown credential id', async () => {
@@ -958,7 +1044,7 @@ describe('Passkeys', () => {
 		await auth.signOut(ctx);
 		const { ctx: ctx2 } = freshContext();
 		const r = await auth.signIn('paula', '', ctx2, { preferredChallenge: 'WEB_AUTHN' });
-		if (r.isSignedIn) throw new Error('expected WebAuthn challenge');
+		if (r.status === 'signedIn') throw new Error('expected WebAuthn challenge');
 		if (r.nextStep.name !== 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN') throw new Error('unexpected');
 		const session = r.nextStep.session;
 		await assert.rejects(
@@ -980,7 +1066,7 @@ describe('Passkeys', () => {
 		await auth.signOut(ctx);
 		const { ctx: ctx2 } = freshContext();
 		const r = await auth.signIn('paula', '', ctx2);
-		if (r.isSignedIn) throw new Error('expected challenge');
+		if (r.status === 'signedIn') throw new Error('expected challenge');
 		if (r.nextStep.name !== 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION') {
 			throw new Error(`unexpected step: ${r.nextStep.name}`);
 		}

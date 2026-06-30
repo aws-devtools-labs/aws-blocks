@@ -1,0 +1,73 @@
+name: Native Changeset Check
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'native/kotlin/**'
+      - 'native/swift/**'
+
+permissions:
+  contents: read
+
+jobs:
+  check-kotlin:
+    name: Require Kotlin changeset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Check for Kotlin changes
+        id: kotlin-changes
+        run: |
+          CHANGES=$(git diff --name-only origin/main...HEAD -- \
+            'native/kotlin/runtime/src/*Main/**' \
+            'native/kotlin/codegen/src/main/**' \
+            'native/kotlin/plugin/src/main/**' \
+            'native/kotlin/gradle/libs.versions.toml')
+          if [ -n "$CHANGES" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify Kotlin changeset exists
+        if: steps.kotlin-changes.outputs.changed == 'true'
+        working-directory: native/kotlin
+        run: |
+          npm ci
+          npx changeset status --since=origin/main
+
+  check-swift:
+    name: Require Swift changeset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Check for Swift changes
+        id: swift-changes
+        run: |
+          CHANGES=$(git diff --name-only origin/main...HEAD -- \
+            'native/swift/Sources/**' \
+            'native/swift/Package.swift')
+          if [ -n "$CHANGES" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify Swift changeset exists
+        if: steps.swift-changes.outputs.changed == 'true'
+        working-directory: native/swift
+        run: |
+          npm ci
+          npx changeset status --since=origin/main

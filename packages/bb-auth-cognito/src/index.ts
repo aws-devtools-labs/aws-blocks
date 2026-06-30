@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
@@ -454,8 +455,8 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 	// ─────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Authenticate a user. Returns `{ isSignedIn: true, user }` on success
-	 * (also sets the session cookie), or `{ isSignedIn: false, nextStep }`
+	 * Authenticate a user. Returns `{ status: 'signedIn', user }` on success
+	 * (also sets the session cookie), or `{ status: 'continueSignIn', nextStep }`
 	 * when a challenge is required (MFA, NEW_PASSWORD_REQUIRED, etc.).
 	 *
 	 * @throws {AuthCognitoErrors.NotAuthorized} Wrong password.
@@ -503,13 +504,13 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 			// signed-up user's sub-prefix (`mock-signup-session-<sub>`).
 			if (options?.cognitoSession === `mock-signup-session-${user.userSub}`) {
 				await this.issueSession(context, username, user);
-				return { isSignedIn: true, user: this.toCognitoUser(username, user) };
+				return { status: 'signedIn', user: this.toCognitoUser(username, user) };
 			}
 			const next = this.firstFactorChallenge(
 				username,
 				options?.preferredChallenge ?? this.options.preferredChallenge,
 			);
-			return { isSignedIn: false, nextStep: next };
+			return { status: 'continueSignIn', nextStep: next };
 		}
 
 		// USER_PASSWORD_AUTH (classic).
@@ -526,7 +527,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 		// when simulating an `AdminCreateUser({ Permanent: false })` user.
 		if ((user as MockUserRecord & { forcePasswordChange?: boolean }).forcePasswordChange) {
 			return {
-				isSignedIn: false,
+				status: 'continueSignIn',
 				nextStep: this.issueChallenge(username, {
 					name: 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED',
 					session: '',
@@ -536,10 +537,10 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 
 		// Challenge selection (mock — matches Cognito's logic at a high level)
 		const challenge = await this.selectSignInChallenge(username, user);
-		if (challenge) return { isSignedIn: false, nextStep: challenge };
+		if (challenge) return { status: 'continueSignIn', nextStep: challenge };
 
 		await this.issueSession(context, username, user);
-		return { isSignedIn: true, user: this.toCognitoUser(username, user) };
+		return { status: 'signedIn', user: this.toCognitoUser(username, user) };
 	}
 
 	/**
@@ -782,7 +783,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					challengeResponse as 'SMS' | 'TOTP' | 'EMAIL',
 				);
 				this.challenges.delete(session);
-				return { isSignedIn: false, nextStep: next };
+				return { status: 'continueSignIn', nextStep: next };
 			}
 			case 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION': {
 				const next = await this.challengeForMfaSetup(
@@ -790,7 +791,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					challengeResponse as 'TOTP' | 'EMAIL',
 				);
 				this.challenges.delete(session);
-				return { isSignedIn: false, nextStep: next };
+				return { status: 'continueSignIn', nextStep: next };
 			}
 			case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP': {
 				if (!/^\d{6}$/.test(challengeResponse)) {
@@ -832,7 +833,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					},
 				};
 				const issued = this.issueChallenge(challenge.username, next, { isEmailSetup: true });
-				return { isSignedIn: false, nextStep: issued };
+				return { status: 'continueSignIn', nextStep: issued };
 			}
 			case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED': {
 				this.enforcePasswordPolicy(challengeResponse);
@@ -863,7 +864,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 				}
 				this.challenges.delete(session);
 				const next = this.firstFactorChallenge(challenge.username, pick);
-				return { isSignedIn: false, nextStep: next };
+				return { status: 'continueSignIn', nextStep: next };
 			}
 			case 'CONFIRM_SIGN_IN_WITH_PASSWORD': {
 				// USER_AUTH password leg. Validate the password the way the
@@ -918,7 +919,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 		}
 
 		await this.issueSession(context, challenge.username, user);
-		return { isSignedIn: true, user: this.toCognitoUser(challenge.username, user) };
+		return { status: 'signedIn', user: this.toCognitoUser(challenge.username, user) };
 	}
 
 	/**
@@ -1510,13 +1511,14 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 
 	createApi(): AuthStateApi {
 		const enablePasskeys = this.options.enablePasskeys === true;
-		const baseSignedOut = (error?: string): AuthState =>
+		const baseSignedOut = (error?: string, errorName?: string): AuthState =>
 			signedOut({
 				selfSignUp: this.options.selfSignUp ?? true,
 				userAttributes: this.options.userAttributes ?? [],
 				enablePasskeys,
 				signInWith: this.options.signInWith,
 				error,
+				errorName,
 			});
 		const baseSignedIn = (user: CognitoUser<O>): AuthState =>
 			signedInState(user, { enablePasskeys });
@@ -1531,7 +1533,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					switch (input.action) {
 						case 'signIn': {
 							const r = await this.signIn(input.username, input.password, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signInWithPasskey': {
@@ -1541,7 +1543,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 								context,
 								{ preferredChallenge: 'WEB_AUTHN' },
 							);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signUp': {
@@ -1581,7 +1583,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 						}
 						case 'autoSignIn': {
 							const r = await this.autoSignIn(context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'resendSignUpCode': {
@@ -1607,7 +1609,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 								default: response = '';
 							}
 							const r = await this.confirmSignIn(input.session, response, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'startPasskeyRegistration': {
@@ -1649,14 +1651,21 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Match the AWS runtime: retriable failures (wrong MFA
 					// code, rejected shape) emit a thin signedOut shape with
 					// `retriable: true` so the client can preserve its current
 					// challenge form instead of tearing it down.
 					if (e instanceof ApiError && e.retriable) {
-						return { state: 'signedOut', actions: [], error: message, retriable: true };
+						return {
+							state: 'signedOut',
+							actions: [],
+							error: message,
+							retriable: true,
+							...(errorName ? { errorName } : {}),
+						};
 					}
-					return { ...baseSignedOut(message) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));

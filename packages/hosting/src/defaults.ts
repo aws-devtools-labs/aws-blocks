@@ -11,6 +11,16 @@ import { HostingError } from './hosting_error.js';
 export const ERROR_PAGE_KEY = '_error.html';
 
 /**
+ * S3 object key for the built-in default 404 page. Used for multi-page
+ * static sites (`staticAssets.spaFallback === false`) that did NOT emit
+ * their own `404.html` and whose user did not supply `errorPages.notFound`.
+ * Without it, a missing path on such a site falls through to CloudFront's
+ * raw S3-OAC 403 XML body. This mirrors the SSR default error page so all
+ * deploy shapes get a branded not-found page instead of a raw error.
+ */
+export const NOT_FOUND_PAGE_KEY = '_not_found.html';
+
+/**
  * Default port for SSR server processes (Lambda Web Adapter).
  */
 export const SSR_DEFAULT_PORT = 3000;

@@ -87,6 +87,13 @@ export class Tracer extends Scope {
 	private rootAnnotations: Record<string, AnnotationValue> = {};
 	private rootMetadata: Record<string, unknown> = {};
 	private segmentStack: TraceRecord[] = [];
+	/**
+	 * Depth tracker for an in-flight *unsampled* trace. The sampled path tracks
+	 * nesting via `segmentStack`, but an unsampled root pushes nothing, so a
+	 * counter is needed to keep its subsegments unsampled too (rather than
+	 * letting them re-roll and spawn their own root traces).
+	 */
+	private unsampledDepth = 0;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -113,8 +120,24 @@ export class Tracer extends Scope {
 	 * @returns The return value of `fn`.
 	 */
 	async startSegment<T>(name: string, fn: (segment: ISegment) => Promise<T>): Promise<T> {
-		if (!this.enabled || !this.shouldSample()) {
+		if (!this.enabled) {
 			return fn(NO_OP_SEGMENT);
+		}
+
+		// Sampling is a per-trace decision: roll it once at the root segment and
+		// have every subsegment inherit it, so a trace is recorded whole or not
+		// at all. Rolling per subsegment (the previous behavior) would randomly
+		// drop children from a sampled trace, or promote a subsegment of an
+		// unsampled trace into its own orphan root trace.
+		const inActiveTrace = this.segmentStack.length > 0 || this.unsampledDepth > 0;
+		const sampled = inActiveTrace ? this.unsampledDepth === 0 : this.shouldSample();
+		if (!sampled) {
+			this.unsampledDepth++;
+			try {
+				return await fn(NO_OP_SEGMENT);
+			} finally {
+				this.unsampledDepth--;
+			}
 		}
 
 		if (!this.currentTraceId) {

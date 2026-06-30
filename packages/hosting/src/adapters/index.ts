@@ -181,9 +181,18 @@ export const getAdapter = (
     });
   }
 
-  // For SPA/static with explicit buildOutputDir, wrap the adapter
-  if (buildOutputDir && (framework === 'spa' || framework === 'static')) {
-    return (projectDir: string) => spaAdapter(projectDir, { buildOutputDir });
+  // Sources the routing model from the framework's build contract rather
+  // than sniffing the output tree, which misclassified both a SPA shipping a
+  // nested index.html and a flat-file SSG. `spa` → single-page (client-side
+  // routing, /index.html fallback); `static` → multi-page (directory-index
+  // resolution).
+  if (framework === 'spa' || framework === 'static') {
+    const spaFallback = framework === 'spa';
+    return (projectDir: string) =>
+      spaAdapter(projectDir, {
+        ...(buildOutputDir ? { buildOutputDir } : {}),
+        spaFallback,
+      });
   }
 
   return entry.adapter;

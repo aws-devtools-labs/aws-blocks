@@ -46,7 +46,7 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { HostingResources } from '../types.js';
-import { ERROR_PAGE_KEY, generateBuildId } from '../defaults.js';
+import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
 import { StorageConstruct } from './storage_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { WafConstruct } from './waf_construct.js';
@@ -137,6 +137,20 @@ export type HostingConstructProps = {
      */
     timeout?: Duration | number;
     reservedConcurrency?: number;
+    /**
+     * Reserved concurrent executions for the image-optimization Lambda.
+     * Default: undefined (no reservation).
+     *
+     * Historically this was hardcoded to 10, which broke `cdk deploy` on
+     * fresh AWS accounts: the default account-level unreserved-concurrency
+     * limit is 10, so reserving all 10 for image-opt drops the account
+     * below its required minimum and Lambda rejects the stack with a 400.
+     * Defaulting to no reservation keeps deploys working out of the box
+     * while still letting operators cap image-opt explicitly.
+     */
+    imageOptimization?: {
+      reservedConcurrency?: number;
+    };
     /**
      * Provisioned concurrency for the SSR Lambda (cold-start elimination).
      * When > 0, the construct creates a `live` alias with this many
@@ -695,7 +709,11 @@ export class HostingConstruct extends Construct {
           memorySize: 1024,
           timeout: 25,
         },
-        reservedConcurrency: 10,
+        // No reservation by default. Reserving concurrency here used to be
+        // hardcoded to 10, which made deploys fail on fresh accounts whose
+        // account-level unreserved limit is also 10. Operators who need to
+        // cap image-opt can set `compute.imageOptimization.reservedConcurrency`.
+        reservedConcurrency: props.compute?.imageOptimization?.reservedConcurrency,
         // Propagate the SSR Lambda's logRetention to image-opt so a
         // user who bumped retention for debugability gets the same
         // window for image-opt logs (intermittent SVG/SSRF rejects
@@ -1259,6 +1277,20 @@ export class HostingConstruct extends Construct {
           prune: false,
         }),
       );
+    }
+
+    // ---- 11-bis. Default 404 page (multi-page static only) ----
+    // Set by the CDN construct only for multi-page static sites
+    // (spaFallback === false) that shipped no 404.html and got no
+    // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
+    // → /builds/<id>/_not_found.html responses resolve from S3.
+    if (cdn.defaultNotFoundPageHtml) {
+      new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
+        sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
+        destinationBucket: this.bucket,
+        destinationKeyPrefix: `builds/${buildId}/`,
+        prune: false,
+      });
     }
 
     // ---- 11a. Custom error pages ----
