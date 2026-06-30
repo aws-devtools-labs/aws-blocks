@@ -69,6 +69,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
 
       - name: Lint (advisory — annotations only, non-blocking)
@@ -120,6 +125,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
 
       - name: Download registry artifact
@@ -151,6 +161,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -185,6 +200,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -218,6 +238,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -250,6 +275,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -332,6 +362,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build

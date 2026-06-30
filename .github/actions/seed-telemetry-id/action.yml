@@ -1,0 +1,14 @@
+name: Seed fixed e2e telemetry installation ID
+description: >-
+  Pre-seeds the Blocks CLI telemetry installation ID file with a fixed e2e
+  canary value so the Blocks Telemetry service can exclude CI/e2e traffic from
+  real usage metrics (see KNOWN_CANARY_INSTALLATION_IDS). Also suppresses the
+  first-run telemetry consent notice. POSIX/Linux only.
+runs:
+  using: composite
+  steps:
+    - name: Seed fixed e2e telemetry installation ID
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.blocks/telemetry"
+        printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.blocks/telemetry/installation-id"

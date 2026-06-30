@@ -39,6 +39,15 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Seed the fixed e2e canary telemetry installation ID so the Blocks
+      # Telemetry service excludes CI traffic from real usage metrics
+      # (KNOWN_CANARY_INSTALLATION_IDS).
+      - name: Seed fixed e2e telemetry installation ID
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.blocks\telemetry" | Out-Null
+          Set-Content -NoNewline -Path "$env:USERPROFILE\.blocks\telemetry\installation-id" -Value '00000000-0000-0000-0000-000000000e2e'
+
       - run: npm ci
       - run: npm run build
 
