@@ -96,7 +96,12 @@ jobs:
       # exactly reproducing the old implicit skip-chain. finalize-result reads
       # each step's TRUE .outcome and stamps klass/composite, so an agent
       # timeout still scores composite 0 (its tests/judge are skipped, never run
-      # against a partial app).
+      # against a partial app). That timeout→composite-0 invariant is load-bearing
+      # on the wall-clock timeout surfacing as a NON-SUCCESS step outcome: a
+      # `timeout-minutes` hit makes step 2's .outcome 'failure', so the
+      # `if: outcome == 'success'` chain skips steps 3-4 and finalize-result
+      # classifies failed_at='2-agent' as agent_fail — keep any future edit from
+      # ever letting a timed-out agent surface as 'success'.
       #
       # Write a baseline result.json BEFORE OIDC/AWS so even an OIDC failure
       # produces a cell row in the summary table. Every later step augments

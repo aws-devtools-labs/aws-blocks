@@ -6,7 +6,7 @@
 // run summary.
 //
 // The baseline is a small commit-keyed aggregate (built by buildAggregate and
-// persisted to S3 under bench/baseline/<sha>/results.json): per-cell composites
+// persisted to S3 under bench/runs/<sha>/results.json): per-cell composites
 // plus the mean. A PR run fetches the aggregate for its base commit and renders
 // the delta so the PR's effect is obvious at first glance. No baseline → the
 // overview falls back to absolute composites with a note (never an error).
