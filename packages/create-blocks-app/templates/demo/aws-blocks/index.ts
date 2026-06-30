@@ -117,11 +117,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       createdAt: 'byCreatedAt'
     } as const;
 
+    // The default path queries the byCreatedAt GSI, which is eventually consistent:
+    // a todo just written by createTodo() may not appear in the immediately following call.
     const iterator = todos.query({
       index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
       where: { userId: { equals: user.username } }
     });
 
+    // demo only: loads all todos into memory, no pagination. query() accepts a `limit` for real apps.
     return await Array.fromAsync(iterator);
   },
 
