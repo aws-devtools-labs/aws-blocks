@@ -101,16 +101,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     
     // ULID: timestamp-based sortable ID
-    const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
-    
-    const todo = {
-      userId: user.username,
-      todoId: ulid,
-      title,
-      completed: false,
-      priority,
-      createdAt: Date.now()
-    };
+    const now = Date.now();
+    const ulid = now.toString(36) + crypto.randomBytes(8).toString('hex');
+    const todo = { userId: user.username, todoId: ulid, title, completed: false, priority, createdAt: now };
     await todos.put(todo);
     return todo;
   },
