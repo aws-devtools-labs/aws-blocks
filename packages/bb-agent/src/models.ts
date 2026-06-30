@@ -80,6 +80,7 @@ export const OllamaModels = {
 		apiKey: 'ollama',
 	},
 	/** Strong reasoning at moderate size. Currently: DeepSeek R1 14B (~9 GB, needs 16 GB VRAM). */
+	// TODO: DeepSeek R1 is strong at reasoning but weak at tool calling — swap to a more tool-capable model.
 	MEDIUM: {
 		provider: 'openai-api',
 		modelId: 'deepseek-r1:14b',
