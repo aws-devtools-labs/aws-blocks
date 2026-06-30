@@ -217,7 +217,8 @@ class OpenRpcParser {
 
     // Check discriminated union: all objects with a shared single-value enum field
     if (nonNull.isNotEmpty &&
-        nonNull.every((v) => v['type'] == 'object' && v.containsKey('properties'))) {
+        nonNull.every(
+            (v) => v['type'] == 'object' && v.containsKey('properties'))) {
       final discriminant = _findDiscriminant(nonNull);
       if (discriminant != null) {
         // A boolean-enum discriminant (`{"type":"boolean","enum":[true|false]}`)
@@ -229,18 +230,17 @@ class OpenRpcParser {
           return p['type'] == 'boolean';
         });
         final variants = nonNull.map((v) {
-          final props = (v['properties'] as Map<String, dynamic>)
-              .map((k, val) => MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
-          final required = (v['required'] as List<dynamic>?)
-                  ?.cast<String>()
-                  .toSet() ??
-              {};
+          final props = (v['properties'] as Map<String, dynamic>).map(
+              (k, val) =>
+                  MapEntry(k, _parseTypeRef(val as Map<String, dynamic>)));
+          final required =
+              (v['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
           // `.toString()` yields the literal value for both string ("create")
           // and boolean (true/false) discriminants; `as String` would throw on
           // a bool.
           final discValue =
               ((v['properties'] as Map<String, dynamic>)[discriminant]
-                  as Map<String, dynamic>)['enum'][0]
+                      as Map<String, dynamic>)['enum'][0]
                   .toString();
           // Remove discriminant from properties
           final filteredProps = Map<String, TypeRef>.from(props)

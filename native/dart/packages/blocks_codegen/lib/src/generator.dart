@@ -291,22 +291,26 @@ class DartCodeGenerator {
     buf.writeln('sealed class ${sealed.name} {');
     buf.writeln('  const ${sealed.name}();');
     buf.writeln('  Map<String, dynamic> toJson();');
-    buf.writeln('  static ${sealed.name} fromJson(Map<String, dynamic> json) {');
+    buf.writeln(
+        '  static ${sealed.name} fromJson(Map<String, dynamic> json) {');
     if (sealed.discriminantIsBoolean) {
       // Boolean discriminant: switch on the real bool; case labels and the
       // serialized value are unquoted true/false literals. true/false are
       // exhaustive for a bool, so no (unreachable) default clause is emitted.
       buf.writeln("    switch (json['${sealed.discriminant}'] as bool) {");
       for (final v in sealed.variants) {
-        buf.writeln("      case ${v.discriminantValue}: return ${v.className}.fromJson(json);");
+        buf.writeln(
+            "      case ${v.discriminantValue}: return ${v.className}.fromJson(json);");
       }
       buf.writeln('    }');
     } else {
       buf.writeln("    switch (json['${sealed.discriminant}'] as String) {");
       for (final v in sealed.variants) {
-        buf.writeln("      case '${v.discriminantValue}': return ${v.className}.fromJson(json);");
+        buf.writeln(
+            "      case '${v.discriminantValue}': return ${v.className}.fromJson(json);");
       }
-      buf.writeln("      default: throw ArgumentError('Unknown ${sealed.discriminant}: \${json['${sealed.discriminant}']}');");
+      buf.writeln(
+          "      default: throw ArgumentError('Unknown ${sealed.discriminant}: \${json['${sealed.discriminant}']}');");
       buf.writeln('    }');
     }
     buf.writeln('  }');
@@ -373,7 +377,8 @@ class DartCodeGenerator {
       if (sealed.discriminantIsBoolean) {
         buf.writeln("      '${sealed.discriminant}': ${v.discriminantValue},");
       } else {
-        buf.writeln("      '${sealed.discriminant}': '${v.discriminantValue}',");
+        buf.writeln(
+            "      '${sealed.discriminant}': '${v.discriminantValue}',");
       }
       for (final f in v.fields) {
         final ident = _escapeIdentifier(f.name);
@@ -837,13 +842,20 @@ class DartCodeGenerator {
   String _deserializeExpr(
       String accessor, ResolvedType type, Map<String, ResolvedType> allTypes) {
     return switch (type) {
-      PrimitiveType(dartType: final dt) => dt == 'int' ? '($accessor as num).toInt()' : '$accessor as $dt',
-      NullableType(inner: final inner) => _deserializeNullable(accessor, inner, allTypes),
-      ListType(items: final items) => _deserializeList(accessor, items, allTypes),
-      MapType(valueType: final vt) => '($accessor as Map<String, dynamic>).map((k, v) => MapEntry(k, ${_mapValueFromJson('v', vt, allTypes)}))',
-      RecordType(name: final name) => '$name.fromJson($accessor as Map<String, dynamic>)',
-      SchemaReference(name: final name) => _deserializeSchema(accessor, name, allTypes),
-      SealedClassType(name: final name) => '$name.fromJson($accessor as Map<String, dynamic>)',
+      PrimitiveType(dartType: final dt) =>
+        dt == 'int' ? '($accessor as num).toInt()' : '$accessor as $dt',
+      NullableType(inner: final inner) =>
+        _deserializeNullable(accessor, inner, allTypes),
+      ListType(items: final items) =>
+        _deserializeList(accessor, items, allTypes),
+      MapType(valueType: final vt) =>
+        '($accessor as Map<String, dynamic>).map((k, v) => MapEntry(k, ${_mapValueFromJson('v', vt, allTypes)}))',
+      RecordType(name: final name) =>
+        '$name.fromJson($accessor as Map<String, dynamic>)',
+      SchemaReference(name: final name) =>
+        _deserializeSchema(accessor, name, allTypes),
+      SealedClassType(name: final name) =>
+        '$name.fromJson($accessor as Map<String, dynamic>)',
       EnumType(name: final name) => '$name.fromJson($accessor as String)',
       TransferableType(blocksType: final kt, typeArgs: final args) =>
         _deserializeTransferable(accessor, kt, args, allTypes),
@@ -870,7 +882,8 @@ class DartCodeGenerator {
   /// Primitive value types keep the plain `v as T` cast (byte-identical to the
   /// prior output); object-like value types (records, sealed classes) — and the
   /// nullable variants thereof — are decoded via their generated `fromJson`.
-  String _mapValueFromJson(String v, ResolvedType valueType, Map<String, ResolvedType> allTypes) {
+  String _mapValueFromJson(
+      String v, ResolvedType valueType, Map<String, ResolvedType> allTypes) {
     switch (valueType) {
       case SealedClassType(name: final n):
         return '$n.fromJson($v as Map<String, dynamic>)';
@@ -890,7 +903,8 @@ class DartCodeGenerator {
           SealedClassType(name: final n) => n,
           RecordType(name: final n) => n,
           SchemaReference(name: final n)
-              when allTypes[n] is RecordType || allTypes[n] is SealedClassType =>
+              when allTypes[n] is RecordType ||
+                  allTypes[n] is SealedClassType =>
             n,
           _ => null,
         };
@@ -903,7 +917,8 @@ class DartCodeGenerator {
     }
   }
 
-  String _deserializeList(String accessor, ResolvedType items, Map<String, ResolvedType> allTypes) {
+  String _deserializeList(
+      String accessor, ResolvedType items, Map<String, ResolvedType> allTypes) {
     final itemExpr = switch (items) {
       RecordType(name: final name) =>
         '(e) => $name.fromJson(e as Map<String, dynamic>)',
