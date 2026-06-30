@@ -129,6 +129,20 @@ const legacy = new KVStore(scope, 'legacy', {
 });
 ```
 
+## Agent Tools
+
+KVStore supports `toAgentTools()` to expose its operations as tools for the [Agent BB](../bb-agent/README.md#bb-provided-tools-toagenttools). Available methods: `get`, `put`, `delete`, `scan`.
+
+```typescript
+const agent = new Agent(scope, 'assistant', {
+  tools: (tool) => ({
+    ...store.toAgentTools({ include: ['get', 'put'] }),
+  }),
+});
+```
+
+See the [Agent BB documentation](../bb-agent/README.md#bb-provided-tools-toagenttools) for filtering, overrides, and full usage.
+
 ## Best Practices
 
 - Keep keys short and descriptive (e.g., `user:{id}`, `session:{token}`)

@@ -5,6 +5,8 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { AgentToolProviderOptions } from '@aws-blocks/core';
+import { kvToAgentTools } from './agent-tools.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -157,6 +159,12 @@ export class KVStore<T = string> extends Scope {
 			}
 			lastKey = result.LastEvaluatedKey;
 		} while (lastKey);
+	}
+
+	// ── Agent tools ──────────────────────────────────────────────────────
+
+	toAgentTools(options?: AgentToolProviderOptions): Record<string, any> {
+		return kvToAgentTools(this, options);
 	}
 
 	/**

@@ -32,6 +32,27 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 - Schema validation on `put()` when configured, throws `ValidationFailedException`.
 - Validates the 400 KB item size limit; throws `ItemTooLargeException` (`KVStoreErrors.ItemTooLarge`) on oversized items. On AWS, DynamoDB raises a generic `ValidationException`; the runtime narrows on the size-specific message and re-maps only that case to `ItemTooLarge`, so both layers surface the same `error.name`.
 
+## Agent Tools
+
+`toAgentTools(options?)` exposes KVStore operations as agent tools via the shared `KV_TOOL_METHODS` registry in `agent-tools.ts`. Both mock and AWS runtimes delegate to `kvToAgentTools()` which calls core's `buildAgentTools()` helper.
+
+### Tool Registry (`KV_TOOL_METHODS`)
+
+| Method | `needsApproval` | `trustable` | Notes |
+|--------|-----------------|-------------|-------|
+| `get` | `false` | — | Read-only |
+| `put` | `true` | `true` | Agent can repeat writes without re-prompting |
+| `delete` | `true` | `false` | Each deletion requires explicit approval |
+| `scan` | `false` | — | Default limit of 100 entries; collects AsyncIterable into array |
+
+### Parameters
+
+Tool parameters are defined as JSON Schema objects. Users can override with zod via `overrides: { methodName: { schema: z.object({...}) } }`.
+
+### Scan Default Limit
+
+`scan` caps results at 100 entries by default to prevent unbounded responses. The agent can pass `{ limit: N }` to override. The handler breaks out of the AsyncIterable once the limit is reached.
+
 ### Mock vs AWS Behavior Differences
 
 | Behavior Difference | Impact | Mitigation |

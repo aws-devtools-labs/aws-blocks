@@ -60,4 +60,5 @@ export class KVStore extends Scope {
 	put(..._args: unknown[]): never { return synthGuard('KVStore', 'put'); }
 	delete(..._args: unknown[]): never { return synthGuard('KVStore', 'delete'); }
 	scan(..._args: unknown[]): never { return synthGuard('KVStore', 'scan'); }
+	toAgentTools(..._args: unknown[]): never { return synthGuard('KVStore', 'toAgentTools'); }
 }

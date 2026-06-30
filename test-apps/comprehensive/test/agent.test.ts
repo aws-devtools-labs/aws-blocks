@@ -197,6 +197,20 @@ export function agentTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('toAgentTools()', () => {
+      test('BB tools and manual tools coexist — stream completes', async () => {
+        const api = getApi();
+        const { channelId } = await api.asToolStream('hello');
+        assert.ok(channelId, 'should return a channelId');
+      });
+
+      test('zod schema override works with BB tools — stream completes', async () => {
+        const api = getApi();
+        const { channelId } = await api.asToolZodOverrideStream('hello');
+        assert.ok(channelId, 'should return a channelId');
+      });
+    });
+
 
     describe('Long-Running Agent (>29s)', () => {
       test('agent with slow tool completes beyond API Gateway timeout', async () => {
