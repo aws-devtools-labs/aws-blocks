@@ -140,9 +140,28 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
  *
  * Semantic note (intentional, documented): for a compute-backed deploy where
  * the unmatched default is the SSR origin, a request to a NON-existent child of
- * a coalesced STATIC group (e.g. `/blog/never-generated`) now routes to S3 (→
- * 404/403 from the bucket) instead of the SSR Lambda's framework 404 page. For
- * prerendered content a miss is a 404 either way; only the 404 styling differs.
+ * a coalesced STATIC group (e.g. `/blog/never-generated`) routes to S3 (→
+ * 404/403 from the bucket) instead of the SSR Lambda. This is SAFE for FROZEN
+ * prerendered content (Nuxt prerender / Astro `prerender = true`): those pages
+ * are baked at build time with no on-demand render, so a non-built child
+ * genuinely does not exist and S3-404 is the correct outcome.
+ *
+ * It would be UNSAFE only for true on-demand fallback — Next ISR
+ * `fallback: 'blocking'`/`true`, where a non-prerendered child is supposed to
+ * render at the SSR Lambda, not 404. That combination is NOT reachable here,
+ * verified live (2026-06-30): OpenNext does not emit one static route per
+ * prerendered page — it routes `/products/*`, `/blog/*` etc. through the
+ * catch-all to the SSR origin (the live KVS route table carries zero per-page
+ * static rows for them). So an ISR child like `/app/products/99999` hits
+ * compute and renders on demand (HTTP 200), never the coalesced wildcard. The
+ * per-page static-row fan-out that coalescing bounds is a Nuxt/Astro trait, and
+ * those frameworks have no on-demand fallback — see the regression test
+ * `coalesceRoutes — preserves a dynamic sibling under a coalesced static parent`.
+ *
+ * (This is why coalescing is NOT gated on `!hasServer`: the confirmed live
+ * instruction-limit 503 was a Nuxt deploy, which IS `hasServer` — gating it off
+ * for compute deploys would re-open that 503 for the exact case it fixed.)
+ *
  * Coalescing a COMPUTE group, or any group in a static-only deploy, is a pure
  * no-op (the wildcard kind equals the default), so this only affects static
  * routes in a compute deploy — exactly the SSG fan-out we need to bound.

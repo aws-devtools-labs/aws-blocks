@@ -1229,4 +1229,44 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     const meta = JSON.parse(entries.meta) as { rc: number };
     assert.equal(meta.rc, 1, 'coalesced SSG fan-out must fit in a single route chunk');
   });
+
+  // Finding 4 (coalesce vs ISR fallback): the hazard is "a non-prerendered child
+  // of a coalesced STATIC group routes to S3-404 instead of the SSR fallback".
+  // It is only reachable if a framework emits per-page STATIC rows under a
+  // dynamic parent AND has on-demand fallback. Live-verified (2026-06-30) that
+  // OpenNext does NOT do this — it routes ISR routes through the catch-all to
+  // compute (zero per-page static rows). These tests pin that contract: a
+  // dynamic/compute route under a parent is NEVER folded into a static wildcard,
+  // so an ISR route always reaches the SSR origin.
+  void it('does NOT fold a compute (dynamic/ISR) route into a static wildcard', () => {
+    // Mirrors how OpenNext models an ISR route: the dynamic parent is a single
+    // compute row, NOT a fan-out of static per-page rows.
+    const rows: [string, 's' | 'c'][] = [
+      ['/products/*', 'c'], // ISR fallback:'blocking' → compute (renders on demand)
+      ['/assets/a', 's'],
+      ['/assets/b', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    // The compute route is preserved verbatim (a miss under it reaches the SSR
+    // Lambda, which renders the ISR-fallback page) — never coalesced to static.
+    assert.ok(out.some(([p, k]) => p === '/products/*' && k === 'c'));
+    // The genuinely-static siblings DO coalesce (the fan-out we bound).
+    assert.ok(out.some(([p, k]) => p === '/assets/*' && k === 's'));
+  });
+
+  void it('preserves a dynamic sibling under a coalesced static parent (mixed-kind → no fold)', () => {
+    // If a build ever DID emit per-page static rows alongside a dynamic row
+    // under the same parent, the mixed-kind guard prevents a lossy static
+    // wildcard from shadowing the dynamic (ISR) route.
+    const rows: [string, 's' | 'c'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/[slug]', 'c'], // the on-demand ISR fallback row, same parent /blog
+    ];
+    const out = coalesceRoutes(rows);
+    // Mixed kind under /blog → NOT coalesced; the compute row survives so a
+    // non-prerendered slug still routes to the SSR origin, not S3-404.
+    assert.ok(out.some(([p, k]) => p === '/blog/[slug]' && k === 'c'));
+    assert.ok(!out.some(([p]) => p === '/blog/*'));
+  });
 });
