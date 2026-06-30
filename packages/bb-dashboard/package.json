@@ -2,6 +2,7 @@
   "name": "@aws-blocks/bb-dashboard",
   "version": "0.1.2",
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist",
     "README.md",
