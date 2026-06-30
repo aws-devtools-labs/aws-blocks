@@ -286,6 +286,48 @@ void describe('generated request fn — image origin basePath strip', () => {
   });
 });
 
+void describe('request fn — F8 consolidated basePath strip (consistent boundary guard)', () => {
+  // Finding 8: the static (4c) / image (4a) basePath strips used a bare
+  // `indexOf(bp) === 0` guard while the canonical 308 used `=== bp ||
+  // startsWith(bp + '/')`. They now share one `stripBasePath` with the
+  // boundary guard. These cases pin the strip → build-id rewrite mapping.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      routes: [{ pattern: '/*', target: 'static' }],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+  const code = generateKvsRouterRequestCode();
+
+  void it('strips an exact basePath /myapp → directory-index of root', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, req('/myapp'));
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/index.html');
+  });
+
+  void it('strips /myapp/ → root index', async () => {
+    const { output } = await runRequestFn(code, entries, req('/myapp/'));
+    assert.equal(output.uri, '/builds/b1/index.html');
+  });
+
+  void it('strips /myapp/x → /x', async () => {
+    const { output } = await runRequestFn(code, entries, req('/myapp/x'));
+    assert.equal(output.uri, '/builds/b1/x/index.html');
+  });
+
+  void it('does NOT treat /myapp-extra as under /myapp (false-prefix → 308, never mis-stripped)', async () => {
+    // The boundary guard means /myapp-extra is off-base: it hits the canonical
+    // 308 (consistent with the strip guard), never the bare-prefix mis-strip
+    // that would have produced an /extra/... S3 key.
+    const { output } = await runRequestFn(code, entries, req('/myapp-extra/x'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/myapp-extra/x');
+  });
+});
+
 void describe('generated request fn — skew cookie gating', () => {
   const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'static' }] });
   const reqWithCookie = {
@@ -361,6 +403,29 @@ void describe('generated response fn — per-pattern headers (mid-wildcard)', ()
       response,
     });
     assert.equal(out.headers['x-guard'].value, 'on');
+  });
+
+  // Finding 7 (anti-divergence): getJson / matchPattern / globMatch / stripBasePath
+  // are now emitted from ONE shared source constant into BOTH functions. They
+  // used to be copied and had already diverged (request matchPattern returned
+  // {tail}, response returned a boolean). Assert byte-identical helper bodies so
+  // a future edit to one function can't silently desync the matcher.
+  void it('request and response functions share byte-identical helper definitions', () => {
+    const reqSrc = generateKvsRouterRequestCode();
+    const resSrc = generateKvsRouterResponseCode(0);
+    for (const fn of ['getJson', 'matchPattern', 'globMatch', 'stripBasePath']) {
+      const extract = (src: string): string => {
+        const start = src.indexOf(`function ${fn}(`);
+        assert.notEqual(start, -1, `${fn} must be present`);
+        // Grab a stable window of the definition for comparison.
+        return src.slice(start, start + 200);
+      };
+      assert.equal(
+        extract(reqSrc),
+        extract(resSrc),
+        `${fn} must be identical in request and response functions`,
+      );
+    }
   });
 });
 

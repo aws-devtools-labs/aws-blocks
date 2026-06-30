@@ -406,19 +406,31 @@ export const routeSpecificity = (pattern: string): number => {
 const specificity = routeSpecificity;
 
 /**
- * Viewer-request CloudFront Function (JS 2.0). Reads the route table + metadata
- * from the associated KVS, evaluates redirects → basePath → origin selection →
- * URI rewrite. Build-independent (everything build-specific is in KVS).
+ * Shared CloudFront-Function helper source, concatenated VERBATIM into BOTH the
+ * viewer-request and viewer-response function bodies so there is ONE definition
+ * of the KVS reader + the pattern matcher (Finding 7: these used to be copied
+ * into each function and `matchPattern` had already diverged — request returned
+ * `{tail}` while response returned a boolean — so a fix to one silently desynced
+ * the other; Findings 2/3 touched exactly this matcher).
  *
- * Pattern match semantics preserved from the per-behavior model:
- *   - exact (`/old-page`) and suffix-wildcard (`/old/*`, captured tail).
- *   - directory-index (`/about` → `/about/index.html`) for non-SPA.
- *   - SPA fallback (`/index.html`) for extensionless non-`.well-known` paths.
- *   - basePath canonical 308 + strip on static; kept on compute.
- *   - static → `/builds/<buildId>/` prefix; compute keeps URI + x-forwarded-host.
+ * Unified on the OBJECT-returning form: `matchPattern` returns `{tail}` on a
+ * match else `null`. The request fn reads `.tail` (for wildcard-redirect tail
+ * splicing); the response fn only needs a yes/no, and `if (matchPattern(...))`
+ * is truthy for the object / falsy for `null`, so the same function serves both.
+ *
+ * `stripBasePath` is the SINGLE basePath-strip used by every strip site
+ * (Finding 8: the strip was reimplemented inline with INCONSISTENT guards — the
+ * canonical 308 used `=== bp || startsWith(bp + '/')` but the image/static
+ * strips used a bare `indexOf(bp) === 0`, so a false-prefix path like
+ * `/myapp-extra` was "inside /myapp" for the strips but not the 308; today the
+ * 308 masks it, but the divergent guards are a latent footgun). This helper uses
+ * the exact-or-`bp + '/'` boundary everywhere.
+ *
+ * Plain JS only — no backticks (this is itself inside a template literal) and no
+ * `${}` (no interpolation needed). Requires `cf` to be in scope (each generated
+ * function declares `import cf from 'cloudfront';` first).
  */
-export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
-var KVS = cf.kvs();
+const SHARED_CF_HELPERS = `var KVS = cf.kvs();
 async function getJson(key, dflt) {
   try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }
 }
@@ -434,14 +446,11 @@ function matchPattern(uri, pattern) {
     if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };
     return null;
   }
-  // General path: glob with '*' anywhere (incl. mid-segment, e.g.
-  // /api/*/admin). This is OUR framework-route matcher, NOT CloudFront behavior
-  // selection: a non-trailing '*' matches a run of any chars EXCEPT '/' (a
-  // SINGLE path segment), so '/api/*/data' matches '/api/foo/data' but NOT
-  // '/api/foo/bar/data'. (CloudFront's own path patterns differ — there '*'
-  // crosses '/'.) A trailing '*' matches the rest, including '/'. Implemented as
-  // a literal scan (no regex — CloudFront Functions JS forbids dynamic RegExp
-  // from strings reliably).
+  // General glob with '*' anywhere (incl. mid-segment). A non-trailing '*'
+  // matches a run of any chars EXCEPT '/' (a SINGLE path segment), so
+  // '/api/*/data' matches '/api/foo/data' but NOT '/api/foo/bar/data'. A
+  // trailing '*' matches the rest, including '/'. Literal scan (no regex —
+  // CloudFront Functions JS forbids dynamic RegExp from strings reliably).
   return globMatch(uri, pattern);
 }
 function globMatch(uri, pattern) {
@@ -452,8 +461,7 @@ function globMatch(uri, pattern) {
       var isTrailing = pi === pattern.length - 1;
       pi++;
       if (isTrailing) { return { tail: uri.substring(ui) }; }
-      var nextLit = pattern.charAt(pi); // literal that ends this wildcard run
-      // consume uri chars (not '/') until we hit nextLit
+      var nextLit = pattern.charAt(pi);
       while (ui < uri.length && uri.charAt(ui) !== nextLit && uri.charAt(ui) !== '/') { ui++; }
       if (ui >= uri.length || uri.charAt(ui) !== nextLit) { return null; }
     } else {
@@ -463,6 +471,32 @@ function globMatch(uri, pattern) {
   }
   return ui === uri.length ? { tail: '' } : null;
 }
+function stripBasePath(uri, bp) {
+  // Consistent boundary guard: strip ONLY an exact basePath or a 'bp/' prefix,
+  // so '/myapp-extra' is NOT treated as under '/myapp'. Empty result → '/'.
+  if (!bp) { return uri; }
+  if (uri === bp) { return '/'; }
+  if (uri.indexOf(bp + '/') === 0) {
+    var stripped = uri.substring(bp.length);
+    return stripped.length === 0 ? '/' : stripped;
+  }
+  return uri;
+}`;
+
+/**
+ * Viewer-request CloudFront Function (JS 2.0). Reads the route table + metadata
+ * from the associated KVS, evaluates redirects → basePath → origin selection →
+ * URI rewrite. Build-independent (everything build-specific is in KVS).
+ *
+ * Pattern match semantics preserved from the per-behavior model:
+ *   - exact (`/old-page`) and suffix-wildcard (`/old/*`, captured tail).
+ *   - directory-index (`/about` → `/about/index.html`) for non-SPA.
+ *   - SPA fallback (`/index.html`) for extensionless non-`.well-known` paths.
+ *   - basePath canonical 308 + strip on static; kept on compute.
+ *   - static → `/builds/<buildId>/` prefix; compute keeps URI + x-forwarded-host.
+ */
+export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
+${SHARED_CF_HELPERS}
 function buildQueryString(request) {
   return request.querystring && Object.keys(request.querystring).length > 0
     ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
@@ -580,11 +614,8 @@ async function handler(event) {
   // sees '/myapp/_ipx/...' , fails to match its prefix, and 404s. (Mirrors the
   // basePath strip the static branch already does.)
   if (kind === 'i') {
-    if (bp && uri.indexOf(bp) === 0) {
-      uri = uri.substring(bp.length);
-      if (uri.length === 0) { uri = '/'; }
-      request.uri = uri;
-    }
+    uri = stripBasePath(uri, bp);
+    request.uri = uri;
     cf.selectRequestOriginById(meta.oImg);
     return request;
   }
@@ -598,10 +629,7 @@ async function handler(event) {
   // 4c. static origin (S3): basePath strip → directory-index/SPA → build-id
   // prefix. (assetPrefix was already stripped up front in step 2b.)
   cf.selectRequestOriginById(meta.oS3);
-  if (bp && uri.indexOf(bp) === 0) {
-    uri = uri.substring(bp.length);
-    if (uri.length === 0) { uri = '/'; }
-  }
+  uri = stripBasePath(uri, bp);
   // resolve build-id from skew cookie (__dpl) if valid, else metadata default.
   // Only honor the cookie when skew protection is enabled — a stale __dpl from
   // a previously-enabled deploy must not pin a visitor to a deleted build.
@@ -688,35 +716,7 @@ export const generateEdgeBasePathStripCode = (basePath: string): string => {
  * @param skewMaxAge cookie Max-Age in seconds; 0 disables the cookie set.
  */
 export const generateKvsRouterResponseCode = (skewMaxAge: number): string => `import cf from 'cloudfront';
-var KVS = cf.kvs();
-async function getJson(key, dflt) {
-  try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }
-}
-function matchPattern(uri, pattern) {
-  if (pattern.indexOf('*') === -1) { return uri === pattern; }
-  if (pattern.indexOf('*') === pattern.length - 1 && pattern.lastIndexOf('*') === pattern.length - 1) {
-    return uri.indexOf(pattern.substring(0, pattern.length - 1)) === 0;
-  }
-  return globMatch(uri, pattern) !== null;
-}
-function globMatch(uri, pattern) {
-  var ui = 0, pi = 0;
-  while (pi < pattern.length) {
-    var pc = pattern.charAt(pi);
-    if (pc === '*') {
-      var isTrailing = pi === pattern.length - 1;
-      pi++;
-      if (isTrailing) { return { tail: uri.substring(ui) }; }
-      var nextLit = pattern.charAt(pi);
-      while (ui < uri.length && uri.charAt(ui) !== nextLit && uri.charAt(ui) !== '/') { ui++; }
-      if (ui >= uri.length || uri.charAt(ui) !== nextLit) { return null; }
-    } else {
-      if (ui >= uri.length || uri.charAt(ui) !== pc) { return null; }
-      ui++; pi++;
-    }
-  }
-  return ui === uri.length ? { tail: '' } : null;
-}
+${SHARED_CF_HELPERS}
 async function handler(event) {
   var request = event.request;
   var response = event.response;
