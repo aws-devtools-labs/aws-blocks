@@ -65,6 +65,8 @@
     "nuke": "rm -rf node_modules packages/*/node_modules test-apps/*/node_modules packages/*/dist test-apps/*/dist test-apps/*/.next packages/*/*.tsbuildinfo test-apps/*/*.tsbuildinfo",
     "test": "npm run test --workspaces",
     "test:unit": "npm run test --workspaces",
+    "test:coverage": "node scripts/coverage.mjs",
+    "test:coverage:local": "npm run build:packages && node scripts/coverage.mjs",
     "test:e2e:local": "cd test-apps/comprehensive && npm run test:e2e:local && cd ../.. && npm run test:vendorize",
     "test:e2e:sandbox": "cd test-apps/comprehensive && npm run test:e2e:sandbox",
     "test:e2e:production": "cd test-apps/comprehensive && npm run test:e2e:production",
