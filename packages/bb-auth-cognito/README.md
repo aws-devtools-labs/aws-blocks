@@ -190,9 +190,11 @@ await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via Grou
 | `admin.setUserPassword(username, password, permanent)` | `Promise<void>` | Set a password. `permanent: true` clears the force-change flag. |
 | `admin.getUser(username)` | `Promise<AdminUser \| null>` | Look up a user, or `null` if absent. |
 | `admin.scan()` | `AsyncIterable<AdminUser>` | Enumerate all users (paginates internally). |
-| `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke all the user's sessions (AWS: `AdminUserGlobalSignOut`) — forces immediate re-authentication. |
+| `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke the user's refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: delete session records). New tokens can no longer be minted; see the session-freshness note for when this takes effect. |
 
-> **Session freshness.** A group change does not affect a user's **existing** session until their token refreshes — `requireRole` reads the `cognito:groups` claim, not live state. This is inherent Cognito behavior. The change applies on the next sign-in or `fetchAuthSession({ forceRefresh: true })`; for immediate effect, call `admin.revokeUserSessions(username)` to force re-auth.
+> **Session freshness.** A group change does not affect a user's **existing** session until their token refreshes — `requireRole` reads the `cognito:groups` claim, not live state. This is inherent Cognito behavior. The change applies on the next sign-in or `fetchAuthSession({ forceRefresh: true })`.
+>
+> `admin.revokeUserSessions(username)` revokes the user's **refresh tokens** so no new access tokens can be minted, but it does **not** invalidate an already-issued access token — a Blocks session whose access token is still valid keeps passing `checkAuth` / `requireAuth` until that token expires (verified against live Cognito). It is not an instant kill-switch on AWS. (The mock deletes the session record outright, so it *does* flip immediately there — a known mock-vs-AWS parity difference.) For a hard cap, lower `sessionTtlSeconds` / the access-token validity.
 
 ## Options
 
