@@ -63,6 +63,51 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 
 `redirectPath` becomes the OAuth `redirect_uri`, so it must be a page your frontend serves **and** a redirect URI registered with the provider (the stub IdP accepts any HTTPS or localhost URL, so local/sandbox needs no registration).
 
+### Re-rendering your UI on sign-in (React SPA)
+
+`signIn()` and `handleRedirectCallback()` drive the OIDC exchange; to make your app re-render once it completes, subscribe to auth-state changes. Two complementary hooks are available:
+
+- **`auth.onAuthStateChange(cb)`** — this OIDC client's own listener. Fires for this client instance on `signIn()` kickoff, on a successful `handleRedirectCallback()`, and on `signOut()`.
+- **`onAuthChange(authApi, cb)`** from `@aws-blocks/blocks/ui` — the shared `@aws-blocks/auth-common` subscription that also backs `<AuthenticatedContent>`. It updates **across components and browser tabs**.
+
+A successful `handleRedirectCallback()` notifies **both**: it calls the local listeners *and* bridges into `@aws-blocks/auth-common` by calling `broadcastAuthChange(user)` for you, so `onAuthChange` consumers (and `<AuthenticatedContent>`) re-render on client-PKCE sign-in — not just on server-initiated sign-in. You don't call `broadcastAuthChange()` yourself for sign-in; the client does. Because it fires both, a component that subscribes to **both** `auth.onAuthStateChange()` and `onAuthChange()` will have its handler invoked twice on a single client-PKCE sign-in — harmless if your handler is idempotent, but prefer one per component.
+
+```tsx
+import { useEffect, useState } from 'react';
+import { authApi } from 'aws-blocks';
+import { onAuthChange } from '@aws-blocks/blocks/ui';
+
+// Dedicated callback route (e.g. /auth-return) — completes the PKCE exchange.
+export function AuthCallback() {
+	useEffect(() => {
+		authApi.getClient()
+			.then((auth) => auth.handleRedirectCallback())
+			.catch((err) => console.error('OIDC callback failed', err));
+	}, []);
+	return <p>Signing you in…</p>;
+}
+
+// Any component — re-renders when auth state changes (this tab + other tabs).
+export function useUser() {
+	const [user, setUser] = useState(null);
+	// onAuthChange returns an unsubscribe fn; returning it cleans up on unmount.
+	useEffect(() => onAuthChange(authApi, setUser), []);
+	return user;
+}
+
+export function SignInButton() {
+	const user = useUser();
+	if (user) return <span>Hi, {user.username}</span>;
+	return (
+		<button onClick={async () => (await authApi.getClient()).signIn('google')}>
+			Sign in with Google
+		</button>
+	);
+}
+```
+
+`onAuthChange` invokes your callback **synchronously** with the current user (from a shared cache) for the first paint, then again whenever auth state changes, and returns an unsubscribe function — return it from `useEffect` to wire up cleanup. The same broadcast also reaches other open tabs, so signing in (or out) in one tab updates them all. In the dedicated-callback pattern above, though, `handleRedirectCallback()` *broadcasts* the sign-in rather than priming that shared cache, so a `useUser()` that mounts **after** the callback fired starts from a cache miss: it paints once as signed-out, then self-corrects when its own async `getAuthState()` resolves — an expected, transient flash.
+
 ### Which flow to use
 
 - **Server-initiated** (`GET /aws-blocks/auth/signin/<provider>` — a link or the `<Authenticator>` button): the backend owns the callback and sets the session cookie. This is the default for **same-origin** apps (frontend and API on one origin: local dev, single deployed origin, or the sandbox front door).

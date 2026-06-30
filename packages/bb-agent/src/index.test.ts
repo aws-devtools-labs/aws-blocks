@@ -1004,9 +1004,9 @@ describe('checkModelHealth', () => {
 // ── Model Presets ─────────────────────────────────────────────────────────────
 
 describe('BedrockModels presets', () => {
-	test('DEFAULT resolves to a bedrock provider', async () => {
-		assert.strictEqual(BedrockModels.DEFAULT.provider, 'bedrock');
-		assert.ok(BedrockModels.DEFAULT.modelId);
+	test('BALANCED resolves to a bedrock provider', async () => {
+		assert.strictEqual(BedrockModels.BALANCED.provider, 'bedrock');
+		assert.ok(BedrockModels.BALANCED.modelId);
 	});
 
 	test('all presets have provider bedrock and a modelId', () => {
@@ -1016,8 +1016,8 @@ describe('BedrockModels presets', () => {
 		}
 	});
 
-	test('DEFAULT flows through createStrandsModel to BedrockModel', async () => {
-		const model = await createStrandsModel(BedrockModels.DEFAULT);
+	test('BALANCED flows through createStrandsModel to BedrockModel', async () => {
+		const model = await createStrandsModel(BedrockModels.BALANCED);
 		assert.ok(model, 'should create a model instance');
 	});
 });

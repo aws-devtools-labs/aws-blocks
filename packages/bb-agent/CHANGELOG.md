@@ -1,5 +1,27 @@
 # @aws-blocks/bb-agent
 
+## 0.2.0
+
+### Minor Changes
+
+- ce61bb7: refactor(bb-agent): capability-based model presets with global inference profiles
+
+  New presets:
+
+  - `BALANCED` (Claude Sonnet 4.6): recommended default for most workloads
+  - `SMART` (Claude Opus 4.8): highest capability for hardest tasks
+  - `FAST` (Claude Haiku 4.5): lowest latency
+
+  All presets use `global.` inference profiles for region-agnostic deployment.
+
+  Deprecated (non-removing): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`. Note this changes the underlying model for existing callers — `DEFAULT` moves from Opus to Sonnet, and `BUDGET`/`MICRO` move from Amazon Nova Pro/Lite to Claude Haiku, so cost and latency profiles differ. The symbols still resolve (no type break), but migrate to `BALANCED`/`FAST` (or a region-scoped profile) explicitly to pin the model you want.
+
+### Patch Changes
+
+- f946736: fix(bb-agent): treat empty channelId as unset in stream()
+
+  An empty `channelId` now falls back to `conversationId` or a random UUID, preventing all streams from sharing the same channel. Empty strings are treated as unset rather than used literally.
+
 ## 0.1.3
 
 ### Patch Changes

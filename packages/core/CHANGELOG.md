@@ -1,5 +1,15 @@
 # @aws-blocks/core
 
+## 0.1.8
+
+### Patch Changes
+
+- e9dc073: fix(telemetry): send events via detached subprocess to prevent dropped events
+
+  Telemetry events are now sent via a detached background subprocess instead of
+  an in-process https.request. This ensures events are delivered even when the
+  parent CLI process exits on failure paths before the socket flushes.
+
 ## 0.1.7
 
 ### Patch Changes
