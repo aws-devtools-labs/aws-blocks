@@ -33,13 +33,12 @@ Stay fair and deterministic. Tie every judgment to evidence in the source, not t
 
 You grade SOURCE you cannot run. Do NOT award full \`functional_completeness\` to a flow whose runtime success can't be proven from source alone — e.g. OIDC redirect/callback round-trips, async session establishment, delete / persist-then-reload cycles, or conditionally-rendered views. Treat such a flow as UNVERIFIED and hold the score back unless the source is unambiguously correct.`;
 
-// The rubric has two parts: dimensions shared by every task (below) and one
-// task-specific dimension supplied per task via tasks/<task>/rubric.md (one
-// "key — description" line, e.g. "auth_correctness — ..."). All dimensions are
-// 0-10 numbers averaged equally — no weights (they invite anchoring bias and
-// are hard to justify scientifically). The orchestrator applies objective caps
-// (build/test/scaffold) deterministically after the judge. Shape is enforced
-// by the Zod schema 4-judge.ts builds from these keys.
+// The judge rubric is a fixed set of dimensions shared by every task (below).
+// All are 0-10 numbers averaged equally — no weights (they invite anchoring
+// bias and are hard to justify scientifically) and no per-task dimension: every
+// task is graded on the same uniform rubric. The orchestrator applies objective
+// caps (build/test/scaffold) deterministically after the judge. Shape is
+// enforced by the Zod schema 4-judge.ts builds from these keys.
 // COMMON_DIMENSIONS is defined in steps/lib/scoring.mjs (plain .mjs) so the
 // bare `node --test` scoring suite can pin the dimension list without a TS
 // loader. Import + re-export it here to keep ONE source of truth.
@@ -55,14 +54,9 @@ const COMMON_RUBRIC_LINES: Record<(typeof COMMON_DIMENSIONS)[number], string> = 
 		"Does the implementation import the @aws-blocks Building Block(s) the task requires and route the task's core behavior through their real API — not an in-memory Map/array, hardcoded data, inline stub, or bypassed/mocked block? Cite the exact import line and at least one concrete method call (e.g. store.put(key,val), job.submit(data), kb.retrieve(q)) per required block. Score 0 if the expected block type is not imported at all.",
 };
 
-// Back-compat fallback for a task directory without a rubric.md (the original
-// single-task harness only graded realtime-todos).
-export const DEFAULT_TASK_DIMENSION =
-	'realtime_quality — Does the implementation use a realtime block correctly so cross-tab sync works without manual reload?';
-
-// Compose the full rubric: the shared dimensions plus the one task-specific
-// line loaded from tasks/<task>/rubric.md.
-export function judgeRubric(taskDimensionLine: string): string {
+// Compose the rubric from the fixed shared dimensions — every task is graded
+// on the same uniform set, with no per-task dimension appended.
+export function judgeRubric(): string {
 	const common = COMMON_DIMENSIONS.map((d) => `- ${d} — ${COMMON_RUBRIC_LINES[d]}`);
-	return `Dimensions:\n${[...common, `- ${taskDimensionLine.trim()}`].join('\n')}`;
+	return `Dimensions:\n${common.join('\n')}`;
 }

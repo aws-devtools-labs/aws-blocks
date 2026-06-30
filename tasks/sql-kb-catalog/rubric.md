@@ -1,1 +1,0 @@
-data_correctness — Does the catalog persist products in a real SQL table via the relational-database block (migration + INSERT/SELECT, surviving reload), and does the FAQ panel return real hits from the knowledge-base block indexing a local `knowledge/` folder the builder created (not hard-coded answers)?

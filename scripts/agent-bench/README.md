@@ -56,22 +56,22 @@ the smallest possible blast radius even within a trusted trigger.
 ## Tasks
 
 Each task is a directory under `tasks/` with a `PROMPT.md` (given to the
-builder) and a `test.spec.ts` (Playwright). Each task ships a `rubric.md` whose
-first line is its one task-specific judge dimension (`key — description`); if a
-task ever omits one, the default in `prompts.ts` is used.
+builder) and a `test.spec.ts` (Playwright). The judge scores every task on the
+same fixed 5-dimension rubric (see *Judge dimensions* below) — there is no
+per-task dimension to author.
 
-| Task | Template | Blocks exercised | Task dimension |
-|------|----------|------------------|----------------|
-| `auth-notes` | `demo` | AuthBasic + KVStore | `auth_correctness` |
-| `file-gallery` | `bare` | FileBucket | `file_handling` |
-| `async-word-counter` | `bare` | AsyncJob + KVStore | `async_correctness` |
-| `collab-cursor-board` | `default` | Realtime + DistributedTable | `realtime_quality` |
-| `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) | `auth_correctness` |
-| `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting | `observability_correctness` |
-| `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase | `data_correctness` |
-| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase | `auth_correctness` |
-| `email-digest` | `demo` | CronJob + EmailClient + KVStore | `async_correctness` |
-| `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use | `agent_rag_tool_correctness` |
+| Task | Template | Blocks exercised |
+|------|----------|------------------|
+| `auth-notes` | `demo` | AuthBasic + KVStore |
+| `file-gallery` | `bare` | FileBucket |
+| `async-word-counter` | `bare` | AsyncJob + KVStore |
+| `collab-cursor-board` | `default` | Realtime + DistributedTable |
+| `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
+| `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
+| `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
+| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase |
+| `email-digest` | `demo` | CronJob + EmailClient + KVStore |
+| `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
 These 10 cells cover 18 Building Blocks across 7 templates. The matrix in
 `pr-agent-bench.yml` is an explicit `include:` list of (task, template) pairs —
@@ -114,10 +114,11 @@ failure can never flip a verdict:
 | `unknown` | no tests ran on an otherwise-gradeable cell (denominator 0) — excluded from the mean |
 | `harness_error` | never produced a gradeable artifact: pre-flight / OIDC / scaffold, or a cancellation — excluded from the mean |
 
-**Judge dimensions.** Five shared dimensions (`functional_completeness`,
-`selector_contract`, `persistence`, `code_quality`, `blocks_fidelity`) plus one
-task-specific dimension from `tasks/<task>/rubric.md`, all 0–10, **averaged
-equally** (no weights — they invite anchoring bias). The overall is recomputed
+**Judge dimensions.** A fixed set of five shared dimensions
+(`functional_completeness`, `selector_contract`, `persistence`, `code_quality`,
+`blocks_fidelity`), applied uniformly to every task with no per-task dimension,
+all 0–10, **averaged equally** (no weights — they invite anchoring bias). The
+overall is recomputed
 deterministically from the dimensions, never read from free text. Objective
 signals (build, dev-server) are applied as deterministic **hard caps**
 *after* the judge returns and are never shown to the model; the test pass-rate
@@ -188,12 +189,12 @@ error). Reading/writing the baseline uses the same OIDC role
 
 | File | Purpose |
 |------|---------|
-| `prompts.ts` | Builder + judge system prompts; shared rubric dimensions + per-task rubric composer |
+| `prompts.ts` | Builder + judge system prompts; the fixed shared rubric dimensions + rubric composer |
 | `steps/0-init-result.mjs` | Write a baseline `result.json` so failed cells still produce an artifact |
 | `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, start the dev server, write `/tmp/dev.port` + `DEV_PORT` |
 | `steps/2-agent-run.ts` | Builder agent (Strands + Bedrock); `shell` tool only; capped at `MAX_TURNS` |
 | `steps/3-build-and-test.sh` | `npm run build` + Playwright spec; writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
-| `steps/4-judge.ts` | Judge agent (Strands + Bedrock); `view` + `list` tools, read-only; loads the task's `rubric.md` and applies hard caps |
+| `steps/4-judge.ts` | Judge agent (Strands + Bedrock); `view` + `list` tools, read-only; grades on the fixed 5-dimension rubric and applies hard caps |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`. Imported by both finalize + summary |
 | `steps/lib/overview.mjs` | Pure helpers for the PR-vs-baseline overview: `buildAggregate` (per-cell composites + mean), `diffAgainstBaseline`, `renderOverview`. Imported by summary |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |

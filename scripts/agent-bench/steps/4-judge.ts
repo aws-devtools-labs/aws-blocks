@@ -34,7 +34,7 @@ import {
 	tool,
 } from '@strands-agents/sdk';
 import { z } from 'zod';
-import { COMMON_DIMENSIONS, DEFAULT_TASK_DIMENSION, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
+import { COMMON_DIMENSIONS, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
 import { buildCapDecision } from './lib/scoring.mjs';
 
 const MAX_BYTES = 64 * 1024;
@@ -67,18 +67,16 @@ const EVIDENCE = parseJsonEnv('EVIDENCE');
 const OUTPUT = required('OUTPUT');
 const MODEL_ID = process.env.BENCH_JUDGE_MODEL ?? 'us.anthropic.claude-opus-4-8';
 
-// Equal-weighted dimensions: the shared ones (prompts.ts COMMON_DIMENSIONS)
-// plus one task-specific dimension loaded from tasks/<task>/rubric.md (one
-// "key — description" line). Listing them in one place keeps the cap logic and
-// the average honest. (We deliberately avoid weights — they invite anchoring
-// bias and are hard to justify scientifically.)
+// Equal-weighted dimensions: the fixed shared set (prompts.ts
+// COMMON_DIMENSIONS) — every task is graded on the same uniform rubric, with no
+// per-task dimension. Listing them in one place keeps the cap logic and the
+// average honest. (We deliberately avoid weights — they invite anchoring bias
+// and are hard to justify scientifically.)
 const TASK_DIR = dirname(TASK_PROMPT_PATH);
-const taskDimensionLine = loadTaskDimension(TASK_DIR);
-const TASK_DIMENSION = taskDimensionLine.match(/^([a-z][a-z0-9_]*)/i)?.[1] ?? 'task_specific';
-const DIMENSIONS: string[] = [...COMMON_DIMENSIONS, TASK_DIMENSION];
+const DIMENSIONS: string[] = [...COMMON_DIMENSIONS];
 
-// Built dynamically so the task-specific dimension's key is required in the
-// structured output. All dimensions are 0-10; explanation is free text.
+// Built from the shared dimension keys so each is required in the structured
+// output. All dimensions are 0-10; explanation is free text.
 const scoreShape: Record<string, z.ZodTypeAny> = { explanation: z.string() };
 for (const d of DIMENSIONS) scoreShape[d] = z.number().min(0).max(10);
 const SCORE_SCHEMA = z.object(scoreShape);
@@ -238,7 +236,7 @@ if (requiredBlocks) {
 judgeSections.push(
 	`<imports>\nMechanical grep of the agent's workspace source for @aws-blocks imports (node_modules/.git/dist/bench-tests excluded) — ground truth for which blocks were actually imported:\n\n${blocksImports}\n</imports>`,
 );
-judgeSections.push(`<rubric>\n${judgeRubric(taskDimensionLine)}\n</rubric>`);
+judgeSections.push(`<rubric>\n${judgeRubric()}\n</rubric>`);
 judgeSections.push(`<task>\n${taskPrompt}\n</task>`);
 const userText = `${judgeSections.join('\n\n')}\n\nInspect the workspace and score it.`;
 
@@ -334,16 +332,6 @@ mergeAndWrite(builderResult, {
 process.stderr.write(
 	`[judge] done: score=${overall ?? 'null'} caps=${applied.length} stop=${result.stopReason} ${judge_duration_sec}s\n`,
 );
-
-function loadTaskDimension(taskDir: string): string {
-	try {
-		const first = readFileSync(resolve(taskDir, 'rubric.md'), 'utf-8').trim().split('\n')[0]?.trim();
-		if (first) return first;
-	} catch {
-		// No rubric.md — fall back to the original single-task default.
-	}
-	return DEFAULT_TASK_DIMENSION;
-}
 
 function loadRequiredBlocks(taskDir: string): string | null {
 	try {
