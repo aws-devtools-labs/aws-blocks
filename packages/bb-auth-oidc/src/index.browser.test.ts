@@ -3,6 +3,7 @@
 
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { onAuthChange, broadcastAuthChange } from '@aws-blocks/auth-common/ui';
 import { AuthOIDCClient, resolveApiBaseOrigin } from './index.browser.js';
 
 /**
@@ -416,5 +417,125 @@ describe('AuthOIDCClient.handleRedirectCallback — idempotency under double inv
 		assert.ok(retry, 'a fresh-code flow resolves — the guard was released after the failure');
 		assert.strictEqual(retry!.userId, 'iss:sub');
 		assert.strictEqual(exchangeCalls, 2, 'the fresh flow runs its own second exchange');
+	});
+});
+
+describe('AuthOIDCClient.handleRedirectCallback — @aws-blocks/auth-common bridge (#79)', () => {
+	// The browser client notifies only its OWN onAuthStateChange subscribers, not
+	// auth-common's onAuthChange / <AuthenticatedContent>. The README documents
+	// that a SPA must announce a client-PKCE sign-in with broadcastAuthChange().
+	// These tests pin that documented wiring against the real auth-common module.
+	const STATE = 'state-bridge';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+	let originalBroadcastChannel: typeof globalThis.BroadcastChannel;
+
+	/**
+	 * Install a `window` that is a real `EventTarget` — so broadcastAuthChange's
+	 * `dispatchEvent` and onAuthChange's `addEventListener` genuinely wire up —
+	 * carrying the `location` the callback reads its `?code=&state=` from.
+	 */
+	function installEventTargetWindow(href: string): void {
+		const url = new URL(href);
+		const target = new EventTarget() as EventTarget & { location: unknown };
+		(target as any).location = { get href() { return href; }, origin: url.origin, pathname: url.pathname };
+		(globalThis as any).window = target;
+		(globalThis as any).location = (target as any).location;
+		store = new Map<string, string>();
+		(globalThis as any).sessionStorage = {
+			getItem: (k: string) => store.get(k) ?? null,
+			setItem: (k: string, v: string) => { store.set(k, v); },
+			removeItem: (k: string) => { store.delete(k); },
+		};
+	}
+
+	beforeEach(() => {
+		// A real BroadcastChannel is a ref'd handle that keeps `node --test` alive;
+		// stub it with an in-memory no-op. The same-window delivery path is what we
+		// assert, and broadcastAuthChange drives that via a window CustomEvent.
+		originalBroadcastChannel = globalThis.BroadcastChannel;
+		(globalThis as any).BroadcastChannel = class {
+			constructor(public name: string) {}
+			postMessage(): void {}
+			addEventListener(): void {}
+			removeEventListener(): void {}
+			close(): void {}
+		};
+		installEventTargetWindow(`http://localhost:3000/spa-callback?code=auth-code-bridge&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: STATE, nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback', appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = (async () => ({ ok: true, json: async () => ({ user: BARE_USER }) })) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		globalThis.BroadcastChannel = originalBroadcastChannel;
+		delete process.env.BLOCKS_API_URL;
+		delete (globalThis as any).window;
+		delete (globalThis as any).location;
+		delete (globalThis as any).sessionStorage;
+	});
+
+	/** The minimal AuthStateApi shape that `auth.createApi()` exposes (getAuthState/setAuthState). */
+	function makeAuthStateApi() {
+		return {
+			getAuthState: async () => ({ user: null }),
+			setAuthState: async () => ({ user: null }),
+		};
+	}
+
+	test('the callback alone does NOT reach onAuthChange; broadcastAuthChange(user) does (documented SPA wiring)', async () => {
+		const api = makeAuthStateApi();
+		const seen: unknown[] = [];
+		const unsubscribe = onAuthChange(api as any, (u) => { seen.push(u); });
+
+		const client = makeClient();
+		const user = await client.handleRedirectCallback();
+		assert.ok(user, 'callback should resolve the signed-in user');
+		assert.strictEqual(user!.userId, 'iss:sub');
+
+		// Completing the OIDC exchange notifies only the client's own subscribers —
+		// auth-common's onAuthChange consumers must NOT have seen the user yet. This
+		// is exactly the gap the README's broadcastAuthChange step closes.
+		assert.ok(
+			!seen.some((u) => (u as any)?.userId === 'iss:sub'),
+			'onAuthChange must not observe the user from handleRedirectCallback alone',
+		);
+
+		// The documented step: announce the sign-in.
+		broadcastAuthChange(user as any);
+
+		const delivered = seen.find((u) => (u as any)?.userId === 'iss:sub') as any;
+		assert.ok(delivered, 'onAuthChange subscriber should receive the user after broadcastAuthChange');
+		assert.strictEqual(delivered.username, 'alice');
+
+		unsubscribe();
+	});
+
+	test('a failed callback (state mismatch) must not broadcast a phantom sign-in', async () => {
+		// Mismatch the pending state so the exchange rejects before any user exists.
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'a-different-state', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		const api = makeAuthStateApi();
+		const seen: unknown[] = [];
+		const unsubscribe = onAuthChange(api as any, (u) => { seen.push(u); });
+
+		const client = makeClient();
+		await assert.rejects(client.handleRedirectCallback(), /state mismatch/i);
+
+		// No user resolved → the documented `if (user) broadcastAuthChange(user)`
+		// guard never fires, so onAuthChange consumers never see a phantom user.
+		assert.ok(
+			!seen.some((u) => (u as any)?.userId === 'iss:sub'),
+			'a rejected callback must not surface a signed-in user to onAuthChange',
+		);
+
+		unsubscribe();
 	});
 });

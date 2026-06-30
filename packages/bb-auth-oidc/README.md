@@ -69,6 +69,41 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 - **Client PKCE** (`auth.signIn()` above): the browser handles the callback and POSTs to `/aws-blocks/auth/exchange`. Use it for SPAs, and required when the frontend and API are on **different origins**. Same-origin SPAs can use it too, but must pass a frontend `redirectPath` (the default current-page redirect avoids the backend `/aws-blocks/auth/callback`).
 - **Relay** (native/CLI): see [Native sign-in](#relay-flow-for-native-sign-in).
 
+### Re-rendering your UI after sign-in (React SPA)
+
+`auth.handleRedirectCallback()` completes the PKCE exchange and notifies this client's own `onAuthStateChange` subscribers — but it does **not** drive `@aws-blocks/auth-common`'s `onAuthChange(...)` or `<AuthenticatedContent>`. Those react only to `broadcastAuthChange(...)`. So a SPA that signs in through the client-PKCE redirect must announce the result itself, or auth-aware components won't update until the next full reload:
+
+```tsx
+import { useEffect, useState } from 'react';
+import { onAuthChange, broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
+import { authApi } from 'aws-blocks';
+
+// The page the IdP redirects back to: finish the exchange, then announce it.
+function AuthCallback() {
+	useEffect(() => {
+		authApi.getClient()
+			.then((auth) => auth.handleRedirectCallback())
+			.then((user) => { if (user) broadcastAuthChange(user); })
+			// signIn()/handleRedirectCallback() reject on failure — surface it,
+			// don't let it become a silent unhandled rejection.
+			.catch((err) => { console.error('OIDC sign-in failed', err); });
+	}, []);
+	return <p>Signing you in…</p>;
+}
+
+// Anywhere that renders auth-aware UI re-renders on the broadcast.
+function useCurrentUser(): AuthUser | null {
+	const [user, setUser] = useState<AuthUser | null>(null);
+	useEffect(() => onAuthChange(authApi, setUser), []);
+	return user;
+}
+```
+
+`broadcastAuthChange(user)` fires a same-window event **and** posts to the cross-tab `BroadcastChannel`, so every `onAuthChange` subscriber — in this tab and others — re-renders. Running the callback from an effect is safe under React StrictMode: a double-mount shares the one in-flight exchange instead of replaying the single-use PKCE code, so it never throws or strands the page. Attach a `.catch()` (or `await` inside `try/catch`) so a failed exchange surfaces instead of silently no-op'ing.
+
+> The server-initiated flow (the `<Authenticator>` button / `GET …/signin/<provider>`) broadcasts from the backend callback already, so it needs none of this — the manual `broadcastAuthChange` step applies only to the client-PKCE `signIn()` path.
+
 ## What the BB provisions
 
 Adding `AuthOIDC` to your app provisions:
