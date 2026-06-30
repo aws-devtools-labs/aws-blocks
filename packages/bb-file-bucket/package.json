@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-file-bucket",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -41,7 +41,7 @@
     "test": "node --test dist/index.test.js dist/index.cdk.test.js dist/scan.test.js dist/file-server.test.js dist/url-encoding.test.js dist/path-containment.test.js dist/bucket-name.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.1",
+    "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-blocks/core": "^0.1.1",
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/s3-request-presigner": "^3.0.0"

@@ -6,6 +6,8 @@ Serverless SQL database backed by Amazon Aurora DSQL. Zero-ops, instant provisio
 
 **When NOT to use:** If you need foreign keys, Row Level Security, triggers, views, or stored procedures — use `Database` (Aurora). If you need transactions that must not fail at commit under contention — use `Database`. If you're connecting to Supabase — use `Database` with `fromExisting()`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript

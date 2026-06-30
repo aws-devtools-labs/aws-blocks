@@ -2,6 +2,8 @@
 
 OIDC sign-in gate for AWS Blocks applications. Sessions are long-lived and refresh transparently — users stay signed in past the IdP's ~1-hour ID token TTL, and sign-out actually invalidates the session server-side. Works with Google, GitHub, Okta, Auth0, Microsoft Entra, and any OIDC-compliant identity provider. Pointing at an existing Cognito User Pool is a supported path too.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quickstart
 
 Backend (`aws-blocks/index.ts`):
@@ -233,6 +235,8 @@ catch (e) {
 `NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
+
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
 
 ## Cognito-mediated federation
 

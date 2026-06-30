@@ -72,6 +72,29 @@ describe('Pipeline synth integration', () => {
     );
   });
 
+  test('synth CodeBuild project declares Node.js 22 runtime by default (partialBuildSpec)', () => {
+    const files = readdirSync(CDK_OUT);
+    const pipelineTemplate = files.find(f => f.includes('pipeline-synth-test') && f.endsWith('.template.json'));
+    assert.ok(pipelineTemplate, 'Pipeline stack template should exist');
+
+    const template = JSON.parse(readFileSync(join(CDK_OUT, pipelineTemplate), 'utf-8'));
+    const resources = template.Resources || {};
+    const buildSpecs = Object.values(resources)
+      .filter((r: any) => r.Type === 'AWS::CodeBuild::Project')
+      .map((r: any) => r.Properties?.Source?.BuildSpec)
+      .filter((b: unknown): b is string => typeof b === 'string');
+
+    const synthSpec = buildSpecs.find(b => b.includes('runtime-versions'));
+    assert.ok(synthSpec, `Expected a synth buildspec declaring runtime-versions, found ${buildSpecs.length} buildspec(s)`);
+
+    const parsed = JSON.parse(synthSpec);
+    assert.strictEqual(
+      parsed.phases?.install?.['runtime-versions']?.nodejs,
+      22,
+      'Synth buildspec should declare the Node.js 22 runtime by default (partialBuildSpec)',
+    );
+  });
+
   test('stage stacks are synthesized (ambient scope worked)', () => {
     // CDK Pipelines puts stage stacks in nested assembly directories
     const allTemplates = findTemplates(CDK_OUT);

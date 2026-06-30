@@ -295,7 +295,7 @@ async function main() {
 		await runTest('signIn with valid creds issues a session', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const r = await s.call('authCSignIn', [username, 'Password1!']);
-			if (!r.isSignedIn) throw new Error(`expected isSignedIn=true, got ${JSON.stringify(r)}`);
+			if (r.status !== 'signedIn') throw new Error(`expected status=signedIn, got ${JSON.stringify(r)}`);
 			if (r.user.username !== username) throw new Error(`username mismatch: ${r.user.username}`);
 			await s.call('authCSignOut');
 		});
@@ -365,7 +365,7 @@ async function main() {
 			const s = new ApiSession(stack.apiUrl);
 			await s.call('authCSignIn', [username, 'Password1!']);
 			const sess = await s.call('authCFetchAuthSession');
-			if (!sess.signedIn) throw new Error('expected signedIn');
+			if (sess.status !== 'signedIn') throw new Error('expected signedIn');
 			if (!sess.idToken || sess.idToken.length < 20) throw new Error('bad idToken');
 			if (!sess.accessToken || sess.accessToken.length < 20) throw new Error('bad accessToken');
 			if (!/^[0-9a-f-]{36}$/.test(sess.userSub)) throw new Error(`userSub not a UUID: ${sess.userSub}`);
@@ -392,7 +392,7 @@ async function main() {
 		await runTest('fetchAuthSession signed-out → signedIn=false', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const sess = await s.call('authCFetchAuthSession');
-			if (sess.signedIn !== false) throw new Error(`expected false, got ${JSON.stringify(sess)}`);
+			if (sess.status !== 'signedOut') throw new Error(`expected false, got ${JSON.stringify(sess)}`);
 		});
 	}
 
@@ -430,7 +430,7 @@ async function main() {
 				if (!isBlocksErrName(e, 'NotAuthorizedException')) throw e;
 			}
 			const r = await s.call('authCSignIn', [username, 'Rotated!Pw9']);
-			if (!r.isSignedIn) throw new Error('new password rejected');
+			if (r.status !== 'signedIn') throw new Error('new password rejected');
 			await s.call('authCSignOut');
 			await cog.send(new AdminSetUserPasswordCommand({
 				UserPoolId: stack.authCPoolId, Username: username, Password: 'Password1!', Permanent: true,
@@ -540,7 +540,7 @@ async function main() {
 		await runTest('setUpTOTP returns a base32 shared secret', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const r1 = await s.call('authCMfaSignIn', [username, 'Password1!']);
-			if (!r1.isSignedIn) throw new Error(`unexpected challenge on first sign-in: ${JSON.stringify(r1)}`);
+			if (r1.status !== 'signedIn') throw new Error(`unexpected challenge on first sign-in: ${JSON.stringify(r1)}`);
 			const r = await s.call('authCMfaSetUpTOTP');
 			if (!r.sharedSecret || !/^[A-Z2-7]+=*$/.test(r.sharedSecret)) {
 				throw new Error(`bad sharedSecret: ${r.sharedSecret}`);
@@ -587,25 +587,25 @@ async function main() {
 		await runTest('end-to-end: signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → complete with RFC-6238 code', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const r1 = await s.call('authCMfaSignIn', [username, 'Password1!']);
-			if (r1.isSignedIn) throw new Error(`expected TOTP challenge, got isSignedIn=true`);
+			if (r1.status === 'signedIn') throw new Error(`expected TOTP challenge, got status=signedIn`);
 			if (r1.nextStep?.name !== 'CONFIRM_SIGN_IN_WITH_TOTP_CODE') {
 				throw new Error(`unexpected nextStep: ${JSON.stringify(r1.nextStep)}`);
 			}
 			await waitNextTotpStep();
 			const code = totp(sharedSecret);
 			const r2 = await s.call('authCMfaConfirmSignIn', [r1.nextStep.session, code]);
-			if (!r2.isSignedIn) throw new Error(`confirmSignIn failed: ${JSON.stringify(r2)}`);
+			if (r2.status !== 'signedIn') throw new Error(`confirmSignIn failed: ${JSON.stringify(r2)}`);
 			await s.call('authCMfaSignOut');
 		});
 
 		await runTest('updateMFAPreference({totp: DISABLED}) removes TOTP', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const r1 = await s.call('authCMfaSignIn', [username, 'Password1!']);
-			if (!r1.isSignedIn) {
+			if (r1.status !== 'signedIn') {
 				await waitNextTotpStep();
 				const code = totp(sharedSecret);
 				const r2 = await s.call('authCMfaConfirmSignIn', [r1.nextStep.session, code]);
-				if (!r2.isSignedIn) throw new Error(`confirmSignIn failed: ${JSON.stringify(r2)}`);
+				if (r2.status !== 'signedIn') throw new Error(`confirmSignIn failed: ${JSON.stringify(r2)}`);
 			}
 			await s.call('authCMfaUpdateMFAPreference', [{ totp: 'DISABLED' }]);
 			const pref = await s.call('authCMfaFetchMFAPreference');
@@ -619,7 +619,7 @@ async function main() {
 		await runTest('updateMFAPreference({totp: PREFERRED}) on un-enrolled user throws', async () => {
 			const s = new ApiSession(stack.apiUrl);
 			const r1 = await s.call('authCMfaSignIn', [neverEnrolled, 'Password1!']);
-			if (!r1.isSignedIn) throw new Error(`unexpected challenge: ${JSON.stringify(r1)}`);
+			if (r1.status !== 'signedIn') throw new Error(`unexpected challenge: ${JSON.stringify(r1)}`);
 			try {
 				await s.call('authCMfaUpdateMFAPreference', [{ totp: 'PREFERRED' }]);
 				throw new Error('expected failure');
