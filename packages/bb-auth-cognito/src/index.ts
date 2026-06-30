@@ -203,7 +203,7 @@ interface PersistedState {
  * in a nested DynamoDB table provisioned by this BB via KVStore — single-
  * digit ms reads, pay-per-request billing.
  */
-export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptions>
+export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMockOptions>
 	extends Scope
 	implements BlocksAuth
 {

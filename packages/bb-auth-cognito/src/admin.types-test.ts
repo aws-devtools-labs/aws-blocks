@@ -57,13 +57,11 @@ async function actionsScopeGrantNotTypes() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (5) Group narrowing on admin methods. With `as const` (today) the group union
-//     narrows and a typo is rejected. (Task T5 — `const O` — will make this hold
-//     WITHOUT `as const`; the @ts-expect-error below is tightened to the
-//     non-const form then.)
+// (5) `const O` narrows group names on admin methods WITHOUT `as const` → typo
+//     is a compile error. (Enabled by the `const O` class generic, T5.)
 // ─────────────────────────────────────────────────────────────────────────────
 async function groupNarrowing() {
-	const auth = new AuthCognito(scope, 'a5', { groups: ['admins', 'readers'] as const, admin: { actions: ['groups'] } });
+	const auth = new AuthCognito(scope, 'a5', { groups: ['admins', 'readers'], admin: { actions: ['groups'] } });
 	await auth.admin.addUserToGroup('u', 'admins');
 	await auth.admin.addUserToGroup('u', 'readers');
 	// @ts-expect-error — 'editor' is not in 'admins' | 'readers'.

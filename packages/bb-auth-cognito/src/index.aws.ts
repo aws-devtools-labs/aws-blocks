@@ -601,7 +601,7 @@ function statusForCognitoError(name: string): number {
  * See the mock entry (`./index.ts`) for full class-level JSDoc; both runtimes
  * share the same public API.
  */
-export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions>
 	extends Scope
 	implements BlocksAuth
 {

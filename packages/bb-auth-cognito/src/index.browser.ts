@@ -28,7 +28,7 @@ export * from './types.js';
 // that references `AuthCognito<typeof options>` typechecks identically under
 // `--conditions=browser`. The browser stub never executes any method —
 // bundlers scan imports, they don't call anything.
-export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> {
 	constructor(..._args: unknown[]) { /* no-op */ }
 	/**
 	 * Server-only admin surface. Present so `auth.admin` typechecks under
