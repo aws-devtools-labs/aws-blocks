@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +10,8 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
+import { runSync, spawnCommand } from './run-command.js';
+import { terminateProcessTree } from './process-tree.js';
 
 /**
  * Import the backend definition to populate the Scope BB registry.
@@ -69,7 +71,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("   (This may take a few minutes on first deploy)");
 
   try {
-    execFileSync(
+    runSync(
       "npm",
       [
         "exec", "cdk", "--", "deploy",
@@ -138,7 +140,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawn("npx", [
+  const cdkWatch = spawnCommand("npx", [
     "cdk", "watch", "--hotswap",
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${process.cwd()}`,
@@ -146,6 +148,12 @@ export async function startSandbox(options: SandboxOptions) {
     `--app`, `npm exec tsx -- -C cdk ${backendPath}`
   ], {
     stdio: ["ignore", "pipe", "pipe"],
+    // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
+    // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
+    // bare kill() would orphan the real cdk-watch node process, the same
+    // shell-only-kill leak this PR eliminates for the dev server. Windows has no
+    // groups; terminateProcessTree reaps the tree via taskkill.
+    detached: process.platform !== 'win32',
     env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
   });
 
@@ -162,9 +170,15 @@ export async function startSandbox(options: SandboxOptions) {
   const devServerCmd = devCommand || `npx tsx watch aws-blocks/scripts/server.ts`;
   const [cmd, ...args] = devServerCmd.split(' ');
   
-  const devServer = spawn(cmd, args, {
+  const devServer = spawnCommand(cmd, args, {
     stdio: "inherit",
     shell: true,
+    // Own process group on POSIX so cleanup can signal the whole dev-server
+    // tree (shell → tsx → node). The node dev server then runs its own SIGTERM
+    // handler — the ~2s terminateFrontend drain that reaps the *detached* Vite
+    // great-grandchild — which a bare `devServer.kill()` (the shell only) never
+    // triggers. Windows has no groups; terminateProcessTree reaps via taskkill.
+    detached: process.platform !== 'win32',
     env: { 
       ...process.env,
       NODE_OPTIONS: '',
@@ -172,12 +186,36 @@ export async function startSandbox(options: SandboxOptions) {
     },
   });
 
-  const cleanup = () => {
+  let cleaningUp = false;
+  const cleanup = async () => {
+    if (cleaningUp) return; // idempotent — a second signal must not re-enter
+    cleaningUp = true;
     console.log("\n\n🛑 Stopping local processes...");
     console.log("   (AWS resources are still running)");
     console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
-    cdkWatch.kill();
-    devServer.kill();
+    // Reap BOTH child trees the way the dev server reaps Vite — a process-group
+    // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
+    // kill() that signals only the npx/shell parent and orphans the real
+    // grandchild (cdk-watch's node, or the dev server's detached Vite). Run them
+    // concurrently so the cdk-watch teardown doesn't serialize on top of the dev
+    // server's longer drain.
+    //
+    // Only the dev-server child owns the `:3100` port-free wait: its own SIGTERM
+    // handler runs terminateFrontend (a ~2s drain that reaps the detached Vite
+    // great-grandchild AND polls until the port frees), so we give it the longer
+    // 6s budget (> that ~2s drain) — a hung dev server still escalates to a tree
+    // SIGKILL and we exit regardless, so shutdown can never wedge. cdk watch
+    // holds no local port, so a bounded tree-kill is all it needs.
+    //
+    // That a group SIGTERM (terminateProcessTree → killFrontendTree's
+    // `process.kill(-pid, 'SIGTERM')`) actually reaches the *nested* node dev
+    // server and runs its own SIGTERM handler — the load-bearing assumption of
+    // the 6s budget above — is verified by the "group SIGTERM reaches a nested
+    // node child" integration test in dev-server-supervisor.test.ts.
+    await Promise.all([
+      terminateProcessTree(cdkWatch, 2000),
+      terminateProcessTree(devServer, 6000),
+    ]);
     process.exit(0);
   };
 
@@ -212,7 +250,7 @@ export async function destroySandbox(backendPath: string) {
 
     for (let attempt = 0; ; attempt++) {
       try {
-        execFileSync("npm", cdkArgs, { stdio: "inherit", env: cdkEnv });
+        runSync("npm", cdkArgs, { stdio: "inherit", env: cdkEnv });
         console.log(attempt === 0 ? "\n✅ Sandbox destroyed!" : "\n✅ Sandbox destroyed on retry!");
         return;
       } catch (error) {

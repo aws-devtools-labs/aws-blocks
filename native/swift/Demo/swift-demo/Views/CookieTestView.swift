@@ -1,6 +1,8 @@
 //
-// CookieTestView.swift
-// Cookie set/get/delete test UI.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI

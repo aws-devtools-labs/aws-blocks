@@ -1,0 +1,16 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Deeply-nested static route. Exercises matrix M1.6 — a multi-segment
+// extensionless path must resolve to its own
+// docs/api/v1/getting-started/index.html, not collapse to the home page.
+import Layout from '../../../../layouts/Layout.astro';
+---
+
+<Layout title="Astro on Blocks — Getting Started">
+  <h1 data-testid="page-id">Getting Started (nested)</h1>
+  <p data-testid="nested-marker">
+    Nested path docs/api/v1/getting-started resolved correctly.
+  </p>
+</Layout>

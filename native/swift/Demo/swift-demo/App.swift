@@ -1,10 +1,12 @@
 //
-// App.swift
-// Blocks Demo — SwiftUI iOS app mirroring the web frontend.
-// Uses the generated BlocksClient, Models, and API extension.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI
+
 // MARK: - Configuration
 
 // MARK: - App Entry Point

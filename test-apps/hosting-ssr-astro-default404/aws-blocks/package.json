@@ -1,0 +1,18 @@
+{
+  "name": "hosting-ssr-astro-default404-aws-blocks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'No tests (IFC subpackage)'"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "browser": "./client.js",
+      "react-server": "./client.js",
+      "import": "./client.js",
+      "default": "./index.ts"
+    }
+  }
+}

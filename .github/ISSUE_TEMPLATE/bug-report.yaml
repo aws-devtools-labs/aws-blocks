@@ -11,7 +11,7 @@ body:
     attributes:
       label: Before opening, please confirm
       options:
-        - label: I have [searched for duplicate or closed issues](https://github.com/aws-amplify/aws-blocks/issues?q=is%3Aissue).
+        - label: I have [searched for duplicate or closed issues](https://github.com/aws-devtools-labs/aws-blocks/issues?q=is%3Aissue).
           required: true
         - label: I have done my best to include a minimal, self-contained set of instructions for consistently reproducing the issue.
           required: true
@@ -42,6 +42,7 @@ body:
         - "Building Block: tracer"
         - "Native Client: Kotlin"
         - "Native Client: Swift"
+        - "Native Client: Dart/Flutter"
         - Other
     validations:
       required: true

@@ -62,9 +62,17 @@ if [ -z "$BLOCKS_URL" ]; then
   echo ""
   echo "🚀 Step 4: Start native-bindings dev server"
   cd "$BACKEND"
+  # Pick a free port so concurrent runs / an already-bound 3001 never collide.
+  # python3 bind-to-0 is portable across macOS (local) and ubuntu (CI); fall
+  # back to 3001 if the picker fails. The launcher owns the port: it passes it
+  # to the server via PORT and builds BLOCKS_URL from the same value, so server
+  # and client agree without a hardcoded literal.
+  PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
+  export PORT
+  echo "   ℹ️  Using local server port $PORT"
   npx tsx aws-blocks/scripts/server.ts > /tmp/blocks-e2e-server.log 2>&1 &
   SERVER_PID=$!
-  BLOCKS_URL="http://localhost:3001/aws-blocks/api"
+  BLOCKS_URL="http://localhost:$PORT/aws-blocks/api"
 
   # Wait for server
   for i in $(seq 1 30); do
@@ -84,6 +92,38 @@ if [ -z "$BLOCKS_URL" ]; then
 else
   echo ""
   echo "🌐 Step 4: Using provided endpoint: $BLOCKS_URL"
+  echo "   ℹ️  Against a deployed pool, the AuthCognito suite skips the dev-only"
+  echo "       emailed-code leg and signs in a PRE-PROVISIONED user. Seed it first:"
+  echo "         (cd \"$BACKEND\" && BLOCKS_STACK_NAME=<stack> AWS_REGION=<region> npm run seed:cognito)"
+
+  # Readiness gate (warm-up). A freshly-deployed stack's Lambda/API Gateway can
+  # cold-start: the very first request against a brand-new sandbox can fail
+  # before the function is warm. Poll the JSON-RPC endpoint until it answers
+  # HTTP 200 (it returns 200 with a JSON-RPC error body for any payload, which
+  # proves the Lambda is up and serving) so no suite eats the cold-start on its
+  # first call. Hits the same Lambda that serves /auth/* (OIDC), so it protects
+  # the OIDC suite's first POST too. Bounded backoff; fails loudly if never ready.
+  echo ""
+  echo "♨️  Step 4b: Warm up endpoint (poll until HTTP 200)"
+  WARMUP_ATTEMPTS="${WARMUP_ATTEMPTS:-24}"
+  warmup_delay=2
+  warmed=0
+  for i in $(seq 1 "$WARMUP_ATTEMPTS"); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+      -X POST -H 'content-type: application/json' -d '{}' "$BLOCKS_URL" 2>/dev/null || echo 000)
+    if [ "$code" = "200" ]; then
+      echo "   ✅ Endpoint warm after attempt $i (http=200)"
+      warmed=1
+      break
+    fi
+    echo "   ⏳ attempt $i/$WARMUP_ATTEMPTS: not ready (http=$code); retry in ${warmup_delay}s"
+    sleep "$warmup_delay"
+    if [ "$warmup_delay" -lt 10 ]; then warmup_delay=$((warmup_delay + 2)); fi
+  done
+  if [ "$warmed" -ne 1 ]; then
+    echo "   ❌ Endpoint did not return HTTP 200 after $WARMUP_ATTEMPTS attempts."
+    exit 1
+  fi
 fi
 
 echo ""

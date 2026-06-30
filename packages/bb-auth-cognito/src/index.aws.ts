@@ -50,6 +50,7 @@ import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 	getSdkIdentifiers,
@@ -902,7 +903,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			if (resp.ChallengeName) {
 				const secret = await this.getSessionSecret();
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: await this.buildNextStep(
 						secret,
 						resp.ChallengeName,
@@ -915,7 +916,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			}
 
 			const user = await this.issueSession(context, resp.AuthenticationResult);
-			return { isSignedIn: true, user };
+			return { status: 'signedIn', user };
 		} catch (e) {
 			throw asApiError(e);
 		}
@@ -1013,10 +1014,10 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			const mfaSetupResp = await this.dispatchMfaSetup(envelope, challengeResponse, secret, options);
 			if (mfaSetupResp) {
 				if (mfaSetupResp.nextStep) {
-					return { isSignedIn: false, nextStep: mfaSetupResp.nextStep };
+					return { status: 'continueSignIn', nextStep: mfaSetupResp.nextStep };
 				}
 				const user = await this.issueSession(context, mfaSetupResp.authResult);
-				return { isSignedIn: true, user };
+				return { status: 'signedIn', user };
 			}
 
 			// USER_AUTH SELECT_CHALLENGE → PASSWORD is a two-step flow on our
@@ -1039,7 +1040,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					awaitingPassword: true,
 				});
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: { name: 'CONFIRM_SIGN_IN_WITH_PASSWORD', session: nextEnvelope },
 				};
 			}
@@ -1063,7 +1064,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 
 			if (resp.ChallengeName) {
 				return {
-					isSignedIn: false,
+					status: 'continueSignIn',
 					nextStep: await this.buildNextStep(
 						secret,
 						resp.ChallengeName,
@@ -1076,7 +1077,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 			}
 
 			const user = await this.issueSession(context, resp.AuthenticationResult);
-			return { isSignedIn: true, user };
+			return { status: 'signedIn', user };
 		} catch (e) {
 			throw asApiError(e);
 		}
@@ -1772,13 +1773,14 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 
 	createApi(): AuthStateApi {
 		const enablePasskeys = this.options.enablePasskeys === true;
-		const baseSignedOut = (error?: string): AuthState =>
+		const baseSignedOut = (error?: string, errorName?: string): AuthState =>
 			signedOut({
 				selfSignUp: this.options.selfSignUp ?? true,
 				userAttributes: this.options.userAttributes ?? [],
 				enablePasskeys,
 				signInWith: this.options.signInWith,
 				error,
+				errorName,
 			});
 		const baseSignedIn = (user: CognitoUser<O>): AuthState =>
 			signedInState(user, { enablePasskeys });
@@ -1793,7 +1795,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					switch (input.action) {
 						case 'signIn': {
 							const r = await this.signIn(input.username, input.password, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signInWithPasskey': {
@@ -1806,7 +1808,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 								context,
 								{ preferredChallenge: 'WEB_AUTHN' },
 							);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'signUp': {
@@ -1851,7 +1853,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 						}
 						case 'autoSignIn': {
 							const r = await this.autoSignIn(context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'resendSignUpCode': {
@@ -1877,7 +1879,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 								default: response = '';
 							}
 							const r = await this.confirmSignIn(input.session, response, context);
-							if (r.isSignedIn) return baseSignedIn(r.user);
+							if (r.status === 'signedIn') return baseSignedIn(r.user);
 							return confirmingSignIn(r.nextStep);
 						}
 						case 'startPasskeyRegistration': {
@@ -1919,6 +1921,7 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Retriable errors keep the challenge session valid. Surface
 					// the flag to the client so its Authenticator renderer can
 					// keep the user on the current step instead of resetting.
@@ -1926,9 +1929,15 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 					// nextStep server-side — the client already has it in its
 					// cached state and can overlay the error there.
 					if (e instanceof ApiError && e.retriable) {
-						return { state: 'signedOut', actions: [], error: message, retriable: true };
+						return {
+							state: 'signedOut',
+							actions: [],
+							error: message,
+							retriable: true,
+							...(errorName ? { errorName } : {}),
+						};
 					}
-					return { ...baseSignedOut(message) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));

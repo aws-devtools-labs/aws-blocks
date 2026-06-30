@@ -28,8 +28,6 @@ This produces the `blocks.spec.json` file that the Gradle plugin reads at build 
 1. Open this directory in Android Studio.
 2. Sync Gradle and run the `app` configuration on an emulator or device.
 
-> **Note:** See [docs/guides/local-development.md](../../docs/guides/local-development.md) for instructions on connecting to the local server from an Android emulator or device.
-
 ## Project Structure
 
 ```

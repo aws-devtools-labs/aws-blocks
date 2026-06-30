@@ -7,9 +7,21 @@ import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function generateStackId(name: string): string {
+  const sanitized = name
+    .replace(/[^A-Za-z0-9-]/g, '-')
+    .replace(/^[^A-Za-z]+/, 'app-')
+    .replace(/-+/g, '-')
+    .replace(/-$/, '')
+    .slice(0, 16)
+    .replace(/-$/, '') || 'blocks-app';
+  return `${sanitized}-${randomBytes(4).toString('hex').slice(0, 6)}`;
+}
 
 // npm `file:` installs a single package without resolving its nested
 // `@aws-blocks/*` deps from the monorepo — it expects them to be
@@ -72,6 +84,14 @@ async function isEmptyDir(dir: string): Promise<boolean> {
 
 async function isAmplifyGen2Project(dir: string): Promise<boolean> {
   return exists(join(dir, 'amplify', 'backend.ts'));
+}
+
+/**
+ * Copies shared resources (maintained once in `resources/`) into the scaffolded project.
+ */
+async function copySharedResources(targetDir: string): Promise<void> {
+  const resourcesDir = join(__dirname, '../resources');
+  await cp(join(resourcesDir, 'AGENTS.md'), join(targetDir, 'AGENTS.md'));
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
@@ -167,14 +187,18 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
 const AVAILABLE_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
 
-// ─── Fresh project creation ──────────────────────────────────────────────────
-
-async function createFreshProject(targetDir: string, templateName: string) {
+function validateTemplateName(templateName: string): void {
   if (!AVAILABLE_TEMPLATES.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
     console.error(`Available templates: ${AVAILABLE_TEMPLATES.join(', ')}`);
     process.exit(1);
   }
+}
+
+// ─── Fresh project creation ──────────────────────────────────────────────────
+
+async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
+  validateTemplateName(templateName);
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -199,7 +223,10 @@ async function createFreshProject(targetDir: string, templateName: string) {
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
-  
+
+  // Overlay shared resources (AGENTS.md — maintained once, not per-template)
+  await copySharedResources(targetDir);
+
   // Rename gitignore to .gitignore
   await rename(join(targetDir, 'gitignore'), join(targetDir, '.gitignore'));
   
@@ -233,23 +260,23 @@ async function createFreshProject(targetDir: string, templateName: string) {
   
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   
-  // Update stack name in CDK file — sanitize for CDK-safe IDs
-  const cdkPath = join(targetDir, 'aws-blocks/index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  let sanitizedName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${sanitizedName}-stack`);
-  await writeFile(cdkPath, cdkContent);
+  // Generate .blocks/config.json with a unique stackId
+  const stackId = generateStackId(appName);
+  const blocksConfigDir = join(targetDir, '.blocks');
+  await mkdir(blocksConfigDir, { recursive: true });
+  await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  console.log('Installing dependencies...');
-  execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  if (!skipInstall) {
+    console.log('Installing dependencies...');
+    execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+  }
   
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${targetDir}`);
+  if (skipInstall) {
+    console.log(`  npm install`);
+  }
   console.log(`  npm run dev`);
   console.log(`\nThen open http://localhost:3000`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
@@ -441,7 +468,7 @@ frontend:
 
 // ─── Init into existing project ─────────────────────────────────────────────
 
-async function integrateWithExistingProject(targetDir: string, skipConfirm = false, skipInstall = false) {
+async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
   console.log('');
@@ -459,8 +486,10 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the default template (reuses the same source of truth)
-  const templateDir = join(__dirname, '../templates/default');
+  // 1. Copy aws-blocks/ from the requested template so framework-specific files
+  // (e.g. scripts/server.ts's frontendCommand — `next dev` vs `vite`) match the
+  // user's project.
+  const templateDir = join(__dirname, '../templates', templateName);
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
 
@@ -471,18 +500,13 @@ async function integrateWithExistingProject(targetDir: string, skipConfirm = fal
 
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
 
-  // Derive a CDK-safe app name from the directory basename for stack naming.
-  // CDK stack IDs must match /^[A-Za-z][A-Za-z0-9-]*$/.
-  let appName = basename(resolve(targetDir));
-  appName = appName
-    .replace(/[^A-Za-z0-9-]/g, '-')
-    .replace(/^[^A-Za-z]+/, 'app-')
-    .replace(/-+/g, '-')
-    .replace(/-$/, '') || 'blocks-app';
-  const cdkPath = join(awsBlocksDest, 'index.cdk.ts');
-  let cdkContent = await readFile(cdkPath, 'utf-8');
-  cdkContent = cdkContent.replace(/my-blocks-stack/g, `${appName}-stack`);
-  await writeFile(cdkPath, cdkContent);
+  // Generate blocks/config.json with a unique stackId
+  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  const baseName = (existingPkg.name || basename(resolve(targetDir)));
+  const stackId = generateStackId(baseName);
+  const blocksConfigDir = join(targetDir, '.blocks');
+  await mkdir(blocksConfigDir, { recursive: true });
+  await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
 
   console.log('  ✓ Created aws-blocks/');
 
@@ -553,7 +577,12 @@ Arguments:
   directory              Target directory (default: ".")
 
 Options:
-  --template <name>      Template to use for fresh projects (default: "default")
+  --template <name>      Template to use. For fresh projects it selects the
+                         starter app; when adding to an existing project it
+                         selects which aws-blocks/ workspace to copy, e.g.
+                         "nextjs" for a Next.js dev server (default: "default")
+                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
+  --skip-install         Skip installing dependencies
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
@@ -575,8 +604,14 @@ async function create() {
     if (args[i] === '--help' || args[i] === '-h') {
       printUsage();
       process.exit(0);
-    } else if (args[i] === '--template' && i + 1 < args.length) {
-      templateName = args[i + 1];
+    } else if (args[i] === '--template') {
+      const value = args[i + 1];
+      if (!value || value.startsWith('-')) {
+        console.error('Error: Missing value for --template.');
+        console.error(`Run with --help for usage information.`);
+        process.exit(1);
+      }
+      templateName = value;
       i++;
     } else if (args[i] === '--yes' || args[i] === '-y') {
       skipConfirm = true;
@@ -598,6 +633,8 @@ async function create() {
     }
   }
 
+  validateTemplateName(templateName);
+
   const templatePkgVersion: string = JSON.parse(
     await readFile(join(__dirname, '../templates', templateName, 'package.json'), 'utf-8'),
   ).version;
@@ -614,7 +651,7 @@ async function create() {
     // Mode 2: Existing project (package.json, no Amplify) — triggered when the
     // resolved directory contains a package.json (covers no-arg, ".", or named dir)
     if (await exists(join(resolvedDir, 'package.json'))) {
-      await integrateWithExistingProject(resolvedDir, skipConfirm, skipInstall);
+      await integrateWithExistingProject(resolvedDir, templateName, skipConfirm, skipInstall);
       return;
     }
 
@@ -626,7 +663,7 @@ async function create() {
         const templateDisplayName = tplPkg.blocksTemplate || templateName;
         targetDir = join('blocks-demo-apps', `template-${templateDisplayName}`);
       }
-      await createFreshProject(resolve(targetDir), templateName);
+      await createFreshProject(resolve(targetDir), templateName, skipInstall);
       return;
     }
 

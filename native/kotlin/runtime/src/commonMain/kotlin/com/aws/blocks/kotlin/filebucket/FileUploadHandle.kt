@@ -17,7 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class FileUploadHandle(
-    private val url: String,
+    val url: String,
     private val fileContentType: String? = null,
     private val httpClient: HttpClient = defaultHttpClient()
 ) {
@@ -30,8 +30,6 @@ class FileUploadHandle(
             return FileUploadHandle(url, contentType)
         }
     }
-
-    fun getUrl(): String = url
 
     suspend fun upload(body: ByteArray) {
         try {

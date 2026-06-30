@@ -3,7 +3,7 @@
 
 export { ApiNamespace, type BlocksContext, type ApiHandler } from './api.js';
 export { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
-export { ApiError, isBlocksError } from './errors.js';
+export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from './errors.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export { BlocksStackProps } from './common/index.js';
 export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
@@ -36,6 +36,7 @@ export {
 export {
   Pipeline,
   DeployStage,
+  __PIPELINE_STAGE_SCOPE__,
   type DeployStageProps,
   type BranchConfig,
   type PipelineProps,

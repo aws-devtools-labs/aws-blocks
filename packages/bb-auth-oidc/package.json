@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-oidc",
-  "version": "0.1.1",
+  "version": "0.1.6",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -34,14 +34,14 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs AuthOidc",
     "build": "tsc --build",
-    "test": "node --test dist/**/*.test.js"
+    "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/auth-common": "^0.1.1",
-    "@aws-blocks/bb-app-setting": "^0.1.1",
-    "@aws-blocks/bb-kv-store": "^0.1.1",
-    "@aws-blocks/bb-logger": "^0.1.1",
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/auth-common": "^0.1.3",
+    "@aws-blocks/bb-app-setting": "^0.1.3",
+    "@aws-blocks/bb-kv-store": "^0.1.4",
+    "@aws-blocks/bb-logger": "^0.1.2",
+    "@aws-blocks/core": "^0.1.6",
     "@aws-sdk/client-ssm": "^3.0.0",
     "jose": "^6.2.3",
     "openid-client": "^6.8.4"

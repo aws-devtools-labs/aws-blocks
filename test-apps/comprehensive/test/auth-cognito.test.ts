@@ -65,8 +65,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				await createConfirmedUser(api, username, 'Password1!', `${username}@example.com`);
 
 				const r = await api.authCSignIn(username, 'Password1!');
-				assert.ok(r.isSignedIn);
-				if (r.isSignedIn) {
+				assert.strictEqual(r.status, 'signedIn');
+				if (r.status === 'signedIn') {
 					assert.strictEqual(r.user.username, username);
 				}
 				await api.authCSignOut();
@@ -237,7 +237,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 
 				// New password works.
 				const r = await api.authCSignIn(username, 'New!Password2');
-				assert.ok(r.isSignedIn);
+				assert.strictEqual(r.status, 'signedIn');
 				await api.authCSignOut();
 			});
 		});
@@ -316,7 +316,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 
 				// New password works; old does not.
 				const r = await api.authCSignIn(username, 'Reset!Pass9');
-				assert.ok(r.isSignedIn);
+				assert.strictEqual(r.status, 'signedIn');
 				await api.authCSignOut();
 
 				try {
@@ -336,7 +336,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				const api = getApi();
 				await api.authCSignOut();
 				const s = await api.authCFetchAuthSession();
-				assert.strictEqual(s.signedIn, false);
+				assert.strictEqual(s.status, 'signedOut');
 			});
 
 			// A9 — signed-in session returns real tokens + userSub + narrowed sub claim.
@@ -347,8 +347,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				await api.authCSignIn(username, 'Password1!');
 
 				const s = await api.authCFetchAuthSession();
-				assert.strictEqual(s.signedIn, true);
-				if (!s.signedIn) throw new Error('unreachable');
+				assert.strictEqual(s.status, 'signedIn');
+				if (s.status !== 'signedIn') throw new Error('unreachable');
 				assert.ok(s.idToken.length > 0, 'idToken must be a non-empty JWT string');
 				assert.ok(s.accessToken.length > 0, 'accessToken must be a non-empty JWT string');
 				assert.ok(s.userSub, 'userSub should be populated');
@@ -480,7 +480,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 
 				// First sign-in skips the challenge (no factor enrolled yet).
 				const r = await api.authCMfaSignIn(username, 'Password1!');
-				if (!r.isSignedIn) throw new Error('expected direct sign-in (no factor enrolled)');
+				if (r.status !== 'signedIn') throw new Error('expected direct sign-in (no factor enrolled)');
 
 				// Enroll TOTP so updateMFAPreference tests that touch TOTP
 				// don't trip the "not associated" guard.
@@ -612,12 +612,12 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 
 				// Second sign-in now issues a TOTP challenge.
 				const r = await api.authCMfaSignIn(username, 'Password1!');
-				if (r.isSignedIn) throw new Error('expected TOTP challenge');
+				if (r.status === 'signedIn') throw new Error('expected TOTP challenge');
 				const step = r.nextStep as { session: string; name: string };
 				assert.strictEqual(step.name, 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 				// Mock accepts any 6-digit code; real Cognito validates RFC-6238.
 				const final = await api.authCMfaConfirmSignIn(step.session, '123456');
-				assert.ok(final.isSignedIn);
+				assert.strictEqual(final.status, 'signedIn');
 				await api.authCMfaSignOut();
 			});
 		});

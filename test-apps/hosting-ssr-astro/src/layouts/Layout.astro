@@ -1,0 +1,29 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+interface Props {
+  title: string;
+}
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5;">
+    <nav style="display: flex; gap: 1rem; flex-wrap: wrap; border-bottom: 1px solid #ccc; padding-bottom: 1rem;">
+      <a href="/">Home</a>
+      <a href="/about">About</a>
+      <a href="/islands">Islands</a>
+      <a href="/docs/api/v1/getting-started">Nested Docs</a>
+      <a href="/posts">Posts + API</a>
+    </nav>
+    <main style="margin-top: 1.5rem;">
+      <slot />
+    </main>
+  </body>
+</html>

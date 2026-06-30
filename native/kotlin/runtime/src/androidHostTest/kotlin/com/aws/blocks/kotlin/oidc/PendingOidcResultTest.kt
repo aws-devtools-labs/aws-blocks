@@ -29,7 +29,9 @@ class PendingOidcResultTest {
         PendingOidcResult.complete("result")
 
         second.await() shouldBe "result"
-        first.isCompleted shouldBe false
+        // create() cancels the previous deferred; a cancelled deferred is completed,
+        // so assert it was cancelled (not that it is incomplete).
+        first.isCancelled shouldBe true
     }
 
     @Test

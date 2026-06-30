@@ -1,0 +1,55 @@
+name: Windows E2E
+
+# Scaffolds the `backend` template from a local registry (packed off this repo)
+# and runs the real `npm run dev`/`sandbox`/`deploy` on Windows, exercising the
+# client tooling (spawning, CDK synth, paths). Deployed logic runs in Lambda and
+# is OS-independent, so behavioral suites stay on Linux. Scheduled + manual only.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
+
+concurrency:
+  group: windows-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  windows-e2e:
+    name: Windows E2E (dev + sandbox + deploy)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    environment: publish
+    env:
+      # Unique per run so a cancelled run can't collide with the next.
+      BLOCKS_STACK_SUFFIX: w${{ github.run_number }}
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Pack to local registry
+        run: npm run publish:dry-run
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Scaffold template and run user commands
+        run: node scripts/ci/windows-template-e2e.mjs

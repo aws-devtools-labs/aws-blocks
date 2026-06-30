@@ -268,11 +268,26 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async cognitoFetchAuthSession() {
+  // The `status` string field is the discriminator native clients (Swift /
+  // Kotlin / Dart) key off when generating the result union. The generators
+  // detect a discriminated union only from a single-value *string* const/enum
+  // per arm; without it they emit numeric `Result_Variant0/1` structs and
+  // try-each-variant decoding that fails to compile. The explicit return type
+  // also keeps the signed-out arm minimal — no phantom `null`-typed token
+  // fields (which became invalid `Void?` in Swift).
+  async cognitoFetchAuthSession(): Promise<
+    | { status: 'signedOut' }
+    | {
+        status: 'signedIn';
+        userSub: string | null;
+        idToken: string;
+        accessToken: string;
+      }
+  > {
     const session = await authCognito.fetchAuthSession(context);
-    if (!session.tokens) return { signedIn: false as const };
+    if (!session.tokens) return { status: 'signedOut' };
     return {
-      signedIn: true as const,
+      status: 'signedIn',
       userSub: session.userSub ?? null,
       idToken: session.tokens.idToken.toString(),
       accessToken: session.tokens.accessToken.toString(),

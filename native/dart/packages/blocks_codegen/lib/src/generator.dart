@@ -13,19 +13,27 @@ class DartCodeGenerator {
     buf.writeln('// ignore_for_file: constant_identifier_names');
     buf.writeln();
     buf.writeln("import 'package:blocks_runtime/blocks_runtime.dart';");
-    buf.writeln("export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;");
+    buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;");
 
     // Export transferable types for consumer convenience
-    final hasTransferables = model.types.values.any((t) => t is TransferableType) ||
-        model.namespaces.any((ns) => ns.operations.any((op) => op.result is TransferableType));
+    final hasTransferables = model.types.values
+            .any((t) => t is TransferableType) ||
+        model.namespaces.any(
+            (ns) => ns.operations.any((op) => op.result is TransferableType));
     if (hasTransferables) {
-      buf.writeln("export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;");
+      buf.writeln(
+          "export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;");
     }
 
-    final hasOidc = model.types.values.any((t) => t is TransferableType && t.blocksType == 'oidc/client') ||
-        model.namespaces.any((ns) => ns.operations.any((op) => op.result is TransferableType && (op.result as TransferableType).blocksType == 'oidc/client'));
+    final hasOidc = model.types.values.any(
+            (t) => t is TransferableType && t.blocksType == 'oidc/client') ||
+        model.namespaces.any((ns) => ns.operations.any((op) =>
+            op.result is TransferableType &&
+            (op.result as TransferableType).blocksType == 'oidc/client'));
     if (hasOidc) {
-      buf.writeln("export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;");
+      buf.writeln(
+          "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;");
     }
     buf.writeln();
 
@@ -33,7 +41,8 @@ class DartCodeGenerator {
     final emittedTypes = <String>{};
 
     // Classify types: schema-defined or multi-use → shared; single-use → namespace-scoped
-    final typeUsage = <String, Set<String>>{}; // type name → set of namespace names using it
+    final typeUsage =
+        <String, Set<String>>{}; // type name → set of namespace names using it
     for (final ns in model.namespaces) {
       for (final op in ns.operations) {
         for (final ref in _collectTypeRefs(op.result)) {
@@ -60,7 +69,8 @@ class DartCodeGenerator {
     buf.writeln();
     for (final entry in model.types.entries) {
       if (emittedTypes.contains(entry.key)) continue;
-      if (!schemaTypes.contains(entry.key) && typeUsage.containsKey(entry.key)) continue;
+      if (!schemaTypes.contains(entry.key) && typeUsage.containsKey(entry.key))
+        continue;
       final code = _emitType(entry.value, model.types, emittedTypes);
       if (code.isNotEmpty) {
         buf.writeln(code);
@@ -73,11 +83,12 @@ class DartCodeGenerator {
     buf.writeln();
     for (final ns in model.namespaces) {
       // Emit single-use types for this namespace first
-      final nsTypes = model.types.entries.where((e) =>
-        !emittedTypes.contains(e.key) &&
-        typeUsage[e.key]?.length == 1 &&
-        typeUsage[e.key]?.first == ns.name
-      ).toList();
+      final nsTypes = model.types.entries
+          .where((e) =>
+              !emittedTypes.contains(e.key) &&
+              typeUsage[e.key]?.length == 1 &&
+              typeUsage[e.key]?.first == ns.name)
+          .toList();
       for (final entry in nsTypes) {
         final code = _emitType(entry.value, model.types, emittedTypes);
         if (code.isNotEmpty) {
@@ -101,7 +112,8 @@ class DartCodeGenerator {
     return buf.toString();
   }
 
-  String _emitType(ResolvedType type, Map<String, ResolvedType> allTypes, Set<String> emitted) {
+  String _emitType(ResolvedType type, Map<String, ResolvedType> allTypes,
+      Set<String> emitted) {
     return switch (type) {
       RecordType() => _emitRecord(type, allTypes, emitted),
       EnumType() => _emitEnum(type, emitted),
@@ -110,12 +122,15 @@ class DartCodeGenerator {
     };
   }
 
-  String _emitRecord(RecordType record, Map<String, ResolvedType> allTypes, Set<String> emitted) {
+  String _emitRecord(RecordType record, Map<String, ResolvedType> allTypes,
+      Set<String> emitted) {
     if (emitted.contains(record.name)) return '';
     emitted.add(record.name);
     final buf = StringBuffer();
     final hasAdditional = record.additionalProperties != null;
-    final additionalValueType = hasAdditional ? _dartTypeStr(record.additionalProperties!, allTypes) : null;
+    final additionalValueType = hasAdditional
+        ? _dartTypeStr(record.additionalProperties!, allTypes)
+        : null;
 
     // Collect validation checks for constrained fields
     final validations = <String>[];
@@ -137,7 +152,8 @@ class DartCodeGenerator {
       buf.writeln('  final $typeStr${nullable ? '?' : ''} $ident;');
     }
     if (hasAdditional) {
-      buf.writeln('  final Map<String, $additionalValueType> additionalProperties;');
+      buf.writeln(
+          '  final Map<String, $additionalValueType> additionalProperties;');
     }
     buf.writeln();
 
@@ -162,7 +178,8 @@ class DartCodeGenerator {
     buf.writeln();
 
     // fromJson
-    buf.writeln('  factory ${record.name}.fromJson(Map<String, dynamic> json) {');
+    buf.writeln(
+        '  factory ${record.name}.fromJson(Map<String, dynamic> json) {');
     if (hasAdditional) {
       final knownKeys = record.fields.map((f) => "'${f.name}'").join(', ');
       buf.writeln('    const knownKeys = {$knownKeys};');
@@ -170,14 +187,16 @@ class DartCodeGenerator {
     buf.writeln('    return ${record.name}(');
     for (final f in record.fields) {
       final ident = _escapeIdentifier(f.name);
-      buf.writeln("      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},");
+      buf.writeln(
+          "      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},");
     }
     if (hasAdditional) {
       final castExpr = additionalValueType == 'dynamic'
           ? 'e.value'
           : 'e.value as $additionalValueType';
       buf.writeln('      additionalProperties: Map.fromEntries(');
-      buf.writeln('        json.entries.where((e) => !knownKeys.contains(e.key))');
+      buf.writeln(
+          '        json.entries.where((e) => !knownKeys.contains(e.key))');
       buf.writeln('            .map((e) => MapEntry(e.key, $castExpr)),');
       buf.writeln('      ),');
     }
@@ -236,10 +255,12 @@ class DartCodeGenerator {
       }
       buf.writeln('  };');
       buf.writeln('  String toJson() => _toJsonMap[this]!;');
-      buf.writeln('  static ${enumType.name} fromJson(String json) => _jsonMap[json]!;');
+      buf.writeln(
+          '  static ${enumType.name} fromJson(String json) => _jsonMap[json]!;');
     } else {
       buf.writeln('  String toJson() => name;');
-      buf.writeln('  static ${enumType.name} fromJson(String json) => values.byName(json);');
+      buf.writeln(
+          '  static ${enumType.name} fromJson(String json) => values.byName(json);');
     }
     buf.writeln('}');
     return buf.toString();
@@ -249,13 +270,19 @@ class DartCodeGenerator {
     // Convert kebab-case, snake_case, or other non-identifier chars to camelCase
     if (RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*$').hasMatch(value)) return value;
     final parts = value.split(RegExp(r'[-_.\s]+'));
-    final result = parts.first + parts.skip(1).map((p) => p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1)).join();
+    final result = parts.first +
+        parts
+            .skip(1)
+            .map((p) => p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1))
+            .join();
     // Ensure it starts with a letter
-    if (result.isEmpty || !RegExp(r'^[a-zA-Z_]').hasMatch(result)) return '_$result';
+    if (result.isEmpty || !RegExp(r'^[a-zA-Z_]').hasMatch(result))
+      return '_$result';
     return result;
   }
 
-  String _emitSealedClass(SealedClassType sealed, Map<String, ResolvedType> allTypes, Set<String> emitted) {
+  String _emitSealedClass(SealedClassType sealed,
+      Map<String, ResolvedType> allTypes, Set<String> emitted) {
     if (emitted.contains(sealed.name)) return '';
     emitted.add(sealed.name);
     final buf = StringBuffer();
@@ -264,12 +291,15 @@ class DartCodeGenerator {
     buf.writeln('sealed class ${sealed.name} {');
     buf.writeln('  const ${sealed.name}();');
     buf.writeln('  Map<String, dynamic> toJson();');
-    buf.writeln('  static ${sealed.name} fromJson(Map<String, dynamic> json) {');
+    buf.writeln(
+        '  static ${sealed.name} fromJson(Map<String, dynamic> json) {');
     buf.writeln("    switch (json['${sealed.discriminant}'] as String) {");
     for (final v in sealed.variants) {
-      buf.writeln("      case '${v.discriminantValue}': return ${v.className}.fromJson(json);");
+      buf.writeln(
+          "      case '${v.discriminantValue}': return ${v.className}.fromJson(json);");
     }
-    buf.writeln("      default: throw ArgumentError('Unknown ${sealed.discriminant}: \${json['${sealed.discriminant}']}');");
+    buf.writeln(
+        "      default: throw ArgumentError('Unknown ${sealed.discriminant}: \${json['${sealed.discriminant}']}');");
     buf.writeln('    }');
     buf.writeln('  }');
     buf.writeln('}');
@@ -291,7 +321,8 @@ class DartCodeGenerator {
         buf.writeln('  final $typeStr${nullable ? '?' : ''} $ident;');
       }
       if (v.embeddedUnion != null) {
-        buf.writeln('  final ${v.embeddedUnion!.name} ${v.embeddedUnion!.discriminant};');
+        buf.writeln(
+            '  final ${v.embeddedUnion!.name} ${v.embeddedUnion!.discriminant};');
       }
       buf.writeln();
 
@@ -311,14 +342,17 @@ class DartCodeGenerator {
       buf.writeln();
 
       // fromJson
-      buf.writeln('  factory ${v.className}.fromJson(Map<String, dynamic> json) {');
+      buf.writeln(
+          '  factory ${v.className}.fromJson(Map<String, dynamic> json) {');
       buf.writeln('    return ${v.className}(');
       for (final f in v.fields) {
         final ident = _escapeIdentifier(f.name);
-        buf.writeln("      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},");
+        buf.writeln(
+            "      $ident: ${_fromJsonExpr("json['${f.name}']", f.type, allTypes, !f.isRequired)},");
       }
       if (v.embeddedUnion != null) {
-        buf.writeln("      ${v.embeddedUnion!.discriminant}: ${v.embeddedUnion!.name}.fromJson(json),");
+        buf.writeln(
+            "      ${v.embeddedUnion!.discriminant}: ${v.embeddedUnion!.name}.fromJson(json),");
       }
       buf.writeln('    );');
       buf.writeln('  }');
@@ -397,7 +431,8 @@ class DartCodeGenerator {
             buf.writeln("      '${p.name}': $valExpr,");
           } else {
             if (_needsTransform(p.type, allTypes)) {
-              buf.writeln("      if ($ident != null) '${p.name}': $ident.toJson(),");
+              buf.writeln(
+                  "      if ($ident != null) '${p.name}': $ident.toJson(),");
             } else {
               buf.writeln("      if ($ident != null) '${p.name}': $ident,");
             }
@@ -411,8 +446,10 @@ class DartCodeGenerator {
       if (isVoid) {
         buf.writeln("    await _client.call('${op.fullName}', $paramsArg);");
       } else {
-        buf.writeln("    final result = await _client.call('${op.fullName}', $paramsArg);");
-        buf.writeln('    return ${_deserializeExpr('result', op.result, allTypes)};');
+        buf.writeln(
+            "    final result = await _client.call('${op.fullName}', $paramsArg);");
+        buf.writeln(
+            '    return ${_deserializeExpr('result', op.result, allTypes)};');
       }
       buf.writeln('  }');
     }
@@ -445,13 +482,17 @@ class DartCodeGenerator {
     }
     buf.writeln();
     final hasDefault = servers.isNotEmpty;
-    final defaultExpr = hasDefault ? 'Servers.${_escapeIdentifier(servers.first.name)}' : null;
+    final defaultExpr =
+        hasDefault ? 'Servers.${_escapeIdentifier(servers.first.name)}' : null;
     if (hasDefault) {
       buf.writeln('  Blocks({String? baseUrl, SessionStore? sessionStore}) {');
-      buf.writeln('    final client = BlocksClient(baseUrl: baseUrl ?? $defaultExpr, sessionStore: sessionStore);');
+      buf.writeln(
+          '    final client = BlocksClient(baseUrl: baseUrl ?? $defaultExpr, sessionStore: sessionStore);');
     } else {
-      buf.writeln('  Blocks({required String baseUrl, SessionStore? sessionStore}) {');
-      buf.writeln('    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);');
+      buf.writeln(
+          '  Blocks({required String baseUrl, SessionStore? sessionStore}) {');
+      buf.writeln(
+          '    final client = BlocksClient(baseUrl: baseUrl, sessionStore: sessionStore);');
     }
     for (final ns in namespaces) {
       final ident = _escapeIdentifier(ns.name);
@@ -478,52 +519,88 @@ class DartCodeGenerator {
     if (c.format != null) {
       switch (c.format) {
         case 'uri':
-          final cond = optional ? "$ident == null || (Uri.tryParse($ident)?.hasScheme ?? false)" : "(Uri.tryParse($ident)?.hasScheme ?? false)";
-          stmts.add("if (!($cond)) throw ArgumentError('$ident must be a valid URI');");
+          final cond = optional
+              ? "$ident == null || (Uri.tryParse($ident)?.hasScheme ?? false)"
+              : "(Uri.tryParse($ident)?.hasScheme ?? false)";
+          stmts.add(
+              "if (!($cond)) throw ArgumentError('$ident must be a valid URI');");
         case 'email':
-          final cond = optional ? "$ident == null || $ident.contains('@')" : "$ident.contains('@')";
-          stmts.add("if (!($cond)) throw ArgumentError('$ident must be a valid email');");
+          final cond = optional
+              ? "$ident == null || $ident.contains('@')"
+              : "$ident.contains('@')";
+          stmts.add(
+              "if (!($cond)) throw ArgumentError('$ident must be a valid email');");
       }
     }
     if (c.minLength != null) {
-      final cond = optional ? '$ident == null || $ident.length >= ${c.minLength}' : '$ident.length >= ${c.minLength}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be at least ${c.minLength} characters');");
+      final cond = optional
+          ? '$ident == null || $ident.length >= ${c.minLength}'
+          : '$ident.length >= ${c.minLength}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be at least ${c.minLength} characters');");
     }
     if (c.maxLength != null) {
-      final cond = optional ? '$ident == null || $ident.length <= ${c.maxLength}' : '$ident.length <= ${c.maxLength}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be at most ${c.maxLength} characters');");
+      final cond = optional
+          ? '$ident == null || $ident.length <= ${c.maxLength}'
+          : '$ident.length <= ${c.maxLength}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be at most ${c.maxLength} characters');");
     }
     if (c.pattern != null) {
-      final cond = optional ? "$ident == null || RegExp(r'${c.pattern}').hasMatch($ident)" : "RegExp(r'${c.pattern}').hasMatch($ident)";
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must match pattern');");
+      final cond = optional
+          ? "$ident == null || RegExp(r'${c.pattern}').hasMatch($ident)"
+          : "RegExp(r'${c.pattern}').hasMatch($ident)";
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must match pattern');");
     }
     if (c.minimum != null) {
-      final cond = optional ? '$ident == null || $ident >= ${c.minimum}' : '$ident >= ${c.minimum}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be >= ${c.minimum}');");
+      final cond = optional
+          ? '$ident == null || $ident >= ${c.minimum}'
+          : '$ident >= ${c.minimum}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be >= ${c.minimum}');");
     }
     if (c.maximum != null) {
-      final cond = optional ? '$ident == null || $ident <= ${c.maximum}' : '$ident <= ${c.maximum}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be <= ${c.maximum}');");
+      final cond = optional
+          ? '$ident == null || $ident <= ${c.maximum}'
+          : '$ident <= ${c.maximum}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be <= ${c.maximum}');");
     }
     if (c.exclusiveMinimum != null) {
-      final cond = optional ? '$ident == null || $ident > ${c.exclusiveMinimum}' : '$ident > ${c.exclusiveMinimum}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be > ${c.exclusiveMinimum}');");
+      final cond = optional
+          ? '$ident == null || $ident > ${c.exclusiveMinimum}'
+          : '$ident > ${c.exclusiveMinimum}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be > ${c.exclusiveMinimum}');");
     }
     if (c.exclusiveMaximum != null) {
-      final cond = optional ? '$ident == null || $ident < ${c.exclusiveMaximum}' : '$ident < ${c.exclusiveMaximum}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be < ${c.exclusiveMaximum}');");
+      final cond = optional
+          ? '$ident == null || $ident < ${c.exclusiveMaximum}'
+          : '$ident < ${c.exclusiveMaximum}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be < ${c.exclusiveMaximum}');");
     }
     if (c.multipleOf != null) {
-      final cond = optional ? '$ident == null || $ident % ${c.multipleOf} == 0' : '$ident % ${c.multipleOf} == 0';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must be a multiple of ${c.multipleOf}');");
+      final cond = optional
+          ? '$ident == null || $ident % ${c.multipleOf} == 0'
+          : '$ident % ${c.multipleOf} == 0';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must be a multiple of ${c.multipleOf}');");
     }
     if (c.minItems != null) {
-      final cond = optional ? '$ident == null || $ident.length >= ${c.minItems}' : '$ident.length >= ${c.minItems}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must have at least ${c.minItems} items');");
+      final cond = optional
+          ? '$ident == null || $ident.length >= ${c.minItems}'
+          : '$ident.length >= ${c.minItems}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must have at least ${c.minItems} items');");
     }
     if (c.maxItems != null) {
-      final cond = optional ? '$ident == null || $ident.length <= ${c.maxItems}' : '$ident.length <= ${c.maxItems}';
-      stmts.add("if (!($cond)) throw ArgumentError('$ident must have at most ${c.maxItems} items');");
+      final cond = optional
+          ? '$ident == null || $ident.length <= ${c.maxItems}'
+          : '$ident.length <= ${c.maxItems}';
+      stmts.add(
+          "if (!($cond)) throw ArgumentError('$ident must have at most ${c.maxItems} items');");
     }
     return stmts;
   }
@@ -535,19 +612,24 @@ class DartCodeGenerator {
       PrimitiveType(dartType: final dt) => dt,
       NullableType(inner: final inner) => '${_dartTypeStr(inner, allTypes)}?',
       ListType(items: final items) => 'List<${_dartTypeStr(items, allTypes)}>',
-      MapType(valueType: final vt) => 'Map<String, ${_dartTypeStr(vt, allTypes)}>',
+      MapType(valueType: final vt) =>
+        'Map<String, ${_dartTypeStr(vt, allTypes)}>',
       RecordType(name: final name) => name,
       EnumType(name: final name) => name,
       SealedClassType(name: final name) => name,
       SchemaReference(name: final name) => name,
-      TransferableType(blocksType: final kt, typeArgs: final args) => _transferableDartType(kt, args, allTypes),
-      TupleType(items: final items) => '(${items.map((i) => _dartTypeStr(i, allTypes)).join(', ')})',
+      TransferableType(blocksType: final kt, typeArgs: final args) =>
+        _transferableDartType(kt, args, allTypes),
+      TupleType(items: final items) =>
+        '(${items.map((i) => _dartTypeStr(i, allTypes)).join(', ')})',
     };
   }
 
-  String _transferableDartType(String blocksType, List<ResolvedType> typeArgs, Map<String, ResolvedType> allTypes) {
+  String _transferableDartType(String blocksType, List<ResolvedType> typeArgs,
+      Map<String, ResolvedType> allTypes) {
     return switch (blocksType) {
-      'realtime/channel' => 'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
+      'realtime/channel' =>
+        'RealtimeChannel<${typeArgs.isNotEmpty ? _dartTypeStr(typeArgs[0], allTypes) : 'dynamic'}>',
       'file-bucket/download' => 'FileDownloadHandle',
       'file-bucket/upload' => 'FileUploadHandle',
       'oidc/client' => 'OidcClient',
@@ -557,16 +639,22 @@ class DartCodeGenerator {
 
   // --- fromJson expression helpers ---
 
-  String _fromJsonExpr(String accessor, ResolvedType type, Map<String, ResolvedType> allTypes, bool optional) {
+  String _fromJsonExpr(String accessor, ResolvedType type,
+      Map<String, ResolvedType> allTypes, bool optional) {
     return switch (type) {
-      PrimitiveType(dartType: final dt) => _primitiveFromJson(accessor, dt, optional),
-      NullableType(inner: final inner) => _nullableFromJson(accessor, inner, allTypes),
-      ListType(items: final items) => _listFromJson(accessor, items, allTypes, optional),
-      MapType(valueType: final vt) => _mapFromJson(accessor, vt, allTypes, optional),
+      PrimitiveType(dartType: final dt) =>
+        _primitiveFromJson(accessor, dt, optional),
+      NullableType(inner: final inner) =>
+        _nullableFromJson(accessor, inner, allTypes),
+      ListType(items: final items) =>
+        _listFromJson(accessor, items, allTypes, optional),
+      MapType(valueType: final vt) =>
+        _mapFromJson(accessor, vt, allTypes, optional),
       RecordType(name: final name) => optional
           ? '$accessor != null ? $name.fromJson($accessor as Map<String, dynamic>) : null'
           : '$name.fromJson($accessor as Map<String, dynamic>)',
-      SchemaReference(name: final name) => _schemaFromJson(accessor, name, allTypes, optional),
+      SchemaReference(name: final name) =>
+        _schemaFromJson(accessor, name, allTypes, optional),
       EnumType(name: final name) => optional
           ? '$accessor != null ? $name.fromJson($accessor as String) : null'
           : '$name.fromJson($accessor as String)',
@@ -582,12 +670,15 @@ class DartCodeGenerator {
 
   String _primitiveFromJson(String accessor, String dartType, bool optional) {
     if (dartType == 'int') {
-      return optional ? '($accessor as num?)?.toInt()' : '($accessor as num).toInt()';
+      return optional
+          ? '($accessor as num?)?.toInt()'
+          : '($accessor as num).toInt()';
     }
     return '$accessor as $dartType${optional ? '?' : ''}';
   }
 
-  String _nullableFromJson(String accessor, ResolvedType inner, Map<String, ResolvedType> allTypes) {
+  String _nullableFromJson(
+      String accessor, ResolvedType inner, Map<String, ResolvedType> allTypes) {
     return switch (inner) {
       SchemaReference(name: final name) =>
         '$accessor != null ? ${_resolvedClassName(name, allTypes)}.fromJson($accessor as Map<String, dynamic>) : null',
@@ -600,11 +691,15 @@ class DartCodeGenerator {
     };
   }
 
-  String _listFromJson(String accessor, ResolvedType items, Map<String, ResolvedType> allTypes, bool optional) {
+  String _listFromJson(String accessor, ResolvedType items,
+      Map<String, ResolvedType> allTypes, bool optional) {
     final itemExpr = switch (items) {
-      RecordType(name: final name) => '(e) => $name.fromJson(e as Map<String, dynamic>)',
-      SchemaReference(name: final name) => '(e) => ${_resolvedClassName(name, allTypes)}.fromJson(e as Map<String, dynamic>)',
-      PrimitiveType(dartType: final dt) => dt == 'int' ? '(e) => (e as num).toInt()' : null,
+      RecordType(name: final name) =>
+        '(e) => $name.fromJson(e as Map<String, dynamic>)',
+      SchemaReference(name: final name) =>
+        '(e) => ${_resolvedClassName(name, allTypes)}.fromJson(e as Map<String, dynamic>)',
+      PrimitiveType(dartType: final dt) =>
+        dt == 'int' ? '(e) => (e as num).toInt()' : null,
       _ => null,
     };
     if (itemExpr != null) {
@@ -620,7 +715,8 @@ class DartCodeGenerator {
     return '($accessor as List<dynamic>).cast<$typeStr>()';
   }
 
-  String _mapFromJson(String accessor, ResolvedType valueType, Map<String, ResolvedType> allTypes, bool optional) {
+  String _mapFromJson(String accessor, ResolvedType valueType,
+      Map<String, ResolvedType> allTypes, bool optional) {
     final valTypeStr = _dartTypeStr(valueType, allTypes);
     if (optional) {
       return '($accessor as Map<String, dynamic>?)?.map((k, v) => MapEntry(k, v as $valTypeStr))';
@@ -628,7 +724,8 @@ class DartCodeGenerator {
     return '($accessor as Map<String, dynamic>).map((k, v) => MapEntry(k, v as $valTypeStr))';
   }
 
-  String _schemaFromJson(String accessor, String name, Map<String, ResolvedType> allTypes, bool optional) {
+  String _schemaFromJson(String accessor, String name,
+      Map<String, ResolvedType> allTypes, bool optional) {
     final resolved = allTypes[name];
     if (resolved is EnumType) {
       return optional
@@ -647,14 +744,18 @@ class DartCodeGenerator {
 
   // --- toJson expression helpers ---
 
-  String _toJsonExpr(String field, ResolvedType type, Map<String, ResolvedType> allTypes, bool optional) {
+  String _toJsonExpr(String field, ResolvedType type,
+      Map<String, ResolvedType> allTypes, bool optional) {
     return switch (type) {
       PrimitiveType() => field,
-      NullableType(inner: final inner) => _toJsonExpr(field, inner, allTypes, true),
-      ListType(items: final items) => _listToJson(field, items, allTypes, optional),
+      NullableType(inner: final inner) =>
+        _toJsonExpr(field, inner, allTypes, true),
+      ListType(items: final items) =>
+        _listToJson(field, items, allTypes, optional),
       MapType() => field,
       RecordType() => optional ? '$field?.toJson()' : '$field.toJson()',
-      SchemaReference(name: final name) => _schemaToJson(field, name, allTypes, optional),
+      SchemaReference(name: final name) =>
+        _schemaToJson(field, name, allTypes, optional),
       EnumType() => optional ? '$field?.toJson()' : '$field.toJson()',
       SealedClassType() => optional ? '$field?.toJson()' : '$field.toJson()',
       TupleType(items: final items) => _tupleToJson(field, items, allTypes),
@@ -662,15 +763,21 @@ class DartCodeGenerator {
     };
   }
 
-  String _listToJson(String field, ResolvedType items, Map<String, ResolvedType> allTypes, bool optional) {
-    final needsMap = items is RecordType || items is SchemaReference || items is SealedClassType;
+  String _listToJson(String field, ResolvedType items,
+      Map<String, ResolvedType> allTypes, bool optional) {
+    final needsMap = items is RecordType ||
+        items is SchemaReference ||
+        items is SealedClassType;
     if (needsMap) {
-      return optional ? '$field?.map((e) => e.toJson()).toList()' : '$field.map((e) => e.toJson()).toList()';
+      return optional
+          ? '$field?.map((e) => e.toJson()).toList()'
+          : '$field.map((e) => e.toJson()).toList()';
     }
     return field;
   }
 
-  String _schemaToJson(String field, String name, Map<String, ResolvedType> allTypes, bool optional) {
+  String _schemaToJson(String field, String name,
+      Map<String, ResolvedType> allTypes, bool optional) {
     final resolved = allTypes[name];
     if (resolved is PrimitiveType) return field;
     return optional ? '$field?.toJson()' : '$field.toJson()';
@@ -678,11 +785,15 @@ class DartCodeGenerator {
 
   // --- Param serialization ---
 
-  String _paramToJsonExpr(String name, ResolvedType type, Map<String, ResolvedType> allTypes) {
+  String _paramToJsonExpr(
+      String name, ResolvedType type, Map<String, ResolvedType> allTypes) {
     return switch (type) {
       RecordType() => '$name.toJson()',
       SealedClassType() => '$name.toJson()',
-      SchemaReference(name: final schemaName) => _needsTransformForSchema(schemaName, allTypes) ? '$name.toJson()' : name,
+      SchemaReference(name: final schemaName) =>
+        _needsTransformForSchema(schemaName, allTypes)
+            ? '$name.toJson()'
+            : name,
       EnumType() => '$name.toJson()',
       TupleType(items: final items) => _tupleToJson(name, items, allTypes),
       _ => name,
@@ -695,34 +806,49 @@ class DartCodeGenerator {
       SealedClassType() => true,
       EnumType() => true,
       TupleType() => true,
-      SchemaReference(name: final name) => _needsTransformForSchema(name, allTypes),
+      SchemaReference(name: final name) =>
+        _needsTransformForSchema(name, allTypes),
       _ => false,
     };
   }
 
-  bool _needsTransformForSchema(String name, Map<String, ResolvedType> allTypes) {
+  bool _needsTransformForSchema(
+      String name, Map<String, ResolvedType> allTypes) {
     final resolved = allTypes[name];
-    return resolved is RecordType || resolved is SealedClassType || resolved is EnumType;
+    return resolved is RecordType ||
+        resolved is SealedClassType ||
+        resolved is EnumType;
   }
 
   // --- Deserialization for return types ---
 
-  String _deserializeExpr(String accessor, ResolvedType type, Map<String, ResolvedType> allTypes) {
+  String _deserializeExpr(
+      String accessor, ResolvedType type, Map<String, ResolvedType> allTypes) {
     return switch (type) {
-      PrimitiveType(dartType: final dt) => dt == 'int' ? '($accessor as num).toInt()' : '$accessor as $dt',
-      NullableType(inner: final inner) => _deserializeNullable(accessor, inner, allTypes),
-      ListType(items: final items) => _deserializeList(accessor, items, allTypes),
-      MapType(valueType: final vt) => '($accessor as Map<String, dynamic>).map((k, v) => MapEntry(k, v as ${_dartTypeStr(vt, allTypes)}))',
-      RecordType(name: final name) => '$name.fromJson($accessor as Map<String, dynamic>)',
-      SchemaReference(name: final name) => _deserializeSchema(accessor, name, allTypes),
-      SealedClassType(name: final name) => '$name.fromJson($accessor as Map<String, dynamic>)',
+      PrimitiveType(dartType: final dt) =>
+        dt == 'int' ? '($accessor as num).toInt()' : '$accessor as $dt',
+      NullableType(inner: final inner) =>
+        _deserializeNullable(accessor, inner, allTypes),
+      ListType(items: final items) =>
+        _deserializeList(accessor, items, allTypes),
+      MapType(valueType: final vt) =>
+        '($accessor as Map<String, dynamic>).map((k, v) => MapEntry(k, v as ${_dartTypeStr(vt, allTypes)}))',
+      RecordType(name: final name) =>
+        '$name.fromJson($accessor as Map<String, dynamic>)',
+      SchemaReference(name: final name) =>
+        _deserializeSchema(accessor, name, allTypes),
+      SealedClassType(name: final name) =>
+        '$name.fromJson($accessor as Map<String, dynamic>)',
       EnumType(name: final name) => '$name.fromJson($accessor as String)',
-      TransferableType(blocksType: final kt, typeArgs: final args) => _deserializeTransferable(accessor, kt, args, allTypes),
-      TupleType(items: final items) => _tupleFromJson(accessor, items, allTypes),
+      TransferableType(blocksType: final kt, typeArgs: final args) =>
+        _deserializeTransferable(accessor, kt, args, allTypes),
+      TupleType(items: final items) =>
+        _tupleFromJson(accessor, items, allTypes),
     };
   }
 
-  String _deserializeNullable(String accessor, ResolvedType inner, Map<String, ResolvedType> allTypes) {
+  String _deserializeNullable(
+      String accessor, ResolvedType inner, Map<String, ResolvedType> allTypes) {
     return switch (inner) {
       PrimitiveType(dartType: final dt) => '$accessor as $dt?',
       RecordType(name: final name) =>
@@ -733,10 +859,13 @@ class DartCodeGenerator {
     };
   }
 
-  String _deserializeList(String accessor, ResolvedType items, Map<String, ResolvedType> allTypes) {
+  String _deserializeList(
+      String accessor, ResolvedType items, Map<String, ResolvedType> allTypes) {
     final itemExpr = switch (items) {
-      RecordType(name: final name) => '(e) => $name.fromJson(e as Map<String, dynamic>)',
-      SchemaReference(name: final name) => '(e) => $name.fromJson(e as Map<String, dynamic>)',
+      RecordType(name: final name) =>
+        '(e) => $name.fromJson(e as Map<String, dynamic>)',
+      SchemaReference(name: final name) =>
+        '(e) => $name.fromJson(e as Map<String, dynamic>)',
       _ => null,
     };
     if (itemExpr != null) {
@@ -746,28 +875,33 @@ class DartCodeGenerator {
     return '($accessor as List<dynamic>).cast<$typeStr>()';
   }
 
-  String _deserializeSchema(String accessor, String name, Map<String, ResolvedType> allTypes) {
+  String _deserializeSchema(
+      String accessor, String name, Map<String, ResolvedType> allTypes) {
     final resolved = allTypes[name];
     if (resolved is EnumType) return '$name.fromJson($accessor as String)';
     return '$name.fromJson($accessor as Map<String, dynamic>)';
   }
 
-  String _deserializeTransferable(String accessor, String blocksType, List<ResolvedType> typeArgs, Map<String, ResolvedType> allTypes) {
+  String _deserializeTransferable(String accessor, String blocksType,
+      List<ResolvedType> typeArgs, Map<String, ResolvedType> allTypes) {
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
-        if (typeArgs.isEmpty) return 'RealtimeChannel.fromJson($cast, (json) => json)';
-        final argType = _dartTypeStr(typeArgs[0], allTypes);
-        return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
-      }(),
+          if (typeArgs.isEmpty)
+            return 'RealtimeChannel.fromJson($cast, (json) => json)';
+          final argType = _dartTypeStr(typeArgs[0], allTypes);
+          return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
+        }(),
       'file-bucket/download' => 'FileDownloadHandle.fromJson($cast)',
       'file-bucket/upload' => 'FileUploadHandle.fromJson($cast)',
-      'oidc/client' => 'OidcClient.fromJson($cast, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore)',
+      'oidc/client' =>
+        'OidcClient.fromJson($cast, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore)',
       _ => accessor,
     };
   }
 
-  String _tupleFromJson(String expr, List<ResolvedType> items, Map<String, ResolvedType> allTypes) {
+  String _tupleFromJson(String expr, List<ResolvedType> items,
+      Map<String, ResolvedType> allTypes) {
     final cast = '($expr as List<dynamic>)';
     final fields = items.asMap().entries.map((e) {
       return _fromJsonExpr('$cast[${e.key}]', e.value, allTypes, false);
@@ -775,7 +909,8 @@ class DartCodeGenerator {
     return '($fields)';
   }
 
-  String _tupleToJson(String expr, List<ResolvedType> items, Map<String, ResolvedType> allTypes) {
+  String _tupleToJson(String expr, List<ResolvedType> items,
+      Map<String, ResolvedType> allTypes) {
     final fields = items.asMap().entries.map((e) {
       return _toJsonExpr('$expr.\$${e.key + 1}', e.value, allTypes, false);
     }).join(', ');
@@ -810,7 +945,8 @@ class DartCodeGenerator {
     } else if (fields.length <= 20) {
       buf.writeln('  int get hashCode => Object.hash(${fields.join(', ')});');
     } else {
-      buf.writeln('  int get hashCode => Object.hashAll([${fields.join(', ')}]);');
+      buf.writeln(
+          '  int get hashCode => Object.hashAll([${fields.join(', ')}]);');
     }
 
     // toString
@@ -831,21 +967,77 @@ class DartCodeGenerator {
   }
 
   static const _dartKeywords = {
-    'abstract', 'as', 'assert', 'async', 'await', 'break', 'case', 'catch',
-    'class', 'const', 'continue', 'covariant', 'default', 'deferred', 'do',
-    'dynamic', 'else', 'enum', 'export', 'extends', 'extension', 'external',
-    'factory', 'false', 'final', 'finally', 'for', 'Function', 'get', 'hide',
-    'if', 'implements', 'import', 'in', 'interface', 'is', 'late', 'library',
-    'mixin', 'new', 'null', 'on', 'operator', 'part', 'required', 'rethrow',
-    'return', 'sealed', 'set', 'show', 'static', 'super', 'switch', 'sync',
-    'this', 'throw', 'true', 'try', 'typedef', 'var', 'void', 'while', 'with',
+    'abstract',
+    'as',
+    'assert',
+    'async',
+    'await',
+    'break',
+    'case',
+    'catch',
+    'class',
+    'const',
+    'continue',
+    'covariant',
+    'default',
+    'deferred',
+    'do',
+    'dynamic',
+    'else',
+    'enum',
+    'export',
+    'extends',
+    'extension',
+    'external',
+    'factory',
+    'false',
+    'final',
+    'finally',
+    'for',
+    'Function',
+    'get',
+    'hide',
+    'if',
+    'implements',
+    'import',
+    'in',
+    'interface',
+    'is',
+    'late',
+    'library',
+    'mixin',
+    'new',
+    'null',
+    'on',
+    'operator',
+    'part',
+    'required',
+    'rethrow',
+    'return',
+    'sealed',
+    'set',
+    'show',
+    'static',
+    'super',
+    'switch',
+    'sync',
+    'this',
+    'throw',
+    'true',
+    'try',
+    'typedef',
+    'var',
+    'void',
+    'while',
+    'with',
     'yield',
   };
 
   String _escapeIdentifier(String name) =>
       _dartKeywords.contains(name) ? '$name\$' : name;
 
-  String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   /// Collects all type names referenced by a resolved type (for usage tracking).
   Set<String> _collectTypeRefs(ResolvedType type) {

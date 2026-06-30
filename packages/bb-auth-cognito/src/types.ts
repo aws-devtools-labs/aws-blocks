@@ -635,12 +635,23 @@ export type ConfirmSignInResponse<O extends AuthCognitoOptions = AuthCognitoOpti
 	| { credential: string };
 
 /**
- * Tagged union on `isSignedIn`. TypeScript narrows the branch automatically
- * inside an `if (result.isSignedIn)` check.
+ * Tagged union on the string `status` field. TypeScript narrows the branch
+ * automatically inside an `if (result.status === 'signedIn')` check, and the
+ * `status` value is the discriminator native clients (Swift / Kotlin / Dart)
+ * key off when generating their result types.
+ *
+ * `status` is a string literal rather than a boolean on purpose: the native
+ * generators detect a discriminated union only when each arm carries a
+ * single-value **string** `const`/`enum` field. A boolean discriminator
+ * (`isSignedIn: true | false`) is invisible to them — they fall back to numeric
+ * `_Variant0/1` structs and try-each-variant decoding that fails to compile —
+ * and a boolean value can't name a variant (`true`/`false` are reserved words
+ * in all three languages). A string discriminator emits clean, named,
+ * switch-decoded variants on every platform.
  */
 export type SignInResult<O extends AuthCognitoOptions = AuthCognitoOptions> =
-	| { isSignedIn: true; user: CognitoUser<O> }
-	| { isSignedIn: false; nextStep: SignInNextStep };
+	| { status: 'signedIn'; user: CognitoUser<O> }
+	| { status: 'continueSignIn'; nextStep: SignInNextStep };
 
 /**
  * Every challenge / continuation state `signIn` and `confirmSignIn` can

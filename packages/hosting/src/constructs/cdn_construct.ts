@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Construct } from 'constructs';
+import { Construct, IDependable } from 'constructs';
 import { CfnOutput, Duration, Fn, Stack } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
@@ -33,6 +33,7 @@ import {
   S3BucketOrigin,
 } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { IBucket } from 'aws-cdk-lib/aws-s3';
+import { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
 import {
   CfnPermission,
   IFunction,
@@ -52,6 +53,7 @@ import { prependBasePath } from '../adapters/shared/basepath.js';
 import { DeployManifest, Redirect } from '../manifest/types.js';
 import {
   ERROR_PAGE_KEY,
+  NOT_FOUND_PAGE_KEY,
   generateAssetPrefixStripFunctionCode,
   generateBuildIdAndRedirectFunctionCode,
   generateForwardedHostAndRedirectFunctionCode,
@@ -95,6 +97,17 @@ const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
 .c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
 <body><div class="c"><h1>Service Temporarily Unavailable</h1><p>We're working on it. Please try again in a few moments.</p></div></body></html>`;
+
+// Built-in default 404 page for multi-page static sites that ship no
+// 404.html of their own. Returned at HTTP 404 (not the SPA 200 fallback)
+// so crawlers and clients see a correct not-found status.
+const DEFAULT_NOT_FOUND_PAGE_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>404 — Page Not Found</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f9fafb;color:#374151}
+.c{text-align:center;max-width:480px;padding:2rem}h1{font-size:1.5rem;margin-bottom:.5rem}p{color:#6b7280}</style></head>
+<body><div class="c"><h1>404 — Page Not Found</h1><p>The page you're looking for doesn't exist.</p></div></body></html>`;
 
 // ---- Public types ----
 
@@ -189,6 +202,32 @@ export class CdnConstruct extends Construct {
   readonly distribution: Distribution;
   readonly distributionUrl: string;
   readonly errorPageHtml: string;
+  /**
+   * Built-in default 404 page HTML, set ONLY when this is a multi-page
+   * static deploy (`spaFallback === false`) that has no framework-emitted
+   * or user-supplied 404 page. `undefined` otherwise. When set, the L3
+   * deploys it to `builds/<id>/_not_found.html` and CloudFront serves it
+   * (at HTTP 404) for missing paths. See {@link NOT_FOUND_PAGE_KEY}.
+   */
+  readonly defaultNotFoundPageHtml?: string;
+
+  /**
+   * CloudFront Functions that bake the deploy's buildId into the request
+   * rewrite (`/builds/<buildId>/...`). Publishing one of these is the moment
+   * the distribution starts routing new/cookieless traffic at the new build,
+   * so they must not update until that build's assets have been uploaded.
+   * See {@link addBuildAssetDependency}.
+   */
+  private readonly buildIdFunctions: CloudFrontFunction[] = [];
+
+  /**
+   * Count of asset deployments registered via {@link addBuildAssetDependency}.
+   * The synth-time validation added in the constructor uses this to detect a
+   * regression where the build-id cutover is left ungated (every build-id
+   * function would publish before the new build's assets are uploaded,
+   * re-opening the 403 deploy window).
+   */
+  private buildAssetDependencyCount = 0;
 
   /**
    * Creates the CDN distribution with routes mapped to origins.
@@ -261,14 +300,43 @@ export class CdnConstruct extends Construct {
       : rawRedirects;
 
     // ---- Build ID rewrite function ----
-    // SPA fallback: when the distribution is static-only with no custom
-    // error pages, navigation requests (no file extension) should serve
-    // /index.html directly. Asset requests (.js, .css) pass through
-    // unchanged so missing assets correctly 403/404 instead of serving HTML.
+    // SPA fallback: when true, navigation requests (no file extension) are
+    // rewritten to /index.html so a client-side router can deep-link any
+    // path. When false, each path resolves to its own <path>/index.html
+    // (directory-index) — correct for multi-page static sites. Asset
+    // requests (.js, .css) pass through unchanged either way so missing
+    // assets correctly 403/404 instead of serving HTML.
+    //
+    // Prefer the adapter's explicit `staticAssets.spaFallback` signal (the
+    // adapter is the only layer that knows the framework's routing model).
+    // Fall back to the legacy heuristic — static-only AND no errorPages —
+    // for adapters that don't yet declare it. This coupling of "has error
+    // pages" to "is a SPA" was the original misclassification: a multi-page
+    // static site with no custom 404 was wrongly treated as a SPA.
     const isSpaFallback =
+      manifest.staticAssets.spaFallback ??
+      (!hasCompute &&
+        (manifest.errorPages === undefined ||
+          Object.keys(manifest.errorPages).length === 0));
+
+    // Multi-page static site (not SPA) that emitted no 404.html of its
+    // own AND whose user supplied no custom notFound page → fill the gap
+    // with a built-in default 404 so missing paths render a branded page
+    // (at HTTP 404) instead of CloudFront's raw S3-OAC 403 XML. SPA sites
+    // are excluded (their miss correctly serves index.html at 200); SSR
+    // sites already have SSR_ERROR_PAGE_HTML. Precedence:
+    // user errorPages.notFound > framework errorPages[404] > this default.
+    const hasFrameworkNotFound = !!manifest.errorPages?.[404];
+    const hasUserNotFound = !!props.customErrorPages?.notFound;
+    const needsDefaultNotFound =
       !hasCompute &&
-      (manifest.errorPages === undefined ||
-        Object.keys(manifest.errorPages).length === 0);
+      !isSpaFallback &&
+      !hasFrameworkNotFound &&
+      !hasUserNotFound;
+    this.defaultNotFoundPageHtml = needsDefaultNotFound
+      ? DEFAULT_NOT_FOUND_PAGE_HTML
+      : undefined;
+
     const viewerRequestFunction = this.createViewerRequestFunction(
       buildId,
       skewEnabled,
@@ -276,6 +344,10 @@ export class CdnConstruct extends Construct {
       manifest.basePath,
       { spaFallback: isSpaFallback, wwwRedirect: props.wwwRedirect },
     );
+    // The viewer-request function rewrites every request to the new
+    // build's `/builds/<buildId>/` prefix - gate its publish on the asset
+    // uploads (see addBuildAssetDependency).
+    this.buildIdFunctions.push(viewerRequestFunction);
 
     // ---- Skew protection viewer-response function ----
     const viewerResponseFunction = this.createViewerResponseFunction(
@@ -752,6 +824,10 @@ export class CdnConstruct extends Construct {
           forwardedHostFunction ??
           viewerRequestFunction,
       );
+      // Also bakes in the buildId (`/builds/<buildId>/`), so it must wait
+      // for the asset uploads before publishing - same as the viewer-request
+      // function above.
+      this.buildIdFunctions.push(stripFunction);
       const prefixedStaticBehavior: BehaviorOptions = {
         origin: s3Origin,
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -915,21 +991,43 @@ export class CdnConstruct extends Construct {
     }
 
     // ---- Error responses ----
-    // Three modes:
+    // Four modes:
     //  1. Compute origin → 502/503/504 → custom error page (preserves status).
     //  2. Static deploy WITH `manifest.errorPages` (Next.js `output: 'export'`,
     //     Astro static, etc.) → 403/404 → /404.html with status 404. S3
     //     with OAC returns 403 (not 404) for missing keys, so both must
     //     be handled.
-    //  3. Static deploy WITHOUT `manifest.errorPages` (single-page app
-    //     with client-side routing) → 403/404 → /index.html with status 200
-    //     so the SPA can deep-link any path.
+    //  3. Static SPA (`spaFallback === true`) → 403/404 → /index.html with
+    //     status 200 so the client-side router can deep-link any path.
+    //     (Wired via the SPA-fallback viewer-request rewrite, not here.)
+    //  4. Static multi-page (`spaFallback === false`) WITHOUT its own
+    //     404.html and WITHOUT a user-supplied notFound → 403/404 → the
+    //     built-in default 404 page at status 404 (see needsDefaultNotFound).
     const isSpaOnly = !hasCompute;
     const hasErrorPages =
       manifest.errorPages !== undefined &&
       Object.keys(manifest.errorPages).length > 0;
 
     const errorResponses: ErrorResponse[] = [
+      ...(needsDefaultNotFound
+        ? [
+            // Multi-page static site with no framework/user 404 → map the
+            // S3-OAC 403 (and any 404) onto the built-in default page,
+            // surfacing a correct 404 status with a branded body.
+            {
+              httpStatus: 403,
+              responseHttpStatus: 404,
+              responsePagePath: `/builds/${buildId}/${NOT_FOUND_PAGE_KEY}`,
+              ttl: Duration.seconds(0),
+            },
+            {
+              httpStatus: 404,
+              responseHttpStatus: 404,
+              responsePagePath: `/builds/${buildId}/${NOT_FOUND_PAGE_KEY}`,
+              ttl: Duration.seconds(0),
+            },
+          ]
+        : []),
       ...(isSpaOnly && hasErrorPages
         ? [
             // S3 with OAC returns 403 for missing keys — map to the
@@ -1172,6 +1270,66 @@ export class CdnConstruct extends Construct {
         description: 'Custom domain name for the hosted site',
       });
     }
+
+    // ---- Self-enforcing atomic-deploy guard ----
+    // The build-id CloudFront functions rewrite every request to
+    // `/builds/<buildId>/...`. If they publish before that build's assets are
+    // uploaded to the OAC-protected bucket, new/cookieless visitors get 403
+    // for the whole deploy window. `addBuildAssetDependency` wires each asset
+    // BucketDeployment as a dependency so CloudFormation uploads first. This
+    // validation fails synth if build-id functions exist alongside asset
+    // deployments but NONE were registered - i.e. the wiring loop in the
+    // hosting construct was removed/broken, silently re-opening the 403
+    // window. It runs at synth, after all `addBuildAssetDependency` calls.
+    this.node.addValidation({
+      validate: (): string[] => {
+        // No build-id functions -> nothing to gate.
+        if (this.buildIdFunctions.length === 0) return [];
+        // At least one asset deployment was wired -> invariant holds.
+        if (this.buildAssetDependencyCount > 0) return [];
+        // Nothing was wired. Only fail if asset BucketDeployments actually
+        // exist in this stack; a standalone CdnConstruct with no assets (or a
+        // hypothetical asset-less deploy) is legitimate and must not
+        // false-positive.
+        const hasAssetDeployments = Stack.of(this)
+          .node.findAll()
+          .some((c) => c instanceof BucketDeployment);
+        if (!hasAssetDeployments) return [];
+        return [
+          `CdnConstruct '${this.node.path}' has ${this.buildIdFunctions.length} ` +
+            'build-id CloudFront function(s) that rewrite requests to ' +
+            "'/builds/<buildId>/...', but no asset BucketDeployment was " +
+            'registered via addBuildAssetDependency(). The build-id cutover ' +
+            'would publish before the new build assets are uploaded, ' +
+            'returning 403 Access Denied to new/cookieless visitors for the ' +
+            'entire deploy window. An asset BucketDeployment was likely added ' +
+            'without calling cdn.addBuildAssetDependency(deployment).',
+        ];
+      },
+    });
+  }
+
+  /**
+   * Register a dependency that must finish before the build-id cutover.
+   *
+   * The viewer-request (and Next.js assetPrefix-strip) CloudFront Functions
+   * bake the deploy's buildId into the request rewrite, sending traffic to
+   * `/builds/<buildId>/...` in the OAC-protected S3 bucket. If those
+   * functions publish before the new build's assets land at that prefix,
+   * new/cookieless visitors get 403 Access Denied for the duration of the
+   * deploy window (returning visitors with a `__dpl` skew cookie keep hitting
+   * the previous build and are unaffected).
+   *
+   * The hosting construct calls this with every asset `BucketDeployment` for
+   * the new build, so CloudFormation uploads the assets first and only then
+   * publishes the functions (and the distribution that references them).
+   * This makes redeploys atomic from a new visitor's perspective.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    for (const fn of this.buildIdFunctions) {
+      fn.node.addDependency(dependency);
+    }
+    this.buildAssetDependencyCount += 1;
   }
 
   /**
