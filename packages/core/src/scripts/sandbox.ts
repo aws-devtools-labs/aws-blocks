@@ -75,6 +75,13 @@ export async function startSandbox(options: SandboxOptions) {
       "npm",
       [
         "exec", "cdk", "--", "deploy",
+        // `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
+        // `export const runtime = 'edge'`) synthesizes a SECOND stack
+        // (`edge-lambda-stack-*`, region us-east-1) in addition to the main
+        // hosting stack. Without `--all`, CDK refuses with "specify which
+        // stacks to use". Deploying every stack in a sandbox app is the
+        // intended behavior, so select them all.
+        "--all",
         "--require-approval", "never",
         "--outputs-file", `${outDir}/outputs.json`,
         "--context", `projectRoot=${process.cwd()}`,

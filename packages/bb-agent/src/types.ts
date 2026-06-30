@@ -251,7 +251,7 @@ export interface ToolCallRecord {
 
 export interface StreamOptions<TContext = DefaultToolContext> {
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. */
+	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
 	channelId?: string;
 	/** User ID for conversation scoping. Defaults to 'anonymous'. */
 	userId?: string;

@@ -1,5 +1,24 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.1.6
+
+### Patch Changes
+
+- 53adfb8: fix(bb-auth-oidc): bridge a successful client callback into auth-common's onAuthChange
+
+  A successful client-PKCE `handleRedirectCallback()` only notified this OIDC
+  client's own `onAuthStateChange` listeners. Components subscribed via
+  `@aws-blocks/auth-common`'s `onAuthChange` — and `<AuthenticatedContent>` —
+  never heard about the sign-in, so a React SPA wouldn't re-render after
+  completing the redirect exchange (only server-initiated sign-in updated them).
+
+  `handleRedirectCallback()` now also calls `broadcastAuthChange(user)` on success,
+  and `signOut()` calls `broadcastAuthChange(null)`, firing the same-window
+  `blocks-auth-change` event and the cross-tab `BroadcastChannel`, so every
+  auth-common consumer (and other open tabs) re-render on both sign-in and sign-out.
+  The README documents the `onAuthChange`/`broadcastAuthChange` wiring and adds an
+  OIDC + React SPA example.
+
 ## 0.1.5
 
 ### Patch Changes

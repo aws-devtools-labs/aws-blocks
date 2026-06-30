@@ -9,6 +9,8 @@
  */
 
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
+import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -207,7 +209,7 @@ function notify(user: unknown | null, meta: AuthStateMeta | null): void {
  */
 export class AuthOIDCClient<
 	Provider extends string = string,
-	User = { userId: string; username: string },
+	User extends AuthUser = { userId: string; username: string },
 > {
 	readonly providers: readonly Provider[];
 
@@ -406,6 +408,22 @@ export class AuthOIDCClient<
 			const user = (body.user ?? body) as User;
 			lastUser = user;
 			notify(user, { state: pending.appState });
+			// Bridge into @aws-blocks/auth-common so its `onAuthChange` subscribers and
+			// `<AuthenticatedContent>` re-render on sign-in (same window AND other tabs),
+			// not just this client's own `onAuthStateChange` listeners.
+			//
+			// We broadcast rather than write auth-common's state directly — two known,
+			// non-blocking consequences:
+			//   - It doesn't prime auth-common's shared cache (keyed by AuthStateApi and
+			//     written via a private `updateState`; this client holds no such handle),
+			//     so a component that subscribes via `onAuthChange` *after* this fires
+			//     paints `null` for one frame, then self-corrects on its `getAuthState()`.
+			//   - A same-tab `<Authenticator>` listens only on the cross-tab
+			//     BroadcastChannel (which never fires in the originating tab), so it
+			//     won't react here; `onAuthChange` / `<AuthenticatedContent>` do.
+			// The `User` generic is constrained to `extends AuthUser`, so the exchange
+			// response is structurally a superset of AuthUser's { userId, username }.
+			broadcastAuthChange(user);
 			return user;
 		} finally {
 			// Release the guard once this exchange settles (success or failure) so a
@@ -422,7 +440,18 @@ export class AuthOIDCClient<
 		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
 		lastUser = null;
 		notify(null, null);
+		// Bridge the sign-out into @aws-blocks/auth-common too, symmetrically with
+		// handleRedirectCallback(). The reload below only repaints THIS tab, and
+		// BroadcastChannel.postMessage never fires in the originating tab, so other
+		// open tabs' onAuthChange / <AuthenticatedContent> consumers would keep
+		// rendering the signed-in user until their own next reload without this.
+		//
+		// broadcastAuthChange() opens a BroadcastChannel and dispatches a window
+		// event, so it needs the same browser globals as the reload — guard both
+		// together so a server-side sign-out (no window) doesn't throw a
+		// ReferenceError after the sign-out POST above has already succeeded.
 		if (typeof window !== 'undefined' && window.location) {
+			broadcastAuthChange(null);
 			window.location.reload();
 		}
 	}

@@ -1,5 +1,15 @@
 # @aws-blocks/blocks
 
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [f946736]
+- Updated dependencies [53adfb8]
+- Updated dependencies [ce61bb7]
+  - @aws-blocks/bb-agent@0.2.0
+  - @aws-blocks/bb-auth-oidc@0.1.6
+
 ## 0.1.6
 
 ### Patch Changes
