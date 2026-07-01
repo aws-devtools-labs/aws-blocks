@@ -153,11 +153,30 @@ class WorkspaceSandbox extends PosixShellSandbox {
 	}
 }
 
+// Bounded grace (ms) between the direct bash process exiting and force-resolving
+// the shell result — see runShell. Only fires if a backgrounded grandchild
+// escaped the process group and still holds the inherited pipes open.
+const EXIT_DRAIN_GRACE_MS = 2000;
+
 // Run one command through a POSIX shell rooted at `cwd`, buffering output and
-// resolving the final ExecutionResult. Mirrors the SDK stream-process
-// termination contract (SIGTERM, then a 1s-grace SIGKILL) and throws the SDK's
-// SandboxTimeoutError / SandboxAbortError so the vended bash surfaces a timeout
-// as BashTimeoutError.
+// resolving the final ExecutionResult. Throws the SDK's SandboxTimeoutError /
+// SandboxAbortError so the vended bash surfaces a timeout as BashTimeoutError.
+//
+// Backgrounded-process containment (the post-invoke-hang fix, shared with the
+// builder step): the graded command may background a process. Two safeguards
+// keep that from wedging the harness:
+//   1. Spawn `detached: true` so bash leads its OWN process group (pgid == pid);
+//      a `&` child stays in that group, so a negative-pid signal reaps the tree.
+//   2. Resolve on 'close' (all stdio drained to EOF) so the buffered stdout is
+//      COMPLETE — the vended fileEditor / PosixShellSandbox reads files via
+//      `base64 < file` and decodes result.stdout, so a truncated capture would
+//      corrupt reads. But 'close' alone BLOCKS for the full timeout when a
+//      backgrounded child inherits the stdout/stderr pipes (their write-ends
+//      never close). So the moment BASH ITSELF exits we SIGKILL the process
+//      group: that reaps the child and closes the leaked FDs, letting 'close'
+//      fire promptly with the foreground output intact. A bounded post-exit
+//      grace (EXIT_DRAIN_GRACE_MS) resolves anyway if a child escaped the group
+//      (e.g. via `setsid`) and still holds the pipes, so we never hang.
 function runShell(
 	command: string,
 	cwd: string,
@@ -168,31 +187,44 @@ function runShell(
 	return new Promise<ExecutionResult>((resolve, reject) => {
 		const proc = spawn('bash', ['-c', `cd ${shellQuote(cwd)} && ${command}`], {
 			env: env ? { ...process.env, ...env } : process.env,
+			detached: true,
 		});
 		let stdout = '';
 		let stderr = '';
 		let settled = false;
+		let exited = false;
 		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+		let drainHandle: ReturnType<typeof setTimeout> | undefined;
 
-		const finish = (fn: () => void): void => {
+		// SIGKILL the whole process group (negative pid). This reaps any process
+		// the command backgrounded — whose inherited stdout/stderr pipe write-ends
+		// are exactly what keeps 'close' from firing (blocking the tool call for
+		// the full timeout) and holds libuv's loop open so Node never exits after
+		// invoke() returns. Guarded: pid is undefined if spawn failed, and the
+		// group may already be gone (ESRCH).
+		const killGroup = (): void => {
+			if (proc.pid === undefined) return;
+			try {
+				process.kill(-proc.pid, 'SIGKILL');
+			} catch {
+				// group already reaped — nothing to do
+			}
+		};
+
+		const settle = (fn: () => void): void => {
 			if (settled) return;
 			settled = true;
 			if (timeoutHandle) clearTimeout(timeoutHandle);
+			if (drainHandle) clearTimeout(drainHandle);
 			if (signal) signal.removeEventListener('abort', onAbort);
+			killGroup();
 			fn();
 		};
-		const terminate = (err: Error): void => {
-			if (settled) return;
-			proc.kill('SIGTERM');
-			setTimeout(() => {
-				try {
-					proc.kill('SIGKILL');
-				} catch {
-					// already exited — nothing to kill
-				}
-			}, 1000).unref();
-			finish(() => reject(err));
-		};
+		const resolveResult = (code: number | null, sig: NodeJS.Signals | null): void =>
+			settle(() =>
+				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
+			);
+		const terminate = (err: Error): void => settle(() => reject(err));
 		const onAbort = (): void => terminate(new SandboxAbortError());
 
 		proc.stdout?.on('data', (d) => {
@@ -201,12 +233,19 @@ function runShell(
 		proc.stderr?.on('data', (d) => {
 			stderr += String(d);
 		});
-		proc.on('error', (err) => finish(() => reject(err)));
-		proc.on('close', (code, sig) =>
-			finish(() =>
-				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
-			),
-		);
+		proc.on('error', (err) => settle(() => reject(err)));
+		// The direct bash process has terminated (its foreground pipeline is done);
+		// only `&`-backgrounded children can still be alive. Reap the group so their
+		// leaked pipe FDs close and 'close' can fire, and arm the grace fallback for
+		// a child that escaped the group.
+		proc.on('exit', (code, sig) => {
+			if (settled || exited) return;
+			exited = true;
+			killGroup();
+			drainHandle = setTimeout(() => resolveResult(code, sig), EXIT_DRAIN_GRACE_MS);
+			drainHandle.unref();
+		});
+		proc.on('close', (code, sig) => resolveResult(code, sig));
 
 		if (timeoutSec !== undefined) {
 			timeoutHandle = setTimeout(() => terminate(new SandboxTimeoutError(timeoutSec)), timeoutSec * 1000);
@@ -366,6 +405,13 @@ mergeAndWrite(builderResult, {
 process.stderr.write(
 	`[judge] done: score=${overall ?? 'null'} caps=${applied.length} stop=${result.stopReason} ${judge_duration_sec}s\n`,
 );
+
+// Explicit success exit (mirrors the process.exit(1) error paths above). The
+// merged result.json is fully written, so nothing remains. Without this, a stray
+// handle left open by a command the judge ran (the same backgrounded-process risk
+// the per-command process-group reap guards against) could keep Node's loop
+// ref'd and idle the step until its wall-clock timeout. Exit cleanly instead.
+process.exit(0);
 
 function loadRequiredBlocks(taskDir: string): string | null {
 	try {

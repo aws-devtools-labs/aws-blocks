@@ -56,6 +56,12 @@ const MAX_TURNS = 120;
 // provided timeout to at least this many seconds. 10 minutes leaves ample room
 // for a cold install + build while staying inside the workflow's wall-clock cap.
 const BASH_MIN_TIMEOUT_SEC = 600;
+// Bounded grace (ms) between the direct bash process exiting and force-resolving
+// the shell result. Normal commands resolve earlier on 'close' (all stdio
+// drained); this only fires for the pathological case where a backgrounded
+// grandchild escaped the process group (e.g. via `setsid`) and still holds the
+// inherited stdout/stderr pipes open, so 'close' would otherwise never fire.
+const EXIT_DRAIN_GRACE_MS = 2000;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
@@ -93,12 +99,28 @@ class WorkspaceSandbox extends PosixShellSandbox {
 }
 
 // Run one command through a POSIX shell rooted at `cwd`, buffering output and
-// resolving the final ExecutionResult. Mirrors the SDK stream-process
-// termination contract (SIGTERM, then a 1s-grace SIGKILL) and throws the SDK's
-// SandboxTimeoutError / SandboxAbortError so the vended bash surfaces a timeout
-// as BashTimeoutError. Buffering (rather than incremental streaming) matches the
-// only consumers here — Sandbox.execute and the file editor, which need just the
-// final result — and preserves the previous spawnSync tool's buffered behavior.
+// resolving the final ExecutionResult. Throws the SDK's SandboxTimeoutError /
+// SandboxAbortError so the vended bash surfaces a timeout as BashTimeoutError.
+// Buffering (rather than incremental streaming) matches the only consumers here
+// — Sandbox.execute and the file editor, which need just the final result.
+//
+// Backgrounded-process containment (the post-invoke-hang fix): the agent may
+// background a long-lived process (e.g. `npm run dev &`). Two safeguards keep
+// that from wedging the harness:
+//   1. Spawn `detached: true` so bash leads its OWN process group (pgid == pid).
+//      Under non-interactive job control a `&` child stays in that group, so a
+//      negative-pid signal reaps the whole tree in one shot.
+//   2. Resolve on 'close' (all stdio drained to EOF) so the buffered stdout is
+//      COMPLETE — the vended fileEditor reads files via `base64 < file` and
+//      decodes result.stdout, so a truncated capture would corrupt reads/writes.
+//      But 'close' alone BLOCKS for the full timeout when a backgrounded child
+//      inherits the stdout/stderr pipes (their write-ends never close). So the
+//      moment BASH ITSELF exits we SIGKILL the process group: that reaps the
+//      backgrounded child and closes the leaked pipe FDs, letting 'close' fire
+//      promptly with the foreground output intact (e.g. `npm run dev & sleep 3;
+//      echo` returns in ~3s, not the 600s floor). A bounded post-exit grace
+//      (EXIT_DRAIN_GRACE_MS) resolves anyway if a child escaped the group (e.g.
+//      via `setsid`) and still holds the pipes, so we never hang.
 function runShell(
 	command: string,
 	cwd: string,
@@ -109,33 +131,44 @@ function runShell(
 	return new Promise<ExecutionResult>((resolve, reject) => {
 		const proc = spawn('bash', ['-c', `cd ${shellQuote(cwd)} && ${command}`], {
 			env: env ? { ...process.env, ...env } : process.env,
+			detached: true,
 		});
 		let stdout = '';
 		let stderr = '';
 		let settled = false;
+		let exited = false;
 		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+		let drainHandle: ReturnType<typeof setTimeout> | undefined;
 
-		const finish = (fn: () => void): void => {
+		// SIGKILL the whole process group (negative pid). This reaps any process
+		// the command backgrounded — whose inherited stdout/stderr pipe write-ends
+		// are exactly what keeps 'close' from firing (blocking the tool call for
+		// the full timeout) and holds libuv's loop open so Node never exits after
+		// invoke() returns. Guarded: pid is undefined if spawn failed, and the
+		// group may already be gone (ESRCH).
+		const killGroup = (): void => {
+			if (proc.pid === undefined) return;
+			try {
+				process.kill(-proc.pid, 'SIGKILL');
+			} catch {
+				// group already reaped — nothing to do
+			}
+		};
+
+		const settle = (fn: () => void): void => {
 			if (settled) return;
 			settled = true;
 			if (timeoutHandle) clearTimeout(timeoutHandle);
+			if (drainHandle) clearTimeout(drainHandle);
 			if (signal) signal.removeEventListener('abort', onAbort);
+			killGroup();
 			fn();
 		};
-		const terminate = (err: Error): void => {
-			if (settled) return;
-			proc.kill('SIGTERM');
-			// Detached grace-kill: if SIGTERM doesn't land in 1s, force it. unref()
-			// so this timer never holds the event loop open on its own.
-			setTimeout(() => {
-				try {
-					proc.kill('SIGKILL');
-				} catch {
-					// already exited — nothing to kill
-				}
-			}, 1000).unref();
-			finish(() => reject(err));
-		};
+		const resolveResult = (code: number | null, sig: NodeJS.Signals | null): void =>
+			settle(() =>
+				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
+			);
+		const terminate = (err: Error): void => settle(() => reject(err));
 		const onAbort = (): void => terminate(new SandboxAbortError());
 
 		proc.stdout?.on('data', (d) => {
@@ -144,12 +177,19 @@ function runShell(
 		proc.stderr?.on('data', (d) => {
 			stderr += String(d);
 		});
-		proc.on('error', (err) => finish(() => reject(err)));
-		proc.on('close', (code, sig) =>
-			finish(() =>
-				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
-			),
-		);
+		proc.on('error', (err) => settle(() => reject(err)));
+		// The direct bash process has terminated (its foreground pipeline is done);
+		// only `&`-backgrounded children can still be alive. Reap the group so their
+		// leaked pipe FDs close and 'close' can fire, and arm the grace fallback for
+		// a child that escaped the group.
+		proc.on('exit', (code, sig) => {
+			if (settled || exited) return;
+			exited = true;
+			killGroup();
+			drainHandle = setTimeout(() => resolveResult(code, sig), EXIT_DRAIN_GRACE_MS);
+			drainHandle.unref();
+		});
+		proc.on('close', (code, sig) => resolveResult(code, sig));
 
 		if (timeoutSec !== undefined) {
 			timeoutHandle = setTimeout(() => terminate(new SandboxTimeoutError(timeoutSec)), timeoutSec * 1000);
@@ -339,6 +379,15 @@ if (METRICS_PATH) {
 		process.stderr.write(`[bench] failed to write metrics to ${METRICS_PATH}: ${describeError(err)}\n`);
 	}
 }
+
+// Explicit success exit (mirrors the process.exit(124) timeout / process.exit(1)
+// error paths). The envelope + trace + metrics are all written above, so there is
+// nothing left to do. Without this, Node would wait for the libuv loop to drain
+// naturally — and if the agent left a stray handle open (e.g. a dev server it
+// backgrounded that somehow escaped the per-command process-group reap), that
+// wait never ends and the GHA step idles until the 35-min wall-clock SIGKILL,
+// falsely recorded as an agent timeout. Exiting here guarantees prompt teardown.
+process.exit(0);
 
 function messageText(msg: import('@strands-agents/sdk').Message | undefined): string {
 	if (!msg) return '';
