@@ -1,3 +1,4 @@
+// CI e2e runs pre-seed a fixed installation ID at $HOME/.blocks/telemetry/installation-id.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
