@@ -11,19 +11,19 @@ This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.htm
 ## Requirements
 
 ### Knowledge base (seed it yourself)
-1. **Create a `knowledge/` folder** containing **at least one `.md` document**, and point a knowledge-base block at it (`source: './knowledge'`). Locally the block indexes the folder with a TF-IDF stub and answers `retrieve()` queries; in the cloud it is backed by Bedrock.
+1. **Create a `knowledge/` folder** containing **at least one `.md` document**, and point a knowledge-base block at that folder. Locally the block indexes the folder with a TF-IDF stub and answers retrieval queries; in the cloud it is backed by Bedrock.
 2. **Required seed content.** One document must be a short Nimbus-7 product sheet that records, in a single passage, **all** of:
    - the product's internal product code **`QUOKKA-9F42`**,
    - its maximum hover altitude of **`1337 centimeters`**,
    - its factory calibration code **`NBS-7Q6X`** (a second, distinct fact from the product code — the grader asks for it separately to prove the assistant surfaces the *actual retrieved passage* rather than a hard-coded product-code string),
    - the word **`sample`** (the local index is probed with a generic term, and the grader relies on this word being in the same passage as the facts above).
 
-   These four facts must appear **only** in the knowledge base — nowhere in your frontend or backend source — so that an answer repeating them proves a real retrieval happened. The same (or another) document must also describe the **return / refund policy** and contain the word **`refund`**. Write real prose, not a stub. Set the block's chunking to `{ strategy: 'none' }` so the passage stays in one chunk.
+   These four facts must appear **only** in the knowledge base — nowhere in your frontend or backend source — so that an answer repeating them proves a real retrieval happened. The same (or another) document must also describe the **return / refund policy** and contain the word **`refund`**. Write real prose, not a stub. Configure the block's chunking so this whole passage stays in a single chunk, rather than being split apart.
 
 ### Agent + tools
 3. Wire an **agent block** whose deployed model is Amazon Bedrock with the Claude Sonnet 4.6 inference profile — model id exactly **`us.anthropic.claude-sonnet-4-6`**. (Locally a keyword-driven mock stands in for Bedrock automatically; you do not need AWS credentials to run the dev server.)
 4. The agent must expose **exactly two tools**, named **exactly** `searchKnowledgeBase` and `lookupOrderStatus` (the grader's questions are phrased to invoke them by name):
-   - **`searchKnowledgeBase`** — parameters `{ query: string }`; its handler calls the knowledge-base block's `retrieve(query, { maxResults })` and returns the hits (each hit's `text` and `source`). **Treat an empty or missing query as a broad lookup** — default it to `'sample'` — so the tool still returns the seeded passage. The agent must **not** crash while the knowledge base is still ingesting: if `retrieve()` throws `KnowledgeBaseErrors.NotReady`, wait briefly and retry until it succeeds (there is **no** `waitUntilReady()`/`isReady()` method — readiness is signalled only by that error).
+   - **`searchKnowledgeBase`** — takes a search query and returns matching passages from the knowledge base (each hit's text and its source document). **Treat an empty or missing query as a broad lookup** — default it to `'sample'` — so the tool still returns the seeded passage. The knowledge base may still be ingesting when the first question arrives: the agent must **not** crash or answer without it — wait for the knowledge base to become ready and retry until retrieval succeeds.
    - **`lookupOrderStatus`** — returns a **fixed, deterministic** result regardless of its input: `{ status: 'shipped', trackingCode: 'TRK-9F42-OK' }`. (A real implementation would look the order up; for this task a constant is required so the result is checkable.)
 5. The agent's system prompt must steer it to call `searchKnowledgeBase` for product / returns / refund questions and `lookupOrderStatus` for order / shipping / tracking questions, and to answer **only** from what those tools return.
 
@@ -35,65 +35,7 @@ A single shared assistant — no login.
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`; **read the agent block's and the knowledge-base block's docs before wiring** — use only methods documented there.
-
-Shapes you'll use (read the READMEs for exact options):
-
-```ts
-import { ApiNamespace, Scope, Agent, KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/blocks';
-import { z } from 'zod';
-
-const scope = new Scope('kb-chat-agent');
-
-const kb = new KnowledgeBase(scope, 'docs', {
-  source: './knowledge',
-  chunking: { strategy: 'none' },
-  description: 'Nimbus-7 product specs and store policies',
-});
-
-const agent = new Agent(scope, 'assistant', {
-  model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4-6' } },
-  systemPrompt: 'Answer product/returns questions from searchKnowledgeBase and order questions from lookupOrderStatus. Never invent facts.',
-  tools: (tool) => ({
-    searchKnowledgeBase: tool({
-      description: 'Search the product knowledge base.',
-      parameters: z.object({ query: z.string() }),
-      handler: async ({ input }) => {
-        const q = (input?.query ?? '').trim() || 'sample';
-        // retry on KnowledgeBaseErrors.NotReady, then:
-        const hits = await kb.retrieve(q, { maxResults: 3 });
-        return { results: hits.map(h => ({ text: h.text, source: h.source })) };
-      },
-    }),
-    lookupOrderStatus: tool({
-      description: 'Look up the current order shipping status.',
-      parameters: z.object({ orderId: z.string().optional() }),
-      handler: async () => ({ status: 'shipped', trackingCode: 'TRK-9F42-OK' }),
-    }),
-  }),
-});
-
-// Recommended: drive each chat turn from ONE backend method (call it `ask`).
-// It creates a conversation, runs a single turn with agent.stream(...).complete(),
-// then reads agent.getConversation(...) to see which tools ran and which sources
-// they cited — returning the answer, tool calls and citations in ONE call the
-// frontend awaits. Note: there is no agent.ask() and no client ask() method;
-// `ask` is simply the ApiNamespace method you define below.
-export const api = new ApiNamespace(scope, 'api', (_context) => ({
-  async ask(question: string) {
-    const conversationId = await agent.createConversationId('demo-user');
-    const result = await agent.stream(question, { conversationId, userId: 'demo-user' });
-    const done = await result.complete();
-    const history = await agent.getConversation(conversationId);
-    const toolCalls = history.filter(m => m.role === 'tool-call').map(m => m.metadata?.toolName);
-    return { answer: done.text, toolCalls /*, citations from tool-result metadata */ };
-  },
-}));
-```
-
-**Recommended: use the backend `ask` method shown above (`agent.stream(...).complete()` + `agent.getConversation(...)`) for the chat round-trip, and call `api.ask(question)` once per turn from the frontend.** It returns the answer plus the tool calls and cited sources in a single request→response call, which maps directly to the transcript / tool-indicator / citation contract below. Commit to this approach and build it end to end — do **not** redesign the frontend mid-build.
-
-**Optional (advanced — streaming only):** if you specifically want live token-by-token streaming, the agent block also ships a framework-agnostic client hook `useChat` — **not** re-exported from `@aws-blocks/blocks`; import it from the bb-agent client subpath: `import { useChat } from '@aws-blocks/bb-agent/client'` — driven by its Realtime channel. It is strictly more work for this task: it surfaces only `user`/`assistant`/`approval` messages and filters out the `tool-call`/`tool-result` records, so you would still call `agent.getConversation(...)` to render the tool indicator and citation. Prefer `ask` unless streaming is a hard requirement — it is not (streaming is out of scope below). Whichever you pick, the rendered transcript, tool indicator and citation must match the contract below.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. **Read the agent block's and the knowledge-base block's docs before wiring, and use only the APIs documented there** — including how to run a chat turn end to end, how to tell which tools ran and which sources they cited, and how retrieval signals that it is not ready yet.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
