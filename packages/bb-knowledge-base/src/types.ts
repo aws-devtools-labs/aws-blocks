@@ -154,29 +154,31 @@ export interface RetrieveResult {
 	metadata: Record<string, string>;
 }
 
-// ── Readiness Options ──────────────────────────────────────────────────────
+// ── Sync Options ───────────────────────────────────────────────────────────
 
 /**
- * Options for the `waitUntilReady()` method.
+ * Options for the `waitUntilSynced()` method.
  *
  * @example
  * ```typescript
  * // Wait up to 10 minutes, polling every 10 seconds
- * await kb.waitUntilReady({ timeoutMs: 600_000, pollIntervalMs: 10_000 });
+ * await kb.waitUntilSynced({ timeoutMs: 600_000, pollIntervalMs: 10_000 });
  * ```
  */
-export interface WaitUntilReadyOptions {
+export interface WaitUntilSyncedOptions {
 	/**
 	 * Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes).
 	 *
 	 * `timeoutMs: 0` is a one-shot check, not a no-poll fast-fail: the deadline is
-	 * evaluated *after* the first readiness poll, so exactly one `isReady()` poll
-	 * always runs (and can resolve the wait) before a `KnowledgeBaseTimeoutException`
-	 * is thrown. Clamped to a minimum of 0.
+	 * evaluated *after* the first `isSynced()` poll, so exactly one poll always
+	 * runs (and can resolve the wait) before a `KnowledgeBaseTimeoutException` is
+	 * thrown. No inter-poll sleep occurs in this case either — the sleep is
+	 * `min(jitter, deadline − now)`, and the remaining-budget clamp drives it to 0
+	 * when the budget is already spent. Clamped to a minimum of 0.
 	 */
 	timeoutMs?: number;
 	/**
-	 * Delay between readiness polls, in milliseconds. Clamped to a minimum of 1ms.
+	 * Delay between sync polls, in milliseconds. Clamped to a minimum of 1ms.
 	 * A small amount of random jitter (±20%) is applied to each delay so that many
 	 * knowledge bases polling after a shared deploy do not fall into lockstep — the
 	 * jitter only varies the wait *between* polls (never the number of polls) and is
@@ -186,16 +188,16 @@ export interface WaitUntilReadyOptions {
 	/**
 	 * Maximum number of *consecutive* transient control-plane errors to tolerate
 	 * before giving up, instead of aborting the wait on the first blip. Two kinds
-	 * of error are treated as transient during a readiness poll:
+	 * of error are treated as transient during a sync poll:
 	 * - `RetrievalFailedException` — the catch-all for network failures, throttling,
 	 *   and other unrecognized SDK errors.
 	 * - A *not-yet-visible* knowledge base: in the post-deploy window the control
 	 *   plane can briefly return `ResourceNotFoundException` (the KB or data source
 	 *   isn't visible yet), which surfaces as `KnowledgeBaseNotReadyException`. Only
 	 *   this control-plane variant is transient — riding it out is the whole point
-	 *   of `waitUntilReady()`.
+	 *   of `waitUntilSynced()`.
 	 *
-	 * Each clean poll (ingestion still in progress, or ready) resets the counter,
+	 * Each clean poll (ingestion still in progress, or synced) resets the counter,
 	 * so only an unbroken run of failures counts toward the limit.
 	 *
 	 * Terminal errors always short-circuit immediately regardless of this value:
@@ -207,7 +209,7 @@ export interface WaitUntilReadyOptions {
 	maxConsecutiveTransientErrors?: number;
 	/**
 	 * Optional {@link AbortSignal} to cancel the wait. When the signal is aborted,
-	 * `waitUntilReady()` rejects promptly — checked before each poll and during the
+	 * `waitUntilSynced()` rejects promptly — checked before each poll and during the
 	 * inter-poll delay — with the signal's abort reason (by default a `DOMException`
 	 * named `'AbortError'`, or whatever value was passed to `AbortController.abort(reason)`).
 	 * An already-aborted signal rejects immediately, before any polling.

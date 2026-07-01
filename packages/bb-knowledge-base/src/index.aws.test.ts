@@ -13,7 +13,7 @@ function mockRuntimeSend(fn: (cmd: unknown) => unknown) {
 	return mock.method(BedrockAgentRuntimeClient.prototype, 'send', fn);
 }
 
-// Control-plane client used by isReady()/waitUntilReady().
+// Control-plane client used by isSynced()/waitUntilSynced().
 function mockAgentSend(fn: (cmd: { constructor: { name: string }; input: any }) => unknown) {
 	return mock.method(BedrockAgentClient.prototype, 'send', fn as (cmd: unknown) => unknown);
 }
@@ -31,8 +31,8 @@ function setKbEnv(scopeId: string, instanceId: string, kbId = 'kb-test-123') {
 }
 
 // Sets KB_ID and (unless dataSourceId is null) DATA_SOURCE_ID, mirroring the
-// two config values the CDK layer registers. Used by readiness tests.
-function setReadyEnv(
+// two config values the CDK layer registers. Used by the sync tests.
+function setSyncEnv(
 	scopeId: string,
 	instanceId: string,
 	opts: { kbId?: string; dataSourceId?: string | null } = {},
@@ -544,16 +544,16 @@ describe('error classification — other SDK exceptions', () => {
 	});
 });
 
-// ── Readiness — isReady() ──────────────────────────────────────────────────
+// ── Sync — isSynced() ────────────────────────────────────────────────────────
 //
-// Ingestion runs asynchronously after deploy, so isReady() inspects the data
-// source's most recent ingestion job: COMPLETE → ready, FAILED → throws,
-// anything else (or no jobs / no data source) → not-ready (or ready when there
+// Ingestion runs asynchronously after deploy, so isSynced() inspects the data
+// source's most recent ingestion job: COMPLETE → synced, FAILED → throws,
+// anything else (or no jobs / no data source) → not-synced (or synced when there
 // is nothing to track).
 
-describe('isReady', () => {
+describe('isSynced', () => {
 	test('returns true when the latest ingestion job is COMPLETE', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY1');
+		const cleanup = setSyncEnv('TEST', 'RDY1');
 		mockAgentSend((cmd) => {
 			assert.strictEqual(cmd.constructor.name, 'ListIngestionJobsCommand');
 			return { ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'COMPLETE' }] };
@@ -561,56 +561,56 @@ describe('isReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy1', { source: './knowledge' });
-			assert.strictEqual(await kb.isReady(), true);
+			assert.strictEqual(await kb.isSynced(), true);
 		} finally {
 			cleanup();
 		}
 	});
 
 	test('returns false when the latest ingestion job is IN_PROGRESS', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY2');
+		const cleanup = setSyncEnv('TEST', 'RDY2');
 		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'IN_PROGRESS' }] }));
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy2', { source: './knowledge' });
-			assert.strictEqual(await kb.isReady(), false);
+			assert.strictEqual(await kb.isSynced(), false);
 		} finally {
 			cleanup();
 		}
 	});
 
 	test('returns false when no ingestion jobs exist yet (empty list)', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY3');
+		const cleanup = setSyncEnv('TEST', 'RDY3');
 		mockAgentSend(() => ({ ingestionJobSummaries: [] }));
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3', { source: './knowledge' });
-			assert.strictEqual(await kb.isReady(), false);
+			assert.strictEqual(await kb.isSynced(), false);
 		} finally {
 			cleanup();
 		}
 	});
 
 	test('returns false when ingestionJobSummaries is undefined', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY3B');
+		const cleanup = setSyncEnv('TEST', 'RDY3B');
 		mockAgentSend(() => ({}));
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3b', { source: './knowledge' });
-			assert.strictEqual(await kb.isReady(), false);
+			assert.strictEqual(await kb.isSynced(), false);
 		} finally {
 			cleanup();
 		}
 	});
 
 	test('returns true (without calling the control plane) when no data source id is configured', async () => {
-		// A deployment that predates the readiness API: KB_ID present, but no
+		// A deployment that predates the sync API: KB_ID present, but no
 		// DATA_SOURCE_ID was injected, so there is no ingestion job to track. (The
 		// CDK layer now always registers a DATA_SOURCE_ID for both folder and
 		// imported s3:// sources — see DESIGN.md, the "Source coverage (folder and
 		// imported s3://)" note — so this is purely the pre-feature case, not a
 		// source-type distinction.)
-		const cleanup = setReadyEnv('TEST', 'RDY4', { dataSourceId: null });
+		const cleanup = setSyncEnv('TEST', 'RDY4', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {
 			sendCalled = true;
@@ -619,7 +619,7 @@ describe('isReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy4', { source: './knowledge' });
-			assert.strictEqual(await kb.isReady(), true);
+			assert.strictEqual(await kb.isSynced(), true);
 			assert.strictEqual(sendCalled, false, 'should not query the control plane when there is no data source to track');
 		} finally {
 			cleanup();
@@ -634,7 +634,7 @@ describe('isReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy5', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.isReady(),
+				() => kb.isSynced(),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
 					return true;
@@ -646,7 +646,7 @@ describe('isReady', () => {
 	});
 
 	test('throws IngestionFailed (with failureReasons) when the latest job FAILED', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY6');
+		const cleanup = setSyncEnv('TEST', 'RDY6');
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
 				return { ingestionJobSummaries: [{ ingestionJobId: 'job-x', status: 'FAILED' }] };
@@ -658,7 +658,7 @@ describe('isReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy6', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.isReady(),
+				() => kb.isSynced(),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
 					assert.ok(err.message.includes('boom one'), 'message should include failure reasons');
@@ -672,7 +672,7 @@ describe('isReady', () => {
 	});
 
 	test('queries ListIngestionJobs with the configured ids, sorted by STARTED_AT desc, maxResults 1', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY7', { kbId: 'kb-aaa', dataSourceId: 'ds-bbb' });
+		const cleanup = setSyncEnv('TEST', 'RDY7', { kbId: 'kb-aaa', dataSourceId: 'ds-bbb' });
 		let captured: any;
 		mockAgentSend((cmd) => {
 			captured = cmd.input;
@@ -681,7 +681,7 @@ describe('isReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy7', { source: './knowledge' });
-			await kb.isReady();
+			await kb.isSynced();
 			assert.strictEqual(captured.knowledgeBaseId, 'kb-aaa');
 			assert.strictEqual(captured.dataSourceId, 'ds-bbb');
 			assert.strictEqual(captured.maxResults, 1);
@@ -693,7 +693,7 @@ describe('isReady', () => {
 	});
 
 	test('maps control-plane ResourceNotFoundException to NotReady', async () => {
-		const cleanup = setReadyEnv('TEST', 'RDY8');
+		const cleanup = setSyncEnv('TEST', 'RDY8');
 		const err = new Error('No knowledge base with ID kb-test-123 exists');
 		err.name = 'ResourceNotFoundException';
 		mockAgentSend(() => { throw err; });
@@ -701,7 +701,7 @@ describe('isReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'rdy8', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.isReady(),
+				() => kb.isSynced(),
 				(e: Error) => {
 					assert.strictEqual(e.name, KnowledgeBaseErrors.NotReady);
 					return true;
@@ -713,23 +713,23 @@ describe('isReady', () => {
 	});
 });
 
-// ── Readiness — waitUntilReady() ───────────────────────────────────────────
+// ── Sync — waitUntilSynced() ─────────────────────────────────────────────────
 
-describe('waitUntilReady', () => {
+describe('waitUntilSynced', () => {
 	test('resolves immediately when ingestion is already COMPLETE', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR1');
+		const cleanup = setSyncEnv('TEST', 'WUR1');
 		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] }));
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur1', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 1000, pollIntervalMs: 10 });
+			await kb.waitUntilSynced({ timeoutMs: 1000, pollIntervalMs: 10 });
 		} finally {
 			cleanup();
 		}
 	});
 
 	test('polls until the ingestion job becomes COMPLETE', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR2');
+		const cleanup = setSyncEnv('TEST', 'WUR2');
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
@@ -739,7 +739,7 @@ describe('waitUntilReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur2', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 5 });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 5 });
 			assert.ok(calls >= 3, `expected at least 3 polls before COMPLETE, got ${calls}`);
 		} finally {
 			cleanup();
@@ -747,7 +747,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('throws IngestionFailed (with failureReasons) when ingestion FAILED', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR3');
+		const cleanup = setSyncEnv('TEST', 'WUR3');
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
 				return { ingestionJobSummaries: [{ ingestionJobId: 'job-fail', status: 'FAILED' }] };
@@ -758,7 +758,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur3', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 1000, pollIntervalMs: 10 }),
+				() => kb.waitUntilSynced({ timeoutMs: 1000, pollIntervalMs: 10 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
 					assert.ok(err.message.includes('S3 access denied'), 'should surface failure reasons');
@@ -771,13 +771,13 @@ describe('waitUntilReady', () => {
 	});
 
 	test('throws Timeout when the job never completes within the budget', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR4');
+		const cleanup = setSyncEnv('TEST', 'WUR4');
 		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] }));
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur4', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5 }),
+				() => kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
 					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
@@ -796,7 +796,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('Timeout message surfaces the last transient error when the budget runs out mid-streak', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR16');
+		const cleanup = setSyncEnv('TEST', 'WUR16');
 		// Every poll throws a transient (throttling → RetrievalFailed) error, but the
 		// tolerance is high enough that the deadline — not the transient budget — ends
 		// the wait. The Timeout message must then surface the last transient error so a
@@ -810,7 +810,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur16', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5, maxConsecutiveTransientErrors: 1000 }),
+				() => kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5, maxConsecutiveTransientErrors: 1000 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
 					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
@@ -831,7 +831,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('Timeout message stays plain when an early transient blip was cleared by later clean polls', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR17');
+		const cleanup = setSyncEnv('TEST', 'WUR17');
 		// Inverse of the mid-streak case (WUR16): the transient blip happens on the
 		// FIRST poll, but every later poll is a clean IN_PROGRESS, so the streak (and
 		// the remembered error) reset well before the deadline. The Timeout that
@@ -851,7 +851,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur17', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 40, pollIntervalMs: 5 }),
+				() => kb.waitUntilSynced({ timeoutMs: 40, pollIntervalMs: 5 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
 					assert.ok(calls >= 2, `expected clean polls after the initial blip, got ${calls} call(s)`);
@@ -872,11 +872,11 @@ describe('waitUntilReady', () => {
 	});
 
 	test('resolves immediately when no data source id is configured', async () => {
-		// Pre-readiness-API deployment: no DATA_SOURCE_ID injected, so there is
+		// Pre-sync-API deployment: no DATA_SOURCE_ID injected, so there is
 		// nothing to poll. (Not a source-type distinction — the CDK layer registers
 		// DATA_SOURCE_ID for folder and imported s3:// sources alike; see DESIGN.md,
 		// the "Source coverage (folder and imported s3://)" note.)
-		const cleanup = setReadyEnv('TEST', 'WUR5', { dataSourceId: null });
+		const cleanup = setSyncEnv('TEST', 'WUR5', { dataSourceId: null });
 		let sendCalled = false;
 		mockAgentSend(() => {
 			sendCalled = true;
@@ -885,7 +885,7 @@ describe('waitUntilReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur5', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 30, pollIntervalMs: 5 });
+			await kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5 });
 			assert.strictEqual(sendCalled, false, 'should not poll the control plane when there is nothing to track');
 		} finally {
 			cleanup();
@@ -893,7 +893,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('tolerates a transient control-plane error, then resolves once COMPLETE', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR6');
+		const cleanup = setSyncEnv('TEST', 'WUR6');
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
@@ -908,7 +908,7 @@ describe('waitUntilReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur6', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1 });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1 });
 			assert.ok(calls >= 2, `expected a retry after the transient blip, got ${calls} call(s)`);
 		} finally {
 			cleanup();
@@ -916,7 +916,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('throws once consecutive transient errors exceed the tolerance', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR7');
+		const cleanup = setSyncEnv('TEST', 'WUR7');
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
@@ -928,7 +928,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur7', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.RetrievalFailed);
 					return true;
@@ -942,7 +942,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('short-circuits immediately on IngestionFailed (never retried as transient)', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR8');
+		const cleanup = setSyncEnv('TEST', 'WUR8');
 		let listCalls = 0;
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
@@ -955,7 +955,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur8', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
 					return true;
@@ -980,7 +980,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur9', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
 					return true;
@@ -993,7 +993,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('resets the transient-error counter after a clean poll', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR10');
+		const cleanup = setSyncEnv('TEST', 'WUR10');
 		// transient → clean (IN_PROGRESS) → transient → COMPLETE. With tolerance 1 this
 		// only succeeds if the counter resets after the clean poll — otherwise the second
 		// transient error would be the 2nd consecutive failure and exceed the limit.
@@ -1011,7 +1011,7 @@ describe('waitUntilReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur10', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 1 });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 1 });
 			assert.strictEqual(i, 4, 'should consume the full transient/clean/transient/complete sequence');
 		} finally {
 			cleanup();
@@ -1024,7 +1024,7 @@ describe('waitUntilReady', () => {
 	// (thrown directly by ensureKbId, no `cause`) stays terminal.
 
 	test('tolerates a transient control-plane ResourceNotFoundException (KB not yet visible), then resolves once COMPLETE', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR11');
+		const cleanup = setSyncEnv('TEST', 'WUR11');
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
@@ -1041,7 +1041,7 @@ describe('waitUntilReady', () => {
 
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur11', { source: './knowledge' });
-			await kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1 });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1 });
 			assert.ok(calls >= 2, `expected a retry after the not-yet-visible blip, got ${calls} call(s)`);
 		} finally {
 			cleanup();
@@ -1049,7 +1049,7 @@ describe('waitUntilReady', () => {
 	});
 
 	test('throws once consecutive control-plane ResourceNotFound errors exceed the tolerance', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR12');
+		const cleanup = setSyncEnv('TEST', 'WUR12');
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
@@ -1061,7 +1061,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur12', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
 					assert.strictEqual(
@@ -1092,7 +1092,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur13', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
 					// The cause-based classification hinges on this: ensureKbId() throws
@@ -1111,7 +1111,7 @@ describe('waitUntilReady', () => {
 	// Cancellation via AbortSignal — checked before each poll and during the inter-poll sleep.
 
 	test('rejects immediately when the signal is already aborted (no polling)', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR14');
+		const cleanup = setSyncEnv('TEST', 'WUR14');
 		let sendCalled = false;
 		mockAgentSend(() => {
 			sendCalled = true;
@@ -1121,7 +1121,7 @@ describe('waitUntilReady', () => {
 		try {
 			const kb = new KnowledgeBase({ id: 'test' }, 'wur14', { source: './knowledge' });
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 5000, pollIntervalMs: 5, signal: AbortSignal.abort() }),
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 5, signal: AbortSignal.abort() }),
 				(err: Error) => {
 					assert.strictEqual(err.name, 'AbortError', 'default abort reason is a DOMException named AbortError');
 					return true;
@@ -1134,12 +1134,12 @@ describe('waitUntilReady', () => {
 	});
 
 	test('aborts during the inter-poll delay and rejects with the supplied abort reason', async () => {
-		const cleanup = setReadyEnv('TEST', 'WUR15');
+		const cleanup = setSyncEnv('TEST', 'WUR15');
 		const controller = new AbortController();
 		let calls = 0;
 		mockAgentSend(() => {
 			calls += 1;
-			// Always "still warming" so the wait reaches the inter-poll sleep, where
+			// Always "not synced yet" so the wait reaches the inter-poll sleep, where
 			// the abort fired below interrupts it.
 			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
 		});
@@ -1149,7 +1149,7 @@ describe('waitUntilReady', () => {
 			const reason = new Error('caller cancelled');
 			setTimeout(() => controller.abort(reason), 20).unref?.();
 			await assert.rejects(
-				() => kb.waitUntilReady({ timeoutMs: 60_000, pollIntervalMs: 50, signal: controller.signal }),
+				() => kb.waitUntilSynced({ timeoutMs: 60_000, pollIntervalMs: 50, signal: controller.signal }),
 				(err: Error) => {
 					assert.strictEqual(err, reason, 'should reject with the exact reason passed to abort()');
 					return true;

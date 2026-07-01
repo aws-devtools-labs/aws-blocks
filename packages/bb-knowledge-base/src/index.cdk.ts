@@ -19,7 +19,7 @@ export type {
 	KnowledgeBaseOptions, SourceConfig,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
-	MetadataFilter, WaitUntilReadyOptions,
+	MetadataFilter, WaitUntilSyncedOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -176,11 +176,11 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  *
  * **Environment variables injected into the handler:**
  * - `BLOCKS_{FULLID}_KB_ID` — Bedrock Knowledge Base ID (used by the AWS runtime)
- * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isReady()` / `waitUntilReady()`)
+ * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isSynced()` / `waitUntilSynced()`)
  *
  * **IAM grants to the handler:**
  * - `bedrock:Retrieve` — query the knowledge base at runtime
- * - `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` — check ingestion readiness
+ * - `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` — poll ingestion-job sync status
  *
  * @param scope - Parent scope.
  * @param id - Unique identifier within the scope.
@@ -452,7 +452,7 @@ export class KnowledgeBase extends Scope {
 		// ── 8. Handler config (read by the AWS runtime) ───────────────────
 		// Registered via registerConfig (not addEnvironment) so the runtime can
 		// locate the Bedrock resources. KB_ID drives retrieve(); DATA_SOURCE_ID
-		// drives the isReady()/waitUntilReady() ingestion-readiness checks.
+		// drives the isSynced()/waitUntilSynced() ingestion-sync checks.
 
 		registerConfig(this, envKey(this.fullId, 'KB_ID'), knowledgeBase.attrKnowledgeBaseId);
 		registerConfig(this, envKey(this.fullId, 'DATA_SOURCE_ID'), dataSource.attrDataSourceId);
@@ -471,7 +471,7 @@ export class KnowledgeBase extends Scope {
 			resources: [knowledgeBaseArn],
 		}));
 
-		// Ingestion-job status for isReady()/waitUntilReady(). These actions are
+		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
 		// authorized at the knowledge-base resource level (the data source and
 		// ingestion jobs are sub-resources of the KB ARN).
 		this.handler.addToRolePolicy(new iam.PolicyStatement({
@@ -482,11 +482,11 @@ export class KnowledgeBase extends Scope {
 
 	// ── Runtime methods are not available during CDK synth ────────────────
 	// Under `--conditions=cdk` a KnowledgeBase resolves to this construct, which
-	// only provisions infrastructure. The data/readiness methods (retrieve/
-	// isReady/waitUntilReady) live in the runtime build. Calling them at module
+	// only provisions infrastructure. The data/sync methods (retrieve/
+	// isSynced/waitUntilSynced) live in the runtime build. Calling them at module
 	// top-level (which runs during synth) would otherwise fail with a cryptic
 	// `X is not a function`; these stubs turn that into an actionable message.
 	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
-	isReady(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isReady'); }
-	waitUntilReady(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilReady'); }
+	isSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isSynced'); }
+	waitUntilSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilSynced'); }
 }

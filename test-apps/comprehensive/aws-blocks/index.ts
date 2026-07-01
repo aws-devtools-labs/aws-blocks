@@ -13,7 +13,7 @@ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { RetrieveOptions, WaitUntilReadyOptions } from '@aws-blocks/bb-knowledge-base';
+import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
@@ -1863,15 +1863,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return await kb.retrieve(query, options);
   },
 
-  // Ingestion readiness — Bedrock ingests asynchronously after deploy, so e2e
+  // Ingestion sync — Bedrock ingests asynchronously after deploy, so e2e
   // tests gate retrieval on these instead of polling retrieve() for results.
-  // The local mock reports ready immediately.
-  async kbReady() {
-    return await kb.isReady();
+  // The local mock reports synced immediately.
+  async kbSynced() {
+    return await kb.isSynced();
   },
 
-  async kbWaitUntilReady(options?: WaitUntilReadyOptions) {
-    await kb.waitUntilReady(options);
+  async kbWaitUntilSynced(options?: WaitUntilSyncedOptions) {
+    await kb.waitUntilSynced(options);
     return { success: true };
   },
 

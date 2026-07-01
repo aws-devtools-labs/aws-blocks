@@ -1032,31 +1032,31 @@ describe('unicode / multilingual retrieval', () => {
 	});
 });
 
-// ── Readiness (local dev: no warm-up window) ────────────────────────────────
+// ── Sync (local dev: no async ingestion window) ─────────────────────────────
 //
 // The local corpus loads synchronously on first retrieve(), so there is no
-// asynchronous ingestion warm-up — isReady() is always true and
-// waitUntilReady() resolves immediately (options are ignored).
+// asynchronous ingestion window — isSynced() is always true and
+// waitUntilSynced() resolves immediately (options are ignored).
 
-describe('readiness', () => {
-	test('isReady() resolves true immediately', async () => {
-		const kb = new KnowledgeBase({ id: 'test' }, 'ready', { source: 'test-knowledge-tmp' });
-		assert.strictEqual(await kb.isReady(), true);
+describe('sync', () => {
+	test('isSynced() resolves true immediately', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'synced', { source: 'test-knowledge-tmp' });
+		assert.strictEqual(await kb.isSynced(), true);
 	});
 
-	test('waitUntilReady() resolves immediately', async () => {
-		const kb = new KnowledgeBase({ id: 'test' }, 'waitready', { source: 'test-knowledge-tmp' });
-		await kb.waitUntilReady();
+	test('waitUntilSynced() resolves immediately', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'waitsynced', { source: 'test-knowledge-tmp' });
+		await kb.waitUntilSynced();
 	});
 
-	test('isReady() is true even for an S3 URI source (no local warm-up)', async () => {
-		const kb = new KnowledgeBase({ id: 'test' }, 'readys3', { source: 's3://my-docs-bucket' });
-		assert.strictEqual(await kb.isReady(), true);
+	test('isSynced() is true even for an S3 URI source (no local ingestion window)', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'synceds3', { source: 's3://my-docs-bucket' });
+		assert.strictEqual(await kb.isSynced(), true);
 	});
 
-	test('waitUntilReady() ignores options and resolves immediately', async () => {
+	test('waitUntilSynced() ignores options and resolves immediately', async () => {
 		const kb = new KnowledgeBase({ id: 'test' }, 'waitopts', { source: 'test-knowledge-tmp' });
-		await kb.waitUntilReady({ timeoutMs: 1, pollIntervalMs: 1 });
+		await kb.waitUntilSynced({ timeoutMs: 1, pollIntervalMs: 1 });
 	});
 });
 

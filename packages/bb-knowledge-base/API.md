@@ -24,11 +24,11 @@ export class KnowledgeBase extends Scope {
     constructor(scope: ScopeParent, id: string, _options: KnowledgeBaseOptions);
     // (undocumented)
     readonly bbName = "KnowledgeBase";
-    isReady(): Promise<boolean>;
+    isSynced(): Promise<boolean>;
     // @internal
     protected log: ChildLogger;
     retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]>;
-    waitUntilReady(options?: WaitUntilReadyOptions): Promise<void>;
+    waitUntilSynced(options?: WaitUntilSyncedOptions): Promise<void>;
 }
 
 // @public
@@ -76,7 +76,7 @@ export interface RetrieveResult {
 export type SourceConfig = string;
 
 // @public
-export interface WaitUntilReadyOptions {
+export interface WaitUntilSyncedOptions {
     maxConsecutiveTransientErrors?: number;
     pollIntervalMs?: number;
     signal?: AbortSignal;

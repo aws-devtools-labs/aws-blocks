@@ -30,6 +30,6 @@ export const KnowledgeBaseErrors = {
 	BrowserNotSupported: 'BrowserNotSupportedException',
 	/** The data source's most recent Bedrock ingestion job failed. The error message includes the reported `failureReasons`. */
 	IngestionFailed: 'IngestionFailedException',
-	/** `waitUntilReady()` exceeded its timeout before the knowledge base finished ingesting. */
+	/** `waitUntilSynced()` exceeded its timeout before the knowledge base finished ingesting. */
 	Timeout: 'KnowledgeBaseTimeoutException',
 } as const;

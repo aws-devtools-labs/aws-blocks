@@ -10,13 +10,13 @@
  * CloudFormation `DeletionPolicy` and leaked. Those tests pin the fix: the
  * vector resources now mirror the data bucket's removal policy.
  *
- * Ingestion readiness: the handler role must be able to read ingestion-job
+ * Ingestion sync: the handler role must be able to read ingestion-job
  * status (`bedrock:GetIngestionJob` / `bedrock:ListIngestionJobs`) — scoped to
  * the KB ARN like the existing `bedrock:Retrieve` grant — and the
- * `DATA_SOURCE_ID` config the runtime readiness checks rely on must be
+ * `DATA_SOURCE_ID` config the runtime sync checks rely on must be
  * registered and surface in the synthesized template.
  *
- * Synth guards: the runtime methods (`retrieve` / `isReady` / `waitUntilReady`)
+ * Synth guards: the runtime methods (`retrieve` / `isSynced` / `waitUntilSynced`)
  * are stubbed on the CDK construct so an accidental synth-time call throws an
  * actionable error instead of a cryptic `TypeError: not a function`.
  */
@@ -57,7 +57,7 @@ class StubBlocksStack extends cdk.Stack {
   }
 }
 
-function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: boolean } = {}): {
+function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: boolean; source?: string } = {}): {
   stack: StubBlocksStack;
   kb: KnowledgeBase;
 } {
@@ -67,7 +67,7 @@ function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: b
   const stack = new StubBlocksStack(app, 'teststack');
   const parent = new Scope('app');
   const kb = new KnowledgeBase(parent, 'docs', {
-    source: FIXTURES,
+    source: options.source ?? FIXTURES,
     ...(options.removalPolicy ? { removalPolicy: options.removalPolicy } : {}),
   });
   return { stack, kb };
@@ -112,7 +112,7 @@ test('CDK: sandboxMode context defaults the data bucket + vector store to destro
 test('CDK: handler role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
   const template = synth();
 
-  // isReady()/waitUntilReady() poll ingestion-job status — the handler role
+  // isSynced()/waitUntilSynced() poll ingestion-job status — the handler role
   // needs both actions, granted as Allow.
   template.hasResourceProperties('AWS::IAM::Policy', {
     PolicyDocument: Match.objectLike({
@@ -148,7 +148,7 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   const { stack } = buildStack();
 
   // registerConfig records BLOCKS_{FULLID}_DATA_SOURCE_ID on the stack's config
-  // registry, bound to the Bedrock data source's id — the runtime readiness
+  // registry, bound to the Bedrock data source's id — the runtime sync
   // checks read it back at cold start. (Mirrors bb-app-setting's CDK test.)
   const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
     | { entries: Map<string, unknown> }
@@ -195,10 +195,83 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   });
 });
 
+// ── S3 URI (imported bucket) source ─────────────────────────────────────────
+// An imported s3:// source skips the documents BucketDeployment (the objects
+// already live in the bucket) but still provisions a BB-managed CfnDataSource
+// and fires the ingestion job — so the runtime sync grants and DATA_SOURCE_ID
+// wiring must be present exactly as they are for a local-folder source (see
+// DESIGN.md, "Source coverage (folder and imported s3://)").
+const S3_SOURCE = 's3://my-docs-bucket';
+
+test('CDK (s3:// source): handler still gets bedrock:Retrieve + ingestion-status grants scoped to the KB ARN', () => {
+  const { stack } = buildStack({ source: S3_SOURCE });
+  const template = Template.fromStack(stack);
+
+  // Imported bucket → no documents BucketDeployment (proves the s3:// branch is
+  // taken, not the folder path; finalizeConfigRegistry isn't called here).
+  template.resourceCountIs('Custom::CDKBucketDeployment', 0);
+
+  // Same ingestion-status grant as a folder source: both actions, granted Allow.
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+
+  // ...scoped to the SAME knowledge-base ARN as the existing bedrock:Retrieve
+  // grant (not a wildcard) — ingestion jobs are sub-resources of the KB ARN.
+  const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+    (policy) => policy.Properties.PolicyDocument.Statement as Array<Record<string, unknown>>,
+  );
+  const retrieveStmt = statements.find((s) => s.Action === 'bedrock:Retrieve');
+  const ingestionStmt = statements.find(
+    (s) => Array.isArray(s.Action) && (s.Action as string[]).includes('bedrock:GetIngestionJob'),
+  );
+  assert.ok(retrieveStmt, 'bedrock:Retrieve grant is present for an s3:// source');
+  assert.ok(ingestionStmt, 'ingestion-status grant is present for an s3:// source');
+  assert.deepStrictEqual(
+    ingestionStmt.Resource,
+    retrieveStmt.Resource,
+    'ingestion-status grant is scoped to the same KB ARN as bedrock:Retrieve',
+  );
+});
+
+test('CDK (s3:// source): DATA_SOURCE_ID config is wired to the data source id (same as a folder source)', () => {
+  const { stack } = buildStack({ source: S3_SOURCE });
+
+  // Even though the bucket is imported, the construct still registers
+  // BLOCKS_{FULLID}_DATA_SOURCE_ID bound to the Bedrock data source's id, so the
+  // runtime isSynced()/waitUntilSynced() checks track the imported source's
+  // ingestion job exactly as they do for a local folder.
+  const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+    | { entries: Map<string, unknown> }
+    | undefined;
+  assert.ok(registry, 'config registry exists on the stack');
+
+  const dataSourceKey = [...registry.entries.keys()].find((k) => k.endsWith('_DATA_SOURCE_ID'));
+  assert.ok(dataSourceKey, 'a *_DATA_SOURCE_ID config key is registered for an s3:// source');
+  assert.match(dataSourceKey, /^BLOCKS_.+_DATA_SOURCE_ID$/);
+
+  const resolvedValue = stack.resolve(registry.entries.get(dataSourceKey)) as {
+    'Fn::GetAtt'?: [string, string];
+  };
+  assert.ok(resolvedValue['Fn::GetAtt'], 'config value is a CDK token (Fn::GetAtt)');
+  assert.strictEqual(
+    resolvedValue['Fn::GetAtt'][1],
+    'DataSourceId',
+    'config value is wired to the data source id even when the source is an S3 URI',
+  );
+});
+
 test('CDK: calling a runtime method throws an actionable synth-time error (not a cryptic TypeError)', () => {
   const { kb } = buildStack();
   const construct = kb as unknown as Record<string, (...args: unknown[]) => unknown>;
-  for (const method of ['retrieve', 'isReady', 'waitUntilReady']) {
+  for (const method of ['retrieve', 'isSynced', 'waitUntilSynced']) {
     assert.throws(
       () => construct[method]('x'),
       /cannot be called during CDK synth/,

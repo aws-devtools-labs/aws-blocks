@@ -20,7 +20,7 @@ import type {
 	RetrieveOptions,
 	RetrieveResult,
 	MetadataFilter,
-	WaitUntilReadyOptions,
+	WaitUntilSyncedOptions,
 } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -35,7 +35,7 @@ export type {
 	RetrieveOptions,
 	RetrieveResult,
 	MetadataFilter,
-	WaitUntilReadyOptions,
+	WaitUntilSyncedOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -57,8 +57,8 @@ function blocksError(name: string, message: string): Error {
 }
 
 /**
- * Resolve after `ms` milliseconds. Used to space out readiness polls in
- * `waitUntilReady()`. If an {@link AbortSignal} is supplied and fires (or is
+ * Resolve after `ms` milliseconds. Used to space out the sync polls in
+ * `waitUntilSynced()`. If an {@link AbortSignal} is supplied and fires (or is
  * already aborted), the returned promise rejects promptly with the signal's
  * abort reason instead of waiting out the full delay.
  */
@@ -147,8 +147,8 @@ function mapSdkError(err: unknown): Error {
 }
 
 /**
- * Whether a mapped readiness error is a *transient* control-plane failure worth
- * a bounded retry in {@link KnowledgeBase.waitUntilReady}, rather than a terminal
+ * Whether a mapped sync-poll error is a *transient* control-plane failure worth
+ * a bounded retry in {@link KnowledgeBase.waitUntilSynced}, rather than a terminal
  * one that should short-circuit the wait.
  *
  * Two cases are transient:
@@ -159,7 +159,7 @@ function mapSdkError(err: unknown): Error {
  *   isn't visible yet); {@link mapSdkError} maps that to `KnowledgeBaseNotReadyException`
  *   **with the original SDK error attached as the non-enumerable `cause`**. Detect
  *   it via `cause.name === 'ResourceNotFoundException'` and ride it out — that is
- *   the entire purpose of `waitUntilReady()`.
+ *   the entire purpose of `waitUntilSynced()`.
  *
  * Everything else is terminal and short-circuits immediately: the `NotReady`
  * raised for an unset `KB_ID` config is thrown directly by `ensureKbId()` (so it
@@ -222,15 +222,15 @@ function buildFilter(filter?: MetadataFilter): RetrievalFilter | undefined {
  *
  * **Environment variables (injected by CDK):**
  * - `BLOCKS_{FULLID}_KB_ID` — Bedrock Knowledge Base ID
- * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isReady()` / `waitUntilReady()`)
+ * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isSynced()` / `waitUntilSynced()`)
  */
 export class KnowledgeBase extends Scope {
 	readonly bbName = BB_NAME;
 	private readonly fullIdCached: string;
 	private readonly runtimeClient: BedrockAgentRuntimeClient;
-	// Control-plane client for ingestion-job status (readiness checks). Created
-	// lazily on first readiness call via getAgentClient() so instances that only
-	// ever retrieve() (or never check readiness) don't allocate it.
+	// Control-plane client for ingestion-job status (sync checks). Created
+	// lazily on first sync call via getAgentClient() so instances that only
+	// ever retrieve() (or never check sync state) don't allocate it.
 	private agentClient?: BedrockAgentClient;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
@@ -267,9 +267,9 @@ export class KnowledgeBase extends Scope {
 	 * missing data source id is a valid state that this simply reports as
 	 * `undefined`. Both folder and imported `s3://` sources register a BB-managed
 	 * data source id at deploy time, so this normally returns a value for either
-	 * source type. It is `undefined` only for deployments that predate the readiness
+	 * source type. It is `undefined` only for deployments that predate the sync
 	 * API (no `DATA_SOURCE_ID` injected) — in which case there is no ingestion job
-	 * to track and callers treat the KB as ready.
+	 * to track and callers treat the KB as synced.
 	 */
 	private getDataSourceId(): string | undefined {
 		const dataSourceId = getSdkIdentifiers(this).dataSourceId;
@@ -335,22 +335,40 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
-	 * Report whether the knowledge base has finished ingesting and is ready to
-	 * serve `retrieve()` calls.
+	 * Report whether the knowledge base is **synced with your latest data** —
+	 * i.e. its most recent Bedrock ingestion job has reached `COMPLETE`. Mirrors
+	 * the "Sync" state Bedrock surfaces in the console.
 	 *
 	 * Bedrock ingestion runs asynchronously after deploy (it is triggered
-	 * fire-and-forget), so during the warm-up window `retrieve()` returns an
-	 * empty array even for queries that will later match. Use `isReady()` to
-	 * distinguish "still warming up" (`false`) from "ingested, genuinely no
-	 * match" (`true` alongside an empty `retrieve()` result).
+	 * fire-and-forget), so on a first deploy `retrieve()` returns an empty array
+	 * during the initial pre-sync window even for queries that will later match.
+	 * Use `isSynced()` to distinguish "not synced with your latest data yet"
+	 * (`false`) from "synced, genuinely no match" (`true` alongside an empty
+	 * `retrieve()` result).
+	 *
+	 * **Freshness, not availability.** This reports freshness, not reachability.
+	 * Once the first ingestion has completed, `retrieve()` stays queryable
+	 * throughout any subsequent re-ingestion — Bedrock keeps serving the prior
+	 * snapshot while it re-indexes, it does not go dark. So `false` during a
+	 * re-sync means "your newest documents aren't indexed yet", **not** "the KB
+	 * is unavailable"; a caller that gates every `retrieve()` on `isSynced()`
+	 * would back off unnecessarily on each document-update cycle even though the
+	 * previous snapshot is fully queryable.
 	 *
 	 * Resolution strategy: lists the data source's ingestion jobs (most recent
-	 * first) and inspects the latest job's status — `COMPLETE` → ready,
+	 * first) and inspects the latest job's status — `COMPLETE` → synced,
 	 * `FAILED` → throws, anything else (`STARTING` / `IN_PROGRESS`, or no jobs
-	 * yet) → not ready. Both folder and imported `s3://` sources register a
+	 * yet) → not synced. Both folder and imported `s3://` sources register a
 	 * BB-managed data source id, so both are tracked here; the "no data source
-	 * id configured → reported ready" shortcut applies only to deployments that
+	 * id configured → reported synced" shortcut applies only to deployments that
 	 * predate this API (no `DATA_SOURCE_ID` injected — nothing to track).
+	 *
+	 * **Embedding-propagation lag.** `COMPLETE` reflects that the ingestion job
+	 * finished. For non-Aurora vector stores — this Building Block uses S3
+	 * Vectors — AWS notes embeddings can take a few more minutes to become
+	 * queryable after the job completes, so `isSynced() === true` means the job
+	 * completed, with a possible short propagation lag before the newest chunks
+	 * surface in `retrieve()`.
 	 *
 	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
 	 *   no managed data source to track); `false` while ingestion is pending.
@@ -359,7 +377,7 @@ export class KnowledgeBase extends Scope {
 	 *   For mapped Bedrock control-plane errors. Two distinct conditions map to `NotReady`:
 	 *   the `KB_ID` env var being unset (a *config* error thrown directly, so it carries no
 	 *   `cause`), and a control-plane `ResourceNotFoundException` (a *not-yet-visible* KB,
-	 *   mapped with the SDK error as `cause`). {@link waitUntilReady} relies on that
+	 *   mapped with the SDK error as `cause`). {@link waitUntilSynced} relies on that
 	 *   distinction: it rides out the not-yet-visible case as transient but treats the
 	 *   unset-`KB_ID` config error as terminal. A control-plane `ValidationException` maps to
 	 *   `KnowledgeBaseValidationError` (or `InvalidFilterException`); any other SDK error
@@ -368,19 +386,19 @@ export class KnowledgeBase extends Scope {
 	 *
 	 * @example
 	 * ```typescript
-	 * if (await kb.isReady()) {
+	 * if (await kb.isSynced()) {
 	 *   const results = await kb.retrieve('how do I reset my password');
 	 * }
 	 * ```
 	 */
-	async isReady(): Promise<boolean> {
+	async isSynced(): Promise<boolean> {
 		const knowledgeBaseId = this.ensureKbId();
 		const dataSourceId = this.getDataSourceId();
 		// No BB-managed ingestion to track → nothing to wait for.
 		if (!dataSourceId) return true;
 
 		const job = await this.fetchLatestIngestionJob(knowledgeBaseId, dataSourceId);
-		// No ingestion job recorded yet → ingestion has not started; still warming.
+		// No ingestion job recorded yet → ingestion has not started; not synced yet.
 		if (!job) return false;
 
 		if (job.status === 'COMPLETE') return true;
@@ -391,15 +409,16 @@ export class KnowledgeBase extends Scope {
 				`Knowledge base ingestion failed.${reasons.length ? ` Reasons: ${reasons.join('; ')}` : ''}`,
 			);
 		}
-		// STARTING | IN_PROGRESS | STOPPING | STOPPED → not ready.
+		// STARTING | IN_PROGRESS | STOPPING | STOPPED → not synced yet.
 		return false;
 	}
 
 	/**
-	 * Wait until the knowledge base has finished ingesting, polling its
-	 * ingestion-job status until ready or until the timeout elapses.
+	 * Wait until the knowledge base is **synced with your latest data** (its most
+	 * recent ingestion job reaches `COMPLETE`), polling the ingestion-job status
+	 * until synced or until the timeout elapses.
 	 *
-	 * Polls {@link isReady} every `pollIntervalMs` until it returns `true`
+	 * Polls {@link isSynced} every `pollIntervalMs` until it returns `true`
 	 * (resolves) or the `timeoutMs` budget is exhausted (throws). If the most
 	 * recent ingestion job has `FAILED`, the underlying `IngestionFailedException`
 	 * propagates immediately rather than waiting out the timeout.
@@ -426,16 +445,16 @@ export class KnowledgeBase extends Scope {
 	 * and during the inter-poll delay, rejecting promptly with the signal's abort
 	 * reason (default: a `DOMException` named `'AbortError'`).
 	 *
-	 * @param {WaitUntilReadyOptions} options - Optional polling parameters.
+	 * @param {WaitUntilSyncedOptions} options - Optional polling parameters.
 	 *   `timeoutMs` (default 300000) bounds the total wait; `pollIntervalMs`
 	 *   (default 5000, clamped to a minimum of 1ms, ±20% jitter) spaces out the
 	 *   polls; `maxConsecutiveTransientErrors` (default 3, minimum 0) bounds how
 	 *   many consecutive transient control-plane errors are tolerated before
 	 *   giving up; `signal` (optional `AbortSignal`) cancels the wait.
-	 * @throws {KnowledgeBaseTimeoutException} If the KB does not become ready within `timeoutMs`.
+	 * @throws {KnowledgeBaseTimeoutException} If the KB does not sync within `timeoutMs`.
 	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
-	 *   Propagated from {@link isReady} for mapped Bedrock control-plane errors — see its docs
+	 *   Propagated from {@link isSynced} for mapped Bedrock control-plane errors — see its docs
 	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
 	 *   `ValidationException` → `KnowledgeBaseValidationError`/`InvalidFilterException`,
 	 *   other SDK errors → `RetrievalFailedException`). Transient errors (a `RetrievalFailedException`,
@@ -446,14 +465,14 @@ export class KnowledgeBase extends Scope {
 	 * @example
 	 * ```typescript
 	 * // Block until the KB is queryable (e.g. right after deploy)
-	 * await kb.waitUntilReady({ timeoutMs: 600_000 });
+	 * await kb.waitUntilSynced({ timeoutMs: 600_000 });
 	 * const results = await kb.retrieve('getting started');
 	 *
 	 * // With cancellation (e.g. an overall request deadline)
-	 * await kb.waitUntilReady({ signal: AbortSignal.timeout(120_000) });
+	 * await kb.waitUntilSynced({ signal: AbortSignal.timeout(120_000) });
 	 * ```
 	 */
-	async waitUntilReady(options?: WaitUntilReadyOptions): Promise<void> {
+	async waitUntilSynced(options?: WaitUntilSyncedOptions): Promise<void> {
 		const timeoutMs = Math.max(options?.timeoutMs ?? 300_000, 0);
 		const pollIntervalMs = Math.max(options?.pollIntervalMs ?? 5_000, 1);
 		const maxConsecutiveTransientErrors = Math.max(options?.maxConsecutiveTransientErrors ?? 3, 0);
@@ -467,11 +486,11 @@ export class KnowledgeBase extends Scope {
 			// already-aborted signal throws here on the very first pass (no poll).
 			signal?.throwIfAborted();
 			try {
-				// isReady() resolves true (ready) / false (still warming), throws
+				// isSynced() resolves true (synced) / false (not synced yet), throws
 				// IngestionFailedException on a FAILED job, NotReady when the KB is
 				// not deployed (or briefly not-yet-visible), or RetrievalFailedException
 				// for transient blips.
-				if (await this.isReady()) return;
+				if (await this.isSynced()) return;
 				// A clean poll clears any transient-error streak — reset the remembered
 				// error alongside the counter so a later Timeout can only ever fold in a
 				// transient from the streak still in flight at the deadline, never a stale
@@ -487,9 +506,19 @@ export class KnowledgeBase extends Scope {
 				// Transient control-plane blip: absorb a bounded run, then give up.
 				consecutiveTransientErrors += 1;
 				lastTransient = err;
-				if (consecutiveTransientErrors > maxConsecutiveTransientErrors) throw err;
+				if (consecutiveTransientErrors > maxConsecutiveTransientErrors) {
+					// Distinct from a Timeout on a healthy-but-still-ingesting KB: log that
+					// the transient tolerance was exhausted before rethrowing, so "gave up
+					// after N consecutive control-plane errors" is greppable in CloudWatch
+					// and not mistaken for a KB that simply never finished syncing.
+					this.log.warn(
+						`waitUntilSynced: giving up after ${consecutiveTransientErrors} consecutive transient ` +
+							`control-plane error(s) — tolerance (${maxConsecutiveTransientErrors}) exhausted: ${err.message}`,
+					);
+					throw err;
+				}
 				this.log.warn(
-					`waitUntilReady: tolerating transient control-plane error ` +
+					`waitUntilSynced: tolerating transient control-plane error ` +
 						`(${consecutiveTransientErrors}/${maxConsecutiveTransientErrors}), retrying: ${err.message}`,
 				);
 			}
@@ -498,7 +527,7 @@ export class KnowledgeBase extends Scope {
 				// control-plane errors, fold the most recent one into the message.
 				// Otherwise a timeout reads like a healthy KB that just never finished
 				// ingesting, hiding that the final polls were actually failing transiently.
-				const base = `Knowledge base did not become ready within ${timeoutMs}ms`;
+				const base = `Knowledge base did not sync within ${timeoutMs}ms`;
 				throw blocksError(
 					KnowledgeBaseErrors.Timeout,
 					consecutiveTransientErrors > 0 && lastTransient
@@ -514,9 +543,9 @@ export class KnowledgeBase extends Scope {
 
 	/**
 	 * Lazily construct (and memoize) the Bedrock control-plane client used for
-	 * ingestion-job status during readiness checks. Built on first use rather
+	 * ingestion-job status during sync checks. Built on first use rather
 	 * than in the constructor so instances that only ever call {@link retrieve}
-	 * — or never check readiness at all — don't allocate a client they won't use.
+	 * — or never check sync state at all — don't allocate a client they won't use.
 	 * Subsequent calls return the cached instance.
 	 */
 	private getAgentClient(): BedrockAgentClient {
@@ -551,7 +580,14 @@ export class KnowledgeBase extends Scope {
 			return response.ingestionJobSummaries?.[0];
 		} catch (err) {
 			const mapped = mapSdkError(err);
-			this.log.error(mapped.message);
+			// Logged at debug, not error: this path fires for the transient control-plane
+			// blips (throttling → RetrievalFailed, a not-yet-visible KB → NotReady) that
+			// waitUntilSynced() is designed to absorb and retry during the post-deploy
+			// warm-up window — emitting them at error produced spurious CloudWatch ERROR
+			// entries during expected behavior. waitUntilSynced() owns the operator signal
+			// (its own warn at the retry/give-up sites); a direct isSynced() caller receives
+			// the thrown mapped error and owns how to surface it.
+			this.log.debug(mapped.message);
 			throw mapped;
 		}
 	}
