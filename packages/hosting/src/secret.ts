@@ -3,20 +3,22 @@
 
 /**
  * `secret()` — a deferred reference to a sensitive value stored in AWS Systems
- * Manager Parameter Store (SecureString), for self-hosted Blocks deployments.
+ * Manager Parameter Store (SecureString), for self-hosted deployments.
  *
  * A `secret('STRIPE_KEY')` call does NOT return the secret value. It returns a
  * lightweight **marker** — think of it as a coat-check ticket. The ticket is
  * safe to write in source code and commit to git; only AWS (the cloakroom),
  * given the right IAM permissions (your ID), can exchange it for the real
  * value. The value itself lives encrypted at rest in Parameter Store and is
- * set out-of-band via `blocks secret set <KEY> <value>` — it never appears in
+ * set out-of-band via the `secret set <KEY> <value>` CLI — it never appears in
  * source, in the CloudFormation template, or in the browser.
  *
- * This module is intentionally **dependency-free** (no CDK, no AWS SDK). It is
- * a leaf so that both `@aws-blocks/core` (for the `Hosting` block) and, later,
- * `@aws-blocks/pipeline` can import the same marker without a dependency cycle.
- * The packages that consume the marker decide *how* and *when* to resolve it.
+ * This module is **framework-neutral and dependency-free** (no CDK, no AWS SDK,
+ * no `@aws-blocks/*`). It is a leaf so any consumer — the `Hosting` construct, a
+ * framework wrapper, a plain framework app, or a future standalone hosting
+ * package — can import the same marker without a dependency cycle or inheriting
+ * a framework's branding. Consumers decide *how* and *when* to resolve it, and
+ * supply their own SSM namespace via {@link secretParameterName}'s `prefix`.
  *
  * @module
  */
@@ -31,7 +33,7 @@ export interface SecretValue {
 	readonly [SECRET_BRAND]: true;
 	/**
 	 * The logical secret name. This is the key the customer sets with
-	 * `blocks secret set <key> <value>` and references with `secret('<key>')`.
+	 * `secret set <key> <value>` and references with `secret('<key>')`.
 	 * The mapping is 1:1 — the key you set is the key you reference (no implicit
 	 * stage-scoping). The underlying SSM parameter path is derived from this key
 	 * by {@link secretParameterName}.
@@ -76,8 +78,8 @@ const SECRET_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * Reference a secret stored in SSM Parameter Store (SecureString).
  *
  * @param key - Logical secret name (e.g. `'STRIPE_KEY'`, `'DOMAIN_PROD'`).
- *   Must match `^[A-Za-z_][A-Za-z0-9_]*$`. Set the value out-of-band with
- *   `blocks secret set <key> <value>`.
+ *   Must match `^[A-Za-z_][A-Za-z0-9_]*$`. Set the value out-of-band with your
+ *   consumer's CLI (e.g. `blocks secret set <key> <value>`).
  * @returns A {@link SecretValue} marker — pass it into `Hosting` props
  *   (`compute.environment` values, or `domain.domainName`).
  *
@@ -121,27 +123,33 @@ export function isSecret(value: unknown): value is SecretValue {
 // ── SSM path convention (single source of truth) ────────────────────────────
 
 /**
- * Root prefix for all hosting secrets in SSM Parameter Store. Kept under
- * `/blocks/` to sit alongside the existing `/blocks/{stage}/db-connection-string`
- * convention used by the database provisioner, so a customer browsing Parameter
- * Store sees one consistent `/blocks` namespace.
+ * Framework-neutral default prefix for secrets in SSM Parameter Store, used
+ * when a consumer does not supply its own. A branded consumer overrides this by
+ * passing an explicit `prefix` to {@link secretParameterName} (e.g. Blocks
+ * passes `/blocks/secrets`), so this package never hardcodes a framework's
+ * namespace into the shared upstream.
  */
-export const SECRET_PARAMETER_PREFIX = '/blocks/secrets';
+export const DEFAULT_SECRET_PARAMETER_PREFIX = '/aws-hosting/secrets';
 
 /**
  * Map a logical secret key to its SSM parameter name. This is the ONLY place
- * the path is constructed — the CLI (`blocks secret set`), the CDK wiring
- * (IAM grants + env injection), and the runtime resolver all route through
- * here so the name can never drift between write and read.
+ * the path is constructed — the CLI (`secret set`), the CDK wiring (IAM grants
+ * + env injection), and the runtime resolver all route through here so the name
+ * can never drift between write and read.
  *
- * Flat namespace by design: `secret('DOMAIN_BETA')` always resolves to
- * `/blocks/secrets/DOMAIN_BETA` regardless of which stage is deploying. The
- * customer picks the key explicitly — no magic scoping.
+ * Flat namespace by design: a given key + prefix always resolves to the same
+ * path regardless of which stage is deploying. The customer picks the key
+ * explicitly — no magic scoping.
  *
- * @example secretParameterName('STRIPE_KEY') // '/blocks/secrets/STRIPE_KEY'
+ * @param key - The logical secret name.
+ * @param prefix - SSM path prefix (no trailing slash). Defaults to
+ *   {@link DEFAULT_SECRET_PARAMETER_PREFIX}. Consumers inject their own to keep
+ *   this package brand-neutral (e.g. Blocks passes `/blocks/secrets`).
+ * @example secretParameterName('STRIPE_KEY') // '/aws-hosting/secrets/STRIPE_KEY'
+ * @example secretParameterName('STRIPE_KEY', '/blocks/secrets') // '/blocks/secrets/STRIPE_KEY'
  */
-export function secretParameterName(key: string): string {
-	return `${SECRET_PARAMETER_PREFIX}/${key}`;
+export function secretParameterName(key: string, prefix: string = DEFAULT_SECRET_PARAMETER_PREFIX): string {
+	return `${prefix}/${key}`;
 }
 
 /**
@@ -151,9 +159,11 @@ export function secretParameterName(key: string): string {
  *
  * Kept distinct from the customer's own key so a `secret('FOO')` reference and
  * a plain `environment: { FOO: '...' }` literal can coexist without collision.
+ * The prefix is framework-neutral (`HOSTING_SECRET_PARAM_`) because this env var
+ * is internal wiring shared by every consumer, not a customer-facing name.
  *
- * @example secretEnvVarName('STRIPE_KEY') // 'BLOCKS_SECRET_PARAM_STRIPE_KEY'
+ * @example secretEnvVarName('STRIPE_KEY') // 'HOSTING_SECRET_PARAM_STRIPE_KEY'
  */
 export function secretEnvVarName(key: string): string {
-	return `BLOCKS_SECRET_PARAM_${key}`;
+	return `HOSTING_SECRET_PARAM_${key}`;
 }

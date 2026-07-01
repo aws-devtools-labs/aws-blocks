@@ -4,9 +4,9 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
+	DEFAULT_SECRET_PARAMETER_PREFIX,
 	isSecret,
 	SECRET_BRAND,
-	SECRET_PARAMETER_PREFIX,
 	secret,
 	secretEnvVarName,
 	secretParameterName,
@@ -49,12 +49,16 @@ void describe('isSecret()', () => {
 });
 
 void describe('secret path + env naming', () => {
-	void it('builds the flat /blocks/secrets/<KEY> path', () => {
-		assert.strictEqual(secretParameterName('STRIPE_KEY'), '/blocks/secrets/STRIPE_KEY');
-		assert.strictEqual(SECRET_PARAMETER_PREFIX, '/blocks/secrets');
+	void it('uses a framework-neutral default prefix (no Blocks branding in the leaf)', () => {
+		assert.strictEqual(DEFAULT_SECRET_PARAMETER_PREFIX, '/aws-hosting/secrets');
+		assert.strictEqual(secretParameterName('STRIPE_KEY'), '/aws-hosting/secrets/STRIPE_KEY');
 	});
 
-	void it('builds a collision-safe env var name for the injected param name', () => {
-		assert.strictEqual(secretEnvVarName('STRIPE_KEY'), 'BLOCKS_SECRET_PARAM_STRIPE_KEY');
+	void it('accepts an injected prefix so consumers pin their own namespace', () => {
+		assert.strictEqual(secretParameterName('STRIPE_KEY', '/blocks/secrets'), '/blocks/secrets/STRIPE_KEY');
+	});
+
+	void it('builds a framework-neutral, collision-safe env var name', () => {
+		assert.strictEqual(secretEnvVarName('STRIPE_KEY'), 'HOSTING_SECRET_PARAM_STRIPE_KEY');
 	});
 });

@@ -15,7 +15,7 @@
 export {
 	isSecret,
 	SECRET_BRAND,
-	SECRET_PARAMETER_PREFIX,
+	DEFAULT_SECRET_PARAMETER_PREFIX,
 	type SecretOptions,
 	type SecretValue,
 	secret,

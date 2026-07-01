@@ -5,7 +5,8 @@
  * `blocks secret` — manage hosting/pipeline secrets in SSM Parameter Store.
  *
  * Secrets are stored as SecureString parameters under `/blocks/secrets/<KEY>`
- * (see {@link secretParameterName} — the single source of truth for the path).
+ * (see {@link blocksSecretParameterName} — the single source of truth for the
+ * Blocks path; the neutral engine lives in `@aws-blocks/hosting/secret`).
  * This is the out-of-band counterpart to `secret('KEY')` in `hosting.ts`:
  * the customer sets values here once; the deploy only ever READS them.
  *
@@ -21,7 +22,8 @@
  * @module
  */
 
-import { SECRET_PARAMETER_PREFIX, secretEnvVarName, secretParameterName } from '@aws-blocks/hosting/secret';
+import { secretEnvVarName } from '@aws-blocks/hosting/secret';
+import { BLOCKS_SECRET_PARAMETER_PREFIX, blocksSecretParameterName } from '../secret-naming.js';
 
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -43,7 +45,7 @@ export async function setSecret(key: string, value: string): Promise<void> {
 	}
 	const { SSMClient, PutParameterCommand } = await import('@aws-sdk/client-ssm');
 	const client = new SSMClient({});
-	const name = secretParameterName(key);
+	const name = blocksSecretParameterName(key);
 	await client.send(
 		new PutParameterCommand({
 			Name: name,
@@ -64,14 +66,14 @@ export async function listSecrets(): Promise<string[]> {
 	do {
 		const result = await client.send(
 			new GetParametersByPathCommand({
-				Path: SECRET_PARAMETER_PREFIX,
+				Path: BLOCKS_SECRET_PARAMETER_PREFIX,
 				Recursive: false,
 				WithDecryption: false, // names only — never decrypt for a list
 				NextToken: nextToken,
 			}),
 		);
 		for (const p of result.Parameters ?? []) {
-			if (p.Name) keys.push(p.Name.slice(SECRET_PARAMETER_PREFIX.length + 1));
+			if (p.Name) keys.push(p.Name.slice(BLOCKS_SECRET_PARAMETER_PREFIX.length + 1));
 		}
 		nextToken = result.NextToken;
 	} while (nextToken);
@@ -84,7 +86,7 @@ export async function removeSecret(key: string): Promise<boolean> {
 	const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
 	const client = new SSMClient({});
 	try {
-		await client.send(new DeleteParameterCommand({ Name: secretParameterName(key) }));
+		await client.send(new DeleteParameterCommand({ Name: blocksSecretParameterName(key) }));
 		console.log(`🗑️  Secret '${key}' removed.`);
 		return true;
 	} catch (error: unknown) {

@@ -1531,11 +1531,13 @@ describe('Hosting', () => {
 
       const template = Template.fromStack(stack);
 
-      // The compute Lambda gets the param NAME under BLOCKS_SECRET_PARAM_STRIPE_KEY.
+      // The compute Lambda gets the param NAME under the neutral
+      // HOSTING_SECRET_PARAM_ prefix; the Blocks-pinned /blocks/secrets path is
+      // the value (Blocks injects its own namespace over the neutral engine).
       template.hasResourceProperties('AWS::Lambda::Function', {
         Environment: {
           Variables: Match.objectLike({
-            BLOCKS_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
+            HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
           }),
         },
       });

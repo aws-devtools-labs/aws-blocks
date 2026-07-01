@@ -10,7 +10,7 @@
  * Resolution order for a key:
  *   1. `process.env[KEY]` — local dev (and the `exposeAsEnv` escape hatch),
  *      where the plaintext is already present. No AWS call, works offline.
- *   2. `process.env[BLOCKS_SECRET_PARAM_<KEY>]` — the SSM parameter NAME the
+ *   2. `process.env[HOSTING_SECRET_PARAM_<KEY>]` — the SSM parameter NAME the
  *      Hosting wiring injected. Fetch + decrypt via SSM, then cache.
  *
  * The value is held only in process memory and only after the first call;
@@ -44,8 +44,8 @@ async function defaultSsmFetcher(parameterName: string): Promise<string> {
 	const value = result.Parameter?.Value;
 	if (value === undefined || value === null) {
 		throw new Error(
-			`[Blocks] Secret parameter "${parameterName}" exists but has no value. ` +
-				`Set it with: blocks secret set <KEY> <value>`,
+			`[hosting] Secret parameter "${parameterName}" exists but has no value. ` +
+				`Set it with your secret CLI (e.g. \`secret set <KEY> <value>\`).`,
 		);
 	}
 	return value;
@@ -75,9 +75,10 @@ export async function getSecret(key: string): Promise<string> {
 	const parameterName = process.env[secretEnvVarName(key)];
 	if (!parameterName) {
 		throw new Error(
-			`[Blocks] getSecret(${JSON.stringify(key)}): no secret reference found. ` +
+			`[hosting] getSecret(${JSON.stringify(key)}): no secret reference found. ` +
 				`Reference it in Hosting props with secret(${JSON.stringify(key)}) so the ` +
-				`parameter is wired, and set its value with: blocks secret set ${key} <value>`,
+				`parameter is wired, and set its value with your secret CLI ` +
+				`(e.g. \`secret set ${key} <value>\`).`,
 		);
 	}
 

@@ -27,7 +27,7 @@ export {
   secretParameterName,
   secretEnvVarName,
   SECRET_BRAND,
-  SECRET_PARAMETER_PREFIX,
+  DEFAULT_SECRET_PARAMETER_PREFIX,
   type SecretValue,
   type SecretOptions,
 } from './secret.js';

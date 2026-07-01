@@ -28,9 +28,10 @@
  * @module
  */
 
-import { isSecret, type SecretValue, secretEnvVarName, secretParameterName } from '@aws-blocks/hosting';
+import { isSecret, type SecretValue, secretEnvVarName } from '@aws-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { blocksSecretParameterName } from './secret-naming.js';
 
 /** A `compute.environment` value: a literal, or a deferred secret reference. */
 export type EnvValue = string | SecretValue;
@@ -103,7 +104,7 @@ export async function resolveSecretsAtSynth(
 	const resolved = new Map<string, string>();
 	await Promise.all(
 		keys.map(async (key) => {
-			const name = secretParameterName(key);
+			const name = blocksSecretParameterName(key);
 			try {
 				resolved.set(key, await fetcher(name));
 			} catch (error: unknown) {
@@ -144,7 +145,7 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * the compute role read+decrypt access scoped to that one parameter.
  */
 export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string): void {
-	const parameterName = secretParameterName(key);
+	const parameterName = blocksSecretParameterName(key);
 	fn.addEnvironment(secretEnvVarName(key), parameterName);
 
 	const parameterArn = cdk.Stack.of(fn).formatArn({
