@@ -266,7 +266,7 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
 });
 
 // Agent BB - AI agent with tools and conversation persistence
-import { Agent } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   removalPolicy: 'destroy',
@@ -377,6 +377,23 @@ const cannedAgent = new Agent(scope, 'canned', {
   }),
 });
 
+
+// Preset agents — one per live BedrockModels preset, used to verify presets work e2e.
+// Skip the deprecated aliases (DEFAULT/BUDGET/MICRO) so we don't provision dead
+// agents that the suite never exercises.
+const LIVE_PRESETS = ['BALANCED', 'SMART', 'FAST'] as const;
+
+const presetAgents = Object.fromEntries(
+	LIVE_PRESETS.map((name) => [
+		name,
+		new Agent(scope, `preset-${name.toLowerCase()}`, {
+			removalPolicy: 'destroy',
+			inferenceOnly: true,
+			model: { deployed: BedrockModels[name], local: { provider: 'canned' } },
+			systemPrompt: 'Reply with exactly one word.',
+		}),
+	]),
+);
 
 // Agent with model fallback — first candidate is unreachable, should fall through to canned
 const fallbackAgent = new Agent(scope, 'fallback', {
@@ -1661,6 +1678,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const channelId = crypto.randomUUID();
     const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
     return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+  },
+
+  async agentPresetStream(presetName: string, message: string) {
+    const presetAgent = presetAgents[presetName];
+    if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
+    const result = await presetAgent.stream(message);
+    const done = await result.complete();
+    return { text: done.text ?? '' };
   },
 
   async agentTestApiKeyResolver() {

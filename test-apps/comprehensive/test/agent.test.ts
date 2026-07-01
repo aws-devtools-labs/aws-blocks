@@ -321,6 +321,16 @@ export function agentTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('Bedrock Model Presets', () => {
+      for (const presetName of ['BALANCED', 'SMART', 'FAST']) {
+        test(`preset ${presetName} returns a response`, { timeout: 30_000 }, async () => {
+          const api = getApi();
+          const { text } = await api.agentPresetStream(presetName, 'hi');
+          assert.ok(text && text.length > 0, `${presetName} should return a non-empty response`);
+        });
+      }
+    });
+
     describe('HITL — Tool Approval (deterministic)', () => {
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();

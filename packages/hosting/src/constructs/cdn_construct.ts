@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Construct, IDependable } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import { CfnOutput, Duration, Fn, Stack } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
@@ -9,7 +9,6 @@ import {
   CacheHeaderBehavior,
   CachePolicy,
   CacheQueryStringBehavior,
-  CachedMethods,
   Function as CloudFrontFunction,
   Distribution,
   ErrorResponse,
@@ -20,10 +19,10 @@ import {
   HttpVersion,
   IOrigin,
   IResponseHeadersPolicy,
+  KeyValueStore,
   LambdaEdgeEventType,
   OriginRequestPolicy,
   PriceClass,
-  ResponseHeadersPolicy,
   SecurityPolicyProtocol,
   ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
@@ -50,20 +49,25 @@ import {
 } from 'aws-cdk-lib/aws-apigateway';
 import { HostingError } from '../hosting_error.js';
 import { prependBasePath } from '../adapters/shared/basepath.js';
-import { DeployManifest, Redirect } from '../manifest/types.js';
+import { DeployManifest } from '../manifest/types.js';
+import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { SkewProtectionConfig } from './skew_protection.js';
+import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
-  ERROR_PAGE_KEY,
-  NOT_FOUND_PAGE_KEY,
-  generateAssetPrefixStripFunctionCode,
-  generateBuildIdAndRedirectFunctionCode,
-  generateForwardedHostAndRedirectFunctionCode,
-} from '../defaults.js';
-import { createCustomHeadersPolicy } from './security_headers.js';
+  ORIGIN_ID,
+  buildKvsEntries,
+  generateKvsRouterRequestCode,
+  generateKvsRouterResponseCode,
+  generateSentinelGuardCode,
+  generateEdgeBasePathStripCode,
+  routeSpecificity,
+} from './kvs_router.js';
+import { KvKeys } from './kv_keys.js';
 import {
-  SkewProtectionConfig,
-  generateSkewProtectionViewerRequestCode,
-  generateSkewProtectionViewerResponseCode,
-} from './skew_protection.js';
+  AwsCustomResource,
+  AwsCustomResourcePolicy,
+  PhysicalResourceId,
+} from 'aws-cdk-lib/custom-resources';
 
 // ---- Constants ----
 
@@ -71,24 +75,12 @@ import {
 const CLOUDFRONT_FUNCTION_RUNTIME = FunctionRuntime.JS_2_0;
 
 /**
- * CloudFront allows a maximum of 25 cache behaviors per distribution
- * (1 default + 24 additional).
+ * Headroom (in edge-function slots) below the effective Lambda@Edge quota at
+ * which we emit a stderr warning, so a distribution approaching the account
+ * limit is flagged before it fails. Other distributions in the same account
+ * count against the same quota.
  */
-const MAX_ADDITIONAL_BEHAVIORS = 24;
-
-/**
- * AWS account-level soft limit on Lambda@Edge replicated function
- * versions. The hard cap is 25; we hard-fail at synth time when this
- * distribution alone would exceed it (the deploy would fail anyway with
- * a CloudFormation error that's harder to debug).
- */
-const MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION = 25;
-
-/**
- * Threshold above which we emit a stderr warning. The 5-route gap
- * leaves headroom for other distributions in the same account.
- */
-const EDGE_FUNCTIONS_WARNING_THRESHOLD = 20;
+const EDGE_FUNCTIONS_WARNING_HEADROOM = 5;
 
 const SSR_ERROR_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -188,6 +180,13 @@ export type CdnConstructProps = {
    * the `webAcl` construct reference.
    */
   webAclArn?: string;
+  /**
+   * Overrides for the adjustable AWS Service Quotas this distribution draws
+   * on (cache behaviors, Lambda@Edge associations, response-headers policies).
+   * Omitted fields use AWS defaults. Set a field only to match a quota
+   * increase AWS has actually granted — see {@link QuotaOverrides}.
+   */
+  quotas?: QuotaOverrides;
 };
 
 // ---- Construct ----
@@ -212,20 +211,22 @@ export class CdnConstruct extends Construct {
   readonly defaultNotFoundPageHtml?: string;
 
   /**
-   * CloudFront Functions that bake the deploy's buildId into the request
-   * rewrite (`/builds/<buildId>/...`). Publishing one of these is the moment
-   * the distribution starts routing new/cookieless traffic at the new build,
-   * so they must not update until that build's assets have been uploaded.
-   * See {@link addBuildAssetDependency}.
+   * Resources whose update is the atomic-deploy cutover and therefore MUST
+   * happen only after the new build's assets are uploaded to S3. Under KVS
+   * routing this is the {@link KvKeys} custom resource — its UpdateKeys call
+   * flips `buildId`/routes to the new build, so it must depend on every asset
+   * BucketDeployment. (Previously this was the build-id CloudFront Functions,
+   * which baked the buildId as a literal; now the buildId lives in KVS and the
+   * router function is build-independent.) See {@link addBuildAssetDependency}.
    */
-  private readonly buildIdFunctions: CloudFrontFunction[] = [];
+  private readonly buildAssetGatedResources: Construct[] = [];
 
   /**
    * Count of asset deployments registered via {@link addBuildAssetDependency}.
-   * The synth-time validation added in the constructor uses this to detect a
-   * regression where the build-id cutover is left ungated (every build-id
-   * function would publish before the new build's assets are uploaded,
-   * re-opening the 403 deploy window).
+   * The synth-time validation in the constructor uses this to detect a
+   * regression where the cutover is left ungated (the KVS route table would
+   * flip to the new build before its assets are uploaded, re-opening the 403
+   * deploy window).
    */
   private buildAssetDependencyCount = 0;
 
@@ -264,40 +265,40 @@ export class CdnConstruct extends Construct {
     this.errorPageHtml = props.errorPageHtml ?? SSR_ERROR_PAGE_HTML;
 
     // ---- Lambda@Edge function-count validation ----
+    // The KVS single-behavior model removed the per-route cache-behavior and
+    // response-headers-policy caps that used to need running-total accounting,
+    // so the ONLY adjustable quota this construct still enforces is the
+    // Lambda@Edge function count. We read its (possibly overridden) limit and
+    // check eagerly — the count is known up front. `QuotaBudget` is used purely
+    // for the override-aware `limit()` lookup here.
+    const budget = new QuotaBudget(props.quotas);
     const edgeRouteCount = props.routeEdgeFunctions?.size ?? 0;
-    if (edgeRouteCount > MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION) {
+    const edgeLimit = budget.limit('edgeFunctions');
+    if (edgeRouteCount > edgeLimit) {
       throw new HostingError('TooManyEdgeRoutesError', {
-        message: `This distribution declares ${edgeRouteCount} edge-runtime routes, exceeding the AWS Lambda@Edge limit of ${MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION} replicated functions per account.`,
+        message: `This distribution declares ${edgeRouteCount} edge-runtime routes, exceeding the Lambda@Edge limit of ${edgeLimit} replicated functions per account.`,
         resolution:
           'Reduce the number of routes that export `runtime: "edge"`, ' +
           'consolidate edge logic into fewer routes (e.g. one router that ' +
-          'switches on path), or request a service-quota increase: ' +
+          'switches on path), raise the `quotas.edgeFunctions` hosting prop if ' +
+          'AWS has granted your account a higher limit, or request a ' +
+          'service-quota increase: ' +
           'https://docs.aws.amazon.com/lambda/latest/dg/edge-functions-restrictions.html',
       });
     }
-    if (edgeRouteCount >= EDGE_FUNCTIONS_WARNING_THRESHOLD) {
+    if (edgeRouteCount >= edgeLimit - EDGE_FUNCTIONS_WARNING_HEADROOM) {
       process.stderr.write(
         `⚠️  Hosting: this distribution declares ${edgeRouteCount} edge-runtime routes. ` +
-          `The AWS Lambda@Edge limit is ${MAX_EDGE_FUNCTIONS_PER_DISTRIBUTION} per account; ` +
+          `The Lambda@Edge limit is ${edgeLimit} per account; ` +
           `other distributions in the same account count against the same quota.\n`,
       );
     }
 
     const skewEnabled = props.skewProtection?.enabled === true;
     const skewMaxAge = props.skewProtection?.maxAge ?? 86400;
-
-    // basePath (if set) prefixes every routable URL on the deployed site.
-    // Redirect sources/destinations declared by the framework are
-    // basePath-relative; prefix them here so the CF Function matches the
-    // actual request URIs CloudFront sees.
-    const rawRedirects = manifest.redirects ?? [];
-    const manifestRedirects = manifest.basePath
-      ? rawRedirects.map((r) => ({
-          ...r,
-          source: prependBasePath(manifest.basePath, r.source),
-          destination: prependBasePath(manifest.basePath, r.destination),
-        }))
-      : rawRedirects;
+    // Redirects (basePath-prefixed) are written into the KVS route table by
+    // buildKvsEntries(); the edge router evaluates them per request. No CF
+    // Function redirect table or 100-entry cap anymore.
 
     // ---- Build ID rewrite function ----
     // SPA fallback: when true, navigation requests (no file extension) are
@@ -337,27 +338,23 @@ export class CdnConstruct extends Construct {
       ? DEFAULT_NOT_FOUND_PAGE_HTML
       : undefined;
 
-    const viewerRequestFunction = this.createViewerRequestFunction(
-      buildId,
-      skewEnabled,
-      manifestRedirects,
-      manifest.basePath,
-      { spaFallback: isSpaFallback, wwwRedirect: props.wwwRedirect },
-    );
-    // The viewer-request function rewrites every request to the new
-    // build's `/builds/<buildId>/` prefix - gate its publish on the asset
-    // uploads (see addBuildAssetDependency).
-    this.buildIdFunctions.push(viewerRequestFunction);
-
-    // ---- Skew protection viewer-response function ----
-    const viewerResponseFunction = this.createViewerResponseFunction(
-      buildId,
-      skewMaxAge,
-      skewEnabled,
-    );
+    // NOTE: routing/build-id/skew/forwarded-host/assetPrefix are now all
+    // handled by the single KVS edge router (see the "KVS edge routing"
+    // section below). The legacy per-behavior CloudFront Functions
+    // (createViewerRequestFunction / createViewerResponseFunction /
+    // forwardedHostFunction) are no longer created. `isSpaFallback`,
+    // `manifestRedirects`, `skewEnabled`, `skewMaxAge`, and `wwwRedirect`
+    // flow into the router's KVS data instead.
 
     // ---- Origins ----
-    const s3Origin = S3BucketOrigin.withOriginAccessControl(bucket);
+    // Every origin gets a STABLE origin id so the KVS edge router can target
+    // it with cf.selectRequestOriginById(). The S3 origin backs the single
+    // default behavior; the server + image origins are attached to the
+    // distribution via an L1 override (CloudFront allows origins that no
+    // behavior references — they're reachable only via the router).
+    const s3Origin = S3BucketOrigin.withOriginAccessControl(bucket, {
+      originId: ORIGIN_ID.s3,
+    });
 
     // SSR Lambda goes through API Gateway REST API + STREAM mode instead of
     // OAC + Function URL. OAC SigV4 includes the body hash; Function URL
@@ -496,44 +493,9 @@ export class CdnConstruct extends Construct {
         ]
       : undefined;
 
-    // ---- x-forwarded-host + redirect function (compute behaviors) ----
-    // CloudFront strips the viewer's Host header when forwarding to Lambda Function
-    // URL origins (ALL_VIEWER_EXCEPT_HOST_HEADER policy). OpenNext's converters use
-    // x-forwarded-host to construct the public-facing URL for middleware rewrites and
-    // image optimization fetches. Without it, URL construction uses the Function URL
-    // domain which breaks path-only rewrites ("TypeError: Invalid URL").
-    //
-    // Same function also runs the manifest redirect table — a matching
-    // redirect short-circuits the request before the Lambda is invoked.
-    const forwardedHostFunction = hasCompute
-      ? new CloudFrontFunction(this, 'ForwardedHostFunction', {
-          code: FunctionCode.fromInline(
-            generateForwardedHostAndRedirectFunctionCode(
-              manifestRedirects,
-              manifest.basePath,
-            ),
-          ),
-          runtime: CLOUDFRONT_FUNCTION_RUNTIME,
-          comment:
-            manifestRedirects.length > 0
-              ? `Forwarded-host + ${manifestRedirects.length} redirect rule(s)`
-              : 'Copies Host header to x-forwarded-host for origin URL construction',
-        })
-      : undefined;
-
-    // ---- Serialize CloudFront Function creation ----
-    // The CloudFront CreateFunction API has a strict rate limit (~1 TPS).
-    // Without explicit ordering, CloudFormation dispatches all CF Function
-    // creates in parallel, causing "Rate exceeded" failures. Chain them
-    // so each waits for the previous to finish.
-    if (forwardedHostFunction) {
-      forwardedHostFunction.node.addDependency(viewerRequestFunction);
-    }
-    if (viewerResponseFunction) {
-      viewerResponseFunction.node.addDependency(
-        forwardedHostFunction ?? viewerRequestFunction,
-      );
-    }
+    // x-forwarded-host: now set by the KVS router on compute-bound requests
+    // (the router copies Host → x-forwarded-host before selecting the server
+    // origin). Redirects + build-id rewrite are likewise handled by the router.
 
     // ---- SSR cache policy (B21) ----
     // CACHING_DISABLED used to short-circuit caching on every compute
@@ -615,379 +577,300 @@ export class CdnConstruct extends Construct {
         })
       : undefined;
 
-    // ---- Behavior helpers ----
-    const makeStaticBehavior = (): BehaviorOptions => ({
-      origin: s3Origin,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-      allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-      cachedMethods: CachedMethods.CACHE_GET_HEAD_OPTIONS,
-      cachePolicy: CachePolicy.CACHING_OPTIMIZED,
-      compress: true,
-      responseHeadersPolicy: props.securityHeadersPolicy,
-      functionAssociations: [
-        {
-          function: viewerRequestFunction,
-          eventType: FunctionEventType.VIEWER_REQUEST,
-        },
-        ...(viewerResponseFunction
-          ? [
-              {
-                function: viewerResponseFunction,
-                eventType: FunctionEventType.VIEWER_RESPONSE,
-              },
-            ]
-          : []),
-      ],
+    // The default behavior's cache policy:
+    //   - compute deploys → `ssrCachePolicy` (honors origin Cache-Control, keys
+    //     on the Next.js router headers).
+    //   - pure-static deploys (`hasCompute === false`) → the AWS-managed
+    //     `CACHING_OPTIMIZED`. Without this the static default behavior would
+    //     fall back to `CACHING_DISABLED`, which ignores the origin's
+    //     `Cache-Control` and turns every immutable hashed asset
+    //     (`/_next/static/*`, `/_astro/*`, `/_nuxt/*`, carrying
+    //     `max-age=31536000, immutable`) into an edge MISS to S3. This restores
+    //     the edge caching the pre-KVS model gave via `makeStaticBehavior`,
+    //     which also used `CACHING_OPTIMIZED`.
+    //
+    // Why the AWS-MANAGED `CACHING_OPTIMIZED` and not a custom `minTtl: 0`
+    // policy: AWS-managed policies don't count against the per-account
+    // "cache policies" quota (default 20), so a custom policy per static
+    // distribution would burn that scarce account-wide limit (and fails to
+    // deploy once the account is at the cap). `CACHING_OPTIMIZED` honors the
+    // origin `Cache-Control` (immutable assets cache up to 1y); its `minTtl: 1s`
+    // can briefly edge-cache the `no-cache` HTML, but that is SAFE across
+    // deploys: every static request — HTML included — is rewritten to
+    // `/builds/<buildId>/...` BEFORE the cache lookup, so the cache key is
+    // build-scoped and a redeploy (new buildId) yields a new key rather than
+    // serving the old build's HTML. Hashed asset filenames are content-addressed
+    // on top. Within a build the HTML is identical, so the 1s window is benign.
+    const defaultCachePolicy =
+      ssrCachePolicy ?? CachePolicy.CACHING_OPTIMIZED;
+
+    // ════════════════════════════════════════════════════════════════
+    // KVS edge routing (single behavior + CloudFront Function + KVS).
+    //
+    // Instead of one CloudFront cache behavior per route (capped at 75/dist),
+    // the distribution has ONE default behavior whose viewer-request function
+    // reads the route table from a KeyValueStore and routes each request to the
+    // right origin via cf.selectRequestOriginById(). Route count no longer
+    // consumes behaviors, so the behavior-cap limit class is eliminated.
+    //
+    // Origins reachable from the router (by stable origin id):
+    //   - ORIGIN_ID.s3      → static assets (the default behavior's origin)
+    //   - ORIGIN_ID.server  → SSR Lambda via REST API GW (if compute)
+    //   - ORIGIN_ID.image   → image-opt Lambda Function URL (if present)
+    // The server/image origins are bound to the distribution via sentinel
+    // behaviors on never-routed patterns (so CDK materializes them + their OAC
+    // correctly); the router, not those behaviors, is what actually directs
+    // traffic to them.
+    // ════════════════════════════════════════════════════════════════
+
+    const imageOrigin = computeOrigins.get('image-optimization');
+    const serverOrigin = ssrComputeName
+      ? computeOrigins.get(ssrComputeName)
+      : undefined;
+
+    // Re-tag the server + image origins with stable ids so the router can
+    // select them. (S3 already carries ORIGIN_ID.s3.)
+    const taggedServerOrigin = serverOrigin
+      ? this.withOriginId(serverOrigin, ORIGIN_ID.server)
+      : undefined;
+    const taggedImageOrigin = imageOrigin
+      ? this.withOriginId(imageOrigin, ORIGIN_ID.image)
+      : undefined;
+
+    // ---- KeyValueStore (route table) ----
+    const routeStore = new KeyValueStore(this, 'RouteStore', {
+      comment: `Edge route table for ${this.node.path}`,
     });
 
-    const makeComputeBehavior = (origin?: IOrigin): BehaviorOptions => ({
-      origin: origin ?? primaryOrigin!,
+    // Lambda@Edge route functions (OpenNext `runtime: 'edge'` split bundles).
+    // Each gets a DEDICATED CloudFront cache behavior below; exclude them from
+    // the KVS route table so the router doesn't send them to the default
+    // server Lambda (which doesn't contain the split routes → 500).
+    const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
+
+    const kvsEntries = buildKvsEntries({
+      manifest,
+      buildId,
+      hasServer: Boolean(taggedServerOrigin),
+      hasImage: Boolean(taggedImageOrigin),
+      wwwRedirect: props.wwwRedirect,
+      skewEnabled,
+      edgeTargets,
+    });
+
+    // ---- Router functions (build-independent; routing data lives in KVS) ----
+    const routerRequestFn = new CloudFrontFunction(this, 'KvsRouterRequest', {
+      code: FunctionCode.fromInline(generateKvsRouterRequestCode()),
+      runtime: CLOUDFRONT_FUNCTION_RUNTIME,
+      keyValueStore: routeStore,
+      comment: 'KVS edge router: origin selection + build-id rewrite',
+    });
+    // The router rewrites static requests to /builds/<buildId>/… where buildId
+    // comes from KVS — so the atomic cutover is the gated KvKeys write, not the
+    // function publish. The function itself is build-independent.
+    const routerResponseFn = new CloudFrontFunction(this, 'KvsRouterResponse', {
+      code: FunctionCode.fromInline(
+        generateKvsRouterResponseCode(skewEnabled ? skewMaxAge : 0),
+      ),
+      runtime: CLOUDFRONT_FUNCTION_RUNTIME,
+      keyValueStore: routeStore,
+      comment: 'KVS edge router: per-pattern headers + skew cookie',
+    });
+    routerResponseFn.node.addDependency(routerRequestFn); // serialize creates
+
+    // Guard for the sentinel behaviors: 403 any direct client request to the
+    // never-routed origin-binding patterns (see sentinel behaviors below).
+    // Created lazily — only when at least one sentinel behavior exists (i.e. a
+    // server or image origin is bound). Pure-static deploys have no sentinels,
+    // so no guard function is synthesized.
+    let sentinelGuardFn: CloudFrontFunction | undefined;
+    const getSentinelGuardFn = (): CloudFrontFunction => {
+      if (!sentinelGuardFn) {
+        sentinelGuardFn = new CloudFrontFunction(this, 'SentinelGuard', {
+          code: FunctionCode.fromInline(generateSentinelGuardCode()),
+          runtime: CLOUDFRONT_FUNCTION_RUNTIME,
+          comment: 'KVS edge router: 403 direct hits to origin-binding sentinels',
+        });
+        sentinelGuardFn.node.addDependency(routerResponseFn); // serialize creates
+      }
+      return sentinelGuardFn;
+    };
+
+    // ---- KvKeys: live KVS update, gated on asset upload (atomic cutover) ----
+    const kvKeys = new KvKeys(this, 'RouteStoreKeys', {
+      store: routeStore,
+      entries: kvsEntries,
+    });
+    // The KV write that flips buildId/routes to the new build must happen only
+    // AFTER the new build's assets are in S3 — same invariant the build-id
+    // functions enforced. Register the custom resource so the hosting construct
+    // wires it via addBuildAssetDependency().
+    this.buildAssetGatedResources.push(kvKeys.resource);
+
+    // ---- Origin-request / cache policies for the single behavior ----
+    // The default behavior must accept ALL methods (the router may send a
+    // request to the SSR origin) and forward viewer data to the origin.
+    const defaultBehavior: BehaviorOptions = {
+      origin: s3Origin,
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: AllowedMethods.ALLOW_ALL,
-      // B21: honor origin Cache-Control. POST/PUT/DELETE are never
-      // cached by CloudFront regardless of CachePolicy (HTTP spec).
-      cachePolicy: ssrCachePolicy ?? CachePolicy.CACHING_DISABLED,
+      cachePolicy: defaultCachePolicy,
       compress: true,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      originRequestPolicy: hasCompute
+        ? OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER
+        : undefined,
       responseHeadersPolicy: props.securityHeadersPolicy,
       ...(edgeLambdas ? { edgeLambdas } : {}),
       functionAssociations: [
-        ...(forwardedHostFunction
-          ? [
-              {
-                function: forwardedHostFunction,
-                eventType: FunctionEventType.VIEWER_REQUEST,
-              },
-            ]
-          : []),
-        ...(viewerResponseFunction
-          ? [
-              {
-                function: viewerResponseFunction,
-                eventType: FunctionEventType.VIEWER_RESPONSE,
-              },
-            ]
-          : []),
+        { function: routerRequestFn, eventType: FunctionEventType.VIEWER_REQUEST },
+        { function: routerResponseFn, eventType: FunctionEventType.VIEWER_RESPONSE },
       ],
-    });
+    };
 
-    /**
-     * Cache behavior for an OpenNext edge route (Lambda@Edge owns the
-     * response). The S3 origin is just a placeholder — CloudFront
-     * associates the function on origin-request and the function returns
-     * the response itself, so origin storage is never read.
-     *
-     * Uses the same `ssrCachePolicy` as the regional SSR behavior so
-     * edge routes can opt into CloudFront caching by emitting
-     * `Cache-Control: s-maxage=N` from the function response — the same
-     * mechanism Vercel uses for its Edge Functions. The cache policy's
-     * `defaultTtl: 0` means routes that don't set `Cache-Control` (the
-     * default for auth/geo/personalization routes) still skip CloudFront
-     * caching and invoke Lambda@Edge on every request.
-     *
-     * Auth-bearing edge routes MUST emit `Cache-Control: private` (or
-     * `no-store`) to opt out — see `ssrCachePolicy.cookieBehavior:none`.
-     * Cookies are not in the cache key; without an explicit private
-     * directive, an authenticated response could be served to other
-     * users.
-     */
-    const makeEdgeRouteBehavior = (edgeVersion: IVersion): BehaviorOptions => ({
-      origin: s3Origin,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: ssrCachePolicy ?? CachePolicy.CACHING_DISABLED,
-      compress: true,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      responseHeadersPolicy: props.securityHeadersPolicy,
-      edgeLambdas: [
-        {
-          functionVersion: edgeVersion,
-          eventType: LambdaEdgeEventType.ORIGIN_REQUEST,
-          includeBody: true,
-        },
-      ],
-    });
-
-    // ---- Route → behavior mapping ----
+    // ---- Sentinel behaviors to bind server + image origins ----
+    // CDK only materializes an origin (and its OAC) when a behavior references
+    // it. These never-routed patterns exist purely to bind those origins; the
+    // router reaches them via selectRequestOriginById. They cost a fixed 1-2
+    // behaviors total — NOT one-per-route — so the cap is still eliminated.
     const additionalBehaviors: Record<string, BehaviorOptions> = {};
-
-    // Separate catch-all from specific routes
-    const catchAllRoute = manifest.routes.find(
-      (r) => r.pattern === '/*' || r.pattern === '*',
-    );
-    const specificRoutes = manifest.routes
-      .filter((r) => r.pattern !== '/*' && r.pattern !== '*')
-      // CloudFront evaluates cache behaviors top-to-bottom, first-match-wins
-      // (no longest-prefix preference). When the manifest mixes a literal
-      // pattern (`/api/edge/b`) with a wildcard from a sibling dynamic route
-      // (`/api/edge/*`, expanded from Next's `[slug]`), the wildcard
-      // shadows the literal if it's emitted first. Sort by descending
-      // specificity so literals always come before wildcards. Same key as
-      // CDK's own behavior ordering: count wildcards, then prefer longer
-      // patterns within the same wildcard count.
-      .sort(
-        (a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern),
-      );
-
-    // NOTE: the CloudFront behavior-count limit is NOT validated here.
-    // `specificRoutes.length` under-counts the real total — each static
-    // route also spawns a derived bare behavior (`deriveBareStaticPattern`),
-    // and header / assetPrefix / `/builds/*` behaviors are added later. The
-    // authoritative check runs after `additionalBehaviors` is fully built
-    // (just before the Distribution is created), so it counts what actually
-    // ships. See the `TooManyRoutesError` throw below.
-
-    const basePath = manifest.basePath;
-
-    for (const route of specificRoutes) {
-      const isStatic = route.target === 'static' || route.target === 's3';
-      const cfPattern = prependBasePath(
-        basePath,
-        normalizePatternForCloudFront(route.pattern),
-      );
-
-      if (isStatic) {
-        additionalBehaviors[cfPattern] = makeStaticBehavior();
-
-        // CloudFront path patterns are not "match either trailing-slash or
-        // bare" — `/about/*` matches `/about/x` but NOT bare `/about`.
-        // For prerendered routes that emit `<name>/index.html` the bare
-        // path falls through to the SSR Lambda, which silently re-renders
-        // every request and ruins the SSG semantics (also costing Lambda
-        // invocations the user didn't sign up for).
-        //
-        // When we see a static `<name>/*` pattern, also emit a behavior
-        // for the bare `<name>` path so both forms hit S3. The S3 origin
-        // (with index document set on the bucket) resolves the bare path
-        // to `<name>/index.html` automatically.
-        const barePattern = deriveBareStaticPattern(cfPattern);
-        if (barePattern && !(barePattern in additionalBehaviors)) {
-          additionalBehaviors[barePattern] = makeStaticBehavior();
-        }
-      } else {
-        // OpenNext edge routes (`runtime = 'edge'`) come through as compute
-        // names in `routeEdgeFunctions`. The Lambda@Edge function generates
-        // the response itself — we still need a CloudFront origin (S3 here)
-        // so the behavior is well-formed; CloudFront associates the edge
-        // function on origin-request and never reaches origin storage when
-        // the function returns a response.
-        const edgeVersion = props.routeEdgeFunctions?.get(route.target);
-        if (edgeVersion) {
-          additionalBehaviors[cfPattern] = makeEdgeRouteBehavior(edgeVersion);
-        } else {
-          // Look up per-compute origin, fall back to primary
-          const targetOrigin =
-            computeOrigins.get(route.target) ?? primaryOrigin;
-          if (targetOrigin) {
-            additionalBehaviors[cfPattern] = makeComputeBehavior(targetOrigin);
-          } else {
-            additionalBehaviors[cfPattern] = makeStaticBehavior();
-          }
-        }
-      }
-    }
-
-    // ---- assetPrefix behavior (P2.7) ----
-    // When the framework's build emits asset URLs under a prefix
-    // (Next.js `assetPrefix: '/shop-static'`), the non-prefixed
-    // `/_next/static/*` behavior won't match. A naive
-    // implementation emits four separate prefixed behaviors
-    // (`/<prefix>/_next/static/*`, `/_next/image*`, `/_next/data/*`,
-    // `/_next/*`) — each one consuming a slot of the CloudFront
-    // 24-additional-behavior budget. That scales poorly: the hosting
-    // construct already provisions ~6-10 base behaviors for SSR /
-    // image-opt / static / cache routes, so dedicating four more to
-    // a single config knob is wasteful.
-    //
-    // We collapse to a single `/<prefix>/*` behavior backed by a
-    // smarter strip function. The function inspects the URI tail
-    // after stripping the prefix and routes the request the same way
-    // CloudFront's first-match-wins behavior matching would have
-    // done — but in code, in O(1), at the edge — saving 3 behaviors
-    // per assetPrefix.
-    const assetPrefix = manifest.assetPrefix;
-    if (assetPrefix) {
-      const stripFunction = new CloudFrontFunction(
-        this,
-        'AssetPrefixStripFunction',
-        {
-          code: FunctionCode.fromInline(
-            generateAssetPrefixStripFunctionCode(buildId, assetPrefix),
-          ),
-          runtime: CLOUDFRONT_FUNCTION_RUNTIME,
-          comment: `Strip Next.js assetPrefix=${assetPrefix} before S3 lookup`,
-        },
-      );
-      // Chain to the last CF Function to stay within rate limits.
-      stripFunction.node.addDependency(
-        viewerResponseFunction ??
-          forwardedHostFunction ??
-          viewerRequestFunction,
-      );
-      // Also bakes in the buildId (`/builds/<buildId>/`), so it must wait
-      // for the asset uploads before publishing - same as the viewer-request
-      // function above.
-      this.buildIdFunctions.push(stripFunction);
-      const prefixedStaticBehavior: BehaviorOptions = {
-        origin: s3Origin,
+    if (taggedServerOrigin) {
+      additionalBehaviors['/__blocks_origin_server/*'] = {
+        origin: taggedServerOrigin,
         viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-        cachedMethods: CachedMethods.CACHE_GET_HEAD_OPTIONS,
-        cachePolicy: CachePolicy.CACHING_OPTIMIZED,
-        compress: true,
+        allowedMethods: AllowedMethods.ALLOW_ALL,
+        cachePolicy: ssrCachePolicy ?? CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
         responseHeadersPolicy: props.securityHeadersPolicy,
         functionAssociations: [
-          {
-            function: stripFunction,
-            eventType: FunctionEventType.VIEWER_REQUEST,
-          },
+          { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
         ],
       };
-      // Note: when both basePath and assetPrefix are absolute (leading
-      // `/`), Next.js emits asset URLs as `<assetPrefix>/...` WITHOUT
-      // prepending basePath — so the CloudFront behavior must match
-      // the bare assetPrefix path, NOT the basePath-prefixed one.
-      // One catch-all under the prefix; the strip function handles
-      // _next/static, _next/image, _next/data, and the open _next/*
-      // case uniformly.
-      const catchAllPrefixedPattern = `${assetPrefix}/*`;
-      if (!(catchAllPrefixedPattern in additionalBehaviors)) {
-        additionalBehaviors[catchAllPrefixedPattern] = prefixedStaticBehavior;
+    }
+    if (taggedImageOrigin) {
+      additionalBehaviors['/__blocks_origin_image/*'] = {
+        origin: taggedImageOrigin,
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachePolicy: ssrCachePolicy ?? CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        responseHeadersPolicy: props.securityHeadersPolicy,
+        functionAssociations: [
+          { function: getSentinelGuardFn(), eventType: FunctionEventType.VIEWER_REQUEST },
+        ],
+      };
+    }
+
+    // ---- Lambda@Edge route behaviors (OpenNext `runtime: 'edge'` routes) ----
+    // OpenNext SPLITS edge routes into separate bundles (edge1/edge2…) that are
+    // NOT in the default server Lambda. Each needs a DEDICATED CloudFront cache
+    // behavior (more specific than the default `*`, so it wins) with the
+    // EdgeFunction attached on origin-request: the function generates the
+    // response itself, so the behavior's origin (S3 here) is never read — it
+    // only needs to be a well-formed origin. Without this the KVS router sends
+    // these paths to the default server Lambda, which lacks the routes → 500.
+    if (props.routeEdgeFunctions && props.routeEdgeFunctions.size > 0) {
+      // CloudFront evaluates additional behaviors FIRST-MATCH-WINS with no
+      // longest-prefix preference, so insert most-specific first: a literal
+      // `/api/edge/special` must precede a wildcard `/api/edge/*` or the
+      // wildcard shadows it. Sort the edge routes by specificity up front.
+      const edgeRoutes = manifest.routes
+        .filter((r) => props.routeEdgeFunctions?.has(r.target))
+        .map((r) => ({
+          route: r,
+          pattern: prependBasePath(manifest.basePath, r.pattern),
+        }))
+        .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+      // basePath strip for edge behaviors. OpenNext compiles each edge bundle's
+      // internal route table basePath-RELATIVE (regex `^/edge$`, `^/api/edge$`)
+      // and matches it against the FULL request path. Under a deployed basePath
+      // the behavior forwards `/app/edge`, which `^/edge$` does not match → the
+      // bundle throws `No route found` → 503. These behaviors bypass the KVS
+      // router (which strips basePath for the other origins), so attach a
+      // viewer-request CloudFront Function that strips basePath before the
+      // Lambda@Edge origin-request function runs. Created once, shared by every
+      // edge behavior; only when a basePath is actually configured.
+      let edgeBasePathStripFn: CloudFrontFunction | undefined;
+      if (manifest.basePath) {
+        edgeBasePathStripFn = new CloudFrontFunction(this, 'EdgeBasePathStrip', {
+          code: FunctionCode.fromInline(
+            generateEdgeBasePathStripCode(manifest.basePath),
+          ),
+          runtime: CLOUDFRONT_FUNCTION_RUNTIME,
+          comment: `Strip basePath ${manifest.basePath} before edge-runtime Lambda@Edge`,
+        });
+        edgeBasePathStripFn.node.addDependency(routerResponseFn); // serialize creates
+      }
+
+      for (const { route, pattern } of edgeRoutes) {
+        // An edge route mapped to the catch-all can't be expressed as a
+        // dedicated behavior (CloudFront's default behavior IS `*`, and it's
+        // bound to the KVS router → the edge bundle would never run). Fail loud
+        // instead of silently falling through to a 500 at runtime.
+        if (pattern === '/*' || pattern === '*') {
+          throw new HostingError('EdgeCatchAllUnsupportedError', {
+            message: `An edge-runtime route is mapped to the catch-all pattern "${pattern}". CloudFront's default behavior is reserved for the KVS router, so a catch-all edge function cannot be wired and would 500 at runtime.`,
+            resolution:
+              'Give the edge route a specific path pattern (e.g. `/api/edge`, ' +
+              '`/edge/*`) rather than a catch-all, or move its logic to the SSR ' +
+              'compute (non-edge) runtime.',
+          });
+        }
+        additionalBehaviors[pattern] = {
+          origin: s3Origin,
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          // Intentionally CACHING_DISABLED (not `ssrCachePolicy ?? …`): an edge
+          // function computes the response per request, so edge routes opt OUT
+          // of the SSR s-maxage caching. Keep this — don't restore ssrCachePolicy.
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: props.securityHeadersPolicy,
+          edgeLambdas: [
+            {
+              functionVersion: props.routeEdgeFunctions.get(route.target)!,
+              eventType: LambdaEdgeEventType.ORIGIN_REQUEST,
+              // POST/PUT App Router edge handlers only receive the request body
+              // on origin-request when includeBody is set; without it the body
+              // is empty.
+              includeBody: true,
+            },
+          ],
+          // Strip basePath at viewer-request (before the Lambda@Edge) so the
+          // OpenNext edge bundle's basePath-relative route regex matches. Only
+          // attached when a basePath is configured (see edgeBasePathStripFn).
+          ...(edgeBasePathStripFn
+            ? {
+                functionAssociations: [
+                  {
+                    function: edgeBasePathStripFn,
+                    eventType: FunctionEventType.VIEWER_REQUEST,
+                  },
+                ],
+              }
+            : {}),
+        };
       }
     }
 
-    // ---- Default behavior (from catch-all route) ----
-    const defaultIsCompute =
-      catchAllRoute &&
-      catchAllRoute.target !== 'static' &&
-      catchAllRoute.target !== 's3' &&
-      hasCompute;
-
-    let defaultBehavior = defaultIsCompute
-      ? makeComputeBehavior(
-          computeOrigins.get(catchAllRoute!.target) ?? primaryOrigin,
-        )
-      : makeStaticBehavior();
-
-    // ---- Per-pattern custom response headers (manifest.headers[]) ----
-    // Each entry in manifest.headers[] declares a (source, headers) pair.
-    // For each, we construct a per-pattern ResponseHeadersPolicy that
-    // bundles the security headers + the custom headers, and attach it
-    // to the matching behavior. If the source pattern has no behavior
-    // yet (i.e. it's a static path the user wants to set headers on
-    // without otherwise routing), we synthesize a static behavior so
-    // the policy has something to attach to.
-    const manifestHeaders = manifest.headers ?? [];
-    if (manifestHeaders.length > 0) {
-      // Dedupe by header-content fingerprint. Many `publicAssets[]`
-      // entries from Nuxt produce *identical* Cache-Control rules — we
-      // share one ResponseHeadersPolicy across all of them so the
-      // account-wide CloudFront ResponseHeadersPolicy quota (default 20
-      // per account, max 200) doesn't get burned on duplicates.
-      //
-      // The fingerprint includes the SECURITY-HEADER inputs the policy
-      // body will end up containing (CSP value, since other security
-      // header values are constants today). Without that, toggling
-      // `cdn.contentSecurityPolicy` between deploys produced new
-      // construct IDs even when the user's `headers[]` content hadn't
-      // changed — burning quota on every CSP edit (P2.5). With it,
-      // identical (customHeaders × securityHeaderInputs) tuples dedup
-      // across deploys.
-      const policyByFingerprint = new Map<string, ResponseHeadersPolicy>();
-      const securityHeaderFingerprint = props.contentSecurityPolicy ?? '';
-      const fingerprint = (headers: Record<string, string>): string => {
-        const customPart = Object.keys(headers)
-          .sort()
-          .map((k) => `${k}=${headers[k]}`)
-          .join('\n');
-        return `csp=${securityHeaderFingerprint}\n--\n${customPart}`;
-      };
-
-      // Construct ID uses the first 8 hex chars of a SHA-256 over the
-      // fingerprint. Why a stable hash instead of a counter (0/1/2/...):
-      // a positional counter changes whenever the iteration order of
-      // `manifest.headers[]` changes (e.g. user reorders publicAssets[]
-      // in nuxt.config.ts). That makes CDK think each redeploy needs to
-      // create new policies + delete the old ones — which churns the
-      // account-wide ResponseHeadersPolicy quota and risks leaking
-      // stale policies under failed rollbacks (B20). A content-derived
-      // ID makes each unique header-set get the same construct ID
-      // forever, so a redeploy with the same content is a no-op.
-      const idForHeaders = (headers: Record<string, string>): string => {
-        const fp = fingerprint(headers);
-        return `CustomHeadersPolicy${createHash('sha256')
-          .update(fp)
-          .digest('hex')
-          .slice(0, 8)}`;
-      };
-
-      const getOrCreatePolicy = (
-        headers: Record<string, string>,
-      ): ResponseHeadersPolicy => {
-        const fp = fingerprint(headers);
-        const existing = policyByFingerprint.get(fp);
-        if (existing) return existing;
-        const policy = createCustomHeadersPolicy(
-          this,
-          idForHeaders(headers),
-          headers,
-          { contentSecurityPolicy: props.contentSecurityPolicy },
-        );
-        policyByFingerprint.set(fp, policy);
-        return policy;
-      };
-
-      const overrideBehaviorPolicy = (
-        target: BehaviorOptions,
-        headers: Record<string, string>,
-      ): BehaviorOptions => ({
-        ...target,
-        responseHeadersPolicy: getOrCreatePolicy(headers),
+    // ---- Behavior-count cap (CloudFront hard limit, default 25) ----
+    // Every entry in `additionalBehaviors` (sentinels + edge routes) is a real
+    // CloudFront cache behavior and counts against the per-distribution cap
+    // (1 default + N additional). Edge routes can approach it before the
+    // edge-FUNCTION cap (also 25) trips, and the raw CloudFormation error is
+    // opaque — surface a friendly one here instead.
+    const additionalBehaviorCount = Object.keys(additionalBehaviors).length;
+    const totalBehaviors = 1 + additionalBehaviorCount; // +1 for the default
+    const behaviorLimit = budget.limit('cacheBehaviors');
+    if (totalBehaviors > behaviorLimit) {
+      throw new HostingError('TooManyCacheBehaviorsError', {
+        message: `This distribution needs ${totalBehaviors} CloudFront cache behaviors (1 default + ${additionalBehaviorCount} for origin-binding sentinels and edge-runtime routes), exceeding the limit of ${behaviorLimit} per distribution.`,
+        resolution:
+          'Reduce the number of `runtime: "edge"` routes (each needs its own ' +
+          'behavior), consolidate edge logic into fewer routes, raise the ' +
+          '`quotas.cacheBehaviors` hosting prop if AWS granted your account a ' +
+          'higher limit, or request a service-quota increase.',
       });
-
-      // B22: when no behavior exists for a header pattern yet, the synthesized
-      // behavior must match how the catch-all would have served the same
-      // request. If the manifest declares any compute (SSR/ISR/SWR), the
-      // route is dynamic and must point to the compute origin — pointing
-      // at S3 here would shadow the catch-all and 403 every request.
-      // Static-only deploys (no compute) fall back to a static behavior.
-      const synthesizeBehaviorForHeaderPattern = (): BehaviorOptions =>
-        hasCompute ? makeComputeBehavior() : makeStaticBehavior();
-
-      for (const entry of manifestHeaders) {
-        const cfPattern = normalizePatternForCloudFront(entry.source);
-        if (cfPattern === '/*' || cfPattern === '*') {
-          // Header rule applies to the catch-all → patch defaultBehavior
-          defaultBehavior = overrideBehaviorPolicy(
-            defaultBehavior,
-            entry.headers,
-          );
-        } else if (additionalBehaviors[cfPattern]) {
-          // Existing behavior — override its policy
-          additionalBehaviors[cfPattern] = overrideBehaviorPolicy(
-            additionalBehaviors[cfPattern],
-            entry.headers,
-          );
-        } else {
-          // No behavior for this pattern yet. Create one that matches the
-          // catch-all's origin choice (compute or static) so headers are
-          // additive, not redirecting requests. Skip silently if we'd exceed the
-          // CloudFront behavior cap (better to lose the header than fail
-          // the deploy; warn at synth-time).
-          if (
-            Object.keys(additionalBehaviors).length >= MAX_ADDITIONAL_BEHAVIORS
-          ) {
-            process.stderr.write(
-              `⚠️  Skipping custom headers for "${entry.source}" — would exceed CloudFront behavior cap.\n`,
-            );
-            continue;
-          }
-          additionalBehaviors[cfPattern] = overrideBehaviorPolicy(
-            synthesizeBehaviorForHeaderPattern(),
-            entry.headers,
-          );
-        }
-      }
     }
 
     // ---- Error responses ----
@@ -1118,49 +1001,14 @@ export class CdnConstruct extends Construct {
       }
     }
 
-    // ---- Error-page behavior (B22) ----
-    // CloudFront custom error responses fetch the configured
-    // responsePagePath from the behavior matching that path. Error pages
-    // live at /builds/<buildId>/404.html (or _error.html) in S3. Without
-    // an explicit behavior, the path falls to the default (compute)
-    // behavior and the Lambda can't serve the file — causing CloudFront
-    // to fall back to the original error. Add a direct-to-S3 behavior
-    // for /builds/* so error page fetches resolve correctly.
-    if (errorResponses.length > 0 && hasCompute) {
-      additionalBehaviors['/builds/*'] = {
-        origin: s3Origin,
-        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-        cachedMethods: CachedMethods.CACHE_GET_HEAD_OPTIONS,
-        cachePolicy: CachePolicy.CACHING_OPTIMIZED,
-        compress: true,
-        responseHeadersPolicy: props.securityHeadersPolicy,
-      };
-    }
-
-    // ---- Authoritative CloudFront behavior-count check ----
-    // Count the REAL additional behaviors now that every source has
-    // contributed: per-route static/compute/edge behaviors, the derived bare
-    // static paths, assetPrefix, custom-header behaviors, and `/builds/*`.
-    // This is the single enforcement point for both adapters — neither the
-    // Next/Astro nor the Nitro adapter caps prerendered-page routes itself;
-    // they emit one `/<page>/*` route per page and rely on this check to fail
-    // loudly (rather than CloudFormation failing opaquely at deploy time when
-    // the 25-behavior hard limit is exceeded).
-    const additionalBehaviorCount = Object.keys(additionalBehaviors).length;
-    if (additionalBehaviorCount > MAX_ADDITIONAL_BEHAVIORS) {
-      throw new HostingError('TooManyRoutesError', {
-        message: `This distribution would create ${additionalBehaviorCount} CloudFront cache behaviors, but the maximum is ${MAX_ADDITIONAL_BEHAVIORS} (CloudFront allows ${MAX_ADDITIONAL_BEHAVIORS + 1} including the default). Each prerendered page consumes up to 2 behaviors (the \`/page/*\` subtree plus a derived bare \`/page\`).`,
-        resolution:
-          'Reduce the number of distinctly-routed prerendered pages or custom-header/assetPrefix patterns. Pages that are not given a dedicated behavior still serve correctly through the SSR Lambda — consider prerendering fewer top-level routes, or grouping pages under a shared path prefix so one `/<prefix>/*` behavior covers them.',
-      });
-    }
 
     // ---- Distribution ----
     this.distribution = new Distribution(this, 'HostingDistribution', {
       defaultBehavior,
       additionalBehaviors:
-        additionalBehaviorCount > 0 ? additionalBehaviors : undefined,
+        Object.keys(additionalBehaviors).length > 0
+          ? additionalBehaviors
+          : undefined,
       httpVersion: HttpVersion.HTTP2_AND_3,
       priceClass: props.priceClass ?? PriceClass.PRICE_CLASS_100,
       minimumProtocolVersion: SecurityPolicyProtocol.TLS_V1_2_2021,
@@ -1271,278 +1119,144 @@ export class CdnConstruct extends Construct {
       });
     }
 
+    // ---- Deploy-time CloudFront invalidation (adapter-declared) ----
+    // Scoped on `hasCompute`, NOT on the framework. Any compute-backed deploy
+    // can edge-cache HTML that goes stale after a redeploy: the shared SSR
+    // cache policy honors the origin's `Cache-Control`, so HTML served by the
+    // compute origin with a long `s-maxage` is edge-cached keyed on the viewer
+    // path (not the build-id prefix) and ends up referencing the previous
+    // build's hashed assets → 403. This is not Next-specific — it also hits
+    // Nuxt `routeRules` swr/isr and Astro SSR (see the field doc in
+    // manifest/types.ts). Pure-static deploys (no compute) serve HTML from S3
+    // with `no-cache`, so they need no invalidation and get none.
+    //
+    // Default: `['/*']` for any deploy with compute; nothing for pure-static.
+    // `manifest.invalidationPaths` OVERRIDES the default — set explicit
+    // patterns to narrow it, or `[]` to opt out.
+    //
+    // Ordering: the invalidation MUST run after the KvKeys atomic cutover
+    // (which is itself asset-gated via addBuildAssetDependency). That way it
+    // only flushes the PREVIOUS build's cached pages; the new build's
+    // `builds/<id>/...` objects were never cached, so `/*` is effectively free
+    // and cannot evict the not-yet-requested new prefix. `wait: false` is
+    // implied — AwsCustomResource does not poll the invalidation to completion,
+    // matching SST's non-blocking model (a brief propagation window where a
+    // first-time/cookieless visitor may still receive stale HTML is accepted).
+    const invalidationPaths = manifest.invalidationPaths ??
+      (hasCompute ? ['/*'] : []);
+    if (invalidationPaths.length > 0) {
+      const invalidation = new AwsCustomResource(this, 'DeployInvalidation', {
+        // CallerReference keyed on buildId so a NEW deploy (new buildId) issues
+        // a fresh invalidation, while an unchanged buildId is a no-op (CFN sees
+        // identical props → no Update → no duplicate invalidation cost).
+        onUpdate: {
+          service: 'CloudFront',
+          action: 'createInvalidation',
+          parameters: {
+            DistributionId: this.distribution.distributionId,
+            InvalidationBatch: {
+              CallerReference: `blocks-${buildId}`,
+              Paths: {
+                Quantity: invalidationPaths.length,
+                Items: invalidationPaths,
+              },
+            },
+          },
+          physicalResourceId: PhysicalResourceId.of(
+            `invalidation-${buildId}`,
+          ),
+        },
+        // createInvalidation is not resource-scopable in IAM; the action must
+        // be granted on `*` (the distribution ARN is not a valid resource for
+        // this action). Scope the policy to the single action.
+        policy: AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ['cloudfront:CreateInvalidation'],
+            resources: ['*'],
+          }),
+        ]),
+      });
+      // Gate AFTER the atomic KVS cutover so we only flush the previous build's
+      // pages (see ordering note above).
+      invalidation.node.addDependency(kvKeys.resource);
+    }
+
     // ---- Self-enforcing atomic-deploy guard ----
-    // The build-id CloudFront functions rewrite every request to
-    // `/builds/<buildId>/...`. If they publish before that build's assets are
-    // uploaded to the OAC-protected bucket, new/cookieless visitors get 403
-    // for the whole deploy window. `addBuildAssetDependency` wires each asset
-    // BucketDeployment as a dependency so CloudFormation uploads first. This
-    // validation fails synth if build-id functions exist alongside asset
-    // deployments but NONE were registered - i.e. the wiring loop in the
-    // hosting construct was removed/broken, silently re-opening the 403
-    // window. It runs at synth, after all `addBuildAssetDependency` calls.
+    // The KVS router rewrites every static request to `/builds/<buildId>/...`
+    // where `buildId` comes from the KVS route table. The KvKeys custom
+    // resource writes that table; if it runs before the new build's assets are
+    // uploaded to the OAC-protected bucket, new/cookieless visitors get 403 for
+    // the whole deploy window. `addBuildAssetDependency` wires each asset
+    // BucketDeployment as a dependency of the KvKeys resource so CloudFormation
+    // uploads first. This validation fails synth if the gated cutover resource
+    // exists alongside asset deployments but NONE were registered — i.e. the
+    // wiring loop in the hosting construct was removed/broken, silently
+    // re-opening the 403 window.
     this.node.addValidation({
       validate: (): string[] => {
-        // No build-id functions -> nothing to gate.
-        if (this.buildIdFunctions.length === 0) return [];
+        // No gated cutover resource -> nothing to gate.
+        if (this.buildAssetGatedResources.length === 0) return [];
         // At least one asset deployment was wired -> invariant holds.
         if (this.buildAssetDependencyCount > 0) return [];
         // Nothing was wired. Only fail if asset BucketDeployments actually
-        // exist in this stack; a standalone CdnConstruct with no assets (or a
-        // hypothetical asset-less deploy) is legitimate and must not
-        // false-positive.
+        // exist in this stack; a standalone CdnConstruct with no assets is
+        // legitimate and must not false-positive.
         const hasAssetDeployments = Stack.of(this)
           .node.findAll()
           .some((c) => c instanceof BucketDeployment);
         if (!hasAssetDeployments) return [];
         return [
-          `CdnConstruct '${this.node.path}' has ${this.buildIdFunctions.length} ` +
-            'build-id CloudFront function(s) that rewrite requests to ' +
-            "'/builds/<buildId>/...', but no asset BucketDeployment was " +
-            'registered via addBuildAssetDependency(). The build-id cutover ' +
-            'would publish before the new build assets are uploaded, ' +
-            'returning 403 Access Denied to new/cookieless visitors for the ' +
-            'entire deploy window. An asset BucketDeployment was likely added ' +
-            'without calling cdn.addBuildAssetDependency(deployment).',
+          `CdnConstruct '${this.node.path}' writes the KVS route table (which ` +
+            'flips traffic to /builds/<buildId>/...), but no asset ' +
+            'BucketDeployment was registered via addBuildAssetDependency(). ' +
+            'The route-table cutover would happen before the new build assets ' +
+            'are uploaded, returning 403 Access Denied to new/cookieless ' +
+            'visitors for the entire deploy window. An asset BucketDeployment ' +
+            'was likely added without calling ' +
+            'cdn.addBuildAssetDependency(deployment).',
         ];
       },
     });
   }
 
   /**
-   * Register a dependency that must finish before the build-id cutover.
+   * Assign a stable CloudFront origin id to an already-constructed origin so
+   * the KVS edge router can target it with `cf.selectRequestOriginById()`.
+   * Wraps the origin's `bind()` to inject the id into the returned config.
+   */
+  private withOriginId(origin: IOrigin, originId: string): IOrigin {
+    return {
+      bind: (scope, options) => {
+        const config = origin.bind(scope, options);
+        return {
+          ...config,
+          originProperty: config.originProperty
+            ? { ...config.originProperty, id: originId }
+            : config.originProperty,
+        };
+      },
+    };
+  }
+
+  /**
+   * Register a dependency that must finish before the atomic-deploy cutover.
    *
-   * The viewer-request (and Next.js assetPrefix-strip) CloudFront Functions
-   * bake the deploy's buildId into the request rewrite, sending traffic to
-   * `/builds/<buildId>/...` in the OAC-protected S3 bucket. If those
-   * functions publish before the new build's assets land at that prefix,
-   * new/cookieless visitors get 403 Access Denied for the duration of the
-   * deploy window (returning visitors with a `__dpl` skew cookie keep hitting
-   * the previous build and are unaffected).
+   * Under KVS routing the cutover is the {@link KvKeys} UpdateKeys call that
+   * flips `buildId`/routes to the new build. If it runs before the new build's
+   * assets land at `/builds/<buildId>/...` in the OAC-protected S3 bucket,
+   * new/cookieless visitors get 403 Access Denied for the deploy window
+   * (returning visitors with a `__dpl` skew cookie keep hitting the previous
+   * build and are unaffected).
    *
    * The hosting construct calls this with every asset `BucketDeployment` for
    * the new build, so CloudFormation uploads the assets first and only then
-   * publishes the functions (and the distribution that references them).
-   * This makes redeploys atomic from a new visitor's perspective.
+   * updates the KVS route table. This makes redeploys atomic from a new
+   * visitor's perspective.
    */
   addBuildAssetDependency(dependency: IDependable): void {
-    for (const fn of this.buildIdFunctions) {
-      fn.node.addDependency(dependency);
+    for (const resource of this.buildAssetGatedResources) {
+      resource.node.addDependency(dependency);
     }
     this.buildAssetDependencyCount += 1;
   }
-
-  /**
-   * Creates the viewer-request CloudFront Function.
-   * When skew protection is enabled, reads the `__dpl` cookie to route users
-   * to their pinned build. Otherwise uses a combined build-id rewrite + redirect function.
-   * Optionally prepends www redirect logic when `wwwRedirect` is configured.
-   */
-  private createViewerRequestFunction(
-    buildId: string,
-    skewEnabled: boolean,
-    redirects: Redirect[],
-    basePath?: string,
-    options?: {
-      spaFallback?: boolean;
-      wwwRedirect?: 'toApex' | 'toWww' | 'none';
-    },
-  ): CloudFrontFunction {
-    const wwwRedirectSnippet = generateWwwRedirectSnippet(options?.wwwRedirect);
-
-    if (skewEnabled) {
-      return new CloudFrontFunction(this, 'SkewProtectionRequestFunction', {
-        code: FunctionCode.fromInline(
-          injectWwwRedirect(
-            generateSkewProtectionViewerRequestCode(buildId, redirects, {
-              spaFallback: options?.spaFallback,
-              basePath,
-            }),
-            wwwRedirectSnippet,
-          ),
-        ),
-        runtime: CLOUDFRONT_FUNCTION_RUNTIME,
-        comment:
-          redirects.length > 0
-            ? `Skew protection: cookie-based routing + ${redirects.length} redirect rule(s)`
-            : `Skew protection: routes requests to build from cookie or current build ${buildId}`,
-      });
-    }
-    return new CloudFrontFunction(this, 'BuildIdRewriteFunction', {
-      code: FunctionCode.fromInline(
-        injectWwwRedirect(
-          generateBuildIdAndRedirectFunctionCode(buildId, redirects, basePath, {
-            spaFallback: options?.spaFallback,
-          }),
-          wwwRedirectSnippet,
-        ),
-      ),
-      runtime: CLOUDFRONT_FUNCTION_RUNTIME,
-      comment:
-        redirects.length > 0
-          ? `Build-id rewrite + ${redirects.length} redirect rule(s)`
-          : `Rewrites request URIs to include build ID prefix: builds/${buildId}/`,
-    });
-  }
-
-  /**
-   * Creates the viewer-response CloudFront Function for skew protection.
-   * Sets the `__dpl` cookie on HTML responses to pin the user's session.
-   * Returns `undefined` when skew protection is disabled.
-   */
-  private createViewerResponseFunction(
-    buildId: string,
-    maxAge: number,
-    skewEnabled: boolean,
-  ): CloudFrontFunction | undefined {
-    if (!skewEnabled) {
-      return undefined;
-    }
-    return new CloudFrontFunction(this, 'SkewProtectionResponseFunction', {
-      code: FunctionCode.fromInline(
-        generateSkewProtectionViewerResponseCode(buildId, maxAge),
-      ),
-      runtime: CLOUDFRONT_FUNCTION_RUNTIME,
-      comment: `Skew protection: sets __dpl cookie to ${buildId} on HTML responses`,
-    });
-  }
 }
-
-/** Characters that indicate regex syntax — not valid in CloudFront path patterns. */
-const REGEX_INDICATORS = /[\\^${}()|[\]+?]/;
-
-/**
- * Normalize a route pattern into a CloudFront-compatible path pattern.
- *
- * CloudFront supports only simple glob patterns with `*` and `?` wildcards.
- * Regex or complex glob syntax is not supported and will cause deployment failures.
- */
-const normalizePatternForCloudFront = (pattern: string): string => {
-  if (REGEX_INDICATORS.test(pattern)) {
-    throw new HostingError('InvalidRoutePatternError', {
-      message: `Route pattern '${pattern}' contains regex syntax which CloudFront does not support.`,
-      resolution:
-        'CloudFront path patterns only support * (match any) and ? (match single char). ' +
-        'Convert regex patterns to glob-style (e.g., /api/* instead of /api/(.*))',
-    });
-  }
-
-  // Ensure pattern starts with /
-  if (!pattern.startsWith('/')) {
-    return `/${pattern}`;
-  }
-  return pattern;
-};
-
-/**
- * Score a route pattern's specificity. Higher score = more specific = should
- * be evaluated first by CloudFront (which is first-match-wins on the order
- * we emit cache behaviors).
- *
- * Approach:
- *   - Primary axis: count of literal (non-wildcard) path segments. A pattern
- *     with more literal segments constrains more of the URL path and is
- *     therefore more specific. `/api/*\/data/*` (2 literal segments)
- *     constrains more than `/*` (0 literal segments) regardless of wildcard
- *     count.
- *   - Tiebreaker: pattern length. Within the same literal-segment count,
- *     longer patterns generally constrain more bytes.
- *
- * Why not "fewer wildcards wins": that ordering ranks `/*` (1 wildcard)
- * above `/api/*\/data/*` (2 wildcards) even though the latter is strictly
- * more constraining. Literal segments are the right primary axis.
- *
- * Examples (highest to lowest):
- *   `/api/edge/catch/*`  → 3 literal segments, length 17 → 3_017
- *   `/api/edge/json`     → 3 literal segments, length 14 → 3_014
- *   `/api/edge/b`        → 3 literal segments, length 11 → 3_011
- *   `/api/*\/data/*`     → 2 literal segments, length 13 → 2_013
- *   `/api/edge/*`        → 2 literal segments, length 11 → 2_011
- *   `/_next/*`           → 1 literal segment,  length  8 → 1_008
- *   `/*`                 → 0 literal segments, length  2 →     2
- */
-const routeSpecificity = (pattern: string): number => {
-  const literalSegments = pattern
-    .split('/')
-    .filter((s) => s !== '' && s !== '*').length;
-  return literalSegments * 1000 + pattern.length;
-};
-
-/**
- * For a static-route pattern that ends with `/*`, return the bare-path
- * variant so the route can be reached without a trailing slash.
- *
- * `/about/*` → `/about`
- * `/posts/2024/*` → `/posts/2024`
- *
- * Returns `null` for patterns that are not a simple `<name>/*` shape
- * (catch-alls, root patterns, multi-wildcard, etc.) — those don't have
- * a meaningful bare form, or the parent pattern is already covered by
- * other behaviors.
- *
- * Why this is needed: CloudFront path patterns don't have a "match
- * either bare or with-slash" wildcard. `/about/*` matches `/about/foo`
- * but NOT bare `/about`. Without an explicit bare-path behavior, the
- * bare form falls through to the SSR Lambda — breaking SSG semantics
- * (timestamp drift, every request is a Lambda invocation).
- */
-const deriveBareStaticPattern = (pattern: string): string | null => {
-  if (!pattern.endsWith('/*')) return null;
-  const bare = pattern.slice(0, -2);
-  // Don't emit `/` (would be the default behavior, not an additional one)
-  // or anything containing additional wildcards (no useful bare form).
-  if (bare === '' || bare === '/' || bare.includes('*')) return null;
-  return bare;
-};
-
-/**
- * Generate a JavaScript snippet that performs www ↔ apex redirection.
- * Returns empty string when wwwRedirect is 'none' or undefined.
- */
-const generateWwwRedirectSnippet = (
-  wwwRedirect?: 'toApex' | 'toWww' | 'none',
-): string => {
-  if (!wwwRedirect || wwwRedirect === 'none') return '';
-
-  if (wwwRedirect === 'toApex') {
-    return `  var __host = request.headers.host && request.headers.host.value;
-  if (__host && __host.startsWith('www.')) {
-    return {
-      statusCode: 301,
-      statusDescription: 'Moved Permanently',
-      headers: { location: { value: 'https://' + __host.substring(4) + request.uri + (request.querystring && Object.keys(request.querystring).length > 0 ? '?' + Object.keys(request.querystring).map(function(k) { var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv) { return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&') : '') } },
-    };
-  }
-`;
-  }
-
-  // toWww
-  return `  var __host = request.headers.host && request.headers.host.value;
-  if (__host && !__host.startsWith('www.')) {
-    return {
-      statusCode: 301,
-      statusDescription: 'Moved Permanently',
-      headers: { location: { value: 'https://www.' + __host + request.uri + (request.querystring && Object.keys(request.querystring).length > 0 ? '?' + Object.keys(request.querystring).map(function(k) { var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv) { return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&') : '') } },
-    };
-  }
-`;
-};
-
-/**
- * Inject www redirect snippet into a CloudFront Function's handler body.
- * Inserts the snippet right after the `var request = event.request;` line.
- * Returns unmodified code when snippet is empty.
- */
-const injectWwwRedirect = (functionCode: string, snippet: string): string => {
-  if (!snippet) return functionCode;
-  const marker = 'var request = event.request;';
-  const idx = functionCode.indexOf(marker);
-  if (idx === -1) return functionCode;
-  const insertPos = idx + marker.length;
-  return (
-    functionCode.slice(0, insertPos) +
-    '\n' +
-    snippet +
-    functionCode.slice(insertPos)
-  );
-};
