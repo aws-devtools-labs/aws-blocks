@@ -29,6 +29,10 @@ jobs:
       # Unique per run so a cancelled run can't collide with the next.
       BLOCKS_STACK_SUFFIX: w${{ github.run_number }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+      # Canonical fixed CI e2e telemetry installation ID. Keep in sync with the
+      # POSIX equivalent (the `installation-id` default in
+      # .github/actions/seed-telemetry-id/action.yml).
+      BLOCKS_E2E_TELEMETRY_ID: '00000000-0000-0000-0000-000000000e2e'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,7 +50,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.blocks\telemetry" | Out-Null
-          Set-Content -NoNewline -Path "$env:USERPROFILE\.blocks\telemetry\installation-id" -Value '00000000-0000-0000-0000-000000000e2e'
+          Set-Content -NoNewline -Path "$env:USERPROFILE\.blocks\telemetry\installation-id" -Value "$env:BLOCKS_E2E_TELEMETRY_ID"
 
       - run: npm ci
       - run: npm run build

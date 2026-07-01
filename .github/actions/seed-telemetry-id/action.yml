@@ -4,11 +4,20 @@ description: >-
   traffic is consistent and identifiable (and can be excluded from product
   usage metrics). Also suppresses the first-run telemetry consent notice.
   POSIX/Linux/macOS only (bash, uses $HOME).
+inputs:
+  installation-id:
+    description: The fixed telemetry installation ID to seed.
+    required: false
+    # Canonical fixed CI e2e telemetry installation ID. Keep in sync with the
+    # Windows equivalent (BLOCKS_E2E_TELEMETRY_ID in .github/workflows/windows-e2e.yml).
+    default: '00000000-0000-0000-0000-000000000e2e'
 runs:
   using: composite
   steps:
     - name: Seed fixed e2e telemetry installation ID
       shell: bash
+      env:
+        BLOCKS_E2E_TELEMETRY_ID: ${{ inputs.installation-id }}
       run: |
         mkdir -p "$HOME/.blocks/telemetry"
-        printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.blocks/telemetry/installation-id"
+        printf '%s' "$BLOCKS_E2E_TELEMETRY_ID" > "$HOME/.blocks/telemetry/installation-id"
