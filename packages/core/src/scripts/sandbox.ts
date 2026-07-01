@@ -51,7 +51,9 @@ export async function startSandbox(options: SandboxOptions) {
 
   // Provision connection string to SSM SecureString.
   // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
-  const secrets = await ensureSecrets('sandbox');
+  // projectRoot is process.cwd() — the same value passed to cdk as --context
+  // projectRoot below — so the written name matches the name resolved at synth.
+  const secrets = await ensureSecrets('sandbox', process.cwd());
   if (secrets.created.length > 0) {
     console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
   }

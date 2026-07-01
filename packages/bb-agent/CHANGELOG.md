@@ -1,5 +1,28 @@
 # @aws-blocks/bb-agent
 
+## 0.3.0
+
+### Minor Changes
+
+- 179817f: feat(bb-agent): make model config optional, default to BedrockModels.BALANCED
+
+  The `model` field in AgentConfig is now optional. When omitted, the agent
+  defaults to `BedrockModels.BALANCED` for deployment and the canned provider
+  for local development.
+
+### Patch Changes
+
+- Updated dependencies [e839301]
+  - @aws-blocks/core@0.1.10
+
+## 0.2.1
+
+### Patch Changes
+
+- c6ba244: fix(bb-agent): add toJSON() to AgentStreamResult
+
+  `AgentStreamResult` now serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`; it is now explicitly `null` to signal it is server-side only.
+
 ## 0.2.0
 
 ### Minor Changes
