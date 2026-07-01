@@ -19,46 +19,41 @@
  *   OUTPUT            path to write the merged result envelope
  *   BENCH_JUDGE_MODEL judge model ID (default us.anthropic.claude-opus-4-8)
  */
-import { execSync } from 'node:child_process';
-import { readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { execSync, spawn } from 'node:child_process';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import {
 	Agent,
 	type AgentResult,
 	BedrockModel,
 	ContextWindowOverflowError,
+	type ExecuteOptions,
+	type ExecutionResult,
 	MaxTokensError,
 	ModelError,
 	ModelThrottledError,
+	PosixShellSandbox,
+	SandboxAbortError,
+	SandboxTimeoutError,
+	type StreamChunk,
 	StructuredOutputError,
-	tool,
 } from '@strands-agents/sdk';
+import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { z } from 'zod';
 import { COMMON_DIMENSIONS, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
 import { buildCapDecision } from './lib/scoring.mjs';
 
-const MAX_BYTES = 64 * 1024;
-// Directories that are never the agent's own work and would blow the judge's
-// context window if listed (node_modules especially). `bench-tests/` holds the
-// objective Playwright spec copied in by step 3 — the judge must grade the
-// SOURCE blind to the exact assertions, so it is hidden here too (and blocked
-// from a direct read by isExcludedPath below). The list tool hides them.
+// Physical spec-blinding: the judge grades a SOURCE-ONLY COPY of the workspace
+// (staged below into JUDGE_SRC) with these excluded, so the objective test can't
+// anchor the score — blinding is by ABSENCE, robust against any cat/grep/find.
+//   - IGNORED_DIRS: dependencies + build output + the copied objective spec dir.
+//     `bench-tests/` holds the Playwright spec copied in by step 3.
+//   - `.blocks-sandbox`: a build-time source-artifact dir, never the agent's work.
+//   - EXCLUDED_FILE_RE: any *.spec.* the agent (or step 3) left in the tree.
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'bench-tests']);
-// Spec files (the copied objective test — e.g. bench-tests/task.spec.ts — or any
-// *.spec.* the agent left behind) are hidden from BOTH list and view, so the
-// grade stays source-only and can't anchor on the tests it will be checked by.
 const EXCLUDED_FILE_RE = /\.spec\.[cm]?[jt]sx?$/;
-const MAX_LIST_ENTRIES = 200;
-
-// Filesystem-exploration budget for the judge: once it has made this many
-// view/list calls OR read this many cumulative bytes, the tools stop returning
-// content and tell it to score with what it has. Caps a pathological workspace
-// from ballooning the judge into a hundreds-of-thousands-of-tokens run.
-const MAX_FS_CALLS = 40;
-const MAX_FS_BYTES = 250 * 1024;
-let fsCalls = 0;
-let fsBytes = 0;
-let explorationCapped = false;
+const STAGE_EXCLUDE_DIRS = new Set([...IGNORED_DIRS, '.blocks-sandbox']);
 
 const WORKSPACE = required('WORKSPACE');
 const TASK_PROMPT_PATH = required('TASK_PROMPT');
@@ -96,95 +91,137 @@ try {
 	// Continue with empty; we still want to produce a graded result.
 }
 
-// Real-path containment defeats symlink escapes. `resolve()` is purely
-// lexical, so a symlink inside WORKSPACE pointing to /etc/passwd would
-// pass the prefix check and `readFileSync` would follow it.
-const WORKSPACE_REAL = realpathSync(WORKSPACE);
-function safeAbs(rel: string): string | null {
-	const lexical = resolve(WORKSPACE_REAL, rel);
-	let real: string;
-	try {
-		real = realpathSync(lexical);
-	} catch {
-		// File doesn't exist — its lexical path can't escape, so safe.
-		real = lexical;
-	}
-	return real === WORKSPACE_REAL || real.startsWith(WORKSPACE_REAL + '/') ? real : null;
-}
+// Physical spec-blinding: stage a SOURCE-ONLY COPY of the workspace and point
+// the judge's Sandbox at it. The objective test spec and everything that isn't
+// the agent's source (deps, build output, .blocks-sandbox, any *.spec.*) is left
+// OUT of the copy, so the judge is blinded by ABSENCE — no cat/grep/find can
+// reach a spec that physically isn't there. The copy is disposable, so the
+// vended bash's write ability can't affect scoring.
+const JUDGE_SRC = mkdtempSync(join(tmpdir(), 'bench-judge-src-'));
 
-// A path is hidden from the judge if any of its segments is an ignored dir
-// (covers `bench-tests/` and everything under it) or its basename is a spec
-// file. Used by BOTH tools, so the objective spec can't be reached by listing
-// its directory OR by viewing it through a direct path.
-function isExcludedPath(abs: string): boolean {
-	const rel = relative(WORKSPACE_REAL, abs);
-	if (rel === '' || rel.startsWith('..')) return false; // the root itself isn't excluded
+// cpSync filter: copy everything except the excluded dirs (skipped whole-subtree)
+// and any *.spec.* file. `src` is an absolute path under WORKSPACE.
+function stageFilter(src: string): boolean {
+	const rel = relative(WORKSPACE, src);
+	if (rel === '') return true; // the root itself
 	const parts = rel.split(sep);
-	if (parts.some((seg) => IGNORED_DIRS.has(seg))) return true;
-	return EXCLUDED_FILE_RE.test(parts[parts.length - 1] ?? '');
+	if (parts.some((seg) => STAGE_EXCLUDE_DIRS.has(seg))) return false;
+	return !EXCLUDED_FILE_RE.test(parts[parts.length - 1] ?? '');
 }
+cpSync(WORKSPACE, JUDGE_SRC, { recursive: true, filter: stageFilter });
 
-// Charge one filesystem call against the judge's exploration budget. Returns a
-// budget-exhausted message (and trips explorationCapped, recorded in the judge
-// notes) once the call or byte cap is reached; null while there is still room.
-function chargeFsCall(): string | null {
-	if (fsCalls >= MAX_FS_CALLS || fsBytes >= MAX_FS_BYTES) {
-		explorationCapped = true;
-		return `error: exploration budget exhausted (${MAX_FS_CALLS} calls / ${Math.round(MAX_FS_BYTES / 1024)}KB). Score now using what you've already seen.`;
+// Fail loudly if any spec or the bench-tests dir leaked into the copy — the
+// whole point of the copy is that they are absent. This is an INDEPENDENT check
+// (a find, not the same filter), so a filter bug can't silently un-blind the judge.
+assertNoSpecLeak(JUDGE_SRC);
+
+function assertNoSpecLeak(dir: string): void {
+	const leaks = execSync(`find ${shellQuote(dir)} \\( -name '*.spec.*' -o -name bench-tests \\) -print`, {
+		encoding: 'utf-8',
+	}).trim();
+	if (leaks) {
+		process.stderr.write(`[judge] FATAL: objective spec / bench-tests leaked into the judge source copy:\n${leaks}\n`);
+		process.exit(1);
 	}
-	fsCalls++;
-	return null;
 }
 
-const view = tool({
-	name: 'view',
-	description: `Read a file inside the workspace. Path is relative to ${WORKSPACE_REAL}. Returns file contents (utf-8) up to ${MAX_BYTES} bytes.`,
-	inputSchema: z.object({ path: z.string().describe('Workspace-relative file path') }),
-	callback: async ({ path }) => {
-		const budget = chargeFsCall();
-		if (budget) return budget;
-		const abs = safeAbs(path);
-		if (!abs) return 'error: path escapes workspace';
-		if (isExcludedPath(abs)) return 'error: not visible to the judge (objective test spec / ignored path)';
-		try {
-			const size = statSync(abs).size;
-			if (size > MAX_BYTES) return `error: file too large (${size} bytes > ${MAX_BYTES})`;
-			const content = readFileSync(abs, 'utf-8');
-			fsBytes += Buffer.byteLength(content, 'utf-8');
-			return content;
-		} catch (err) {
-			return `error: ${describeError(err)}`;
-		}
-	},
-});
+// Host-execution Sandbox rooted at a fixed directory (the judge's source-only
+// copy). The vended bash tool routes every command through the agent's Sandbox,
+// so the judge's shell cwd is the copy root — it reads/greps source there and can
+// never reach the excluded spec. PosixShellSandbox implements file ops on top of
+// executeStreaming, so rooting the shell roots everything. minTimeoutSec defaults
+// to 0, so the vended bash's own 120s per-command default stands — ample for a
+// judge that only reads/greps.
+class WorkspaceSandbox extends PosixShellSandbox {
+	constructor(
+		private readonly root: string,
+		private readonly minTimeoutSec = 0,
+	) {
+		super();
+	}
 
-const list = tool({
-	name: 'list',
-	description: `List entries in a directory inside the workspace. Path is relative to ${WORKSPACE_REAL}. Use "." for the workspace root. Returns one entry per line, suffixed with / for directories. node_modules/, .git/, dist/ and bench-tests/ (the objective test spec) are hidden; long listings are truncated at ${MAX_LIST_ENTRIES} entries.`,
-	inputSchema: z.object({ path: z.string().describe('Workspace-relative directory path') }),
-	callback: async ({ path }) => {
-		const budget = chargeFsCall();
-		if (budget) return budget;
-		const abs = safeAbs(path);
-		if (!abs) return 'error: path escapes workspace';
-		if (isExcludedPath(abs)) return 'error: not visible to the judge (objective test spec / ignored path)';
-		try {
-			const names = readdirSync(abs, { withFileTypes: true })
-				.filter((e) => !isExcludedPath(resolve(abs, e.name)))
-				.map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-				.sort();
-			const shown = names.slice(0, MAX_LIST_ENTRIES);
-			if (names.length > MAX_LIST_ENTRIES) {
-				shown.push(`… (${names.length - MAX_LIST_ENTRIES} more entries truncated)`);
-			}
-			const listing = shown.join('\n');
-			fsBytes += Buffer.byteLength(listing, 'utf-8');
-			return listing;
-		} catch (err) {
-			return `error: ${describeError(err)}`;
+	async *executeStreaming(
+		command: string,
+		options?: ExecuteOptions,
+	): AsyncGenerator<StreamChunk | ExecutionResult, void, undefined> {
+		const cwd = options?.cwd ?? this.root;
+		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
+		const result = await runShell(command, cwd, timeout, options?.signal, options?.env);
+		if (result.stdout) yield { type: 'streamChunk', data: result.stdout, streamType: 'stdout' };
+		if (result.stderr) yield { type: 'streamChunk', data: result.stderr, streamType: 'stderr' };
+		yield result;
+	}
+}
+
+// Run one command through a POSIX shell rooted at `cwd`, buffering output and
+// resolving the final ExecutionResult. Mirrors the SDK stream-process
+// termination contract (SIGTERM, then a 1s-grace SIGKILL) and throws the SDK's
+// SandboxTimeoutError / SandboxAbortError so the vended bash surfaces a timeout
+// as BashTimeoutError.
+function runShell(
+	command: string,
+	cwd: string,
+	timeoutSec: number | undefined,
+	signal: AbortSignal | undefined,
+	env: Record<string, string> | undefined,
+): Promise<ExecutionResult> {
+	return new Promise<ExecutionResult>((resolve, reject) => {
+		const proc = spawn('bash', ['-c', `cd ${shellQuote(cwd)} && ${command}`], {
+			env: env ? { ...process.env, ...env } : process.env,
+		});
+		let stdout = '';
+		let stderr = '';
+		let settled = false;
+		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+		const finish = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			if (timeoutHandle) clearTimeout(timeoutHandle);
+			if (signal) signal.removeEventListener('abort', onAbort);
+			fn();
+		};
+		const terminate = (err: Error): void => {
+			if (settled) return;
+			proc.kill('SIGTERM');
+			setTimeout(() => {
+				try {
+					proc.kill('SIGKILL');
+				} catch {
+					// already exited — nothing to kill
+				}
+			}, 1000).unref();
+			finish(() => reject(err));
+		};
+		const onAbort = (): void => terminate(new SandboxAbortError());
+
+		proc.stdout?.on('data', (d) => {
+			stdout += String(d);
+		});
+		proc.stderr?.on('data', (d) => {
+			stderr += String(d);
+		});
+		proc.on('error', (err) => finish(() => reject(err)));
+		proc.on('close', (code, sig) =>
+			finish(() =>
+				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
+			),
+		);
+
+		if (timeoutSec !== undefined) {
+			timeoutHandle = setTimeout(() => terminate(new SandboxTimeoutError(timeoutSec)), timeoutSec * 1000);
 		}
-	},
-});
+		if (signal) {
+			if (signal.aborted) onAbort();
+			else signal.addEventListener('abort', onAbort, { once: true });
+		}
+	});
+}
+
+// Single-quote a path for safe interpolation into a shell command.
+function shellQuote(s: string): string {
+	return `'${s.replace(/'/g, `'\\''`)}'`;
+}
 
 // Judge-call robustness. The judge's own Bedrock calls throttle under the ~8
 // concurrent matrix cells (each an Opus judge hitting the same inference
@@ -207,7 +244,11 @@ function makeJudgeAgent(): Agent {
 			clientConfig: { maxAttempts: 8, retryMode: 'adaptive' },
 		}),
 		systemPrompt: JUDGE_SYSTEM,
-		tools: [view, list],
+		// Vended bash rooted at the spec-blinded source-only copy (JUDGE_SRC). The
+		// judge only reads/greps, so the default 120s per-command timeout is ample;
+		// its write ability is harmless because JUDGE_SRC is a disposable copy.
+		sandbox: new WorkspaceSandbox(JUDGE_SRC),
+		tools: [makeBash()],
 	});
 }
 
@@ -226,7 +267,7 @@ const JUDGE_BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 // imported — so a block that was never imported can't slip past the judge (the
 // score-0 case). Both are injected before the rubric/task sections.
 const requiredBlocks = loadRequiredBlocks(TASK_DIR);
-const blocksImports = collectBlocksImports(WORKSPACE_REAL);
+const blocksImports = collectBlocksImports(JUDGE_SRC);
 const judgeSections: string[] = [];
 if (requiredBlocks) {
 	judgeSections.push(
@@ -303,13 +344,6 @@ if (!out) {
 const rawScores: Partial<Record<string, number>> = {};
 if (out) for (const d of DIMENSIONS) if (typeof out[d] === 'number') rawScores[d] = out[d] as number;
 const { capped, applied, notes } = applyHardCaps(rawScores, EVIDENCE);
-// Cost guard (fix): if the judge hit its filesystem-exploration budget it scored
-// on a partial view of the workspace — record that so a capped run is auditable.
-if (explorationCapped) {
-	notes.push(
-		`judge exploration budget hit (${fsCalls} view/list calls, ${Math.round(fsBytes / 1024)}KB read) — scored on a partial view of the workspace`,
-	);
-}
 const overall = DIMENSIONS.every((d) => typeof capped[d] === 'number')
 	? Math.round((DIMENSIONS.reduce((acc, d) => acc + (capped[d] ?? 0), 0) / DIMENSIONS.length) * 100) / 100
 	: null;

@@ -6,19 +6,33 @@
  *   TASK_PROMPT      path to PROMPT.md
  *   OUTPUT           path to write the builder envelope JSON
  *   BENCH_MODEL      Bedrock model ID (default: us.anthropic.claude-sonnet-4-6)
- *   TRACE            (optional) path to write the full hierarchical tool-call
- *                    trace tree; on a wall-clock timeout a lightweight transcript
- *                    fallback is flushed here instead
+ *   TRACE            (optional) path to write the Strands built-in hierarchical
+ *                    tool-call trace tree (result.traces). Only written on normal
+ *                    completion; on a wall-clock timeout no trace is emitted (the
+ *                    SDK exposes no mid-run trace accessor).
  *   METRICS          (optional) path to write the run metrics (cycleCount,
  *                    totalDuration, accumulatedUsage, per-tool toolUsage, …)
  *
- * Tools: a single `shell` running bash inside WORKSPACE. The runner is the
- * sandbox; no extra isolation needed for our PR-CI threat model.
+ * Tools: the framework's vended `bash` + `fileEditor`, both routed through a
+ * Sandbox rooted at WORKSPACE — so containment (cwd = WORKSPACE) is enforced by
+ * the Sandbox, not by a cwd+prompt convention. The bash execute timeout is
+ * floored to BASH_MIN_TIMEOUT_SEC so npm install/build survive.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Agent, BedrockModel, MessageAddedEvent, ModelStreamUpdateEvent, tool } from '@strands-agents/sdk';
-import { z } from 'zod';
+import {
+	Agent,
+	BedrockModel,
+	type ExecuteOptions,
+	type ExecutionResult,
+	ModelStreamUpdateEvent,
+	PosixShellSandbox,
+	SandboxAbortError,
+	SandboxTimeoutError,
+	type StreamChunk,
+} from '@strands-agents/sdk';
+import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
+import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
 import { builderSystem } from '../prompts.ts';
 
 const WORKSPACE = required('WORKSPACE');
@@ -34,39 +48,144 @@ const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-sonnet-4-6';
 // only ~20% of, so 120 leaves ample headroom for a full build without risking a
 // runaway. One turn = one model call plus any tool calls it makes.
 const MAX_TURNS = 120;
+// Floor for the vended bash execute timeout (seconds). The vended bash tool
+// defaults to 120s per command — long enough to kill `npm install` / `npm run
+// build`. There is no `makeBash({timeout})` knob (the factory only takes
+// name/description/inputSchema and the callback hardcodes `input.timeout ?? 120`),
+// so we enforce the floor in the Sandbox instead: WorkspaceSandbox raises any
+// provided timeout to at least this many seconds. 10 minutes leaves ample room
+// for a cold install + build while staying inside the workflow's wall-clock cap.
+const BASH_MIN_TIMEOUT_SEC = 600;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
-const shell = tool({
-	name: 'shell',
-	description: `Run a bash command. Working directory is the bench-app root (${WORKSPACE}). State persists between calls. Use this for everything: reading files, editing files (with sed/heredoc), running curl, running npm. Long-running commands (npm install, npm run build) can take minutes; stdout/stderr are captured and returned along with the exit code.`,
-	inputSchema: z.object({ command: z.string().describe('Bash command to run') }),
-	callback: async ({ command }) => {
-		const r = spawnSync('bash', ['-lc', command], {
-			cwd: WORKSPACE,
-			encoding: 'utf-8',
-			maxBuffer: 8 * 1024 * 1024,
-			timeout: 600_000,
-		});
-		const stdout = (r.stdout ?? '').slice(-50_000);
-		const stderr = (r.stderr ?? '').slice(-10_000);
-		return `exit=${r.status ?? 'killed'}\n${stdout}${stderr ? `\n--- stderr ---\n${stderr}` : ''}`;
-	},
-});
+// Host-execution Sandbox rooted at a fixed directory. The vended bash +
+// fileEditor tools route every command and file operation through the agent's
+// configured Sandbox, so rooting it at WORKSPACE makes containment structural
+// (the shell's cwd is the workspace) rather than a prompt convention.
+// PosixShellSandbox already implements readFile/writeFile/listFiles on top of
+// executeStreaming, so rooting the shell roots the file editor too — the only
+// method we must supply is executeStreaming.
+class WorkspaceSandbox extends PosixShellSandbox {
+	constructor(
+		private readonly root: string,
+		private readonly minTimeoutSec = 0,
+	) {
+		super();
+	}
 
-// INTENTIONALLY MINIMAL: a single-tool (`shell`) agent, no planner, no
-// sub-agents, no retrieval, no bespoke scaffolding. This is a deliberate design
-// choice, not an unfinished one — DO NOT "helpfully" swap in a richer agent:
+	async *executeStreaming(
+		command: string,
+		options?: ExecuteOptions,
+	): AsyncGenerator<StreamChunk | ExecutionResult, void, undefined> {
+		const cwd = options?.cwd ?? this.root;
+		// The vended bash callback always passes a timeout (its own 120s default
+		// when the model omits one), which would kill npm install/build. Floor it
+		// to minTimeoutSec so long commands survive. `undefined` means the caller
+		// opted out of a timeout (e.g. the file-editor's internal read/write execs
+		// run with none) — leave that untouched.
+		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
+		const result = await runShell(command, cwd, timeout, options?.signal, options?.env);
+		if (result.stdout) yield { type: 'streamChunk', data: result.stdout, streamType: 'stdout' };
+		if (result.stderr) yield { type: 'streamChunk', data: result.stderr, streamType: 'stderr' };
+		yield result;
+	}
+}
+
+// Run one command through a POSIX shell rooted at `cwd`, buffering output and
+// resolving the final ExecutionResult. Mirrors the SDK stream-process
+// termination contract (SIGTERM, then a 1s-grace SIGKILL) and throws the SDK's
+// SandboxTimeoutError / SandboxAbortError so the vended bash surfaces a timeout
+// as BashTimeoutError. Buffering (rather than incremental streaming) matches the
+// only consumers here — Sandbox.execute and the file editor, which need just the
+// final result — and preserves the previous spawnSync tool's buffered behavior.
+function runShell(
+	command: string,
+	cwd: string,
+	timeoutSec: number | undefined,
+	signal: AbortSignal | undefined,
+	env: Record<string, string> | undefined,
+): Promise<ExecutionResult> {
+	return new Promise<ExecutionResult>((resolve, reject) => {
+		const proc = spawn('bash', ['-c', `cd ${shellQuote(cwd)} && ${command}`], {
+			env: env ? { ...process.env, ...env } : process.env,
+		});
+		let stdout = '';
+		let stderr = '';
+		let settled = false;
+		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+		const finish = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			if (timeoutHandle) clearTimeout(timeoutHandle);
+			if (signal) signal.removeEventListener('abort', onAbort);
+			fn();
+		};
+		const terminate = (err: Error): void => {
+			if (settled) return;
+			proc.kill('SIGTERM');
+			// Detached grace-kill: if SIGTERM doesn't land in 1s, force it. unref()
+			// so this timer never holds the event loop open on its own.
+			setTimeout(() => {
+				try {
+					proc.kill('SIGKILL');
+				} catch {
+					// already exited — nothing to kill
+				}
+			}, 1000).unref();
+			finish(() => reject(err));
+		};
+		const onAbort = (): void => terminate(new SandboxAbortError());
+
+		proc.stdout?.on('data', (d) => {
+			stdout += String(d);
+		});
+		proc.stderr?.on('data', (d) => {
+			stderr += String(d);
+		});
+		proc.on('error', (err) => finish(() => reject(err)));
+		proc.on('close', (code, sig) =>
+			finish(() =>
+				resolve({ type: 'executionResult', exitCode: code ?? (sig ? 128 : 1), stdout, stderr, outputFiles: [] }),
+			),
+		);
+
+		if (timeoutSec !== undefined) {
+			timeoutHandle = setTimeout(() => terminate(new SandboxTimeoutError(timeoutSec)), timeoutSec * 1000);
+		}
+		if (signal) {
+			if (signal.aborted) onAbort();
+			else signal.addEventListener('abort', onAbort, { once: true });
+		}
+	});
+}
+
+// Single-quote a path for safe interpolation into the `cd <cwd>` shell prefix.
+function shellQuote(s: string): string {
+	return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+// INTENTIONALLY MINIMAL: a bare agent given only the framework's vended tools
+// (`bash` + `fileEditor`, routed through a WORKSPACE-rooted Sandbox), no planner,
+// no sub-agents, no retrieval, no bespoke scaffolding. This is a deliberate
+// design choice, not an unfinished one — DO NOT "helpfully" swap in a richer
+// agent:
 //   - Stable measurement surface: the bench measures how the FRAMEWORK (the
-//     scaffold + Building Blocks + docs) shapes an agent's output. A fixed,
-//     minimal agent keeps that surface constant so a score delta is
-//     deterministically attributable to a framework change, not to agent tweaks.
+//     scaffold + Building Blocks + docs + its own vended tools) shapes an agent's
+//     output. A fixed, minimal agent keeps that surface constant so a score delta
+//     is deterministically attributable to a framework change, not to agent
+//     tweaks.
 //   - Accounting control: token usage (the ModelStreamUpdateEvent hook) and the
 //     SIGTERM wall-clock-timeout envelope flush both need direct, in-process
 //     control of the loop — a higher-level "helpful" agent abstraction would hide
 //     the model-metadata events and the invoke lifecycle we depend on here.
 //   - Reproducibility: a pinned model + temperature 0 + a hard MAX_TURNS bound is
 //     what makes a run repeatable; extra tools/heuristics reintroduce variance.
+// The vended bash tool routes through `context.agent.sandbox`, so the Sandbox is
+// set on the Agent and the timeout floor lives in WorkspaceSandbox (see above).
+// NOTE: the barrel `bash` export is a host-only persistent session that ignores
+// the sandbox — `makeBash()` is the sandbox-aware tool, so we use that.
 const agent = new Agent({
 	model: new BedrockModel({
 		modelId: MODEL_ID,
@@ -74,7 +193,8 @@ const agent = new Agent({
 		temperature: 0,
 	}),
 	systemPrompt: builderSystem(),
-	tools: [shell],
+	sandbox: new WorkspaceSandbox(WORKSPACE, BASH_MIN_TIMEOUT_SEC),
+	tools: [makeBash(), fileEditor],
 });
 
 // Best-effort live usage accounting. The workflow caps step 2 at a hard
@@ -95,19 +215,6 @@ agent.addHook(ModelStreamUpdateEvent, (event) => {
 		partialTokensOut += inner.usage.outputTokens ?? 0;
 		partialCycles += 1;
 	}
-});
-
-// TIMEOUT-SAFE trace fallback. The full hierarchical trace tree (result.traces,
-// written below) only exists once agent.invoke() RETURNS — but a wall-clock
-// timeout SIGTERMs us mid-invoke, so a timed-out cell would otherwise produce NO
-// trace at all. Mirroring the token hook above, accumulate a lightweight
-// transcript of every message the agent loop adds (the user prompt, each
-// assistant turn, and tool-result messages) as it happens, so the SIGTERM
-// handler can flush this trace-shaped fallback to TRACE_PATH for the timed-out
-// cell. On the normal path the real result.traces overwrites it.
-const transcript: Array<{ role: string; ts: string; blocks: unknown[] }> = [];
-agent.addHook(MessageAddedEvent, (event) => {
-	transcript.push({ role: event.message.role, ts: new Date().toISOString(), blocks: summarizeBlocks(event.message) });
 });
 
 const started = Date.now();
@@ -144,17 +251,12 @@ function writePartialEnvelopeAndExit(signal: string): void {
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write partial envelope on ${signal}: ${describeError(err)}\n`);
 	}
-	// Flush the lightweight transcript as the trace fallback so a timed-out cell
-	// still uploads SOMETHING trace-shaped (the real hierarchical result.traces
-	// is unavailable — invoke() never returned). Separate try so a trace-write
-	// failure never loses the envelope written above.
-	if (TRACE_PATH) {
-		try {
-			writeFileSync(TRACE_PATH, JSON.stringify({ partial: true, reason: signal, messages: transcript }, null, 2));
-		} catch (err) {
-			process.stderr.write(`[bench] failed to write partial trace on ${signal}: ${describeError(err)}\n`);
-		}
-	}
+	// No trace on the timeout path: the Strands built-in trace/metrics
+	// (result.traces / result.metrics) only exist once agent.invoke() RETURNS,
+	// and the SDK exposes no public mid-run accessor for them on the Agent
+	// instance (its `_tracer`/`_meter` are private) — so a timed-out cell emits
+	// only this partial envelope (tokens/cycles from the ModelStreamUpdateEvent
+	// hook). We deliberately do NOT hand-build a trace.
 	process.exit(124);
 }
 process.on('SIGTERM', () => writePartialEnvelopeAndExit('SIGTERM'));
@@ -236,20 +338,6 @@ if (METRICS_PATH) {
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write metrics to ${METRICS_PATH}: ${describeError(err)}\n`);
 	}
-}
-
-// Compact per-block summary of a message for the timeout-safe transcript
-// fallback: text is truncated, a tool call keeps its name + input keys, a
-// tool result keeps its status — enough to reconstruct what happened without
-// dragging multi-KB tool stdout into the fallback trace.
-function summarizeBlocks(msg: import('@strands-agents/sdk').Message): unknown[] {
-	return msg.content.map((b) => {
-		if (b.type === 'textBlock') return { type: 'text', text: b.text.slice(0, 2000) };
-		if (b.type === 'toolUseBlock')
-			return { type: 'toolUse', name: b.name, input: b.input && typeof b.input === 'object' ? Object.keys(b.input) : [] };
-		if (b.type === 'toolResultBlock') return { type: 'toolResult', status: b.status };
-		return { type: b.type };
-	});
 }
 
 function messageText(msg: import('@strands-agents/sdk').Message | undefined): string {
