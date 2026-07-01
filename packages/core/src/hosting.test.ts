@@ -11,6 +11,7 @@ import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { Hosting, type BlocksStackApi } from './hosting.js';
+import { secret } from '@aws-blocks/hosting';
 import { clearRouteRegistry, registerRoute } from './raw-route.js';
 
 // ================================================================
@@ -1504,6 +1505,113 @@ describe('Hosting', () => {
         assetDeps.length >= 1,
         `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
           `found DependsOn=${JSON.stringify(dependsOn)}`,
+      );
+    });
+  });
+
+  // ── secret() integration ────────────────────────────────────────
+  //
+  // Runtime secrets: the SSM parameter NAME (never the value) is injected as a
+  // Lambda env var, and the role is granted ssm:GetParameter + kms:Decrypt.
+  // Domain/exposeAsEnv secrets resolve at synth time via Hosting.create().
+
+  describe('secret() integration', () => {
+    it('injects the SSM param NAME (not the value) and grants read+decrypt', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SecretEnvStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+      });
+
+      const template = Template.fromStack(stack);
+
+      // The compute Lambda gets the param NAME under BLOCKS_SECRET_PARAM_STRIPE_KEY.
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            BLOCKS_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
+          }),
+        },
+      });
+
+      // The plaintext value must NOT appear anywhere in the template.
+      const json = JSON.stringify(template.toJSON());
+      assert.ok(!json.includes('STRIPE_KEY_VALUE'), 'no secret value should be in the template');
+
+      // The role has ssm:GetParameter scoped to the parameter + kms:Decrypt via SSM.
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({ Action: 'ssm:GetParameter' }),
+            Match.objectLike({
+              Action: 'kms:Decrypt',
+              Condition: {
+                StringEquals: Match.objectLike({
+                  'kms:ViaService': Match.anyValue(),
+                }),
+              },
+            }),
+          ]),
+        },
+      });
+    });
+
+    it('does not inject a plaintext env var for a runtime secret', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SecretNoPlaintextStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { FLAG: 'on', STRIPE_KEY: secret('STRIPE_KEY') },
+      });
+
+      const template = Template.fromStack(stack);
+      // Plain env passes through; the secret KEY itself is never a plaintext var.
+      const fns = template.findResources('AWS::Lambda::Function');
+      for (const fn of Object.values(fns)) {
+        const vars = ((fn as any).Properties?.Environment?.Variables ?? {}) as Record<string, unknown>;
+        assert.strictEqual(vars.STRIPE_KEY, undefined, 'secret key must not be a plaintext env var');
+      }
+    });
+
+    it('rejects a runtime secret whose key mismatches the env var name', () => {
+      createNextjsBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'SecretMismatchStack');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            customAdapter: createNextjsFixtureAdapter(tmpDir),
+            api: MOCK_API,
+            environment: { STRIPE_KEY: secret('OTHER') },
+          }),
+        /must match the environment variable name/,
+      );
+    });
+
+    it('throws if a domain secret is used with the sync constructor', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'SecretDomainSyncStack');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            domain: { domainName: secret('DOMAIN_PROD') },
+          }),
+        /Hosting\.create/,
       );
     });
   });

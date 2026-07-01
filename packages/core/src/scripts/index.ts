@@ -10,6 +10,7 @@ export { deploy, type DeployOptions } from './deploy.js';
 export { destroy, type DestroyOptions } from './destroy.js';
 export { openConsole, type ConsoleOptions } from './console.js';
 export { ensureSecrets, loadProductionEnv, loadEnvFile } from './ensure-secrets.js';
+export { setSecret, listSecrets, removeSecret, runSecretCli } from './secret.js';
 export {
   trackCommand,
   buildAndSendEvent,

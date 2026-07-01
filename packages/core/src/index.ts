@@ -7,6 +7,16 @@ export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '.
 export { Scope, type ScopeOptions, type ScopeParent, type BuildingBlockMeta } from './common/index.js';
 export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
 export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';
+// Secrets: marker + runtime resolver (CDK-free subpath, safe in the Lambda bundle).
+export {
+  secret,
+  isSecret,
+  getSecret,
+  secretParameterName,
+  secretEnvVarName,
+  type SecretValue,
+  type SecretOptions,
+} from '@aws-blocks/hosting/secret';
 export {
   registerRoute,
   matchRoute,
