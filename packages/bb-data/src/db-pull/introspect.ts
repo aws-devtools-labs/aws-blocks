@@ -10,9 +10,10 @@
  *
  * @module
  */
-import pg from 'pg';
 import type { ColumnInfo, IntrospectionResult, TableInfo } from './types.js';
 import { SUPABASE_AUTH } from './supabase.js';
+import { externalDbSsl, resolveCaPem } from '../external-ssl.js';
+import { PgClientEngine } from '../engines/pg-client-engine.js';
 
 /**
  * Decide whether a column's DEFAULT clause indicates the value is server-managed
@@ -50,10 +51,11 @@ export function isServerManagedDefault(columnDefault: string | null): boolean {
   );
 }
 
-export async function introspect(connectionString: string): Promise<IntrospectionResult> {
+export async function introspect(connectionString: string, caCert?: string): Promise<IntrospectionResult> {
   // Validate the URL is parseable before handing to pg.
+  let parsed: URL;
   try {
-    new URL(connectionString);
+    parsed = new URL(connectionString);
   } catch {
     throw new Error(
       `Could not parse connection string.\n` +
@@ -65,14 +67,34 @@ export async function introspect(connectionString: string): Promise<Introspectio
     );
   }
 
-  // Strip sslmode from connection string — pg v8+ treats sslmode=require as verify-full,
-  // which rejects Supavisor's self-signed cert. We provide ssl config explicitly instead.
-  const connStr = connectionString.replace(/[?&]sslmode=[^&]*/g, '').replace(/\?$/, '');
-  const pool = new pg.Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
+  // Strip sslmode so our explicit ssl config takes effect: node `pg` treats
+  // `sslmode=require` (and stricter) as verify-full against the system trust
+  // store and ignores a programmatic `ssl.ca`. Supabase's pooler/direct
+  // endpoints present a cert signed by Supabase's private CA, which is not in
+  // the system store — so verification needs that CA pinned. When the caller
+  // provides one (e.g. the CA captured by `db pull`), verify against it;
+  // otherwise externalDbSsl() applies DATABASE_CA_CERT or an unverified fallback
+  // for this ephemeral, operator-driven introspection. First-pull introspection
+  // runs *before* a CA has been captured, so it explicitly tolerates the
+  // unverified fallback even in CI (unlike the migration/DDL paths).
+  parsed.searchParams.delete('sslmode');
+  const connStr = parsed.toString();
+  // Route introspection through PgClientEngine (rather than a raw pg.Pool) so it
+  // inherits the engine's TLS 1.2 floor (`minVersion`) and the connect-time TLS
+  // confirmation — the same posture as the migrate CLI, baseline, and migration
+  // runner. The caller-supplied CA is normalized via the shared resolveCaPem()
+  // (inline PEM or file path), matching externalDbSsl() so the two can't drift.
+  const engine = new PgClientEngine({
+    connectionString: connStr,
+    ssl: caCert
+      ? { ca: resolveCaPem(caCert), rejectUnauthorized: true }
+      : externalDbSsl({ allowUnverifiedInCi: true }),
+    poolSize: 1,
+  });
 
   try {
     // Get columns
-    const { rows: columns } = await pool.query<ColumnInfo>(`
+    const columns = await engine.query<ColumnInfo>(`
       SELECT table_name, column_name, data_type, is_nullable, column_default, ordinal_position
       FROM information_schema.columns
       WHERE table_schema = 'public'
@@ -81,7 +103,7 @@ export async function introspect(connectionString: string): Promise<Introspectio
     `);
 
     // Get primary keys
-    const { rows: pks } = await pool.query<{ table_name: string; column_name: string }>(`
+    const pks = await engine.query<{ table_name: string; column_name: string }>(`
       SELECT tc.table_name, kcu.column_name
       FROM information_schema.table_constraints tc
       JOIN information_schema.key_column_usage kcu
@@ -98,7 +120,7 @@ export async function introspect(connectionString: string): Promise<Introspectio
     }
 
     // Get RLS status
-    const { rows: rlsRows } = await pool.query<{ tablename: string; rowsecurity: boolean }>(`
+    const rlsRows = await engine.query<{ tablename: string; rowsecurity: boolean }>(`
       SELECT tablename, rowsecurity FROM pg_tables WHERE schemaname = 'public'
     `);
     const rlsMap = new Map(rlsRows.map(r => [r.tablename, r.rowsecurity]));
@@ -107,7 +129,7 @@ export async function introspect(connectionString: string): Promise<Introspectio
     // auth.uid(), auth.email(), auth.role() depend on Supabase's internal user store
     // and won't work post-migration. auth.jwt() is OIDC-compatible — it just reads
     // the JWT payload, which withRLS() sets via current_setting('request.jwt.claims').
-    const { rows: policyRows } = await pool.query<{ tablename: string; qual: string | null; with_check: string | null }>(`
+    const policyRows = await engine.query<{ tablename: string; qual: string | null; with_check: string | null }>(`
       SELECT tablename, qual, with_check FROM pg_policies WHERE schemaname = 'public'
     `);
     const tablesUsingSupabaseAuth = new Set<string>();
@@ -137,7 +159,7 @@ export async function introspect(connectionString: string): Promise<Introspectio
     // Tables created via SQL editor (not Dashboard) may be missing these.
     // The role is passed as a bound parameter (not interpolated) so this stays
     // injection-safe even once the role name comes from a provider object.
-    const { rows: grantRows } = await pool.query<{ table_name: string; privilege_type: string }>(
+    const grantRows = await engine.query<{ table_name: string; privilege_type: string }>(
       `SELECT table_name, privilege_type
       FROM information_schema.role_table_grants
       WHERE table_schema = 'public' AND grantee = $1`,
@@ -181,6 +203,6 @@ export async function introspect(connectionString: string): Promise<Introspectio
 
     return { tables, tablesUsingSupabaseAuth, nonStandardClaims };
   } finally {
-    await pool.end();
+    await engine.destroy();
   }
 }

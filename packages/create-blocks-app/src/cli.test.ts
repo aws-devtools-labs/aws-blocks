@@ -181,7 +181,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId and uses getStackId in index.cdk.ts', () => {
+  it('generates .blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -194,8 +194,8 @@ describe('create-blocks-app auto-detection', () => {
         'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('getStackId'),
-        'generated index.cdk.ts should import getStackId from @aws-blocks/blocks/scripts'
+        cdkContent.includes('getStackName'),
+        'generated index.cdk.ts should import getStackName from @aws-blocks/blocks/scripts'
       );
       const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
       assert.ok(config.stackId, '.blocks/config.json should have a stackId');

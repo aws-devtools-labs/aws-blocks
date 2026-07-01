@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-data",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -35,7 +35,7 @@
     "@aws-blocks/bb-app-setting": "^0.1.3",
     "@aws-blocks/data-common": "^0.1.1",
     "@aws-blocks/bb-logger": "^0.1.2",
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/core": "^0.1.10",
     "@aws-sdk/client-rds-data": "^3.700.0",
     "@electric-sql/pglite": "^0.2.0",
     "pg": "^8.13.0",

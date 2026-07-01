@@ -43,4 +43,10 @@ export interface DbPullOptions {
   outputDir: string;
   /** Supabase project ref (for AppSetting parameter naming). */
   projectRef?: string;
+  /**
+   * PEM contents of the provider's CA certificate (public, non-secret). Written
+   * to `database.ca.ts` and pinned by the generated wiring for TLS verification.
+   * When omitted, the generated connection falls back to encrypted-but-unverified.
+   */
+  caCert?: string;
 }

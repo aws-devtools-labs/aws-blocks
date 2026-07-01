@@ -115,6 +115,19 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 	});
 });
 
+// ── AgentStreamResult.toJSON() ───────────────────────────────────────────────
+
+describe('AgentStreamResult.toJSON()', () => {
+	test('serializes to { channelId, channel: null }', async () => {
+		const scope = new Scope('test-tojson');
+		const agent = new Agent(scope, 'tj', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const result = await agent.stream('hello', { userId: 'test-user' });
+		const serialized = JSON.parse(JSON.stringify(result));
+		assert.deepStrictEqual(serialized, { channelId: result.channelId, channel: null });
+		assert.strictEqual('complete' in serialized, false);
+	});
+});
+
 // ── stream() empty channelId fallback ────────────────────────────────────────
 
 describe('stream() empty channelId fallback', () => {
@@ -1002,6 +1015,14 @@ describe('checkModelHealth', () => {
 });
 
 // ── Model Presets ─────────────────────────────────────────────────────────────
+
+describe('default model', () => {
+	test('agent can be created without model config', () => {
+		const s = new Scope('test-default-model');
+		const agent = new Agent(s, 'no-model', { systemPrompt: 'test' });
+		assert.ok(agent);
+	});
+});
 
 describe('BedrockModels presets', () => {
 	test('BALANCED resolves to a bedrock provider', async () => {
