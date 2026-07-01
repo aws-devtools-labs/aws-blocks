@@ -8,7 +8,7 @@ Build a personal notes app gated by OIDC sign-in. A visitor signs in through an 
 
 The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `default` template — a vanilla-TypeScript single-page app (frontend entry `src/index.ts`, served on port 3000). It ships a todo demo wired with **AuthBasic + DistributedTable + Realtime**; you will **replace** those with **AuthOIDC + DistributedDatabase** (remove the todo/realtime code you don't need). The frontend imports backend exports via `import { ... } from 'aws-blocks'`.
+This is the `react` template — a React single-page app (frontend entry `src/main.tsx`, which mounts the `src/App.tsx` component; served on port 3000 via a single-origin dev front door). It ships a todo demo wired with **AuthBasic + DistributedTable + Realtime**; you will **replace** those with **AuthOIDC + DistributedDatabase** (remove the todo/realtime code you don't need). The frontend imports backend exports via `import { ... } from 'aws-blocks'`.
 
 ## Requirements
 
@@ -52,7 +52,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 On the frontend, import the browser-only auth helpers from `@aws-blocks/auth-common/ui` (these are client APIs — keep them out of the backend `aws-blocks/index.ts`):
 
 ```ts
-// frontend — e.g. src/index.ts (browser only)
+// frontend — e.g. src/App.tsx (browser only)
 import { onAuthChange } from '@aws-blocks/auth-common/ui';
 import { authApi } from 'aws-blocks';
 

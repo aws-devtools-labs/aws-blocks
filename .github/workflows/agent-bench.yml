@@ -46,7 +46,7 @@ jobs:
       # One cell per (task, template) pair via an explicit include list.
       # Each task runs on the SINGLE template that pre-ships (or best exercises)
       # its Building Blocks. Together these 10 cells cover 18 Building Blocks
-      # across 6 templates without a task x template cross-product, keeping the
+      # across 7 templates without a task x template cross-product, keeping the
       # cell count — and Bedrock spend — bounded.
       matrix:
         include:
@@ -57,7 +57,7 @@ jobs:
           - { task: cognito-profile, template: auth-cognito } # AuthCognito (email-OTP)
           - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
           - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase
-          - { task: oidc-dsql-notes, template: default } # AuthOIDC + DistributedDatabase (default = single-origin front door; the react template splits Vite :3000 / backend :3001 with no proxy, so the server-redirect signin can't route)
+          - { task: oidc-dsql-notes, template: react } # AuthOIDC + DistributedDatabase
           - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
           - { task: kb-chat-agent, template: demo } # Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use
     env:

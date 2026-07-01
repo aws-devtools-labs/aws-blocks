@@ -69,11 +69,11 @@ per-task dimension to author.
 | `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `default` | AuthOIDC + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | AuthOIDC + DistributedDatabase |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 
-These 10 cells cover 18 Building Blocks across 6 templates. The matrix in
+These 10 cells cover 18 Building Blocks across 7 templates. The matrix in
 `pr-agent-bench.yml` is an explicit `include:` list of (task, template) pairs —
 not a cross-product: each task runs on the single template that pre-ships (or
 best exercises) its blocks, to bound Bedrock spend. The `task` name is part of
