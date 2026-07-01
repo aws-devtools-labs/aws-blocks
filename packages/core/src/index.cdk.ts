@@ -19,6 +19,20 @@ export {
   type HostingWafConfig,
 } from './hosting.js';
 export {
+  secret,
+  isSecret,
+  getSecret,
+  secretParameterName,
+  secretEnvVarName,
+  DEFAULT_SECRET_PARAMETER_PREFIX,
+  type SecretValue,
+  type SecretOptions,
+} from '@aws-blocks/hosting';
+export {
+  BLOCKS_SECRET_PARAMETER_PREFIX,
+  blocksSecretParameterName,
+} from './secret-naming.js';
+export {
   RawRoute,
   RawRouteErrors,
   type RawRouteOptions,

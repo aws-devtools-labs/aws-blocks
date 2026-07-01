@@ -37,6 +37,15 @@ import type {
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import {
+  partitionEnvironment,
+  collectSynthSecretKeys,
+  resolveSecretsAtSynth,
+  resolveDomainNames,
+  wireRuntimeSecret,
+  type EnvValue,
+  type DomainNameInput,
+} from './hosting-secrets.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -198,8 +207,38 @@ export interface HostingProps {
   /** Lambda compute configuration for SSR frameworks. */
   compute?: ComputeConfig;
 
-  /** Custom domain configuration. */
-  domain?: HostingDomainConfig;
+  /**
+   * Custom environment variables injected into all compute Lambda functions.
+   *
+   * Values are either plain strings or {@link secret} references:
+   *
+   * ```ts
+   * environment: {
+   *   FEATURE_FLAG: 'on',                 // plaintext (in CFN template + Lambda config)
+   *   STRIPE_KEY: secret('STRIPE_KEY'),   // encrypted; read at runtime via getSecret()
+   * }
+   * ```
+   *
+   * A plain string is injected verbatim (visible in the CloudFormation
+   * template — safe for non-sensitive config). A `secret('K')` value injects
+   * only the SSM parameter NAME and grants the Lambda decrypt access; fetch the
+   * value at runtime with `await getSecret('K')`. Using
+   * `secret('K', { exposeAsEnv: true })` instead resolves the plaintext at
+   * deploy time into the env var (requires `Hosting.create()`).
+   *
+   * The env-var name must equal the secret key: `STRIPE_KEY: secret('STRIPE_KEY')`.
+   */
+  environment?: Record<string, EnvValue>;
+
+  /**
+   * Custom domain configuration. `domainName` accepts plain strings and/or
+   * {@link secret} references (e.g. `domain: { domainName: secret('DOMAIN_PROD') }`).
+   * Domain secrets are resolved at synth time, so any domain secret requires
+   * constructing via the async {@link Hosting.create}.
+   */
+  domain?: Omit<HostingDomainConfig, 'domainName'> & {
+    domainName: DomainNameInput;
+  };
 
   /** WAF protection configuration. */
   waf?: HostingWafConfig;
@@ -387,7 +426,48 @@ export class Hosting extends Construct {
   /** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
   public readonly monitoringTopic?: cdk.aws_sns.ITopic;
 
-  constructor(scope: Construct, id: string, props: HostingProps) {
+  /**
+   * Async constructor. Required when any `secret()` resolves at **synth time** —
+   * i.e. a `domain.domainName` secret or a `secret(..., { exposeAsEnv: true })`
+   * env value — because those values are fetched from SSM during synthesis.
+   * Returns a fully-constructed {@link Hosting}.
+   *
+   * For runtime-only secrets (the default) and plain config, `new Hosting(...)`
+   * works directly; `create()` is also safe to use uniformly.
+   *
+   * @example
+   * ```ts
+   * await Hosting.create(stack, 'Web', {
+   *   root: '.', framework: 'nextjs', api: blocksStack,
+   *   domain: { domainName: secret('DOMAIN_PROD') },
+   * });
+   * ```
+   */
+  static async create(
+    scope: Construct,
+    id: string,
+    props: HostingProps,
+  ): Promise<Hosting> {
+    const { exposeSecrets } = partitionEnvironment(props.environment);
+    const synthKeys = collectSynthSecretKeys(props.domain?.domainName, exposeSecrets);
+    const resolved = synthKeys.length
+      ? await resolveSecretsAtSynth(synthKeys)
+      : new Map<string, string>();
+    return new Hosting(scope, id, props, resolved);
+  }
+
+  /**
+   * @param resolvedSecrets - Synth-time-resolved secret values, keyed by secret
+   *   key. Populated by {@link Hosting.create}; empty for the direct
+   *   `new Hosting()` path (which then rejects any synth-time secret with a
+   *   clear "use Hosting.create()" error).
+   */
+  constructor(
+    scope: Construct,
+    id: string,
+    props: HostingProps,
+    resolvedSecrets: Map<string, string> = new Map(),
+  ) {
     super(scope, id);
 
     const root = resolve(props.root);
@@ -531,10 +611,44 @@ export class Hosting extends Construct {
         }
       : undefined;
 
+    // ── 6b. Resolve secret() markers ─────────────────────────────
+    //    Env values split into plain / runtime-secret / exposeAsEnv buckets;
+    //    domain names may contain markers resolved at synth time. See
+    //    ./hosting-secrets.ts for the two-strategy rationale.
+    const { plain: plainEnv, runtimeSecrets, exposeSecrets } =
+      partitionEnvironment(props.environment);
+
+    // Resolved domain (markers → literals); falls back to the raw config when
+    // no domain is set. resolveDomainNames throws a "use Hosting.create()"
+    // error if a domain marker reached the sync path unresolved.
+    const resolvedDomain = props.domain
+      ? {
+          ...props.domain,
+          domainName: resolveDomainNames(props.domain.domainName, resolvedSecrets),
+        }
+      : undefined;
+
+    // exposeAsEnv secrets: inline the synth-resolved plaintext as a normal env
+    // var (escape hatch — value lands in the CloudFormation template).
+    for (const s of exposeSecrets) {
+      const value = resolvedSecrets.get(s.key);
+      if (value === undefined) {
+        throw new Error(
+          `Hosting: secret('${s.key}', { exposeAsEnv: true }) requires async ` +
+            `resolution. Construct with: await Hosting.create(scope, id, props).`,
+        );
+      }
+      plainEnv[s.key] = value;
+    }
+
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
-      domain: props.domain,
+      // Plain env + exposeAsEnv literals go straight to the L3 (which stays
+      // secret-agnostic: it only ever sees plain strings). Runtime secrets are
+      // wired separately below so we can attach IAM grants per function.
+      environment: Object.keys(plainEnv).length ? plainEnv : undefined,
+      domain: resolvedDomain,
       waf: props.waf,
       storage: props.retainOnDelete != null
         ? { retainOnDelete: props.retainOnDelete }
@@ -582,6 +696,12 @@ export class Hosting extends Construct {
       }
       if (props.backendConfig) {
         fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
+      }
+      // Runtime secrets: inject the SSM parameter NAME (never the value) and
+      // grant this function read+decrypt on that one parameter. The plaintext
+      // is fetched on first use via getSecret() — never enters the template.
+      for (const s of runtimeSecrets) {
+        wireRuntimeSecret(fn, s.key);
       }
     }
 

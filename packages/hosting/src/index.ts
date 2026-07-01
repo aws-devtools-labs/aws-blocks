@@ -21,3 +21,14 @@ export {
   generateBuildIdFunctionCode,
 } from './constructs/hosting_construct.js';
 export type { SkewProtectionConfig } from './constructs/skew_protection.js';
+export {
+  secret,
+  isSecret,
+  secretParameterName,
+  secretEnvVarName,
+  SECRET_BRAND,
+  DEFAULT_SECRET_PARAMETER_PREFIX,
+  type SecretValue,
+  type SecretOptions,
+} from './secret.js';
+export { getSecret, _resetSecretCache, _setSecretFetcher } from './secret-runtime.js';
