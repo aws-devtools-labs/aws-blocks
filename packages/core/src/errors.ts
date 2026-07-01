@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
+ * The `name` an `ApiError` falls back to when no structured error name is
+ * given. A name equal to this carries no BB-level meaning, so consumers
+ * branching on the structured identity should treat it as "no name".
+ */
+export const DEFAULT_API_ERROR_NAME = 'ApiError';
+
+/**
  * Error subclass for errors that cross the wire between server and client.
  *
  * Carries a `status` (HTTP status code) and sets `name` to the BB-level
@@ -46,7 +53,7 @@ export class ApiError extends Error {
 
 	constructor(message: string, status: number, options?: { name?: string; cause?: unknown; retriable?: boolean }) {
 		super(message, options?.cause ? { cause: options.cause } : undefined);
-		this.name = options?.name ?? 'ApiError';
+		this.name = options?.name ?? DEFAULT_API_ERROR_NAME;
 		this.status = status;
 		this.retriable = options?.retriable ?? false;
 	}
@@ -69,4 +76,28 @@ export class ApiError extends Error {
  */
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & { name: N } {
 	return e instanceof Error && e.name === name;
+}
+
+/**
+ * Type guard for branching on a failed `AuthState` (the recommended
+ * `setAuthState` client path) by its structured `errorName`.
+ *
+ * The returned state is a plain object, not a thrown `Error`, so
+ * `isBlocksError` does not apply — use this on the value returned by
+ * `setAuthState`/`getAuthState`. Match on the BB error constant, never on
+ * the human-facing `error` string.
+ *
+ * @example
+ * ```typescript
+ * const next = await authApi.setAuthState({ action: 'signIn', username, password });
+ * if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+ *   // unknown user → fall back to sign-up
+ * }
+ * ```
+ */
+export function hasAuthError<T extends { errorName?: string }, N extends string>(
+	state: T | null | undefined,
+	name: N,
+): state is T & { errorName: N } {
+	return state?.errorName === name;
 }

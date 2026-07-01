@@ -96,14 +96,6 @@ const ASTROJS_NODE_PIN = '@astrojs/node@^9';
 export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
 
 /**
- * Maximum redirects lifted from astro.config to the CloudFront viewer
- * Function. Matches the cap applied to Next.js's lifted redirects so the
- * compiled CFF stays under the 10 KB limit; anything past this stays in
- * the SSR Lambda where Astro evaluates it natively.
- */
-const REDIRECT_LIFT_CAP = 100;
-
-/**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
  * `$_HANDLER` as a child process — without a `node` shebang, bash
  * would parse `entry.mjs` as shell, so we wrap in `run.sh`.
@@ -205,22 +197,22 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
         });
 
   // Lift the user's astro.config `redirects:` table out of the SSR
-  // Lambda and onto the CloudFront viewer-request Function. Capped at
-  // 100 to keep the compiled CFF under the 10 KB limit (matches the
-  // Next.js redirect-lift cap in liftSimpleRoutesManifest).
+  // Lambda and onto the CloudFront viewer-request Function.
+  //
+  // No count cap: under KVS edge routing redirects are DATA (chunked `d{n}`
+  // KVS entries the viewer-request function reads at runtime), not literals
+  // inlined into the function source — so the old 10 KB-CloudFront-Function
+  // code limit that motivated the cap no longer applies. The authoritative
+  // bound is the KVS store/chunk budget enforced centrally in
+  // `buildKvsEntries` (kvs_router.ts), which throws a friendly
+  // `TooManyRoutesError` / `RouteTableTooLargeError` if the tables genuinely
+  // exceed the safe per-request read budget.
   if (liftedRedirects.length > 0) {
-    if (liftedRedirects.length > REDIRECT_LIFT_CAP) {
-      process.stderr.write(
-        `⚠️  Astro config has ${liftedRedirects.length} redirects; lifting only the first ${REDIRECT_LIFT_CAP} ` +
-          `to the CloudFront edge. The rest will be evaluated by Astro at runtime.\n`,
-      );
-    }
-    manifest.redirects = liftedRedirects.slice(0, REDIRECT_LIFT_CAP);
+    manifest.redirects = liftedRedirects;
   }
 
   // Trailing-slash canonical redirects. Append AFTER user-declared lifts
-  // so explicit redirects win the precedence in the CF Function and the
-  // overflow (if any) drops trailing-slash entries first.
+  // so explicit redirects win the precedence in the CF Function.
   if (trailingSlash !== 'ignore') {
     const staticPaths = collectStaticPathsForRedirects(
       output === 'static' ? distDir : clientDir,
@@ -231,24 +223,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     );
     if (tsRedirects.length > 0) {
       const existing = manifest.redirects ?? [];
-      const remainingCap = REDIRECT_LIFT_CAP - existing.length;
-      if (remainingCap <= 0) {
-        process.stderr.write(
-          `⚠️  ${tsRedirects.length} trailing-slash redirect(s) skipped — ` +
-            `redirect cap of ${REDIRECT_LIFT_CAP} already filled by user-declared redirects.\n`,
-        );
-      } else {
-        if (tsRedirects.length > remainingCap) {
-          process.stderr.write(
-            `⚠️  ${tsRedirects.length} trailing-slash redirects requested; only ${remainingCap} fit ` +
-              `under the ${REDIRECT_LIFT_CAP}-redirect CloudFront Function cap.\n`,
-          );
-        }
-        manifest.redirects = [
-          ...existing,
-          ...tsRedirects.slice(0, remainingCap),
-        ];
-      }
+      manifest.redirects = [...existing, ...tsRedirects];
     }
   }
 

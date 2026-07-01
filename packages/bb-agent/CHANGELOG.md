@@ -1,5 +1,55 @@
 # @aws-blocks/bb-agent
 
+## 0.2.1
+
+### Patch Changes
+
+- c6ba244: fix(bb-agent): add toJSON() to AgentStreamResult
+
+  `AgentStreamResult` now serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`; it is now explicitly `null` to signal it is server-side only.
+
+## 0.2.0
+
+### Minor Changes
+
+- ce61bb7: refactor(bb-agent): capability-based model presets with global inference profiles
+
+  New presets:
+
+  - `BALANCED` (Claude Sonnet 4.6): recommended default for most workloads
+  - `SMART` (Claude Opus 4.8): highest capability for hardest tasks
+  - `FAST` (Claude Haiku 4.5): lowest latency
+
+  All presets use `global.` inference profiles for region-agnostic deployment.
+
+  Deprecated (non-removing): `DEFAULT` resolves to `BALANCED`, `BUDGET` and `MICRO` resolve to `FAST`. Note this changes the underlying model for existing callers — `DEFAULT` moves from Opus to Sonnet, and `BUDGET`/`MICRO` move from Amazon Nova Pro/Lite to Claude Haiku, so cost and latency profiles differ. The symbols still resolve (no type break), but migrate to `BALANCED`/`FAST` (or a region-scoped profile) explicitly to pin the model you want.
+
+### Patch Changes
+
+- f946736: fix(bb-agent): treat empty channelId as unset in stream()
+
+  An empty `channelId` now falls back to `conversationId` or a random UUID, preventing all streams from sharing the same channel. Empty strings are treated as unset rather than used literally.
+
+## 0.1.3
+
+### Patch Changes
+
+- ba3bf7b: docs: add per-package DESIGN.md documents
+
+  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
+
+  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
+  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
+  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
+  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
+
+- Updated dependencies [ba3bf7b]
+  - @aws-blocks/bb-async-job@0.1.2
+  - @aws-blocks/bb-distributed-table@0.1.3
+  - @aws-blocks/bb-file-bucket@0.1.2
+  - @aws-blocks/bb-logger@0.1.2
+  - @aws-blocks/bb-realtime@0.1.2
+
 ## 0.1.2
 
 ### Patch Changes

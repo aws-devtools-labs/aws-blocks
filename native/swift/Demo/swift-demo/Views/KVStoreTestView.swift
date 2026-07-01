@@ -1,6 +1,8 @@
 //
-// KVStoreTestView.swift
-// Key-value store set/get test UI.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI

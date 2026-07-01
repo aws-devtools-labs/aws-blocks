@@ -49,9 +49,17 @@ export interface ChunkingConfig {
 	strategy?: ChunkingStrategy;
 	/** Max tokens per chunk. Only used with `'fixed'` strategy. Default: 300. */
 	chunkSize?: number;
-	/** Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20. */
+	/**
+	 * Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20.
+	 *
+	 * **Parity note:** Interpreted as a *percentage* of `chunkSize` in both local
+	 * development and production — the mock overlaps by `chunkSize * chunkOverlap / 100`
+	 * words, and the CDK layer maps it to Bedrock's `overlapPercentage`. The value is
+	 * directly transferable between environments. Bedrock accepts 1–99; the local mock
+	 * also accepts 0 (no overlap).
+	 */
 	chunkOverlap?: number;
-	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. */
+	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. (No effect in local dev / mock.) */
 	breakpointPercentile?: number;
 }
 
@@ -145,5 +153,3 @@ export interface RetrieveResult {
 	/** Document metadata key-value pairs. Includes auto-populated `folder` key derived from subfolder structure. */
 	metadata: Record<string, string>;
 }
-
-

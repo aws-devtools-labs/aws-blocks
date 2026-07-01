@@ -11,6 +11,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
+import { terminateProcessTree } from './process-tree.js';
 
 /**
  * Import the backend definition to populate the Scope BB registry.
@@ -74,6 +75,13 @@ export async function startSandbox(options: SandboxOptions) {
       "npm",
       [
         "exec", "cdk", "--", "deploy",
+        // `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
+        // `export const runtime = 'edge'`) synthesizes a SECOND stack
+        // (`edge-lambda-stack-*`, region us-east-1) in addition to the main
+        // hosting stack. Without `--all`, CDK refuses with "specify which
+        // stacks to use". Deploying every stack in a sandbox app is the
+        // intended behavior, so select them all.
+        "--all",
         "--require-approval", "never",
         "--outputs-file", `${outDir}/outputs.json`,
         "--context", `projectRoot=${process.cwd()}`,
@@ -147,6 +155,12 @@ export async function startSandbox(options: SandboxOptions) {
     `--app`, `npm exec tsx -- -C cdk ${backendPath}`
   ], {
     stdio: ["ignore", "pipe", "pipe"],
+    // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
+    // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
+    // bare kill() would orphan the real cdk-watch node process, the same
+    // shell-only-kill leak this PR eliminates for the dev server. Windows has no
+    // groups; terminateProcessTree reaps the tree via taskkill.
+    detached: process.platform !== 'win32',
     env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
   });
 
@@ -166,6 +180,12 @@ export async function startSandbox(options: SandboxOptions) {
   const devServer = spawnCommand(cmd, args, {
     stdio: "inherit",
     shell: true,
+    // Own process group on POSIX so cleanup can signal the whole dev-server
+    // tree (shell → tsx → node). The node dev server then runs its own SIGTERM
+    // handler — the ~2s terminateFrontend drain that reaps the *detached* Vite
+    // great-grandchild — which a bare `devServer.kill()` (the shell only) never
+    // triggers. Windows has no groups; terminateProcessTree reaps via taskkill.
+    detached: process.platform !== 'win32',
     env: { 
       ...process.env,
       NODE_OPTIONS: '',
@@ -173,12 +193,36 @@ export async function startSandbox(options: SandboxOptions) {
     },
   });
 
-  const cleanup = () => {
+  let cleaningUp = false;
+  const cleanup = async () => {
+    if (cleaningUp) return; // idempotent — a second signal must not re-enter
+    cleaningUp = true;
     console.log("\n\n🛑 Stopping local processes...");
     console.log("   (AWS resources are still running)");
     console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
-    cdkWatch.kill();
-    devServer.kill();
+    // Reap BOTH child trees the way the dev server reaps Vite — a process-group
+    // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
+    // kill() that signals only the npx/shell parent and orphans the real
+    // grandchild (cdk-watch's node, or the dev server's detached Vite). Run them
+    // concurrently so the cdk-watch teardown doesn't serialize on top of the dev
+    // server's longer drain.
+    //
+    // Only the dev-server child owns the `:3100` port-free wait: its own SIGTERM
+    // handler runs terminateFrontend (a ~2s drain that reaps the detached Vite
+    // great-grandchild AND polls until the port frees), so we give it the longer
+    // 6s budget (> that ~2s drain) — a hung dev server still escalates to a tree
+    // SIGKILL and we exit regardless, so shutdown can never wedge. cdk watch
+    // holds no local port, so a bounded tree-kill is all it needs.
+    //
+    // That a group SIGTERM (terminateProcessTree → killFrontendTree's
+    // `process.kill(-pid, 'SIGTERM')`) actually reaches the *nested* node dev
+    // server and runs its own SIGTERM handler — the load-bearing assumption of
+    // the 6s budget above — is verified by the "group SIGTERM reaches a nested
+    // node child" integration test in dev-server-supervisor.test.ts.
+    await Promise.all([
+      terminateProcessTree(cdkWatch, 2000),
+      terminateProcessTree(devServer, 6000),
+    ]);
     process.exit(0);
   };
 

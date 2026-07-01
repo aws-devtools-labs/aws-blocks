@@ -13,6 +13,7 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
 import { DeployManifest } from '../manifest/types.js';
+import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- Helpers ----
 
@@ -393,16 +394,35 @@ void describe('Image Optimization provisioning', () => {
     // SSR 'default' is fronted by exactly one REGIONAL REST API.
     template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 
-    // CloudFront should have a behavior for /_next/image/*
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({
-            PathPattern: '/_next/image/*',
-          }),
-        ]),
-      }),
-    });
+    // The image-opt route is no longer a dedicated cache behavior — it's a KVS
+    // route row routed to the image origin. The distribution carries all three
+    // stable origin ids, and the only additional behaviors are the
+    // server/image origin-binding sentinels.
+    const dist = Object.values(
+      template.findResources('AWS::CloudFront::Distribution'),
+    )[0] as {
+      Properties: {
+        DistributionConfig: {
+          Origins: { Id: string }[];
+          CacheBehaviors?: { PathPattern: string }[];
+        };
+      };
+    };
+    const ids = dist.Properties.DistributionConfig.Origins.map((o) => o.Id);
+    assert.ok(ids.includes(ORIGIN_ID.s3));
+    assert.ok(ids.includes(ORIGIN_ID.server));
+    assert.ok(ids.includes(ORIGIN_ID.image));
+    const patterns = (
+      dist.Properties.DistributionConfig.CacheBehaviors ?? []
+    ).map((b) => b.PathPattern);
+    assert.ok(
+      !patterns.includes('/_next/image/*'),
+      `image route must not be a behavior; got ${JSON.stringify(patterns)}`,
+    );
+    assert.deepEqual(patterns.sort(), [
+      '/__blocks_origin_image/*',
+      '/__blocks_origin_server/*',
+    ]);
   });
 });
 
@@ -467,25 +487,44 @@ void describe('Multi-compute provisioning', () => {
     template.resourceCountIs('AWS::Lambda::Url', 1);
     template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
 
-    // CloudFront behaviors: one for /api/*, one for /_next/static/*, default for /*
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({
-            PathPattern: '/api/*',
-          }),
-        ]),
-      }),
+    // Routing is in the KVS table now, not per-route cache behaviors. The
+    // distribution carries the server origin; /api/* → compute and
+    // /_next/static/* → S3 are route rows, NOT behaviors.
+    const dist = Object.values(
+      template.findResources('AWS::CloudFront::Distribution'),
+    )[0] as {
+      Properties: {
+        DistributionConfig: {
+          Origins: { Id: string }[];
+          CacheBehaviors?: { PathPattern: string }[];
+        };
+      };
+    };
+    const ids = dist.Properties.DistributionConfig.Origins.map((o) => o.Id);
+    assert.ok(ids.includes(ORIGIN_ID.s3));
+    assert.ok(ids.includes(ORIGIN_ID.server));
+    const patterns = (
+      dist.Properties.DistributionConfig.CacheBehaviors ?? []
+    ).map((b) => b.PathPattern);
+    assert.ok(
+      !patterns.includes('/api/*') && !patterns.includes('/_next/static/*'),
+      `routes must not be behaviors; got ${JSON.stringify(patterns)}`,
+    );
+
+    // Verify the route kinds in the KVS table built from the same manifest.
+    const rows: [string, string][] = [];
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'multi-compute-test-1',
+      hasServer: true,
+      hasImage: false,
     });
-    template.hasResourceProperties('AWS::CloudFront::Distribution', {
-      DistributionConfig: Match.objectLike({
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({
-            PathPattern: '/_next/static/*',
-          }),
-        ]),
-      }),
-    });
+    for (const [k, v] of Object.entries(entries)) {
+      if (/^r\d+$/.test(k)) rows.push(...(JSON.parse(v) as [string, string][]));
+    }
+    const kindFor = (p: string) => rows.find(([pat]) => pat === p)?.[1];
+    assert.equal(kindFor('/api/*'), 'c', '/api/* routes to compute');
+    assert.equal(kindFor('/_next/static/*'), 's', '/_next/static/* routes to S3');
   });
 
   void it('selects primary compute by convention (default > server > first)', () => {

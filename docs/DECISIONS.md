@@ -304,8 +304,26 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
-### Known limitation — TLS verification on the DDL/baseline path
-The host-side migration, baseline (`pg_dump`), and `--url` CLI connections currently use `ssl: { rejectUnauthorized: false }` — the same posture the runtime engine has historically used for `fromExisting`. #806 is enforcing verify-by-default (with an `ssl: { ca }` override to pin a provider CA) on the runtime/dev paths; this PR's DDL paths do not consume that override yet. **Accepted interim risk:** unverified TLS to the pooler on the deploy/CI host. **Fast-follow:** have these paths adopt #806's `ssl`/CA override (verify, or explicitly pin the CA) once it lands, rather than introducing a separate mechanism here.
+### TLS verification on the external-DB paths — see D-013
+
+> The full TLS posture (verify-by-default, the `ssl` option, committed-CA delivery, and the
+> fail-closed-in-CI/Lambda policy) is recorded as its own decision, **D-013**. The notes below are
+> retained for context on the DDL/baseline path specifically.
+The host-side migration, baseline (`pg_dump`), and `--url` CLI connections originally used
+`ssl: { rejectUnauthorized: false }` — the same posture the runtime engine historically used for
+`fromExisting`. **Resolved (fast-follow landed):** `fromExisting` now accepts an `ssl` option and the
+runtime verifies by default; the DDL/baseline/`--url` paths now resolve TLS through the shared
+`externalDbSsl()` helper, which pins a CA from `DATABASE_CA_CERT` (inline PEM or file path) and strips
+`sslmode` so the CA takes effect. **Residual:** when `DATABASE_CA_CERT` is not set, these
+operator-host, ephemeral connections fall back to `rejectUnauthorized: false` in an interactive run
+(the operator is connecting to a database they own with a string they just supplied) — but in a
+**non-interactive run** (`CI` set, excluding `CI=false`/`0`) they now **fail closed** rather than run a
+privileged DDL/migration unverified. First-pull `db pull` introspection is the one exception (it runs
+before a CA is captured) and opts into the unverified fallback explicitly. Limitation: this gate keys
+off the conventional `CI` env var, so a pipeline or deploy host that does not set `CI` is treated as
+interactive — set `DATABASE_CA_CERT` to guarantee verification in any automated run. Unlike the
+deployed runtime — which pins the CA committed in `database.ca.ts` by `db pull` and fails closed when
+it is absent — the operational paths read the CA from the environment only.
 
 ## D-010: `--telemetry-file` flag writes regardless of opt-out status
 
@@ -400,3 +418,109 @@ earlier planning decisions and removed a released behavior:
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
+
+## D-012: CloudFormation stack naming uses a generated `stackId` with per-machine sandbox isolation
+
+**Date**: 2026-06-19
+**Authors:** wirej
+
+### Decision
+
+CloudFormation stack names are derived from a `stackId` stored in `.blocks/config.json` (committed to the repo). The `stackId` is generated once at scaffold time as `<sanitizedName>.slice(0, 16)-<random(6)>`, producing names like `my-app-k7x2mf`.
+
+Stack name scheme:
+- **Production:** `<stackId>-prod` (e.g., `my-app-9f3a2b-prod`)
+- **Sandbox:** `<stackId>-<username(8)>-<random(6)>` (e.g., `my-app-9f3a2b-alice-0d7e1c`)
+
+The sandbox identifier is generated per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
+
+Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/blocks/scripts` and accept an optional `projectRoot` parameter (defaults to `process.cwd()`).
+
+### Rationale
+- **Collision avoidance:** The 6-char hex suffix in `stackId` provides ~16.8M combinations (16⁶), making accidental collisions between same-named apps in a shared account negligible.
+- **Per-developer sandbox isolation:** Teams sharing a test account need distinct sandbox stacks. The username prefix makes stacks identifiable in the AWS Console; the 6-char hex suffix handles multiple sandboxes per developer and username collisions.
+- **Length control:** `name.slice(0, 16)` keeps stack names under ~37 chars total, well within CloudFormation's 128-char limit and readable in the console.
+- **Committed vs gitignored:** `stackId` is committed so the whole team and CI deploy to the same production stack. `sandbox-id.txt` is gitignored so each machine gets its own sandbox.
+
+### References
+- PR #51; `.blocks/config.json` is also used by telemetry (`telemetry.projectId`).
+- Code: `packages/core/src/scripts/stack-id.ts`
+
+### Migration scope
+This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set `stackId` in `.blocks/config.json` to their current production stack name **with the `-prod` suffix removed** — since the template appends `-prod` automatically. For example, if your existing stack is `my-blocks-stack-prod`, set `stackId` to `my-blocks-stack`.
+
+
+## D-013: External-DB connections verify TLS by default; CA committed via `db pull`
+
+**Date:** 2026-06-29
+**Authors:** mehrishi
+
+### Context
+
+`fromExisting({ connectionString })` historically hardcoded `ssl: { rejectUnauthorized: false }` on
+every path (runtime, mock, CLI, migrations, introspection) — encrypted but with **no** server-
+certificate verification (CWE-295), exposing the connection (including the JWT claims forwarded for
+RLS) to an active man-in-the-middle. There was also no supported way for a caller to configure TLS.
+Managed providers (Supabase, Neon, RDS) present a certificate signed by a private CA not in Node's
+trust store, so "just flip the default to verify" breaks connectivity unless the CA is supplied.
+
+### Decision
+
+1. **Verify by default.** The runtime engine defaults to `{ rejectUnauthorized: true }`; no path
+   hardcodes `false`. A TLS 1.2 floor is enforced on every connection.
+2. **Public `ssl` option as a discriminated union.** `ExternalDatabaseRef`'s connection-string
+   variant gains `ssl?: ExternalSslOptions` = `{ rejectUnauthorized?: true; ca?: string } | { rejectUnauthorized: false }`,
+   so the misleading `{ ca, rejectUnauthorized: false }` (a pinned CA `pg` would ignore) is a
+   compile-time error. The same union is reused by `PgClientEngineConfig` and the generated wiring.
+3. **CA delivered by committing it.** `db pull` prompts for the provider CA and writes it to a
+   generated, committed `database.ca.ts` (a public cert — public key + issuer metadata, no private
+   key). The generated `resolveDbSsl()` pins it. Because it is a bundled JS import (not a runtime
+   file/env read), verification works in the deployed Lambda with no env/SSM/CDK plumbing.
+   `DATABASE_CA_CERT` (inline PEM or path) overrides it.
+4. **Fail closed where a silent downgrade is dangerous; fail open where it is safe.**
+   - Deployed Lambda with no CA → **throws** (a missing CA in prod is a misconfiguration).
+   - Non-interactive (`CI` set) CLI/migration/baseline runs with no CA → **throw** (privileged DDL
+     must not run unverified). First-pull introspection is the one explicit exception (it runs before
+     a CA exists).
+   - Interactive operator runs with no CA → encrypted-but-unverified fallback, with a warning.
+   - Local dev (mock) defaults to unverified (self-signed local DBs are common) but warns when `ssl`
+     is omitted, so the dev/deploy asymmetry surfaces locally.
+5. **`sslmode` is stripped centrally in `PgClientEngine`** so a programmatic `ssl.ca` is never
+   silently ignored (node `pg` drops `ssl.ca` when `sslmode` is present in the URL).
+
+Released as a `minor` with an upgrade note: a hand-written `fromExisting` with no `ssl` now verifies;
+private-CA providers require pinning via `ssl: { ca }`, or `ssl: { rejectUnauthorized: false }` to opt
+out explicitly. `db pull`-generated apps are unaffected in default connectivity.
+
+### Rationale
+
+- The CA is **not secret** (it is presented to every client on every handshake and is freely
+  downloadable), so committing + bundling it is the simplest mechanism that verifies in production. An
+  env-var-only CA was rejected: `.env.*` is loaded on the deploy host, never injected into the Lambda,
+  so it would leave the highest-exposure path (deployed runtime) unverified.
+- A discriminated union shifts the `{ ca, rejectUnauthorized: false }` mistake to compile time (T1).
+
+### Alternatives Considered
+
+1. **Hardcode a "universal" provider root CA** — rejected (region/rotation variance can't be assumed;
+   use the customer's actual downloaded cert). For the Supabase pooler the cert is in fact a wildcard
+   over a shared root (verified empirically), but per-customer capture stays the safe default.
+2. **Route the CA through SSM / AppSetting** — rejected: extra provisioning for a non-secret value.
+3. **Flip the engine default to verify without delivering a CA** — rejected: breaks the generated
+   path (private CA not in the trust store); the server-side enforce-SSL toggle does not help.
+
+### Known limitation
+
+The non-interactive gate keys off the conventional `CI` env var (excluding `CI=false`/`0`). A pipeline
+or deploy host (e.g. CodeBuild/CodePipeline) that does not set `CI` is treated as interactive, so a
+privileged migration there can fall back to unverified — set `DATABASE_CA_CERT` to guarantee
+verification in any automated run. A more robust signal (verify-unless-TTY, or an explicit opt-in env)
+is a candidate follow-up.
+
+### References
+
+- PR #107 (this change). Supersedes the SSL posture of D-009's TLS note.
+- Code: `packages/bb-data/src/{types.ts, external-ssl.ts, index.aws.ts, index.mock.ts}`,
+  `engines/pg-client-engine.ts`, `db-pull/{templates.ts, introspect.ts, pull.ts}`,
+  `migrations/baseline.ts`.
+
