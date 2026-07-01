@@ -125,4 +125,129 @@ test.describe('kb-chat-agent', () => {
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
+
+	test('surfaces a SECOND distinct seeded fact — proves the answer is the retrieved passage, not a hard-coded product code', async ({ page }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+
+		// The calibration code `NBS-7Q6X` lives ONLY in the same seeded passage as
+		// QUOKKA-9F42 and is asserted by NO other test. An impl that just hard-codes
+		// the two well-known strings (QUOKKA-9F42 / 1337) would pass the retrieval
+		// test above yet FAIL here — only a real retrieval that surfaces the whole
+		// passage carries this second, independent fact into the reply.
+		await ask(page, 'From the product knowledge base, what is the Nimbus-7 factory calibration code?');
+
+		await expect.poll(() => bubbleWith(page, 'NBS-7Q6X').count(), { timeout: REPLY }).toBeGreaterThan(0);
+		await expect(bubbleWith(page, 'NBS-7Q6X').first()).toHaveAttribute('data-role', 'assistant');
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('a question with no knowledge-base match does NOT fabricate the seeded facts', async ({ page }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+
+		// Tool-free, KB-free small talk: it names none of the tools and asks for none
+		// of the seeded content, so a faithful agent has nothing to retrieve or look
+		// up. The unique token keeps the echoed question from colliding with any
+		// other test's bubbles.
+		const question = uniq('please just say a short friendly hello and nothing else');
+		await ask(page, question);
+
+		// Wait until the assistant has ACTUALLY replied (its own bubble, not the
+		// echoed question) BEFORE asserting absence — otherwise the checks below
+		// would pass vacuously against an always-answering impl before its
+		// fabricated reply even lands.
+		const assistant = page.locator('[data-testid=message][data-role=assistant]');
+		await expect.poll(() => assistant.count(), { timeout: REPLY }).toBeGreaterThan(0);
+
+		// No retrieval or tool call happened, so none of the KB/tool-only payloads may
+		// appear anywhere on the page. Each fragment is distinctive enough never to
+		// collide with a uniq()/timestamp token. Catches an impl that always answers
+		// with the seeded fact regardless of the question.
+		await expect(bubbleWith(page, 'QUOKKA-9F42')).toHaveCount(0);
+		await expect(bubbleWith(page, 'NBS-7Q6X')).toHaveCount(0);
+		await expect(bubbleWith(page, 'TRK-9F42-OK')).toHaveCount(0);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('the order tool returns the SAME deterministic code across two different inputs', async ({ page }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+
+		const orderReplies = () =>
+			page.locator('[data-testid=message][data-role=assistant]').filter({ hasText: 'TRK-9F42-OK' });
+
+		// Two differently-phrased order questions, each routing to the order tool.
+		// Its result is a fixed constant, so BOTH turns must produce an assistant
+		// bubble carrying the exact same tracking code — a per-input or
+		// non-deterministic tool would yield a different (or missing) second answer.
+		await ask(page, 'What is my order status right now?');
+		await expect.poll(() => orderReplies().count(), { timeout: REPLY }).toBe(1);
+
+		await ask(page, 'Please look up the shipping status for a second, different order.');
+		await expect.poll(() => orderReplies().count(), { timeout: REPLY }).toBe(2);
+
+		// The tool ran on both turns (an indicator per tool-using reply).
+		await expect.poll(() => page.getByTestId('tool-indicator').count(), { timeout: REPLY }).toBeGreaterThan(1);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('the user question and the assistant answer render as distinct bubbles with distinct roles', async ({ page }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+
+		// A KB product question carrying a unique marker: the marker appears ONLY in
+		// the user's echoed bubble, while the retrieved fact (QUOKKA-9F42) appears
+		// ONLY in the assistant's bubble — so the two must be separate elements with
+		// opposite roles, not one merged/mis-attributed bubble.
+		const marker = uniq('marker');
+		await ask(page, `Using the product knowledge base, answer this tagged request ${marker}`);
+
+		const mine = messages(page).filter({ hasText: marker });
+		await expect(mine).toHaveCount(1, { timeout: T });
+		await expect(mine).toHaveAttribute('data-role', 'user');
+
+		await expect.poll(() => bubbleWith(page, 'QUOKKA-9F42').count(), { timeout: REPLY }).toBeGreaterThan(0);
+		const reply = bubbleWith(page, 'QUOKKA-9F42').first();
+		await expect(reply).toHaveAttribute('data-role', 'assistant');
+		// The answer is a DIFFERENT bubble from the user's echo: it must not carry the
+		// user's marker.
+		await expect(reply).not.toContainText(marker);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('multi-turn: both turns\u2019 answers accumulate in one transcript', async ({ page }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+
+		const orderReply = () =>
+			page.locator('[data-testid=message][data-role=assistant]').filter({ hasText: 'TRK-9F42-OK' });
+
+		// Turn 1 hits the order tool; turn 2 hits the knowledge base — two turns in
+		// ONE page session. Because the transcript is a running log, BOTH assistant
+		// answers (with their DIFFERENT deterministic payloads) must still be present
+		// after the second turn. An impl that clears the list per turn, or re-renders
+		// only the latest answer, loses the first and fails.
+		const q1 = uniq('turn-one order status');
+		await ask(page, q1);
+		await expect.poll(() => orderReply().count(), { timeout: REPLY }).toBe(1);
+
+		const q2 = uniq('turn-two product knowledge base');
+		await ask(page, q2);
+		await expect.poll(() => bubbleWith(page, 'QUOKKA-9F42').count(), { timeout: REPLY }).toBeGreaterThan(0);
+
+		// The first turn's user + assistant messages survive alongside the second's.
+		await expect(messages(page).filter({ hasText: q1 })).toHaveAttribute('data-role', 'user');
+		await expect(messages(page).filter({ hasText: q2 })).toHaveAttribute('data-role', 'user');
+		await expect(orderReply()).toHaveCount(1);
+		await expect(bubbleWith(page, 'QUOKKA-9F42').first()).toHaveAttribute('data-role', 'assistant');
+		// At least four bubbles: two questions + two distinct answers.
+		await expect.poll(() => messages(page).count(), { timeout: T }).toBeGreaterThan(3);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
 });

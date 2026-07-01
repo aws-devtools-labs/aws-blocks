@@ -10,6 +10,16 @@ set -euo pipefail
 TEMPLATE="${1:?usage: init-bench-app.sh <template>}"
 : "${WORKSPACE:?WORKSPACE must be set}"
 
+# Harden npm against transient registry blips (ECONNRESET etc.) during the
+# create-blocks-app scaffold and its internal `npm install`, so a network blip
+# while scaffolding doesn't harness-fail a cell. npm only RETRIES transient
+# network/registry fetch failures (with backoff) — real errors are NOT masked.
+# `${VAR:-default}` lets the CI job env win; exported so child npm processes
+# (including create-blocks-app's own install) inherit the setting.
+export NPM_CONFIG_FETCH_RETRIES="${NPM_CONFIG_FETCH_RETRIES:-5}"
+export NPM_CONFIG_FETCH_RETRY_MINTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MINTIMEOUT:-20000}"
+export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-120000}"
+
 # `npm run build` is topology-aware and runs prebuild hooks in the right order.
 # `build:packages` runs alphabetically and trips over bb-data needing
 # bb-app-setting's generated version.ts.

@@ -61,6 +61,18 @@ jobs:
           - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
           - { task: kb-chat-agent, template: demo } # Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use
     env:
+      # Harden npm against transient registry blips (e.g. the ECONNRESET mid-`npm
+      # ci` that failed a cell with exit 152 — a network blip that classifies as
+      # preflight_failed/harness_error, not a real defect). These only make npm
+      # RETRY transient network/registry fetch failures with backoff; they do NOT
+      # mask real 4xx/auth/version errors. Set at JOB level so every npm
+      # invocation in the cell inherits them: the root `npm ci` step, the init
+      # script's `npm install`, and create-blocks-app's own internal install
+      # (child processes inherit the env). Matches the repo's existing
+      # NPM_CONFIG_* convention (scripts/test-templates-e2e.sh).
+      NPM_CONFIG_FETCH_RETRIES: '5'
+      NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+      NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
       # Current Bedrock geo (cross-Region) inference-profile IDs actually in use —

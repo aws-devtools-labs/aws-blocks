@@ -15,9 +15,10 @@ This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.htm
 2. **Required seed content.** One document must be a short Nimbus-7 product sheet that records, in a single passage, **all** of:
    - the product's internal product code **`QUOKKA-9F42`**,
    - its maximum hover altitude of **`1337 centimeters`**,
+   - its factory calibration code **`NBS-7Q6X`** (a second, distinct fact from the product code — the grader asks for it separately to prove the assistant surfaces the *actual retrieved passage* rather than a hard-coded product-code string),
    - the word **`sample`** (the local index is probed with a generic term, and the grader relies on this word being in the same passage as the facts above).
 
-   These three facts must appear **only** in the knowledge base — nowhere in your frontend or backend source — so that an answer repeating them proves a real retrieval happened. The same (or another) document must also describe the **return / refund policy** and contain the word **`refund`**. Write real prose, not a stub. Set the block's chunking to `{ strategy: 'none' }` so the passage stays in one chunk.
+   These four facts must appear **only** in the knowledge base — nowhere in your frontend or backend source — so that an answer repeating them proves a real retrieval happened. The same (or another) document must also describe the **return / refund policy** and contain the word **`refund`**. Write real prose, not a stub. Set the block's chunking to `{ strategy: 'none' }` so the passage stays in one chunk.
 
 ### Agent + tools
 3. Wire an **agent block** whose deployed model is Amazon Bedrock with the Claude Sonnet 4.6 inference profile — model id exactly **`us.anthropic.claude-sonnet-4-6`**. (Locally a keyword-driven mock stands in for Bedrock automatically; you do not need AWS credentials to run the dev server.)
@@ -104,7 +105,7 @@ The Playwright test grades your work using these `data-testid` hooks and one dat
 | `[data-testid=tool-indicator]` | inside an assistant bubble | Present when that reply used a tool |
 | `[data-testid=citation]` | inside an assistant bubble | Present when that reply drew on the knowledge base; names the source document |
 
-Set `data-role` on each `[data-testid=message]`: `"user"` for the person's questions, `"assistant"` for the agent's replies. The test locates a bubble by the text it contains (`filter({ hasText: … })`), so the assistant reply must literally contain the retrieved fact (`QUOKKA-9F42`, `1337`) or the tracking code (`TRK-9F42-OK`).
+Set `data-role` on each `[data-testid=message]`: `"user"` for the person's questions, `"assistant"` for the agent's replies. The test locates a bubble by the text it contains (`filter({ hasText: … })`), so the assistant reply must literally contain the retrieved fact (`QUOKKA-9F42`, `1337`, `NBS-7Q6X`) or the tracking code (`TRK-9F42-OK`).
 
 The mount point for your page is the existing root element / `index.html` body. Replace the template's placeholder content.
 
