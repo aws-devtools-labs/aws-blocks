@@ -159,12 +159,69 @@ jobs:
         # BLOCKS_URL is provided via $GITHUB_ENV from the "Pick a free port" step.
         run: dart run bin/e2e_test.dart
 
-  # Kotlin E2E (TODO: add when ready)
-  # kotlin-e2e:
-  #   name: Kotlin E2E
-  #   needs: [detect-changes, setup]
-  #   if: needs.detect-changes.outputs.source-changed == 'true'
-  #   ...
+  kotlin-e2e:
+    name: Kotlin E2E (${{ matrix.label }})
+    needs: [detect-changes, setup]
+    if: needs.detect-changes.outputs.source-changed == 'true'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: JVM
+            runs-on: ubuntu-latest
+            gradle-task: jvmTest
+            timeout: 15
+          - label: iOS
+            runs-on: macos-15
+            gradle-task: iosSimulatorArm64Test
+            timeout: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Download spec
+        uses: actions/download-artifact@v4
+        with:
+          name: blocks-spec
+          path: native/kotlin/e2e/
+
+      - name: Run Kotlin codegen
+        working-directory: native/kotlin/e2e
+        run: ./gradlew awsBlocksCodegen
+
+      - name: Start native-bindings server
+        working-directory: test-apps/native-bindings
+        run: |
+          npx tsx aws-blocks/scripts/server.ts &
+          for i in $(seq 1 30); do
+            curl -s -X POST http://localhost:3001/aws-blocks/api \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"api.kvGet","params":{"key":"healthcheck"},"id":1}' && break
+            sleep 1
+          done
+
+      - name: Run E2E tests
+        working-directory: native/kotlin/e2e
+        env:
+          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+        run: ./gradlew ${{ matrix.gradle-task }}
 
   swift-e2e:
     name: Swift E2E
@@ -477,31 +534,110 @@ jobs:
         working-directory: test-apps/native-bindings
         run: npm run destroy || true
 
+  kotlin-e2e-sandbox:
+    name: Kotlin E2E (${{ matrix.label }}, sandbox)
+    needs: [detect-changes, kotlin-e2e]
+    if: >-
+      needs.detect-changes.outputs.source-changed == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    environment: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: JVM
+            suffix: jvm
+            runs-on: ubuntu-latest
+            gradle-task: jvmTest
+          - label: iOS
+            suffix: ios
+            runs-on: macos-15
+            gradle-task: iosSimulatorArm64Test
+    env:
+      BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Deploy sandbox
+        working-directory: test-apps/native-bindings
+        run: npm run deploy
+
+      - name: Resolve BLOCKS_URL
+        id: url
+        working-directory: test-apps/native-bindings
+        run: |
+          URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
+          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+
+      - name: Generate OpenRPC spec
+        working-directory: test-apps/native-bindings
+        run: npm run spec
+
+      - name: Download spec
+        uses: actions/download-artifact@v4
+        with:
+          name: blocks-spec
+          path: native/kotlin/e2e/
+
+      - name: Run Kotlin codegen
+        working-directory: native/kotlin/e2e
+        run: ./gradlew awsBlocksCodegen
+
+      - name: Run Kotlin E2E against sandbox
+        working-directory: native/kotlin/e2e
+        env:
+          BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
+        run: ./gradlew ${{ matrix.gradle-task }}
+
+      - name: Destroy sandbox
+        if: always()
+        working-directory: test-apps/native-bindings
+        run: npm run destroy || true
+
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated
   # or fork PRs) and only fails if a job that actually ran failed.
   native-sdk-e2e-required:
     name: Native SDK E2E (Required)
     if: always()
-    needs: [detect-changes, setup, dart-e2e, swift-e2e]
+    needs: [detect-changes, setup, dart-e2e, kotlin-e2e, swift-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          echo "detect-changes=${{ needs.detect-changes.result }} setup=${{ needs.setup.result }} dart-e2e=${{ needs.dart-e2e.result }} swift-e2e=${{ needs.swift-e2e.result }}"
-          # Required gate = SDK correctness: detect-changes + setup + the local
-          # dart-e2e suite (no AWS). The deploying `dart-e2e-sandbox` job still
-          # runs as a NON-BLOCKING signal — it depends on deployed-backend config
-          # that isn't part of the SDK (real-Cognito email code delivery, which a
-          # dev-only `cognitoGetLastCode` hook can't satisfy; and fresh-deploy
-          # OIDC state). The OIDC relay suite was verified 5/5 against a live
-          # sandbox, so this is environment, not SDK. Re-add `dart-e2e-sandbox`
-          # to this gate once the deployed Cognito sign-in path is testable.
-          # Skipped jobs (no source changes) are treated as passing.
+          echo "detect-changes=${{ needs.detect-changes.result }} setup=${{ needs.setup.result }} dart-e2e=${{ needs.dart-e2e.result }} kotlin-e2e=${{ needs.kotlin-e2e.result }} swift-e2e=${{ needs.swift-e2e.result }}"
+          # Required gate = SDK correctness. Skipped jobs (no source changes)
+          # are treated as passing.
           for result in \
             "${{ needs.detect-changes.result }}" \
             "${{ needs.setup.result }}" \
             "${{ needs.dart-e2e.result }}" \
+            "${{ needs.kotlin-e2e.result }}" \
             "${{ needs.swift-e2e.result }}"; do
             if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
               echo "A required native SDK E2E job failed (or was cancelled)."
