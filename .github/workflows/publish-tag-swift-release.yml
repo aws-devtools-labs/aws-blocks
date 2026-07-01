@@ -30,7 +30,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          git config user.name "AWS Blocks Team"
-          git config user.email "aws-blocks-team@amazon.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "swift@${VERSION}" -m "Swift SDK ${VERSION}"
           git push origin "swift@${VERSION}"

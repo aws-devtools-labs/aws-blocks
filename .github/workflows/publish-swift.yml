@@ -151,7 +151,7 @@ jobs:
           GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          BRANCH="release/${VERSION}"
+          BRANCH="release/swift-${VERSION}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
