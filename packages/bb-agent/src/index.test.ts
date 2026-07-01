@@ -115,6 +115,26 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 	});
 });
 
+// ── stream() empty channelId fallback ────────────────────────────────────────
+
+describe('stream() empty channelId fallback', () => {
+	test('empty channelId is treated as unset', async () => {
+		const scope = new Scope('test-empty-ch');
+		const agent = new Agent(scope, 'ec', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const result = await agent.stream('hello', { userId: 'test-user', channelId: '' });
+		assert.notStrictEqual(result.channelId, '');
+		assert.ok(result.channelId.length > 0);
+	});
+
+	test('empty conversationId is treated as unset', async () => {
+		const scope = new Scope('test-empty-conv');
+		const agent = new Agent(scope, 'ev', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const result = await agent.stream('hello', { userId: 'test-user', conversationId: '' });
+		assert.notStrictEqual(result.channelId, '');
+		assert.ok(result.channelId.length > 0);
+	});
+});
+
 // ── tool factory enforcement (compile-time) ──────────────────────────────────
 
 describe('tool factory enforcement', () => {
@@ -984,9 +1004,9 @@ describe('checkModelHealth', () => {
 // ── Model Presets ─────────────────────────────────────────────────────────────
 
 describe('BedrockModels presets', () => {
-	test('DEFAULT resolves to a bedrock provider', async () => {
-		assert.strictEqual(BedrockModels.DEFAULT.provider, 'bedrock');
-		assert.ok(BedrockModels.DEFAULT.modelId);
+	test('BALANCED resolves to a bedrock provider', async () => {
+		assert.strictEqual(BedrockModels.BALANCED.provider, 'bedrock');
+		assert.ok(BedrockModels.BALANCED.modelId);
 	});
 
 	test('all presets have provider bedrock and a modelId', () => {
@@ -996,8 +1016,8 @@ describe('BedrockModels presets', () => {
 		}
 	});
 
-	test('DEFAULT flows through createStrandsModel to BedrockModel', async () => {
-		const model = await createStrandsModel(BedrockModels.DEFAULT);
+	test('BALANCED flows through createStrandsModel to BedrockModel', async () => {
+		const model = await createStrandsModel(BedrockModels.BALANCED);
 		assert.ok(model, 'should create a model instance');
 	});
 });

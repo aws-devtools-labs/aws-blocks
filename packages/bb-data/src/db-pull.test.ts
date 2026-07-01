@@ -7,6 +7,8 @@ import {
   generateTypesFile,
   generateMetaFile,
   generateIndexFile,
+  generateCaFile,
+  resolveCaFileWrite,
   generateMigrationGuide,
   isServerManagedDefault,
   parseExistingMetaSingulars,
@@ -162,7 +164,7 @@ describe('generateIndexFile', () => {
     assert.ok(output.includes("u.port = '5432'"));
     assert.ok(output.includes("u.searchParams.set('prepared_statements', 'false')"));
     // Database consumes the resolver via the { get } shape, not the AppSetting directly.
-    assert.ok(output.includes('fromExisting({ connectionString: { get: resolveConnString } })'));
+    assert.ok(output.includes('fromExisting({ connectionString: { get: resolveConnString }, ssl: resolveDbSsl() })'));
     // A non-URL-parseable string (e.g. unencoded password) must not crash the
     // runtime — fall back to the raw string and let pg parse it.
     assert.ok(output.includes('catch'));
@@ -171,6 +173,34 @@ describe('generateIndexFile', () => {
 
   test('emits rlsPolicy when tables have RLS', () => {
     assert.ok(output.includes("rlsPolicy: 'enforce'"));
+  });
+
+  test('generated wiring verifies TLS by default via CA pinning (visible, editable)', () => {
+    // The connection passes an explicit ssl config (resolveDbSsl), so the secure
+    // default is visible in the generated file, not hidden in an engine default.
+    assert.ok(output.includes('function resolveDbSsl()'));
+    assert.ok(output.includes('ssl: resolveDbSsl()'));
+    // Primary path: the project CA captured at pull time, committed in database.ca.ts
+    // and bundled into the function (works in Lambda — no runtime file/env needed).
+    assert.ok(output.includes("import { DATABASE_CA_CERT } from './database.ca.js'"));
+    assert.ok(output.includes('DATABASE_CA_CERT'));
+    assert.ok(output.includes('rejectUnauthorized: true'));
+    // DATABASE_CA_CERT env override (inline PEM or file path).
+    assert.ok(output.includes('process.env.DATABASE_CA_CERT'));
+    assert.ok(output.includes('readFileSync'));
+    // Visible, commented opt-out fallback when no CA is available.
+    assert.ok(output.includes('rejectUnauthorized: false'));
+    assert.ok(output.includes('prod-ca-2021'));
+    // In the deployed function a missing CA must fail closed, not connect unverified.
+    assert.ok(output.includes('AWS_LAMBDA_FUNCTION_NAME'));
+    assert.ok(output.includes('refusing to connect'));
+    // Logs the resolved TLS mode so success isn't silent.
+    assert.ok(output.includes('DB TLS: will verify'));
+    assert.ok(output.includes('DB TLS: server certificate NOT verified'));
+  });
+
+  test('resolveConnString strips sslmode so the pinned CA takes effect', () => {
+    assert.ok(output.includes("u.searchParams.delete('sslmode')"));
   });
 
   test('wires CRUD from tableMeta (data-driven, not a hardcoded list)', () => {
@@ -187,9 +217,68 @@ describe('generateIndexFile', () => {
   });
 });
 
+// ── generateCaFile ─────────────────────────────────────────────────────
+
+describe('generateCaFile', () => {
+  test('inlines the provided PEM as the DATABASE_CA_CERT constant', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\nMIIBexample\n-----END CERTIFICATE-----';
+    const out = generateCaFile(pem);
+    assert.ok(out.includes('export const DATABASE_CA_CERT = `'));
+    assert.ok(out.includes('-----BEGIN CERTIFICATE-----'));
+    assert.ok(out.includes('-----END CERTIFICATE-----'));
+    assert.ok(out.includes('safe to regenerate'));
+  });
+
+  test('emits an empty constant when no CA is provided', () => {
+    const out = generateCaFile();
+    assert.ok(out.includes('export const DATABASE_CA_CERT = ``;'));
+  });
+
+  test('escapes characters that could break out of the template literal', () => {
+    const out = generateCaFile('`${evil}\\');
+    // backtick, ${ interpolation, and backslash are all escaped.
+    assert.ok(out.includes('\\`'), 'backtick escaped');
+    assert.ok(out.includes('\\${evil}'), 'interpolation escaped');
+    assert.ok(out.includes('\\\\'), 'backslash escaped');
+  });
+});
+
+// ── resolveCaFileWrite ─────────────────────────────────────────────────
+
+describe('resolveCaFileWrite', () => {
+  test('writes the provided CA (first pull or rotation refresh)', () => {
+    const pem = '-----BEGIN CERTIFICATE-----\nAAA\n-----END CERTIFICATE-----';
+    const out = resolveCaFileWrite(pem, false);
+    assert.ok(out !== null);
+    assert.ok(out!.includes('AAA'));
+
+    const refreshed = resolveCaFileWrite(pem, true);
+    assert.ok(refreshed !== null && refreshed.includes('AAA'));
+  });
+
+  test('writes an empty stub on first pull when no CA is provided', () => {
+    const out = resolveCaFileWrite(undefined, false);
+    assert.ok(out !== null);
+    assert.ok(out!.includes('export const DATABASE_CA_CERT = ``;'));
+  });
+
+  test('preserves an existing file when no CA is provided (no silent downgrade on re-pull)', () => {
+    // Regression guard: a re-pull that skips the CA prompt must NOT overwrite a
+    // previously-populated database.ca.ts (which would turn off verification).
+    assert.strictEqual(resolveCaFileWrite(undefined, true), null);
+  });
+});
+
 // ── generateMigrationGuide ─────────────────────────────────────────────
 
 describe('generateMigrationGuide', () => {
+  test('documents TLS certificate verification (CA provisioning)', () => {
+    const output = generateMigrationGuide(TABLES, new Map());
+    assert.ok(output.includes('Securing the connection (TLS)'));
+    assert.ok(output.includes('prod-ca-2021'));
+    assert.ok(output.includes('database.ca.ts'));
+    assert.ok(output.includes('DATABASE_CA_CERT'));
+  });
   test('uses AuthOIDC for the auth example', () => {
     const output = generateMigrationGuide(TABLES, new Map());
     assert.ok(output.includes('AuthOIDC'));

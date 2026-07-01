@@ -12,9 +12,10 @@ the same AWS account + region + stage computed the same name and silently
 overwrote each other's credentials.
 
 The parameter name is now stack-scoped (`/<stackName>-db-url`), derived from a
-single new `getStackName(projectRoot, { sandbox })` helper that is also the one
+single new `getStackName({ sandbox, projectRoot })` helper that is also the one
 place the CDK templates compute the stack name (replacing logic duplicated across
-templates). The same `dbConnectionParameterName(projectRoot, { sandbox })` is used
+templates). The same `dbConnectionParameterName(stackName)` — fed the stack name
+from `getStackName({ sandbox, projectRoot })` — is used
 by the pre-deploy writer (`ensureSecrets`) and by the `db pull` generated wiring at
 synth, so the written name and the read name are derived once, from committed
 config (`.blocks/config.json`) — never from the connection string — and cannot

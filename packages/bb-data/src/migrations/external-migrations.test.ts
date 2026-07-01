@@ -19,10 +19,13 @@ test('toSessionPortUrl rewrites the 6543 transaction-pooler port to 5432', () =>
   assert.strictEqual(u.port, '5432');
 });
 
-test('toSessionPortUrl drops the prepared_statements pooler hint', () => {
-  const out = toSessionPortUrl('postgresql://u:p@host:6543/db?prepared_statements=false&sslmode=require');
+test('toSessionPortUrl drops the prepared_statements and sslmode hints, preserves others', () => {
+  const out = toSessionPortUrl('postgresql://u:p@host:6543/db?prepared_statements=false&sslmode=require&application_name=blocks');
   assert.ok(!out.includes('prepared_statements'), 'prepared_statements should be removed');
-  assert.ok(out.includes('sslmode=require'), 'other params preserved');
+  // sslmode is stripped so an explicitly-configured ssl (pinned CA) takes effect:
+  // node pg ignores a programmatic ssl.ca when sslmode is present in the URL.
+  assert.ok(!out.includes('sslmode'), 'sslmode should be removed');
+  assert.ok(out.includes('application_name=blocks'), 'unrelated params preserved');
 });
 
 test('toSessionPortUrl is a no-op on port when no explicit port (sets 5432)', () => {
