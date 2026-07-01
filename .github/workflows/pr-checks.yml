@@ -262,6 +262,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: publish
+    env:
+      # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
+      # connection in this suite runs verify-full — exercising the TLS verification
+      # feature end-to-end instead of connecting unverified. externalDbSsl() reads
+      # this; the explicit-engine tests read it too.
+      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false

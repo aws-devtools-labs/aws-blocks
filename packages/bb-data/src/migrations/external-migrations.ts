@@ -18,6 +18,7 @@
 
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import { PgClientEngine } from '../engines/pg-client-engine.js';
+import { externalDbSsl } from '../external-ssl.js';
 import { BASELINE_FILE } from './baseline.js';
 import { createHash } from 'node:crypto';
 import { DatabaseErrors } from '../errors.js';
@@ -68,6 +69,10 @@ export function toSessionPortUrl(connectionString: string): string {
   // `prepared_statements=false` is a transaction-pooler hint; session mode
   // supports prepared statements, so drop it to avoid confusion.
   url.searchParams.delete('prepared_statements');
+  // Strip `sslmode` so an explicitly-configured `ssl` (e.g. a pinned CA via
+  // DATABASE_CA_CERT) takes effect: node `pg` ignores a programmatic `ssl.ca`
+  // and verifies against the system trust store when `sslmode` is in the URL.
+  url.searchParams.delete('sslmode');
   return url.toString();
 }
 
@@ -264,7 +269,7 @@ export async function runExternalMigrations(
 
   const engine = new PgClientEngine({
     connectionString: toSessionPortUrl(opts.connectionString),
-    ssl: { rejectUnauthorized: false },
+    ssl: externalDbSsl(),
     // poolSize 1 is load-bearing: a SESSION-level advisory lock lives on one
     // backend connection, so every query must reuse that single connection.
     poolSize: 1,

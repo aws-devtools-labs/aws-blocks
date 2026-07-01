@@ -1,5 +1,12 @@
 # @aws-blocks/blocks
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [42fcbdf]
+  - @aws-blocks/bb-data@0.2.0
+
 ## 0.1.7
 
 ### Patch Changes

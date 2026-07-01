@@ -17,16 +17,17 @@ import { SkewProtectionConfig } from './skew_protection.js';
 // Atomic deploy window (403 elimination)
 // ============================================================================
 //
-// Redeploys must be atomic for new/cookieless visitors: the CloudFront
-// build-id functions rewrite every request to `/builds/<buildId>/...`, so
-// they must NOT publish until that build's assets have been uploaded to the
-// OAC-protected S3 bucket. Otherwise the new buildId propagates globally
+// Redeploys must be atomic for new/cookieless visitors: the KVS edge router
+// rewrites every static request to `/builds/<buildId>/...` where `buildId`
+// comes from the KVS route table. The KvKeys custom resource WRITES that table,
+// so it must NOT run until that build's assets have been uploaded to the
+// OAC-protected S3 bucket. Otherwise the route table flips to the new buildId
 // before the objects exist and CloudFront returns 403 Access Denied for the
 // duration of the deploy.
 //
 // These tests assert the synthesized CloudFormation ordering:
-//   1. the viewer-request (and assetPrefix strip) CF Function DependsOn every
-//      asset BucketDeployment custom resource, and
+//   1. the KvKeys custom resource (RouteStoreKeys) DependsOn every asset
+//      BucketDeployment custom resource, and
 //   2. no BucketDeployment carries a `/*` CloudFront invalidation anymore
 //      (which is both useless under immutable build-id prefixes and was the
 //      bad dependency that forced uploads to run AFTER the distribution).
@@ -93,38 +94,39 @@ const assetDeploymentIds = (tpl: CfnTemplate): string[] =>
   );
 
 /**
- * Logical ids of the CloudFront Functions that bake the buildId into the
- * request rewrite (the ones that flip routing to the new build). Excludes the
- * viewer-RESPONSE skew function and the compute forwarded-host function, which
- * do not rewrite to `/builds/<id>/`.
+ * Logical ids of the KvKeys custom resource(s) that write the KVS route table
+ * (the cutover atom — flipping `buildId`/routes to the new build). Under KVS
+ * routing this replaces the old build-id CloudFront Functions as the gated
+ * resource.
  */
-const buildIdFunctionIds = (tpl: CfnTemplate): string[] =>
+const cutoverResourceIds = (tpl: CfnTemplate): string[] =>
   Object.entries(tpl.Resources)
     .filter(
       ([id, r]) =>
-        r.Type === 'AWS::CloudFront::Function' &&
-        /(SkewProtectionRequestFunction|BuildIdRewriteFunction|AssetPrefixStripFunction)/.test(
-          id,
-        ),
+        r.Type === 'AWS::CloudFormation::CustomResource' &&
+        /RouteStoreKeys/.test(id),
     )
     .map(([id]) => id);
 
-const assertFunctionsWaitForDeployments = (
+const assertCutoverWaitsForDeployments = (
   tpl: CfnTemplate,
-  fnIds: string[],
+  cutoverIds: string[],
   deployments: string[],
 ): void => {
-  assert.ok(fnIds.length >= 1, 'expected at least one build-id CF Function');
+  assert.ok(
+    cutoverIds.length >= 1,
+    'expected the KvKeys (RouteStoreKeys) cutover custom resource',
+  );
   assert.ok(
     deployments.length >= 1,
     'expected at least one asset BucketDeployment',
   );
-  for (const fnId of fnIds) {
-    const dependsOn = tpl.Resources[fnId].DependsOn ?? [];
+  for (const crId of cutoverIds) {
+    const dependsOn = tpl.Resources[crId].DependsOn ?? [];
     for (const dep of deployments) {
       assert.ok(
         dependsOn.includes(dep),
-        `build-id function ${fnId} must DependsOn asset deployment ${dep} ` +
+        `KvKeys cutover resource ${crId} must DependsOn asset deployment ${dep} ` +
           `(found: ${JSON.stringify(dependsOn)})`,
       );
     }
@@ -154,16 +156,17 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       deployments.length >= 2,
       `expected multiple asset deployments, got ${deployments.length}`,
     );
-    // Default skew protection is on -> the viewer-request function is the
-    // SkewProtectionRequestFunction.
-    assertFunctionsWaitForDeployments(
+    // The cutover atom (KvKeys route-table write) must wait for the uploads,
+    // whether or not skew protection is on (skew only changes a cookie read in
+    // the router, not the cutover mechanism).
+    assertCutoverWaitsForDeployments(
       tpl,
-      buildIdFunctionIds(tpl),
+      cutoverResourceIds(tpl),
       deployments,
     );
   });
 
-  void it('build-id rewrite function DependsOn asset deployments (skew disabled)', () => {
+  void it('route-table cutover DependsOn asset deployments (skew disabled)', () => {
     const staticDir = createStaticDir();
     const tpl = synth(
       {
@@ -179,14 +182,11 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       { enabled: false },
     );
 
-    const rewriteFns = Object.keys(tpl.Resources).filter((id) =>
-      /BuildIdRewriteFunction/.test(id),
+    assertCutoverWaitsForDeployments(
+      tpl,
+      cutoverResourceIds(tpl),
+      assetDeploymentIds(tpl),
     );
-    assert.ok(
-      rewriteFns.length >= 1,
-      'expected a BuildIdRewriteFunction when skew protection is disabled',
-    );
-    assertFunctionsWaitForDeployments(tpl, rewriteFns, assetDeploymentIds(tpl));
   });
 
   void it('does NOT emit a /* CloudFront invalidation on any BucketDeployment', () => {
@@ -255,14 +255,14 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       deployments.some((id) => /ErrorPageDeployment/.test(id)),
       `expected an ErrorPageDeployment in SSR mode, got ${JSON.stringify(deployments)}`,
     );
-    assertFunctionsWaitForDeployments(
+    assertCutoverWaitsForDeployments(
       tpl,
-      buildIdFunctionIds(tpl),
+      cutoverResourceIds(tpl),
       deployments,
     );
   });
 
-  void it('assetPrefix strip function DependsOn every asset BucketDeployment (Next.js)', () => {
+  void it('route-table cutover DependsOn every asset BucketDeployment (assetPrefix / Next.js)', () => {
     const staticDir = createStaticDir();
     const tpl = synth({
       version: 1,
@@ -276,18 +276,14 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       buildId: 'atomic-prefix-1',
     });
 
-    // When the manifest carries `assetPrefix` (Next.js), the CDN adds an
-    // AssetPrefixStripFunction that ALSO bakes in the `/builds/<buildId>/`
-    // prefix, so it is a build-id cutover function and must wait for the asset
-    // uploads exactly like the viewer-request function.
-    const stripFns = Object.keys(tpl.Resources).filter((id) =>
-      /AssetPrefixStripFunction/.test(id),
+    // assetPrefix is now handled inside the KVS router (stored in the route
+    // table), so the cutover atom remains the KvKeys write — it must wait for
+    // the asset uploads regardless of assetPrefix.
+    assertCutoverWaitsForDeployments(
+      tpl,
+      cutoverResourceIds(tpl),
+      assetDeploymentIds(tpl),
     );
-    assert.ok(
-      stripFns.length >= 1,
-      'expected an AssetPrefixStripFunction when assetPrefix is set',
-    );
-    assertFunctionsWaitForDeployments(tpl, stripFns, assetDeploymentIds(tpl));
   });
 });
 
