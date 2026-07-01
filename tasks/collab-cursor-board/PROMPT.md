@@ -4,7 +4,7 @@ Build a shared presence board in this AWS Blocks app. Each visitor picks a name 
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
 ## Requirements
 
@@ -23,8 +23,6 @@ A single shared board across all tabs — no login, no per-user filtering.
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
 
 This template already wires up a realtime channel block and a structured-data table block — exactly the two capabilities this task needs: one block to broadcast presence changes to connected clients, and one block to persist the board so it survives a reload. Adapt the scaffolded blocks to a single shared board (this task has no auth or per-user channels). Read the relevant block READMEs before wiring.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Selector contract
 

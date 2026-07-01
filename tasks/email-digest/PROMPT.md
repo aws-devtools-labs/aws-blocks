@@ -4,9 +4,9 @@ Build a scheduled email-digest feature in this AWS Blocks app. A recurring job i
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `demo` template (vanilla-TS frontend in `src/index.ts`, port 3000). It already wires a key/value store block (`KVStore`) — reuse it for the "last sent" metadata. The frontend calls the backend with `import { api } from 'aws-blocks'`.
+This is the `demo` template (vanilla-TS frontend in `src/index.ts`). It already wires a key/value store block (`KVStore`) — reuse it for the "last sent" metadata. The frontend calls the backend with `import { api } from 'aws-blocks'`.
 
 ## Requirements
 
@@ -23,8 +23,6 @@ This is the `demo` template (vanilla-TS frontend in `src/index.ts`, port 3000). 
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the cron-job and email-client block READMEs (and the key/value store one) before wiring, and use only the APIs documented there — including how a cron handler is registered, how to send an email, and how to read/write the key/value store.
 
 Factor the digest into one shared function and call it from the cron handler, from `triggerDigest()`, and from `triggerDigestTo(to)`; expose `getLastDigest()` to read the stored record back. See requirement 7 for the `triggerDigestTo` validation rule.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Selector contract
 

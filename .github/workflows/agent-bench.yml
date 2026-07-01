@@ -9,7 +9,9 @@ name: Agent Bench
 #   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
 #                           on the bench model, plus s3:PutObject on bench/* in
 #                           the registry bucket (per-cell archive + the commit-
-#                           keyed baseline aggregate). The PR-vs-baseline
+#                           keyed baseline aggregate + the Athena NDJSON under
+#                           bench/athena/*, all covered by the one bench/* grant).
+#                           The PR-vs-baseline
 #                           overview also reads the baseline back, which needs
 #                           s3:GetObject on bench/* — without it the overview
 #                           degrades to "no baseline" (never an error).
@@ -158,6 +160,12 @@ jobs:
         env:
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
           OUTPUT: /tmp/builder-result.json
+          # Full hierarchical tool-call trace tree + run metrics (cycleCount,
+          # accumulatedUsage, per-tool toolUsage, …), uploaded as bench-trace-*.
+          # On a wall-clock timeout the SIGTERM handler flushes a lightweight
+          # transcript fallback to TRACE instead.
+          TRACE: /tmp/trace.json
+          METRICS: /tmp/metrics.json
 
       - name: 3. Build and test
         id: tests
@@ -257,7 +265,26 @@ jobs:
             !bench-app/**/.env*
             !bench-app/**/*.pem
             !bench-app/**/.aws/**
-          retention-days: 14
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: ignore
+
+      # Archive the agent's FULL trace (hierarchical tool-call tree) + run metrics
+      # (cycleCount, accumulatedUsage, per-tool toolUsage/successRate/callCount)
+      # written by step 2, so a run's tool calls + token spend can be inspected
+      # post-hoc. On a wall-clock timeout the trace is the lightweight transcript
+      # fallback the SIGTERM handler flushed. if: always() + if-no-files-found:
+      # ignore mirrors the other uploads so it never turns the cell red (e.g. when
+      # the agent step never ran, so neither file exists).
+      - name: 6b. Upload trace
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
+          path: |
+            /tmp/trace.json
+            /tmp/metrics.json
+          retention-days: 90
           overwrite: true
           if-no-files-found: ignore
 
@@ -363,6 +390,10 @@ jobs:
           # summary.mjs writes the compact aggregate (per-cell composites + mean)
           # here; the persist step below uploads it as this commit's baseline.
           AGGREGATE_PATH: ${{ github.workspace }}/bench-aggregate.json
+          # summary.mjs writes one flat NDJSON line per scored cell here; the
+          # "Persist Athena NDJSON" step below uploads it to a date-partitioned
+          # Athena prefix. Existing bench/* IAM covers it (best-effort).
+          ATHENA_NDJSON_PATH: ${{ github.workspace }}/bench-athena.ndjson
           # Parity file written by summary.mjs for the (currently disabled)
           # PR-comment step; kept so that step stays valid if it is re-enabled.
           SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
@@ -391,6 +422,31 @@ jobs:
             aws s3 cp "$AGG" "s3://${BUCKET}/bench/runs/latest-main.json" \
               || echo "::warning::S3 latest-main pointer write failed"
           fi
+
+      # Persist the Athena NDJSON (one flat row per scored cell, written by
+      # summary.mjs) to a DATE-PARTITIONED prefix so bench history is queryable in
+      # Athena without parsing per-cell result.json blobs. Key:
+      # bench/athena/year=YYYY/month=MM/<sha-short>.json (Hive-style partitions).
+      # The existing bench/* IAM (s3:PutObject) already covers this prefix — no
+      # new grant needed. Best-effort: warn on any failure, never turn the job red.
+      - name: Persist Athena NDJSON to S3 (best-effort)
+        if: always() && steps.oidc.outcome == 'success'
+        env:
+          BUCKET: ${{ vars.S3_BUCKET }}
+          BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          NDJSON: ${{ github.workspace }}/bench-athena.ndjson
+        run: |
+          set -u
+          if [ ! -f "$NDJSON" ]; then
+            echo "::warning::no Athena NDJSON at $NDJSON (no scored cells) — nothing to persist"
+            exit 0
+          fi
+          YEAR="$(date -u +%Y)"
+          MONTH="$(date -u +%m)"
+          SHA_SHORT="${BENCH_SHA:0:12}"
+          KEY="bench/athena/year=${YEAR}/month=${MONTH}/${SHA_SHORT}.json"
+          aws s3 cp "$NDJSON" "s3://${BUCKET}/${KEY}" \
+            || echo "::warning::S3 Athena NDJSON write failed for ${KEY}"
 
       # ── PR comment: DISABLED (change #1 — "comment out commenting altogether") ──
       # Per owner request the bench no longer posts a PR comment at all. The

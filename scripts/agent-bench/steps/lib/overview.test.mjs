@@ -108,15 +108,17 @@ describe('buildAggregate(cells, meta)', () => {
 });
 
 describe('deltaArrow(delta)', () => {
-	it('▲ for a meaningful increase, ▼ for a decrease', () => {
+	it('▲ for a move larger than the ±5 band, ▼ for a large decrease', () => {
 		assert.equal(deltaArrow(5.2), '▲');
-		assert.equal(deltaArrow(-3.1), '▼');
+		assert.equal(deltaArrow(-6.4), '▼');
 	});
 
-	it('= for zero / sub-epsilon float noise', () => {
-		assert.equal(deltaArrow(0), '=');
-		assert.equal(deltaArrow(0.04), '=');
-		assert.equal(deltaArrow(-0.04), '=');
+	it('≈ for |delta| within the ±5 noise band (incl. zero and the boundary)', () => {
+		assert.equal(deltaArrow(0), '≈');
+		assert.equal(deltaArrow(3.1), '≈');
+		assert.equal(deltaArrow(-4.9), '≈');
+		assert.equal(deltaArrow(5), '≈'); // boundary is inclusive: |5| is not > 5
+		assert.equal(deltaArrow(-5), '≈');
 	});
 
 	it('empty string for a null/NaN delta (no baseline cell)', () => {

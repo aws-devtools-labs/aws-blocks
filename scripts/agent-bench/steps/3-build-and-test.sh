@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Step 3: run `npm run build` and the task's Playwright spec against the
-# running dev server. Writes the build/test/dev-server/playwright signals to
-# $GITHUB_OUTPUT (the judge step folds them into EVIDENCE for its hard caps).
+# Step 3 (verifier): run `npm run build`, then launch the dev server FRESH and
+# run the task's Playwright spec against it. This step OWNS the dev server: the
+# agent's edit phase (step 2) ran with no server bound, so here we free the
+# candidate ports, start `npm run dev`, robustly discover the port it actually
+# binds, and point Playwright at it via APP_BASE_URL. Writes the
+# build/dev-server/playwright/test signals to $GITHUB_OUTPUT (the judge step
+# folds them into EVIDENCE for its hard caps).
 #
 # Required env:
 #   WORKSPACE     absolute path to the bench-app
-#   DEV_PORT      dev server port (set by step 1)
 #   TASK_DIR      absolute path to the task directory (PROMPT.md + test.spec.ts)
+# The dev port is NO LONGER passed in — it is discovered internally below.
 set -euo pipefail
 
 : "${WORKSPACE:?WORKSPACE must be set}"
-: "${DEV_PORT:?DEV_PORT must be set}"
 : "${TASK_DIR:?TASK_DIR must be set}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set (run inside GitHub Actions)}"
 
@@ -35,73 +38,9 @@ PW_VERSION="1.60.0"
   echo "tests_total=0"
 } >> "$GITHUB_OUTPUT"
 
-# SINGLE bounded readiness wait. The dev server was launched once in step 1; the
-# agent's edits in step 2 run under a `tsx watch` that restarts it in place, so
-# it may still be finishing a normal restart/boot as this step begins. Poll the
-# public port until it returns any non-5xx response (cap ~180s), then move on.
-# This is the ONLY wait, and it deliberately does NO relaunch, port-freeing,
-# data reset, or other recovery: if a framework bug leaves the server dead — an
-# orphaned frontend on :3100 after a tsx-watch restart (502 / EADDRINUSE, issue
-# #78) or a half-written PGlite `.bb-data` dir — the cell must FAIL HONESTLY so
-# the failure is visible and tracked, not papered over here. A non-5xx response
-# means the server is genuinely serving; a 5xx (e.g. the 502 the frontend-orphan
-# bug produces) is NOT ready. The trailing `|| code=000` keeps the guarded curl
-# safe under `set -euo pipefail`; curl ALSO prints "000" on a transport failure,
-# so the override must sit OUTSIDE the $(...) — inside, the two "000"s would
-# concatenate to "000000" and the `!= "000"` test would false-positive as ready.
-dev_ready=false
-for i in $(seq 1 36); do
-  code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${DEV_PORT}") || code=000
-  if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
-    echo "[readiness] dev server ready (HTTP $code) on attempt $i"
-    dev_ready=true
-    break
-  fi
-  echo "[readiness] attempt $i: HTTP $code"
-  sleep 5
-done
-
-# Record dev_server_started from that single wait so the judge's caps reflect
-# reality instead of a hardcoded true. If the server never became ready, emit a
-# brief diagnostic — the dev PID's liveness + the tail of its log — to BOTH the
-# step log AND result.json (dev_pid_status / dev_log_tail), so the uploaded
-# artifact records WHY it was down, then proceed so the cell fails honestly.
-# RESULT_PATH matches steps 0/4/finalize (/tmp/result.json); the judge's merge
-# and finalize both carry extra keys through, so this field survives into the
-# final artifact.
-if [ "$dev_ready" = "true" ]; then
-  echo "dev_server_started=true" >> "$GITHUB_OUTPUT"
-else
-  echo "::warning::dev server never became ready on :${DEV_PORT} within the readiness window"
-  dev_pid=""
-  if [ -f /tmp/dev.pid ]; then dev_pid="$(cat /tmp/dev.pid 2>/dev/null || true)"; fi
-  if [ -z "${dev_pid:-}" ]; then
-    dev_pid_status="no-pidfile"
-  elif kill -0 "$dev_pid" 2>/dev/null; then
-    dev_pid_status="alive (pid=${dev_pid}) but not serving"
-  else
-    dev_pid_status="exited (pid=${dev_pid})"
-  fi
-  echo "[dead-server] dev pid: ${dev_pid_status}"
-  if [ -f /tmp/dev.log ]; then
-    dev_log_tail="$(tail -100 /tmp/dev.log 2>/dev/null || true)"
-    echo "[dead-server] tail -100 /tmp/dev.log:"
-    printf '%s\n' "$dev_log_tail"
-  else
-    dev_log_tail="(/tmp/dev.log missing)"
-    echo "[dead-server] /tmp/dev.log missing"
-  fi
-  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" DEV_PID_STATUS="$dev_pid_status" DEV_LOG_TAIL="$dev_log_tail" node -e '
-    const fs = require("fs");
-    const p = process.env.RESULT_PATH;
-    let r = {};
-    try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
-    r.dev_log_tail = process.env.DEV_LOG_TAIL || "";
-    r.dev_pid_status = process.env.DEV_PID_STATUS || "";
-    fs.writeFileSync(p, JSON.stringify(r, null, 2));
-  ' || echo "::warning::failed to record dev_log_tail on result.json"
-fi
-
+# The dev server is launched + discovered further below (after the build), since
+# this verifier now OWNS the server. First make sure the workspace exists and cd
+# into it — the build and the dev launch both need to run from the bench-app root.
 cd "$WORKSPACE" || {
   # A missing workspace (e.g. the agent never produced bench-app) must not hard-abort
   # this step: the pessimistic defaults written to $GITHUB_OUTPUT above already record
@@ -157,6 +96,86 @@ else
   } >> "$GITHUB_OUTPUT"
 fi
 
+# ── Dev server: launch fresh + robustly discover its bound port ──────────────
+# The verifier OWNS the server now (step 1 no longer starts one, so the agent's
+# edit phase ran with nothing bound). Free the candidate ports first (kill
+# anything the agent may have left — the old tsx-watch/EADDRINUSE flakiness),
+# launch `npm run dev` in the background, then discover the port it ACTUALLY
+# binds. Discovery is belt-and-suspenders: (a) poll each candidate port for a
+# real HTTP response (<500), and (b) parse the dev log for a "listening on
+# :<port>" line and verify THAT port responds — first hit wins. Bounded (~60s):
+# if nothing serves we record dev_server_started=false and PROCEED
+# (green-regardless — the cell fails honestly rather than hanging or hard-failing).
+for p in 3000 3001 3100; do fuser -k "${p}/tcp" 2>/dev/null || true; done
+sleep 1
+
+nohup npm run dev > /tmp/dev.log 2>&1 &
+echo $! > /tmp/dev.pid
+
+CANDIDATE_PORTS="3000 3001 3100"
+APP_BASE_URL=""
+for i in $(seq 1 60); do
+  # (a) direct probe: first candidate port returning a real HTTP status <500.
+  # `|| code=000` sits OUTSIDE $(...) so a transport failure reads as one "000"
+  # (curl also prints "000" itself) rather than concatenating to a false ready.
+  for port in $CANDIDATE_PORTS; do
+    code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
+    if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+      APP_BASE_URL="http://localhost:${port}"
+      echo "[discover] dev server serving on :${port} (HTTP $code) after ${i}s"
+      break
+    fi
+  done
+  [ -n "$APP_BASE_URL" ] && break
+  # (b) log fallback: a "listening on"/":<port>" line names the bound port; only
+  # accept it once that port actually answers (guards against matching a PID/etc).
+  if [ -f /tmp/dev.log ]; then
+    log_port=$(grep -oiE '(listening on|localhost:|:)[[:space:]]*[0-9]{4,5}' /tmp/dev.log 2>/dev/null | grep -oE '[0-9]{4,5}' | tail -1 || true)
+    if [ -n "${log_port:-}" ]; then
+      code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${log_port}") || code=000
+      if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
+        APP_BASE_URL="http://localhost:${log_port}"
+        echo "[discover] dev server serving on :${log_port} (from dev.log, HTTP $code) after ${i}s"
+        break
+      fi
+    fi
+  fi
+  sleep 1
+done
+
+if [ -n "$APP_BASE_URL" ]; then
+  echo "dev_server_started=true" >> "$GITHUB_OUTPUT"
+  echo "[discover] APP_BASE_URL=${APP_BASE_URL}"
+else
+  # No port ever served within the bounded window. Record the signal (already
+  # defaulted to false above) + a brief diagnostic (pid liveness + log tail) onto
+  # result.json, then PROCEED: the specs run against the :3000 fallback and fail
+  # honestly. RESULT_PATH matches steps 0/4/finalize; extra keys are carried through.
+  echo "::warning::dev server never became ready on any candidate port within ~60s"
+  dev_pid=""; [ -f /tmp/dev.pid ] && dev_pid="$(cat /tmp/dev.pid 2>/dev/null || true)"
+  if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
+  elif kill -0 "$dev_pid" 2>/dev/null; then dev_pid_status="alive (pid=${dev_pid}) but not serving"
+  else dev_pid_status="exited (pid=${dev_pid})"; fi
+  echo "[dead-server] dev pid: ${dev_pid_status}"
+  if [ -f /tmp/dev.log ]; then
+    dev_log_tail="$(tail -100 /tmp/dev.log 2>/dev/null || true)"
+    echo "[dead-server] tail -100 /tmp/dev.log:"; printf '%s\n' "$dev_log_tail"
+  else
+    dev_log_tail="(/tmp/dev.log missing)"; echo "[dead-server] /tmp/dev.log missing"
+  fi
+  RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" DEV_PID_STATUS="$dev_pid_status" DEV_LOG_TAIL="$dev_log_tail" node -e '
+    const fs = require("fs");
+    const p = process.env.RESULT_PATH;
+    let r = {};
+    try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
+    r.dev_log_tail = process.env.DEV_LOG_TAIL || "";
+    r.dev_pid_status = process.env.DEV_PID_STATUS || "";
+    fs.writeFileSync(p, JSON.stringify(r, null, 2));
+  ' || echo "::warning::failed to record dev_log_tail on result.json"
+  APP_BASE_URL="http://localhost:3000"
+fi
+export APP_BASE_URL
+
 # Record whether Playwright installed. On failure tests can't run, so we emit
 # the signal and bail — the judge treats playwright_installed=false explicitly
 # rather than mistaking the resulting tests_total=0 for "no caps needed".
@@ -192,6 +211,11 @@ export default defineConfig({
   globalTimeout: 600_000,
   expect: { timeout: 15_000 },
   use: {
+    // The discovered dev-server URL (exported as APP_BASE_URL by this step).
+    // The specs use their own absolute goto() via BLOCKS_URL (set on the run
+    // line below to the same value); baseURL is set too so any relative
+    // navigation also resolves against the real port.
+    baseURL: process.env.APP_BASE_URL,
     actionTimeout: 30_000,
     navigationTimeout: 45_000,
     screenshot: 'only-on-failure',
@@ -206,8 +230,8 @@ export default defineConfig({
 EOF
 
 # The specs read BLOCKS_URL for their absolute goto() (they don't rely on
-# Playwright's baseURL), so it must point at the actual dev port — the
-# `backend` template binds :3001, not :3000.
+# Playwright's baseURL). Point it at the port the verifier discovered above
+# (APP_BASE_URL); pass APP_BASE_URL through too so the config's baseURL resolves.
 #
 # RUN_ID is a run-stable seed the specs fold into their unique-but-deterministic
 # test data (usernames, file names, notes …). Exported once here so it stays
@@ -215,7 +239,7 @@ EOF
 # a per-call counter + timestamp on top, so a retry still gets fresh identifiers
 # instead of colliding with the data its own earlier attempt wrote.
 export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$(date +%s)"
-BLOCKS_URL="http://localhost:${DEV_PORT}" npx playwright test 2>&1 | tee /tmp/pw.log || true
+BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee /tmp/pw.log || true
 
 if [ -f /tmp/pw-results.json ]; then
   node -e "

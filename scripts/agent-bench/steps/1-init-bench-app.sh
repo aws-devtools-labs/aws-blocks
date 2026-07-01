@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Step 1: build packages, pack to local registry, scaffold the bench-app,
-# start the dev server, write the dev port to /tmp/dev.port and DEV_PORT
-# to $GITHUB_ENV.
+# Step 1: build packages, pack to local registry, scaffold the bench-app, and
+# seed the telemetry canary. Does NOT start a dev server — the verifier (step 3)
+# owns launching + port discovery, so the agent's edit phase (step 2) runs with
+# NO server bound (this removes the tsx-watch/EADDRINUSE flakiness the old
+# pre-agent launch caused).
 #
 # Usage: init-bench-app.sh <template>
 # Required env: WORKSPACE (absolute path where bench-app lands)
@@ -78,23 +80,7 @@ fi
 mv bench-app "$WORKSPACE"
 cd "$WORKSPACE"
 
-nohup npm run dev > /tmp/dev.log 2>&1 &
-echo $! > /tmp/dev.pid
-
-# Different templates bind different ports — most proxy :3000 in front of
-# :3100; backend binds :3001 directly and serves a 404 root. `curl --head`
-# treats any HTTP response as bound (unlike `-sf` which rejects 4xx).
-for i in $(seq 1 60); do
-  for port in 3000 3001; do
-    if curl -s --head -m 2 "http://localhost:$port" > /dev/null 2>&1; then
-      echo "$port" > /tmp/dev.port
-      echo "DEV_PORT=$port" >> "$GITHUB_ENV"
-      exit 0
-    fi
-  done
-  sleep 1
-done
-
-echo "dev server timed out; tail of /tmp/dev.log:"
-tail -50 /tmp/dev.log
-exit 1
+# Scaffold complete. No dev server is started here — the verifier (step 3) frees
+# the candidate ports, launches `npm run dev` fresh, and discovers the bound
+# port itself. Keeping the server out of the agent's edit phase is deliberate.
+echo "bench-app scaffolded at $WORKSPACE (no dev server started — verifier owns that)"

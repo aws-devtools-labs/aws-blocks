@@ -6,20 +6,26 @@
  *   TASK_PROMPT      path to PROMPT.md
  *   OUTPUT           path to write the builder envelope JSON
  *   BENCH_MODEL      Bedrock model ID (default: us.anthropic.claude-sonnet-4-6)
+ *   TRACE            (optional) path to write the full hierarchical tool-call
+ *                    trace tree; on a wall-clock timeout a lightweight transcript
+ *                    fallback is flushed here instead
+ *   METRICS          (optional) path to write the run metrics (cycleCount,
+ *                    totalDuration, accumulatedUsage, per-tool toolUsage, …)
  *
  * Tools: a single `shell` running bash inside WORKSPACE. The runner is the
  * sandbox; no extra isolation needed for our PR-CI threat model.
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Agent, BedrockModel, ModelStreamUpdateEvent, tool } from '@strands-agents/sdk';
+import { Agent, BedrockModel, MessageAddedEvent, ModelStreamUpdateEvent, tool } from '@strands-agents/sdk';
 import { z } from 'zod';
 import { builderSystem } from '../prompts.ts';
 
 const WORKSPACE = required('WORKSPACE');
 const TASK_PROMPT_PATH = required('TASK_PROMPT');
 const OUTPUT = required('OUTPUT');
-const TEMPLATE = required('TEMPLATE');
+const TRACE_PATH = process.env.TRACE;
+const METRICS_PATH = process.env.METRICS;
 const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-sonnet-4-6';
 // Backstop against runaway tool-call loops (v1's long prompts caused
 // over-iteration). The Strands TS SDK enforces this per-invocation; hitting it
@@ -48,13 +54,26 @@ const shell = tool({
 	},
 });
 
+// INTENTIONALLY MINIMAL: a single-tool (`shell`) agent, no planner, no
+// sub-agents, no retrieval, no bespoke scaffolding. This is a deliberate design
+// choice, not an unfinished one — DO NOT "helpfully" swap in a richer agent:
+//   - Stable measurement surface: the bench measures how the FRAMEWORK (the
+//     scaffold + Building Blocks + docs) shapes an agent's output. A fixed,
+//     minimal agent keeps that surface constant so a score delta is
+//     deterministically attributable to a framework change, not to agent tweaks.
+//   - Accounting control: token usage (the ModelStreamUpdateEvent hook) and the
+//     SIGTERM wall-clock-timeout envelope flush both need direct, in-process
+//     control of the loop — a higher-level "helpful" agent abstraction would hide
+//     the model-metadata events and the invoke lifecycle we depend on here.
+//   - Reproducibility: a pinned model + temperature 0 + a hard MAX_TURNS bound is
+//     what makes a run repeatable; extra tools/heuristics reintroduce variance.
 const agent = new Agent({
 	model: new BedrockModel({
 		modelId: MODEL_ID,
 		region: process.env.AWS_REGION ?? 'us-east-1',
 		temperature: 0,
 	}),
-	systemPrompt: builderSystem(TEMPLATE),
+	systemPrompt: builderSystem(),
 	tools: [shell],
 });
 
@@ -76,6 +95,19 @@ agent.addHook(ModelStreamUpdateEvent, (event) => {
 		partialTokensOut += inner.usage.outputTokens ?? 0;
 		partialCycles += 1;
 	}
+});
+
+// TIMEOUT-SAFE trace fallback. The full hierarchical trace tree (result.traces,
+// written below) only exists once agent.invoke() RETURNS — but a wall-clock
+// timeout SIGTERMs us mid-invoke, so a timed-out cell would otherwise produce NO
+// trace at all. Mirroring the token hook above, accumulate a lightweight
+// transcript of every message the agent loop adds (the user prompt, each
+// assistant turn, and tool-result messages) as it happens, so the SIGTERM
+// handler can flush this trace-shaped fallback to TRACE_PATH for the timed-out
+// cell. On the normal path the real result.traces overwrites it.
+const transcript: Array<{ role: string; ts: string; blocks: unknown[] }> = [];
+agent.addHook(MessageAddedEvent, (event) => {
+	transcript.push({ role: event.message.role, ts: new Date().toISOString(), blocks: summarizeBlocks(event.message) });
 });
 
 const started = Date.now();
@@ -111,6 +143,17 @@ function writePartialEnvelopeAndExit(signal: string): void {
 		);
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write partial envelope on ${signal}: ${describeError(err)}\n`);
+	}
+	// Flush the lightweight transcript as the trace fallback so a timed-out cell
+	// still uploads SOMETHING trace-shaped (the real hierarchical result.traces
+	// is unavailable — invoke() never returned). Separate try so a trace-write
+	// failure never loses the envelope written above.
+	if (TRACE_PATH) {
+		try {
+			writeFileSync(TRACE_PATH, JSON.stringify({ partial: true, reason: signal, messages: transcript }, null, 2));
+		} catch (err) {
+			process.stderr.write(`[bench] failed to write partial trace on ${signal}: ${describeError(err)}\n`);
+		}
 	}
 	process.exit(124);
 }
@@ -173,6 +216,41 @@ writeFileSync(
 process.stderr.write(
 	`[bench] done: stop=${result.stopReason} tokens=${tokensIn}/${tokensOut} cycles=${result.metrics?.cycleCount ?? 0} ${duration_sec}s\n`,
 );
+
+// Persist the full hierarchical tool-call trace tree and the run metrics as
+// SEPARATE artifacts. NEVER serialize `result` directly: AgentResult.toJSON()
+// deliberately strips traces/metrics/invocationState to keep the wire payload
+// small, so JSON.stringify(result) would silently drop exactly what we want.
+// Access the properties instead — traces are JSONSerializable (call toJSON() on
+// each), metrics is a plain aggregate object.
+if (TRACE_PATH) {
+	try {
+		writeFileSync(TRACE_PATH, JSON.stringify(result.traces?.map((t) => t.toJSON()) ?? [], null, 2));
+	} catch (err) {
+		process.stderr.write(`[bench] failed to write trace to ${TRACE_PATH}: ${describeError(err)}\n`);
+	}
+}
+if (METRICS_PATH) {
+	try {
+		writeFileSync(METRICS_PATH, JSON.stringify(result.metrics ?? {}, null, 2));
+	} catch (err) {
+		process.stderr.write(`[bench] failed to write metrics to ${METRICS_PATH}: ${describeError(err)}\n`);
+	}
+}
+
+// Compact per-block summary of a message for the timeout-safe transcript
+// fallback: text is truncated, a tool call keeps its name + input keys, a
+// tool result keeps its status — enough to reconstruct what happened without
+// dragging multi-KB tool stdout into the fallback trace.
+function summarizeBlocks(msg: import('@strands-agents/sdk').Message): unknown[] {
+	return msg.content.map((b) => {
+		if (b.type === 'textBlock') return { type: 'text', text: b.text.slice(0, 2000) };
+		if (b.type === 'toolUseBlock')
+			return { type: 'toolUse', name: b.name, input: b.input && typeof b.input === 'object' ? Object.keys(b.input) : [] };
+		if (b.type === 'toolResultBlock') return { type: 'toolResult', status: b.status };
+		return { type: b.type };
+	});
+}
 
 function messageText(msg: import('@strands-agents/sdk').Message | undefined): string {
 	if (!msg) return '';

@@ -4,9 +4,9 @@ Build an instrumented health/status service in this **backend-only** AWS Blocks 
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-**This is the `backend` template: no frontend, and the dev server listens on port 3001** (the test reads `/tmp/dev.port` / `BLOCKS_URL`, so you don't hard-code it). The RPC endpoint is JSON-RPC 2.0 at `POST /aws-blocks/api`; unmatched paths return 404.
+**This is the `backend` template: no frontend.** The RPC endpoint is JSON-RPC 2.0 at `POST /aws-blocks/api`; unmatched paths return 404.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ The workspace has already been scaffolded and the dev server is running; its por
    - **`api.echo`** — takes a **single argument** and returns **exactly** `{ "echo": <that argument, unchanged> }` and **nothing else**. The value must round-trip with its **original type** (a number stays a number — do not stringify). If the argument is **missing** (the call supplies no params, or an empty params list), `echo` must **validate the input** and return a JSON-RPC **error** envelope (a populated `error`, no `result`) — it must **not** return a degenerate success like `{ "echo": null }`.
 
    A **malformed** request — for example a JSON **array / batch** body in place of a single request object — must come back as a JSON-RPC **error** envelope with **`error.code === -32600`** (Invalid Request) and **no** `result`; it must never crash the server (no HTTP 5xx).
-3. **A status page served by the backend.** Since this template has no frontend, serve a minimal HTML page at `GET /status` using the core block that lets you register a raw HTTP route and write the response yourself (set `Content-Type: text/html`). **Serve the page at the `/status` sub-path, not the root path `/`.** The page must:
+3. **A status page served by the backend.** Since this template has no frontend, serve a minimal HTML page at `GET /status` using the core block that lets you register a raw HTTP route and write the response yourself (set `Content-Type: text/html`). The page must:
    - show the app name (read from the setting) in `[data-testid=appname]`,
    - have a `[data-testid=ping-btn]` button that calls your `ping` operation,
    - show the ping result text in `[data-testid=ping-status]` (must contain `ok` once the ping succeeds).
@@ -37,8 +37,6 @@ All four blocks (setting, logger, metrics, tracer) must initialize cleanly when 
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the app-setting, logger, metrics, and tracer blocks — plus the core blocks README for how to register a **raw HTTP route** (the one you serve `/status` from) and how to expose JSON-RPC methods on an `api` namespace — and use only the APIs documented there. In particular, read how to read a setting on the server, write a log line, emit a metric, and open a tracer segment.
 
 The status page is plain server-rendered HTML: it must contain the three `data-testid` hooks below, and an inline `<script>` that POSTs to your `ping` method and writes the result into `[data-testid=ping-status]`. The endpoint takes the JSON-RPC request shape shown in requirement 2.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend. Verify with `curl` against `http://localhost:3001/status` and your ping endpoint.
 
 ## Selector contract
 

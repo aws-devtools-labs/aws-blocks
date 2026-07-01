@@ -4,7 +4,7 @@ Build a personal notepad in this AWS Blocks app. A visitor signs up (or signs in
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
 ## Requirements
 
@@ -22,8 +22,6 @@ Exactly one note per user. No password reset, email verification, or multiple no
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
 
 You'll need a block that provides authentication (sign-up / sign-in / sign-out, plus a way to know who the current user is) and a block for per-user stored data. Pick whichever ones fit.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Selector contract
 

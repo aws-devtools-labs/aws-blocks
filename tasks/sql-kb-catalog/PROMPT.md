@@ -4,9 +4,9 @@ Build a product catalog with an FAQ search panel in this AWS Blocks app. Product
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `nextjs` template (App Router, runs on port 3000). The frontend calls the backend with `import { api } from 'aws-blocks'`; interactive UI goes in a Client Component (`'use client'`). Define your backend methods in `aws-blocks/index.ts`.
+This is the `nextjs` template (App Router). The frontend calls the backend with `import { api } from 'aws-blocks'`; interactive UI goes in a Client Component (`'use client'`). Define your backend methods in `aws-blocks/index.ts`.
 
 ## Requirements
 
@@ -25,8 +25,6 @@ This is the `nextjs` template (App Router, runs on port 3000). The frontend call
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the relational-database block and the knowledge-base block before wiring, and use only the APIs documented there — including how to run a numbered migration, how to run a parameterized `INSERT`/`SELECT`, and how to point the knowledge base at your folder and query it.
 
 Define your backend methods in `aws-blocks/index.ts` (e.g. add a product, list products, search the FAQ) and call them from the frontend via `import { api } from 'aws-blocks'`.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Selector contract
 

@@ -4,7 +4,7 @@ Build an async word counter in this AWS Blocks app. A user submits some text; th
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
 ## Requirements
 
@@ -25,8 +25,6 @@ A single shared list — no login.
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
 
 You'll need a block that runs background/async work and a key/value block to hold each job's result (keyed by job id) so it survives a reload. Pick whichever ones fit.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Selector contract
 

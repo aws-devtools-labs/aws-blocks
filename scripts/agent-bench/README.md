@@ -10,12 +10,16 @@ Seven steps per cell, all on the GitHub runner:
 
 0. **Init result** — write a baseline `result.json` before any AWS call, so
    even an OIDC failure still produces a cell row in the summary
-1. **Init** — build the local registry, scaffold a fresh app, start the dev
-   server, and write its port to `/tmp/dev.port`
+1. **Init** — build the local registry and scaffold a fresh app. No dev server
+   is started here — the verifier (step 3) owns launching it and discovering its
+   port, so the agent's edit phase runs with nothing bound
 2. **Agent run** — Strands + Bedrock; the agent has one tool (`shell`). The
-   workspace is already scaffolded and the dev server is already running.
-3. **Build and test** — `npm run build` + the task's Playwright spec; probes the
-   dev server and records build / dev-server / playwright / test signals
+   workspace is already scaffolded; no dev server is running (the agent must not
+   rely on or start one).
+3. **Build and test** — `npm run build`, then launch the dev server fresh,
+   robustly discover the port it binds (`APP_BASE_URL`), and run the task's
+   Playwright spec against it; records build / dev-server / playwright / test
+   signals
 4. **Judge** — Strands + Bedrock; two read-only tools (`view`, `list`). Scores
    source only; objective signals are applied as caps afterward, not shown to it.
 5. **Upload result** — JSON artifact + S3 archive (best-effort)
@@ -94,7 +98,7 @@ table can't drift apart.
 ```
 tr        = tests_passed / (tests_passed + tests_failed)   # 0 if no tests ran
 judge     = overall judge score, 0–10 (0 if the judge errored)
-composite = round( 60*tr + 40*(judge/10)*min(1, 4*tr) , 1 )   # == 60*tr + 4*judge*min(1, 4*tr)
+composite = round( 60*tr + 4*judge*min(1, 4*tr) , 1 )
 ```
 
 60% is the objective pass-rate, 40% is the judge. The `min(1, 4*tr)` gate ties
@@ -191,7 +195,7 @@ error). Reading/writing the baseline uses the same OIDC role
 |------|---------|
 | `prompts.ts` | Builder + judge system prompts; the fixed shared rubric dimensions + rubric composer |
 | `steps/0-init-result.mjs` | Write a baseline `result.json` so failed cells still produce an artifact |
-| `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, start the dev server, write `/tmp/dev.port` + `DEV_PORT` |
+| `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, seed the telemetry canary (no dev server — the verifier owns that) |
 | `steps/2-agent-run.ts` | Builder agent (Strands + Bedrock); `shell` tool only; capped at `MAX_TURNS` |
 | `steps/3-build-and-test.sh` | `npm run build` + Playwright spec; writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
 | `steps/4-judge.ts` | Judge agent (Strands + Bedrock); `view` + `list` tools, read-only; grades on the fixed 5-dimension rubric and applies hard caps |
@@ -220,11 +224,10 @@ note and still exits 0.
 ## Local development
 
 Each step is runnable directly with the right env. Example for the builder
-(the workspace must already be scaffolded with its dev server running):
+(the workspace must already be scaffolded; no dev server is needed):
 
 ```bash
 WORKSPACE=/tmp/bench-app \
-TEMPLATE=demo \
 TASK_PROMPT=tasks/auth-notes/PROMPT.md \
 OUTPUT=/tmp/builder-result.json \
   npx tsx scripts/agent-bench/steps/2-agent-run.ts

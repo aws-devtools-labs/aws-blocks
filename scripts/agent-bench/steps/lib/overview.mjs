@@ -85,16 +85,19 @@ export function buildAggregate(cells, meta = {}) {
 }
 
 /**
- * Direction marker for a composite delta. A small epsilon keeps float noise
- * (and a true 0) reading as `=` rather than a spurious ▲/▼.
+ * Direction marker for a composite delta. The near-equal band is ±5 (wide on
+ * purpose): the bench is N=1 per cell, so a small delta is as likely to be
+ * model variance as a real change. Within ±5 we render `≈` (still showing the
+ * signed number) rather than a confident ▲/▼, reserving the arrows for moves
+ * large enough to plausibly be real. `''` for a missing/NaN delta.
  * @param {number|null} delta
- * @returns {'▲'|'▼'|'='|''}
+ * @returns {'▲'|'▼'|'≈'|''}
  */
 export function deltaArrow(delta) {
 	if (delta === null || delta === undefined || Number.isNaN(delta)) return '';
-	if (delta > 0.05) return '▲';
-	if (delta < -0.05) return '▼';
-	return '=';
+	if (delta > 5) return '▲';
+	if (delta < -5) return '▼';
+	return '≈';
 }
 
 /**
@@ -157,5 +160,8 @@ export function renderOverview(diff, opts = {}) {
 		lines.push(`| **Mean** | | **${fmt(diff.meanCurrent)}** |`);
 	}
 	lines.push('');
+	// N=1 caveat: with a single rep per cell, small deltas are indistinguishable
+	// from model variance — hence the ±5 ≈ band above.
+	lines.push('_N=1 per cell. Deltas within ±5 may reflect model variance, not a real change — re-run for certainty._', '');
 	return lines;
 }

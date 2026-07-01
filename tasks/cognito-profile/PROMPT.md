@@ -4,7 +4,7 @@ Build a passwordless sign-in flow in this AWS Blocks app. A visitor enters their
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
 ## Requirements
 
@@ -25,8 +25,6 @@ The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring p
 This template already ships a Cognito-backed auth block configured for **passwordless email-OTP**. It also wires a hook that captures the delivered OTP locally (no real mailbox) and exposes it through a `getLastCode()` API method. Read the template's `aws-blocks/index.ts`, its README, and the Cognito auth block's README to see the exact sign-up → confirm → session flow (sign-up confirmation auto-bridges into a signed-in session, so a single emailed code is enough), and use only the APIs documented there.
 
 You own the page UI: replace the template's demo with a custom two-step form that uses the selector contract below. Drive it through the auth block's documented sign-up / confirm / sign-in API (or the state-machine API the block exposes) — whatever wiring lands a session and lets you read back the current user.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Test harness contract (required)
 

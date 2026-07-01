@@ -79,6 +79,15 @@ export function classifyCell(result) {
 
 /**
  * Test counts for a cell. Missing / non-numeric fields read as 0.
+ *
+ * DENOMINATOR = passed + failed (NOT the audit-only `tests_total`). `tests_total`
+ * (passed + failed + skipped) is recorded on result.json for auditing only and
+ * is deliberately NOT the scoring divisor: skipped/interrupted tests never ran,
+ * so counting them would dilute the rate with cases that produced no signal. A
+ * per-test TIMEOUT is not "skipped" — Playwright records it as an unexpected
+ * failure, so it already lands in `failed` and IS penalized here. Net effect:
+ * the rate rewards passes and penalizes real failures/timeouts, while genuinely
+ * un-run (skipped/interrupted) tests are excluded rather than counted as losses.
  * @param {{tests_passed?: number, tests_failed?: number}} result
  * @returns {{passed: number, failed: number, denom: number}}
  */
@@ -145,6 +154,14 @@ export function verdictOf(result) {
 export function composite(tr, j) {
 	const rate = num(tr);
 	const judge = num(j);
+	// The min(1, 4*rate) gate ramps the judge term from 0 (at rate 0) to its
+	// FULL weight at rate 0.25, and holds full above that. Rationale: a 25%
+	// pass-rate is the minimum objective evidence that the agent produced
+	// genuinely runnable code, so below it the qualitative (judge) score is
+	// discounted proportionally — a polished-looking app that almost nothing
+	// passes can't ride the judge to a high composite — and at/above 25% the
+	// judge counts in full. At rate 0 the whole judge term is gated off, so a
+	// zero-test cell floors to 0 regardless of the judge.
 	const c = 60 * rate + 4 * judge * Math.min(1, 4 * rate);
 	return Math.round(c * 10) / 10;
 }

@@ -99,6 +99,15 @@ const sortKey = (r) => `${r.task ?? ''}/${r.template ?? ''}`;
 const byTask = (a, b) => sortKey(a).localeCompare(sortKey(b));
 
 // ── Table ───────────────────────────────────────────────────────────────────
+// Run-logs deep-link, hoisted ABOVE the table so the artifacts pointer can sit
+// right under it (the footer's "last run" line reuses these same vars). GitHub
+// Actions exposes no per-artifact deep link, so we name the deterministic
+// artifacts and link the run page where they're listed.
+const serverUrl = process.env.GITHUB_SERVER_URL;
+const repoSlug = process.env.GITHUB_REPOSITORY;
+const runId = process.env.GITHUB_RUN_ID;
+const logsUrl = serverUrl && repoSlug && runId ? `${serverUrl}/${repoSlug}/actions/runs/${runId}` : null;
+
 const out = ['## Bench results', ''];
 out.push(
 	'| Task | Template | Verdict | Tests | Build | Judge | Composite | Stop reason |',
@@ -128,6 +137,12 @@ for (const r of cells.slice().sort(byTask)) {
 	);
 }
 out.push('');
+if (logsUrl) {
+	out.push(
+		`📦 Per-cell source & full agent traces (tool calls, tokens): see this run's Artifacts — \`bench-source-<task>-<template>\`, \`bench-trace-<task>-<template>\` → [run artifacts](${logsUrl})`,
+		'',
+	);
+}
 
 // ── Harness-error section (excluded from the headline & the gate) ────────────
 if (harnessErrors.length > 0) {
@@ -265,14 +280,11 @@ if (compositeCells.length > 0) {
 // ── Footer: when the bench last ran + a deep-link back to the workflow run ────
 // Uses the default GitHub Actions env vars (always set inside a workflow step)
 // so the run summary shows the last-run time and links straight to these logs.
-// The timestamp prefers GitHub's run start time when exported, else falls back
-// to render time (both UTC, ISO 8601).
-const serverUrl = process.env.GITHUB_SERVER_URL;
-const repoSlug = process.env.GITHUB_REPOSITORY;
-const runId = process.env.GITHUB_RUN_ID;
-if (serverUrl && repoSlug && runId) {
+// serverUrl / repoSlug / runId / logsUrl are hoisted above the table (the
+// artifacts pointer reuses them). The timestamp prefers GitHub's run start time
+// when exported, else falls back to render time (both UTC, ISO 8601).
+if (logsUrl) {
 	const lastRun = (process.env.GITHUB_RUN_STARTED_AT || new Date().toISOString()).replace(/\.\d{3}Z$/, 'Z');
-	const logsUrl = `${serverUrl}/${repoSlug}/actions/runs/${runId}`;
 	out.push('');
 	out.push(`🕒 Last run: ${lastRun} · [run #${runId}](${logsUrl})`);
 }
@@ -324,7 +336,7 @@ if (cells.length > 0) {
 		const exact =
 			baseline.sha && baseSha && (baseline.sha === baseSha || baseline.sha.startsWith(baseSha) || baseSha.startsWith(baseline.sha));
 		const src = exact ? `base ${baseLabel}` : `latest \`main\` ${baseLabel} (PR base not benched)`;
-		note = `Per-cell composite **delta** vs ${src}. ▲ better · ▼ worse · = unchanged · 🆕 new cell.`;
+		note = `Per-cell composite **delta** vs ${src}. ▲ better · ▼ worse · ≈ within ±5 (likely noise) · 🆕 new cell.`;
 	} else if (benchEvent === 'push') {
 		heading = '## Overview — baseline run';
 		note = `Baseline run (push to \`main\`): these composites are recorded as the baseline for \`${benchSha.slice(0, 7) || '(unknown)'}\`. No earlier baseline to diff against.`;
@@ -344,6 +356,45 @@ if (process.env.AGGREGATE_PATH && cells.length > 0) {
 		writeFileSync(process.env.AGGREGATE_PATH, `${JSON.stringify(aggregate, null, 2)}\n`);
 	} catch (err) {
 		process.stderr.write(`[summary] failed to write aggregate to ${process.env.AGGREGATE_PATH}: ${err?.message ?? err}\n`);
+	}
+}
+
+// ── Athena NDJSON (one flat line per SCORED cell) ────────────────────────────
+// Emit a newline-delimited-JSON file the workflow uploads to a date-partitioned
+// Athena prefix (bench/athena/year=YYYY/month=MM/<sha-short>.json), so bench
+// history is queryable without parsing per-cell result.json blobs. One line per
+// scored cell (same inclusion rule as the headline mean); each line is a FLAT
+// record — no nested objects — so it maps cleanly to Athena columns. Best-effort:
+// warn and carry on if the write fails, never fail the summary job. The S3 upload
+// (and the partition key) live in the workflow step; here we only write the file.
+if (process.env.ATHENA_NDJSON_PATH) {
+	try {
+		const scored = dataCells.filter((c) => isScoredCell(c));
+		const ndjson = scored
+			.map((r) =>
+				JSON.stringify({
+					sha: benchSha || null,
+					timestamp: aggregate.generated_at,
+					event: benchEvent || null,
+					pr_number: (process.env.PR_NUMBER ?? '').trim() || null,
+					task: r.task ?? null,
+					template: r.template ?? null,
+					composite: compositeOf(r),
+					test_rate: Math.round(testRate(testStats(r)) * 1000) / 1000,
+					judge_score: typeof r.judge_score === 'number' ? r.judge_score : null,
+					verdict: verdictOf(r),
+					klass: r.klass ?? null,
+					tokens_in: typeof r.tokens_in === 'number' ? r.tokens_in : null,
+					tokens_out: typeof r.tokens_out === 'number' ? r.tokens_out : null,
+					duration_sec: typeof r.duration_sec === 'number' ? r.duration_sec : null,
+				}),
+			)
+			.join('\n');
+		// Only write when there's at least one scored cell — an empty NDJSON file
+		// would upload a 0-row partition object for no reason.
+		if (scored.length > 0) writeFileSync(process.env.ATHENA_NDJSON_PATH, `${ndjson}\n`);
+	} catch (err) {
+		process.stderr.write(`[summary] failed to write Athena NDJSON to ${process.env.ATHENA_NDJSON_PATH}: ${err?.message ?? err}\n`);
 	}
 }
 

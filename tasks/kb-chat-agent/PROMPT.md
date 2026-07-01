@@ -4,9 +4,9 @@ Build a chat assistant in this AWS Blocks app. A user types a question; an AI **
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded and the dev server is running; its port is in `/tmp/dev.port`. Begin by reading `README.md` and `AGENTS.md`, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading `README.md` and `AGENTS.md`, then do all your edits in this workspace.
 
-This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.html` + `src/index.ts`) on port 3000, with the backend wired in `aws-blocks/index.ts`. The frontend imports the backend with `import { api } from 'aws-blocks'`; you call typed methods on it and the JSON-RPC transport is invisible. Replace the template's placeholder demo (todos / KV / cookies) with your chat UI.
+This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.html` + `src/index.ts`), with the backend wired in `aws-blocks/index.ts`. The frontend imports the backend with `import { api } from 'aws-blocks'`; you call typed methods on it and the JSON-RPC transport is invisible. Replace the template's placeholder demo (todos / KV / cookies) with your chat UI.
 
 ## Requirements
 
@@ -23,7 +23,7 @@ This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.htm
 ### Agent + tools
 3. Wire an **agent block** whose deployed model is Amazon Bedrock with the Claude Sonnet 4.6 inference profile — model id exactly **`us.anthropic.claude-sonnet-4-6`**. (Locally a keyword-driven mock stands in for Bedrock automatically; you do not need AWS credentials to run the dev server.)
 4. The agent must expose **exactly two tools**, named **exactly** `searchKnowledgeBase` and `lookupOrderStatus` (the grader's questions are phrased to invoke them by name):
-   - **`searchKnowledgeBase`** — takes a search query and returns matching passages from the knowledge base (each hit's text and its source document). **Treat an empty or missing query as a broad lookup** — default it to `'sample'` — so the tool still returns the seeded passage. The knowledge base may still be ingesting when the first question arrives: the agent must **not** crash or answer without it — wait for the knowledge base to become ready and retry until retrieval succeeds.
+   - **`searchKnowledgeBase`** — takes a search query and returns matching passages from the knowledge base (each hit's text and its source document). **Treat an empty or missing query as a broad lookup** — default it to `'sample'` — so the tool still returns the seeded passage.
    - **`lookupOrderStatus`** — returns a **fixed, deterministic** result regardless of its input: `{ status: 'shipped', trackingCode: 'TRK-9F42-OK' }`. (A real implementation would look the order up; for this task a constant is required so the result is checkable.)
 5. The agent's system prompt must steer it to call `searchKnowledgeBase` for product / returns / refund questions and `lookupOrderStatus` for order / shipping / tracking questions, and to answer **only** from what those tools return.
 
@@ -35,9 +35,7 @@ A single shared assistant — no login.
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. **Read the agent block's and the knowledge-base block's docs before wiring, and use only the APIs documented there** — including how to run a chat turn end to end, how to tell which tools ran and which sources they cited, and how retrieval signals that it is not ready yet.
-
-The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. **Read the agent block's and the knowledge-base block's docs before wiring, and use only the APIs documented there** — including how to run a chat turn end to end, and how to tell which tools ran and which sources they cited.
 
 ## Selector contract
 
