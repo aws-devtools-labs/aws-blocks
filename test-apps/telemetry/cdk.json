@@ -1,0 +1,3 @@
+{
+  "app": "npx tsx aws-blocks/index.ts"
+}
