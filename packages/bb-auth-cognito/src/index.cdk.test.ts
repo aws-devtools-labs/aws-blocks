@@ -536,3 +536,78 @@ describe('AuthCognito (CDK) — enablePasskeys', () => {
 		}
 	});
 });
+
+// ─── Admin surface IAM grant (opt-in) ─────────────────────────────────────────
+
+/** Collect every cognito-idp IAM action granted to any role in the template. */
+function grantedActions(template: Template): Set<string> {
+	const policies = template.findResources('AWS::IAM::Policy');
+	const statements = Object.values(policies).flatMap(
+		(p) => ((p as { Properties?: { PolicyDocument?: { Statement?: unknown[] } } })
+			.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[],
+	);
+	const flat = new Set<string>();
+	for (const s of statements) {
+		const actions = Array.isArray(s.Action) ? s.Action : s.Action ? [s.Action] : [];
+		for (const a of actions) if (typeof a === 'string') flat.add(a);
+	}
+	return flat;
+}
+
+const GROUP_ADMIN_ACTIONS = [
+	'cognito-idp:AdminAddUserToGroup',
+	'cognito-idp:AdminRemoveUserFromGroup',
+	'cognito-idp:AdminListGroupsForUser',
+	'cognito-idp:ListUsersInGroup',
+];
+const LIFECYCLE_ADMIN_ACTIONS = [
+	'cognito-idp:AdminCreateUser',
+	'cognito-idp:AdminDeleteUser',
+	'cognito-idp:AdminEnableUser',
+	'cognito-idp:AdminDisableUser',
+	'cognito-idp:AdminResetUserPassword',
+	'cognito-idp:AdminSetUserPassword',
+	'cognito-idp:AdminGetUser',
+	'cognito-idp:ListUsers',
+	'cognito-idp:AdminUserGlobalSignOut',
+];
+
+describe('AuthCognito (CDK) — admin IAM grant', () => {
+	test('no admin option → NO Admin* actions granted (least privilege)', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'] });
+		});
+		const actions = grantedActions(template);
+		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			assert.ok(!actions.has(a), `unexpected admin action granted without opt-in: ${a}`);
+		}
+	});
+
+	test("admin: {} (no actions) → grants both group + lifecycle actions", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: {} });
+		});
+		const actions = grantedActions(template);
+		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			assert.ok(actions.has(a), `missing admin action ${a}`);
+		}
+	});
+
+	test("actions: ['groups'] → grants group actions only", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['groups'] } });
+		});
+		const actions = grantedActions(template);
+		for (const a of GROUP_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing group action ${a}`);
+		for (const a of LIFECYCLE_ADMIN_ACTIONS) assert.ok(!actions.has(a), `unexpected lifecycle action ${a}`);
+	});
+
+	test("actions: ['lifecycle'] → grants lifecycle actions only", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		});
+		const actions = grantedActions(template);
+		for (const a of LIFECYCLE_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing lifecycle action ${a}`);
+		for (const a of GROUP_ADMIN_ACTIONS) assert.ok(!actions.has(a), `unexpected group action ${a}`);
+	});
+});

@@ -238,7 +238,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async cognitoRequireRole(role: string) {
-    return await authCognito.requireRole(context, role);
+    // `const O` narrowed requireRole's param to the pool's group union; narrow
+    // the wire string at the boundary (runtime validates membership).
+    return await authCognito.requireRole(context, role as Parameters<typeof authCognito.requireRole>[1]);
   },
 
   async cognitoFetchUserAttributes() {

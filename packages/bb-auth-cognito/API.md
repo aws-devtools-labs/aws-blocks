@@ -12,6 +12,45 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
+// @public
+export interface AdminCreateInit {
+    attributes?: Record<string, string>;
+    suppressInvite?: boolean;
+    temporaryPassword?: string;
+}
+
+// @public
+export type AdminDisabled = {
+    readonly __adminNotEnabled: 'construct AuthCognito with { admin: {} }';
+};
+
+// @public
+export type AdminGetterOf<O extends AuthCognitoOptions> = O extends {
+    admin: object;
+} ? AdminSurface<O> : AdminDisabled;
+
+// @public
+export interface AdminOptions {
+    actions?: readonly ('groups' | 'lifecycle')[];
+}
+
+// @public
+export type AdminSurface<O extends AuthCognitoOptions = AuthCognitoOptions> = GroupAdmin<O> & LifecycleAdmin<O>;
+
+// @public
+export interface AdminUser {
+    // (undocumented)
+    attributes: Record<string, string>;
+    // (undocumented)
+    enabled: boolean;
+    // (undocumented)
+    groups?: string[];
+    // (undocumented)
+    username: string;
+    // (undocumented)
+    userSub: string;
+}
+
 // Warning: (ae-incompatible-release-tags) The symbol "AttrOf" is marked as @public, but its signature references "CustomAttrNames" which is marked as @internal
 //
 // @public
@@ -20,8 +59,9 @@ export type AttrOf<O extends AuthCognitoOptions> = O extends {
 } ? StandardUserAttributeKey | CustomAttrNames<O> | `custom:${CustomAttrNames<O>}` : string;
 
 // @public
-export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptions> extends Scope implements BlocksAuth {
+export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMockOptions> extends Scope implements BlocksAuth {
     constructor(scope: ScopeParent, id: string, options?: O);
+    get admin(): AdminGetterOf<O>;
     autoSignIn(context: BlocksContext): Promise<SignInResult<O>>;
     checkAuth(context: BlocksContext): Promise<boolean>;
     completePasskeyRegistration(context: BlocksContext, credential: string): Promise<CompletePasskeyRegistrationResult>;
@@ -114,6 +154,7 @@ export interface AuthCognitoMockOptions extends AuthCognitoOptions {
 
 // @public
 export interface AuthCognitoOptions {
+    admin?: AdminOptions;
     authFlowType?: AuthFlowType;
     crossDomain?: boolean;
     deviceTracking?: {
@@ -271,6 +312,18 @@ export interface FetchAuthSessionOptions {
 }
 
 // @public
+export interface GroupAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    // (undocumented)
+    addUserToGroup(username: string, group: GroupOf<O>): Promise<void>;
+    // (undocumented)
+    listGroupsForUser(username: string): Promise<GroupOf<O>[]>;
+    // (undocumented)
+    listUsersInGroup(group: GroupOf<O>): Promise<AdminUser[]>;
+    // (undocumented)
+    removeUserFromGroup(username: string, group: GroupOf<O>): Promise<void>;
+}
+
+// @public
 export type GroupOf<O extends AuthCognitoOptions> = O extends {
     groups: readonly [unknown, ...unknown[]];
 } ? O extends {
@@ -290,6 +343,28 @@ export interface JWT {
     payload: Record<string, unknown>;
     // (undocumented)
     toString(): string;
+}
+
+// @public
+export interface LifecycleAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    // (undocumented)
+    createUser(username: string, init?: AdminCreateInit): Promise<AdminUser>;
+    // (undocumented)
+    deleteUser(username: string): Promise<void>;
+    // (undocumented)
+    disableUser(username: string): Promise<void>;
+    // (undocumented)
+    enableUser(username: string): Promise<void>;
+    // (undocumented)
+    getUser(username: string): Promise<AdminUser | null>;
+    // (undocumented)
+    resetUserPassword(username: string): Promise<void>;
+    // (undocumented)
+    revokeUserSessions(username: string): Promise<void>;
+    // (undocumented)
+    scan(): AsyncIterable<AdminUser>;
+    // (undocumented)
+    setUserPassword(username: string, password: string, permanent: boolean): Promise<void>;
 }
 
 // @public
@@ -376,6 +451,7 @@ export interface SessionRecord {
 export class SessionStore {
     constructor(scope: ScopeParent, id?: string);
     createSession(record: SessionRecord): Promise<string>;
+    deleteByUsername(username: string): Promise<number>;
     deleteSession(sessionId: string): Promise<void>;
     lookupSession(sessionId: string): Promise<SessionRecord | null>;
     // (undocumented)

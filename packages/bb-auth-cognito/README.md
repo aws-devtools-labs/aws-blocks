@@ -151,6 +151,51 @@ Requires `enablePasskeys: true` and a WebAuthn-configured pool (`webAuthnRelying
 | `listPasskeys(context)` | `Promise<PasskeyDescription[]>` | List the signed-in user's registered passkeys (paginates internally). |
 | `deletePasskey(context, credentialId)` | `Promise<void>` | Remove a registered passkey by `credentialId`. |
 
+## Admin surface (`auth.admin`)
+
+Server-side admin operations — group membership and user lifecycle — that act on **any** user by `username` (unlike the client methods above, which act on the signed-in user via `context`). These are **opt-in**: pass an `admin` options object to enable the `auth.admin` handle and grant the matching `Admin*` / `List*` IAM. A pool that never opts in has no admin grant — its synthesized role is identical to today.
+
+```typescript
+const auth = new AuthCognito(scope, 'auth', {
+  groups: ['admins'],
+  admin: { actions: ['groups'] },   // enable auth.admin; grant only group Admin* actions
+});
+
+// Always gate admin routes behind requireRole — these methods do NOT self-gate.
+await auth.requireRole(ctx, 'admins');
+await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via GroupOf<O>
+```
+
+- **Compile-time gate.** Without an `admin` options object, `auth.admin` is typed `AdminDisabled` and any access is a compile error whose message names the fix (`construct AuthCognito with { admin: {} }`). The getter also throws at runtime for untyped JS callers.
+- **`actions` scopes the IAM grant, not the method set.** `actions: ['groups']` grants only the group `Admin*` actions; `['lifecycle']` only the user-lifecycle actions; omitted grants both. The **typed surface is always the full set** — narrowing the method types by `actions` is not possible without breaking `AuthCognito<O>` variance, so calling a method whose action wasn't granted fails at runtime with an IAM `AccessDenied`.
+- **Not an access boundary.** Like every block on the shared backend Lambda, client and admin run under one role. Separation is by API surface + lint, not IAM — gate every admin route with `requireRole`.
+
+**Group membership** (`actions: 'groups'`):
+
+| Method | Returns | Description |
+|---|---|---|
+| `admin.addUserToGroup(username, group)` | `Promise<void>` | Add a user to a seeded group. `group` narrows to `GroupOf<O>`. Throws `GroupNotFound` for an unseeded group, `UserNotFound` for a missing user. |
+| `admin.removeUserFromGroup(username, group)` | `Promise<void>` | Remove a user from a group. |
+| `admin.listGroupsForUser(username)` | `Promise<GroupOf<O>[]>` | Groups the user belongs to. |
+| `admin.listUsersInGroup(group)` | `Promise<AdminUser[]>` | Members of a group (paginates internally). |
+
+**User lifecycle** (`actions: 'lifecycle'`):
+
+| Method | Returns | Description |
+|---|---|---|
+| `admin.createUser(username, init?)` | `Promise<AdminUser>` | Create a user. `init`: `{ temporaryPassword?, attributes?, suppressInvite? }`. Conflicts with `UserAlreadyExists`. |
+| `admin.deleteUser(username)` | `Promise<void>` | Delete a user (also strips them from every group). |
+| `admin.disableUser(username)` / `admin.enableUser(username)` | `Promise<void>` | Toggle sign-in. A disabled user's `signIn` is rejected with `NotAuthorizedException`. |
+| `admin.resetUserPassword(username)` | `Promise<void>` | Force the user to set a new password on next sign-in. |
+| `admin.setUserPassword(username, password, permanent)` | `Promise<void>` | Set a password. `permanent: true` clears the force-change flag. |
+| `admin.getUser(username)` | `Promise<AdminUser \| null>` | Look up a user, or `null` if absent. |
+| `admin.scan()` | `AsyncIterable<AdminUser>` | Enumerate all users (paginates internally). |
+| `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke the user's refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: delete session records). New tokens can no longer be minted; see the session-freshness note for when this takes effect. |
+
+> **Session freshness.** A group change does not affect a user's **existing** session until their token refreshes — `requireRole` reads the `cognito:groups` claim, not live state. This is inherent Cognito behavior. The change applies on the next sign-in or `fetchAuthSession({ forceRefresh: true })`.
+>
+> `admin.revokeUserSessions(username)` revokes the user's **refresh tokens** so no new access tokens can be minted, but it does **not** invalidate an already-issued access token — a Blocks session whose access token is still valid keeps passing `checkAuth` / `requireAuth` until that token expires (verified against live Cognito). It is not an instant kill-switch on AWS. (The mock deletes the session record outright, so it *does* flip immediately there — a known mock-vs-AWS parity difference.) For a hard cap, lower `sessionTtlSeconds` / the access-token validity.
+
 ## Options
 
 ```typescript
@@ -206,7 +251,15 @@ The `signInWith` option controls what end users sign in with. It maps to Cognito
 
 ## Using AuthCognito generically (literal-narrowing with `as const`)
 
-`AuthCognito<O extends AuthCognitoOptions>` is generic on its options literal. When you pass the options object `as const`, TypeScript narrows method signatures to the exact values you configured — typos on group names, custom attributes, and MFA factors become compile errors instead of runtime surprises.
+`AuthCognito<const O extends AuthCognitoOptions>` is generic on its options literal. Because the generic is a **`const` type parameter**, TypeScript narrows method signatures to the exact values you configured for **options passed inline** — typos on group names, custom attributes, and MFA factors become compile errors instead of runtime surprises, with no `as const` needed:
+
+```typescript
+const auth = new AuthCognito(scope, 'auth', { groups: ['admins', 'readers'] });
+await auth.requireRole(ctx, 'admins');   // ✅ narrowed inline — no `as const`
+await auth.requireRole(ctx, 'admin');    // ❌ compile error (typo)
+```
+
+For an options object **declared separately** in a variable, add `as const` so its literals don't widen before reaching the constructor. The example below uses `as const` for that reason; the narrowing it produces is identical.
 
 ```typescript
 const options = {
