@@ -73,9 +73,12 @@ const agent = new Agent(scope, 'assistant', {
   }),
 });
 
-// One simple way to drive a turn from a backend method: create a conversation,
-// stream the message, await completion, then read the history to see which
-// tools ran and which sources they cited.
+// Recommended: drive each chat turn from ONE backend method (call it `ask`).
+// It creates a conversation, runs a single turn with agent.stream(...).complete(),
+// then reads agent.getConversation(...) to see which tools ran and which sources
+// they cited — returning the answer, tool calls and citations in ONE call the
+// frontend awaits. Note: there is no agent.ask() and no client ask() method;
+// `ask` is simply the ApiNamespace method you define below.
 export const api = new ApiNamespace(scope, 'api', (_context) => ({
   async ask(question: string) {
     const conversationId = await agent.createConversationId('demo-user');
@@ -88,7 +91,9 @@ export const api = new ApiNamespace(scope, 'api', (_context) => ({
 }));
 ```
 
-You may instead stream tokens to the UI with the agent block's framework-agnostic client hook `useChat` — it is **not** re-exported from `@aws-blocks/blocks`; import it from the bb-agent client subpath: `import { useChat } from '@aws-blocks/bb-agent/client'` — driven by its Realtime channel. Either approach is fine, as long as the rendered transcript, tool indicator and citation match the contract below.
+**Recommended: use the backend `ask` method shown above (`agent.stream(...).complete()` + `agent.getConversation(...)`) for the chat round-trip, and call `api.ask(question)` once per turn from the frontend.** It returns the answer plus the tool calls and cited sources in a single request→response call, which maps directly to the transcript / tool-indicator / citation contract below. Commit to this approach and build it end to end — do **not** redesign the frontend mid-build.
+
+**Optional (advanced — streaming only):** if you specifically want live token-by-token streaming, the agent block also ships a framework-agnostic client hook `useChat` — **not** re-exported from `@aws-blocks/blocks`; import it from the bb-agent client subpath: `import { useChat } from '@aws-blocks/bb-agent/client'` — driven by its Realtime channel. It is strictly more work for this task: it surfaces only `user`/`assistant`/`approval` messages and filters out the `tool-call`/`tool-result` records, so you would still call `agent.getConversation(...)` to render the tool indicator and citation. Prefer `ask` unless streaming is a hard requirement — it is not (streaming is out of scope below). Whichever you pick, the rendered transcript, tool indicator and citation must match the contract below.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 

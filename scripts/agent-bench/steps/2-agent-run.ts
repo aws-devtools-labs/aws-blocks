@@ -23,9 +23,11 @@ const TEMPLATE = required('TEMPLATE');
 const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-sonnet-4-6';
 // Backstop against runaway tool-call loops (v1's long prompts caused
 // over-iteration). The Strands TS SDK enforces this per-invocation; hitting it
-// yields stopReason 'limitTurns'. The 35-min wall-clock timeout in the workflow
-// is the other bound. One turn = one model call plus any tool calls it makes.
-const MAX_TURNS = 80;
+// yields stopReason 'limitTurns'. This is only a runaway-loop backstop: the real
+// bound is the 35-min wall-clock timeout in the workflow, which prior runs used
+// only ~20% of, so 120 leaves ample headroom for a full build without risking a
+// runaway. One turn = one model call plus any tool calls it makes.
+const MAX_TURNS = 120;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
