@@ -34,7 +34,7 @@
     "vite": "^5.0.0",
     "tsx": "^4.7.0",
     "concurrently": "^8.2.0",
-    "esbuild": "^0.27.1",
+    "esbuild": "^0.28.1",
     "aws-cdk-lib": "2.257.0",
     "constructs": "^10.6.0"
   }
