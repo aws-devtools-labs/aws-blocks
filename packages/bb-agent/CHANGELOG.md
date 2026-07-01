@@ -1,5 +1,13 @@
 # @aws-blocks/bb-agent
 
+## 0.2.1
+
+### Patch Changes
+
+- c6ba244: fix(bb-agent): add toJSON() to AgentStreamResult
+
+  `AgentStreamResult` now serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`; it is now explicitly `null` to signal it is server-side only.
+
 ## 0.2.0
 
 ### Minor Changes
