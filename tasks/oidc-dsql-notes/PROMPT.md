@@ -2,7 +2,7 @@
 
 Build a personal notes app gated by OIDC sign-in. A visitor signs in through an OIDC provider, then creates notes that belong to them and persist in a distributed SQL database across reloads.
 
-> **Block naming:** the SQL-over-DSQL block is exported as **`DistributedDatabase`** (from `@aws-blocks/blocks`). The task is named `oidc-dsql-notes` for the DSQL engine it runs on, but in code the class is `DistributedDatabase` — there is no `DsqlDatabase` export.
+> **Block naming:** the SQL-over-DSQL block is the one exported as **`DistributedDatabase`**. The task is named `oidc-dsql-notes` for the DSQL engine it runs on, but in code the class is `DistributedDatabase` — there is no `DsqlDatabase` export. Check the block's README for its exact export name.
 
 ## Setup (do this first)
 
@@ -13,10 +13,10 @@ This is the `react` template — a React single-page app (frontend entry `src/ma
 ## Requirements
 
 1. **OIDC sign-in.** A signed-out visitor sees a single sign-in button; once signed in, a cookie session is established and the profile + note editor appear.
-   - Use the auth block's **`stubIdp()`** provider for zero-config local sign-in, and **name the provider exactly `stub`**: `stubIdp({ name: 'stub', onAuthorize: (req) => req.users[0] })`. The `onAuthorize` callback auto-approves the first user (the stub otherwise shows an interactive account picker).
-   - **Simplest, most robust sign-in — a server-initiated redirect.** Make the sign-in button navigate the browser to the block's signin route, **`/aws-blocks/auth/signin/stub`** (an `<a href>` or `location.assign(...)`). That route runs the whole flow through server-side redirects (signin → stub authorize, auto-approved → callback sets the session cookie → back to `/`) and lands the visitor on the app already signed in. No client-side PKCE / `handleRedirectCallback` wiring is required for this path.
+   - Use the auth block's **stub OIDC provider** for zero-config local sign-in, and **name the provider exactly `stub`**. Configure it to auto-approve the first user, so sign-in needs no interactive account picker.
+   - **Simplest, most robust sign-in — a server-initiated redirect.** Make the sign-in button navigate the browser to the block's signin route, **`/aws-blocks/auth/signin/stub`**. That route runs the whole flow through server-side redirects (signin → stub authorize, auto-approved → callback sets the session cookie → back to `/`) and lands the visitor on the app already signed in. No client-side PKCE / redirect-callback wiring is required for this path.
    - **Same origin — use relative paths, don't hardcode a backend port.** The SPA and the block's `/aws-blocks/*` backend routes are served from the **same origin** the browser loaded the app on (the dev front door whose port is in `/tmp/dev.port`). Use **same-origin relative paths** like `/aws-blocks/auth/signin/stub` — never an absolute `http://localhost:<port>` with a separate backend port. The server-redirect lands back on `/`, where your on-load session hydration renders the signed-in view.
-   - On load, **restore the session from the cookie** and render the signed-in view — this is what surfaces the profile once the redirect lands on `/`, and what keeps the visitor signed in across reloads (requirement 4). `onAuthChange(authApi, (user) => …)` (from `@aws-blocks/auth-common/ui`) hydrates the current user from the session on load and on every change.
+   - On load, **restore the session from the cookie** and render the signed-in view — this is what surfaces the profile once the redirect lands on `/`, and what keeps the visitor signed in across reloads (requirement 4). Use the auth block's documented client/session API to hydrate the current user from the session on load and on every change.
 2. **Profile.** Once signed in, show the signed-in user's stable subject id (e.g. the OIDC `userId`) in `[data-testid=profile-sub]`, and hide the sign-in button.
 3. **Notes in DistributedDatabase.** A signed-in user can type a note and add it. Notes are stored in a **`DistributedDatabase`** table (create a `.sql` migration under `aws-blocks/dsql-migrations/`), scoped to the current user, and each note renders in the list.
    - Store and display note text **verbatim** — including long notes and unicode / emoji: use **parameterized** SQL (so a note containing a single quote like `' OR '1'='1` round-trips intact rather than breaking the query), and render the text as **text content**, never as HTML (`<b>x</b>` must show literally, not become a real element).
@@ -27,45 +27,9 @@ This is the `react` template — a React single-page app (frontend entry `src/ma
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the OIDC auth block's README (especially the **`stubIdp()`** provider and the **signin route** `/aws-blocks/auth/signin/<provider>`) and the distributed-database block's README before wiring.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the OIDC auth block's README (especially the **stub provider** and the **signin route** `/aws-blocks/auth/signin/<provider>`) and the distributed-database block's README before wiring, and use only the APIs documented there — including how to require an authenticated user in a backend method, how to hydrate the current user on the client, how to run a migration, and how to run a parameterized query.
 
-Shapes you'll use (read the READMEs for exact options):
-
-```ts
-// backend — aws-blocks/index.ts
-import { ApiNamespace, Scope, AuthOIDC, stubIdp, DistributedDatabase, sql } from '@aws-blocks/blocks';
-
-const scope = new Scope('my-app');
-const auth = new AuthOIDC(scope, 'auth', {
-  providers: [stubIdp({ name: 'stub', onAuthorize: (req) => req.users[0] })],
-});
-export const authApi = auth.createApi();
-
-const db = new DistributedDatabase(scope, 'main', { migrationsPath: './aws-blocks/dsql-migrations' });
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async addNote(text: string) { const u = await auth.requireAuth(context); /* INSERT scoped to u.userId */ },
-  async listNotes() { const u = await auth.requireAuth(context); /* SELECT WHERE owner = u.userId */ },
-}));
-```
-
-On the frontend, import the browser-only auth helpers from `@aws-blocks/auth-common/ui` (these are client APIs — keep them out of the backend `aws-blocks/index.ts`):
-
-```ts
-// frontend — e.g. src/App.tsx (browser only)
-import { onAuthChange } from '@aws-blocks/auth-common/ui';
-import { authApi } from 'aws-blocks';
-
-// Fires with the current user on load and on every change — use it to flip
-// between the signed-out and signed-in views and to restore the session after a reload.
-onAuthChange(authApi, (user) => { /* render signed-out vs signed-in */ });
-
-// Sign-in: a server-initiated redirect through the block's signin route. The browser
-// navigates here, the server runs the whole flow via 302s (signin → authorize →
-// callback sets the session cookie → back to `/`), and the visitor lands on `/`
-// already signed in — onAuthChange then fires with the user. No client PKCE needed.
-signinBtn.onclick = () => location.assign('/aws-blocks/auth/signin/stub');
-```
+Keep the browser-only auth helpers on the frontend and the block wiring in the backend `aws-blocks/index.ts`; the auth block's README shows which import path each lives under.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
@@ -89,7 +53,7 @@ The mount point is the existing root element. Replace the template's todo UI.
 
 ## Out of scope
 
-- Real OIDC providers / credentials (use `stubIdp()` locally), refresh-token UX, multi-provider pickers
+- Real OIDC providers / credentials (use the stub provider locally), refresh-token UX, multi-provider pickers
 - Editing / deleting / sharing notes, rich text
 - Realtime sync between tabs (you're removing the Realtime block)
 - Styling beyond what makes the test pass

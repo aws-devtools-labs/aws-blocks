@@ -22,15 +22,15 @@ This is email-OTP / passwordless: the visitor never types a password. One identi
 
 The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the relevant ones before wiring.
 
-This template already ships a Cognito-backed auth block configured for **passwordless email-OTP** (`USER_AUTH` + `EMAIL_OTP`, `signInWith: 'email'`, self sign-up enabled). It also wires a `codeDelivery` hook that captures the OTP locally (no real mailbox) and exposes it through a `getLastCode()` API method. Read the template's `aws-blocks/index.ts`, its README, and `node_modules/@aws-blocks/bb-auth-cognito/README.md` to see the exact sign-up → confirm → session flow (sign-up confirmation auto-bridges into a signed-in session, so a single emailed code is enough).
+This template already ships a Cognito-backed auth block configured for **passwordless email-OTP**. It also wires a hook that captures the delivered OTP locally (no real mailbox) and exposes it through a `getLastCode()` API method. Read the template's `aws-blocks/index.ts`, its README, and the Cognito auth block's README to see the exact sign-up → confirm → session flow (sign-up confirmation auto-bridges into a signed-in session, so a single emailed code is enough), and use only the APIs documented there.
 
-You own the page UI: replace the template's `<Authenticator>`-based demo with a custom two-step form that uses the selector contract below. Drive it through the auth block (its sign-up / confirm / sign-in methods, or the state-machine API the block exposes) — whatever wiring lands a session and lets you read back the current user.
+You own the page UI: replace the template's demo with a custom two-step form that uses the selector contract below. Drive it through the auth block's documented sign-up / confirm / sign-in API (or the state-machine API the block exposes) — whatever wiring lands a session and lets you read back the current user.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
 ## Test harness contract (required)
 
-The grader has no mailbox, so it reads the OTP the same way the template's UI does — over JSON-RPC. **Keep an `api` namespace that exposes `getLastCode()`**, wired from the `codeDelivery` hook, returning the most recently delivered code as `{ username, code }` (or `null`). The grader retrieves it by POSTing to `/aws-blocks/api`:
+The grader has no mailbox, so it reads the OTP the same way the template's UI does — over JSON-RPC. **Keep an `api` namespace that exposes `getLastCode()`**, wired from the block's code-delivery hook, returning the most recently delivered code as `{ username, code }` (or `null`). The grader retrieves it by POSTing to `/aws-blocks/api`:
 
 ```
 POST /aws-blocks/api

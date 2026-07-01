@@ -10,9 +10,9 @@ This is the `demo` template (vanilla-TS frontend in `src/index.ts`, port 3000). 
 
 ## Requirements
 
-1. **A scheduled job is declared.** Wire a cron-job block on a real schedule (e.g. `schedule: 'rate(1 hour)'`). Its handler runs the digest. **The schedule must be declared even though the test triggers manually** — it proves the recurring wiring exists.
+1. **A scheduled job is declared.** Wire a cron-job block on a real recurring schedule (e.g. once an hour). Its handler runs the digest. **The schedule must be declared even though the test triggers manually** — it proves the recurring wiring exists.
 2. **Shared digest logic + manual trigger.** The cron-job block has **no manual `submit()`/run method**, so factor the digest work into a plain function and call it from *both* the cron handler **and** an exposed API method named so the UI can run it on demand (e.g. `triggerDigest()`).
-3. **Sending email.** The digest sends an email via the email-client block (`send({ to, subject, body })`). Locally this is a mock — it logs the message and writes it to `.bb-data/.../emails.json`; no real mailbox or SES setup is needed. Give the client a `fromAddress` and pick a recipient for the digest.
+3. **Sending email.** The digest sends an email via the email-client block. Locally this is a mock — it logs the message and writes it to `.bb-data/.../emails.json`; no real mailbox or SES setup is needed. Give the client a sender address and pick a recipient for the digest.
 4. **Cache last-sent metadata.** After sending, store the last-sent metadata in the key/value store block as structured JSON with at least a **recipient** (`to`) and a fresh **ISO timestamp** (`at`, e.g. `new Date().toISOString()`).
 5. **UI.** Show the last-sent info in `[data-testid=last-email]` and a `[data-testid=trigger-btn]` button. Clicking the button runs the digest (the manual trigger), then refreshes the displayed last-sent info. After a successful trigger, `[data-testid=last-email]` must read like **`sent to <recipient> at <time>`** — it must contain the phrase **`sent to`**, the actual recipient **email address**, and a **time**.
 6. **Structured read-back + persistence.** Expose an API method `getLastDigest()` that returns the stored record as **exactly** `{ to, at }` — those two fields **only** (recipient string + ISO timestamp), reading it back from the key/value store. `at` must be a canonical **ISO-8601** instant (`new Date().toISOString()` — not a locale string or an epoch number). The displayed recipient and timestamp must survive a full page reload (re-read from the store on load).
@@ -20,34 +20,9 @@ This is the `demo` template (vanilla-TS frontend in `src/index.ts`, port 3000). 
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the cron-job and email-client block READMEs (and the key/value store one) before wiring.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the cron-job and email-client block READMEs (and the key/value store one) before wiring, and use only the APIs documented there — including how a cron handler is registered, how to send an email, and how to read/write the key/value store.
 
-Shape you'll build (read the READMEs for exact options):
-
-```ts
-import { ApiNamespace, Scope, KVStore, CronJob, EmailClient } from '@aws-blocks/blocks';
-
-const scope = new Scope('my-app');
-const store = new KVStore(scope, 'app-store', {});
-const email = new EmailClient(scope, 'digest-mail', { fromAddress: 'noreply@example.com' });
-
-// Shared logic — called by the cron handler AND the manual trigger(s).
-async function runDigest(to = 'subscriber@example.com') {
-  await email.send({ to, subject: 'Your digest', body: '…' });
-  await store.put('last-digest', JSON.stringify({ to, at: new Date().toISOString() }));
-  return { to };
-}
-
-new CronJob(scope, 'digest', { schedule: 'rate(1 hour)', handler: async () => { await runDigest(); } });
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async triggerDigest() { return runDigest(); },
-  // Parameterized variant — VALIDATE `to` first (reject missing/blank/malformed
-  // with a thrown error), then share runDigest(to). See requirement 7.
-  async triggerDigestTo(to) { /* validate `to`, then: */ return runDigest(to); },
-  async getLastDigest() { const v = await store.get('last-digest'); return v ? JSON.parse(v) : null; },
-}));
-```
+Factor the digest into one shared function and call it from the cron handler, from `triggerDigest()`, and from `triggerDigestTo(to)`; expose `getLastDigest()` to read the stored record back. See requirement 7 for the `triggerDigestTo` validation rule.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 

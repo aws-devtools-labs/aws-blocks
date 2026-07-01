@@ -16,29 +16,15 @@ This is the `nextjs` template (App Router, runs on port 3000). The frontend call
 3. The catalog lists every product, each rendering its name.
 
 ### FAQ search (knowledge base)
-4. **You must create a `knowledge/` folder** (e.g. `./knowledge/`) containing **at least one `.md` FAQ document**, and point the knowledge-base block at it (`source: './knowledge'`). Locally the block indexes the folder (TF-IDF) and answers `retrieve()` queries.
+4. **You must create a `knowledge/` folder** (e.g. `./knowledge/`) containing **at least one `.md` FAQ document**, and point the knowledge-base block at it. Locally the block indexes the folder (TF-IDF) and answers retrieval queries.
 5. **Required seed content:** at least one FAQ doc must cover your store's **return / refund policy** and must contain the words **`return`** and **`refund`** (the grader searches for these). Write a real short FAQ (a few Q&A lines) — not a stub.
 6. A user types a question into a search input and clicks a button; the panel shows one result row per knowledge-base hit.
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the relational-database block and the knowledge-base block before wiring.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the relational-database block and the knowledge-base block before wiring, and use only the APIs documented there — including how to run a numbered migration, how to run a parameterized `INSERT`/`SELECT`, and how to point the knowledge base at your folder and query it.
 
-Shapes you'll use (read the READMEs for exact options):
-
-```ts
-import { Scope, ApiNamespace, Database, sql, KnowledgeBase } from '@aws-blocks/blocks';
-
-const scope = new Scope('my-app');
-const db = new Database(scope, 'main', { migrationsPath: './aws-blocks/migrations' });
-const kb = new KnowledgeBase(scope, 'faq', { source: './knowledge' });
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async addProduct(name: string) { await db.execute(sql`INSERT INTO products (name) VALUES (${name})`); /* … */ },
-  async listProducts() { return db.query(sql`SELECT id, name FROM products ORDER BY id`); },
-  async searchFaq(q: string) { return kb.retrieve(q, { maxResults: 5 }); },
-}));
-```
+Define your backend methods in `aws-blocks/index.ts` (e.g. add a product, list products, search the FAQ) and call them from the frontend via `import { api } from 'aws-blocks'`.
 
 The dev server is already running on the port in `/tmp/dev.port`. Edits to `aws-blocks/` reload the backend; edits under `src/` hot-reload the frontend. Use the running app to verify your work.
 
