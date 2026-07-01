@@ -25,6 +25,8 @@
     "hosting-ssr-nuxt-aws-blocks",
     "pipeline-synth-test",
     "test-extending-blocks-guide",
-    "test-extending-blocks-guide-blocksbackend"
+    "test-extending-blocks-guide-blocksbackend",
+    "example-ai-support-assistant",
+    "example-agentcore-blocks-smoke"
   ]
 }
