@@ -1,5 +1,15 @@
 # @aws-blocks/blocks
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [e839301]
+- Updated dependencies [179817f]
+  - @aws-blocks/core@0.1.10
+  - @aws-blocks/bb-data@0.2.1
+  - @aws-blocks/bb-agent@0.3.0
+
 ## 0.1.8
 
 ### Patch Changes
