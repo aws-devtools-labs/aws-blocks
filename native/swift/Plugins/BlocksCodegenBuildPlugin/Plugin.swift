@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import PackagePlugin
 import Foundation
 
@@ -16,7 +23,7 @@ struct BlocksCodegenBuildPlugin: BuildToolPlugin {
             file.path.lastComponent == "blocks.spec.json"
         }
 
-        guard let specFile = specFile else {
+        guard let specFile else {
             return []
         }
 
@@ -47,7 +54,7 @@ extension BlocksCodegenBuildPlugin: XcodeBuildToolPlugin {
             file.path.lastComponent == "blocks.spec.json"
         }
 
-        guard let specFile = specFile else {
+        guard let specFile else {
             return []
         }
 

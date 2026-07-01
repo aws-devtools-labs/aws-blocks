@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import Security
 
@@ -8,7 +15,7 @@ import Security
 ///
 /// Uses `kSecUseDataProtectionKeychain` on macOS to opt into the iOS-style
 /// data-protection keychain, which is required for sandboxed/entitled apps.
-internal final class KeychainCookieStore {
+final class KeychainCookieStore {
     private let service: String
 
     init(service: String = "com.aws.blocks.swift.cookies") {
@@ -24,7 +31,7 @@ internal final class KeychainCookieStore {
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecMatchLimit as String: kSecMatchLimitAll
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -56,7 +63,7 @@ internal final class KeychainCookieStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: name,
+            kSecAttrAccount as String: name
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -64,7 +71,7 @@ internal final class KeychainCookieStore {
 
         let attrs: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
         let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
@@ -84,7 +91,7 @@ internal final class KeychainCookieStore {
     func removeAll() {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
+            kSecAttrService as String: service
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true
@@ -98,7 +105,7 @@ internal final class KeychainCookieStore {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: name,
+            kSecAttrAccount as String: name
         ]
         #if os(macOS)
         query[kSecUseDataProtectionKeychain as String] = true

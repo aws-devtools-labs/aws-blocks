@@ -18,6 +18,10 @@ export { nuxtAdapter } from './nuxt.js';
 export type { NuxtAdapterOptions } from './nuxt.js';
 export { astroAdapter } from './astro.js';
 export type { AstroAdapterOptions } from './astro.js';
+// Re-exported so the integration layer (core `Hosting`) can normalize a
+// user-declared `basePath` prop the same way adapters normalize the
+// framework-config value, keeping one canonical form for `manifest.basePath`.
+export { normalizeBasePath } from './shared/basepath.js';
 
 /**
  * A framework adapter function that produces a DeployManifest from a project.
