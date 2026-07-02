@@ -295,13 +295,41 @@ export async function reclaimPort(port: number, deps: Partial<ReclaimPortDeps> =
   await waitFree(port, 2000);
 
   if (await probe(port)) {
-    // Still held after a graceful SIGTERM — escalate to SIGKILL. Re-list in case
-    // the owner set changed (e.g. lsof was momentarily empty on the first pass).
-    for (const pid of pids.length ? pids : listPids(port)) killTree(pid, 'SIGKILL');
+    // Still held after a graceful SIGTERM — escalate to SIGKILL. ALWAYS re-list
+    // first: the owner set can change during the wait — the original process may
+    // have exited and a NEW one grabbed the port, so SIGKILLing the stale `pids`
+    // would miss the real owner. Fall back to the stale list only if the re-list
+    // comes back empty (e.g. lsof was momentarily unavailable).
+    const killPids = listPids(port);
+    for (const pid of killPids.length ? killPids : pids) killTree(pid, 'SIGKILL');
     await waitFree(port, 2000);
   }
 
   return { wasOpen: true, reclaimed: !(await probe(port)), pids };
+}
+
+/**
+ * Build the console message for a startup reclaim of a port that was in use,
+ * distinguishing the three meaningfully different outcomes so the operator knows
+ * what (if anything) to do next:
+ *  - reclaimed → we freed it; startup continues.
+ *  - not reclaimed but owner PID(s) known → tell the operator exactly which
+ *    process(es) to stop and retry.
+ *  - not reclaimed and no owner PID found → nothing to point at (lsof/netstat
+ *    found no listener), so surface the generic "in use" message.
+ * `subject` describes what was reclaimed (e.g. 'a stale/orphaned listener'). Pure.
+ */
+export function reclaimMessage(port: number, result: ReclaimResult, subject: string): string {
+  if (result.reclaimed) {
+    return `♻️  Reclaimed port ${port} from ${subject} before startup.`;
+  }
+  if (result.pids.length > 0) {
+    return (
+      `⚠️  Port ${port} held by pid(s) [${result.pids.join(', ')}] and could not be freed — ` +
+      `stop that process and retry.`
+    );
+  }
+  return `⚠️  Port ${port} is in use and could not be reclaimed automatically (no owner PID found).`;
 }
 
 /** Bounded retry policy for binding the `:3000` front door under EADDRINUSE. */
@@ -425,6 +453,11 @@ export async function startDevServer(options: DevServerOptions) {
   const pidfilePath = join('.blocks-sandbox', `dev-server.${port}.pid`);
   const removeOwnPidfile = (): void => {
     try {
+      // Read-then-unlink has a narrow race: a tsx-watch successor could write its
+      // own pidfile between our read and unlink, and we'd delete its file. We only
+      // unlink when the record still points at us, and tsx-watch drains the old
+      // supervisor before relaunching the successor, so the two never overlap here
+      // in practice — the window is benign and not worth locking for.
       const rec = parsePidRecord(readFileSync(pidfilePath, 'utf-8'));
       if (rec && rec.pid === process.pid) unlinkSync(pidfilePath);
     } catch {
@@ -812,20 +845,12 @@ export async function startDevServer(options: DevServerOptions) {
   // these ports is an orphan — reclaim it (see {@link reclaimPort}).
   const r3000 = await reclaimPort(port);
   if (r3000.wasOpen) {
-    console.error(
-      r3000.reclaimed
-        ? `♻️  Reclaimed port ${port} from a stale/orphaned listener before startup.`
-        : `⚠️  Port ${port} is in use and could not be reclaimed automatically (no owner PID found).`,
-    );
+    console.error(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
   }
   if (frontendCommand) {
     const rFrontend = await reclaimPort(frontendPort);
     if (rFrontend.wasOpen) {
-      console.error(
-        rFrontend.reclaimed
-          ? `♻️  Reclaimed frontend port ${frontendPort} from a stale/orphaned dev server before startup.`
-          : `⚠️  Frontend port ${frontendPort} is in use and could not be reclaimed automatically.`,
-      );
+      console.error(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
     }
   }
 
@@ -875,7 +900,6 @@ export async function startDevServer(options: DevServerOptions) {
       );
       void (async () => {
         await reclaimPort(port);
-        await waitForPortFree(port);
         setTimeout(() => server.listen(port, onListening), decision.delayMs).unref?.();
       })();
       return;

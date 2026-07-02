@@ -5,6 +5,7 @@ import assert from 'node:assert';
 import { createServer } from 'node:net';
 import {
   reclaimPort,
+  reclaimMessage,
   evaluatePortBindRetry,
   DEFAULT_PORT_BIND_RETRY_POLICY,
   evaluateSingleton,
@@ -104,6 +105,26 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
     assert.strictEqual(result.reclaimed, true);
   });
 
+  it('SIGKILLs the CURRENT owner, not the stale one, when the port changed hands during the wait', async () => {
+    // The original listener (111) is SIGTERM'd but exits, and a DIFFERENT process
+    // (222) grabs the port before the SIGKILL pass. The escalation must re-list
+    // and target the new owner (222) — never the stale pid (111) it already
+    // signalled — otherwise it SIGKILLs a dead pid and leaves the real owner.
+    const kills: Array<[number, NodeJS.Signals]> = [];
+    let call = 0;
+    const result = await reclaimPort(3000, {
+      // open, still open after SIGTERM (new owner now holds it), free after SIGKILL
+      probe: scriptedProbe([true, true, false]),
+      listPids: () => (call++ === 0 ? [111] : [222]),
+      killTree: (pid, sig) => kills.push([pid, sig]),
+      waitFree: async () => {},
+    });
+    assert.deepStrictEqual(kills, [[111, 'SIGTERM'], [222, 'SIGKILL']]);
+    assert.strictEqual(result.reclaimed, true);
+    // result.pids reflects the initial discovery (what we SIGTERM'd).
+    assert.deepStrictEqual(result.pids, [111]);
+  });
+
   it('reports the port free once its real listener is reclaimed (real sockets, injected kill)', async () => {
     const port = await getFreePort();
     const srv = createServer((c) => c.destroy());
@@ -123,6 +144,25 @@ describe('reclaimPort — frees a stale/orphaned port before startup', () => {
     assert.strictEqual(result.wasOpen, true);
     assert.strictEqual(result.reclaimed, true);
     assert.strictEqual(await isPortOpen(port, '127.0.0.1'), false, 'port should be free after reclaim');
+  });
+});
+
+// ── reclaimMessage — accurate startup reclaim-outcome messaging ──────────────
+describe('reclaimMessage — three-way reclaim outcome message', () => {
+  it('reports success when the port was reclaimed', () => {
+    const msg = reclaimMessage(3000, { wasOpen: true, reclaimed: true, pids: [] }, 'a stale/orphaned listener');
+    assert.match(msg, /Reclaimed port 3000 from a stale\/orphaned listener/);
+  });
+
+  it('names the holding pid(s) when reclaim failed but an owner is known', () => {
+    const msg = reclaimMessage(3100, { wasOpen: true, reclaimed: false, pids: [4242, 4243] }, 'a stale/orphaned dev server');
+    assert.match(msg, /Port 3100 held by pid\(s\) \[4242, 4243\]/);
+    assert.match(msg, /stop that process and retry/);
+  });
+
+  it('falls back to the generic message when reclaim failed with no owner PID', () => {
+    const msg = reclaimMessage(3000, { wasOpen: true, reclaimed: false, pids: [] }, 'a stale/orphaned listener');
+    assert.match(msg, /no owner PID found/);
   });
 });
 

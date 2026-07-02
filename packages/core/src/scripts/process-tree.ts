@@ -41,13 +41,14 @@ interface TreeKillResult {
  * denied): such a run did NOT reap the tree, so the caller must fall back to a
  * direct `child.kill` rather than treat the leak as handled. (`child.kill`
  * cannot reap the orphaned grandchild either, but the fallback is cheap and
- * strictly correct — we never silently swallow a failed tree-kill.) Never
- * throws.
+ * strictly correct — we never silently swallow a failed tree-kill.) Runs with a
+ * 3s `timeout` so a wedged `taskkill` can't stall teardown; a timed-out run
+ * surfaces as `{error}` and degrades to the fallback. Never throws.
  */
 export function windowsTreeKill(
   pid: number,
   runner: (command: string, args: readonly string[]) => TreeKillResult = (command, args) =>
-    spawnSync(command, args as string[], { stdio: 'ignore', windowsHide: true }),
+    spawnSync(command, args as string[], { stdio: 'ignore', windowsHide: true, timeout: 3000 }),
 ): boolean {
   try {
     const { status, error } = runner('taskkill', ['/T', '/F', '/PID', String(pid)]);
@@ -134,14 +135,17 @@ interface CommandOutput {
  *   `LISTENING` rows whose local address ends in `:<port>`.
  *
  * Best-effort and never throws: a missing tool, a non-zero exit ("nothing is
- * listening"), or unparseable output all yield `[]`. PIDs `<= 1` are dropped
+ * listening"), or unparseable output all yield `[]`. The `spawnSync` runs with a
+ * 3s `timeout` so a hung `lsof`/`netstat` (e.g. an unresponsive NFS mount) can't
+ * block the event loop during startup — a timed-out probe returns `{error}`,
+ * which the `catch` degrades to `[]`. PIDs `<= 1` are dropped
  * defensively (never target init / the whole current group). `runner`/`platform`
  * are injected for tests.
  */
 export function findListenerPids(
   port: number,
   runner: (command: string, args: readonly string[]) => CommandOutput = (command, args) =>
-    spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true }),
+    spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true, timeout: 3000 }),
   platform: NodeJS.Platform = process.platform,
 ): number[] {
   try {
