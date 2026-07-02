@@ -400,7 +400,7 @@ jobs:
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     environment: publish
     permissions:
       contents: read
