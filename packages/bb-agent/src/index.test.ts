@@ -1054,47 +1054,73 @@ describe('OllamaModels presets', () => {
 });
 
 // ── deployed Agent S3Storage region (multi-region) ──────────────────────────
-// Regression for #120: the deployed (aws-runtime) Agent must pass the Lambda
-// execution region (AWS_REGION) into Strands' S3Storage. Omitting `region` makes
-// S3Storage default its S3 client to us-east-1, hard-pinning it there and breaking
-// any deploy outside us-east-1 — the session bucket lives in the deploy region, so
-// snapshot reads/writes hit a cross-region 301 PermanentRedirect. index.test.ts
-// otherwise only drives the mock/local path, so this exercises agent.aws.ts.
+// Regression for #120: the deployed (aws-runtime) Agent must build Strands' S3Storage
+// with the Lambda execution region (AWS_REGION). Omitting `region` defaults S3Storage to
+// us-east-1 and breaks deploys elsewhere — the session bucket lives in the deploy region,
+// so snapshots hit a cross-region 301 PermanentRedirect. index.test.ts otherwise only
+// drives the mock/local path, so this covers agent.aws.ts by spying the S3Storage ctor.
 
 import { Agent as DeployedAgent } from './index.aws.js';
+import { createDeployedSnapshotStorage } from './agent.aws.js';
+import type { SnapshotStorage, SnapshotManifest } from '@strands-agents/sdk';
+import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
 
 describe('deployed Agent S3Storage region (multi-region)', () => {
-	// Build a deployed Agent and read the region its S3Storage's S3 client resolved to.
-	// AgentBase keeps the SnapshotStorage on `snapshotStorage`; S3Storage keeps the
-	// SDK client on `_s3`, whose resolved region the AWS SDK v3 exposes as a provider.
-	async function deployedS3Region(scopeId: string, agentId: string): Promise<string> {
-		const scope = new Scope(scopeId);
-		const agent = new DeployedAgent(scope, agentId, { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
-		const region = (agent as any).snapshotStorage._s3.config.region;
-		return typeof region === 'function' ? region() : region;
+	// Type-safe stand-in for S3Storage that records every config it's constructed with,
+	// so we assert exactly what agent.aws.ts passes in — no S3Storage/AWS SDK internals.
+	function s3StorageSpy() {
+		const configs: S3StorageConfig[] = [];
+		class Spy implements SnapshotStorage {
+			constructor(config: S3StorageConfig) {
+				configs.push(config);
+			}
+			async saveSnapshot(): Promise<void> {}
+			async loadSnapshot(): Promise<null> {
+				return null;
+			}
+			async listSnapshotIds(): Promise<string[]> {
+				return [];
+			}
+			async deleteSession(): Promise<void> {}
+			async loadManifest(): Promise<SnapshotManifest> {
+				return { schemaVersion: '1.0', updatedAt: new Date().toISOString() };
+			}
+			async saveManifest(): Promise<void> {}
+		}
+		return { configs, Spy };
 	}
 
-	test('propagates AWS_REGION to the S3Storage S3 client', async () => {
+	// Capture the S3StorageConfig the deployed factory builds for a given AWS_REGION.
+	function configForRegion(region: string, scopeId: string): S3StorageConfig {
 		const prev = process.env.AWS_REGION;
-		process.env.AWS_REGION = 'eu-west-1';
+		process.env.AWS_REGION = region;
 		try {
-			assert.strictEqual(await deployedS3Region('test-s3-region-euw1', 'r1'), 'eu-west-1');
+			const { configs, Spy } = s3StorageSpy();
+			const bucket = new FileBucket(new Scope(scopeId), 'sn');
+			createDeployedSnapshotStorage(bucket, Spy);
+			assert.strictEqual(configs.length, 1, 'S3Storage should be constructed exactly once');
+			assert.strictEqual(configs[0].bucket, bucket.fullId, 'session bucket id should be passed through');
+			return configs[0];
 		} finally {
 			if (prev === undefined) delete process.env.AWS_REGION;
 			else process.env.AWS_REGION = prev;
 		}
+	}
+
+	test('constructs S3Storage with the Lambda execution region (eu-west-1)', () => {
+		const config = configForRegion('eu-west-1', 'test-s3-region-euw1');
+		assert.strictEqual(config.region, 'eu-west-1');
+		assert.notStrictEqual(config.region, 'us-east-1');
 	});
 
-	test('does not hard-pin us-east-1 when deployed to another region', async () => {
-		const prev = process.env.AWS_REGION;
-		process.env.AWS_REGION = 'ap-southeast-2';
-		try {
-			const region = await deployedS3Region('test-s3-region-apse2', 'r2');
-			assert.strictEqual(region, 'ap-southeast-2');
-			assert.notStrictEqual(region, 'us-east-1');
-		} finally {
-			if (prev === undefined) delete process.env.AWS_REGION;
-			else process.env.AWS_REGION = prev;
-		}
+	test('does not hard-pin us-east-1 when deployed to another region (ap-southeast-2)', () => {
+		const config = configForRegion('ap-southeast-2', 'test-s3-region-apse2');
+		assert.strictEqual(config.region, 'ap-southeast-2');
+		assert.notStrictEqual(config.region, 'us-east-1');
+	});
+
+	test('deployed Agent constructs on the aws-runtime path', () => {
+		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
+		assert.ok(agent);
 	});
 });

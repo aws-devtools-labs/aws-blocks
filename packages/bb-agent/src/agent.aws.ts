@@ -2,17 +2,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { AgentBase } from './agent.js';
+import type { FileBucket } from '@aws-blocks/bb-file-bucket';
+import type { SnapshotStorage } from '@strands-agents/sdk';
 import { S3Storage } from '@strands-agents/sdk/session/s3-storage';
+import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
+import { AgentBase } from './agent.js';
 import type { AgentConfig, DefaultToolContext } from './types.js';
 import { BedrockModels } from './models.js';
 
+/**
+ * Builds the deployed Agent's snapshot storage, pinning S3Storage to the Lambda
+ * execution region (`AWS_REGION`) so non-us-east-1 deploys use the correct regional
+ * endpoint (#120). `S3StorageImpl` is injectable so tests can assert the resulting
+ * config without depending on S3Storage/AWS SDK internals; production uses the real one.
+ */
+export function createDeployedSnapshotStorage(
+	bucket: FileBucket,
+	S3StorageImpl: new (config: S3StorageConfig) => SnapshotStorage = S3Storage,
+): SnapshotStorage {
+	return new S3StorageImpl({ bucket: bucket.fullId, region: process.env.AWS_REGION });
+}
+
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>) {
-		// Pin S3Storage to the Lambda execution region. When `region` is omitted, S3Storage
-		// defaults its S3 client to us-east-1, which breaks any deploy outside us-east-1: the
-		// session bucket lives in the deploy region, so snapshot reads/writes fail with a
-		// cross-region 301 PermanentRedirect. AWS_REGION is always set in the Lambda runtime.
-		super(scope, id, config, config.model?.deployed ?? BedrockModels.BALANCED, (bucket) => new S3Storage({ bucket: bucket.fullId, region: process.env.AWS_REGION }));
+		super(scope, id, config, config.model?.deployed ?? BedrockModels.BALANCED, createDeployedSnapshotStorage);
 	}
 }
