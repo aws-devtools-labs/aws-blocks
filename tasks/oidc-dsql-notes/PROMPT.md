@@ -6,7 +6,7 @@ Build a personal notes app gated by OIDC sign-in. A visitor signs in through an 
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `react` template — a React single-page app (frontend entry `src/main.tsx`, which mounts the `src/App.tsx` component). It ships a todo demo wired with **AuthBasic + DistributedTable + Realtime**; you will **replace** those with **AuthOIDC + DistributedDatabase** (remove the todo/realtime code you don't need). The frontend imports backend exports via `import { ... } from 'aws-blocks'`.
+This is the `react` template — a React single-page app (frontend entry `src/main.tsx`, which mounts the `src/App.tsx` component). Replace the template's todo demo with your OIDC-gated notes app.
 
 ## Requirements
 
@@ -21,12 +21,6 @@ This is the `react` template — a React single-page app (frontend entry `src/ma
    - **No deduplication:** adding the same text twice creates **two** separate note rows.
 4. **Persistence.** After a full page reload the visitor is still signed in (session cookie restored) and **all** of their notes are still listed; the note editor remains functional after the reload (adding another note still works).
 5. **Input validation.** Disable `[data-testid=add-note-btn]` while the note input is empty or whitespace-only (trim before the check); re-enable it once real text is present.
-
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the OIDC auth block's README (especially the **stub provider** and the **signin route** `/aws-blocks/auth/signin/<provider>`) and the distributed-database block's README before wiring, and use only the APIs documented there — including how to require an authenticated user in a backend method, how to hydrate the current user on the client, how to run a migration, and how to run a parameterized query.
-
-Keep the browser-only auth helpers on the frontend and the block wiring in the backend `aws-blocks/index.ts`; the auth block's README shows which import path each lives under.
 
 ## Selector contract
 

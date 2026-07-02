@@ -33,10 +33,6 @@ This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.htm
 
 A single shared assistant — no login.
 
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. You'll need an agent block and a knowledge-base block — read the relevant ones before wiring.
-
 ## Selector contract
 
 The Playwright test grades your work using these `data-testid` hooks and one data attribute. Implement them exactly.

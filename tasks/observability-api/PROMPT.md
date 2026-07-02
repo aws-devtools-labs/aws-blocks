@@ -6,7 +6,7 @@ Build an instrumented health/status service in this **backend-only** AWS Blocks 
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-**This is the `backend` template: no frontend.** The RPC endpoint is JSON-RPC 2.0 at `POST /aws-blocks/api`; unmatched paths return 404.
+**This is the `backend` template: no frontend.**
 
 ## Requirements
 
@@ -31,12 +31,6 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 4. **Routing & content type:** the `/status` response must carry `Content-Type: text/html`, and any unmatched path (anything other than your routes) must return **404** — do not add a catch-all route.
 
 All four blocks (setting, logger, metrics, tracer) must initialize cleanly when the server boots and when `ping` runs — the test fails on any browser error or server 5xx.
-
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the app-setting, logger, metrics, and tracer blocks — plus the core blocks README for how to register a **raw HTTP route** (the one you serve `/status` from) and how to expose JSON-RPC methods on an `api` namespace — and use only the APIs documented there. In particular, read how to read a setting on the server, write a log line, emit a metric, and open a tracer segment.
-
-The status page is plain server-rendered HTML: it must contain the three `data-testid` hooks below, and an inline `<script>` that POSTs to your `ping` method and writes the result into `[data-testid=ping-status]`. The endpoint takes the JSON-RPC request shape shown in requirement 2.
 
 ## Selector contract
 

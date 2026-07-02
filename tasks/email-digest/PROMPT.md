@@ -6,7 +6,7 @@ Build a scheduled email-digest feature in this AWS Blocks app. A recurring job i
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `demo` template (vanilla-TS frontend in `src/index.ts`). It already wires a key/value store block (`KVStore`) — reuse it for the "last sent" metadata. The frontend calls the backend with `import { api } from 'aws-blocks'`.
+This is the `demo` template (vanilla-TS frontend in `src/index.ts`).
 
 ## Requirements
 
@@ -17,12 +17,6 @@ This is the `demo` template (vanilla-TS frontend in `src/index.ts`). It already 
 5. **UI.** Show the last-sent info in `[data-testid=last-email]` and a `[data-testid=trigger-btn]` button. Clicking the button runs the digest (the manual trigger), then refreshes the displayed last-sent info. After a successful trigger, `[data-testid=last-email]` must read like **`sent to <recipient> at <time>`** — it must contain the phrase **`sent to`**, the actual recipient **email address**, and a **time**.
 6. **Structured read-back + persistence.** Expose an API method `getLastDigest()` that returns the stored record as **exactly** `{ to, at }` — those two fields **only** (recipient string + ISO timestamp), reading it back from the key/value store. `at` must be a canonical **ISO-8601** instant (`new Date().toISOString()` — not a locale string or an epoch number). The displayed recipient and timestamp must survive a full page reload (re-read from the store on load).
 7. **Parameterized send + recipient validation.** Also expose an API method `triggerDigestTo(to)` that runs the **same** digest (shares the digest function) to a **caller-supplied** recipient, then updates the stored `{ to, at }` exactly like the scheduled run. **Validate `to` first**: it must be a non-empty, email-shaped address. A **missing, blank, or malformed** recipient is rejected with a JSON-RPC **error** envelope and must **not** send an email or modify the last-sent record (validate before sending — never persist a record for a send that didn't happen). Triggering several digests in sequence updates the last-sent record each time, so `getLastDigest()` always reflects the **most recent** send and stored timestamps advance in order.
-
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the cron-job and email-client block READMEs (and the key/value store one) before wiring, and use only the APIs documented there — including how a cron handler is registered, how to send an email, and how to read/write the key/value store.
-
-Factor the digest into one shared function and call it from the cron handler, from `triggerDigest()`, and from `triggerDigestTo(to)`; expose `getLastDigest()` to read the stored record back. See requirement 7 for the `triggerDigestTo` validation rule.
 
 ## Selector contract
 

@@ -18,12 +18,6 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 
 A single shared board across all tabs — no login, no per-user filtering.
 
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
-
-This template already wires up a realtime channel block and a structured-data table block — exactly the two capabilities this task needs: one block to broadcast presence changes to connected clients, and one block to persist the board so it survives a reload. Adapt the scaffolded blocks to a single shared board (this task has no auth or per-user channels). Read the relevant block READMEs before wiring.
-
 ## Selector contract
 
 The Playwright test grades your work using these `data-testid` hooks. Implement them exactly.

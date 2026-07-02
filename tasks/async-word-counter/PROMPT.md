@@ -20,12 +20,6 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 
 A single shared list — no login.
 
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
-
-You'll need a block that runs background/async work and a key/value block to hold each job's result (keyed by job id) so it survives a reload. Pick whichever ones fit.
-
 ## Selector contract
 
 The Playwright test grades your work using `data-testid` hooks and one data attribute. Implement them exactly.

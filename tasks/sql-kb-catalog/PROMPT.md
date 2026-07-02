@@ -6,7 +6,7 @@ Build a product catalog with an FAQ search panel in this AWS Blocks app. Product
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `nextjs` template (App Router). The frontend calls the backend with `import { api } from 'aws-blocks'`; interactive UI goes in a Client Component (`'use client'`). Define your backend methods in `aws-blocks/index.ts`.
+This is the `nextjs` template (App Router). Define your backend methods in `aws-blocks/index.ts`.
 
 ## Requirements
 
@@ -19,12 +19,6 @@ This is the `nextjs` template (App Router). The frontend calls the backend with 
 4. **You must create a `knowledge/` folder** (e.g. `./knowledge/`) containing **at least one `.md` FAQ document**, and point the knowledge-base block at it. Locally the block indexes the folder (TF-IDF) and answers retrieval queries.
 5. **Required seed content:** at least one FAQ doc must cover your store's **return / refund policy** and must contain the words **`return`** and **`refund`** (the grader searches for these). Write a real short FAQ (a few Q&A lines) — not a stub.
 6. A user types a question into a search input and clicks a button; the panel shows one result row per knowledge-base hit.
-
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md`. Read the ones for the relational-database block and the knowledge-base block before wiring, and use only the APIs documented there — including how to run a numbered migration, how to run a parameterized `INSERT`/`SELECT`, and how to point the knowledge base at your folder and query it.
-
-Define your backend methods in `aws-blocks/index.ts` (e.g. add a product, list products, search the FAQ) and call them from the frontend via `import { api } from 'aws-blocks'`.
 
 ## Selector contract
 

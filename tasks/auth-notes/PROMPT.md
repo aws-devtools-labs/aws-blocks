@@ -17,12 +17,6 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 
 Exactly one note per user. No password reset, email verification, or multiple notes.
 
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
-
-You'll need a block that provides authentication (sign-up / sign-in / sign-out, plus a way to know who the current user is) and a block for per-user stored data. Pick whichever ones fit.
-
 ## Selector contract
 
 The Playwright test grades your work using these `data-testid` hooks. Implement them exactly. The signed-out and signed-in views are told apart by which hooks are present: the auth fields show only when signed out; the note hooks and sign-out button show only when signed in.
