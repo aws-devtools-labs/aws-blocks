@@ -17,12 +17,6 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 
 A single shared gallery — no login, no per-user separation.
 
-## Where to look
-
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point — backend handlers and CDK constructs live there. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. Read the relevant ones before deciding which building blocks to use.
-
-You'll need a block for file storage — one that can store an uploaded file, list what's stored, hand back a download URL, and delete. Pick whichever one fits.
-
 ## Selector contract
 
 The Playwright test grades your work using these `data-testid` hooks. Implement them exactly.

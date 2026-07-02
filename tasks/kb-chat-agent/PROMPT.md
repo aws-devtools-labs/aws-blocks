@@ -6,7 +6,7 @@ Build a chat assistant in this AWS Blocks app. A user types a question; an AI **
 
 The workspace has already been scaffolded. Begin by reading `README.md` and `AGENTS.md`, then do all your edits in this workspace.
 
-This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.html` + `src/index.ts`), with the backend wired in `aws-blocks/index.ts`. The frontend imports the backend with `import { api } from 'aws-blocks'`; you call typed methods on it and the JSON-RPC transport is invisible. Replace the template's placeholder demo (todos / KV / cookies) with your chat UI.
+This is the `demo` template — a vanilla TypeScript + Vite frontend (`index.html` + `src/index.ts`), with the backend wired in `aws-blocks/index.ts`. Replace the template's placeholder demo (todos / KV / cookies) with your chat UI.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ A single shared assistant — no login.
 
 ## Where to look
 
-The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. **Read the agent block's and the knowledge-base block's docs before wiring, and use only the APIs documented there** — including how to run a chat turn end to end, and how to tell which tools ran and which sources they cited.
+The project is built on AWS Blocks. The `aws-blocks/` directory is your wiring point. Under `node_modules/@aws-blocks/`, each package has a `README.md` and an `API.md` describing what it does and how to use it. You'll need an agent block and a knowledge-base block — read the relevant ones before wiring.
 
 ## Selector contract
 
