@@ -395,13 +395,43 @@ jobs:
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
 
+  e2e-telemetry:
+    name: Telemetry E2E
+    needs: [build-and-test-local, detect-changes]
+    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Seed fixed e2e telemetry installation ID
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.blocks/telemetry"
+          printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.blocks/telemetry/installation-id"
+
+      - name: Telemetry E2E Tests
+        run: npm run test:telemetry
+
   # Gate job — matches the branch protection required check name.
   # Skipped E2E jobs (no source changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
+    needs: [build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -418,7 +448,8 @@ jobs:
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
-             [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]]; then
+             [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||
+             [[ "${{ needs.e2e-telemetry.result }}" != "success" && "${{ needs.e2e-telemetry.result }}" != "skipped" ]]; then
             echo "One or more E2E jobs failed"
             exit 1
           fi
