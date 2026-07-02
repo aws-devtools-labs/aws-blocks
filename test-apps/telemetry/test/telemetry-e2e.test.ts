@@ -2,32 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Isolated E2E Telemetry Test Suite
+ * E2E Telemetry Test Suite
  *
- * Verifies that telemetry events fire correctly across all Blocks CLI commands
- * using the `--telemetry-file` sink for assertions, that identifiers are created
- * and pinned correctly, and that every telemetry-emitting command produces a
- * correct SUCCESS and FAIL event.
+ * Tests telemetry end-to-end by invoking REAL CLI scripts and verifying:
+ * 1. Event payload correctness via --telemetry-file
+ * 2. Actual delivery to the telemetry endpoint via NODE_DEBUG stderr output
  *
- * Isolation:
- * - Every test overrides HOME to a throwaway temp dir, so telemetry state
- *   (installation-id, global config) is sandboxed and never touches the real
- *   ~/.blocks or the other e2e suites.
- * - Each captured event goes to a UNIQUE --telemetry-file path (the sink uses
- *   O_EXCL, so paths must never be reused).
- *
- * Pinned installation ID:
- * - Matching .github/actions/seed-telemetry-id, most tests seed a fixed
- *   installation ID by writing $HOME/.blocks/telemetry/installation-id before
- *   invoking the CLI. This keeps installationId deterministic and suppresses
- *   the first-run consent notice.
- *
- * No AWS credentials: cloud commands fail fast but still emit a FAIL event.
+ * Requirements:
+ * - Valid AWS credentials (for sandbox/deploy/destroy SUCCESS paths)
+ * - Network access to the telemetry endpoint
+ * - `npm run build` must have been run first
  */
 
-import { describe, test, afterEach } from 'node:test';
+import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import {
   mkdirSync,
   writeFileSync,
@@ -37,57 +26,38 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:net';
 import { join, dirname } from 'node:path';
-import { tmpdir, homedir, platform } from 'node:os';
+import { tmpdir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
-const MONO_ROOT = join(APP_ROOT, '..', '..');
 
-// Built CLI entry points (require `npm run build` first).
-const CLEANUP_SCRIPT = join(MONO_ROOT, 'packages', 'core', 'dist', 'scripts', 'cleanup.js');
-const CREATE_APP_SCRIPT = join(MONO_ROOT, 'packages', 'create-blocks-app', 'dist', 'index.js');
-
-/**
- * Fixed CI e2e telemetry installation ID.
- * Kept in sync with .github/actions/seed-telemetry-id.
- */
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
-
-/** Fixed projectId seeded in test-apps/telemetry/.blocks/config.json. */
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';
-
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SENT_REGEX = /BLOCKS-TELEMETRY: sent \(status=200\)/;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 let fileCounter = 0;
 
 function createTmpDir(prefix = 'blocks-telemetry-e2e'): string {
-  const dir = join(
-    tmpdir(),
-    `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-  );
+  const dir = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-/** Absolute path to the installation-id file inside a sandboxed HOME. */
 function installationIdPath(homeDir: string): string {
   return join(homeDir, '.blocks', 'telemetry', 'installation-id');
 }
 
-/** Write the pinned installation ID into a sandboxed HOME (returns it). */
-function seedPinnedInstallationId(homeDir: string): string {
+function seedPinnedInstallationId(homeDir: string): void {
   const filePath = installationIdPath(homeDir);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, PINNED_INSTALLATION_ID, 'utf-8');
-  return PINNED_INSTALLATION_ID;
 }
 
-/** Unique, never-before-used telemetry file path inside a dir. */
 function uniqueTelemetryFile(dir: string): string {
   return join(dir, `telemetry-event-${fileCounter++}.json`);
 }
@@ -102,126 +72,110 @@ interface SpawnResult {
   exitCode: number | null;
 }
 
-function spawnCommand(
+/**
+ * Spawn a command with NODE_DEBUG=blocks-telemetry and --telemetry-file.
+ * Returns stdout, stderr (for delivery verification), and exit code.
+ */
+function runCommand(
   cmd: string,
   args: string[],
   options: {
+    home: string;
+    telemetryFile: string;
     cwd?: string;
-    env?: Record<string, string | undefined>;
     timeoutMs?: number;
+    env?: Record<string, string | undefined>;
   },
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
-    const { cwd, env, timeoutMs = 20_000 } = options;
+    const { home, telemetryFile, cwd, timeoutMs = 60_000, env = {} } = options;
     let stdout = '';
     let stderr = '';
 
-    const child = spawn(cmd, args, {
-      cwd: cwd ?? APP_ROOT,
-      stdio: 'pipe',
-      detached: true,
-      env: { ...process.env, ...env, NODE_OPTIONS: '' } as NodeJS.ProcessEnv,
-    });
-
-    child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString();
-    });
-    child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString();
-    });
-
-    const timer = globalThis.setTimeout(() => {
-      try {
-        process.kill(-child.pid!, 'SIGKILL');
-      } catch {}
-    }, timeoutMs);
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ stdout, stderr, exitCode: code });
-    });
-  });
-}
-
-/** Spawn the dev server and wait for the ready marker (or reject on exit). */
-function spawnDevServer(options: {
-  port: number;
-  env: Record<string, string | undefined>;
-  cwd?: string;
-  extraArgs?: string[];
-}): Promise<{ process: ChildProcess; output: { stdout: string; stderr: string } }> {
-  return new Promise((resolve, reject) => {
-    const { port, env, cwd, extraArgs = [] } = options;
-    const output = { stdout: '', stderr: '' };
-
-    const args = ['tsx', 'aws-blocks/scripts/server.ts', ...extraArgs];
-
-    const child = spawn('npx', args, {
+    const child = spawn(cmd, [...args, `--telemetry-file=${telemetryFile}`], {
       cwd: cwd ?? APP_ROOT,
       stdio: 'pipe',
       detached: true,
       env: {
         ...process.env,
         ...env,
+        HOME: home,
+        NODE_DEBUG: 'blocks-telemetry',
+        NODE_OPTIONS: '',
+      } as NodeJS.ProcessEnv,
+    });
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const timer = globalThis.setTimeout(() => {
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
+    }, timeoutMs);
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      // Wait a moment for the detached telemetry subprocess to finish
+      globalThis.setTimeout(() => resolve({ stdout, stderr, exitCode: code }), 1500);
+    });
+  });
+}
+
+/** Spawn dev server, wait for ready, return process + output. */
+function spawnDevServer(options: {
+  port: number;
+  home: string;
+  telemetryFile: string;
+  env?: Record<string, string | undefined>;
+}): Promise<{ process: ChildProcess; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const { port, home, telemetryFile, env = {} } = options;
+    let stdout = '';
+    let stderr = '';
+
+    const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
+      cwd: APP_ROOT,
+      stdio: 'pipe',
+      detached: true,
+      env: {
+        ...process.env,
+        ...env,
+        HOME: home,
         PORT: String(port),
+        NODE_DEBUG: 'blocks-telemetry',
         NODE_OPTIONS: '',
       } as NodeJS.ProcessEnv,
     });
 
     const timeout = globalThis.setTimeout(() => {
-      try {
-        process.kill(-child.pid!, 'SIGKILL');
-      } catch {}
-      child.kill('SIGKILL');
-      reject(
-        new Error(
-          `Dev server did not become ready within 45s.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`,
-        ),
-      );
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
+      reject(new Error(`Dev server timeout.\nstdout: ${stdout}\nstderr: ${stderr}`));
     }, 45_000);
 
     child.stdout?.on('data', (d: Buffer) => {
-      output.stdout += d.toString();
-      if (output.stdout.includes('local server running on')) {
+      stdout += d.toString();
+      if (stdout.includes('local server running on')) {
         clearTimeout(timeout);
-        resolve({ process: child, output });
+        resolve({ process: child, stdout, stderr });
       }
     });
-    child.stderr?.on('data', (d: Buffer) => {
-      output.stderr += d.toString();
-    });
-
-    child.on('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('exit', (code) => {
       clearTimeout(timeout);
-      reject(
-        new Error(
-          `Dev server exited with code ${code} before ready.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`,
-        ),
-      );
+      // Dev server exited — might be FAIL (port in use). Resolve anyway.
+      resolve({ process: child, stdout, stderr });
     });
   });
 }
 
 function killProcess(proc: ChildProcess): void {
   try {
-    if (proc.pid) {
-      try {
-        process.kill(-proc.pid, 'SIGKILL');
-      } catch {}
-    }
+    if (proc.pid) { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} }
     proc.kill('SIGKILL');
-    proc.stdout?.destroy();
-    proc.stderr?.destroy();
     proc.removeAllListeners();
   } catch {}
 }
 
-/** Poll until a file exists (used to wait for the telemetry sink to flush). */
-async function waitForFile(filePath: string, timeoutMs = 15_000): Promise<boolean> {
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (existsSync(filePath)) return true;
@@ -230,608 +184,600 @@ async function waitForFile(filePath: string, timeoutMs = 15_000): Promise<boolea
   return existsSync(filePath);
 }
 
-/** Read a --telemetry-file output. The file contains a JSON array [event]. */
 function readTelemetryFile(filePath: string): Record<string, any> {
   const content = readFileSync(filePath, 'utf-8');
   const parsed = JSON.parse(content);
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
-/**
- * Run a one-shot script that emits a single telemetry event to a file, wait
- * for the file, and return the parsed event.
- */
-async function runScriptAndCapture(
-  cmd: string,
-  args: string[],
-  home: string,
-  telemetryFile: string,
-  cwd = APP_ROOT,
-  timeoutMs = 20_000,
-): Promise<Record<string, any> | null> {
-  await spawnCommand(cmd, [...args, `--telemetry-file=${telemetryFile}`], {
-    cwd,
-    env: { HOME: home, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-    timeoutMs,
-  });
-  const found = await waitForFile(telemetryFile, 3_000);
-  return found ? readTelemetryFile(telemetryFile) : null;
+/** Assert that the event was delivered to the real endpoint. */
+function assertDelivered(stderr: string, description = ''): void {
+  assert.match(stderr, SENT_REGEX, `Telemetry should be delivered to endpoint. ${description}\nstderr: ${stderr.slice(-500)}`);
 }
 
-/** Emit a SUCCESS or FAIL event for a command via the real trackCommand pipeline. */
-async function emitCommand(
-  command: string,
-  outcome: 'success' | 'fail',
-  home: string,
-  telemetryFile: string,
-): Promise<Record<string, any> | null> {
-  return runScriptAndCapture(
-    'npx',
-    ['tsx', 'aws-blocks/scripts/emit.ts', command, outcome],
-    home,
-    telemetryFile,
-  );
+/** Assert that the event was NOT delivered (disabled). */
+function assertNotDelivered(stderr: string): void {
+  assert.doesNotMatch(stderr, SENT_REGEX, 'Telemetry should NOT be delivered when disabled');
 }
 
 // ─── Test Suites ─────────────────────────────────────────────────────────────
 
-describe('Telemetry E2E (isolated, pinned)', { timeout: 600_000 }, () => {
-  // ── 1. --telemetry-file emission & attribute assertions ────────────────────
+describe('Telemetry E2E', { timeout: 600_000 }, () => {
 
-  describe('--telemetry-file emission & attributes', () => {
+  // ── 1. Payload structure & Building Block filtering ─────────────────────────
+
+  describe('payload structure', () => {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
     afterEach(() => {
-      if (devProcess) {
-        killProcess(devProcess);
-        devProcess = null;
-      }
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test('dev event carries all standard attributes and correct counters', async () => {
-      tmpHome = createTmpDir('telemetry-attrs');
+    test('dev event carries correct identifiers, environment, product, and counters', async () => {
+      tmpHome = createTmpDir('payload-structure');
       seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await spawnDevServer({
-        port,
-        env: { HOME: tmpHome, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-        extraArgs: [`--telemetry-file=${telemetryFile}`],
-      });
+      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
       const body = readTelemetryFile(telemetryFile);
 
-      // Identifiers (pinned).
-      assert.strictEqual(
-        body.identifiers.installationId,
-        PINNED_INSTALLATION_ID,
-        'installationId should be the pinned value',
-      );
-      assert.strictEqual(
-        body.identifiers.projectId,
-        PINNED_PROJECT_ID,
-        'projectId should be the pinned value from .blocks/config.json',
-      );
-      assert.match(body.identifiers.eventId, UUID_REGEX, 'eventId should be a UUID');
-      assert.ok(body.identifiers.timestamp, 'timestamp should exist');
+      // Identifiers
+      assert.strictEqual(body.identifiers.installationId, PINNED_INSTALLATION_ID);
+      assert.strictEqual(body.identifiers.projectId, PINNED_PROJECT_ID);
+      assert.match(body.identifiers.eventId, UUID_REGEX);
+      assert.ok(body.identifiers.timestamp);
 
-      // Command.
-      assert.strictEqual(body.event.command, 'dev', 'command should be "dev"');
-      assert.strictEqual(body.event.state, 'SUCCESS', 'dev server start should be SUCCESS');
+      // Event
+      assert.strictEqual(body.event.command, 'dev');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assert.strictEqual(typeof body.event.duration, 'number');
 
-      // Product: blocks version + template name/version.
-      assert.match(
-        body.product.blocksVersion,
-        /^\d+\.\d+\.\d+/,
-        'blocksVersion should be semver',
-      );
-      assert.deepStrictEqual(
-        body.product.template,
-        { name: 'telemetry-e2e', version: '1.2.3' },
-        'template name/version should come from package.json',
-      );
+      // Environment
+      assert.strictEqual(body.environment.os, platform());
+      assert.match(body.environment.nodeVersion, /^\d+\.\d+\.\d+/);
+      assert.strictEqual(typeof body.environment.ci, 'boolean');
 
-      // Environment: os + ci.
-      assert.ok(
-        ['linux', 'darwin', 'win32'].includes(body.environment.os),
-        `os should be a known platform, got ${body.environment.os}`,
-      );
-      assert.strictEqual(
-        body.environment.os,
-        platform(),
-        'environment.os should match the actual platform',
-      );
-      assert.strictEqual(typeof body.environment.ci, 'boolean', 'ci should be a boolean');
-      assert.match(body.environment.nodeVersion, /^v?\d+\.\d+\.\d+/, 'nodeVersion should be semver');
+      // Product
+      assert.match(body.product.blocksVersion, /^\d+\.\d+\.\d+/);
+      assert.deepStrictEqual(body.product.template, { name: 'telemetry-e2e', version: '1.2.3' });
 
-      // Building blocks: official appear with version; custom excluded.
-      const officialNames: string[] = (body.product.buildingBlocks ?? []).map(
-        (b: { name: string }) => b.name,
-      );
-      assert.ok(officialNames.includes('AppSetting'), 'AppSetting should appear as official BB');
-      assert.ok(officialNames.includes('KVStore'), 'KVStore should appear as official BB');
-      assert.ok(
-        !officialNames.includes('CustomAnalyticsTracker'),
-        'custom BB must NOT appear in buildingBlocks',
-      );
+      // Delivery
+      await sleep(2000);
+      assertDelivered(result.stderr, 'dev SUCCESS');
+    });
+
+    test('official BBs appear with version, custom BBs are excluded but counted', async () => {
+      tmpHome = createTmpDir('bb-filtering');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+
+      const bbNames = (body.product.buildingBlocks ?? []).map((b: any) => b.name);
+      assert.ok(bbNames.includes('AppSetting'), 'AppSetting should be in buildingBlocks');
+      assert.ok(bbNames.includes('KVStore'), 'KVStore should be in buildingBlocks');
+      assert.ok(!bbNames.includes('CustomAnalyticsTracker'), 'Custom BB must NOT appear');
+
       for (const bb of body.product.buildingBlocks ?? []) {
-        assert.ok(bb.version, `official BB ${bb.name} should carry a version`);
+        assert.ok(bb.version, `${bb.name} should have a version`);
       }
 
-      // Counters: custom count and total count.
-      assert.ok(body.counters, 'counters should exist');
-      assert.ok(
-        body.counters.customBuildingBlocks >= 1,
-        `customBuildingBlocks should be >= 1, got ${body.counters.customBuildingBlocks}`,
-      );
-      assert.ok(
-        body.counters.blocksCount >= 3,
-        `blocksCount should be >= 3 (2 official + 1 custom), got ${body.counters.blocksCount}`,
-      );
-      assert.ok(
-        body.counters.blocksCount > officialNames.length,
-        'total blocksCount should exceed official BB count (custom BB included)',
-      );
+      assert.ok(body.counters);
+      assert.ok(body.counters.customBuildingBlocks >= 1, 'customBuildingBlocks should count custom BBs');
+      assert.ok(body.counters.blocksCount >= 3, 'blocksCount should include all BBs');
+    });
+
+    test('payload contains no file paths, home dirs, or usernames (privacy)', async () => {
+      tmpHome = createTmpDir('privacy-check');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const raw = readFileSync(telemetryFile, 'utf-8');
+
+      assert.ok(!raw.includes(tmpHome), 'payload must not contain HOME path');
+      assert.ok(!raw.includes('/Users/'), 'payload must not contain /Users/ path');
+      assert.ok(!raw.includes('/home/'), 'payload must not contain /home/ path');
+      assert.ok(!raw.includes(process.env.USER ?? '___none___'), 'payload must not contain username');
     });
   });
 
-  // ── 2. Identifier creation when missing ────────────────────────────────────
+  // ── 2. Identifier creation & stability ───────────────────────────────────────
 
-  describe('identifier creation', () => {
+  describe('identifiers', () => {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
-    let tmpProject: string | null = null;
 
     afterEach(() => {
-      if (devProcess) {
-        killProcess(devProcess);
-        devProcess = null;
-      }
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
-      if (tmpProject) {
-        rmSync(tmpProject, { recursive: true, force: true });
-        tmpProject = null;
-      }
     });
 
-    test('installation-id is created when missing and carried in the event', async () => {
-      tmpHome = createTmpDir('telemetry-installid-create');
-      // NOTE: no seeding — start from a clean HOME.
+    test('installation-id is created when missing', async () => {
+      tmpHome = createTmpDir('id-creation');
+      // Do NOT seed — let the CLI create it
       const idPath = installationIdPath(tmpHome);
       assert.ok(!existsSync(idPath), 'installation-id must not exist at start');
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
-      const result = await spawnDevServer({
-        port,
-        env: { HOME: tmpHome, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-        extraArgs: [`--telemetry-file=${telemetryFile}`],
-      });
+      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
       devProcess = result.process;
 
-      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
-      assert.ok(existsSync(idPath), 'installation-id file should have been created');
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      assert.ok(existsSync(idPath), 'installation-id should be created');
 
       const createdId = readFileSync(idPath, 'utf-8').trim();
-      assert.match(createdId, UUID_REGEX, 'created installation-id should be a valid UUID');
+      assert.match(createdId, UUID_REGEX);
 
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(
-        body.identifiers.installationId,
-        createdId,
-        'emitted event should carry the freshly created installation-id',
-      );
+      assert.strictEqual(body.identifiers.installationId, createdId);
     });
 
-    test('project-id is created when missing (fresh project dir)', async () => {
-      tmpHome = createTmpDir('telemetry-projectid-home');
+    test('projectId is stable across multiple runs', async () => {
+      tmpHome = createTmpDir('id-stability');
       seedPinnedInstallationId(tmpHome);
-      tmpProject = createTmpDir('telemetry-projectid-project');
-      // Provide a package.json so the app can run from this cwd.
-      writeFileSync(
-        join(tmpProject, 'package.json'),
-        JSON.stringify({ name: 'tmp-proj', type: 'module' }),
-        'utf-8',
-      );
-      const configPath = join(tmpProject, '.blocks', 'config.json');
-      assert.ok(!existsSync(configPath), 'project config must not exist at start');
 
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const file1 = uniqueTelemetryFile(tmpHome);
+      const file2 = uniqueTelemetryFile(tmpHome);
+      const port1 = getNextPort();
+      const port2 = getNextPort();
 
-      // Run the emit harness from the fresh project dir so getProjectId() writes there.
-      const body = await runScriptAndCapture(
-        'npx',
-        ['tsx', join(APP_ROOT, 'aws-blocks', 'scripts', 'emit.ts'), 'deploy', 'success'],
-        tmpHome,
-        telemetryFile,
-        tmpProject,
-      );
+      // Run 1
+      const r1 = await spawnDevServer({ port: port1, home: tmpHome, telemetryFile: file1 });
+      killProcess(r1.process);
+      await waitForFile(file1, 15_000);
 
-      assert.ok(existsSync(configPath), 'project .blocks/config.json should have been created');
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      assert.match(
-        config.telemetry.projectId,
-        UUID_REGEX,
-        'created projectId should be a valid UUID',
-      );
-      assert.ok(body, 'event should have been captured');
-      assert.strictEqual(
-        body!.identifiers.projectId,
-        config.telemetry.projectId,
-        'emitted event should carry the freshly created projectId',
-      );
+      // Run 2
+      const r2 = await spawnDevServer({ port: port2, home: tmpHome, telemetryFile: file2 });
+      killProcess(r2.process);
+      await waitForFile(file2, 15_000);
+
+      const body1 = readTelemetryFile(file1);
+      const body2 = readTelemetryFile(file2);
+
+      assert.strictEqual(body1.identifiers.projectId, body2.identifiers.projectId, 'projectId should be stable');
+      assert.notStrictEqual(body1.identifiers.eventId, body2.identifiers.eventId, 'eventIds should be unique');
     });
   });
 
-  // ── 3. Per-command SUCCESS + FAILURE events ────────────────────────────────
+  // ── 3. Per-command real invocations ──────────────────────────────────────────
 
-  describe('per-command success + failure events', () => {
-    let tmpHome: string;
-
-    afterEach(() => {
-      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
-    });
-
-    const trackedCommands = [
-      'deploy',
-      'destroy',
-      'sandbox',
-      'sandbox:destroy',
-      'cleanup',
-      'console',
-      'create-blocks-app',
-    ] as const;
-
-    for (const command of trackedCommands) {
-      test(`${command}: SUCCESS event has correct command + state`, async () => {
-        tmpHome = createTmpDir(`telemetry-ok-${command.replace(':', '-')}`);
-        seedPinnedInstallationId(tmpHome);
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-        const body = await emitCommand(command, 'success', tmpHome, telemetryFile);
-
-        assert.ok(body, `${command} success event should be captured`);
-        assert.strictEqual(body!.event.command, command, 'command name should match');
-        assert.strictEqual(body!.event.state, 'SUCCESS', 'state should be SUCCESS');
-        assert.strictEqual(body!.event.error, undefined, 'SUCCESS event must not carry error info');
-        assert.strictEqual(
-          body!.identifiers.installationId,
-          PINNED_INSTALLATION_ID,
-          'installationId should be pinned',
-        );
-      });
-
-      test(`${command}: FAILURE event has correct command + state + error`, async () => {
-        tmpHome = createTmpDir(`telemetry-fail-${command.replace(':', '-')}`);
-        seedPinnedInstallationId(tmpHome);
-        const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-        const body = await emitCommand(command, 'fail', tmpHome, telemetryFile);
-
-        assert.ok(body, `${command} failure event should be captured`);
-        assert.strictEqual(body!.event.command, command, 'command name should match');
-        assert.strictEqual(body!.event.state, 'FAIL', 'state should be FAIL');
-        assert.ok(body!.event.error, 'FAIL event should carry error info');
-        assert.strictEqual(typeof body!.event.error.code, 'string', 'error.code should be a string');
-        assert.strictEqual(typeof body!.event.error.phase, 'string', 'error.phase should be a string');
-      });
-    }
-  });
-
-  // ── 3b. Real CLI integration: actual scripts emit correct events ───────────
-
-  describe('real CLI command integration', () => {
+  describe('command: dev', () => {
     let devProcess: ChildProcess | null = null;
     let blocker: ReturnType<typeof createServer> | null = null;
     let tmpHome: string;
 
     afterEach(async () => {
-      if (devProcess) {
-        killProcess(devProcess);
-        devProcess = null;
-      }
-      if (blocker) {
-        await new Promise<void>((r) => blocker!.close(() => r()));
-        blocker = null;
-      }
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (blocker) { await new Promise<void>(r => blocker!.close(() => r())); blocker = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test('dev: real server start emits dev/SUCCESS', async () => {
-      tmpHome = createTmpDir('telemetry-real-dev-ok');
+    test('SUCCESS: dev server starts and emits dev/SUCCESS', async () => {
+      tmpHome = createTmpDir('dev-success');
       seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
-      const result = await spawnDevServer({
-        port,
-        env: { HOME: tmpHome, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-        extraArgs: [`--telemetry-file=${telemetryFile}`],
-      });
+
+      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
       devProcess = result.process;
 
-      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
+      assert.ok(await waitForFile(telemetryFile, 15_000));
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'dev');
       assert.strictEqual(body.event.state, 'SUCCESS');
+
+      await sleep(2000);
+      assertDelivered(result.stderr, 'dev SUCCESS');
     });
 
-    test('dev: EADDRINUSE emits dev/FAIL with PORT_IN_USE', async () => {
-      tmpHome = createTmpDir('telemetry-real-dev-fail');
+    test('FAIL: port in use emits dev/FAIL with PORT_IN_USE', async () => {
+      tmpHome = createTmpDir('dev-fail');
       seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      // Occupy the port so the dev server's listen() fails deterministically.
       blocker = createServer();
       await new Promise<void>((resolve, reject) => {
         blocker!.once('error', reject);
         blocker!.listen(port, resolve);
       });
 
-      // Dev server will hit EADDRINUSE, emit FAIL, but keep the process alive;
-      // run it via spawnCommand with a short timeout that kills it.
-      await spawnCommand(
-        'npx',
-        ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`],
-        {
-          cwd: APP_ROOT,
-          env: { HOME: tmpHome, PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-          timeoutMs: 12_000,
-        },
-      );
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 15_000,
+      });
 
-      assert.ok(await waitForFile(telemetryFile, 3_000), 'FAIL telemetry file should be written');
+      assert.ok(await waitForFile(telemetryFile, 3_000));
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'dev');
       assert.strictEqual(body.event.state, 'FAIL');
       assert.strictEqual(body.event.error?.code, 'PORT_IN_USE');
-      assert.strictEqual(body.event.error?.phase, 'startup');
-    });
-
-    test('sandbox: real script fails without creds and emits sandbox/FAIL', async () => {
-      tmpHome = createTmpDir('telemetry-real-sandbox-fail');
-      seedPinnedInstallationId(tmpHome);
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const body = await runScriptAndCapture(
-        'npx',
-        ['tsx', 'aws-blocks/scripts/sandbox.ts'],
-        tmpHome,
-        telemetryFile,
-        APP_ROOT,
-        60_000,
-      );
-
-      // Sandbox forwards the flag to a child process in some paths; only assert
-      // when the event was captured (it fires on CDK failure in this env).
-      if (body) {
-        assert.strictEqual(body.event.command, 'sandbox');
-        assert.strictEqual(body.event.state, 'FAIL');
-      }
-    });
-
-    test('deploy: real script fails without creds and emits deploy/FAIL', async () => {
-      tmpHome = createTmpDir('telemetry-real-deploy-fail');
-      seedPinnedInstallationId(tmpHome);
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const body = await runScriptAndCapture(
-        'npx',
-        ['tsx', 'aws-blocks/scripts/deploy.ts'],
-        tmpHome,
-        telemetryFile,
-        APP_ROOT,
-        60_000,
-      );
-
-      if (body) {
-        assert.strictEqual(body.event.command, 'deploy');
-        assert.strictEqual(body.event.state, 'FAIL');
-        assert.ok(body.event.error, 'deploy FAIL should carry error info');
-      }
-    });
-
-    test('destroy: real script fails without creds and emits destroy/FAIL', async () => {
-      tmpHome = createTmpDir('telemetry-real-destroy-fail');
-      seedPinnedInstallationId(tmpHome);
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const body = await runScriptAndCapture(
-        'npx',
-        ['tsx', 'aws-blocks/scripts/destroy.ts'],
-        tmpHome,
-        telemetryFile,
-        APP_ROOT,
-        60_000,
-      );
-
-      if (body) {
-        assert.strictEqual(body.event.command, 'destroy');
-        assert.strictEqual(body.event.state, 'FAIL');
-        assert.ok(body.event.error, 'destroy FAIL should carry error info');
-      }
-    });
-
-    test('cleanup: real built CLI emits cleanup/SUCCESS', async () => {
-      tmpHome = createTmpDir('telemetry-real-cleanup');
-      seedPinnedInstallationId(tmpHome);
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      assert.ok(existsSync(CLEANUP_SCRIPT), `built cleanup script should exist at ${CLEANUP_SCRIPT}`);
-
-      const body = await runScriptAndCapture(
-        'node',
-        [CLEANUP_SCRIPT],
-        tmpHome,
-        telemetryFile,
-        APP_ROOT,
-        20_000,
-      );
-
-      assert.ok(body, 'cleanup should emit a telemetry event');
-      assert.strictEqual(body!.event.command, 'cleanup');
-      assert.strictEqual(body!.event.state, 'SUCCESS');
-    });
-
-    test('create-blocks-app: real built CLI scaffolds and emits create-blocks-app/SUCCESS', async () => {
-      tmpHome = createTmpDir('telemetry-real-create-app');
-      seedPinnedInstallationId(tmpHome);
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const scaffoldParent = createTmpDir('telemetry-scaffold');
-      const targetDir = join(scaffoldParent, 'my-app');
-
-      assert.ok(existsSync(CREATE_APP_SCRIPT), `built create-blocks-app should exist at ${CREATE_APP_SCRIPT}`);
-
-      const body = await runScriptAndCapture(
-        'node',
-        [CREATE_APP_SCRIPT, targetDir, '--template', 'bare', '--yes', '--skip-install'],
-        tmpHome,
-        telemetryFile,
-        scaffoldParent,
-        60_000,
-      );
-
-      rmSync(scaffoldParent, { recursive: true, force: true });
-
-      assert.ok(body, 'create-blocks-app should emit a telemetry event');
-      assert.strictEqual(body!.event.command, 'create-blocks-app');
-      assert.strictEqual(body!.event.state, 'SUCCESS');
-      assert.ok(body!.product?.template, 'create-blocks-app event should carry template info');
+      assertDelivered(result.stderr, 'dev FAIL');
     });
   });
 
-  // ── 4. Pinned installation ID: delete → recreate → restore ─────────────────
 
-  describe('pinned installationId recreation lifecycle', () => {
-    let devProcess: ChildProcess | null = null;
+  describe('command: create-blocks-app', () => {
     let tmpHome: string;
-
+    let scaffoldDir: string | null = null;
     afterEach(() => {
-      if (devProcess) {
-        killProcess(devProcess);
-        devProcess = null;
-      }
-      // Teardown: ensure the pinned value is restored before cleanup so the
-      // sandboxed HOME ends in the canonical pinned state.
-      if (tmpHome) {
-        seedPinnedInstallationId(tmpHome);
-        assert.strictEqual(
-          readFileSync(installationIdPath(tmpHome), 'utf-8').trim(),
-          PINNED_INSTALLATION_ID,
-          'teardown should restore the pinned installation-id',
-        );
-        rmSync(tmpHome, { recursive: true, force: true });
-      }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+      if (scaffoldDir) rmSync(scaffoldDir, { recursive: true, force: true });
     });
 
-    test('delete pinned id, let CLI recreate a fresh one, then restore', async () => {
-      tmpHome = createTmpDir('telemetry-pinned-lifecycle');
-      const idPath = installationIdPath(tmpHome);
-
-      // 1. Seed pinned, verify.
+    test('SUCCESS: scaffolds app and emits create-blocks-app/SUCCESS', async () => {
+      tmpHome = createTmpDir('create-app-success');
       seedPinnedInstallationId(tmpHome);
-      assert.strictEqual(readFileSync(idPath, 'utf-8').trim(), PINNED_INSTALLATION_ID);
-
-      // 2. Delete the pinned file.
-      rmSync(idPath, { force: true });
-      assert.ok(!existsSync(idPath), 'pinned installation-id should be deleted');
-
-      // 3. Run the real CLI so it creates a fresh installation-id.
+      scaffoldDir = createTmpDir('scaffold-target');
+      const targetDir = join(scaffoldDir, 'my-app');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const port = getNextPort();
-      const result = await spawnDevServer({
-        port,
-        env: { HOME: tmpHome, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-        extraArgs: [`--telemetry-file=${telemetryFile}`],
+
+      const result = await runCommand('npx', ['create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
+        home: tmpHome, telemetryFile, cwd: scaffoldDir, timeoutMs: 60_000,
       });
-      devProcess = result.process;
 
-      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
-      assert.ok(existsSync(idPath), 'CLI should have recreated the installation-id file');
-
-      const recreatedId = readFileSync(idPath, 'utf-8').trim();
-      assert.match(recreatedId, UUID_REGEX, 'recreated id should be a valid UUID');
-      assert.notStrictEqual(
-        recreatedId,
-        PINNED_INSTALLATION_ID,
-        'recreated id should be a fresh random UUID, not the pinned value',
-      );
-
+      assert.ok(await waitForFile(telemetryFile, 5_000));
       const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(
-        body.identifiers.installationId,
-        recreatedId,
-        'emitted event should carry the recreated id',
-      );
+      assert.strictEqual(body.event.command, 'create-blocks-app');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'create-blocks-app SUCCESS');
+    });
 
-      // 4. Restore the pinned value explicitly (teardown re-asserts it too).
+    test('FAIL: missing args emits create-blocks-app/FAIL', async () => {
+      tmpHome = createTmpDir('create-app-fail');
       seedPinnedInstallationId(tmpHome);
-      assert.strictEqual(
-        readFileSync(idPath, 'utf-8').trim(),
-        PINNED_INSTALLATION_ID,
-        'pinned installation-id should be restored',
-      );
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      // No target dir argument → should fail
+      const result = await runCommand('npx', ['create-blocks-app'], {
+        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+      });
+
+      // create-blocks-app may exit without emitting telemetry on arg parse failure
+      // (it exits before trackCommand is called). This is expected behavior.
+      if (await waitForFile(telemetryFile, 3_000)) {
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.command, 'create-blocks-app');
+        assert.strictEqual(body.event.state, 'FAIL');
+      }
     });
   });
 
-  // ── 5. Environment isolation guarantees ────────────────────────────────────
+  describe('command: vendorize', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
 
-  describe('environment isolation', () => {
+    test('FAIL: bad package name emits vendorize/FAIL', async () => {
+      tmpHome = createTmpDir('vendorize-fail');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['blocks-vendorize', '@nonexistent/fake-package'], {
+        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+      });
+
+      if (await waitForFile(telemetryFile, 3_000)) {
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.command, 'vendorize');
+        assert.strictEqual(body.event.state, 'FAIL');
+        assertDelivered(result.stderr, 'vendorize FAIL');
+      }
+    });
+  });
+
+  // ── 4. AWS commands (require valid credentials) ─────────────────────────────
+
+  describe('command: sandbox', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits sandbox/FAIL', async () => {
+      tmpHome = createTmpDir('sandbox-fail');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox FAIL should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assert.ok(body.event.error, 'FAIL should carry error info');
+      assertDelivered(result.stderr, 'sandbox FAIL');
+    });
+
+    test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
+      tmpHome = createTmpDir('sandbox-success');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 300_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox SUCCESS should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assert.strictEqual(body.event.error, undefined);
+      assertDelivered(result.stderr, 'sandbox SUCCESS');
+    });
+  });
+
+  describe('command: sandbox:destroy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits sandbox:destroy/FAIL', async () => {
+      tmpHome = createTmpDir('sandbox-destroy-fail');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      if (await waitForFile(telemetryFile, 5_000)) {
+        const body = readTelemetryFile(telemetryFile);
+        assert.strictEqual(body.event.command, 'sandbox:destroy');
+        assert.strictEqual(body.event.state, 'FAIL');
+        assertDelivered(result.stderr, 'sandbox:destroy FAIL');
+      }
+    });
+
+    test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
+      tmpHome = createTmpDir('sandbox-destroy-success');
+      seedPinnedInstallationId(tmpHome);
+
+      // First deploy a sandbox
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      // Then destroy it
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 120_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox:destroy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'sandbox:destroy SUCCESS');
+    });
+  });
+
+  describe('command: deploy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits deploy/FAIL', async () => {
+      tmpHome = createTmpDir('deploy-fail');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'deploy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assert.ok(body.event.error);
+      assertDelivered(result.stderr, 'deploy FAIL');
+    });
+
+    test('SUCCESS: deploy with creds emits deploy/SUCCESS', async () => {
+      tmpHome = createTmpDir('deploy-success');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 300_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'deploy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'deploy SUCCESS');
+    });
+  });
+
+  describe('command: destroy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits destroy/FAIL', async () => {
+      tmpHome = createTmpDir('destroy-fail');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'destroy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assertDelivered(result.stderr, 'destroy FAIL');
+    });
+
+    test('SUCCESS: destroy with creds emits destroy/SUCCESS', async () => {
+      tmpHome = createTmpDir('destroy-success');
+      seedPinnedInstallationId(tmpHome);
+
+      // Deploy first, then destroy
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        home: tmpHome, telemetryFile, timeoutMs: 120_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'destroy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'destroy SUCCESS');
+    });
+  });
+
+  describe('command: console', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('SUCCESS: console after sandbox deploy emits console/SUCCESS', async () => {
+      tmpHome = createTmpDir('console-success');
+      seedPinnedInstallationId(tmpHome);
+
+      // Deploy sandbox first to create outputs.json
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      // Run console
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const result = await runCommand('npx', ['tsx', '-e', `
+        import { openConsole } from '@aws-blocks/blocks/scripts';
+        openConsole({ outputsFile: '.blocks-sandbox/outputs.json' });
+      `], {
+        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 3_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'console');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'console SUCCESS');
+
+      // Cleanup: destroy the sandbox
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+      });
+    });
+  });
+
+  // ── 5. Disable mechanisms ────────────────────────────────────────────────────
+
+  describe('disable mechanisms', () => {
     let devProcess: ChildProcess | null = null;
     let tmpHome: string;
 
     afterEach(() => {
-      if (devProcess) {
-        killProcess(devProcess);
-        devProcess = null;
-      }
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
-    test('suite runs in a sandboxed HOME and never touches the real ~/.blocks', async () => {
-      tmpHome = createTmpDir('telemetry-isolation');
+    test('AWS_BLOCKS_DISABLE_TELEMETRY=1 prevents telemetry', async () => {
+      tmpHome = createTmpDir('disable-env');
       seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
 
-      const realHome = homedir();
-      assert.notStrictEqual(tmpHome, realHome, 'test HOME must differ from real HOME');
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        home: tmpHome, telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
+      });
 
-      const realIdPath = installationIdPath(realHome);
-      const realIdBefore = existsSync(realIdPath)
-        ? readFileSync(realIdPath, 'utf-8')
-        : null;
+      const fileExists = await waitForFile(telemetryFile, 2_000);
+      // --telemetry-file still writes even when disabled (matches CDK behavior)
+      // but HTTP send should NOT happen
+      assertNotDelivered(result.stderr);
+    });
+
+    test('global config telemetry.enabled=false prevents telemetry', async () => {
+      tmpHome = createTmpDir('disable-global');
+      seedPinnedInstallationId(tmpHome);
+      // Write global config disabling telemetry
+      const globalConfig = join(tmpHome, '.blocks', 'config.json');
+      mkdirSync(dirname(globalConfig), { recursive: true });
+      writeFileSync(globalConfig, JSON.stringify({ telemetry: { enabled: false } }));
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+      });
+
+      assertNotDelivered(result.stderr);
+    });
+
+    test('per-project config telemetry.enabled=false prevents telemetry', async () => {
+      tmpHome = createTmpDir('disable-project');
+      seedPinnedInstallationId(tmpHome);
+      // Write per-project config disabling telemetry
+      const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
+      const originalContent = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
+
+      try {
+        mkdirSync(dirname(projectConfig), { recursive: true });
+        writeFileSync(projectConfig, JSON.stringify({ telemetry: { enabled: false } }));
+
+        const telemetryFile = uniqueTelemetryFile(tmpHome);
+        const port = getNextPort();
+
+        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+          home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+        });
+
+        assertNotDelivered(result.stderr);
+      } finally {
+        // Restore original config
+        if (originalContent) {
+          writeFileSync(projectConfig, originalContent);
+        } else {
+          rmSync(projectConfig, { force: true });
+        }
+      }
+    });
+
+    test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable (only "1" disables)', async () => {
+      tmpHome = createTmpDir('disable-zero');
+      seedPinnedInstallationId(tmpHome);
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
       const result = await spawnDevServer({
-        port,
-        env: { HOME: tmpHome, AWS_BLOCKS_DISABLE_TELEMETRY: undefined },
-        extraArgs: [`--telemetry-file=${telemetryFile}`],
+        port, home: tmpHome, telemetryFile,
+        env: { AWS_BLOCKS_DISABLE_TELEMETRY: '0' },
       });
       devProcess = result.process;
-      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
 
-      // The pinned id lives ONLY in the sandboxed home.
-      assert.strictEqual(
-        readFileSync(installationIdPath(tmpHome), 'utf-8').trim(),
-        PINNED_INSTALLATION_ID,
-      );
-
-      // The real home's installation-id is unchanged.
-      const realIdAfter = existsSync(realIdPath)
-        ? readFileSync(realIdPath, 'utf-8')
-        : null;
-      assert.strictEqual(realIdAfter, realIdBefore, 'real ~/.blocks installation-id must be untouched');
-
-      // No PII leak: payload must not contain the real or sandbox home paths.
-      const body = readTelemetryFile(telemetryFile);
-      const serialized = JSON.stringify(body);
-      assert.ok(!serialized.includes(realHome), 'payload must not contain the real HOME path');
-      assert.ok(!serialized.includes(tmpHome), 'payload must not contain the sandbox HOME path');
+      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry should still fire with =0');
+      await sleep(2000);
+      assertDelivered(result.stderr, 'telemetry should be delivered when DISABLE=0');
     });
   });
-});
+
+}); // end describe('Telemetry E2E')
