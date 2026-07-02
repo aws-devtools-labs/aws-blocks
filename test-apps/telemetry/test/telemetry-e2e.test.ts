@@ -668,10 +668,7 @@ describe('Telemetry E2E', { timeout: 600_000 }, () => {
 
       // Run console
       const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', '-e', `
-        import { openConsole } from '@aws-blocks/blocks/scripts';
-        openConsole({ outputsFile: '.blocks-sandbox/outputs.json' });
-      `], {
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
         home: tmpHome, telemetryFile, timeoutMs: 15_000,
       });
 
