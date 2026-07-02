@@ -234,3 +234,53 @@ export function buildCapDecision(ev) {
 				: null,
 	};
 }
+
+/**
+ * The deterministic hard-cap plan for the judge's qualitative dimensions given
+ * the objective evidence. Returns the CEILINGS each affected dimension is
+ * clamped to (a ceiling only ever LOWERS a dim above it — it never raises one),
+ * plus audit reasons and notes. This is the single source of truth for WHICH
+ * objective failure caps WHICH dimension and by how much, so 4-judge.ts can't
+ * drift from these tests.
+ *
+ * FAIRNESS — a single root failure must not double-penalize one dimension:
+ *   - A REAL build failure (`build_status`=='failed', deterministically NOT the
+ *     'na' case where a template ships no `build` script) caps
+ *     functional_completeness to 3. buildCapDecision owns that 'failed' vs 'na'
+ *     distinction, so an absent build script never triggers a cap.
+ *   - A dev server that never started caps selector_contract to 2 (its selectors
+ *     were never verifiable at runtime) and functional_completeness to 2 — but
+ *     the functional_completeness cap fires ONLY when the build did NOT itself
+ *     fail. When the build DID fail, a not-started dev server is a downstream
+ *     SYMPTOM of that same root failure, so the build cap already owns
+ *     functional_completeness and the dev-server rule does not stack a second,
+ *     lower fc ceiling on top of it. (This never weakens "a broken app scores
+ *     low": a failed build floors the objective test-rate — no test can pass —
+ *     so the composite headline is ~0 regardless of whether fc lands at 2 or 3;
+ *     these caps only shape the raw qualitative dims, not the composite.)
+ * The caller applies each ceiling through a `cur > ceiling` guard, so a
+ * dimension the judge already scored at/below a ceiling is never lowered again
+ * nor recorded as a no-op cap — an already-low dim can't be double-counted.
+ * @param {{build_status?: unknown, build_succeeded?: unknown, dev_server_started?: unknown}} ev objective evidence
+ * @returns {{caps: {dimension: string, ceiling: number, reason: string}[], notes: string[]}}
+ */
+export function hardCapPlan(ev) {
+	const caps = [];
+	const notes = [];
+	const build = buildCapDecision(ev);
+	if (build.cap) caps.push({ dimension: 'functional_completeness', ceiling: 3, reason: 'build failed' });
+	if (build.note) notes.push(build.note);
+	// dev_server_started reaches us as a real bool or its GITHUB_OUTPUT string.
+	const devOk = ev?.dev_server_started === true || ev?.dev_server_started === 'true';
+	if (!devOk) {
+		// Only cap functional_completeness for a not-started dev server when the
+		// build did NOT already fail — otherwise this is the SAME root failure and
+		// the build cap already owns fc (see FAIRNESS above). selector_contract is
+		// a distinct dimension the build cap never touches, so it always applies.
+		if (!build.cap) {
+			caps.push({ dimension: 'functional_completeness', ceiling: 2, reason: 'dev server not started' });
+		}
+		caps.push({ dimension: 'selector_contract', ceiling: 2, reason: 'dev server not started' });
+	}
+	return { caps, notes };
+}

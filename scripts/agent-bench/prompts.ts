@@ -25,6 +25,8 @@ JUSTIFY every dimension's score in your explanation by citing concrete evidence 
 
 Stay fair and deterministic. Tie every judgment to evidence in the source, not to a hunch or the task's assumed difficulty. Do not invent flaws that aren't there, and do not credit features you cannot find — symmetric rigor in both directions is what keeps the grade reproducible.
 
+APPLICABILITY — grade each dimension ONLY against what THIS task's prompt actually requires. Before scoring a dimension, decide whether the prompt puts it in play at all. A dimension that is genuinely not applicable to the task — e.g. \`persistence\` when nothing is required to survive a reload (no durable data), or \`selector_contract\` for a backend/API task with no DOM — must NOT be docked for the absence of something the task never asked for: treat an inapplicable dimension as satisfied (score it at the top of the scale) and state briefly in your explanation why it is N/A. This is NOT license to inflate: when a dimension DOES apply, hold the strict anchors above and dock for every real gap. Applicability decides only WHETHER a dimension is in play; the anchors decide the score once it is.
+
 You grade SOURCE you cannot run. Do NOT award full \`functional_completeness\` to a flow whose runtime success can't be proven from source alone — e.g. OIDC redirect/callback round-trips, async session establishment, delete / persist-then-reload cycles, or conditionally-rendered views. Treat such a flow as UNVERIFIED and hold the score back unless the source is unambiguously correct.`;
 
 // The judge rubric is a fixed set of dimensions shared by every task (below).
@@ -40,12 +42,16 @@ import { COMMON_DIMENSIONS } from './steps/lib/scoring.mjs';
 export { COMMON_DIMENSIONS };
 
 const COMMON_RUBRIC_LINES: Record<(typeof COMMON_DIMENSIONS)[number], string> = {
-	functional_completeness: 'Does the source implement everything the prompt asks for?',
-	selector_contract: 'Are the data-testid hooks present and correctly named on the right DOM elements?',
-	persistence: 'Does the implementation use a storage block correctly so state survives a reload?',
-	code_quality: 'No dead code, no @ts-ignore, no unused imports, no commented-out blocks. Cite the file.',
+	functional_completeness:
+		'Does the source implement everything the task PROMPT actually asks for (and only that)? Applicability: always in play — every task requires some behavior. Score against the prompt\'s stated requirements; do not invent requirements it never made, and do not credit features it never asked for.',
+	selector_contract:
+		'Are the data-testid (or otherwise-specified) selector hooks the prompt names present, correctly named, and on the right DOM elements? Applicability: only when the task defines a selector/testid contract. For a task with no DOM or no named selector contract (e.g. a backend/API-only task), this dimension is N/A — treat it as satisfied and say so; never dock for selectors the task never required.',
+	persistence:
+		'Applicability FIRST: score this only if the prompt actually requires state to be durable — to survive a reload/restart. If the task has NO durability requirement (its state is ephemeral or per-request), persistence is N/A: treat it as satisfied and note why — do NOT dock it merely for "not using a storage block". When durability IS required, score whether the implementation routes that state through a storage block correctly so it survives a reload, against the strict anchors. Either way, grade only the correct handling of whatever state the task actually needs.',
+	code_quality:
+		'No dead code, no @ts-ignore, no unused imports, no commented-out blocks. Cite the file. Applicability: always in play, but scale it to the code the task actually required — judge only the code that is there; do not manufacture issues in code the task never called for.',
 	blocks_fidelity:
-		"Does the implementation import the @aws-blocks Building Block(s) the task requires and route the task's core behavior through their real API — not an in-memory Map/array, hardcoded data, inline stub, or bypassed/mocked block? Cite the exact import line and at least one concrete method call (e.g. store.put(key,val), job.submit(data), kb.retrieve(q)) per required block. Score 0 if the expected block type is not imported at all.",
+		"Applicability: score against the Building Block(s) the task requires (see <required-blocks> when present); if the task requires no @aws-blocks Building Block, this dimension is N/A — treat it as satisfied and note why. When blocks ARE required: does the implementation import the required @aws-blocks Building Block(s) and route the task's core behavior through their real API — not an in-memory Map/array, hardcoded data, inline stub, or bypassed/mocked block? Cite the exact import line and at least one concrete method call (e.g. store.put(key,val), job.submit(data), kb.retrieve(q)) per required block. Score 0 for any REQUIRED block whose type is never imported at all.",
 };
 
 // Compose the rubric from the fixed shared dimensions — every task is graded

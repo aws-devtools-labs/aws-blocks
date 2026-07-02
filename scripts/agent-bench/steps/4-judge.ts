@@ -42,7 +42,7 @@ import {
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { z } from 'zod';
 import { COMMON_DIMENSIONS, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
-import { buildCapDecision } from './lib/scoring.mjs';
+import { hardCapPlan } from './lib/scoring.mjs';
 
 // Physical spec-blinding: the judge grades a SOURCE-ONLY COPY of the workspace
 // (staged below into JUDGE_SRC) with these excluded, so the objective test can't
@@ -461,29 +461,28 @@ function applyHardCaps(
 
 	// GITHUB_OUTPUT values can reach EVIDENCE as strings ("true"/"3") as well as
 	// the JSON bool/number the workflow normally interpolates — coerce both forms
-	// so the caps fire either way.
+	// so the caps/notes fire either way.
 	const truthy = (v: unknown): boolean => v === true || v === 'true';
 	const numOf = (v: unknown): number => {
 		const n = Number(v);
 		return Number.isFinite(n) ? n : 0;
 	};
-	const devOk = truthy(ev.dev_server_started);
 	const tt = numOf(ev.tests_total);
 	const tp = numOf(ev.tests_passed);
 
-	// Build cap fires ONLY on a REAL build failure — a `build` script existed and
-	// exited non-zero (e.g. file-gallery's `tsc` type errors). Templates that ship
-	// no `build` script report build_status="na" (NOT a failure) and must not be
-	// capped: an absent script wrongly read as build_succeeded=false is what
-	// unfairly capped observability-api to 3 despite 18/18 tests. The tri-state
-	// interpretation lives in scoring.mjs so this stays the single source of truth.
-	const build = buildCapDecision(ev);
-	if (build.cap) cap('functional_completeness', 3, 'build failed');
-	if (build.note) notes.push(build.note);
-	if (!devOk) {
-		cap('functional_completeness', 2, 'dev server not started');
-		cap('selector_contract', 2, 'dev server not started');
-	}
+	// Deterministic hard-cap plan (single-sourced in lib/scoring.mjs). It decides
+	// WHICH objective failure caps WHICH dimension: a REAL build failure
+	// (build_status=='failed', never 'na') caps functional_completeness to 3, and
+	// a not-started dev server caps selector_contract to 2 — plus
+	// functional_completeness to 2 ONLY when the build did not itself fail, so one
+	// root failure (a broken build that also can't serve a dev server) never
+	// stacks two fc caps. cap()'s `cur > ceiling` guard means an already-low dim
+	// is never lowered again or recorded twice. None of this weakens
+	// "broken app scores low" — a failed build floors the test-rate, so the
+	// composite is ~0 regardless of the raw fc dim. See hardCapPlan's docs.
+	const plan = hardCapPlan(ev);
+	for (const { dimension, ceiling, reason } of plan.caps) cap(dimension, ceiling, reason);
+	for (const n of plan.notes) notes.push(n);
 	// Test pass-rate is recorded for auditability ONLY — it deliberately does
 	// NOT cap functional_completeness (or any dimension). The judge grades the
 	// source on its own merits; the test ratio drives the composite headline in

@@ -17,6 +17,7 @@ import {
 	composite,
 	compositeBand,
 	HARNESS_FAIL_REASONS,
+	hardCapPlan,
 	isScoredCell,
 	testRate,
 	testStats,
@@ -338,6 +339,91 @@ describe('buildCapDecision(ev) — the build-cap is for REAL build failures only
 		// build_succeeded, so a real failure still caps.
 		assert.equal(buildCapDecision({ build_status: 'weird', build_succeeded: 'false' }).cap, true);
 		assert.equal(buildCapDecision({ build_status: 'weird', build_succeeded: 'true' }).cap, false);
+	});
+});
+
+describe('hardCapPlan(ev) — deterministic, non-stacking hard caps (fairness)', () => {
+	// A cap entry {dimension, ceiling, reason} for easy assertions.
+	const capFor = (plan, dim) => plan.caps.find((c) => c.dimension === dim) ?? null;
+
+	it('build ok + dev started → NO caps (a healthy cell is never capped)', () => {
+		const plan = hardCapPlan({ build_status: 'ok', dev_server_started: 'true' });
+		assert.deepEqual(plan.caps, []);
+		assert.deepEqual(plan.notes, []);
+	});
+
+	it('build N/A (no `build` script) + dev started → NO caps, but an N/A note (never capped for an absent script)', () => {
+		const plan = hardCapPlan({ build_status: 'na', dev_server_started: 'true' });
+		assert.deepEqual(plan.caps, []);
+		assert.equal(plan.notes.length, 1);
+		assert.match(plan.notes[0], /N\/A/);
+	});
+
+	it('build failed + dev started → functional_completeness capped to 3 only (the build penalty)', () => {
+		const plan = hardCapPlan({ build_status: 'failed', dev_server_started: 'true' });
+		assert.deepEqual(capFor(plan, 'functional_completeness'), {
+			dimension: 'functional_completeness',
+			ceiling: 3,
+			reason: 'build failed',
+		});
+		assert.equal(capFor(plan, 'selector_contract'), null);
+	});
+
+	it('build ok + dev NOT started (independent dev failure) → fc capped to 2 AND selector to 2', () => {
+		const plan = hardCapPlan({ build_status: 'ok', dev_server_started: 'false' });
+		assert.deepEqual(capFor(plan, 'functional_completeness'), {
+			dimension: 'functional_completeness',
+			ceiling: 2,
+			reason: 'dev server not started',
+		});
+		assert.deepEqual(capFor(plan, 'selector_contract'), {
+			dimension: 'selector_contract',
+			ceiling: 2,
+			reason: 'dev server not started',
+		});
+	});
+
+	it('build N/A + dev NOT started → fc capped to 2 (na is not a build failure, so the dev cap owns fc)', () => {
+		const plan = hardCapPlan({ build_status: 'na', dev_server_started: 'false' });
+		assert.deepEqual(capFor(plan, 'functional_completeness'), {
+			dimension: 'functional_completeness',
+			ceiling: 2,
+			reason: 'dev server not started',
+		});
+		assert.deepEqual(capFor(plan, 'selector_contract'), {
+			dimension: 'selector_contract',
+			ceiling: 2,
+			reason: 'dev server not started',
+		});
+	});
+
+	it('FAIRNESS: build failed + dev NOT started (same root failure) → fc capped ONCE to 3, NOT stacked to 2', () => {
+		// A broken build can't serve a dev server, so the not-started dev server is
+		// a downstream symptom of the SAME root failure. The build cap owns
+		// functional_completeness (ceiling 3); the dev-server rule must NOT add a
+		// second, lower fc ceiling (2) on top — that would double-penalize one
+		// cause. selector_contract, a distinct dimension, is still capped to 2.
+		const plan = hardCapPlan({ build_status: 'failed', dev_server_started: 'false' });
+		const fcCaps = plan.caps.filter((c) => c.dimension === 'functional_completeness');
+		assert.equal(fcCaps.length, 1, 'functional_completeness must be capped exactly once');
+		assert.deepEqual(fcCaps[0], { dimension: 'functional_completeness', ceiling: 3, reason: 'build failed' });
+		assert.deepEqual(capFor(plan, 'selector_contract'), {
+			dimension: 'selector_contract',
+			ceiling: 2,
+			reason: 'dev server not started',
+		});
+	});
+
+	it("caps fire on the REAL condition: build_status=='failed' caps, 'na' never does", () => {
+		assert.ok(hardCapPlan({ build_status: 'failed', dev_server_started: 'true' }).caps.length > 0);
+		assert.deepEqual(hardCapPlan({ build_status: 'na', dev_server_started: 'true' }).caps, []);
+	});
+
+	it('coerces the GITHUB_OUTPUT string form of dev_server_started (bare "false" is not truthy)', () => {
+		// A quoted "false" from GITHUB_OUTPUT must read as not-started (JS truthiness
+		// would otherwise treat the non-empty string as true and skip the cap).
+		assert.ok(hardCapPlan({ build_status: 'ok', dev_server_started: 'false' }).caps.length > 0);
+		assert.deepEqual(hardCapPlan({ build_status: 'ok', dev_server_started: true }).caps, []);
 	});
 });
 

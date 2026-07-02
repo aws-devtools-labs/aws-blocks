@@ -237,7 +237,7 @@ jobs:
 
       - name: 5. Upload result
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
           path: /tmp/result.json
@@ -253,7 +253,7 @@ jobs:
       # never turns the cell red (e.g. when init failed before bench-app exists).
       - name: 6. Upload source
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
           path: |
@@ -278,7 +278,7 @@ jobs:
       # the agent step never ran, so neither file exists).
       - name: 6b. Upload trace
         if: always()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
           path: |
@@ -332,8 +332,13 @@ jobs:
           sparse-checkout: scripts/agent-bench
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with: { node-version-file: '.nvmrc' }
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with: { path: results, pattern: bench-result-* }
+      # Traces (+ metrics.json) for the best-effort struggle analysis below.
+      # Best-effort: if-no-files-found is n/a for download; a missing pattern
+      # just yields no dirs and analyze.mjs degrades to "no trace" per cell.
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with: { path: traces, pattern: bench-trace-* }
 
       # OIDC for S3 (read the baseline, write this run's baseline). Best-effort:
       # on any creds failure the overview simply degrades to "no baseline" and
@@ -398,6 +403,39 @@ jobs:
           # PR-comment step; kept so that step stays valid if it is re-enabled.
           SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
 
+      # Best-effort, ISOLATED per-run struggle analysis: an LLM diagnosis of ONLY
+      # the low (< 50) or regressed cells, from each cell's downloaded trace. It
+      # appends an "Agent struggles" rollup to the step summary and writes
+      # bench-analysis.json. It can NEVER fail this job — analyze.mjs is wrapped to
+      # always exit 0, and continue-on-error is belt-and-suspenders on top. Reuses
+      # the OIDC creds above for Bedrock; if creds/permission are missing it just
+      # emits an "analysis unavailable" note. BASELINE_PATH (PR-only) enables the
+      # regression check; on push it degrades to low-only.
+      - name: Analyze low/regressed cells (best-effort)
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 12
+        run: node scripts/agent-bench/steps/analyze.mjs
+        env:
+          RESULTS_DIR: results
+          TRACES_DIR: traces
+          BASELINE_PATH: ${{ github.workspace }}/baseline.json
+          ANALYSIS_PATH: ${{ github.workspace }}/bench-analysis.json
+          # Same judge model as 4-judge.ts / the bench job's default.
+          BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
+          AWS_REGION: us-east-1
+
+      - name: Upload analysis (best-effort)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bench-analysis
+          path: ${{ github.workspace }}/bench-analysis.json
+          if-no-files-found: ignore
+          retention-days: 90
+          overwrite: true
+
       # Persist this run's aggregate (per-cell composites + mean) as the
       # COMMIT-keyed baseline. A push-to-main run thus leaves the baseline that
       # later PRs diff their base commit against; it ALSO updates a stable
@@ -460,7 +498,7 @@ jobs:
       #
       # - name: Post PR comment
       #   if: github.event.pull_request
-      #   uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      #   uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
       #   env:
       #     SUMMARY_MD_PATH: ${{ github.workspace }}/bench-summary.md
       #   with:
