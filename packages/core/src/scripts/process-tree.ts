@@ -113,6 +113,100 @@ export function killFrontendTree(
   }
 }
 
+/** Subset of a `spawnSync` result that {@link findListenerPids} inspects. */
+interface CommandOutput {
+  stdout?: string | null;
+  status?: number | null;
+  error?: Error;
+}
+
+/**
+ * Find the PIDs of processes holding a TCP *listener* on `port`, so a fresh dev
+ * server can reclaim a port left bound by a crashed / SIGKILL'd predecessor (its
+ * orphaned backend, or a detached Vite grandchild) instead of colliding on it.
+ * This mirrors the `lsof -ti:<port>` discovery the `cleanup` script already uses
+ * — it does NOT introduce a new port-to-PID mechanism.
+ *
+ * - **POSIX**: `lsof -ti tcp:<port> -sTCP:LISTEN` — `-t` prints bare PIDs and the
+ *   `-sTCP:LISTEN` state filter restricts the match to the *listener*, so a
+ *   transient client socket on the same port is never targeted.
+ * - **Windows**: `netstat -ano -p tcp`, keeping the trailing PID column of
+ *   `LISTENING` rows whose local address ends in `:<port>`.
+ *
+ * Best-effort and never throws: a missing tool, a non-zero exit ("nothing is
+ * listening"), or unparseable output all yield `[]`. PIDs `<= 1` are dropped
+ * defensively (never target init / the whole current group). `runner`/`platform`
+ * are injected for tests.
+ */
+export function findListenerPids(
+  port: number,
+  runner: (command: string, args: readonly string[]) => CommandOutput = (command, args) =>
+    spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true }),
+  platform: NodeJS.Platform = process.platform,
+): number[] {
+  try {
+    const pids = new Set<number>();
+    if (platform === 'win32') {
+      const { stdout } = runner('netstat', ['-ano', '-p', 'tcp']);
+      if (!stdout) return [];
+      for (const line of stdout.split(/\r?\n/)) {
+        if (!/LISTENING/i.test(line)) continue;
+        // Columns: Proto  Local-Address  Foreign-Address  State  PID
+        const cols = line.trim().split(/\s+/);
+        const local = cols[1] ?? '';
+        if (!local.endsWith(`:${port}`)) continue;
+        const pid = Number(cols[cols.length - 1]);
+        if (Number.isInteger(pid) && pid > 1) pids.add(pid);
+      }
+      return [...pids];
+    }
+    const { stdout } = runner('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN']);
+    if (!stdout) return [];
+    for (const token of stdout.split(/\s+/)) {
+      const pid = Number(token.trim());
+      if (Number.isInteger(pid) && pid > 1) pids.add(pid);
+    }
+    return [...pids];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Force-terminate whatever process (and, on POSIX, its process group) currently
+ * holds a port — used by the dev server's startup / EADDRINUSE *reclaim* path on
+ * a PID discovered via {@link findListenerPids}, i.e. a process this dev server
+ * did NOT spawn. Reuses {@link killFrontendTree} (POSIX `-pid` group kill /
+ * Windows `taskkill /T`, with a direct-`kill` fallback) so reclaim reaps exactly
+ * like our own frontend teardown — no bespoke kill mechanism. Best-effort; never
+ * throws (a since-exited PID just yields ESRCH, swallowed by killFrontendTree).
+ */
+export function killListenerTree(
+  pid: number,
+  signal: NodeJS.Signals = 'SIGTERM',
+  platform: NodeJS.Platform = process.platform,
+  killFn: (pid: number, signal: NodeJS.Signals) => void = (p, s) => process.kill(p, s),
+  winTreeKill: (pid: number) => boolean = windowsTreeKill,
+): void {
+  killFrontendTree(
+    {
+      pid,
+      kill: (s) => {
+        try {
+          process.kill(pid, s ?? signal);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    },
+    signal,
+    platform,
+    killFn,
+    winTreeKill,
+  );
+}
+
 /** Child surface {@link terminateProcessTree} needs: a tree to kill plus exit state to await. */
 export interface AwaitableChild extends KillableProcess {
   exitCode: number | null;
