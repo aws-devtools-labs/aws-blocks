@@ -61,7 +61,6 @@ function isTelemetryEnabled(): boolean {
     if (config.telemetry?.enabled === true) return true;
   } catch { /* no config */ }
 
-  if (isCI()) return false;
   return true;
 }
 
