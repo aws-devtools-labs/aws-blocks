@@ -201,7 +201,7 @@ function assertNotDelivered(stderr: string): void {
 
 // ─── Test Suites ─────────────────────────────────────────────────────────────
 
-describe('Telemetry E2E', { timeout: 600_000 }, () => {
+describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
   // ── 1. Payload structure & Building Block filtering ─────────────────────────
 
@@ -532,7 +532,7 @@ describe('Telemetry E2E', { timeout: 600_000 }, () => {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        home: tmpHome, telemetryFile, timeoutMs: 300_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
