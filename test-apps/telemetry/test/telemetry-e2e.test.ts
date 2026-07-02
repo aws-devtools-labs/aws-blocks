@@ -429,7 +429,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
-        home: tmpHome, telemetryFile, cwd: scaffoldDir, timeoutMs: 60_000,
+        home: tmpHome, telemetryFile, timeoutMs: 60_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
