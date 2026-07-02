@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-destroySandbox(join(__dirname, '..', 'index.ts')).catch((error) => {
+destroySandbox(join(__dirname, '..', 'index.cdk.ts')).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
