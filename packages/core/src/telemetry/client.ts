@@ -199,7 +199,7 @@ export function sendEvent(event: BlocksTelemetryEvent): void {
     const workerPath = path.join(dir, 'telemetry-send-worker.js');
     const child = spawn(process.execPath, [workerPath, endpoint], {
       detached: true,
-      stdio: ['pipe', 'ignore', 'ignore'],
+      stdio: ['pipe', 'ignore', process.env.NODE_DEBUG?.includes('blocks-telemetry') ? 'inherit' : 'ignore'],
       // Clear NODE_OPTIONS so inherited flags (e.g. --conditions=cdk) don't interfere
       env: { ...process.env, NODE_OPTIONS: '' },
     });
