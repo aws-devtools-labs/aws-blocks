@@ -126,11 +126,10 @@ function spawnDevServer(options: {
   home: string;
   telemetryFile: string;
   env?: Record<string, string | undefined>;
-}): Promise<{ process: ChildProcess; stdout: string; stderr: string }> {
+}): Promise<{ process: ChildProcess; output: { stdout: string; stderr: string } }> {
   return new Promise((resolve, reject) => {
     const { port, home, telemetryFile, env = {} } = options;
-    let stdout = '';
-    let stderr = '';
+    const output = { stdout: '', stderr: '' };
 
     const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
       cwd: APP_ROOT,
@@ -148,21 +147,21 @@ function spawnDevServer(options: {
 
     const timeout = globalThis.setTimeout(() => {
       try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
-      reject(new Error(`Dev server timeout.\nstdout: ${stdout}\nstderr: ${stderr}`));
+      reject(new Error(`Dev server timeout.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`));
     }, 45_000);
 
     child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString();
-      if (stdout.includes('local server running on')) {
+      output.stdout += d.toString();
+      if (output.stdout.includes('local server running on')) {
         clearTimeout(timeout);
-        resolve({ process: child, stdout, stderr });
+        resolve({ process: child, output });
       }
     });
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { output.stderr += d.toString(); });
     child.on('exit', (code) => {
       clearTimeout(timeout);
       // Dev server exited — might be FAIL (port in use). Resolve anyway.
-      resolve({ process: child, stdout, stderr });
+      resolve({ process: child, output });
     });
   });
 }
@@ -248,8 +247,8 @@ describe('Telemetry E2E', { timeout: 600_000 }, () => {
       assert.deepStrictEqual(body.product.template, { name: 'telemetry-e2e', version: '1.2.3' });
 
       // Delivery
-      await sleep(2000);
-      assertDelivered(result.stderr, 'dev SUCCESS');
+      await sleep(5000);
+      assertDelivered(result.output.stderr, 'dev SUCCESS');
     });
 
     test('official BBs appear with version, custom BBs are excluded but counted', async () => {
@@ -383,8 +382,8 @@ describe('Telemetry E2E', { timeout: 600_000 }, () => {
       assert.strictEqual(body.event.command, 'dev');
       assert.strictEqual(body.event.state, 'SUCCESS');
 
-      await sleep(2000);
-      assertDelivered(result.stderr, 'dev SUCCESS');
+      await sleep(5000);
+      assertDelivered(result.output.stderr, 'dev SUCCESS');
     });
 
     test('FAIL: port in use emits dev/FAIL with PORT_IN_USE', async () => {
@@ -772,8 +771,8 @@ describe('Telemetry E2E', { timeout: 600_000 }, () => {
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry should still fire with =0');
-      await sleep(2000);
-      assertDelivered(result.stderr, 'telemetry should be delivered when DISABLE=0');
+      await sleep(5000);
+      assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=0');
     });
   });
 
