@@ -6,6 +6,7 @@ import * as os from 'os';
 import {
   VERIFIED_NITRO_RANGE,
   extractJsonObjectAfter,
+  parseNuxtImageDomains,
   patchNitroHandlerForApiGateway,
   resolveNitroBundlePath,
   warnIfNitroOutOfRange,
@@ -357,5 +358,44 @@ void describe('extractJsonObjectAfter', () => {
       extractJsonObjectAfter(src, '"routeRules":'),
       '{"a": 1}',
     );
+  });
+});
+
+describe('parseNuxtImageDomains (image.domains allowlist scan)', () => {
+  it('reads a simple image.domains array', () => {
+    const src = `export default defineNuxtConfig({
+      image: { domains: ['a.com', "b.com"] },
+    })`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), ['a.com', 'b.com']);
+  });
+
+  it('reads domains even when a nested object precedes it (brace balancing)', () => {
+    // Regression: a non-greedy `image:{…}?` match truncated at the first `}`
+    // (the end of `provider`), missing domains entirely → [].
+    const src = `export default defineNuxtConfig({
+      image: {
+        provider: 'ipx',
+        providers: { ipx: { options: { maxAge: 60 } } },
+        domains: ['images.unsplash.com', 'picsum.photos'],
+      },
+    })`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), [
+      'images.unsplash.com',
+      'picsum.photos',
+    ]);
+  });
+
+  it('returns [] when there is no image block', () => {
+    assert.deepStrictEqual(parseNuxtImageDomains('export default {}'), []);
+  });
+
+  it('returns [] when image block has no domains', () => {
+    const src = `export default { image: { provider: { name: 'ipx' } } }`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), []);
+  });
+
+  it('is not fooled by a brace inside a string value before domains', () => {
+    const src = `export default { image: { note: 'a } b', domains: ['x.com'] } }`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), ['x.com']);
   });
 });

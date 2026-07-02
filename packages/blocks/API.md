@@ -163,6 +163,7 @@ import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
+import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
 export { Agent }
 
@@ -570,6 +571,8 @@ export { TransactionOptions }
 export { UpdateAttributeOutcome }
 
 export { UserAttribute }
+
+export { WaitUntilSyncedOptions }
 
 
 export * from "@aws-blocks/core";

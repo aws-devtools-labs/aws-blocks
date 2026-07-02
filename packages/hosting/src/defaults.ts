@@ -133,8 +133,12 @@ export const generateRedirectCheckSnippet = (
     }
     if (__matched) {
       var __dest = __r.destination;
-      if (__tail && __dest.charAt(__dest.length - 1) === '*') {
-        __dest = __dest.substring(0, __dest.length - 1) + __tail;
+      // Guard on the DESTINATION trailing '*', not __tail truthiness: an exact
+      // hit on a wildcard prefix yields __tail '' , and a truthiness guard would
+      // skip the splice and leak a literal '*' into Location. Always strip the
+      // trailing '*' and append the (possibly empty) tail.
+      if (__dest.charAt(__dest.length - 1) === '*') {
+        __dest = __dest.substring(0, __dest.length - 1) + (__tail || '');
       }
       return {
         statusCode: __r.statusCode,

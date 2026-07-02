@@ -20,6 +20,12 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Rationale:** Ingestion can take minutes to hours depending on corpus size. Blocking `cdk deploy` until ingestion completes would make iterative development painful. Fire-and-forget means the deploy finishes quickly and ingestion happens in the background. The trade-off is that the knowledge base may return stale or empty results for a brief window after deploy. This is acceptable because the alternative (using a CDK `Provider` with `isComplete` polling) adds significant complexity and Lambda cold-start cost for a one-time operation.
 
+**Resolution of the warm-up window:** The `isSynced()` / `waitUntilSynced()` sync API (see [README.md](./README.md#sync)) closes the gap left by fire-and-forget ingestion. Rather than blocking the deploy, callers poll the data source's ingestion-job status at runtime (`ListIngestionJobs` / `GetIngestionJob`) and gate on completion — keeping deploys fast while giving application code a reliable "is the KB synced with my latest data yet?" signal. `COMPLETE` → synced, `FAILED` → throws `IngestionFailedException`, anything else (or no jobs yet) → not synced. This tracks *freshness*, not availability: `retrieve()` is always callable and serves the prior snapshot during a re-ingestion (it returns empty only during the initial pre-sync window, before the first ingestion completes). So `isSynced() === false` means "not yet synced with your latest data," never "unavailable."
+
+**Embedding-propagation lag after `COMPLETE`:** `isSynced() === true` means the ingestion *job* reached `COMPLETE`. Per the Bedrock docs, for non-Aurora vector stores — and this BB uses S3 Vectors — newly-written embeddings can take a few minutes after `COMPLETE` before they are fully queryable. So `isSynced()` signals "the ingestion job finished," with a possible short embedding-propagation lag before the freshest chunks surface in `retrieve()` results.
+
+**Source coverage (folder and imported `s3://`):** Both a local-folder source and an imported `s3://` URI create a BB-managed `CfnDataSource` and register its `DATA_SOURCE_ID` unconditionally, so the sync API tracks the ingestion job for either source type — `isSynced()` / `waitUntilSynced()` reflect that data source's most recent ingestion job in both cases. (For an `s3://` source the construct skips the `BucketDeployment` step, since the documents are expected to already be in the bucket, but it still creates the data source and fires the ingestion job — so sync is tracked the same way.) The only case with nothing to track is a deployment that predates this sync API: such a handler has no `DATA_SOURCE_ID` injected, so `isSynced()` returns `true` immediately (treating "no managed data source" as synced). Re-deploying injects the id and enables sync tracking.
+
 ### D-KB-3: Semantic chunking as default strategy
 
 **Decision:** Default chunking strategy is `'semantic'` (breakpoint-based topic detection), not fixed-size.
@@ -56,13 +62,45 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Rationale:** KnowledgeBase requires Bedrock API access (AWS runtime) or filesystem reads (mock). Neither is available in the browser. Throwing at construction — not at `retrieve()` time — gives developers an immediate, clear error message guiding them to use server actions, API routes, or Lambda handlers. This follows the same pattern as other server-only Building Blocks.
 
+The method stubs are consistent with construction: `retrieve()`, `isSynced()`, and `waitUntilSynced()` **all** throw `BrowserNotSupportedException` as well (none silently no-ops or returns a fake "synced"). So the browser layer's sync contract matches `retrieve()` — completing the picture across all three layers: mock is always synced (`isSynced()` returns `true`, `waitUntilSynced()` resolves immediately; see the table below), AWS polls the real ingestion job, and browser throws for the data *and* sync methods alike.
+
+### D-KB-9: Raw `s3.Bucket` for the data bucket (not the `FileBucket` Building Block)
+
+**Decision:** Provision the data bucket with a raw `aws-cdk-lib/aws-s3` `s3.Bucket` rather than the `FileBucket` Building Block, even though `FileBucket` exists for "an app needs an S3 bucket" use cases.
+
+**Rationale:** Bedrock ingestion assumes an IAM role that must **read** the data bucket, and the Knowledge Base / Data Source wiring needs low-level bucket primitives that `FileBucket` intentionally does not expose:
+
+- **`bucketArn`** — fed verbatim into `CfnDataSource.s3Configuration.bucketArn`.
+- **`grantRead(role)`** — grants the Bedrock service-principal role read access with the exact resource scoping CDK generates.
+- **`enforceSSL: true`** — required posture for the bucket policy.
+- **`PhysicalName.GENERATE_IF_NEEDED`** — a CDK-generated name so the bucket can be referenced cross-construct (and, for an imported `s3://` source, swapped for `Bucket.fromBucketName`) without the caller having to name it.
+
+`FileBucket` is a higher-level, app-facing abstraction (presigned uploads, client access patterns) and does not surface these primitives. Reaching for the raw L2 here keeps the Bedrock IAM grant precise and avoids bending `FileBucket` into an infrastructure role it was not designed for.
+
+### D-KB-10: S3 Vectors resources mirror the data bucket's removal policy
+
+**Decision:** Apply a removal policy to the S3 Vectors L1 resources (`s3vectors.CfnVectorBucket` + `s3vectors.CfnIndex`), computed from the **same** `destroy` signal that drives the data bucket.
+
+**Rationale:** Unlike the L2 `s3.Bucket` — which defaults to `RETAIN` and supports `autoDeleteObjects` — these L1 resources rely solely on their CloudFormation `DeletionPolicy`, whose default is `Delete`. Left unmanaged they are inconsistent with the data bucket on teardown. So:
+
+- `removalPolicy: 'destroy'` (or sandbox mode with no explicit policy) → `RemovalPolicy.DESTROY` → `DeletionPolicy: Delete`. The vector bucket + index are dropped alongside the (auto-emptied) data bucket.
+- otherwise → `RemovalPolicy.RETAIN` → `DeletionPolicy: Retain`, matching the data bucket's `RETAIN`-by-default posture so customer data is never silently destroyed.
+
+`applyRemovalPolicy()` sets both `DeletionPolicy` and `UpdateReplacePolicy`. There is no `autoDeleteObjects` equivalent for S3 Vectors, but a vector bucket deleted by CloudFormation is removed with its contents, so no manual emptying step is needed for the vector store.
+
+### D-KB-11: Teardown caveat — the stack-level `RemovalPolicies` aspect cannot auto-empty the data bucket
+
+**Decision:** For a clean teardown, pass `removalPolicy: 'destroy'` to the KnowledgeBase (or run in sandbox mode) rather than relying solely on a stack-level `RemovalPolicies.of(stack).destroy()` aspect.
+
+**Rationale:** The stack-level aspect flips every resource's `DeletionPolicy` to `Delete`, **but it cannot enable `autoDeleteObjects`** on a bucket — `autoDeleteObjects` is a constructor behavior (it provisions a custom resource + Lambda that empties the bucket on delete), not a CloudFormation attribute an aspect can toggle after the fact. Consequence: if you rely solely on the stack-level aspect and do **not** pass `removalPolicy: 'destroy'` to the KnowledgeBase, the data bucket's `DeletionPolicy` becomes `Delete` but it still has objects in it, so CloudFormation's `DELETE` fails with `BucketNotEmpty` and the teardown stalls. Passing `removalPolicy: 'destroy'` (or running in sandbox mode) pairs `RemovalPolicy.DESTROY` with `autoDeleteObjects` on the data bucket and `DeletionPolicy: Delete` on the S3 Vectors resources (see D-KB-10), so the bucket is emptied and every resource is removed without manual intervention.
+
 ## Infrastructure (CDK)
 
 Creates the following resources:
 
 1. **S3 Data Bucket** — Stores source documents. Created new for local folder sources; imported via `Bucket.fromBucketName` for `s3://` URI sources. Block public access enabled, SSE-S3 encryption. Removal policy defaults to CDK's default (`RETAIN`) — the bucket and its documents are preserved on `cdk destroy` — unless `removalPolicy: 'destroy'` is set or the stack is in sandbox mode (`sandboxMode` context), in which case it becomes `DESTROY` with `autoDeleteObjects` enabled.
 
-2. **S3 Vectors VectorBucket + Index** — Serverless vector store for embeddings. Index configured with `float32` data type, cosine distance metric, and configurable dimensions (default 1024). `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` marked as non-filterable metadata keys.
+2. **S3 Vectors VectorBucket + Index** — Serverless vector store for embeddings. Index configured with `float32` data type, cosine distance metric, and configurable dimensions (default 1024). `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` marked as non-filterable metadata keys. On teardown these two L1 resources now mirror the data bucket's removal policy — `DeletionPolicy: Delete` when `removalPolicy: 'destroy'` (or sandbox mode), `Retain` otherwise — so they are dropped alongside the data bucket instead of being left behind (see D-KB-10).
 
 3. **IAM Role** — Assumed by `bedrock.amazonaws.com` (scoped via `aws:SourceAccount`). Grants: S3 read on data bucket, S3 Vectors CRUD on vector bucket/index, `bedrock:InvokeModel` on Titan V2 (both inference profile and foundation model ARNs).
 
@@ -74,8 +112,8 @@ Creates the following resources:
 
 7. **AwsCustomResource (StartIngestionJob)** — Fires `bedrock:StartIngestionJob` on Create/Update. Ingestion runs asynchronously. Depends on both the data source and bucket deployment (when present) so documents are in S3 before ingestion starts.
 
-**Environment variables injected:** `BLOCKS_{FULLID}_KB_ID`
-**IAM grants to handler:** `bedrock:Retrieve` on the knowledge base ARN
+**Handler config** (registered via `registerConfig`, surfaced to the runtime as env vars): `BLOCKS_{FULLID}_KB_ID`, `BLOCKS_{FULLID}_DATA_SOURCE_ID` (the data source id drives the `isSynced()` / `waitUntilSynced()` sync checks)
+**IAM grants to handler:** `bedrock:Retrieve`, `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` on the knowledge base ARN (the ingestion-job actions back the sync checks; the data source and its ingestion jobs are sub-resources of the KB ARN)
 
 ## Mock Implementation
 
@@ -98,3 +136,4 @@ Creates the following resources:
 | No ingestion pipeline | Documents are indexed synchronously on first `retrieve()` | No mitigation — the mock doesn't need async ingestion. First call may be slower due to indexing |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 | Immediate consistency | New documents appear instantly vs async ingestion in AWS | No mitigation — eventual consistency in AWS is inherent to the Bedrock ingestion pipeline |
+| Unconditional mock sync | `isSynced()` always returns `true` (and `waitUntilSynced()` resolves immediately) — even for an `s3://` source that `retrieve()` rejects with `InvalidSourceConfigException`. Local sync state is therefore NOT a proxy for a working local `retrieve()` on `s3://` sources — the inverse of the production contract, where `isSynced() === true` implies `retrieve()` is queryable | No mitigation — local has no async ingestion to wait on, so sync is a no-op. `s3://` sources require AWS infrastructure; validate them in sandbox/production where sync state genuinely reflects queryability |
