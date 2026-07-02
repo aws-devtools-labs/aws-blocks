@@ -339,13 +339,14 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
       // Run 1
       const r1 = await spawnDevServer({ port: port1, home: tmpHome, telemetryFile: file1 });
+      assert.ok(await waitForFile(file1, 15_000), `Run 1: telemetry file not written.\nstdout: ${r1.output.stdout.slice(-300)}\nstderr: ${r1.output.stderr.slice(-300)}`);
       killProcess(r1.process);
-      await waitForFile(file1, 15_000);
+      await sleep(1000);
 
       // Run 2
       const r2 = await spawnDevServer({ port: port2, home: tmpHome, telemetryFile: file2 });
+      assert.ok(await waitForFile(file2, 15_000), `Run 2: telemetry file not written.\nstdout: ${r2.output.stdout.slice(-300)}\nstderr: ${r2.output.stderr.slice(-300)}`);
       killProcess(r2.process);
-      await waitForFile(file2, 15_000);
 
       const body1 = readTelemetryFile(file1);
       const body2 = readTelemetryFile(file2);
@@ -431,7 +432,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         home: tmpHome, telemetryFile, cwd: scaffoldDir, timeoutMs: 60_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'create-blocks-app');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -513,10 +514,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         home: tmpHome, telemetryFile, timeoutMs: 300_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox SUCCESS should emit telemetry');
+      assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox');
-      assert.strictEqual(body.event.state, 'SUCCESS');
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 300): ${result.stdout.slice(-300)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');
     });
@@ -560,7 +561,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         home: tmpHome, telemetryFile, timeoutMs: 120_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox:destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -582,7 +583,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'FAIL');
@@ -599,7 +600,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         home: tmpHome, telemetryFile, timeoutMs: 300_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -621,7 +622,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'FAIL');
@@ -643,7 +644,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         home: tmpHome, telemetryFile, timeoutMs: 120_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000));
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
