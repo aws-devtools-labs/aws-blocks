@@ -1052,3 +1052,49 @@ describe('OllamaModels presets', () => {
 		}
 	});
 });
+
+// ── deployed Agent S3Storage region (multi-region) ──────────────────────────
+// Regression for #120: the deployed (aws-runtime) Agent must pass the Lambda
+// execution region (AWS_REGION) into Strands' S3Storage. Omitting `region` makes
+// S3Storage default its S3 client to us-east-1, hard-pinning it there and breaking
+// any deploy outside us-east-1 — the session bucket lives in the deploy region, so
+// snapshot reads/writes hit a cross-region 301 PermanentRedirect. index.test.ts
+// otherwise only drives the mock/local path, so this exercises agent.aws.ts.
+
+import { Agent as DeployedAgent } from './index.aws.js';
+
+describe('deployed Agent S3Storage region (multi-region)', () => {
+	// Build a deployed Agent and read the region its S3Storage's S3 client resolved to.
+	// AgentBase keeps the SnapshotStorage on `snapshotStorage`; S3Storage keeps the
+	// SDK client on `_s3`, whose resolved region the AWS SDK v3 exposes as a provider.
+	async function deployedS3Region(scopeId: string, agentId: string): Promise<string> {
+		const scope = new Scope(scopeId);
+		const agent = new DeployedAgent(scope, agentId, { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
+		const region = (agent as any).snapshotStorage._s3.config.region;
+		return typeof region === 'function' ? region() : region;
+	}
+
+	test('propagates AWS_REGION to the S3Storage S3 client', async () => {
+		const prev = process.env.AWS_REGION;
+		process.env.AWS_REGION = 'eu-west-1';
+		try {
+			assert.strictEqual(await deployedS3Region('test-s3-region-euw1', 'r1'), 'eu-west-1');
+		} finally {
+			if (prev === undefined) delete process.env.AWS_REGION;
+			else process.env.AWS_REGION = prev;
+		}
+	});
+
+	test('does not hard-pin us-east-1 when deployed to another region', async () => {
+		const prev = process.env.AWS_REGION;
+		process.env.AWS_REGION = 'ap-southeast-2';
+		try {
+			const region = await deployedS3Region('test-s3-region-apse2', 'r2');
+			assert.strictEqual(region, 'ap-southeast-2');
+			assert.notStrictEqual(region, 'us-east-1');
+		} finally {
+			if (prev === undefined) delete process.env.AWS_REGION;
+			else process.env.AWS_REGION = prev;
+		}
+	});
+});
