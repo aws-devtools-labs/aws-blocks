@@ -7,12 +7,14 @@ import {
   reclaimPort,
   reclaimMessage,
   evaluatePortBindRetry,
+  createBindRetryController,
   DEFAULT_PORT_BIND_RETRY_POLICY,
   evaluateSingleton,
   parsePidRecord,
   isPidAlive,
   isPortOpen,
   type DevServerPidRecord,
+  type ReclaimResult,
 } from './dev-server.js';
 import { findListenerPids, killListenerTree } from './process-tree.js';
 
@@ -210,9 +212,9 @@ describe('evaluateSingleton — one supervisor per port, hot-reload safe', () =>
 
   it('exits when a different, live supervisor is actually holding the port', () => {
     const d = evaluateSingleton(rec({ pid: 1000, ppid: 500, port: 3000 }), { pid: 2000, ppid: 900 }, true, alive);
-    assert.strictEqual(d.action, 'exit');
-    assert.match((d as { reason: string }).reason, /already running on :3000/);
-    assert.match((d as { reason: string }).reason, /pid 1000/);
+    if (d.action !== 'exit') assert.fail(`expected exit, got ${d.action}`);
+    assert.match(d.reason, /already running on :3000/);
+    assert.match(d.reason, /pid 1000/);
   });
 
   it('proceeds when the recorded owner is dead (stale pidfile), even if the port looks in use', () => {
@@ -326,5 +328,103 @@ describe('killListenerTree — reclaim reuses the process-group kill', () => {
     killListenerTree(4242, 'SIGKILL', 'win32', () => { groupCalled = true; }, (pid) => { winPids.push(pid); return true; });
     assert.strictEqual(groupCalled, false);
     assert.deepStrictEqual(winPids, [4242]);
+  });
+});
+
+// ── createBindRetryController — :3000 EADDRINUSE retry wiring ─────────────────
+// Locks in the retry *wiring* the front-door robustness fix hinges on — the
+// 1-based attempt counter, the bounded decision, reclaim-result routing, and
+// retry scheduling — without a real socket. All effects are injected seams.
+describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', () => {
+  // setImmediate resolves after the microtask queue, so the controller's
+  // `void (async () => { await reclaim(); … scheduleRetry() })()` IIFE has run.
+  const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+  interface Recorder {
+    handler: () => void;
+    reclaimCalls: number;
+    relistenCalls: number;
+    exhaustedCalls: number;
+    scheduled: Array<{ fn: () => void; delayMs: number }>;
+    warnings: string[];
+  }
+
+  function makeController(
+    result: ReclaimResult = { wasOpen: true, reclaimed: true, pids: [] },
+    policy = DEFAULT_PORT_BIND_RETRY_POLICY,
+  ): Recorder {
+    const rec: Recorder = {
+      handler: () => {},
+      reclaimCalls: 0,
+      relistenCalls: 0,
+      exhaustedCalls: 0,
+      scheduled: [],
+      warnings: [],
+    };
+    rec.handler = createBindRetryController(
+      3000,
+      {
+        reclaim: async () => { rec.reclaimCalls += 1; return result; },
+        relisten: () => { rec.relistenCalls += 1; },
+        scheduleRetry: (fn, delayMs) => { rec.scheduled.push({ fn, delayMs }); },
+        onExhausted: () => { rec.exhaustedCalls += 1; },
+        warn: (m) => { rec.warnings.push(m); },
+      },
+      policy,
+    );
+    return rec;
+  }
+
+  it('reclaims and schedules a retry with linear backoff, invoking relisten on the scheduled callback', async () => {
+    const c = makeController();
+
+    c.handler(); // attempt 1
+    await flush();
+    assert.strictEqual(c.reclaimCalls, 1, 'reclaim runs on a retryable attempt');
+    assert.strictEqual(c.exhaustedCalls, 0);
+    assert.strictEqual(c.scheduled.length, 1, 'one retry scheduled');
+    assert.strictEqual(c.scheduled[0].delayMs, 250, 'delay = backoffMs * attempt (250*1)');
+    assert.match(c.warnings[0], /attempt 1\/3/);
+
+    // Firing the scheduled callback must re-attempt the bind (guards against a
+    // refactor dropping the onListening-bound relisten on the retry path).
+    assert.strictEqual(c.relistenCalls, 0, 'relisten deferred until the scheduled callback fires');
+    c.scheduled[0].fn();
+    assert.strictEqual(c.relistenCalls, 1);
+
+    c.handler(); // attempt 2
+    await flush();
+    assert.strictEqual(c.scheduled.length, 2);
+    assert.strictEqual(c.scheduled[1].delayMs, 500, 'delay = backoffMs * attempt (250*2)');
+    assert.match(c.warnings.at(-1) ?? '', /attempt 2\/3/);
+  });
+
+  it('gives up after the attempt budget — no reclaim, no retry scheduled, actionable message', async () => {
+    const c = makeController({ wasOpen: true, reclaimed: true, pids: [] }, { maxAttempts: 2, backoffMs: 100 });
+
+    c.handler(); // attempt 1 → retry
+    await flush();
+    c.handler(); // attempt 2 → budget reached
+    await flush();
+
+    assert.strictEqual(c.exhaustedCalls, 1, 'onExhausted fired exactly once at the budget');
+    assert.strictEqual(c.reclaimCalls, 1, 'no reclaim on the exhausted attempt (only the retryable one)');
+    assert.strictEqual(c.scheduled.length, 1, 'no retry scheduled after exhaustion');
+    assert.match(c.warnings.at(-1) ?? '', /still in use after 2/);
+  });
+
+  it('surfaces the holding pid(s) when a retry reclaim fails to free the port', async () => {
+    const c = makeController({ wasOpen: true, reclaimed: false, pids: [4242] });
+
+    c.handler(); // attempt 1 → retry; reclaim fails
+    await flush();
+
+    assert.ok(
+      c.warnings.some((w) => /held by pid\(s\) \[4242\]/.test(w)),
+      'operator sees the pid-naming reclaim message, not just the generic banner',
+    );
+    // A failed reclaim still schedules the next attempt (the budget, not reclaim
+    // success, bounds the loop).
+    assert.strictEqual(c.scheduled.length, 1);
   });
 });
