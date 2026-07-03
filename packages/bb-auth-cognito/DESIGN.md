@@ -18,10 +18,10 @@ Design document. For usage, see [README.md](./README.md).
 - Device tracking (list, forget).
 - Password reset via verification code.
 - Provider-agnostic state machine driving the same `<Authenticator>` UI as every other Blocks auth BB.
+- **Admin user-lifecycle + group-membership APIs** (`createUser`, `deleteUser`, `addUserToGroup`, `listUsersInGroup`, etc.) — exposed as an **opt-in `auth.admin` handle** on this class, gated by the `admin` options object. Off by default (no handle, no `Admin*` IAM). See *Admin surface* below and [BB-auth-cognito-admin-implementation-plan.md](../../docs/tech-design/BB-auth-cognito-admin-implementation-plan.md) for the rationale.
 
 **Out (for this BB):**
 
-- **Admin user-lifecycle APIs** (`createUser`, `deleteUser`, `addUserToGroup`, `listUsers`, etc.) — deliberately excluded. Those operate on *any* user and can't self-gate from a `context`, so they don't belong on the same class that exposes `signIn`/`signUp`. They are provided by a separate admin Building Block.
 - **HostedUI + federated sign-in** (Google / Facebook / LoginWithAmazon / Apple / OIDC / SAML) — not supported.
 - **Cognito Lambda triggers** (`preSignUp`, `postConfirmation`, `preAuthentication`, …) — customers who need them can attach against the underlying `userPool` construct directly.
 - **Auth flows other than `USER_PASSWORD_AUTH`** — widened typing only.
@@ -47,7 +47,7 @@ Creates under the construct's scope:
 - **Nested `AppSetting(this, 'session-secret', { secret: true })`** — SSM SecureString HMAC for signing session-ID cookies. `AppSetting` handles the custom-resource wiring (CF can't create SecureString natively) and grants `ssm:GetParameter` + `kms:Decrypt` to `this.handler` automatically. Both the CDK layer and AWS runtime instantiate an `AppSetting` at the same scope path, so each side derives the same SSM parameter name without a dedicated env var.
 - **Nested `KVStore(this, 'sessions', { removalPolicy })`** — DynamoDB table holding server-side session records.
 
-The Lambda handler receives env vars `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_{USER_POOL_ID, CLIENT_ID, REGION}` so the AWS runtime can discover the pool/client IDs without CfnOutput round-trips. IAM grants are a **single** policy statement scoped to the pool ARN — the 17 client-facing Cognito actions (sign-up, sign-in, MFA, devices, self-service password/attribute mutations, `GlobalSignOut`). No `cognito-idp:Admin*` or `cognito-idp:List*` actions are granted; those belong to a separate admin Building Block.
+The Lambda handler receives env vars `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_{USER_POOL_ID, CLIENT_ID, REGION}` so the AWS runtime can discover the pool/client IDs without CfnOutput round-trips. IAM grants are scoped to the pool ARN: a base policy statement covering the 17 client-facing Cognito actions (sign-up, sign-in, MFA, devices, self-service password/attribute mutations, `GlobalSignOut`) is always attached. `cognito-idp:Admin*` / `cognito-idp:List*` actions are granted **only** when the `admin` option is set — a second statement whose action set is scoped by `admin.actions` (`'groups'` and/or `'lifecycle'`). Omit `admin` and the synthesized role is byte-identical to the client-only grant (least privilege by default). See *Admin surface*.
 
 `userPoolName` is `this.fullId`; the construct throws at synth time if the ID exceeds Cognito's 128-char limit.
 
@@ -80,6 +80,15 @@ Everything else (`username`, `userSub`, `groups`, `attributes`) is derived on re
 **Session lifetime.** Currently bounded by the cookie's `Max-Age` (configurable via `sessionTtlSeconds`, defaults to 400 days) and by the refresh token's TTL at the pool level. Because the server is authoritative, operators can invalidate a session by deleting its KVStore entry — no need to rotate the HMAC secret.
 
 **Challenge envelopes.** The challenge token returned by `signIn` on MFA / `NEW_PASSWORD_REQUIRED` is a small HMAC-signed envelope the client echoes back in `confirmSignIn`. Cognito's raw session token never reaches the browser; the envelope carries enough state to reconstruct `ChallengeResponses` on the server.
+
+## Admin surface (`auth.admin`)
+
+Server-side group-membership and user-lifecycle administration is exposed as an **opt-in handle on this class**, not a separate Building Block. Enable it by passing an `admin` options object; the handle grants the matching `Admin*` / `List*` IAM (scoped by `admin.actions`). This keeps the admin/client API distinction structural while avoiding a second package, its `/internal` mock-state-sharing port, and cross-construct wiring — the handle mutates the same live `state`/pool the client methods use. See [BB-auth-cognito-admin-implementation-plan.md](../../docs/tech-design/BB-auth-cognito-admin-implementation-plan.md) for the full rationale and the package-vs-handle trade study.
+
+- **Compile-time gate.** The getter's type is `AdminGetterOf<O> = O extends { admin: object } ? AdminSurface<O> : AdminDisabled`. Without an `admin` object, `auth.admin` is `AdminDisabled` and any access is a compile error whose message names the fix; the getter also throws at runtime for untyped JS callers. Group names on the methods narrow via `GroupOf<O>`.
+- **`actions` scopes the IAM grant, not the typed method set.** `AdminSurface<O>` is always the full `GroupAdmin<O> & LifecycleAdmin<O>`. Narrowing the *type* by `actions` via a conditional over `O` would force `AuthCognito<O>` invariant (it broke assignability across the codebase — verified), so `actions` scopes only the CDK grant. Calling a method whose action wasn't granted fails at runtime with an IAM `AccessDenied`.
+- **Not an access boundary.** Like every block on the shared backend Lambda, client and admin run under one role; separation is by API surface + lint, not IAM. Gate every admin route behind `requireRole`.
+- **Session freshness.** `revokeUserSessions` revokes Cognito refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: deletes session records). On AWS an already-issued access token stays valid until it expires, so `checkAuth` does not flip immediately — a known mock-vs-AWS parity difference. Group changes likewise apply on the next sign-in / `fetchAuthSession({ forceRefresh: true })`, not to a live session.
 
 ## Options Split: `AuthCognitoOptions` vs `AuthCognitoMockOptions`
 
@@ -134,3 +143,4 @@ Resolved by the MFA_SETUP + USER_AUTH work:
 4. **Mock + AWS runtimes share the session/cookie code path.** `SessionStore`, cookie helpers, JWT decode — all shared. The only divergence is that mock issues placeholder-signature JWTs and never talks to Cognito.
 5. **Error constants mirror Cognito's wire-format exception names.** Every value equals the name Cognito puts on the wire, so `isBlocksError(e, AuthCognitoErrors.X)` works identically for errors thrown by the mock (matched name directly) and errors propagated from the AWS SDK (name preserved when re-thrown as `ApiError`).
 6. **`GroupNotFound` maps to `ResourceNotFoundException`.** Real Cognito returns `ResourceNotFoundException` (not the intuitive `GroupNotFoundException`) for a missing group. The constant name preserves the semantic label while the value matches what Cognito actually returns.
+7. **Admin surface as an opt-in `auth.admin` handle, not a separate Building Block.** The admin/client distinction is preserved by the handle (and the `admin` opt-in gate) rather than by a second package. This removes a whole package, an `/internal` subpath for sharing mock state, and cross-construct wiring, at the cost of independent versioning (not needed). Because narrowing the typed method set by `admin.actions` would make `AuthCognito<O>` invariant, `actions` scopes the IAM grant only; the typed surface is always the full set. Full trade study in [BB-auth-cognito-admin-implementation-plan.md](../../docs/tech-design/BB-auth-cognito-admin-implementation-plan.md).

@@ -815,7 +815,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				let paginationToken: string | undefined;
 				do {
 					const resp = await this.client.send(new ListUsersCommand({
-						UserPoolId: this.adminUserPoolId(), PaginationToken: paginationToken,
+						UserPoolId: this.adminUserPoolId(), Limit: 60, PaginationToken: paginationToken,
 					}));
 					for (const u of resp.Users ?? []) {
 						const attributes: Record<string, string> = {};

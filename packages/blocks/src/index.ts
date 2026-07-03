@@ -69,6 +69,14 @@ export type {
 	UserAttribute,
 	ExternalUserPoolRef,
 	CodeDeliveryFn,
+	AdminOptions,
+	AdminUser,
+	AdminCreateInit,
+	GroupAdmin,
+	LifecycleAdmin,
+	AdminSurface,
+	AdminGetterOf,
+	AdminDisabled,
 } from '@aws-blocks/bb-auth-cognito';
 
 /**
