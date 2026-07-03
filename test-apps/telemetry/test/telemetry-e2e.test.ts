@@ -697,10 +697,10 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, timeoutMs: 15_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 3_000));
+      assert.ok(await waitForFile(telemetryFile, 3_000), `console should emit telemetry.\nexit=${result.exitCode}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'console');
-      assert.strictEqual(body.event.state, 'SUCCESS');
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
       assertDelivered(result.stderr, 'console SUCCESS');
 
       // Cleanup: destroy the sandbox
