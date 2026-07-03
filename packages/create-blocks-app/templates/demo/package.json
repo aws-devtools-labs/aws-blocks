@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "demo",
+  "blocksTemplateDescription": "Fuller example — auth + KVStore + DynamoDB todo on Vite + lit-html",
   "engines": {
     "node": ">=22.0.0"
   },

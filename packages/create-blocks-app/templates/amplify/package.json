@@ -1,0 +1,7 @@
+{
+  "name": "blocks-amplify-overlay",
+  "version": "0.1.0",
+  "private": true,
+  "blocksTemplate": "amplify",
+  "blocksTemplateDescription": "Overlay for an existing Amplify Gen 2 app (auto-selected when detected)"
+}
