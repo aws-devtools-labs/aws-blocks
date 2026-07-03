@@ -103,12 +103,20 @@ agent.addHook(ModelStreamUpdateEvent, (event) => {
 const started = Date.now();
 let finished = false;
 
-// Flush a best-effort partial envelope if the runner kills us on the hard
-// wall-clock timeout (SIGTERM, or SIGINT on cancellation). writeFileSync + exit
+// Flush a best-effort partial envelope if the runner kills us: SIGTERM on the
+// hard wall-clock timeout (`timeout-minutes`), or SIGINT on a cancellation
+// (concurrency cancel-in-progress fired by the next push). writeFileSync + exit
 // run synchronously inside the handler, before the SIGKILL grace period elapses.
 function writePartialEnvelopeAndExit(signal: string): void {
 	if (finished) return;
 	finished = true;
+	// Label the archived envelope by signal so a cancellation isn't mislabeled a
+	// timeout. Trace-only: cell classification/scoring keys off result.status
+	// (stamped by finalize-result from the step OUTCOME), never this envelope's
+	// stop_reason — summary.mjs merely DISPLAYS stop_reason in a column.
+	const isCancel = signal === 'SIGINT';
+	const stopReason = isCancel ? 'cancelled' : 'wall_clock_timeout';
+	const cause = isCancel ? 'cancellation' : 'workflow wall-clock timeout';
 	let wrote = false;
 	try {
 		writeFileSync(
@@ -119,11 +127,11 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					duration_sec: Math.round((Date.now() - started) / 1000),
 					tokens_in: partialTokensIn,
 					tokens_out: partialTokensOut,
-					stop_reason: 'wall_clock_timeout',
+					stop_reason: stopReason,
 					cycle_count: partialCycles,
 					final_message: '',
 					partial: true,
-					builder_error: `killed by ${signal} (workflow wall-clock timeout) after ${partialCycles} model call(s)`,
+					builder_error: `killed by ${signal} (${cause}) after ${partialCycles} model call(s)`,
 				},
 				null,
 				2,
@@ -135,6 +143,11 @@ function writePartialEnvelopeAndExit(signal: string): void {
 		);
 	} catch (err) {
 		process.stderr.write(`[bench] failed to write partial envelope on ${signal}: ${describeError(err)}\n`);
+		// Envelope lost — still surface the spend in ONE parseable marker so the
+		// tokens/cycles remain recoverable from the CI logs despite the failed flush.
+		process.stderr.write(
+			`[bench] partial-spend tokens_in=${partialTokensIn} tokens_out=${partialTokensOut} cycles=${partialCycles}\n`,
+		);
 	}
 	// No trace on the timeout path: the Strands built-in trace/metrics
 	// (result.traces / result.metrics) only exist once agent.invoke() RETURNS,
