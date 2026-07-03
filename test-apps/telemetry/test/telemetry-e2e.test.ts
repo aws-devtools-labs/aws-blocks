@@ -428,7 +428,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       const targetDir = join(scaffoldDir, 'my-app');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
+      const result = await runCommand('npm', ['exec', '--', 'create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
         home: tmpHome, telemetryFile, timeoutMs: 60_000,
       });
 
@@ -445,7 +445,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       // No target dir argument → should fail
-      const result = await runCommand('npx', ['create-blocks-app'], {
+      const result = await runCommand('npm', ['exec', '--', 'create-blocks-app'], {
         home: tmpHome, telemetryFile, timeoutMs: 15_000,
       });
 
@@ -510,6 +510,9 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
+      // Delete sandbox-id to get a unique stack name for this test
+      rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
+
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
         home: tmpHome, telemetryFile, timeoutMs: 300_000,
       });
@@ -520,6 +523,11 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');
+
+      // Cleanup: destroy the sandbox stack
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+      });
     });
   });
 
@@ -596,6 +604,9 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
+      // Delete sandbox-id to get a unique stack name for this test
+      rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
+
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
         home: tmpHome, telemetryFile, timeoutMs: 300_000,
       });
@@ -605,6 +616,11 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'SUCCESS');
       assertDelivered(result.stderr, 'deploy SUCCESS');
+
+      // Cleanup: destroy the production stack
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+      });
     });
   });
 
