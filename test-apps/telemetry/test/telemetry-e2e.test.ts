@@ -16,7 +16,7 @@
 
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import {
   mkdirSync,
   writeFileSync,
@@ -512,6 +512,13 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
       // Delete sandbox-id to get a unique stack name for this test
       rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
+
+      // Verify AWS credentials are valid before deploying
+      try {
+        execSync('aws sts get-caller-identity', { encoding: 'utf-8', timeout: 10_000 });
+      } catch (e: any) {
+        assert.fail(`AWS credentials invalid before sandbox deploy: ${e.message}`);
+      }
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
         home: tmpHome, telemetryFile, timeoutMs: 300_000,
