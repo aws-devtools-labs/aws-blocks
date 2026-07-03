@@ -3,6 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { buildAgentTools } from './agent-tools.js';
 import { Scope } from './common/index.js';
 import type { ToolMethodDef } from './agent-tools.js';
@@ -100,11 +101,15 @@ describe('buildAgentTools', () => {
 		});
 
 		test('override schema replaces parameters', () => {
-			const customSchema = { type: 'object', properties: { id: { type: 'number' } } };
+			// Minimal Standard Schema value — core stays library-agnostic, so the unit test
+			// uses a bare `~standard` stub. See bb-kv-store for the zod developer path.
+			const customSchema: StandardSchemaV1 = {
+				'~standard': { version: 1, vendor: 'test', validate: (value) => ({ value }) },
+			};
 			const tools = buildAgentTools(mockBB, MOCK_METHODS, {
 				overrides: { get: { schema: customSchema } },
 			});
-			assert.deepStrictEqual(tools['store__get'].parameters, customSchema);
+			assert.strictEqual(tools['store__get'].parameters, customSchema);
 		});
 
 		test('fixed values are injected into handler input', async () => {
@@ -196,6 +201,86 @@ describe('buildAgentTools', () => {
 				context: { tenant: 'context-tenant' },
 			});
 			assert.strictEqual(result.tenant, 'pinned-tenant');
+		});
+	});
+
+	describe('parameter stripping', () => {
+		const paramMethods: Record<string, ToolMethodDef<any>> = {
+			query: {
+				description: 'Query items',
+				parameters: {
+					type: 'object',
+					properties: { userId: { type: 'string' }, status: { type: 'string' } },
+					required: ['userId'],
+				},
+				handler: () => async ({ input }) => input,
+			},
+		};
+
+		test('scope keys are removed from the parameters the model sees', () => {
+			const tools = buildAgentTools(mockBB, paramMethods, {
+				scope: (ctx: { userId: string }) => ({ userId: ctx.userId }),
+			});
+			const props = (tools['store__query'].parameters as any).properties;
+			assert.ok(!('userId' in props), 'userId should be stripped');
+			assert.ok('status' in props, 'unscoped fields remain');
+		});
+
+		test('scope keys are removed from required', () => {
+			const tools = buildAgentTools(mockBB, paramMethods, {
+				scope: (ctx: { userId: string }) => ({ userId: ctx.userId }),
+			});
+			assert.deepStrictEqual((tools['store__query'].parameters as any).required, []);
+		});
+
+		test('fixed keys are removed from the parameters the model sees', () => {
+			const tools = buildAgentTools(mockBB, paramMethods, {
+				unscoped: true,
+				overrides: { query: { fixed: { status: 'active' } } },
+			});
+			const props = (tools['store__query'].parameters as any).properties;
+			assert.ok(!('status' in props), 'fixed field should be stripped');
+			assert.ok('userId' in props, 'other fields remain');
+		});
+
+		test('scope still overrides at runtime after stripping', async () => {
+			const tools = buildAgentTools(mockBB, paramMethods, {
+				scope: (ctx: { userId: string }) => ({ userId: ctx.userId }),
+			});
+			const result = await tools['store__query'].handler({
+				input: { status: 'active' },
+				context: { userId: 'real-user' },
+			});
+			assert.strictEqual(result.userId, 'real-user');
+		});
+	});
+
+	describe('requiresScope', () => {
+		test('throws when neither scope nor unscoped is passed', () => {
+			assert.throws(
+				() => buildAgentTools(mockBB, MOCK_METHODS, undefined, { requiresScope: true }),
+				/holds per-user data/,
+			);
+		});
+
+		test('scope satisfies the requirement', () => {
+			const tools = buildAgentTools(
+				mockBB,
+				MOCK_METHODS,
+				{ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) },
+				{ requiresScope: true },
+			);
+			assert.ok('store__get' in tools);
+		});
+
+		test('unscoped: true satisfies the requirement', () => {
+			const tools = buildAgentTools(mockBB, MOCK_METHODS, { unscoped: true }, { requiresScope: true });
+			assert.ok('store__get' in tools);
+		});
+
+		test('no requirement when requiresScope is unset', () => {
+			const tools = buildAgentTools(mockBB, MOCK_METHODS);
+			assert.ok('store__get' in tools);
 		});
 	});
 });

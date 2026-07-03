@@ -36,6 +36,8 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 
 `toAgentTools(options?)` exposes KVStore operations as agent tools via the shared `KV_TOOL_METHODS` registry in `agent-tools.ts`. Both mock and AWS runtimes delegate to `kvToAgentTools()` which calls core's `buildAgentTools()` helper.
 
+A KVStore can be keyed by `userId`, so `kvToAgentTools()` passes `{ requiresScope: true }`: callers must supply either `scope` or `unscoped: true`, otherwise `toAgentTools()` throws at construction. See core's `buildAgentTools` for the mechanism.
+
 ### Tool Registry (`KV_TOOL_METHODS`)
 
 | Method | `needsApproval` | `trustable` | Notes |

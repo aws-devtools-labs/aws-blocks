@@ -14,7 +14,8 @@ interface KVStoreLike {
 
 export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 	get: {
-		description: 'Retrieve a value by key',
+		description:
+			'Retrieve a stored value by its exact key. Use when you know the specific key you are looking for. Returns null if the key does not exist.',
 		parameters: {
 			type: 'object',
 			properties: { key: { type: 'string', description: 'The key to retrieve' } },
@@ -26,7 +27,8 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 				self.get(input.key),
 	},
 	put: {
-		description: 'Store a value at a key',
+		description:
+			'Store or overwrite a value at a key. Use when you want to save or update a value. Overwrites any existing value at that key without warning — use with care if data loss is a concern.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -45,7 +47,8 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 			},
 	},
 	delete: {
-		description: 'Delete a key',
+		description:
+			'Permanently delete a key and its value. Use when you want to remove an entry entirely. Cannot be undone.',
 		parameters: {
 			type: 'object',
 			properties: { key: { type: 'string', description: 'The key to delete' } },
@@ -61,7 +64,8 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 			},
 	},
 	scan: {
-		description: 'List keys and values. Returns up to `limit` entries (default 100).',
+		description:
+			'List all key-value pairs in the store. Use when you need to browse or search across entries without knowing specific keys. Returns up to `limit` entries (default 100) — for large stores, prefer get if you know the key.',
 		parameters: {
 			type: 'object',
 			properties: { limit: { type: 'number', description: 'Maximum number of entries to return (default 100)' } },
@@ -81,7 +85,9 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 };
 
 export function kvToAgentTools(self: Scope & KVStoreLike, options?: AgentToolProviderOptions): Record<string, any> {
-	return buildAgentTools(self, KV_TOOL_METHODS, options);
+	// A KVStore is commonly keyed by userId, so it can hold per-user data. Require the
+	// caller to scope it to the current user or explicitly opt out as a shared store.
+	return buildAgentTools(self, KV_TOOL_METHODS, options, { requiresScope: true });
 }
 
 // Compile-time check: fails the build if KVStoreLike drifts from the real KVStore class.

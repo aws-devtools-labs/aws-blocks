@@ -6,6 +6,7 @@
  * Lives in core so any BB can implement the interface without depending on `bb-agent`.
  */
 
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { Scope } from './common/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -22,6 +23,12 @@ export interface AgentToolProviderOptions<TContext = any> {
 	 * Precedence when the same key appears in multiple sources: fixed > scope > model input.
 	 */
 	scope?: (context: TContext) => Record<string, unknown>;
+	/**
+	 * Opt out of the scoping requirement for a BB that declares `requiresScope`.
+	 * Asserts the store holds no per-user data (a cache, feature flags, shared config).
+	 * Ignored for BBs that don't require scope.
+	 */
+	unscoped?: boolean;
 }
 
 export interface MethodOverrides {
@@ -29,7 +36,7 @@ export interface MethodOverrides {
 	/** Pin parameter values — injected server-side, stripped from what the model sees. */
 	fixed?: Record<string, unknown>;
 	/** Narrow or replace the parameters schema the model sees. */
-	schema?: unknown;
+	schema?: StandardSchemaV1;
 	needsApproval?: boolean;
 	trustable?: boolean;
 }
@@ -53,8 +60,57 @@ export interface AgentToolProvider {
 // ── Builder ─────────────────────────────────────────────────────────────────
 
 /**
+ * Discover the key names a `scope` callback injects, without a request context.
+ * The documented pattern maps context fields to a fixed set of keys
+ * (`(ctx) => ({ key: ctx.userId })`), so we probe with a proxy that tolerates any
+ * property access and read the returned object's keys. Falls back to no stripping
+ * if the callback throws or returns a non-object.
+ */
+function discoverScopeKeys(scope?: (context: any) => Record<string, unknown>): string[] {
+	if (!scope) return [];
+	try {
+		const probe = new Proxy({}, { get: () => '' });
+		const injected = scope(probe);
+		return injected && typeof injected === 'object' ? Object.keys(injected) : [];
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Remove server-injected keys from a JSON Schema `parameters` object so the model
+ * never sees a field it can't control. Only applies to plain JSON Schema objects;
+ * a Standard Schema override is returned untouched (core can't `.omit()` generically
+ * without depending on a concrete validation library — a BB that authors its
+ * parameters with a schema library omits scoped fields itself before this point).
+ */
+function stripKeysFromParameters(parameters: unknown, keys: string[]): unknown {
+	if (keys.length === 0 || !parameters || typeof parameters !== 'object') return parameters;
+	if ('~standard' in parameters) return parameters;
+	const schema = parameters as { properties?: Record<string, unknown>; required?: string[] };
+	if (!schema.properties || typeof schema.properties !== 'object') return parameters;
+	const properties = { ...schema.properties };
+	for (const key of keys) delete properties[key];
+	const required = Array.isArray(schema.required)
+		? schema.required.filter((name) => !keys.includes(name))
+		: schema.required;
+	return { ...schema, properties, required };
+}
+
+/** Build-time configuration a BB passes to describe its tool registry. */
+export interface BuildAgentToolsConfig {
+	/**
+	 * The BB can hold per-user data. When true, `buildAgentTools` throws unless the
+	 * caller passes either `scope` or `unscoped: true`, so an accidental unscoped
+	 * spread can't quietly expose every user's data.
+	 */
+	requiresScope?: boolean;
+}
+
+/**
  * Build agent tools from a BB's tool method registry.
- * Handles include/exclude filtering, overrides, and scope injection.
+ * Handles include/exclude filtering, overrides, scope injection, and the
+ * scoping requirement for BBs that hold per-user data.
  *
  * Returns `Record<string, any>` — this bypasses the Agent BB's branded AgentTool type
  * check. Core can't import the brand without a circular dep, so shape/override errors
@@ -64,13 +120,25 @@ export function buildAgentTools<TSelf extends Scope>(
 	self: TSelf,
 	toolMethods: Record<string, ToolMethodDef<TSelf>>,
 	options?: AgentToolProviderOptions<any>,
+	config?: BuildAgentToolsConfig,
 ): Record<string, any> {
 	if (options?.include && options?.exclude) {
 		throw new Error('toAgentTools: `include` and `exclude` are mutually exclusive');
 	}
 
 	const bbId = self.id;
+
+	// A BB that can hold per-user data must be scoped to the caller or explicitly
+	// opted out. Throws at construction so the mistake never reaches production.
+	if (config?.requiresScope && !options?.scope && !options?.unscoped) {
+		throw new Error(
+			`toAgentTools: ${self.constructor.name} "${bbId}" holds per-user data — pass \`scope\` to lock it to the caller, or \`unscoped: true\` if it is shared`,
+		);
+	}
 	const result: Record<string, any> = {};
+
+	// Keys injected by `scope` are the same for every method; discover them once.
+	const scopeKeys = discoverScopeKeys(options?.scope);
 
 	for (const [methodName, def] of Object.entries(toolMethods)) {
 		if (options?.include && !options.include.includes(methodName)) continue;
@@ -80,7 +148,11 @@ export function buildAgentTools<TSelf extends Scope>(
 		const description = override?.description ?? def.description;
 		const needsApproval = override?.needsApproval ?? def.needsApproval ?? false;
 		const trustable = override?.trustable ?? def.trustable;
-		const parameters = override?.schema ?? def.parameters;
+
+		// Fields injected server-side (scope + fixed) are stripped from what the model
+		// sees, so it never receives a parameter it can't control.
+		const injectedKeys = [...scopeKeys, ...Object.keys(override?.fixed ?? {})];
+		const parameters = stripKeysFromParameters(override?.schema ?? def.parameters, injectedKeys);
 
 		const baseHandler = def.handler(self);
 		const handler = async (args: { input: any; context: any }) => {

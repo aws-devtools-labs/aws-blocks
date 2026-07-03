@@ -4,6 +4,8 @@
 
 ```ts
 
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+
 // @public
 export interface AgentToolProvider {
     // (undocumented)
@@ -16,6 +18,7 @@ export interface AgentToolProviderOptions<TContext = any> {
     include?: string[];
     overrides?: Record<string, MethodOverrides>;
     scope?: (context: TContext) => Record<string, unknown>;
+    unscoped?: boolean;
 }
 
 // @public
@@ -62,7 +65,12 @@ export type BlocksContext = {
 };
 
 // @public
-export function buildAgentTools<TSelf extends Scope>(self: TSelf, toolMethods: Record<string, ToolMethodDef<TSelf>>, options?: AgentToolProviderOptions<any>): Record<string, any>;
+export function buildAgentTools<TSelf extends Scope>(self: TSelf, toolMethods: Record<string, ToolMethodDef<TSelf>>, options?: AgentToolProviderOptions<any>, config?: BuildAgentToolsConfig): Record<string, any>;
+
+// @public
+export interface BuildAgentToolsConfig {
+    requiresScope?: boolean;
+}
 
 // @public
 export interface BuildingBlockMeta {
@@ -129,7 +137,7 @@ export interface MethodOverrides {
     fixed?: Record<string, unknown>;
     // (undocumented)
     needsApproval?: boolean;
-    schema?: unknown;
+    schema?: StandardSchemaV1;
     // (undocumented)
     trustable?: boolean;
 }
