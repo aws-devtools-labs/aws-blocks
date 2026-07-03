@@ -108,6 +108,7 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 | LISTEN / NOTIFY | AppSync Events, EventBridge, or polling |
 | Extensions | Not available |
 | ADD COLUMN with DEFAULT | Add column without default, handle nulls in app |
+| Index key sort order (`ASC`/`DESC`, `NULLS FIRST/LAST`) | Omit it; enforce ordering with `ORDER BY` in queries |
 
 ### Transaction Constraints
 
