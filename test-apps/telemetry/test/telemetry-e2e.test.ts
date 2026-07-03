@@ -804,6 +804,353 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       await sleep(5000);
       assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=0');
     });
+
+    test('AWS_BLOCKS_DISABLE_TELEMETRY=true does NOT disable (only "1" disables)', async () => {
+      tmpHome = createTmpDir('disable-true');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: { AWS_BLOCKS_DISABLE_TELEMETRY: 'true' },
+      });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry should still fire with =true');
+      await sleep(5000);
+      assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=true');
+    });
+  });
+
+  // ── 6. Network resilience ──────────────────────────────────────────────────
+
+  describe('network resilience', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('broken endpoint is invisible to users (no NODE_DEBUG)', async () => {
+      tmpHome = createTmpDir('net-invisible');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: {
+          PORT: String(port),
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+          NODE_DEBUG: '',  // explicitly disable debug
+        }, timeoutMs: 12_000,
+      });
+
+      // No BLOCKS-TELEMETRY output should be visible without NODE_DEBUG
+      assert.ok(!result.stderr.includes('BLOCKS-TELEMETRY:'), 'telemetry errors must be invisible without NODE_DEBUG');
+    });
+
+    test('broken endpoint IS visible with NODE_DEBUG=blocks-telemetry', async () => {
+      tmpHome = createTmpDir('net-visible');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: {
+          PORT: String(port),
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        }, timeoutMs: 12_000,
+      });
+
+      // Debug output should show the send attempt
+      assert.ok(result.stderr.includes('BLOCKS-TELEMETRY'), 'telemetry debug should be visible with NODE_DEBUG');
+    });
+
+    test('telemetry failure does not crash or delay the command', async () => {
+      tmpHome = createTmpDir('net-nocrash');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const start = Date.now();
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: {
+          PORT: String(port),
+          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
+        }, timeoutMs: 12_000,
+      });
+      const elapsed = Date.now() - start;
+
+      // Command should exit normally (telemetry file written regardless of send failure)
+      assert.ok(await waitForFile(telemetryFile, 3_000), 'telemetry file should still be written');
+      // Command should not be delayed significantly by telemetry failure
+      assert.ok(elapsed < 10_000, `Command took ${elapsed}ms — telemetry should not delay it`);
+    });
+  });
+
+  // ── 7. Schema forward-compatibility ────────────────────────────────────────
+
+  describe('schema forward-compatibility', () => {
+    let devProcess: ChildProcess | null = null;
+    let tmpHome: string;
+
+    afterEach(() => {
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('payload is fully JSON-serializable (no circular refs, no undefined)', async () => {
+      tmpHome = createTmpDir('schema-json');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const raw = readFileSync(telemetryFile, 'utf-8');
+      // Should parse without error and re-serialize identically
+      const parsed = JSON.parse(raw);
+      const reserialized = JSON.stringify(JSON.parse(JSON.stringify(parsed)));
+      assert.strictEqual(JSON.stringify(parsed), reserialized, 'payload should round-trip through JSON');
+    });
+
+    test('all required top-level fields exist', async () => {
+      tmpHome = createTmpDir('schema-fields');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+
+      assert.ok(body.telemetryVersion, 'telemetryVersion required');
+      assert.ok(body.identifiers, 'identifiers required');
+      assert.ok(body.event, 'event required');
+      assert.ok(body.environment, 'environment required');
+      assert.ok(body.product, 'product required');
+    });
+  });
+
+  // ── 8. Environment metadata ────────────────────────────────────────────────
+
+  describe('environment metadata', () => {
+    let devProcess: ChildProcess | null = null;
+    let tmpHome: string;
+
+    afterEach(() => {
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('environment includes nodeVersion, os, and ci fields', async () => {
+      tmpHome = createTmpDir('env-fields');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+
+      assert.ok(body.environment.nodeVersion, 'nodeVersion should exist');
+      assert.match(body.environment.nodeVersion, /^\d+\.\d+\.\d+/, 'nodeVersion should be semver');
+      assert.ok(['linux', 'darwin', 'win32'].includes(body.environment.os), `os should be valid, got: ${body.environment.os}`);
+      assert.strictEqual(typeof body.environment.ci, 'boolean', 'ci should be boolean');
+    });
+
+    test('environment.os matches actual platform', async () => {
+      tmpHome = createTmpDir('env-platform');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000));
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.environment.os, platform(), 'os should match process platform');
+    });
+  });
+
+  // ── 9. --telemetry-file sink ───────────────────────────────────────────────
+
+  describe('--telemetry-file sink', () => {
+    let devProcess: ChildProcess | null = null;
+    let tmpHome: string;
+
+    afterEach(() => {
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('--telemetry-file writes payload when telemetry is enabled', async () => {
+      tmpHome = createTmpDir('file-enabled');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await spawnDevServer({ port, telemetryFile });
+      devProcess = result.process;
+
+      assert.ok(await waitForFile(telemetryFile, 15_000), 'file should be written when enabled');
+      const body = readTelemetryFile(telemetryFile);
+      assert.ok(body.event, 'file should contain a valid event');
+    });
+
+    test('--telemetry-file writes even when HTTP telemetry is disabled', async () => {
+      tmpHome = createTmpDir('file-disabled-http');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 3_000), '--telemetry-file should write even when HTTP disabled');
+      const body = readTelemetryFile(telemetryFile);
+      assert.ok(body.event, 'file should contain a valid event even when HTTP disabled');
+    });
+
+    test('projectId persists across runs from same project', async () => {
+      tmpHome = createTmpDir('file-projectid');
+      const file1 = uniqueTelemetryFile(tmpHome);
+      const file2 = uniqueTelemetryFile(tmpHome);
+      const port1 = getNextPort();
+      const port2 = getNextPort();
+
+      const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
+      assert.ok(await waitForFile(file1, 15_000));
+      killProcess(r1.process);
+      await sleep(1000);
+
+      const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
+      assert.ok(await waitForFile(file2, 15_000));
+      killProcess(r2.process);
+
+      const body1 = readTelemetryFile(file1);
+      const body2 = readTelemetryFile(file2);
+      assert.strictEqual(body1.identifiers.projectId, body2.identifiers.projectId, 'projectId should persist');
+    });
+  });
+
+  // ── 10. Consent notice ─────────────────────────────────────────────────────
+
+  describe('consent notice', () => {
+    let devProcess: ChildProcess | null = null;
+    let tmpHome: string;
+
+    afterEach(() => {
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('no consent notice on subsequent runs (installation-id exists)', async () => {
+      tmpHome = createTmpDir('consent-silent');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const port = getNextPort();
+
+      // Use real HOME which has the pinned installation-id
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+        telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+      });
+
+      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'consent notice should NOT show when id exists');
+    });
+  });
+
+  // ── 11. blocks-telemetry CLI consent commands ──────────────────────────────
+
+  describe('blocks-telemetry CLI', () => {
+    let tmpHome: string;
+
+    afterEach(() => {
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
+
+    test('bare command shows help/usage', async () => {
+      tmpHome = createTmpDir('cli-bare');
+      const result = await runCommand('npx', ['blocks-telemetry'], {
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+      });
+      assert.ok(result.stdout.includes('Usage:') || result.stdout.includes('--enable'), 'bare command should show usage');
+    });
+
+    test('--help shows usage information', async () => {
+      tmpHome = createTmpDir('cli-help');
+      const result = await runCommand('npx', ['blocks-telemetry', '--help'], {
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+      });
+      assert.ok(result.stdout.includes('--enable'), '--help should mention --enable');
+      assert.ok(result.stdout.includes('--disable'), '--help should mention --disable');
+    });
+
+    test('--disable creates config with telemetry.enabled=false', async () => {
+      tmpHome = createTmpDir('cli-disable');
+      const result = await runCommand('npx', ['blocks-telemetry', '--disable'], {
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+      });
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(APP_ROOT, '.blocks', 'config.json'), 'utf-8'));
+      assert.strictEqual(config.telemetry.enabled, false);
+      // Restore
+      writeFileSync(join(APP_ROOT, '.blocks', 'config.json'), JSON.stringify({ telemetry: { projectId: PINNED_PROJECT_ID } }));
+    });
+
+    test('--enable creates config with telemetry.enabled=true', async () => {
+      tmpHome = createTmpDir('cli-enable');
+      const result = await runCommand('npx', ['blocks-telemetry', '--enable'], {
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+      });
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(APP_ROOT, '.blocks', 'config.json'), 'utf-8'));
+      assert.strictEqual(config.telemetry.enabled, true);
+      // Restore
+      writeFileSync(join(APP_ROOT, '.blocks', 'config.json'), JSON.stringify({ telemetry: { projectId: PINNED_PROJECT_ID } }));
+    });
+
+    test('--status shows current telemetry status', async () => {
+      tmpHome = createTmpDir('cli-status');
+      const result = await runCommand('npx', ['blocks-telemetry', '--status'], {
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+      });
+      assert.strictEqual(result.exitCode, 0);
+      assert.ok(result.stdout.includes('Telemetry:') || result.stdout.includes('telemetry'), '--status should show telemetry state');
+    });
+
+    test('--disable --global writes global config', async () => {
+      tmpHome = createTmpDir('cli-disable-global');
+      const globalCfg = globalConfigPath();
+      const hadConfig = existsSync(globalCfg);
+      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
+
+      try {
+        const result = await runCommand('npx', ['blocks-telemetry', '--disable', '--global'], {
+          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+        });
+        assert.strictEqual(result.exitCode, 0);
+        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
+        assert.strictEqual(config.telemetry.enabled, false);
+      } finally {
+        if (originalContent) writeFileSync(globalCfg, originalContent);
+        else rmSync(globalCfg, { force: true });
+      }
+    });
+
+    test('--enable --global writes global config', async () => {
+      tmpHome = createTmpDir('cli-enable-global');
+      const globalCfg = globalConfigPath();
+      const hadConfig = existsSync(globalCfg);
+      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
+
+      try {
+        const result = await runCommand('npx', ['blocks-telemetry', '--enable', '--global'], {
+          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+        });
+        assert.strictEqual(result.exitCode, 0);
+        const config = JSON.parse(readFileSync(globalCfg, 'utf-8'));
+        assert.strictEqual(config.telemetry.enabled, true);
+      } finally {
+        if (originalContent) writeFileSync(globalCfg, originalContent);
+        else rmSync(globalCfg, { force: true });
+      }
+    });
   });
 
 }); // end describe('Telemetry E2E')
