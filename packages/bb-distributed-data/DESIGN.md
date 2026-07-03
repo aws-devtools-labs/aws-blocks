@@ -74,6 +74,7 @@ The core insight: PGlite supports everything DSQL doesn't. Without validation, c
 | `CREATE TEMP TABLE` | Temporary tables |
 | `SET TRANSACTION ISOLATION LEVEL` | Fixed Repeatable Read |
 | `COLLATE` | C collation only |
+| `CREATE INDEX ... ASC/DESC` | Sort direction on index keys (NULLS FIRST/LAST is allowed) |
 
 ### Transaction Tracking
 

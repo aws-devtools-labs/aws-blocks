@@ -520,9 +520,9 @@ describe('validateStatement — index key sort order', () => {
     assert.throws(() => validateStatement('CREATE INDEX idx ON t (col ASC)'), /sort order/i);
   });
 
-  it('rejects NULLS FIRST / NULLS LAST on an index key', () => {
-    assert.throws(() => validateStatement('CREATE INDEX idx ON t (col NULLS FIRST)'), /sort order/i);
-    assert.throws(() => validateStatement('CREATE INDEX idx ON t (col NULLS LAST)'), /sort order/i);
+  it('allows NULLS FIRST / NULLS LAST on an index key (supported by DSQL)', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS FIRST)'));
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS LAST)'));
   });
 
   it('allows a plain CREATE INDEX without sort order', () => {

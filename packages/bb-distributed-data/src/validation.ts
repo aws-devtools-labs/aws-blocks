@@ -85,7 +85,13 @@ const RULES: ValidationRule[] = [
   { pattern: /\bCOLLATE\b/i, message: 'DSQL only supports C collation.', severity: 'error' },
   { pattern: /(?<!::)\bJSONB\b/i, message: 'DSQL does not support JSONB columns. Use JSON instead (JSONB is available as a query runtime cast via ::jsonb).', severity: 'error' },
   { pattern: /(@>|<@|\?\||\?&)/, message: 'JSONB operators lack GIN index acceleration in DSQL.', severity: 'warn' },
-  { pattern: /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[\s\S]*\b(?:ASC|DESC|NULLS\s+(?:FIRST|LAST))\b/i, message: 'DSQL does not support sort order (ASC/DESC/NULLS FIRST/LAST) on index keys. Remove it — ordering is enforced by ORDER BY in queries. (DSQL: "specifying sort order not supported for index keys")', severity: 'error' },
+  // DSQL rejects a sort direction (ASC/DESC) on index keys — it isn't in the
+  // CREATE INDEX ASYNC grammar (only `NULLS FIRST|LAST`, which IS supported, is).
+  // `[^;]*` keeps the match inside a single statement; ASC/DESC cannot otherwise
+  // appear in a CREATE INDEX. Caveat: stripLiteralsAndComments doesn't strip
+  // double-quoted identifiers, so a column literally named "desc"/"asc" would
+  // false-positive — niche, and shared with other single-keyword rules here.
+  { pattern: /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*\b(?:ASC|DESC)\b/i, message: 'DSQL does not support sort order (ASC/DESC) on index keys. Remove it — ordering is enforced by ORDER BY in queries (NULLS FIRST/LAST is allowed). (DSQL: "specifying sort order not supported for index keys")', severity: 'error' },
 ];
 
 /** Validate a SQL statement for DSQL compatibility. Throws on unsupported features. */
