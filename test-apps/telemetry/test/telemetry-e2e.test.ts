@@ -14,7 +14,7 @@
  * - `npm run build` must have been run first
  */
 
-import { describe, test, beforeEach, afterEach } from 'node:test';
+import { describe, test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import {
@@ -26,7 +26,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:net';
 import { join, dirname } from 'node:path';
-import { tmpdir, platform } from 'node:os';
+import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -48,14 +48,18 @@ function createTmpDir(prefix = 'blocks-telemetry-e2e'): string {
   return dir;
 }
 
-function installationIdPath(homeDir: string): string {
-  return join(homeDir, '.blocks', 'telemetry', 'installation-id');
+function installationIdPath(homeDir?: string): string {
+  return join(homeDir ?? homedir(), '.blocks', 'telemetry', 'installation-id');
 }
 
-function seedPinnedInstallationId(homeDir: string): void {
+function seedPinnedInstallationId(homeDir?: string): void {
   const filePath = installationIdPath(homeDir);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, PINNED_INSTALLATION_ID, 'utf-8');
+}
+
+function globalConfigPath(homeDir?: string): string {
+  return join(homeDir ?? homedir(), '.blocks', 'config.json');
 }
 
 function uniqueTelemetryFile(dir: string): string {
@@ -80,7 +84,7 @@ function runCommand(
   cmd: string,
   args: string[],
   options: {
-    home: string;
+    home?: string;
     telemetryFile: string;
     cwd?: string;
     timeoutMs?: number;
@@ -99,7 +103,7 @@ function runCommand(
       env: {
         ...process.env,
         ...env,
-        HOME: home,
+        ...(home ? { HOME: home } : {}),
         NODE_DEBUG: 'blocks-telemetry',
         NODE_OPTIONS: '',
       } as NodeJS.ProcessEnv,
@@ -123,7 +127,7 @@ function runCommand(
 /** Spawn dev server, wait for ready, return process + output. */
 function spawnDevServer(options: {
   port: number;
-  home: string;
+  home?: string;
   telemetryFile: string;
   env?: Record<string, string | undefined>;
 }): Promise<{ process: ChildProcess; output: { stdout: string; stderr: string } }> {
@@ -138,7 +142,7 @@ function spawnDevServer(options: {
       env: {
         ...process.env,
         ...env,
-        HOME: home,
+        ...(home ? { HOME: home } : {}),
         PORT: String(port),
         NODE_DEBUG: 'blocks-telemetry',
         NODE_OPTIONS: '',
@@ -203,6 +207,17 @@ function assertNotDelivered(stderr: string): void {
 
 describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
+  // Seed pinned installation-id in real HOME (no HOME override needed).
+  // CI workflow also seeds this, but doing it here ensures local runs work too.
+  before(() => {
+    seedPinnedInstallationId();
+  });
+
+  // Clean up: remove the seeded .blocks directory
+  after(() => {
+    rmSync(join(homedir(), '.blocks', 'telemetry'), { recursive: true, force: true });
+  });
+
   // ── 1. Payload structure & Building Block filtering ─────────────────────────
 
   describe('payload structure', () => {
@@ -216,11 +231,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('dev event carries correct identifiers, environment, product, and counters', async () => {
       tmpHome = createTmpDir('payload-structure');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      const result = await spawnDevServer({ port, telemetryFile });
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should be written');
@@ -253,11 +267,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('official BBs appear with version, custom BBs are excluded but counted', async () => {
       tmpHome = createTmpDir('bb-filtering');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      const result = await spawnDevServer({ port, telemetryFile });
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000));
@@ -279,11 +292,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('payload contains no file paths, home dirs, or usernames (privacy)', async () => {
       tmpHome = createTmpDir('privacy-check');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      const result = await spawnDevServer({ port, telemetryFile });
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000));
@@ -309,7 +321,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('installation-id is created when missing', async () => {
       tmpHome = createTmpDir('id-creation');
-      // Do NOT seed — let the CLI create it
+      // Use a fresh HOME with no installation-id — let the CLI create it
       const idPath = installationIdPath(tmpHome);
       assert.ok(!existsSync(idPath), 'installation-id must not exist at start');
 
@@ -330,7 +342,6 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('projectId is stable across multiple runs', async () => {
       tmpHome = createTmpDir('id-stability');
-      seedPinnedInstallationId(tmpHome);
 
       const file1 = uniqueTelemetryFile(tmpHome);
       const file2 = uniqueTelemetryFile(tmpHome);
@@ -338,13 +349,13 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       const port2 = getNextPort();
 
       // Run 1
-      const r1 = await spawnDevServer({ port: port1, home: tmpHome, telemetryFile: file1 });
+      const r1 = await spawnDevServer({ port: port1, telemetryFile: file1 });
       assert.ok(await waitForFile(file1, 15_000), `Run 1: telemetry file not written.\nstdout: ${r1.output.stdout.slice(-300)}\nstderr: ${r1.output.stderr.slice(-300)}`);
       killProcess(r1.process);
       await sleep(1000);
 
       // Run 2
-      const r2 = await spawnDevServer({ port: port2, home: tmpHome, telemetryFile: file2 });
+      const r2 = await spawnDevServer({ port: port2, telemetryFile: file2 });
       assert.ok(await waitForFile(file2, 15_000), `Run 2: telemetry file not written.\nstdout: ${r2.output.stdout.slice(-300)}\nstderr: ${r2.output.stderr.slice(-300)}`);
       killProcess(r2.process);
 
@@ -371,11 +382,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: dev server starts and emits dev/SUCCESS', async () => {
       tmpHome = createTmpDir('dev-success');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const result = await spawnDevServer({ port, home: tmpHome, telemetryFile });
+      const result = await spawnDevServer({ port, telemetryFile });
       devProcess = result.process;
 
       assert.ok(await waitForFile(telemetryFile, 15_000));
@@ -389,7 +399,6 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: port in use emits dev/FAIL with PORT_IN_USE', async () => {
       tmpHome = createTmpDir('dev-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
@@ -400,7 +409,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       });
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 15_000,
+        telemetryFile, env: { PORT: String(port) }, timeoutMs: 15_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 3_000));
@@ -423,13 +432,12 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: scaffolds app and emits create-blocks-app/SUCCESS', async () => {
       tmpHome = createTmpDir('create-app-success');
-      seedPinnedInstallationId(tmpHome);
       scaffoldDir = createTmpDir('scaffold-target');
       const targetDir = join(scaffoldDir, 'my-app');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npm', ['exec', '--', 'create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
-        home: tmpHome, telemetryFile, timeoutMs: 60_000,
+        telemetryFile, timeoutMs: 60_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -441,12 +449,11 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: missing args emits create-blocks-app/FAIL', async () => {
       tmpHome = createTmpDir('create-app-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       // No target dir argument → should fail
       const result = await runCommand('npm', ['exec', '--', 'create-blocks-app'], {
-        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+        telemetryFile, timeoutMs: 15_000,
       });
 
       // create-blocks-app may exit without emitting telemetry on arg parse failure
@@ -465,11 +472,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: bad package name emits vendorize/FAIL', async () => {
       tmpHome = createTmpDir('vendorize-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['blocks-vendorize', '@nonexistent/fake-package'], {
-        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+        telemetryFile, timeoutMs: 15_000,
       });
 
       if (await waitForFile(telemetryFile, 3_000)) {
@@ -489,11 +495,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: no creds emits sandbox/FAIL', async () => {
       tmpHome = createTmpDir('sandbox-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
@@ -507,7 +512,6 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
       tmpHome = createTmpDir('sandbox-success');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       // Delete sandbox-id to get a unique stack name for this test
@@ -521,7 +525,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       }
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 300_000,
+        telemetryFile, timeoutMs: 300_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -533,7 +537,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
       // Cleanup: destroy the sandbox stack
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
       });
     });
   });
@@ -544,11 +548,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: no creds emits sandbox:destroy/FAIL', async () => {
       tmpHome = createTmpDir('sandbox-destroy-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 300_000,
+        telemetryFile, timeoutMs: 300_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
@@ -562,18 +565,17 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
       tmpHome = createTmpDir('sandbox-destroy-success');
-      seedPinnedInstallationId(tmpHome);
 
       // First deploy a sandbox
       const deployFile = uniqueTelemetryFile(tmpHome);
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+        telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Then destroy it
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 120_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -590,11 +592,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: no creds emits deploy/FAIL', async () => {
       tmpHome = createTmpDir('deploy-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
@@ -608,14 +609,13 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: deploy with creds emits deploy/SUCCESS', async () => {
       tmpHome = createTmpDir('deploy-success');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       // Delete sandbox-id to get a unique stack name for this test
       rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 300_000,
+        telemetryFile, timeoutMs: 300_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -626,7 +626,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
       // Cleanup: destroy the production stack
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
       });
     });
   });
@@ -637,11 +637,10 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('FAIL: no creds emits destroy/FAIL', async () => {
       tmpHome = createTmpDir('destroy-fail');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 90_000,
+        telemetryFile, timeoutMs: 90_000,
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
@@ -654,17 +653,16 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: destroy with creds emits destroy/SUCCESS', async () => {
       tmpHome = createTmpDir('destroy-success');
-      seedPinnedInstallationId(tmpHome);
 
       // Deploy first, then destroy
       const deployFile = uniqueTelemetryFile(tmpHome);
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+        telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 120_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -681,18 +679,17 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('SUCCESS: console after sandbox deploy emits console/SUCCESS', async () => {
       tmpHome = createTmpDir('console-success');
-      seedPinnedInstallationId(tmpHome);
 
       // Deploy sandbox first to create outputs.json
       const deployFile = uniqueTelemetryFile(tmpHome);
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        home: tmpHome, telemetryFile: deployFile, timeoutMs: 300_000,
+        telemetryFile: deployFile, timeoutMs: 300_000,
       });
 
       // Run console
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
-        home: tmpHome, telemetryFile, timeoutMs: 15_000,
+        telemetryFile, timeoutMs: 15_000,
       });
 
       assert.ok(await waitForFile(telemetryFile, 3_000));
@@ -703,7 +700,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
       // Cleanup: destroy the sandbox
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        home: tmpHome, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
       });
     });
   });
@@ -721,12 +718,11 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('AWS_BLOCKS_DISABLE_TELEMETRY=1 prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-env');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        home: tmpHome, telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
+        telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
       });
 
       const fileExists = await waitForFile(telemetryFile, 2_000);
@@ -737,25 +733,31 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('global config telemetry.enabled=false prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-global');
-      seedPinnedInstallationId(tmpHome);
-      // Write global config disabling telemetry
-      const globalConfig = join(tmpHome, '.blocks', 'config.json');
-      mkdirSync(dirname(globalConfig), { recursive: true });
-      writeFileSync(globalConfig, JSON.stringify({ telemetry: { enabled: false } }));
+      // Write global config disabling telemetry in real HOME
+      const globalCfg = globalConfigPath();
+      const hadConfig = existsSync(globalCfg);
+      const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
+      mkdirSync(dirname(globalCfg), { recursive: true });
+      writeFileSync(globalCfg, JSON.stringify({ telemetry: { enabled: false } }));
 
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const port = getNextPort();
+      try {
+        const telemetryFile = uniqueTelemetryFile(tmpHome);
+        const port = getNextPort();
 
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
-      });
+        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+          telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+        });
 
-      assertNotDelivered(result.stderr);
+        assertNotDelivered(result.stderr);
+      } finally {
+        // Restore original state
+        if (originalContent) writeFileSync(globalCfg, originalContent);
+        else rmSync(globalCfg, { force: true });
+      }
     });
 
     test('per-project config telemetry.enabled=false prevents telemetry', async () => {
       tmpHome = createTmpDir('disable-project');
-      seedPinnedInstallationId(tmpHome);
       // Write per-project config disabling telemetry
       const projectConfig = join(APP_ROOT, '.blocks', 'config.json');
       const originalContent = existsSync(projectConfig) ? readFileSync(projectConfig, 'utf-8') : null;
@@ -768,7 +770,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
         const port = getNextPort();
 
         const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-          home: tmpHome, telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
+          telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
         });
 
         assertNotDelivered(result.stderr);
@@ -784,12 +786,11 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
 
     test('AWS_BLOCKS_DISABLE_TELEMETRY=0 does NOT disable (only "1" disables)', async () => {
       tmpHome = createTmpDir('disable-zero');
-      seedPinnedInstallationId(tmpHome);
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
       const result = await spawnDevServer({
-        port, home: tmpHome, telemetryFile,
+        port, telemetryFile,
         env: { AWS_BLOCKS_DISABLE_TELEMETRY: '0' },
       });
       devProcess = result.process;
