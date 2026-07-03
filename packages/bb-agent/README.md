@@ -803,7 +803,7 @@ const agent = new Agent(scope, 'assistant', {
 
 // at call time, userId comes from the authenticated session:
 const user = await auth.getCurrentUser(requestContext);
-await agent.stream(message, { conversationId, context: { userId: user.userId } });
+await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
 ```
 
 > Some operations can't be scope-isolated (for example, one that lists an entire store). `toAgentTools()` throws if such a method is exposed under `scope`; exclude it, or use `unscoped: true` only when cross-user results are genuinely intended. See the BB's own README for which of its methods are affected.
