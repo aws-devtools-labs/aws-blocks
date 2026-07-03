@@ -796,7 +796,8 @@ const agent = new Agent(scope, 'assistant', {
   toolContextSchema: z.object({ userId: z.string() }),
   tools: (tool) => ({
     // every operation is locked to the caller's own key
-    ...store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }) }),
+    // (scan is excluded — it can't be scope-isolated; see the note below)
+    ...store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }), exclude: ['scan'] }),
   }),
 });
 
