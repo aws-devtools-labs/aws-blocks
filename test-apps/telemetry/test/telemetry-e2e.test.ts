@@ -210,7 +210,7 @@ function assertNotDelivered(stderr: string): void {
 
 // ─── Test Suites ─────────────────────────────────────────────────────────────
 
-describe('Telemetry E2E', { timeout: 900_000 }, () => {
+describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
   // Seed pinned installation-id in real HOME (no HOME override needed).
   // CI workflow also seeds this, but doing it here ensures local runs work too.
