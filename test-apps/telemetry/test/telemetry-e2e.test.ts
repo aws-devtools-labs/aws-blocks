@@ -37,6 +37,10 @@ const REPO_ROOT = join(APP_ROOT, '..', '..');
 // that is not published to the public npm registry, so `npm exec create-blocks-app` 404s.
 // Invoke the locally built binary directly (built by `npm run build` before the suite).
 const CREATE_BLOCKS_APP_BIN = join(REPO_ROOT, 'packages', 'create-blocks-app', 'dist', 'index.js');
+// The blocks-telemetry consent CLI is the `blocks-telemetry` bin of @aws-blocks/core.
+// `npx blocks-telemetry` depends on the workspace bin symlink + exec bit surviving the
+// build step, which is fragile in CI; invoke the built entrypoint directly with `node`.
+const BLOCKS_TELEMETRY_CLI = join(REPO_ROOT, 'packages', 'core', 'dist', 'scripts', 'telemetry-cli.js');
 
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';
@@ -1056,7 +1060,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
     test('bare command shows help/usage', async () => {
       tmpHome = createTmpDir('cli-bare');
-      const result = await runCommand('npx', ['blocks-telemetry'], {
+      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI], {
         telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
       });
       assert.ok(result.stdout.includes('Usage:') || result.stdout.includes('--enable'), 'bare command should show usage');
@@ -1064,7 +1068,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
     test('--help shows usage information', async () => {
       tmpHome = createTmpDir('cli-help');
-      const result = await runCommand('npx', ['blocks-telemetry', '--help'], {
+      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--help'], {
         telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
       });
       assert.ok(result.stdout.includes('--enable'), '--help should mention --enable');
@@ -1077,7 +1081,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
 
       try {
-        const result = await runCommand('npx', ['blocks-telemetry', '--disable'], {
+        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--disable'], {
           telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
         });
         assert.strictEqual(result.exitCode, 0);
@@ -1095,7 +1099,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
 
       try {
-        const result = await runCommand('npx', ['blocks-telemetry', '--enable'], {
+        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--enable'], {
           telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
         });
         assert.strictEqual(result.exitCode, 0);
@@ -1109,7 +1113,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
     test('--status shows current telemetry status', async () => {
       tmpHome = createTmpDir('cli-status');
-      const result = await runCommand('npx', ['blocks-telemetry', '--status'], {
+      const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--status'], {
         telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
       });
       assert.strictEqual(result.exitCode, 0);
@@ -1123,7 +1127,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
 
       try {
-        const result = await runCommand('npx', ['blocks-telemetry', '--disable', '--global'], {
+        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--disable', '--global'], {
           telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
         });
         assert.strictEqual(result.exitCode, 0);
@@ -1142,7 +1146,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const originalContent = hadConfig ? readFileSync(globalCfg, 'utf-8') : null;
 
       try {
-        const result = await runCommand('npx', ['blocks-telemetry', '--enable', '--global'], {
+        const result = await runCommand('node', [BLOCKS_TELEMETRY_CLI, '--enable', '--global'], {
           telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
         });
         assert.strictEqual(result.exitCode, 0);
