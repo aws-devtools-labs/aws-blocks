@@ -479,6 +479,25 @@ export function myBBToAgentTools(self: Scope & MyBBLike, options?: AgentToolProv
 }
 ```
 
+If your BB can hold **per-user data** (it can be keyed or partitioned by a user id), pass `{ requiresScope: true }`. `buildAgentTools` then throws at construction unless the caller supplies `scope` (to lock operations to the current user) or `unscoped: true` (an explicit opt-out for shared stores) — so an accidental unscoped spread can't silently expose every user's data:
+
+```typescript
+export function myBBToAgentTools(self: Scope & MyBBLike, options?: AgentToolProviderOptions): Record<string, any> {
+  return buildAgentTools(self, MY_BB_TOOL_METHODS, options, { requiresScope: true });
+}
+```
+
+Mark any method whose handler **ignores the scoped fields** (e.g. a `scan` that lists the entire store) with `scopeSafe: false` in the registry. `buildAgentTools` throws if such a method is exposed under `scope`, since it would return data across users despite the scoping:
+
+```typescript
+scan: {
+  description: 'List all entries',
+  parameters: { type: 'object', properties: {} },
+  scopeSafe: false, // can't be scope-isolated — caller must exclude it on a scoped BB
+  handler: (self) => async () => { /* ... */ },
+},
+```
+
 2. Add `toAgentTools()` to both runtime classes (one-liner each):
 
 ```typescript
@@ -503,13 +522,16 @@ export class MyBB extends Scope {
 - **Handlers** should return JSON-serializable values. For `AsyncIterable` results (like `scan`), collect into an array with a default limit.
 - **Tool names** are generated automatically as `{bbId}__{methodName}` by `buildAgentTools`.
 - **The interface** (`MyBBLike`) ensures the tool registry stays in sync with the BB's public API.
+- **Scoping** — decide whether your BB can hold per-user data. If so, pass `{ requiresScope: true }` and mark any list-all method `scopeSafe: false`. Shared BBs (a knowledge base, app-wide config) leave both unset so scoping stays optional.
 
 ### What `buildAgentTools` Handles
 
 The `buildAgentTools` helper from `@aws-blocks/core` handles:
 - `include`/`exclude` filtering
 - `overrides` (description, needsApproval, trustable, schema, fixed)
-- `scope` injection (merges context fields into handler input)
+- `scope` injection (merges context fields into handler input; overwrites model-supplied values)
+- The scoping requirement (`requiresScope`) and the `scopeSafe: false` gate — throwing at construction when a per-user BB isn't scoped or a scope-unsafe method is exposed under `scope`
+- Stripping `scope`/`fixed` fields from the JSON Schema the model sees, so the model can't supply a server-injected parameter
 - Tool naming (`{bbId}__{methodName}`)
 
 You only need to define the tool registry and delegate.
