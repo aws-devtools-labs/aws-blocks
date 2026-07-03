@@ -13,8 +13,12 @@ new RawRoute(scope, 'health', {
   },
 });
 
+// Scope the SSM parameter name by stack identity (scope.fullId resolves to
+// `{stackName}-{scopeId}`) so each uniquely-named deploy owns its own parameter.
+// A fixed name collides across stacks — CloudFormation rejects the changeset with
+// "Resource of type 'AWS::SSM::Parameter' ... already exists".
 new AppSetting(scope, 'test-setting', {
-  name: '/telemetry-e2e/api-url',
+  name: `/${scope.fullId}/api-url`,
   value: 'https://example.com',
 });
 

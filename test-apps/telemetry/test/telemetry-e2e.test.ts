@@ -32,6 +32,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
+const REPO_ROOT = join(APP_ROOT, '..', '..');
+// The create-blocks-app CLI is a monorepo workspace package (@aws-blocks/create-blocks-app)
+// that is not published to the public npm registry, so `npm exec create-blocks-app` 404s.
+// Invoke the locally built binary directly (built by `npm run build` before the suite).
+const CREATE_BLOCKS_APP_BIN = join(REPO_ROOT, 'packages', 'create-blocks-app', 'dist', 'index.js');
 
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';
@@ -436,7 +441,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       const targetDir = join(scaffoldDir, 'my-app');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npm', ['exec', '--', 'create-blocks-app', targetDir, '--template', 'bare', '--yes', '--skip-install'], {
+      const result = await runCommand('node', [CREATE_BLOCKS_APP_BIN, targetDir, '--template', 'bare', '--yes', '--skip-install'], {
         telemetryFile, timeoutMs: 60_000,
       });
 
@@ -451,8 +456,8 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       tmpHome = createTmpDir('create-app-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      // No target dir argument → should fail
-      const result = await runCommand('npm', ['exec', '--', 'create-blocks-app'], {
+      // `--template` with no value forces an arg-parse failure (exits non-zero).
+      const result = await runCommand('node', [CREATE_BLOCKS_APP_BIN, '--template'], {
         telemetryFile, timeoutMs: 15_000,
       });
 
@@ -531,7 +536,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox');
-      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');
 
