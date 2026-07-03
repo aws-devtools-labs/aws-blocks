@@ -96,6 +96,23 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.doesNotMatch(result.stderr, /ENOENT/);
   });
 
+  it('--template amplify on a fresh dir exits 1 with a helpful message', () => {
+    // amplify is auto-selected when an existing Amplify Gen 2 project is
+    // detected — it's not scaffoldable as a fresh app. The CLI should
+    // reject the fresh-scaffold path up front rather than crashing partway
+    // through the file copy on missing template contents.
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-fresh-'));
+    try {
+      const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /amplify.*auto-selected/i);
+      assert.match(result.stderr, /--template default/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('multiple positional args exits 1 with error message', () => {
     const result = run(['my-app', 'extra-arg']);
     assert.strictEqual(result.exitCode, 1);

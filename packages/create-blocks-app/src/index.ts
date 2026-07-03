@@ -269,6 +269,28 @@ async function validateTemplateName(templateName: string): Promise<void> {
 async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
   await validateTemplateName(templateName);
 
+  // The `amplify` template is not a scaffoldable starter — it's an overlay
+  // auto-selected when the CLI detects an existing Amplify Gen 2 project
+  // (see `hasAmplify()` on `amplify/backend.ts`). It ships only
+  // `amplify-blocks.ts` + the shared `aws-blocks/` snippet directory, NOT
+  // a full standalone project (no `src/`, no `index.html`, no `gitignore`).
+  // Attempting `createFreshProject` with `--template amplify` would fail
+  // partway through the copy (at the `rename(gitignore, .gitignore)` step
+  // among other missing files). Reject up front with a helpful message.
+  if (templateName === 'amplify') {
+    console.error('Error: The `amplify` template is auto-selected when the CLI detects');
+    console.error('an existing Amplify Gen 2 project (an `amplify/backend.ts` in the');
+    console.error('target directory). It cannot be scaffolded as a fresh app.');
+    console.error('');
+    console.error('To scaffold a fresh Blocks app, choose a different template:');
+    console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
+    console.error('');
+    console.error('To integrate Blocks into an existing Amplify project, run this from');
+    console.error('the project root:');
+    console.error('  npx @aws-blocks/create-blocks-app');
+    process.exit(1);
+  }
+
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
   const templatePkgPath = join(templateDir, 'package.json');
