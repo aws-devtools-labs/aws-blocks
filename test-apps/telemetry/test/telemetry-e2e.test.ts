@@ -76,7 +76,13 @@ function uniqueTelemetryFile(dir: string): string {
 }
 
 function getNextPort(): number {
-  return 3456 + Math.floor(Math.random() * 4000);
+  // Bind to port 0 to get an OS-assigned ephemeral port, then close immediately.
+  // This eliminates random collisions from the previous random-range approach.
+  const srv = createServer();
+  srv.listen(0, '127.0.0.1');
+  const port = (srv.address() as { port: number }).port;
+  srv.close();
+  return port;
 }
 
 interface SpawnResult {
@@ -465,13 +471,10 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, timeoutMs: 15_000,
       });
 
-      // create-blocks-app may exit without emitting telemetry on arg parse failure
-      // (it exits before trackCommand is called). This is expected behavior.
-      if (await waitForFile(telemetryFile, 3_000)) {
-        const body = readTelemetryFile(telemetryFile);
-        assert.strictEqual(body.event.command, 'create-blocks-app');
-        assert.strictEqual(body.event.state, 'FAIL');
-      }
+      // create-blocks-app exits before trackCommand on arg parse failure —
+      // no telemetry event is emitted. Assert that explicitly.
+      const fileWritten = await waitForFile(telemetryFile, 3_000);
+      assert.ok(!fileWritten, 'create-blocks-app with no args should NOT emit telemetry');
     });
   });
 
@@ -487,12 +490,11 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, timeoutMs: 15_000,
       });
 
-      if (await waitForFile(telemetryFile, 3_000)) {
-        const body = readTelemetryFile(telemetryFile);
-        assert.strictEqual(body.event.command, 'vendorize');
-        assert.strictEqual(body.event.state, 'FAIL');
-        assertDelivered(result.stderr, 'vendorize FAIL');
-      }
+      assert.ok(await waitForFile(telemetryFile, 3_000), 'vendorize FAIL should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'vendorize');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assertDelivered(result.stderr, 'vendorize FAIL');
     });
   });
 
@@ -564,12 +566,11 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
-      if (await waitForFile(telemetryFile, 5_000)) {
-        const body = readTelemetryFile(telemetryFile);
-        assert.strictEqual(body.event.command, 'sandbox:destroy');
-        assert.strictEqual(body.event.state, 'FAIL');
-        assertDelivered(result.stderr, 'sandbox:destroy FAIL');
-      }
+      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox:destroy FAIL should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox:destroy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assertDelivered(result.stderr, 'sandbox:destroy FAIL');
     });
 
     test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
@@ -734,8 +735,8 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, env: { PORT: String(port), AWS_BLOCKS_DISABLE_TELEMETRY: '1' }, timeoutMs: 12_000,
       });
 
-      const fileExists = await waitForFile(telemetryFile, 2_000);
-      // --telemetry-file still writes even when disabled (matches CDK behavior)
+      // --telemetry-file still writes even when HTTP is disabled (D-010 contract)
+      assert.ok(await waitForFile(telemetryFile, 2_000), '--telemetry-file should write even when telemetry is disabled');
       // but HTTP send should NOT happen
       assertNotDelivered(result.stderr);
     });

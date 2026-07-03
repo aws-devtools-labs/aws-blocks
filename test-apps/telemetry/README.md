@@ -9,24 +9,22 @@ test apps:
 
 - Its own test application (`test-apps/telemetry`, distinct from
   `test-apps/comprehensive`).
-- Every test overrides `HOME` to a throwaway temp directory, so the telemetry
-  installation-id, global config, and any consent state live in a sandboxed
-  home and never touch the developer's real `~/.blocks` or another suite's
-  state.
+- A suite-level `before()` seeds the pinned installation-id in `$HOME/.blocks/`
+  so telemetry state is deterministic without affecting other suites.
 - Each captured event is written to a unique `--telemetry-file` path (the sink
   creates the file with `O_EXCL`, so paths are never reused).
 
 ## Pinned installation ID
 
-Matching the CI setup (`.github/actions/seed-telemetry-id`), the suite pins a
-fixed installation ID (`00000000-0000-0000-0000-000000000e2e`) by writing
+Matching the CI setup (the "Seed fixed e2e telemetry installation ID" step in
+`.github/workflows/pr-checks.yml`), the suite pins a fixed installation ID
+(`00000000-0000-0000-0000-000000000e2e`) by writing
 `$HOME/.blocks/telemetry/installation-id` **before** any CLI invocation. This
 keeps emitted `installationId` values deterministic and suppresses the
 first-run consent notice.
 
 One dedicated test deletes the pinned file, lets the real CLI create a fresh
-random ID, asserts it was created correctly, and then **restores** the pinned
-value in teardown.
+random ID, and asserts it was created correctly.
 
 ## What's tested
 
@@ -35,11 +33,17 @@ value in teardown.
   (official BB names + version, custom BB count, total blocks count).
 - **Identifier creation**: `installationId` and `projectId` are written when
   they do not already exist, and emitted events carry them.
-- **Per-command success + failure**: every telemetry-emitting command
-  (`deploy`, `destroy`, `sandbox`, `sandbox:destroy`, `cleanup`, `console`,
-  `create-blocks-app`, `dev`) emits a correct SUCCESS event and a correct FAIL
-  event (with error code/phase).
-- **Pinned ID recreation**: delete → recreate → restore lifecycle.
+- **Per-command success + failure**: `deploy`, `destroy`, `sandbox`,
+  `sandbox:destroy`, `console`, `create-blocks-app`, `vendorize`, and `dev`
+  emit correct SUCCESS and FAIL events (with error code/phase).
+- **Network resilience**: broken endpoint is invisible to users, visible with
+  NODE_DEBUG, and does not crash or delay the command.
+- **Disable mechanisms**: env var, global config, project config.
+- **Schema forward-compatibility**: payload is JSON-serializable with all
+  required fields.
+- **Environment metadata**: nodeVersion, os, ci fields validated.
+- **Consent CLI**: `blocks-telemetry` --help, --disable, --enable, --status,
+  --global variants.
 
 ## Running
 
@@ -55,10 +59,11 @@ npx tsx test/telemetry-e2e.test.ts
 
 ## Design
 
-Tests run **without AWS credentials**. Cloud commands (`sandbox`, `deploy`,
-`destroy`) fail fast during CDK synth/deploy but still fire their telemetry
-event with `state: FAIL` — that failure event is what those integration tests
-assert. The SUCCESS terminal state for every command is exercised through the
-real `trackCommand` pipeline via `aws-blocks/scripts/emit.ts`, which wraps a
-controlled operation with the exact same telemetry code the production commands
-use. The `dev` server needs no AWS and starts successfully.
+Tests exercise real CLI commands. The `dev` server starts without AWS and emits
+`dev/SUCCESS`. Cloud commands (`sandbox`, `deploy`, `destroy`) require valid AWS
+credentials — in CI these are provided by `aws-actions/configure-aws-credentials`.
+FAIL paths are exercised by clearing credential env vars so CDK fails fast.
+
+The `--telemetry-file` flag captures the event payload to disk for structure
+assertions, while `NODE_DEBUG=blocks-telemetry` stderr output verifies actual
+delivery to the telemetry endpoint (`sent (status=200)`).
