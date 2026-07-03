@@ -517,7 +517,7 @@ describe('Telemetry E2E', { timeout: 900_000 }, () => {
       assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox');
-      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 300): ${result.stdout.slice(-300)}`);
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       assert.strictEqual(body.event.error, undefined);
       assertDelivered(result.stderr, 'sandbox SUCCESS');
     });
