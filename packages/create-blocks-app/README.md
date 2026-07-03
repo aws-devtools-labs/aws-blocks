@@ -20,15 +20,13 @@ npx @aws-blocks/create-blocks-app my-app
 npx @aws-blocks/create-blocks-app my-app --template react
 ```
 
-Available templates:
-- **default** - Real-time todo app with auth, data, and live sync
-- **bare** - Minimal Blocks setup
-- **react** - React frontend with Blocks backend
-- **backend** - Backend-only (no frontend)
-- **nextjs** - Next.js integration
-- **auth-cognito** - Cognito authentication example
-- **amplify** - Amplify Gen 2 integration
-- **demo** - Demo application
+For the full list of templates and one-line descriptions, run:
+
+```bash
+npx @aws-blocks/create-blocks-app --help
+```
+
+Template descriptions are sourced from each template's `package.json` (`blocksTemplateDescription`) so the CLI is always the source of truth.
 
 ### Add to Existing Project
 
@@ -135,33 +133,11 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ## Templates
 
-### Default
-Real-time todo application with:
-- User authentication (AuthBasic)
-- Todo storage (DistributedTable / DynamoDB)
-- Optimistic locking
-- Real-time sync (Realtime / WebSocket)
+Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
-### Bare
-Minimal setup demonstrating core concepts.
-
-### React
-React frontend with Blocks backend.
-
-### Backend
-Backend-only template (no frontend bundling).
-
-### Next.js
-Next.js integration with Blocks backend.
-
-### Auth-Cognito
-Cognito authentication example.
-
-### Amplify
-Amplify Gen 2 integration template.
-
-### Demo
-Demo application showcasing Building Blocks.
+```bash
+npx @aws-blocks/create-blocks-app --help
+```
 
 ## Related Packages
 
