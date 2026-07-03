@@ -69,8 +69,9 @@ Each task is a directory under `tasks/` with a `PROMPT.md` (given to the
 builder — the task OBJECTIVE and selector contract only, no framework how-to;
 the agent learns the framework from the scaffolded app's own `README.md`) and a
 `test.spec.ts` (Playwright, graded — never shown to the builder or the judge).
-The judge scores every task on the same fixed 5-dimension rubric (see *Judge
-dimensions* below) — there is no per-task dimension to author.
+The judge scores every task on the same fixed shared rubric — the dimensions in
+`COMMON_DIMENSIONS` (`lib/scoring.mjs`, the source of truth), see *Judge
+dimensions* below — there is no per-task dimension to author.
 
 | Task | Template | Blocks exercised |
 |------|----------|------------------|
@@ -126,9 +127,10 @@ failure can never flip a verdict:
 | `unknown` | no tests ran on an otherwise-gradeable cell (denominator 0) — excluded from the mean |
 | `harness_error` | never produced a gradeable artifact: pre-flight / OIDC / scaffold, or a cancellation — excluded from the mean |
 
-**Judge dimensions.** A fixed set of five shared dimensions
-(`functional_completeness`, `selector_contract`, `persistence`, `code_quality`,
-`blocks_fidelity`), applied uniformly to every task with no per-task dimension,
+**Judge dimensions.** A fixed set of shared dimensions — defined once in
+`COMMON_DIMENSIONS` (`lib/scoring.mjs`, the source of truth), currently
+`functional_completeness`, `selector_contract`, `persistence`, `code_quality`,
+`blocks_fidelity` — applied uniformly to every task with no per-task dimension,
 all 0–10, **averaged equally** (no weights — they invite anchoring bias). The
 overall is recomputed
 deterministically from the dimensions, never read from free text. Objective
@@ -218,7 +220,7 @@ error). Reading/writing the baseline uses the same OIDC role
 | `steps/1-init-bench-app.sh` | Build packages, pack the local registry, scaffold the app, seed the telemetry canary from `BLOCKS_TELEMETRY_CANARY_ID` (optional — skipped with a warning if unset), no dev server (the verifier owns that) |
 | `steps/2-agent-run.ts` | Builder agent (Strands + Bedrock); vended `bash` + `fileEditor` tools; capped at `MAX_TURNS` |
 | `steps/3-build-and-test.sh` | `npm run build` + Playwright spec; writes build / dev-server / playwright / test signals to `$GITHUB_OUTPUT` |
-| `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed 5-dimension rubric and applies hard caps |
+| `steps/4-judge.ts` | Judge agent (Strands + Bedrock); one vended `bash` tool over a spec-blinded, disposable source-only copy; grades on the fixed shared rubric (`COMMON_DIMENSIONS`) and applies hard caps |
 | `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`. Imported by both finalize + summary |
 | `steps/lib/overview.mjs` | Pure helpers for the PR-vs-baseline overview: `buildAggregate` (per-cell composites + mean), `diffAgainstBaseline`, `renderOverview`. Imported by summary |

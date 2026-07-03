@@ -109,6 +109,7 @@ let finished = false;
 function writePartialEnvelopeAndExit(signal: string): void {
 	if (finished) return;
 	finished = true;
+	let wrote = false;
 	try {
 		writeFileSync(
 			OUTPUT,
@@ -128,6 +129,7 @@ function writePartialEnvelopeAndExit(signal: string): void {
 				2,
 			),
 		);
+		wrote = true;
 		process.stderr.write(
 			`[bench] ${signal}: wrote partial envelope tokens=${partialTokensIn}/${partialTokensOut} cycles=${partialCycles}\n`,
 		);
@@ -140,7 +142,12 @@ function writePartialEnvelopeAndExit(signal: string): void {
 	// instance (its `_tracer`/`_meter` are private) — so a timed-out cell emits
 	// only this partial envelope (tokens/cycles from the ModelStreamUpdateEvent
 	// hook). We deliberately do NOT hand-build a trace.
-	process.exit(124);
+	//
+	// Always terminate. Exit 124 = clean timeout with the partial envelope
+	// flushed; exit 125 = the envelope write itself FAILED, so downstream sees no
+	// spend from this run. The distinct code (plus the stderr marker above) keeps
+	// a lost-envelope flush from looking identical to a clean timeout in the logs.
+	process.exit(wrote ? 124 : 125);
 }
 process.on('SIGTERM', () => writePartialEnvelopeAndExit('SIGTERM'));
 process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
@@ -223,7 +230,7 @@ if (METRICS_PATH) {
 	}
 }
 
-// Explicit success exit (mirrors the process.exit(124) timeout / process.exit(1)
+// Explicit success exit (mirrors the process.exit(124/125) timeout / process.exit(1)
 // error paths). The envelope + trace + metrics are all written above, so there is
 // nothing left to do. Without this, Node would wait for the libuv loop to drain
 // naturally — and if the agent left a stray handle open (e.g. a dev server it

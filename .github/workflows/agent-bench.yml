@@ -330,9 +330,10 @@ jobs:
         timeout-minutes: 3
         env:
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BUCKET: ${{ vars.S3_BUCKET }}
         run: |
           KEY="bench/runs/${BENCH_SHA}/cells/${TASK}-${TEMPLATE}.json"
-          aws s3 cp /tmp/result.json "s3://${{ vars.S3_BUCKET }}/$KEY" || echo "::warning::S3 archive failed for $KEY"
+          aws s3 cp /tmp/result.json "s3://${BUCKET}/$KEY" || echo "::warning::S3 archive failed for $KEY"
 
   summary:
     needs: bench
@@ -513,3 +514,35 @@ jobs:
           KEY="bench/athena/year=${YEAR}/month=${MONTH}/${SHA_SHORT}.json"
           aws s3 cp "$NDJSON" "s3://${BUCKET}/${KEY}" \
             || echo "::warning::S3 Athena NDJSON write failed for ${KEY}"
+
+  # Bench harness SELF-CHECK: type-check + unit-test the bench's OWN code
+  # (scoring / overview / run-shell libs) via its `test:ci` script. This is the
+  # real check for the bench package, and it lives HERE — deliberately NOT in the
+  # repo-wide `test:unit` fan-out (`npm run test --workspaces`). The workspace
+  # `test` script is a no-op (see scripts/agent-bench/package.json) so a
+  # bench-only typing/dependency issue surfaces on THIS bench workflow instead of
+  # reddening the main Unit Tests gate for PRs that don't touch the bench. Runs
+  # ONCE per bench run (not per-cell) and needs no AWS/OIDC — just contents:read.
+  selfcheck:
+    name: bench self-check (tsc + unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Same npm transient-blip hardening as the bench job (repo convention).
+      NPM_CONFIG_FETCH_RETRIES: '5'
+      NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+      NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - name: Type-check + unit-test the bench harness
+        run: npm run test:ci -w scripts/agent-bench
