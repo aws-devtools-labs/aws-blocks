@@ -405,6 +405,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      BLOCKS_STACK_SUFFIX: telemetry-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -434,6 +436,13 @@ jobs:
 
       - name: Telemetry E2E Tests
         run: npm run test:telemetry
+
+      - name: Cleanup stacks
+        if: always()
+        run: |
+          cd test-apps/telemetry
+          npx tsx aws-blocks/scripts/sandbox-destroy.ts || true
+          npx tsx aws-blocks/scripts/destroy.ts || true
 
   # Gate job — matches the branch protection required check name.
   # Skipped E2E jobs (no source changes) are treated as passing.
