@@ -6,7 +6,7 @@ Build a personal notes app gated by OIDC sign-in. A visitor signs in through an 
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `react` template. Replace the template's todo demo with your OIDC-gated notes app.
+Replace the scaffold's starter todo demo with your OIDC-gated notes app.
 
 ## Requirements
 
@@ -41,11 +41,11 @@ The mount point is the existing root element. Replace the template's todo UI.
 
 - Real OIDC providers / credentials (use the stub provider locally), refresh-token UX, multi-provider pickers
 - Editing / deleting / sharing notes, rich text
-- Realtime sync between tabs (you're removing the Realtime block)
+- Realtime sync between tabs (do not add a Realtime block)
 - Styling beyond what makes the test pass
 
 ## Done means
 
 - All Playwright assertions pass against the running dev server.
-- No errors in the browser console under normal use, and no server 5xx.
+- No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.

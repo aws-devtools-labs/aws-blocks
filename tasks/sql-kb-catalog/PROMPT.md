@@ -6,8 +6,6 @@ Build a product catalog with an FAQ search panel in this AWS Blocks app. Product
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `nextjs` template.
-
 ## Requirements
 
 ### Product catalog (SQL)
@@ -48,5 +46,5 @@ The mount point for your page is the existing root element / page. Replace the t
 ## Done means
 
 - All Playwright assertions pass against the running dev server.
-- No errors in the browser console under normal use, and no server 5xx.
+- No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.

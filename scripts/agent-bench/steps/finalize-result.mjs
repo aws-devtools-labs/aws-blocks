@@ -5,7 +5,7 @@
 // scoring module, so the uploaded artifact is self-describing and summary.mjs
 // can re-derive the exact same numbers from one source of truth.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { classifyCell, composite, testRate, testStats, verdictOf } from './lib/scoring.mjs';
+import { classifyCell, composite, isScoredCell, testRate, testStats, verdictOf } from './lib/scoring.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
 
@@ -129,10 +129,15 @@ if (reason) r.klass_reason = reason;
 const stats = testStats(r);
 const tr = testRate(stats);
 const j = typeof r.judge_score === 'number' ? r.judge_score : 0;
+// test_rate is ROUNDED to 3 decimals for display/audit only; composite() below
+// is fed the EXACT ratio `tr` so the score never inherits the rounding error.
 r.test_rate = Math.round(tr * 1000) / 1000;
 r.judge_overall = typeof r.judge_score === 'number' ? r.judge_score : null;
 r.verdict = verdictOf(r);
-r.composite = composite(tr, j);
+// Only scored + agent_fail cells carry a numeric composite; a harness_error cell
+// never produced a gradeable artifact, so it gets composite:null (NOT 0) and is
+// excluded from the headline mean — isScoredCell reads the klass stamped above.
+r.composite = isScoredCell(r) ? composite(tr, j) : null;
 
 writeFileSync(RESULT_PATH, JSON.stringify(r, null, 2));
 process.stderr.write(

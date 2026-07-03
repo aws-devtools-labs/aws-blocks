@@ -103,7 +103,6 @@ export function runShell(
 		let stdout = '';
 		let stderr = '';
 		let settled = false;
-		let exited = false;
 		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 		let drainHandle: ReturnType<typeof setTimeout> | undefined;
 
@@ -150,8 +149,7 @@ export function runShell(
 		// leaked pipe FDs close and 'close' can fire, and arm the grace fallback for
 		// a child that escaped the group.
 		proc.on('exit', (code, sig) => {
-			if (settled || exited) return;
-			exited = true;
+			if (settled) return;
 			killGroup();
 			drainHandle = setTimeout(() => resolveResult(code, sig), EXIT_DRAIN_GRACE_MS);
 			drainHandle.unref();

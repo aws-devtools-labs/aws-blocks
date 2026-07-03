@@ -84,9 +84,21 @@ const harnessErrors = dataCells.filter((c) => c.klass === 'harness_error');
 // (timeout / no app) ran neither the judge nor the tests, so it is NEITHER a
 // judge error NOR a test-harness error — it shows as ❌ fail / composite 0 in
 // the table; exclude it from both isolation notes below.
-const judgeErr = (r) => r.klass !== 'harness_error' && r.klass !== 'agent_fail' && typeof r.judge_score !== 'number';
-// Test harness error: tests produced no result on an otherwise-gradeable cell.
+//
+// A judge error means the judge actually RAN and failed to yield a numeric
+// score (invoke error, schema-validation error, timeout, or missing structured
+// output). A cell that failed at 3-build-test SKIPS the judge entirely (step 4
+// is gated on step 3 success), so it has no judge_score even though the judge
+// never ran — excluding failed_at==='3-build-test' (and testErr cells, whose
+// no-test-signal bucket already owns them) prevents miscounting those here and
+// double-counting them with the test-harness note below.
 const testErr = (r) => r.klass !== 'harness_error' && r.klass !== 'agent_fail' && testStats(r).denom === 0;
+const judgeErr = (r) =>
+	r.klass !== 'harness_error' &&
+	r.klass !== 'agent_fail' &&
+	!testErr(r) &&
+	r.failed_at !== '3-build-test' &&
+	typeof r.judge_score !== 'number';
 
 const VERDICT_LABEL = {
 	pass: '✅ pass',

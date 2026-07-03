@@ -21,6 +21,17 @@ set -euo pipefail
 # browser/runner stay reproducible run-to-run.
 PW_VERSION="1.60.0"
 
+# Isolate this cell's scratch files under a per-run, per-cell prefix so a re-run
+# on a reused runner (or a concurrent local invocation) can never collide on the
+# fixed /tmp paths this step used to hard-code. TASK is inherited from the job
+# env (defaulted for local runs); $$ adds per-invocation uniqueness. Every
+# dev/build/playwright scratch file below lives under here. PW_RESULTS_JSON is
+# exported so the generated playwright.config.ts (a quoted heredoc that can't
+# expand shell vars) can read the report path from the environment.
+CELL_TMP="/tmp/bench-${TASK:-default}-$$"
+mkdir -p "$CELL_TMP"
+export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
+
 # Write pessimistic defaults up front, then update on success. If any step
 # below fails (npm install, playwright install, the parser), the workflow
 # still sees valid values and the EVIDENCE JSON in step 4 is well-formed.
@@ -75,7 +86,7 @@ if ! node -e 'require("./package.json")' 2>/dev/null; then
     echo "build_succeeded=false"
   } >> "$GITHUB_OUTPUT"
 elif node -e 'process.exit(require("./package.json").scripts?.build ? 0 : 1)'; then
-  if npm run build > /tmp/build.log 2>&1; then
+  if npm run build > "${CELL_TMP}/build.log" 2>&1; then
     {
       echo "build_status=ok"
       echo "build_succeeded=true"
@@ -86,7 +97,7 @@ elif node -e 'process.exit(require("./package.json").scripts?.build ? 0 : 1)'; t
       echo "build_status=failed"
       echo "build_succeeded=false"
     } >> "$GITHUB_OUTPUT"
-    tail -50 /tmp/build.log
+    tail -50 "${CELL_TMP}/build.log"
   fi
 else
   echo "[build] no \`build\` script in package.json — build is N/A for this template (not a failure)"
@@ -114,26 +125,27 @@ for i in $(seq 1 10); do
   sleep 1
 done
 
-nohup npm run dev > /tmp/dev.log 2>&1 &
-echo $! > /tmp/dev.pid
-
 # Reap the dev server when this step exits. It must stay alive through the
 # Playwright run below (which happens before any exit), and no later step (judge
 # grades a static source copy) needs it — so killing it on EXIT only reclaims the
-# port/process and records no signal, leaving scoring untouched. Guarded so it is
-# a no-op on the early-exit paths that run before the server was launched (no
-# pidfile) and never itself changes the step's exit status.
+# port/process and records no signal, leaving scoring untouched. Defined + trapped
+# BEFORE the launch so an interrupt during/just-after `npm run dev` is still
+# reaped; guarded so it is a no-op on the early-exit paths that run before the
+# server was launched (no pidfile) and never itself changes the step's exit status.
 cleanup_dev_server() {
-  [ -f /tmp/dev.pid ] || return 0
+  [ -f "${CELL_TMP}/dev.pid" ] || return 0
   local dev_pid
-  dev_pid="$(cat /tmp/dev.pid 2>/dev/null || true)"
+  dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -n "${dev_pid:-}" ]; then kill "$dev_pid" 2>/dev/null || true; fi
 }
 trap cleanup_dev_server EXIT
 
+nohup npm run dev > "${CELL_TMP}/dev.log" 2>&1 &
+echo "$!" > "${CELL_TMP}/dev.pid"
+
 APP_BASE_URL=""
 for i in $(seq 1 60); do
-  port=$(grep -oE 'Blocks local server running on http://localhost:[0-9]+' /tmp/dev.log 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
+  port=$(grep -oE 'AWS Blocks local server running on http://localhost:[0-9]+' "${CELL_TMP}/dev.log" 2>/dev/null | grep -oE '[0-9]+$' | head -1 || true)
   if [ -n "${port:-}" ]; then
     code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:${port}") || code=000
     if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then
@@ -155,16 +167,16 @@ else
   # APP_BASE_URL EMPTY so the specs fail honestly instead of being pointed at a
   # guessed :3000. RESULT_PATH matches steps 0/4/finalize; extra keys are carried through.
   echo "::warning::dev server banner never appeared / port never became ready within ~60s"
-  dev_pid=""; [ -f /tmp/dev.pid ] && dev_pid="$(cat /tmp/dev.pid 2>/dev/null || true)"
+  dev_pid=""; [ -f "${CELL_TMP}/dev.pid" ] && dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
   elif kill -0 "$dev_pid" 2>/dev/null; then dev_pid_status="alive (pid=${dev_pid}) but not serving"
   else dev_pid_status="exited (pid=${dev_pid})"; fi
   echo "[dead-server] dev pid: ${dev_pid_status}"
-  if [ -f /tmp/dev.log ]; then
-    dev_log_tail="$(tail -100 /tmp/dev.log 2>/dev/null || true)"
-    echo "[dead-server] tail -100 /tmp/dev.log:"; printf '%s\n' "$dev_log_tail"
+  if [ -f "${CELL_TMP}/dev.log" ]; then
+    dev_log_tail="$(tail -100 "${CELL_TMP}/dev.log" 2>/dev/null || true)"
+    echo "[dead-server] tail -100 ${CELL_TMP}/dev.log:"; printf '%s\n' "$dev_log_tail"
   else
-    dev_log_tail="(/tmp/dev.log missing)"; echo "[dead-server] /tmp/dev.log missing"
+    dev_log_tail="(${CELL_TMP}/dev.log missing)"; echo "[dead-server] ${CELL_TMP}/dev.log missing"
   fi
   RESULT_PATH="${RESULT_PATH:-/tmp/result.json}" DEV_PID_STATUS="$dev_pid_status" DEV_LOG_TAIL="$dev_log_tail" node -e '
     const fs = require("fs");
@@ -188,7 +200,7 @@ if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
   echo "::warning::playwright install failed; functional tests will not run"
   exit 0
 fi
-if ! npx playwright install chromium > /tmp/pw-install.log 2>&1; then
+if ! npx playwright install chromium > "${CELL_TMP}/pw-install.log" 2>&1; then
   echo "::warning::playwright chromium download failed; functional tests will not run"
   exit 0
 fi
@@ -196,7 +208,7 @@ echo "playwright_installed=true" >> "$GITHUB_OUTPUT"
 
 mkdir -p bench-tests
 cp "$TASK_DIR/test.spec.ts" bench-tests/task.spec.ts
-cat > playwright.config.ts <<EOF
+cat > playwright.config.ts <<'EOF'
 import { defineConfig } from '@playwright/test';
 
 // Serial, single-worker: cells share one dev server whose backing store
@@ -226,7 +238,10 @@ export default defineConfig({
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     },
   },
-  reporter: [['json', { outputFile: '/tmp/pw-results.json' }]],
+  // Report path is injected by step 3 via PW_RESULTS_JSON (the script isolates
+  // it under a per-cell /tmp prefix); the literal fallback keeps a local run
+  // that forgets to export it working.
+  reporter: [['json', { outputFile: process.env.PW_RESULTS_JSON || '/tmp/pw-results.json' }]],
 });
 EOF
 
@@ -235,16 +250,18 @@ EOF
 # (APP_BASE_URL); pass APP_BASE_URL through too so the config's baseURL resolves.
 #
 # RUN_ID is a run-stable seed the specs fold into their unique-but-deterministic
-# test data (usernames, file names, notes …). Exported once here so it stays
-# identical across a spec's internal navigation; the specs' uniq() helper adds
-# a per-call counter + timestamp on top, so identifiers stay collision-free.
-export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$(date +%s)"
-BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee /tmp/pw.log || true
+# test data (usernames, file names, notes …). It carries the cell's TASK so two
+# cells sharing a run/attempt id still seed distinct data. Exported once here so
+# it stays identical across a spec's internal navigation; the specs' uniq()
+# helper adds a per-call counter + timestamp on top, so identifiers stay
+# collision-free.
+export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${TASK:-x}-$(date +%s)"
+BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee "${CELL_TMP}/pw.log" || true
 
-if [ -f /tmp/pw-results.json ]; then
-  node -e "
+if [ -f "$PW_RESULTS_JSON" ]; then
+  PW_RESULTS_JSON="$PW_RESULTS_JSON" node -e "
     const fs = require('fs');
-    const stats = JSON.parse(fs.readFileSync('/tmp/pw-results.json', 'utf-8')).stats ?? {};
+    const stats = JSON.parse(fs.readFileSync(process.env.PW_RESULTS_JSON, 'utf-8')).stats ?? {};
     // Assert the field exists before the ?? fallback — a missing 'expected'
     // means an unexpected reporter shape, not zero passes. Fail loudly so the
     // pessimistic defaults are retained instead of silently reporting 0/0.
@@ -261,7 +278,7 @@ if [ -f /tmp/pw-results.json ]; then
     console.log('tests_total='+total);
   " >> "$GITHUB_OUTPUT" || echo "::warning::pw-results.json parse failed or unexpected shape; defaults retained"
 else
-  echo "::warning::Playwright produced no /tmp/pw-results.json (probably never ran); defaults retained"
+  echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
 
 # Always exit 0: this step records signals to $GITHUB_OUTPUT for the judge's

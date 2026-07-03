@@ -6,12 +6,10 @@ Build a scheduled email-digest feature in this AWS Blocks app. A recurring job i
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-This is the `demo` template.
-
 ## Requirements
 
-1. **A recurring scheduled job.** The digest runs on a real recurring schedule (e.g. once an hour). **The schedule must be declared even though the test triggers manually** — it proves the recurring wiring exists.
-2. **Shared digest logic + manual trigger.** Factor the digest work into a plain function and call it from *both* the scheduled handler **and** an exposed API method named so the UI can run it on demand (e.g. `triggerDigest()`).
+1. **A recurring scheduled job.** Declare the digest on a real recurring schedule (e.g. once an hour) using the CronJob block. The automated test can't wait for a real cron tick, so it triggers the digest manually — the recurring schedule itself is **not** exercised by the tests; it's assessed from your source. Declare a genuine schedule, not a stub.
+2. **Shared digest logic + manual trigger.** Factor the digest work into a plain function and call it from *both* the scheduled handler **and** an exposed API method named so the UI can run it on demand (e.g. `triggerDigest()`). The tests drive the manual API path; that the scheduled handler calls the *same* shared function is assessed from your source, so wire it for real rather than duplicating the logic.
 3. **Sending email.** The digest sends an email via the email-client block. Locally this is a mock — it logs the message and writes it to `.bb-data/.../emails.json`; no real mailbox or SES setup is needed. Give the client a sender address and pick a recipient for the digest.
 4. **Cache last-sent metadata.** After sending, store the last-sent metadata in the key/value store block as structured JSON with at least a **recipient** (`to`) and a fresh **ISO timestamp** (`at`, e.g. `new Date().toISOString()`).
 5. **UI.** Show the last-sent info in `[data-testid=last-email]` and a `[data-testid=trigger-btn]` button. Clicking the button runs the digest (the manual trigger), then refreshes the displayed last-sent info. After a successful trigger, `[data-testid=last-email]` must read like **`sent to <recipient> at <time>`** — it must contain the phrase **`sent to`**, the actual recipient **email address**, and a **time**.
@@ -39,5 +37,5 @@ The mount point for your page is the existing root element. You can replace what
 ## Done means
 
 - All Playwright assertions pass against the running dev server.
-- No errors in the browser console under normal use, and no server 5xx.
+- No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.

@@ -154,6 +154,21 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 		assert.equal(row.hasBaselineCell, false);
 	});
 
+	it('a baseline-only cell (removed/renamed) surfaces as its own row: current+delta null, removed=true', () => {
+		// The baseline has `removed/x` (composite 50), absent from `current`. It
+		// must NOT silently vanish — it appears as a row flagged `removed`, with a
+		// null current + delta so it stays out of the mean, keeping its baseline value.
+		const row = diff.rows.find((r) => r.key === 'removed/x');
+		assert.ok(row, 'baseline-only cell must appear as a row');
+		assert.equal(row.removed, true);
+		assert.equal(row.current, null);
+		assert.equal(row.delta, null);
+		assert.equal(row.baseline, 50);
+		assert.equal(row.hasBaselineCell, true);
+		// A present-both cell is never flagged removed.
+		assert.equal(diff.rows.find((r) => r.key === 'auth-notes/demo').removed, false);
+	});
+
 	it('computes the mean delta when both means exist', () => {
 		// current mean = (92 + 65 + 100)/3 = 85.7 ; baseline mean = 70 → +15.7
 		assert.equal(diff.meanCurrent, 85.7);
@@ -209,5 +224,19 @@ describe('renderOverview(diff, opts)', () => {
 		const md = renderOverview(diffAgainstBaseline(withHarness, baseline), {}).join('\n');
 		assert.match(md, /oidc-dsql \| react \| — \| — \| — \|/);
 		assert.doesNotMatch(md, /oidc-dsql \| react \| — \| — \| 🆕 new \|/);
+	});
+
+	it('a baseline-only (removed) cell renders a "removed" marker with a "—" PR column', () => {
+		// current has only auth-notes; the baseline additionally has a gone cell.
+		const baseline = {
+			mean_composite: 75,
+			cells: [
+				{ task: 'auth-notes', template: 'demo', composite: 80 },
+				{ task: 'gone-task', template: 'demo', composite: 40 },
+			],
+		};
+		const md = renderOverview(diffAgainstBaseline(current, baseline), {}).join('\n');
+		// baseline 40.0, PR "—", Δ removed marker.
+		assert.match(md, /gone-task \| demo \| 40\.0 \| — \| 🗑️ removed \|/);
 	});
 });

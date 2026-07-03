@@ -111,16 +111,33 @@ export function deltaArrow(delta) {
  */
 export function diffAgainstBaseline(current, baseline) {
 	const baseCells = new Map((baseline?.cells ?? []).map((c) => [cellKey(c), c]));
-	const rows = (current?.cells ?? [])
-		.map((c) => {
-			const key = cellKey(c);
-			const base = baseCells.get(key);
-			const cur = typeof c.composite === 'number' ? c.composite : null;
-			const bas = base && typeof base.composite === 'number' ? base.composite : null;
-			const delta = cur !== null && bas !== null ? round1(cur - bas) : null;
-			return { key, task: c.task ?? null, template: c.template ?? null, current: cur, baseline: bas, delta, hasBaselineCell: !!base };
-		})
-		.sort((a, b) => a.key.localeCompare(b.key));
+	const curKeys = new Set((current?.cells ?? []).map((c) => cellKey(c)));
+	const rows = (current?.cells ?? []).map((c) => {
+		const key = cellKey(c);
+		const base = baseCells.get(key);
+		const cur = typeof c.composite === 'number' ? c.composite : null;
+		const bas = base && typeof base.composite === 'number' ? base.composite : null;
+		const delta = cur !== null && bas !== null ? round1(cur - bas) : null;
+		return { key, task: c.task ?? null, template: c.template ?? null, current: cur, baseline: bas, delta, hasBaselineCell: !!base, removed: false };
+	});
+	// Baseline-only cells (removed or renamed since the baseline — e.g. a task
+	// folder rename) get their OWN row so a dropped cell is VISIBLE in the diff
+	// instead of silently vanishing. current + delta are null and `removed` flags
+	// it for the 'removed' marker; a null current keeps it out of the mean.
+	for (const [key, base] of baseCells) {
+		if (curKeys.has(key)) continue;
+		rows.push({
+			key,
+			task: base.task ?? null,
+			template: base.template ?? null,
+			current: null,
+			baseline: typeof base.composite === 'number' ? base.composite : null,
+			delta: null,
+			hasBaselineCell: true,
+			removed: true,
+		});
+	}
+	rows.sort((a, b) => a.key.localeCompare(b.key));
 	const meanCurrent = typeof current?.mean_composite === 'number' ? current.mean_composite : null;
 	const meanBaseline = baseline && typeof baseline.mean_composite === 'number' ? baseline.mean_composite : null;
 	const meanDelta = meanCurrent !== null && meanBaseline !== null ? round1(meanCurrent - meanBaseline) : null;
@@ -146,7 +163,8 @@ export function renderOverview(diff, opts = {}) {
 		lines.push('| Task | Template | Baseline | PR | Δ |', '|------|----------|----------|----|----|');
 		for (const r of diff.rows) {
 			let deltaCell;
-			if (r.delta !== null) deltaCell = `${deltaArrow(r.delta)} ${signed(r.delta)}`;
+			if (r.removed) deltaCell = '🗑️ removed'; // baseline-only cell — dropped/renamed since the baseline
+			else if (r.delta !== null) deltaCell = `${deltaArrow(r.delta)} ${signed(r.delta)}`;
 			else if (r.current === null) deltaCell = '—'; // not scored this run (harness / no-tests) — nothing to diff
 			else if (!r.hasBaselineCell) deltaCell = '🆕 new'; // scored now, absent from the baseline
 			else deltaCell = '—'; // baseline cell exists but had no composite

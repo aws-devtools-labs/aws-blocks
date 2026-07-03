@@ -119,6 +119,13 @@ cpSync(WORKSPACE, JUDGE_SRC, { recursive: true, filter: stageFilter });
 // (a find, not the same filter), so a filter bug can't silently un-blind the judge.
 assertNoSpecLeak(JUDGE_SRC);
 
+// Belt-and-suspenders spec-blinding: the judge's vended bash is rooted at
+// JUDGE_SRC (the spec-blinded copy), but scrub $WORKSPACE from the environment
+// so nothing downstream — the judge agent or any child process it spawns — can
+// reach the non-blinded originals (which still contain the *.spec files) via
+// the env var. WORKSPACE is only read above (stageFilter/cpSync), never after.
+delete process.env.WORKSPACE;
+
 function assertNoSpecLeak(dir: string): void {
 	// INDEPENDENT re-check (a find, not the same JS filter) so a stageFilter bug
 	// can't silently un-blind the judge. The -regex MUST mirror EXCLUDED_FILE_RE:
@@ -129,7 +136,7 @@ function assertNoSpecLeak(dir: string): void {
 	// glob false-positived on exactly that file and killed the judge (run
 	// 28639226838). posix-extended -regex matches the whole path, so `.*` prefixes.
 	const leaks = execSync(
-		`find ${shellQuote(dir)} \\( -name bench-tests -o -regextype posix-extended -regex '.*\\.spec\\.[cm]?[jt]sx?' \\) -print`,
+		`find ${shellQuote(dir)} \\( -name bench-tests -o -regextype posix-extended -regex '.*\\.spec\\.[cm]?[jt]sx?$' \\) -print`,
 		{ encoding: 'utf-8' },
 	).trim();
 	if (leaks) {

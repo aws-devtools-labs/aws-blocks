@@ -409,3 +409,37 @@ describe('COMMON_DIMENSIONS — the pinned judge rubric dimension set', () => {
 		);
 	});
 });
+
+describe('scored-cell integrity across the judge/build-test failure modes', () => {
+	// A judge error/absence must not zero an otherwise-passing cell: finalize
+	// gates a non-numeric judge_score to 0 before composite(), leaving only the
+	// test-driven 60% — a full pass therefore floors to composite 60, still 'pass'.
+	it('all-pass cell with a null judge_score → composite 60, verdict pass, INCLUDED', () => {
+		const cell = { task: 'auth-notes', template: 'demo', tests_passed: 4, tests_failed: 0, judge_score: null };
+		const tr = testRate(testStats(cell));
+		assert.equal(tr, 1);
+		const j = typeof cell.judge_score === 'number' ? cell.judge_score : 0; // finalize-result's gate
+		assert.equal(composite(tr, j), 60); // 60*1 + 4*0*min(1,4*1) = 60
+		assert.equal(verdictOf(cell), 'pass');
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	// A 3-build-test failure is NOT a harness flake and NOT an agent_fail: the
+	// cell reached build/test and produced real results, so it stays 'scored'
+	// and its partial pass-rate is a genuine signal (the judge is simply skipped).
+	it('3-build-test failure with 2/3 tests passing → klass scored, INCLUDED, verdict partial', () => {
+		const cell = {
+			task: 'file-gallery',
+			template: 'bare',
+			failed_at: '3-build-test',
+			status: 'error',
+			tests_passed: 2,
+			tests_failed: 1,
+		};
+		assert.equal(classifyCell(cell).klass, 'scored');
+		assert.equal(isScoredCell(cell), true);
+		assert.equal(verdictOf(cell), 'partial');
+		// Judge skipped ⇒ judge term gated to 0 ⇒ composite is the test portion: 60*(2/3) = 40.
+		assert.equal(composite(testRate(testStats(cell)), 0), 40);
+	});
+});

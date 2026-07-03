@@ -6,7 +6,7 @@ Build an instrumented health/status service in this **backend-only** AWS Blocks 
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
-**This is the `backend` template: no frontend.**
+**This app is backend-only — there is no frontend.**
 
 ## Requirements
 
@@ -52,5 +52,5 @@ The Playwright test grades your work using these `data-testid` hooks on the serv
 ## Done means
 
 - All Playwright assertions pass against the running dev server.
-- No errors in the browser console under normal use, and no server 5xx.
+- No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.

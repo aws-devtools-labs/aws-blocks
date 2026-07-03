@@ -119,6 +119,11 @@ export function testRate(stats) {
 export function verdict(tr, harnessHint) {
 	if (harnessHint === 'harness_error') return 'harness_error';
 	if (harnessHint === 'unknown') return 'unknown';
+	// `>= 0.999` (not `=== 1`) is a floating-point guard: a full pass computed as
+	// e.g. 7/7 can land a hair under 1.0, and this keeps it a 'pass'. It is a
+	// float-equality guard, NOT intentional leniency — no real partial pass-rate
+	// on a small-N suite reaches 0.999 (the nearest, 1 failure in a large suite,
+	// is far below it).
 	if (tr >= 0.999) return 'pass';
 	if (tr > 0) return 'partial';
 	return 'fail';
@@ -216,22 +221,32 @@ export function isScoredCell(result) {
 export function buildCapDecision(ev) {
 	const raw = ev?.build_status;
 	let status;
+	let note = null;
 	if (raw === 'na' || raw === 'ok' || raw === 'failed') {
 		status = raw;
+		if (status === 'na') {
+			note = 'build N/A — template ships no `build` script; build-cap not applicable';
+		}
 	} else {
 		// Legacy evidence without the tri-state: a truthy build_succeeded (the
 		// workflow may pass the GITHUB_OUTPUT strings "true"/"false") is a pass;
 		// anything else is a real failure — the original pre-tri-state behaviour.
 		const ok = ev?.build_succeeded === true || ev?.build_succeeded === 'true';
 		status = ok ? 'ok' : 'failed';
+		// When NEITHER the tri-state NOR a build_succeeded flag is present, the
+		// resulting 'failed' is a pessimistic default (no evidence either way),
+		// not an observed build failure — record that so the cap is explainable.
+		const evidenceAbsent =
+			(raw === undefined || raw === null) &&
+			(ev?.build_succeeded === undefined || ev?.build_succeeded === null);
+		if (status === 'failed' && evidenceAbsent) {
+			note = 'build evidence absent — pessimistic cap applied';
+		}
 	}
 	return {
 		status,
 		cap: status === 'failed',
-		note:
-			status === 'na'
-				? 'build N/A — template ships no `build` script; build-cap not applicable'
-				: null,
+		note,
 	};
 }
 

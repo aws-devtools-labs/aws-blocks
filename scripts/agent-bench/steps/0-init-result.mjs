@@ -19,6 +19,12 @@ writeFileSync(
 			status: 'init',
 			scaffolded: false,
 			build_succeeded: false,
+			// Tri-state the build cap keys off (na|ok|failed); seed the same
+			// pessimistic default as build_succeeded so an early abort (before
+			// 3-build-test / 4-judge write the real value) still renders a
+			// consistent 'failed' in the summary. Composite scoring never reads
+			// this field, so seeding it moves no score.
+			build_status: 'failed',
 			dev_server_started: false,
 			playwright_installed: false,
 			tests_passed: 0,

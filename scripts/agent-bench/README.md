@@ -6,7 +6,7 @@ Playwright grades the result, and a judge agent scores against the rubric.
 
 ## Architecture
 
-Seven steps per cell, all on the GitHub runner:
+Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxiliaries):
 
 0. **Init result** — write a baseline `result.json` before any AWS call, so
    even an OIDC failure still produces a cell row in the summary
@@ -27,11 +27,17 @@ Seven steps per cell, all on the GitHub runner:
    (`lib/run-shell.ts`); any writes it makes to the copy can't affect scoring.
    Scores source only; objective signals are applied as caps afterward, not
    shown to it.
+   - **4b. Analyze cell** (best-effort) — asks the judge model for a concise
+     2–4 sentence analysis of this cell's fresh `trace.json` + `metrics.json`
+     and writes it back into `result.json` (`analyze-cell.mjs`); the summary
+     job later rolls these up
 5. **Upload result** — JSON artifact + S3 archive (best-effort)
 6. **Upload source** — uploads the generated `bench-app` as
    `bench-source-<task>-<template>` for post-run auditing, excluding deps/build
    output and anything credential-shaped (`node_modules`, `.git`, `dist`,
    `.env*`, `*.pem`, `.aws`)
+   - **6b. Upload trace** (best-effort) — the agent trace + run metrics written
+     by step 2; on a wall-clock timeout step 2 emits no trace, so nothing uploads
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
 sandbox; Bedrock provides the model. Builder and judge use different models
@@ -78,7 +84,7 @@ dimensions* below — there is no per-task dimension to author.
 | `auth-notes` | `demo` | AuthBasic + KVStore |
 | `file-gallery` | `bare` | FileBucket |
 | `async-word-counter` | `bare` | AsyncJob + KVStore |
-| `collab-cursor-board` | `default` | Realtime + DistributedTable |
+| `collab-presence-board` | `default` | Realtime + DistributedTable |
 | `cognito-profile` | `auth-cognito` | AuthCognito (email-OTP) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
@@ -224,6 +230,9 @@ error). Reading/writing the baseline uses the same OIDC role
 | `steps/lib/run-shell.ts` | Shared shell infrastructure for the builder + judge: the `WorkspaceSandbox` (host-execution Sandbox rooted at a fixed dir) + a backgrounded-process-safe runner. The containment fix lives here once; imported by `2-agent-run.ts` and `4-judge.ts` |
 | `steps/lib/scoring.mjs` | **Single source of truth** for scoring: `classifyCell`, `testStats`/`testRate`, `verdict`/`verdictOf`, `composite`/`compositeBand`, `isScoredCell`. Imported by both finalize + summary |
 | `steps/lib/overview.mjs` | Pure helpers for the PR-vs-baseline overview: `buildAggregate` (per-cell composites + mean), `diffAgainstBaseline`, `renderOverview`. Imported by summary |
+| `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature; imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
+| `steps/analyze-cell.mjs` | Step 4b: per-cell trace/metrics analysis via the judge model; writes a concise `analysis` string back into the cell's `result.json` |
+| `steps/analyze.mjs` | Summary-job roll-up that synthesizes the per-cell `analysis` strings into one executive summary via a single Bedrock call |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
 | `steps/summary.mjs` | Render the PR-vs-baseline overview + scoreboard (+ collapsible raw per-dimension table, run-logs deep-link) to `$GITHUB_STEP_SUMMARY`; reads one `result.json` per cell (N=1); writes the run's aggregate (per-cell composites + mean) for the S3 baseline; optional `BENCH_MIN_SCORE` gate |
 | `package.json` | Workspace metadata; `private: true` |

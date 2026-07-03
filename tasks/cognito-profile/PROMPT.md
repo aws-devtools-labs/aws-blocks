@@ -51,7 +51,7 @@ The mount point for your page is the existing root element. You can replace what
 ## Out of scope
 
 - Passwords, password reset, MFA beyond the email OTP, social / federated login
-- Groups / roles, custom attributes, device tracking (the template demos these — you can delete that UI)
+- Groups / roles, custom attributes, device tracking (you may remove any UI not required by this task)
 - Styling beyond what makes the test pass
 
 ## Done means

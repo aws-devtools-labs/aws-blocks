@@ -21,7 +21,7 @@ async function join(page: Page, name: string): Promise<void> {
 	await page.getByTestId('join-btn').click();
 }
 
-test.describe('collab-cursor-board', () => {
+test.describe('collab-presence-board', () => {
 	test('shows the name input and the join button', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);

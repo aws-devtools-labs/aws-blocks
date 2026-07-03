@@ -6,7 +6,7 @@ Build a chat assistant in this AWS Blocks app. A user types a question; an AI **
 
 The workspace has already been scaffolded. Begin by reading `README.md` and `AGENTS.md`, then do all your edits in this workspace.
 
-This is the `demo` template. Replace the template's placeholder demo with your chat UI.
+Replace the scaffold's starter content with your chat UI.
 
 ## Requirements
 
@@ -15,13 +15,13 @@ This is the `demo` template. Replace the template's placeholder demo with your c
 2. **Required seed content.** One document must be a short Nimbus-7 product sheet that records, in a single passage, **all** of:
    - the product's internal product code **`QUOKKA-9F42`**,
    - its maximum hover altitude of **`1337 centimeters`**,
-   - its factory calibration code **`NBS-7Q6X`** (a second, distinct fact from the product code — the grader asks for it separately to prove the assistant surfaces the *actual retrieved passage* rather than a hard-coded product-code string),
-   - the word **`sample`** (the local index is probed with a generic term, and the grader relies on this word being in the same passage as the facts above).
+   - its factory calibration code **`NBS-7Q6X`** (a second, distinct fact from the product code),
+   - the word **`sample`**.
 
    These four facts must appear **only** in the knowledge base — nowhere in your frontend or backend source — so that an answer repeating them proves a real retrieval happened. The same (or another) document must also describe the **return / refund policy** and contain the word **`refund`**. Write real prose, not a stub. Configure the block's chunking so this whole passage stays in a single chunk, rather than being split apart.
 
 ### Agent + tools
-3. Wire an **agent block** whose deployed model is Amazon Bedrock with the Claude Sonnet 4.6 inference profile — model id exactly **`us.anthropic.claude-sonnet-4-6`**. (Locally a keyword-driven mock stands in for Bedrock automatically; you do not need AWS credentials to run the dev server.)
+3. Wire an **agent block** whose deployed model is Amazon Bedrock with the Claude Sonnet 4.6 inference profile — model id exactly **`us.anthropic.claude-sonnet-4-6`**. (Locally a lightweight mock stands in for Bedrock — no AWS creds needed to run the dev server.)
 4. The agent must expose **exactly two tools**, named **exactly** `searchKnowledgeBase` and `lookupOrderStatus` (the grader's questions are phrased to invoke them by name):
    - **`searchKnowledgeBase`** — takes a search query and returns matching passages from the knowledge base (each hit's text and its source document). **Treat an empty or missing query as a broad lookup** — default it to `'sample'` — so the tool still returns the seeded passage.
    - **`lookupOrderStatus`** — returns a **fixed, deterministic** result regardless of its input: `{ status: 'shipped', trackingCode: 'TRK-9F42-OK' }`. (A real implementation would look the order up; for this task a constant is required so the result is checkable.)
