@@ -382,6 +382,80 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(started, ['getOrder']);
 	});
 
+	// Collect the parsed tool input from the first tool call in a stream.
+	const collectToolInput = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<any> => {
+		let input: any;
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'toolUseInputDelta') {
+				input = JSON.parse(event.delta.input);
+			}
+		}
+		return input;
+	};
+
+	// Collect the names of every tool call started in a stream.
+	const collectToolStarts = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<string[]> => {
+		const started: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+		}
+		return started;
+	};
+
+	test('cannedExamples are shallow-merged over generated placeholder input', async () => {
+		const hints = new Map([['searchDocs', { examples: { query: 'how do I get started' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		// Example query wins; unspecified `limit` falls back to the generic integer placeholder.
+		assert.deepStrictEqual(input, { query: 'how do I get started', limit: 1 });
+	});
+
+	test('respects schema default values over generic placeholders', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10 });
+	});
+
+	test('mixes schema defaults with generic placeholders per field', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 }, query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10, query: 'sample' });
+	});
+
+	test('cannedTriggers fire a tool for a single-word keyword beyond its name', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['find'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'help me find the answer', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('cannedTriggers fire a tool for a multi-word phrase', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('single-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['cat'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'what category is this', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "cat" must not fire on "category"');
+	});
+
+	test('generates generic placeholder when no example or default is given', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		assert.deepStrictEqual(input, { query: 'sample' });
+	});
+
 	test('responds to tool result with acknowledgment', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
@@ -414,6 +488,35 @@ describe('CannedProvider', () => {
 		const done = await result.complete();
 		assert.strictEqual(done.type, 'done');
 		assert.ok(done.text && done.text.length > 0, 'should have response text');
+	});
+
+	// End-to-end: exercises the full createStrandsAgent -> createStrandsModel -> CannedProvider
+	// plumbing. A prompt that only matches a `cannedTriggers` keyword must fire the tool, and the
+	// emitted call must carry the `cannedExamples` input.
+	test('canned hints plumb through the Agent end-to-end', async () => {
+		const scope = new Scope('test-canned-hints');
+		const agent = new Agent(scope, 'hints', {
+			inferenceOnly: false,
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				searchDocs: tool({
+					description: 'Search documentation',
+					parameters: z.object({ query: z.string() }),
+					handler: async ({ input }) => ({ echoed: input.query }),
+					cannedExamples: { query: 'how do I get started' },
+					cannedTriggers: ['find'],
+				}),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream('help me find the answer', { conversationId: convId, userId: 'test-user' });
+		await result.complete();
+		const messages = await agent.getConversation(convId);
+		const toolCall = messages.find(m => m.role === 'tool-call');
+		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
+		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
+		assert.deepStrictEqual(toolCall.metadata.toolInput, { query: 'how do I get started' });
 	});
 
 	test("getConversation with limit returns most recent messages", async () => {
