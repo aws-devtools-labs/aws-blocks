@@ -175,6 +175,28 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * - `interrupt` — pause the agent for human input
 	 */
 	handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;
+	/**
+	 * Local-dev only. Realistic tool input for the `canned` mock provider. Shallow-merged
+	 * over the generated placeholder input (your fields win; unspecified fields fall back to
+	 * schema defaults / generic placeholders). Ignored by the bedrock/openai providers.
+	 */
+	cannedExamples?: Record<string, JSONValue>;
+	/**
+	 * Local-dev only. Extra keyword phrases that make the `canned` mock provider select this
+	 * tool, in addition to the tool name and its camelCase words. Single words match on word
+	 * boundaries; multi-word phrases match as substrings. Ignored by the bedrock/openai providers.
+	 */
+	cannedTriggers?: string[];
+}
+
+/**
+ * Local-dev hints for the `canned` mock provider, keyed by tool name and threaded from
+ * `ToolDefinition.cannedExamples`/`cannedTriggers` into the provider (Strands strips these
+ * fields when converting tools, so they're plumbed explicitly). Ignored by real providers.
+ */
+export interface CannedToolHints {
+	examples?: Record<string, JSONValue>;
+	triggers?: string[];
 }
 
 /**

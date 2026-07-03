@@ -7,7 +7,7 @@ import { OpenAIModel } from '@strands-agents/sdk/models/openai';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { CannedProvider } from './providers/canned.js';
 import { ThrowingProvider } from './providers/throwing.js';
-import type { ModelConfig } from './types.js';
+import type { CannedToolHints, ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 
 // TODO: validate model-specific inference config (e.g., some models don't support topP with temperature)
@@ -151,8 +151,8 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
  *
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
-export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger): Promise<Model<BaseModelConfig>> {
-	if (!config || config.provider === 'canned') return new CannedProvider();
+export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger, cannedHints?: Map<string, CannedToolHints>): Promise<Model<BaseModelConfig>> {
+	if (!config || config.provider === 'canned') return new CannedProvider({ hints: cannedHints });
 
 	// Test-only provider — throws mid-stream to verify error handling
 	if (config.provider === 'throwing' as string) {

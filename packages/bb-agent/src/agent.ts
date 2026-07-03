@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import type { SnapshotStorage } from '@strands-agents/sdk';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
-import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition } from './types.js';
+import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
 import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
 import { SlidingWindowConversationManager, SummarizingConversationManager } from '@strands-agents/sdk';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -323,6 +323,17 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			}),
 		}));
 
+		// Collect local-dev hints for the canned provider (Strands strips these fields from
+		// tools, so plumb them explicitly). Built only when a tool declares one — otherwise
+		// undefined, so real providers and the common no-hint case carry zero overhead.
+		let cannedHints: Map<string, CannedToolHints> | undefined;
+		for (const t of toolDefs) {
+			if (t.cannedExamples || t.cannedTriggers) {
+				cannedHints ??= new Map();
+				cannedHints.set(t.name!, { examples: t.cannedExamples, triggers: t.cannedTriggers });
+			}
+		}
+
 		const configs = Array.isArray(this.modelConfig) ? this.modelConfig : this.modelConfig ? [this.modelConfig] : [];
 		let resolvedConfig: ModelConfig | undefined;
 		for (const config of configs) {
@@ -332,7 +343,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			const tried = configs.map(c => `${c.provider}${c.modelId ? ` (${c.modelId})` : ''}`).join(', ');
 			throw blocksAgentError(AgentErrors.ModelUnavailable, `No model available. Tried: ${tried}. Check logs for details.`);
 		}
-		const model = await createStrandsModel(resolvedConfig, this.log);
+		const model = await createStrandsModel(resolvedConfig, this.log, cannedHints);
 
 		// SessionManager restores/saves agent state across invocations.
 		// undefined when no conversationId (inference-only calls — no state to persist).
