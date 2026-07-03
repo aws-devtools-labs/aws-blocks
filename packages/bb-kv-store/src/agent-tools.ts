@@ -66,6 +66,9 @@ export const KV_TOOL_METHODS: Record<string, ToolMethodDef<KVStoreLike>> = {
 	scan: {
 		description:
 			'List all key-value pairs in the store. Use when you need to browse or search across entries without knowing specific keys. Returns up to `limit` entries (default 100) — for large stores, prefer get if you know the key.',
+		// scan lists the whole store; it can't honor an exact-key `scope`, so it must be
+		// excluded on a scoped store (or the store opted out with `unscoped: true`).
+		scopeSafe: false,
 		parameters: {
 			type: 'object',
 			properties: { limit: { type: 'number', description: 'Maximum number of entries to return (default 100)' } },

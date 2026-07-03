@@ -236,8 +236,25 @@ describe('toAgentTools()', () => {
 	test('scope satisfies the scoping requirement', () => {
 		const scope = new Scope('app');
 		const store = new KVStore(scope, 'memory');
-		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) });
-		assert.deepStrictEqual(Object.keys(tools).sort(), ['memory__delete', 'memory__get', 'memory__put', 'memory__scan']);
+		// scan can't be scope-isolated, so a scoped store must exclude it
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
+		assert.deepStrictEqual(Object.keys(tools).sort(), ['memory__delete', 'memory__get', 'memory__put']);
+	});
+
+	test('scoping while exposing scan throws', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		assert.throws(
+			() => store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) }),
+			/scan.*cannot be scope-isolated/,
+		);
+	});
+
+	test('scan is allowed on an unscoped store', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools({ unscoped: true });
+		assert.ok('memory__scan' in tools);
 	});
 
 	test('get handler reads from the store', async () => {
@@ -261,7 +278,7 @@ describe('toAgentTools()', () => {
 		const scope = new Scope('app');
 		const store = new KVStore(scope, 'memory');
 		await store.put('user-123', 'mine');
-		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) });
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
 		// model tries to read another user's key; scope overrides it to the caller's
 		const result = await tools['memory__get'].handler({
 			input: { key: 'user-999' },
@@ -273,7 +290,7 @@ describe('toAgentTools()', () => {
 	test('scoped key is stripped from the parameters the model sees', () => {
 		const scope = new Scope('app');
 		const store = new KVStore(scope, 'memory');
-		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) });
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
 		const props = (tools['memory__get'].parameters as any).properties;
 		assert.ok(!('key' in props), 'scoped key should not be exposed to the model');
 		assert.deepStrictEqual((tools['memory__get'].parameters as any).required, []);

@@ -694,7 +694,7 @@ const agent = new Agent(scope, 'assistant', {
   model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a helpful assistant.',
   tools: (tool) => ({
-    ...store.toAgentTools({ include: ['get', 'put'] }),
+    ...store.toAgentTools({ include: ['get', 'put'], unscoped: true }),
     echo: tool({
       description: 'Echo back the user message',
       parameters: z.object({ message: z.string() }),
@@ -703,6 +703,8 @@ const agent = new Agent(scope, 'assistant', {
   }),
 });
 ```
+
+> A `KVStore` can hold per-user data, so `toAgentTools()` requires you to either pass `scope` (lock operations to the current user) or `unscoped: true` (opt out for a shared store) — otherwise it throws. See [Scoping](#scoping) below. The example above uses `unscoped: true` because it is a shared store.
 
 Tool names follow the convention `{bbId}__{methodName}` (e.g. `memory__get`, `memory__put`). The BB provides defaults for each tool:
 
@@ -719,14 +721,14 @@ Tool names follow the convention `{bbId}__{methodName}` (e.g. `memory__get`, `me
 Control which operations are exposed to the agent:
 
 ```typescript
-// Only read operations
-store.toAgentTools({ include: ['get', 'scan'] })
+// Only read operations (shared store)
+store.toAgentTools({ include: ['get', 'scan'], unscoped: true })
 
-// Everything except destructive operations
-store.toAgentTools({ exclude: ['delete'] })
+// Everything except destructive operations (shared store)
+store.toAgentTools({ exclude: ['delete'], unscoped: true })
 
-// All operations (default)
-store.toAgentTools()
+// All operations, scoped to the current user (scan excluded — see Scoping)
+store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }), exclude: ['scan'] })
 ```
 
 `include` and `exclude` are mutually exclusive.
@@ -781,6 +783,29 @@ The model's tool has no `key` parameter — it's injected server-side on every c
 > **Precedence:** When the same key appears in multiple sources, `fixed` wins over `scope` which wins over model input.
 
 > **Note:** If a tool requires custom logic or many overrides, a manual `tool()` definition is often simpler and easier to read.
+
+### Scoping
+
+A BB that can hold per-user data will not expose itself to the agent unscoped. `toAgentTools()` throws at construction unless you pass one of:
+
+- **`scope`** — a callback that maps the request context to fields injected into every call, locking operations to the current user. The model never sees or controls a scoped field (it is stripped from the tool's parameters and overwritten server-side).
+- **`unscoped: true`** — an explicit opt-out for stores whose data is genuinely shared (a cache, feature flags, config).
+
+```typescript
+const agent = new Agent(scope, 'assistant', {
+  toolContextSchema: z.object({ userId: z.string() }),
+  tools: (tool) => ({
+    // every operation is locked to the caller's own key
+    ...store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }) }),
+  }),
+});
+
+// at call time, userId comes from the authenticated session:
+const user = await auth.getCurrentUser(requestContext);
+await agent.stream(message, { conversationId, context: { userId: user.userId } });
+```
+
+> Some operations can't be scope-isolated (for example, one that lists an entire store). `toAgentTools()` throws if such a method is exposed under `scope`; exclude it, or use `unscoped: true` only when cross-user results are genuinely intended. See the BB's own README for which of its methods are affected.
 
 ### Supported BBs
 

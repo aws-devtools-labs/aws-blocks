@@ -47,6 +47,13 @@ export interface ToolMethodDef<TSelf = any> {
 	parameters: unknown;
 	needsApproval?: boolean;
 	trustable?: boolean;
+	/**
+	 * Whether this method honors an injected `scope`. Defaults to true.
+	 * Set false for methods whose handler ignores the scoped fields (e.g. a `scan`
+	 * that lists the whole store): under `scope` such a method would run unscoped and
+	 * leak across users, so `buildAgentTools` throws if it is exposed on a scoped BB.
+	 */
+	scopeSafe?: boolean;
 	// `input: any` because parameters are JSON Schema objects — no compile-time type link.
 	// Core avoids a zod dependency, so we can't derive input types from the schema.
 	handler: (self: TSelf) => (args: { input: any; context: any }) => Promise<unknown>;
@@ -143,6 +150,15 @@ export function buildAgentTools<TSelf extends Scope>(
 	for (const [methodName, def] of Object.entries(toolMethods)) {
 		if (options?.include && !options.include.includes(methodName)) continue;
 		if (options?.exclude && options.exclude.includes(methodName)) continue;
+
+		// A method whose handler ignores the scoped fields (scopeSafe: false) would run
+		// unscoped under `scope` and leak across users. Throw so the caller excludes it
+		// or opts the whole store out of scoping.
+		if (options?.scope && def.scopeSafe === false) {
+			throw new Error(
+				`toAgentTools: "${methodName}" cannot be scope-isolated on ${self.constructor.name} "${bbId}" — its handler ignores the scoped fields, so under \`scope\` it would return data across users. Either exclude it (e.g. \`exclude: ['${methodName}']\`), or pass \`unscoped: true\` if this store is shared and cross-user results are intended.`,
+			);
+		}
 
 		const override = options?.overrides?.[methodName];
 		const description = override?.description ?? def.description;

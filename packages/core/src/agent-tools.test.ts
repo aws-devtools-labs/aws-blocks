@@ -255,6 +255,42 @@ describe('buildAgentTools', () => {
 		});
 	});
 
+	describe('scopeSafe', () => {
+		const withScan: Record<string, ToolMethodDef<any>> = {
+			get: {
+				description: 'Get',
+				parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+				handler: () => async ({ input }) => input,
+			},
+			scan: {
+				description: 'List everything',
+				parameters: { type: 'object', properties: {} },
+				scopeSafe: false,
+				handler: () => async () => [],
+			},
+		};
+
+		test('throws when a scopeSafe:false method is exposed under scope', () => {
+			assert.throws(
+				() => buildAgentTools(mockBB, withScan, { scope: (ctx: { userId: string }) => ({ key: ctx.userId }) }),
+				/scan.*cannot be scope-isolated/,
+			);
+		});
+
+		test('excluding the scopeSafe:false method allows scoping', () => {
+			const tools = buildAgentTools(mockBB, withScan, {
+				scope: (ctx: { userId: string }) => ({ key: ctx.userId }),
+				exclude: ['scan'],
+			});
+			assert.deepStrictEqual(Object.keys(tools), ['store__get']);
+		});
+
+		test('scopeSafe:false method is fine when unscoped', () => {
+			const tools = buildAgentTools(mockBB, withScan, { unscoped: true });
+			assert.ok('store__scan' in tools);
+		});
+	});
+
 	describe('requiresScope', () => {
 		test('throws when neither scope nor unscoped is passed', () => {
 			assert.throws(

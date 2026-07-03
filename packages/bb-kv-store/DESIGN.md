@@ -38,6 +38,8 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 
 A KVStore can be keyed by `userId`, so `kvToAgentTools()` passes `{ requiresScope: true }`: callers must supply either `scope` or `unscoped: true`, otherwise `toAgentTools()` throws at construction. See core's `buildAgentTools` for the mechanism.
 
+`scan` is marked `scopeSafe: false`. `scope` pins an exact key, but `scan` lists the whole store, so on a scoped store it would return every user's entries. `buildAgentTools` therefore throws if `scan` is exposed under `scope` — scoped stores must `exclude: ['scan']` (or opt out with `unscoped: true` when the data is genuinely shared).
+
 ### Tool Registry (`KV_TOOL_METHODS`)
 
 | Method | `needsApproval` | `trustable` | Notes |

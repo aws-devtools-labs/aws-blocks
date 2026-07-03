@@ -245,6 +245,7 @@ export interface ToolMethodDef<TSelf = any> {
     needsApproval?: boolean;
     // (undocumented)
     parameters: unknown;
+    scopeSafe?: boolean;
     // (undocumented)
     trustable?: boolean;
 }
