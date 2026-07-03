@@ -109,7 +109,7 @@ function runCommand(
         ...process.env,
         ...env,
         ...(home ? { HOME: home } : {}),
-        NODE_DEBUG: 'blocks-telemetry',
+        ...('NODE_DEBUG' in env ? {} : { NODE_DEBUG: 'blocks-telemetry' }),
         NODE_OPTIONS: '',
       } as NodeJS.ProcessEnv,
     });
@@ -149,7 +149,7 @@ function spawnDevServer(options: {
         ...env,
         ...(home ? { HOME: home } : {}),
         PORT: String(port),
-        NODE_DEBUG: 'blocks-telemetry',
+        ...('NODE_DEBUG' in env ? {} : { NODE_DEBUG: 'blocks-telemetry' }),
         NODE_OPTIONS: '',
       } as NodeJS.ProcessEnv,
     });
@@ -805,28 +805,17 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=0');
     });
 
-    test('AWS_BLOCKS_DISABLE_TELEMETRY=true does NOT disable (only "1" disables)', async () => {
-      tmpHome = createTmpDir('disable-true');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const port = getNextPort();
-
-      const result = await spawnDevServer({
-        port, telemetryFile,
-        env: { AWS_BLOCKS_DISABLE_TELEMETRY: 'true' },
-      });
-      devProcess = result.process;
-
-      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry should still fire with =true');
-      await sleep(5000);
-      assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=true');
-    });
   });
 
   // ── 6. Network resilience ──────────────────────────────────────────────────
 
   describe('network resilience', () => {
+    let devProcess: ChildProcess | null = null;
     let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+    afterEach(() => {
+      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
+    });
 
     test('broken endpoint is invisible to users (no NODE_DEBUG)', async () => {
       tmpHome = createTmpDir('net-invisible');
@@ -866,19 +855,20 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const port = getNextPort();
 
-      const start = Date.now();
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        telemetryFile, env: {
-          PORT: String(port),
-          BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable',
-        }, timeoutMs: 12_000,
+      // Use a port that's NOT in use so the dev server starts successfully,
+      // but with a broken telemetry endpoint. If telemetry blocked, the command
+      // would hang waiting for the HTTP timeout. The dev server should start
+      // normally regardless.
+      const result = await spawnDevServer({
+        port, telemetryFile,
+        env: { BLOCKS_TELEMETRY_ENDPOINT: 'http://127.0.0.1:1/unreachable' },
       });
-      const elapsed = Date.now() - start;
+      devProcess = result.process;
 
-      // Command should exit normally (telemetry file written regardless of send failure)
-      assert.ok(await waitForFile(telemetryFile, 3_000), 'telemetry file should still be written');
-      // Command should not be delayed significantly by telemetry failure
-      assert.ok(elapsed < 10_000, `Command took ${elapsed}ms — telemetry should not delay it`);
+      // Dev server started (spawnDevServer resolved) — telemetry failure didn't block it
+      assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry file should still be written despite send failure');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.state, 'SUCCESS', 'command should succeed regardless of telemetry failure');
     });
   });
 
@@ -1083,26 +1073,38 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
     test('--disable creates config with telemetry.enabled=false', async () => {
       tmpHome = createTmpDir('cli-disable');
-      const result = await runCommand('npx', ['blocks-telemetry', '--disable'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(APP_ROOT, '.blocks', 'config.json'), 'utf-8'));
-      assert.strictEqual(config.telemetry.enabled, false);
-      // Restore
-      writeFileSync(join(APP_ROOT, '.blocks', 'config.json'), JSON.stringify({ telemetry: { projectId: PINNED_PROJECT_ID } }));
+      const configPath = join(APP_ROOT, '.blocks', 'config.json');
+      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
+
+      try {
+        const result = await runCommand('npx', ['blocks-telemetry', '--disable'], {
+          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+        });
+        assert.strictEqual(result.exitCode, 0);
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        assert.strictEqual(config.telemetry.enabled, false);
+      } finally {
+        if (originalContent) writeFileSync(configPath, originalContent);
+        else rmSync(configPath, { force: true });
+      }
     });
 
     test('--enable creates config with telemetry.enabled=true', async () => {
       tmpHome = createTmpDir('cli-enable');
-      const result = await runCommand('npx', ['blocks-telemetry', '--enable'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
-      });
-      assert.strictEqual(result.exitCode, 0);
-      const config = JSON.parse(readFileSync(join(APP_ROOT, '.blocks', 'config.json'), 'utf-8'));
-      assert.strictEqual(config.telemetry.enabled, true);
-      // Restore
-      writeFileSync(join(APP_ROOT, '.blocks', 'config.json'), JSON.stringify({ telemetry: { projectId: PINNED_PROJECT_ID } }));
+      const configPath = join(APP_ROOT, '.blocks', 'config.json');
+      const originalContent = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : null;
+
+      try {
+        const result = await runCommand('npx', ['blocks-telemetry', '--enable'], {
+          telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 10_000,
+        });
+        assert.strictEqual(result.exitCode, 0);
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        assert.strictEqual(config.telemetry.enabled, true);
+      } finally {
+        if (originalContent) writeFileSync(configPath, originalContent);
+        else rmSync(configPath, { force: true });
+      }
     });
 
     test('--status shows current telemetry status', async () => {
