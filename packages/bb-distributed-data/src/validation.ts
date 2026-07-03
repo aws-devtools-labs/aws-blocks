@@ -85,6 +85,7 @@ const RULES: ValidationRule[] = [
   { pattern: /\bCOLLATE\b/i, message: 'DSQL only supports C collation.', severity: 'error' },
   { pattern: /(?<!::)\bJSONB\b/i, message: 'DSQL does not support JSONB columns. Use JSON instead (JSONB is available as a query runtime cast via ::jsonb).', severity: 'error' },
   { pattern: /(@>|<@|\?\||\?&)/, message: 'JSONB operators lack GIN index acceleration in DSQL.', severity: 'warn' },
+  { pattern: /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[\s\S]*\b(?:ASC|DESC|NULLS\s+(?:FIRST|LAST))\b/i, message: 'DSQL does not support sort order (ASC/DESC/NULLS FIRST/LAST) on index keys. Remove it — ordering is enforced by ORDER BY in queries. (DSQL: "specifying sort order not supported for index keys")', severity: 'error' },
 ];
 
 /** Validate a SQL statement for DSQL compatibility. Throws on unsupported features. */
