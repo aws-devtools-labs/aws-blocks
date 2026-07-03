@@ -45,6 +45,22 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stdout, /Usage: create-blocks-app/);
   });
 
+  it('--help includes template descriptions', () => {
+    // Guards the filesystem-driven catalog: if template discovery breaks or a
+    // template's `blocksTemplateDescription` disappears, --help output will no
+    // longer include the canonical description strings and this test fails.
+    const result = run(['--help']);
+    assert.strictEqual(result.exitCode, 0);
+    // "default" template's canonical description substring. Pinned to a stable
+    // fragment so wording tweaks don't require test churn but a missing
+    // description does.
+    assert.match(
+      result.stdout,
+      /default\s+Vite \+ lit-html frontend with auth/,
+      '--help should list the default template with its blocksTemplateDescription',
+    );
+  });
+
   it('unknown flag exits 1 with error message', () => {
     const result = run(['--foo']);
     assert.strictEqual(result.exitCode, 1);
