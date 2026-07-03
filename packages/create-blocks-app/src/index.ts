@@ -628,7 +628,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 async function printUsage() {
   const catalog = await loadTemplateCatalog();
   const names = catalog.map(t => t.name);
-  const widest = Math.max(...catalog.map(t => t.name.length));
+  const widest = catalog.length ? Math.max(...catalog.map(t => t.name.length)) : 0;
   const templateList = catalog
     .map(t => `    ${t.name.padEnd(widest)}   ${t.description}`)
     .join('\n');
