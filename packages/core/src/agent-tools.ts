@@ -170,10 +170,18 @@ export function buildAgentTools<TSelf extends Scope>(
 		const injectedKeys = [...scopeKeys, ...Object.keys(override?.fixed ?? {})];
 		const parameters = stripKeysFromParameters(override?.schema ?? def.parameters, injectedKeys);
 
+		const toolName = `${bbId}__${methodName}`;
 		const baseHandler = def.handler(self);
 		const handler = async (args: { input: any; context: any }) => {
 			let input = args.input;
-			if (options?.scope && args.context) {
+			if (options?.scope) {
+				// A scoped tool must never run without context — that would silently drop
+				// the isolation field and call the store unscoped. Fail loud instead.
+				if (args.context == null) {
+					throw new Error(
+						`toAgentTools: "${toolName}" is scoped but was invoked without a context — cannot derive the scoped fields. Pass \`context\` when calling the agent.`,
+					);
+				}
 				const scoped = options.scope(args.context);
 				input = { ...input, ...scoped };
 			}
@@ -183,7 +191,6 @@ export function buildAgentTools<TSelf extends Scope>(
 			return baseHandler({ input, context: args.context });
 		};
 
-		const toolName = `${bbId}__${methodName}`;
 		result[toolName] = { description, parameters, needsApproval, trustable, handler };
 	}
 

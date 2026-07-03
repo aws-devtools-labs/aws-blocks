@@ -165,6 +165,23 @@ describe('buildAgentTools', () => {
 			assert.strictEqual(result.userId, 'real-user');
 		});
 
+		test('scoped tool invoked without context throws instead of running unscoped', async () => {
+			const methods: Record<string, ToolMethodDef<any>> = {
+				query: {
+					description: 'Query items',
+					parameters: { type: 'object', properties: {} },
+					handler: () => async ({ input }) => input,
+				},
+			};
+			const tools = buildAgentTools(mockBB, methods, {
+				scope: (ctx: { userId: string }) => ({ userId: ctx.userId }),
+			});
+			await assert.rejects(
+				() => tools['store__query'].handler({ input: { status: 'active' }, context: undefined }),
+				/scoped but was invoked without a context/,
+			);
+		});
+
 		test('scope and fixed combine on disjoint keys', async () => {
 			const methods: Record<string, ToolMethodDef<any>> = {
 				query: {
