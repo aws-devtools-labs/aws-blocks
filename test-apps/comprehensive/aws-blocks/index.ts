@@ -52,13 +52,16 @@ const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.arra
 const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSchema });
 
 // AuthBasic - Authentication
-// Store last delivered code so e2e tests can retrieve and use it.
-let lastDeliveredCode: { username: string; code: string } | null = null;
+// Store the last delivered code so e2e tests can retrieve and use it. This
+// must be shared storage: sandbox/production may read from a different Lambda
+// instance than the one that delivered the code.
+type DeliveredAuthBasicCode = { username: string; code: string };
+const authBasicLastCodeKey = 'auth-basic:last-code';
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await store.put(authBasicLastCodeKey, JSON.stringify({ username, code }));
     // In a real app, connect this to email: await sendEmail(username, `Your code: ${code}`);
     logCodeLocally(`[AuthBasic] Verification code for "${username}": ${code}`);
   },
@@ -884,7 +887,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async authGetLastCode() {
-    return lastDeliveredCode;
+    const lastDeliveredCode = await store.get(authBasicLastCodeKey);
+    return lastDeliveredCode ? JSON.parse(lastDeliveredCode) as DeliveredAuthBasicCode : null;
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
