@@ -7,6 +7,7 @@ export {
   type BackendImageProps,
 } from './image-asset.js';
 export {
+  handlerEnvironmentForJson,
   mirrorHandlerEnvironmentToContainer,
   resolveHandlerEnvironment,
 } from './env-mirror.js';

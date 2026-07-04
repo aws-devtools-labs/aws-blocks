@@ -45,6 +45,36 @@ describe('stageBackendImage', () => {
   });
 });
 
+describe('handlerEnvironmentForJson', () => {
+  test('env values embed into JSON documents as CloudFormation joins, not literal intrinsics', async () => {
+    const { handlerEnvironmentForJson } = await import('./env-mirror.js');
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'TokenStack');
+    const bucket = new (await import('aws-cdk-lib/aws-s3')).Bucket(stack, 'B');
+
+    const handler = new lambda.Function(stack, 'Handler', {
+      runtime: lambda.Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline('exports.handler = async () => {};'),
+      environment: { PLAIN: 'value' },
+    });
+    handler.addEnvironment('BUCKET', bucket.bucketName);
+
+    // Same embedding a KubernetesManifest performs: lazily produced env,
+    // stringified by the stack.
+    const lazyEnv = cdk.Lazy.any({
+      produce: () =>
+        Object.entries(handlerEnvironmentForJson(handler)).map(([name, value]) => ({ name, value })),
+    });
+    new cdk.CfnOutput(stack, 'Out', { value: stack.toJsonString({ env: lazyEnv }) });
+
+    const rendered = JSON.stringify(app.synth().getStackByName('TokenStack').template.Outputs.Out.Value);
+    assert.ok(rendered.includes('"PLAIN'), 'plain value embedded');
+    assert.ok(rendered.includes('"Ref"'), 'bucket reference became a real Ref');
+    assert.ok(!/\\+"(Fn::GetAtt|Ref)\\+"/.test(rendered), 'no intrinsic leaked as literal text');
+  });
+});
+
 describe('mirrorHandlerEnvironmentToContainer', () => {
   test('copies handler env into the container at synth, container vars win', () => {
     const app = new cdk.App();
