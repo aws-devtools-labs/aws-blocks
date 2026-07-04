@@ -110,6 +110,15 @@ export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtecti
 export interface BlocksStackApi {
   /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
   readonly apiUrl: string;
+  /**
+   * Structured origin for the API. Container compute targets set this because
+   * their `apiUrl` has no API Gateway stage segment — parsing a stage out of
+   * it would mangle the origin. When present, Hosting uses it directly.
+   */
+  readonly apiOrigin?: {
+    readonly hostname: string;
+    readonly originPath: string;
+  };
 }
 
 /**
@@ -558,7 +567,7 @@ export class Hosting extends Construct {
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
     if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      this.addApiBehaviors(hosting, props.api.apiUrl, props.api.apiOrigin);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -679,17 +688,33 @@ export class Hosting extends Construct {
   }
 
   /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+   * Add CloudFront behaviors that proxy API traffic to the API origin.
+   *
+   * With a structured `apiOrigin` (container compute targets) the origin is
+   * used as-is. Otherwise the API Gateway stage is parsed out of `apiUrl`,
+   * which assumes the `https://{host}/{stage}/aws-blocks/api` shape.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+  private addApiBehaviors(
+    hosting: HostingConstruct,
+    apiUrl: string,
+    apiOrigin?: BlocksStackApi['apiOrigin'],
+  ): void {
+    let apiGatewayOrigin: HttpOrigin;
+    if (apiOrigin) {
+      apiGatewayOrigin = new HttpOrigin(
+        apiOrigin.hostname,
+        apiOrigin.originPath ? { originPath: apiOrigin.originPath } : {},
+      );
+    } else {
+      const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
+      const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
+      const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
+      const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+      apiGatewayOrigin = new HttpOrigin(hostname, {
+        originPath: `/${stage}`,
+      });
+    }
 
     const behaviorDefaults = {
       allowedMethods: AllowedMethods.ALLOW_ALL,
