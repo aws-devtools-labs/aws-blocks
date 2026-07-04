@@ -1,0 +1,40 @@
+{
+  "name": "@aws-blocks/compute-ecs",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "ECS Fargate compute target for AWS Blocks: run the Blocks backend load-balanced behind ALB + CloudFront",
+  "files": [
+    "dist",
+    "README.md",
+    "DESIGN.md",
+    "src",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build",
+    "test": "node --test dist/*.test.js",
+    "dev": "tsc --build --watch"
+  },
+  "dependencies": {
+    "@aws-blocks/compute-common": "*",
+    "@aws-blocks/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0"
+  }
+}
