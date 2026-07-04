@@ -58,7 +58,9 @@
     "test-apps/pipeline",
     "test-apps/db-pull-typecheck",
     "test-apps/compute-ecs-smoke",
-    "test-apps/compute-ecs-smoke/aws-blocks"
+    "test-apps/compute-ecs-smoke/aws-blocks",
+    "test-apps/compute-eks-smoke",
+    "test-apps/compute-eks-smoke/aws-blocks"
   ],
   "scripts": {
     "prepare": "husky && bash scripts/setup-git-secrets.sh",
