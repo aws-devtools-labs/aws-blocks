@@ -4,24 +4,25 @@ Shares the hybrid companion-Lambda model, shared execution role, and
 CloudFront front-door reasoning with `@aws-blocks/compute-ecs` (see its
 DESIGN.md). This file covers what is EKS-specific.
 
-## Auto Mode on the stable aws-eks module
+## Auto Mode on aws-eks-v2
 
-The stable `aws-cdk-lib/aws-eks` L2 does not model Auto Mode (only the alpha
-`@aws-cdk/aws-eks-v2-alpha` does, and an alpha dependency is not acceptable
-in a framework package). `EksCompute` therefore enables Auto Mode through the
-documented cluster settings, applied to the L2's cluster custom resource
-(`Config.*`, camelCase, passed to the EKS CreateCluster API):
+`EksCompute` builds on `aws-cdk-lib/aws-eks-v2`, the stabilized successor to
+the custom-resource-based `aws-eks` module (the alpha package carries the
+notice "This package has been stabilized and moved to aws-cdk-lib"). It
+renders a native `AWS::EKS::Cluster`, uses access entries (API
+authentication mode), and defaults the capacity type to Auto Mode: compute
+(`system` + `general-purpose` node pools), block storage, and load balancing
+capabilities all enabled, with the node role, its access entry, and the Auto
+Mode cluster-role policies managed by the construct. The kubectl provider is
+opt-in (`kubectlProviderOptions`) and is only used for the two manifests and
+the ingress-hostname read; its handler role automatically receives a
+cluster-admin access entry. A unit test pins the rendered Auto Mode cluster
+properties.
 
-- `computeConfig`: enabled, `system` + `general-purpose` node pools, a node
-  role with `AmazonEKSWorkerNodeMinimalPolicy` + `AmazonEC2ContainerRegistryPullOnly`
-- `storageConfig.blockStorage` and `kubernetesNetworkConfig.elasticLoadBalancing` enabled
-- `bootstrapSelfManagedAddons: false` (Auto Mode replaces CoreDNS, kube-proxy, VPC CNI)
-- cluster role gains the four Auto Mode managed policies and `sts:TagSession` trust
-- an `EC2_AUTO` access entry admits the node role
-
-All of it is contained in one private method so migrating to a native L2
-(when `aws-eks-v2` stabilizes) is mechanical. A unit test pins the rendered
-cluster config.
+Auto Mode discovers load-balancer subnets by role tags, so the construct
+tags the VPC's public subnets with `kubernetes.io/role/elb=1` and private
+subnets with `kubernetes.io/role/internal-elb=1` (verified live: without the
+tags the Ingress never gets an ALB).
 
 ## Identity: Pod Identity, not IRSA
 
@@ -39,9 +40,15 @@ VPC origin cannot be wired to them. The ALB is internet-facing but every
 request must carry the `X-Origin-Verify` header — enforced as an ALB listener
 rule condition from the ingress `conditions.*` annotation; non-matching
 requests hit the default 404. CloudFront adds the header as an origin custom
-header. The value is a Secrets Manager dynamic reference, so it is stable
-across deploys (no rotation race between the CloudFront update and the ALB
-rule update).
+header. The value lives in Secrets Manager and is read at deploy time by an
+`AwsCustomResource` (`GetSecretValue`) that feeds both the ingress annotation
+and the CloudFront custom header, so the two always match. A
+`{{resolve:secretsmanager:...}}` dynamic reference cannot be used here:
+CloudFormation does not substitute dynamic references inside custom resource
+properties, so the kubectl provider would apply the literal `{{resolve:...}}`
+string and the controller's `CreateRule` call fails on the 128-character
+condition-value limit (verified live; a unit test pins that manifests contain
+no dynamic references).
 
 ## Two manifests, not one
 
