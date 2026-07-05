@@ -8,6 +8,7 @@ import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import type * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
@@ -117,13 +118,22 @@ export class EcsFargateCompute implements ComputeTarget {
     const networkMode = this.props.networkMode ?? (ctx.isSandbox ? 'public' : 'private');
     const isPublic = networkMode === 'public';
 
+    // CloudFront VPC origins require the origin resource in PRIVATE subnets —
+    // the origin-facing ENIs black-hole through an IGW route table (verified
+    // on a live deploy: healthy targets, deployed VPC origin, CloudFront 504).
+    // So the ALB always gets private subnets. In `public` mode those are
+    // ISOLATED (the ALB only forwards within the VPC, so it needs no NAT and
+    // the mode stays NAT-free); tasks keep public IPs for egress.
     this.vpc =
       this.props.vpc ??
       new ec2.Vpc(scope, 'Vpc', {
         maxAzs: 2,
         natGateways: isPublic ? 0 : 1,
         subnetConfiguration: isPublic
-          ? [{ name: 'public', subnetType: ec2.SubnetType.PUBLIC }]
+          ? [
+              { name: 'public', subnetType: ec2.SubnetType.PUBLIC },
+              { name: 'alb', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+            ]
           : [
               { name: 'public', subnetType: ec2.SubnetType.PUBLIC },
               { name: 'private', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
@@ -131,6 +141,9 @@ export class EcsFargateCompute implements ComputeTarget {
       });
     const taskSubnets: ec2.SubnetSelection = isPublic
       ? { subnetType: ec2.SubnetType.PUBLIC }
+      : { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
+    const albSubnets: ec2.SubnetSelection = isPublic
+      ? { subnetType: ec2.SubnetType.PRIVATE_ISOLATED }
       : { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
 
     this.cluster = new ecs.Cluster(scope, 'Cluster', {
@@ -183,7 +196,7 @@ export class EcsFargateCompute implements ComputeTarget {
     this.loadBalancer = new elbv2.ApplicationLoadBalancer(scope, 'Alb', {
       vpc: this.vpc,
       internetFacing: false,
-      vpcSubnets: taskSubnets,
+      vpcSubnets: albSubnets,
     });
     const listener = this.loadBalancer.addListener('Http', { port: 80, open: false });
     const targetGroup = listener.addTargets('Backend', {
@@ -197,11 +210,32 @@ export class EcsFargateCompute implements ComputeTarget {
         healthyThresholdCount: 2,
       },
     });
-    // CloudFront VPC-origin traffic arrives through ENIs inside the VPC.
+    // CloudFront VPC-origin traffic passes through the origin-facing ENIs
+    // WITHOUT source NAT: packets arrive at the ALB with CloudFront's public
+    // origin-facing source IPs (verified via VPC flow logs on a live deploy —
+    // a VPC-CIDR rule REJECTs them). Allow the CloudFront origin-facing
+    // managed prefix list. Its id is region-specific, and PrefixList.fromLookup
+    // needs an env-pinned stack (Blocks stacks are env-agnostic), so resolve it
+    // at deploy time.
+    const cloudFrontOriginFacing = new cr.AwsCustomResource(scope, 'CfOriginFacingLookup', {
+      onUpdate: {
+        service: 'EC2',
+        action: 'describeManagedPrefixLists',
+        parameters: {
+          Filters: [
+            { Name: 'prefix-list-name', Values: ['com.amazonaws.global.cloudfront.origin-facing'] },
+          ],
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('cloudfront-origin-facing-prefix-list'),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+      }),
+    });
     this.loadBalancer.connections.allowFrom(
-      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Peer.prefixList(cloudFrontOriginFacing.getResponseField('PrefixLists.0.PrefixListId')),
       ec2.Port.tcp(80),
-      'CloudFront VPC origin',
+      'CloudFront origin-facing',
     );
 
     const scaling = this.props.autoscaling ?? {};

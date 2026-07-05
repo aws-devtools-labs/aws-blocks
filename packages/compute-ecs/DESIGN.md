@@ -39,6 +39,12 @@ port 80 from the VPC CIDR, which is where CloudFront's VPC-origin ENIs live.
 `BLOCKS_PUBLIC_ORIGIN` is injected so absolute URLs built by the backend
 (OIDC redirect URIs) use the CloudFront domain, not the internal ALB host.
 
+VPC origins require the origin in **private** subnets: with the ALB in a
+public subnet the origin-facing ENIs deploy but traffic black-holes
+(verified live: healthy targets, `Deployed` VPC origin, CloudFront 504).
+The ALB therefore always gets private subnets — isolated ones in `public`
+mode, so that mode stays NAT-free.
+
 Rejected alternatives: a bare ALB URL breaks Secure-cookie auth over HTTP; a
 mandatory customer ACM certificate breaks zero-config deploys.
 

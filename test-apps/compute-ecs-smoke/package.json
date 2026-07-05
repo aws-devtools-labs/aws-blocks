@@ -13,8 +13,8 @@
     "dev": "tsx aws-blocks/scripts/server.ts",
     "test": "echo 'Smoke tests run via test:e2e:local and test:e2e:sandbox'",
     "test:e2e:local": "tsx test/local.test.ts",
-    "sandbox:deploy": "tsx test/sandbox-deploy.ts aws-blocks/index.ts",
-    "sandbox:destroy": "tsx test/sandbox-destroy.ts aws-blocks/index.ts"
+    "sandbox:deploy": "tsx test/sandbox-deploy.ts aws-blocks/index.cdk.ts",
+    "sandbox:destroy": "tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",

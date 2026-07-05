@@ -159,6 +159,34 @@ describe('EcsFargateCompute — networking modes', () => {
     });
   });
 
+  test('the ALB sits in private subnets even in public mode (VPC origin requirement)', async () => {
+    // CloudFront VPC origins black-hole when the origin is in a public subnet
+    // (IGW route table) — verified on a live deploy. The ALB must always be
+    // in private subnets; in public mode they are isolated so no NAT appears.
+    const { template } = await synthWith(
+      new EcsFargateCompute({ image: testImage() }),
+      'EcsAlbPriv',
+      { sandboxMode: 'true' },
+    );
+
+    const publicSubnetIds = new Set(
+      Object.entries(template.findResources('AWS::EC2::Subnet'))
+        .filter(([, subnet]) => (subnet as any).Properties?.MapPublicIpOnLaunch === true)
+        .map(([logicalId]) => logicalId),
+    );
+    assert.ok(publicSubnetIds.size >= 2, 'public task subnets exist');
+
+    const alb = Object.values(
+      template.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer'),
+    )[0] as any;
+    for (const subnetRef of alb.Properties.Subnets) {
+      assert.ok(
+        !publicSubnetIds.has(subnetRef.Ref),
+        `ALB subnet ${subnetRef.Ref} must not be public`,
+      );
+    }
+  });
+
   test('explicit networkMode wins over sandbox default', async () => {
     const { template } = await synthWith(
       new EcsFargateCompute({ image: testImage(), networkMode: 'private' }),

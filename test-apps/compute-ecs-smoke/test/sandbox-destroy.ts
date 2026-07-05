@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { destroySandbox } from '@aws-blocks/blocks/scripts';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+// Keep the path relative: destroySandbox interpolates it unquoted into the
+// CDK --app command, so an absolute path containing spaces would split.
+const backendPath = process.argv[2] ?? 'aws-blocks/index.cdk.ts';
 
 await destroySandbox(backendPath);
