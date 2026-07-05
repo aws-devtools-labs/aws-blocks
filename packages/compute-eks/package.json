@@ -28,7 +28,7 @@
   "dependencies": {
     "@aws-blocks/compute-common": "*",
     "@aws-blocks/core": "*",
-    "@aws-cdk/lambda-layer-kubectl-v33": "^2.0.0"
+    "@aws-cdk/lambda-layer-kubectl-v34": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -3,12 +3,13 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as eks from 'aws-cdk-lib/aws-eks';
-import * as iam from 'aws-cdk-lib/aws-iam';
+import * as eks from 'aws-cdk-lib/aws-eks-v2';
+import { CfnPodIdentityAssociation } from 'aws-cdk-lib/aws-eks';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import { KubectlV33Layer } from '@aws-cdk/lambda-layer-kubectl-v33';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import { KubectlV34Layer } from '@aws-cdk/lambda-layer-kubectl-v34';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import type * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
@@ -32,7 +33,7 @@ const ORIGIN_VERIFY_HEADER = 'X-Origin-Verify';
 export interface EksComputeProps {
   /** Bring your own VPC. Default: a dedicated 2-AZ VPC with one NAT gateway. */
   vpc?: ec2.IVpc;
-  /** Kubernetes control plane version. Default: 1.33. */
+  /** Kubernetes control plane version. Default: 1.34. */
   kubernetesVersion?: eks.KubernetesVersion;
   /** Namespace the backend runs in. Default: `aws-blocks`. */
   namespace?: string;
@@ -70,12 +71,12 @@ export interface EksComputeProps {
  * });
  * ```
  *
- * Auto Mode is enabled on the stable `aws-eks` cluster through the documented
- * CloudFormation properties (the CDK L2 does not model Auto Mode natively
- * yet; see DESIGN.md). AWS manages nodes, and the built-in load balancing
- * capability provisions the ALB from a standard Ingress — no controller
- * install. Pod Identity maps the backend service account onto the shared
- * execution role, so every Building Block grant applies to pods unchanged.
+ * Auto Mode is the `aws-eks-v2` cluster default: a native AWS::EKS::Cluster
+ * with managed compute, storage, and load balancing capabilities. The
+ * built-in load balancing capability provisions the ALB from a standard
+ * Ingress (no controller install). Pod Identity maps the backend service
+ * account onto the shared execution role, so every Building Block grant
+ * applies to pods unchanged.
  */
 export class EksCompute implements ComputeTarget {
   readonly requiredPrincipals: ReadonlyArray<ComputePrincipal> = ['pods.eks.amazonaws.com'];
@@ -112,15 +113,27 @@ export class EksCompute implements ComputeTarget {
           { name: 'private', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         ],
       });
+    // Auto Mode's load balancing requires role tags to discover subnets;
+    // without them the Ingress never gets an ALB (verified live: ingress
+    // hostname wait timed out). https://docs.aws.amazon.com/eks/latest/userguide/tag-subnets-auto.html
+    for (const subnet of this.vpc.publicSubnets) {
+      cdk.Tags.of(subnet).add('kubernetes.io/role/elb', '1');
+    }
+    for (const subnet of this.vpc.privateSubnets) {
+      cdk.Tags.of(subnet).add('kubernetes.io/role/internal-elb', '1');
+    }
 
+    // aws-eks-v2 (stable since it moved into aws-cdk-lib) models Auto Mode
+    // natively: AUTOMODE is the default capacity type, the node role and its
+    // access entry, the Auto Mode cluster-role policies, and API
+    // authentication mode are all managed by the construct.
     this.cluster = new eks.Cluster(scope, 'Cluster', {
-      version: this.props.kubernetesVersion ?? eks.KubernetesVersion.V1_33,
-      kubectlLayer: new KubectlV33Layer(scope, 'KubectlLayer'),
+      version: this.props.kubernetesVersion ?? eks.KubernetesVersion.V1_34,
       vpc: this.vpc,
-      defaultCapacity: 0,
-      authenticationMode: eks.AuthenticationMode.API,
+      kubectlProviderOptions: {
+        kubectlLayer: new KubectlV34Layer(scope, 'KubectlLayer'),
+      },
     });
-    this.enableAutoMode(scope);
 
     const imageUri =
       this.props.imageUri ??
@@ -133,7 +146,7 @@ export class EksCompute implements ComputeTarget {
     // Pod Identity: the backend service account assumes the shared execution
     // role, so Building Block grants apply to pods. Auto Mode nodes run the
     // Pod Identity agent out of the box.
-    const podIdentity = new eks.CfnPodIdentityAssociation(scope, 'PodIdentity', {
+    const podIdentity = new CfnPodIdentityAssociation(scope, 'PodIdentity', {
       clusterName: this.cluster.clusterName,
       namespace,
       serviceAccount,
@@ -142,13 +155,27 @@ export class EksCompute implements ComputeTarget {
 
     // Direct-to-ALB requests must present this header (enforced by the ALB
     // listener rule from the ingress conditions annotation); CloudFront adds
-    // it as an origin custom header. Stable across deploys via a Secrets
-    // Manager dynamic reference, so rotations don't race ALB rule updates.
+    // it as an origin custom header. The value is read at deploy time with an
+    // AwsCustomResource: a `{{resolve:secretsmanager:...}}` dynamic reference
+    // is NOT substituted inside custom resource properties, so it would reach
+    // the kubectl provider literally and the controller's CreateRule would
+    // fail with "Condition value ... cannot contain more than 128 characters"
+    // (verified live; the ingress then never gets an ALB).
     const originVerifySecret = new secretsmanager.Secret(scope, 'OriginVerify', {
       generateSecretString: { excludePunctuation: true, passwordLength: 32 },
       description: `CloudFront origin verification header for ${ctx.id}`,
     });
-    const originVerifyValue = originVerifySecret.secretValue.unsafeUnwrap();
+    const originVerifyValue = new cr.AwsCustomResource(scope, 'OriginVerifyValue', {
+      onUpdate: {
+        service: 'SecretsManager',
+        action: 'getSecretValue',
+        parameters: { SecretId: originVerifySecret.secretArn },
+        physicalResourceId: cr.PhysicalResourceId.of('origin-verify-value'),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: [originVerifySecret.secretArn],
+      }),
+    }).getResponseField('SecretString');
 
     this.containerEnv = {
       PORT: String(CONTAINER_PORT),
@@ -181,11 +208,16 @@ export class EksCompute implements ComputeTarget {
 
     // Two manifests on purpose. The Deployment's env references the
     // CloudFront domain, and CloudFront's origin reads the ingress ALB
-    // hostname — putting the Ingress and the Deployment in one manifest
+    // hostname â€” putting the Ingress and the Deployment in one manifest
     // would make that a dependency cycle. The infra manifest (everything the
     // ALB needs) deploys first; the Deployment follows once the front door
     // exists.
-    const infraManifest = this.cluster.addManifest('BackendInfra',
+    // `overwrite: true` gives apply semantics, so re-deploys after a failed
+    // attempt never trip over leftover objects from a previous rollout.
+    const infraManifest = new eks.KubernetesManifest(scope, 'BackendInfra', {
+      cluster: this.cluster,
+      overwrite: true,
+      manifest: [
       { apiVersion: 'v1', kind: 'Namespace', metadata: { name: namespace } },
       {
         apiVersion: 'v1',
@@ -257,9 +289,13 @@ export class EksCompute implements ComputeTarget {
           ],
         },
       },
-    );
+      ],
+    });
 
-    this.manifest = this.cluster.addManifest('Backend',
+    this.manifest = new eks.KubernetesManifest(scope, 'Backend', {
+      cluster: this.cluster,
+      overwrite: true,
+      manifest: [
       {
         apiVersion: 'apps/v1',
         kind: 'Deployment',
@@ -297,12 +333,13 @@ export class EksCompute implements ComputeTarget {
           },
         },
       },
-    );
+      ],
+    });
     this.manifest.node.addDependency(podIdentity);
     this.manifest.node.addDependency(infraManifest);
 
     // The ingress-provisioned ALB only surfaces a hostname (no ARN), so a VPC
-    // origin is not wireable — CloudFront reaches it as an HTTP origin gated
+    // origin is not wireable â€” CloudFront reaches it as an HTTP origin gated
     // by the origin-verify header.
     const ingressHost = new eks.KubernetesObjectValue(scope, 'IngressHost', {
       cluster: this.cluster,
@@ -312,6 +349,9 @@ export class EksCompute implements ComputeTarget {
       jsonPath: '.status.loadBalancer.ingress[0].hostname',
       timeout: this.props.ingressReadyTimeout ?? cdk.Duration.minutes(10),
     });
+    // Wait only on the infra manifest: Auto Mode provisions the ALB from the
+    // Ingress regardless of endpoint readiness, and depending on the backend
+    // manifest would recreate the Deployment -> CloudFront -> IngressHost cycle.
     ingressHost.node.addDependency(infraManifest);
 
     this.frontDoor = new CloudFrontFrontDoor(scope, 'FrontDoor', {
@@ -339,70 +379,4 @@ export class EksCompute implements ComputeTarget {
     }
   }
 
-  /**
-   * Enable EKS Auto Mode on the stable L2 cluster through raw CloudFormation
-   * properties. The stable `aws-eks` module does not model Auto Mode yet
-   * (only the alpha v2 module does); these are the documented cluster
-   * settings, kept in one place so a future migration is mechanical.
-   */
-  private enableAutoMode(scope: Construct): void {
-    // Nodes Auto Mode launches on our behalf.
-    const nodeRole = new iam.Role(scope, 'AutoNodeRole', {
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEKSWorkerNodeMinimalPolicy'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonEC2ContainerRegistryPullOnly'),
-      ],
-    });
-
-    // The stable L2 provisions the cluster through a custom resource whose
-    // `Config` property is handed to the EKS CreateCluster API (camelCase),
-    // so Auto Mode settings are injected there rather than on an
-    // AWS::EKS::Cluster resource. Located by type: the exact construct
-    // nesting is an implementation detail of aws-eks.
-    const cfnCluster = this.cluster.node
-      .findAll()
-      .find(
-        (child): child is cdk.CfnResource =>
-          cdk.CfnResource.isCfnResource(child) &&
-          child.cfnResourceType === 'Custom::AWSCDK-EKS-Cluster',
-      );
-    if (!cfnCluster) {
-      throw new Error('EksCompute: unable to locate the EKS cluster resource to enable Auto Mode.');
-    }
-    cfnCluster.addPropertyOverride('Config.computeConfig', {
-      enabled: true,
-      nodePools: ['system', 'general-purpose'],
-      nodeRoleArn: nodeRole.roleArn,
-    });
-    cfnCluster.addPropertyOverride('Config.storageConfig.blockStorage.enabled', true);
-    cfnCluster.addPropertyOverride('Config.kubernetesNetworkConfig.elasticLoadBalancing.enabled', true);
-    // Auto Mode replaces the self-managed core add-ons (CoreDNS, kube-proxy, VPC CNI).
-    cfnCluster.addPropertyOverride('Config.bootstrapSelfManagedAddons', false);
-
-    // The cluster role drives Auto Mode's compute/storage/networking and
-    // needs the corresponding managed policies plus sts:TagSession trust.
-    const clusterRole = this.cluster.role as iam.Role;
-    for (const policy of [
-      'AmazonEKSComputePolicy',
-      'AmazonEKSBlockStoragePolicy',
-      'AmazonEKSLoadBalancingPolicy',
-      'AmazonEKSNetworkingPolicy',
-    ]) {
-      clusterRole.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(policy));
-    }
-    clusterRole.assumeRolePolicy?.addStatements(
-      new iam.PolicyStatement({
-        actions: ['sts:TagSession'],
-        principals: [new iam.ServicePrincipal('eks.amazonaws.com')],
-      }),
-    );
-
-    // Auto Mode nodes join through an EC2_AUTO access entry, not aws-auth.
-    new eks.CfnAccessEntry(scope, 'AutoNodeAccess', {
-      clusterName: this.cluster.clusterName,
-      principalArn: nodeRole.roleArn,
-      type: 'EC2_AUTO',
-    });
-  }
 }

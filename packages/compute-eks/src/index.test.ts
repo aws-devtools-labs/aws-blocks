@@ -49,21 +49,27 @@ describe('EksCompute — synth shape', () => {
     const { template } = await synthOnce();
 
     template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
-    template.resourceCountIs('Custom::AWSCDK-EKS-Cluster', 1);
+    template.resourceCountIs('AWS::EKS::Cluster', 1);
     template.resourceCountIs('AWS::EKS::PodIdentityAssociation', 1);
   });
 
-  test('Auto Mode settings are applied to the cluster resource', async () => {
+  test('Auto Mode is enabled natively on the cluster resource', async () => {
     const { template } = await synthOnce();
 
-    // The stable L2 renders the cluster through a custom resource whose Config
-    // carries the CfnCluster properties, including our overrides.
-    const clusterJson = JSON.stringify(
-      Object.values(template.findResources('Custom::AWSCDK-EKS-Cluster')),
-    );
-    assert.ok(clusterJson.includes('general-purpose'), 'Auto Mode node pools configured');
-    assert.ok(clusterJson.includes('bootstrapSelfManagedAddons') || clusterJson.includes('BootstrapSelfManagedAddons'),
-      'self-managed addons bootstrap disabled for Auto Mode');
+    // aws-eks-v2 renders a native AWS::EKS::Cluster with Auto Mode compute,
+    // storage, and load balancing capabilities enabled by default.
+    template.hasResourceProperties('AWS::EKS::Cluster', {
+      ComputeConfig: Match.objectLike({
+        Enabled: true,
+        NodePools: Match.arrayWith(['general-purpose']),
+      }),
+      KubernetesNetworkConfig: Match.objectLike({
+        ElasticLoadBalancing: { Enabled: true },
+      }),
+      StorageConfig: Match.objectLike({
+        BlockStorage: { Enabled: true },
+      }),
+    });
   });
 
   test('Pod Identity association maps the service account to the shared role', async () => {
@@ -111,6 +117,13 @@ describe('EksCompute — synth shape', () => {
     ]) {
       assert.ok(text.includes(marker), `manifest contains ${marker}`);
     }
+
+    // A secretsmanager dynamic reference is not substituted inside custom
+    // resource properties: it would reach the kubectl provider literally and
+    // the ALB CreateRule would reject the >128-char condition value (found
+    // live). The origin-verify value must arrive via the deploy-time
+    // GetSecretValue custom resource instead.
+    assert.ok(!text.includes('{{resolve:'), 'manifest has no literal dynamic reference');
   });
 
   test('pod env mirrors the handler env and container-specific vars', async () => {
