@@ -640,8 +640,31 @@ The CannedProvider is a custom Strands model provider that requires no network o
 
 - Returns simple mock responses
 - Triggers tool calls when the prompt mentions a tool name (e.g., "get order" triggers `getOrderStatus`)
-- Generates valid tool inputs from Zod schemas using type-based placeholders
+- Generates valid tool inputs from Zod schemas, respecting schema `default` values (from `.default()`) before falling back to type-based placeholders (`'sample'`, `1`, `true`, `[]`)
 - Streams responses word by word, matching the same protocol as real providers
+
+#### Canned Hints — `cannedExamples` and `cannedTriggers`
+
+Two optional tool fields make the canned provider more useful for local prototyping. Both are **ignored by the real bedrock/openai providers**, so they're safe to leave on production tools:
+
+| Field | Type | Effect (canned provider only) |
+| --- | --- | --- |
+| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. |
+| `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
+
+```typescript
+tools: (tool) => ({
+  searchDocs: tool({
+    description: 'Search documentation',
+    parameters: z.object({ query: z.string() }),
+    handler: async ({ input }) => search(input.query),
+
+    // Canned provider hints (ignored by real models):
+    cannedExamples: { query: 'how do I get started' },      // used instead of the generic 'sample'
+    cannedTriggers: ['search', 'find', 'look up'],           // "help me find X" now triggers searchDocs
+  }),
+}),
+```
 
 
 ## Client Hook — `useChat`
