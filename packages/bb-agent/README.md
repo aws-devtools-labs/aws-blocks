@@ -668,8 +668,9 @@ tools: (tool) => ({
     // Without this the mock would search for the literal 'sample' and match nothing —
     // use a query that hits YOUR documents so local runs return meaningful results.
     cannedExamples: { query: 'how do I reset my password' },
-    // "help me find the login docs" now triggers searchDocs, not just the word "searchDocs".
-    cannedTriggers: ['search', 'find', 'look up'],
+    // The name already matches "search"/"docs"/"searchDocs"; these add phrasings that don't
+    // contain the name, so "help me find the manual" or "look up the guide" also fire the tool.
+    cannedTriggers: ['find', 'look up'],
   }),
 }),
 ```
