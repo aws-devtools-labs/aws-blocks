@@ -38,8 +38,7 @@
   },
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs Agent",
-    "build": "tsc --build && npm run bundle:agentcore",
-    "bundle:agentcore": "node scripts/bundle-agentcore.mjs",
+    "build": "tsc --build",
     "test": "node --test dist/index.test.js dist/index.cdk.test.js"
   },
   "dependencies": {

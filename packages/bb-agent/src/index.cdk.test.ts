@@ -10,20 +10,21 @@
  * - With an existing `agentcoreAssetPath`, synth provisions an
  *   `AWS::BedrockAgentCore::Runtime` from the code asset.
  */
-import { test } from 'node:test';
 import assert from 'node:assert';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import type { Construct } from 'constructs';
 import { Agent } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// The bundle dir produced by `npm run build` (tsc → dist, then bundle:agentcore).
-// dirname(this test file compiled) is dist/, so the asset dir is dist/agentcore.
-const ASSET_DIR = join(__dirname, 'agentcore');
+// `agentcoreAssetPath` just needs to be a real existing directory — the Runtime construct
+// passes it to fromCodeAsset({ path }) and we only assert the Runtime resource is created,
+// not its contents. Use the compiled dist/ dir (this test compiles to dist/index.cdk.test.js).
+const ASSET_DIR = __dirname;
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
