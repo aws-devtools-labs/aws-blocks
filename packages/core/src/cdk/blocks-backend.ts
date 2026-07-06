@@ -4,6 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
@@ -82,9 +83,34 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
   }
 
+  const accessLogGroup = new logs.LogGroup(scope, 'ApiAccessLogs', {
+    retention: logs.RetentionDays.ONE_MONTH,
+    removalPolicy: cdk.RemovalPolicy.DESTROY,
+  });
+
   const api = new apigateway.RestApi(scope, 'API', {
     restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
+    deployOptions: {
+      cachingEnabled: false,
+      // Steady-state cap: 100 requests/second sustained across the stage,
+      // enforced by API Gateway's token-bucket refill rate.
+      throttlingRateLimit: 100,
+      // Burst cap: token-bucket depth allowing up to 200 concurrent requests
+      // to absorb short spikes above the steady-state rate before throttling (429s).
+      throttlingBurstLimit: 200,
+      accessLogDestination: new apigateway.LogGroupLogDestination(accessLogGroup),
+      accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
+        ip: true,
+        httpMethod: true,
+        resourcePath: true,
+        status: true,
+        responseLength: true,
+        requestTime: true,
+        caller: true,
+        user: true,
+        protocol: true,
+      }),
+    },
   });
 
   const integration = new apigateway.LambdaIntegration(handler);
