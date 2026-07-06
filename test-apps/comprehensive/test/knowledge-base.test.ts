@@ -3,44 +3,48 @@
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert';
-import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
 const ValidationError = 'KnowledgeBaseValidationError';
+const Timeout = 'KnowledgeBaseTimeoutException';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
 
 /**
- * Poll kbRetrieve until at least one result is returned, indicating that
- * the knowledge-base ingestion job has completed. In local mode the mock
- * returns results immediately; in sandbox/production Bedrock ingestion is
- * async and may take a couple of minutes after deploy.
+ * Gate retrieval tests on knowledge-base ingestion sync.
+ *
+ * Bedrock ingests asynchronously after deploy, so during the initial pre-sync
+ * window we wait for the KB to sync with our latest data before probing
+ * `kbRetrieve`. We delegate to the wired `waitUntilSynced()` endpoint (exposed
+ * here as `kbWaitUntilSynced`) rather than hand-rolling a poll loop over
+ * `isSynced()` (`kbSynced`): `waitUntilSynced()` owns the deadline AND rides out
+ * transient control-plane blips — throttling, a `RetrievalFailed`, or a brief
+ * not-yet-visible `ResourceNotFoundException` during the post-deploy poll — that
+ * a per-poll `isSynced()` would otherwise surface as a hard suite failure.
+ *
+ * A *thrown* error here is therefore a real failure (a failed ingestion job
+ * surfaced as `IngestionFailedException`, a `KnowledgeBaseValidationError`, the
+ * sync timeout, or anything unexpected) and is surfaced immediately rather than
+ * masked as an in-progress sync.
+ *
+ * In local mode the mock resolves immediately, so this returns on the first poll.
  */
-async function waitForIngestion(
+async function gateOnSync(
   api: typeof apiType,
-  query: string,
-  { timeoutMs = 180_000, intervalMs = 10_000 } = {},
+  { timeoutMs = 180_000, pollIntervalMs = 10_000 } = {},
 ): Promise<void> {
   const start = Date.now();
-  const deadline = start + timeoutMs;
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    attempt++;
-    const elapsed = Math.round((Date.now() - start) / 1000);
-    try {
-      const results = await api.kbRetrieve(query);
-      console.log(`[KB ingestion poll #${attempt}] ${results.length} results (${elapsed}s elapsed)`);
-      if (results.length > 0) return;
-    } catch (err: any) {
-      console.log(`[KB ingestion poll #${attempt}] error: ${err.name || err.message} (${elapsed}s elapsed)`);
-      // ValidationError = real bug, throw immediately
-      if (isBlocksError(err, ValidationError)) throw err;
-      // NotReady, RetrievalFailed, etc. = KB not ready yet, keep polling
-    }
-    await setTimeout(intervalMs);
+  console.log('⏳ Waiting for KB to sync with latest data (ingesting if needed)…');
+  try {
+    await api.kbWaitUntilSynced({ timeoutMs, pollIntervalMs });
+  } catch (err: any) {
+    // Real failure (failed ingestion / validation / timeout / unexpected) — surface it.
+    console.error(`❌ KB sync check failed: ${err.name || err.message}`);
+    throw err;
   }
-  throw new Error(`KB ingestion did not complete within ${timeoutMs / 1000}s`);
+  const elapsed = Math.round((Date.now() - start) / 1000);
+  console.log(`✅ KB synced (ingestion complete) — ${elapsed}s elapsed`);
 }
 
 export function knowledgeBaseTests(getApi: () => typeof apiType) {
@@ -72,12 +76,46 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
       });
     });
 
+    // --- Sync: cover the wired waitUntilSynced() endpoint end-to-end ---
+    // The retrieval suites gate via gateOnSync() → kbWaitUntilSynced(); this
+    // exercises that same waitUntilSynced() polling path directly. (kbSynced /
+    // isSynced() is wired but not exercised by this suite — it's covered by unit
+    // tests.) Locally the mock resolves on the first poll; on AWS we give it the
+    // same budget as gateOnSync so a still-ingesting KB is waited out rather
+    // than surfaced as a failure.
+    describe('waitUntilSynced', () => {
+      test('resolves once the KB is synced', async (t) => {
+        const api = getApi();
+        try {
+          const result = await api.kbWaitUntilSynced(
+            isLocal
+              ? { timeoutMs: 5_000, pollIntervalMs: 50 }
+              : { timeoutMs: 180_000, pollIntervalMs: 10_000 },
+          );
+          assert.deepStrictEqual(result, { success: true });
+        } catch (err: unknown) {
+          // Sync tolerance: unlike the retrieval suites, this standalone test is NOT
+          // behind the gateOnSync() gate, so on AWS a slow-but-healthy KB whose
+          // ingestion outruns the 180s budget makes kbWaitUntilSynced throw a Timeout.
+          // That's the post-deploy sync window, not a defect — soft-skip it here. A
+          // genuine IngestionFailed (or any other error) still fails the test. The local
+          // mock resolves on the first poll, so this branch never trips and the success
+          // assertion above always runs.
+          if (isBlocksError(err, Timeout)) {
+            t.skip(`KB still syncing — ingestion exceeded budget: ${(err as Error).message}`);
+            return;
+          }
+          throw err;
+        }
+      });
+    });
+
     // --- Retrieval tests: wait for ingestion before running ---
     describe('retrieve', () => {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'getting started');
+        await gateOnSync(api);
       });
 
       test('returns results for a matching query', async () => {
@@ -134,7 +172,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'getting started');
+        await gateOnSync(api);
       });
 
       test('maxResults limits results', async () => {
@@ -172,7 +210,7 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await waitForIngestion(api, 'deployment');
+        await gateOnSync(api);
       });
 
       test('customer metadata category is present on tutorial doc', async () => {

@@ -38,6 +38,11 @@ export function getStackId(projectRoot?: string): string {
  * Get or create a per-machine sandbox identifier.
  * Stored in `.blocks-sandbox/sandbox-id.txt` (gitignored).
  * Format: `<username(8)>-<random(6)>` — identifies the developer's sandbox.
+ *
+ * Get-or-create (lazy init): returns the existing id, or generates and persists
+ * one on first call. The file is the shared sync point — once written, every
+ * later caller and every process reads the same id, so the secret writer
+ * (`ensureSecrets`) and synth derive identical names.
  */
 export function getSandboxId(projectRoot?: string): string {
   const root = projectRoot || process.cwd();
@@ -50,6 +55,27 @@ export function getSandboxId(projectRoot?: string): string {
   const id = `${username}-${random}`;
   writeFileSync(filePath, id);
   return id;
+}
+
+/**
+ * The full CloudFormation stack name for a deployment.
+ *
+ * Single source of truth for the stack-name scheme (D-012): production is
+ * `<stackId>-prod`; a sandbox is `<stackId>-<sandboxId>`. The CDK templates name
+ * the stack with this function, and the external-DB connection-string parameter
+ * name (`dbConnectionParameterName`) is derived from it — so a deployed stack and
+ * the parameter holding its database credentials can never use divergent names.
+ *
+ * This function reads committed config (`.blocks/config.json`, throws if absent
+ * — D-012) and resolves the sandbox id via {@link getSandboxId} (get-or-create):
+ * the first caller materializes `.blocks-sandbox/sandbox-id.txt`, every later
+ * caller reads the same value. Because that file persists and is shared across
+ * processes, the secret writer (`ensureSecrets`) and synth resolve identical
+ * names. Production does not use the sandbox id.
+ */
+export function getStackName(opts: { sandbox: boolean; projectRoot?: string }): string {
+  const base = getStackId(opts.projectRoot);
+  return opts.sandbox ? `${base}-${getSandboxId(opts.projectRoot)}` : `${base}-prod`;
 }
 
 function getUsername(): string {

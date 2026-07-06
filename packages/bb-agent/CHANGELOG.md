@@ -1,5 +1,36 @@
 # @aws-blocks/bb-agent
 
+## 0.3.1
+
+### Patch Changes
+
+- cfe6cb0: fix(bb-agent): use the Lambda execution region for S3Storage (#120)
+
+  The deployed Agent constructed Strands' `S3Storage` without a `region`, so it defaulted to `us-east-1` and hard-pinned the snapshot S3 client there. Because the session bucket is created in the deploy region, any deployment outside `us-east-1` failed snapshot reads/writes with a cross-region 301 `PermanentRedirect`. `S3Storage` is now constructed with `region: process.env.AWS_REGION` — which the Lambda runtime always sets to the function's region — so snapshots resolve against the correct regional endpoint. `region` and `s3Client` are mutually exclusive in `S3StorageConfig`, so only `region` is passed.
+
+## 0.3.0
+
+### Minor Changes
+
+- 179817f: feat(bb-agent): make model config optional, default to BedrockModels.BALANCED
+
+  The `model` field in AgentConfig is now optional. When omitted, the agent
+  defaults to `BedrockModels.BALANCED` for deployment and the canned provider
+  for local development.
+
+### Patch Changes
+
+- Updated dependencies [e839301]
+  - @aws-blocks/core@0.1.10
+
+## 0.2.1
+
+### Patch Changes
+
+- c6ba244: fix(bb-agent): add toJSON() to AgentStreamResult
+
+  `AgentStreamResult` now serializes to `{ channelId, channel: null }` when returned from API methods. Previously `channel` serialized to an empty object `{}`; it is now explicitly `null` to signal it is server-side only.
+
 ## 0.2.0
 
 ### Minor Changes
