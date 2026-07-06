@@ -183,8 +183,9 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	cannedExamples?: Record<string, JSONValue>;
 	/**
 	 * Local-dev only. Extra keyword phrases that make the `canned` mock provider select this
-	 * tool, in addition to the tool name and its camelCase words. Single words match on word
-	 * boundaries; multi-word phrases match as substrings. Ignored by the bedrock/openai providers.
+	 * tool, in addition to the tool name and its camelCase words. Single and multi-word phrases
+	 * match on word boundaries (so "log in" is not triggered by "backlog in"). Ignored by the
+	 * bedrock/openai providers.
 	 */
 	cannedTriggers?: string[];
 }

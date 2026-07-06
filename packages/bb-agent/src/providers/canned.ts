@@ -68,13 +68,15 @@ function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[], hint
 		// on word boundaries. Skip short words (<=2 chars) to avoid noise.
 		const words = t.name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(' ');
 		if (words.some(w => w.length > 2 && promptMentionsWord(lower, w))) return true;
-		// Extra trigger keywords declared via `cannedTriggers`. Single words use word
-		// boundaries (consistent with tool-name matching); multi-word phrases use substrings.
+		// Extra trigger keywords declared via `cannedTriggers`. Single and multi-word triggers
+		// both match on word boundaries (consistent with tool-name matching), so "log in" is not
+		// triggered by "backlog in" and internal whitespace is flexible (matches one-or-more spaces).
 		const triggers = hints?.get(t.name)?.triggers;
 		return triggers?.some(tr => {
 			const low = tr.trim().toLowerCase();
 			if (!low) return false;
-			return low.includes(' ') ? lower.includes(low) : promptMentionsWord(lower, low);
+			const escaped = low.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+			return new RegExp(`\\b${escaped}\\b`).test(lower);
 		}) ?? false;
 	}).map(t => t.name);
 }

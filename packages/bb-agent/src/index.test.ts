@@ -449,6 +449,22 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(started, [], 'trigger "cat" must not fire on "category"');
 	});
 
+	test('multi-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['log in'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'check the backlog in the queue', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "log in" must not fire on "backlog in"');
+	});
+
+	test('multi-word cannedTriggers tolerate flexible internal whitespace', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look   up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs'], 'multiple spaces between words should still match');
+	});
+
 	test('generates generic placeholder when no example or default is given', async () => {
 		const provider = new CannedProvider();
 		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }];
