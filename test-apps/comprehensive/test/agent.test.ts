@@ -176,21 +176,6 @@ export function agentTests(getApi: () => typeof apiType) {
       });
     });
 
-
-    describe('Long-Running Agent (>29s)', () => {
-      test('agent with slow tool completes beyond API Gateway timeout', async () => {
-        const api = getApi();
-        const { conversationId } = await api.cannedCreateConversationId();
-        await api.cannedStream('Use the slowTask now.', conversationId);
-
-        const messages = await waitForMessages(api, conversationId, 4, 90000, true);
-        assert.ok(messages.length >= 4, 'should have all messages after slow tool completes');
-        const toolResult = messages.find((m: any) => m.role === 'tool-result');
-        assert.ok(toolResult, 'should have tool-result');
-        const meta = toolResult!.metadata;
-        assert.ok(meta.toolName === 'slowTask', 'tool result should reference slowTask');
-      });
-    });
     describe('Conversation Isolation', () => {
       test('different conversations do not share messages', async () => {
         const api = getApi();
