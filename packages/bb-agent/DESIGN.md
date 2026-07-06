@@ -61,6 +61,7 @@ Custom Strands model provider for local development. No network, no API keys, no
 
 - Returns instant keyword-based responses (e.g., prompt contains "weather" → weather response, otherwise a default canned response)
 - Streams word by word, matching the same `ModelStreamEvent` protocol as Bedrock/OpenAI
-- Triggers tool calls when the prompt mentions a tool name — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events
+- Triggers tool calls when the prompt mentions a tool name (or a `cannedTriggers` keyword) — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events. Matching is on word boundaries, not substrings, so "category" does not fire `getCat`.
+- Derives tool input from, in order of preference: the tool's `cannedExamples`, the schema `default` (from Zod `.default()`), the first `enum` value (for enum fields), then a generic placeholder by type (`'sample'` / `1` / `true` / `[]`)
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)
