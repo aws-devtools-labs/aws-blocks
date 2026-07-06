@@ -75,14 +75,11 @@ function uniqueTelemetryFile(dir: string): string {
   return join(dir, `telemetry-event-${fileCounter++}.json`);
 }
 
+let portCounter = 0;
 function getNextPort(): number {
-  // Bind to port 0 to get an OS-assigned ephemeral port, then close immediately.
-  // This eliminates random collisions from the previous random-range approach.
-  const srv = createServer();
-  srv.listen(0, '127.0.0.1');
-  const port = (srv.address() as { port: number }).port;
-  srv.close();
-  return port;
+  // Sequential ports starting from a high range to avoid common service ports.
+  // Each test gets a unique port within this run.
+  return 13456 + (portCounter++);
 }
 
 interface SpawnResult {
