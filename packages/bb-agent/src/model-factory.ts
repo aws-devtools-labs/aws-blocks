@@ -1,12 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BedrockModel, type Model } from '@strands-agents/sdk';
-import type { BaseModelConfig } from '@strands-agents/sdk';
-import { OpenAIModel } from '@strands-agents/sdk/models/openai';
+// Strands is imported for types only; its model provider classes (BedrockModel,
+// OpenAIModel) are loaded lazily inside createStrandsModel() so this module — reached
+// eagerly via agent.ts — does not pull the Strands SDK onto the load path of apps
+// that never instantiate an agent. See loadStrands() in agent.ts and issue #153.
+import type { Model, BaseModelConfig } from '@strands-agents/sdk';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { CannedProvider } from './providers/canned.js';
-import { ThrowingProvider } from './providers/throwing.js';
+// `./providers/canned` and `./providers/throwing` are NOT imported statically: their
+// classes `extend` Strands' `Model`, so importing them evaluates `@strands-agents/sdk`
+// at module-load time. They are loaded lazily inside createStrandsModel() to keep the
+// Strands SDK off the load path of apps that never instantiate an agent (issue #153).
 import type { ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 
@@ -152,11 +156,15 @@ export async function checkModelHealth(config: ModelConfig, log: ChildLogger, _t
  * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/
  */
 export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger): Promise<Model<BaseModelConfig>> {
-	if (!config || config.provider === 'canned') return new CannedProvider();
+	if (!config || config.provider === 'canned') {
+		const { CannedProvider } = await import('./providers/canned.js');
+		return new CannedProvider();
+	}
 
 	// Test-only provider — throws mid-stream to verify error handling
 	if (config.provider === 'throwing' as string) {
 		log?.warn('ThrowingProvider is only for internal test purposes');
+		const { ThrowingProvider } = await import('./providers/throwing.js');
 		return new ThrowingProvider();
 	}
 
@@ -164,6 +172,7 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		if (!config.modelId) {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, "Model provider 'bedrock' requires modelId.");
 		}
+		const { BedrockModel } = await import('@strands-agents/sdk');
 		return new BedrockModel({
 			modelId: config.modelId,
 			...(config.inferenceConfig && {
@@ -184,6 +193,7 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 		if (!apiKey && !process.env.OPENAI_API_KEY) {
 			throw blocksAgentError(AgentErrors.InvalidModelConfig, "provider 'openai-api' requires apiKey or OPENAI_API_KEY environment variable.");
 		}
+		const { OpenAIModel } = await import('@strands-agents/sdk/models/openai');
 		return new OpenAIModel({
 			api: 'chat',
 			apiKey: apiKey ?? '',
