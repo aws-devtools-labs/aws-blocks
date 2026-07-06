@@ -652,16 +652,24 @@ Two optional tool fields make the canned provider more useful for local prototyp
 | `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. The merge is one level deep: a nested-object example replaces that whole generated sub-object rather than deep-merging into it. |
 | `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
 
+Building on the [KnowledgeBase tool](#using-knowledgebase-with-the-agent) above: without hints the mock calls `searchDocs` with `{ query: 'sample' }`, which matches nothing in your documents, so local testing returns empty results. A `cannedExamples` query that actually appears in *your* docs makes the mock return real hits, and `cannedTriggers` lets natural phrasings fire the tool:
+
 ```typescript
 tools: (tool) => ({
   searchDocs: tool({
-    description: 'Search documentation',
-    parameters: z.object({ query: z.string() }),
-    handler: async ({ input }) => search(input.query),
+    description: 'Search product documentation for relevant information',
+    parameters: z.object({
+      query: z.string().describe('The search query'),
+      maxResults: z.number().optional().describe('Max results to return (default: 5)'),
+    }),
+    handler: async ({ input }) => kb.retrieve(input.query, { maxResults: input.maxResults ?? 5 }),
 
     // Canned provider hints (ignored by real models):
-    cannedExamples: { query: 'how do I get started' },      // used instead of the generic 'sample'
-    cannedTriggers: ['search', 'find', 'look up'],           // "help me find X" now triggers searchDocs
+    // Without this the mock would search for the literal 'sample' and match nothing —
+    // use a query that hits YOUR documents so local runs return meaningful results.
+    cannedExamples: { query: 'how do I reset my password' },
+    // "help me find the login docs" now triggers searchDocs, not just the word "searchDocs".
+    cannedTriggers: ['search', 'find', 'look up'],
   }),
 }),
 ```
