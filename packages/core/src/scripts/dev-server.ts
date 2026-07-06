@@ -618,6 +618,11 @@ export async function startDevServer(options: DevServerOptions) {
   // 1. Set up global collectors for plugin discovery
   (globalThis as any).__BLOCKS_CLIENT_MIDDLEWARE__ = [];
   (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__ = [];
+  // Generic HTTP dev-route handlers: a dev attachment can push
+  // `{ method, pathname, handle(req,res,url) }` here to own a path (e.g. an SSE stream) that
+  // the inline request handler can't express via the buffered RPC/RawRoute layer. Checked
+  // before API/frontend routing. Kept generic — not tied to any specific BB.
+  (globalThis as any).__BLOCKS_DEV_ROUTE_HANDLERS__ = [];
 
   // 2. Import backend (sync construction phase — BBs register plugins via globals)
   console.log('Loading backend...');
@@ -626,6 +631,13 @@ export async function startDevServer(options: DevServerOptions) {
   // 3. Read collected dev attachments and clean up
   const devAttachments: string[] = (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__;
   delete (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__;
+  // Dev route handlers are populated during attach() (below), so keep the array live and
+  // read it per-request rather than snapshotting here.
+  const devRouteHandlers: Array<{
+    method: string;
+    pathname: string;
+    handle: (req: IncomingMessage, res: ServerResponse, url: URL) => void | Promise<void>;
+  }> = (globalThis as any).__BLOCKS_DEV_ROUTE_HANDLERS__;
 
   // 4. Deploy local (async initialization phase) — skip in sandbox mode
   if (!isSandbox) {
@@ -879,6 +891,21 @@ export async function startDevServer(options: DevServerOptions) {
         'Cache-Control': 'no-store',
       });
       res.end(JSON.stringify(blocksConfig));
+      return;
+    }
+
+    // ── Dev route handlers (e.g. SSE streams that can't use the buffered RPC layer) ──
+    const devRoute = devRouteHandlers.find((h) => h.method === method && h.pathname === url.pathname);
+    if (devRoute) {
+      Promise.resolve(devRoute.handle(req, res, url)).catch((err) => {
+        console.error(`[dev-route] ${method} ${url.pathname} failed:`, err);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        } else {
+          res.end();
+        }
+      });
       return;
     }
 

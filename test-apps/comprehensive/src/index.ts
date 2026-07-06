@@ -319,19 +319,18 @@ function createChatForConvo(conversationId: string) {
 	activeConvoId = conversationId;
 	activeChat = useChat({
 		api: {
-			sendMessage: async (convId, message, channelId) => {
-				await api.agentStream(message, convId, channelId);
-			},
 			createConversation: async () => ({ conversationId }),
 			getConversation: async (id) => await api.agentGetConversation(id),
-			resume: async (channelId, responses, convId) => {
-				await api.agentResume(channelId, responses, convId);
-			},
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
 		},
-		subscribe: async (channelId, handler) => {
-			const result: any = await api.agentGetChannel(channelId);
-			return result.channel.subscribe(handler);
+		// One SSE-shaped transport. Here it wraps the buffered RPC (agentStream/agentResume
+		// return { chunks }); a production client would open a real SSE stream to the AgentCore
+		// Runtime instead. Either way it yields AgentStreamChunk objects.
+		streamChunks: async function* ({ conversationId: convId, message, interruptResponses }) {
+			const { chunks } = interruptResponses
+				? await api.agentResume(interruptResponses, convId)
+				: await api.agentStream(message ?? '', convId);
+			for (const chunk of chunks) yield chunk;
 		},
 		onMessagesChange: (msgs) => {
 			chatMessages.innerHTML = msgs.map(m => {

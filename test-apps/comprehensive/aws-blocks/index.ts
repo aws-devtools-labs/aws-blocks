@@ -1608,21 +1608,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversations: await agent.listConversations(user?.userId ?? 'anonymous') };
   },
 
-  async agentStream(message: string, conversationId?: string, channelId?: string) {
+  // Streaming now runs on AgentCore (SSE) — no Realtime channel. These RPC methods drain the
+  // agent's SSE generator and return the collected chunks (the dev-server RPC layer buffers a
+  // single response). A real browser client would instead open the SSE stream directly (dev
+  // route locally, AgentCore Runtime on AWS) via useChat's `streamChunks` transport.
+  async agentStream(message: string, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
     const userId = user?.userId ?? 'anonymous';
-    const result = await agent.stream(message, conversationId ? { conversationId, channelId, userId } : { channelId, userId });
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of agent.streamSSE(message, { conversationId, userId })) chunks.push(chunk);
+    return { chunks };
   },
 
-  async agentGetChannel(channelId: string) {
-    return { channel: await agent.getChannel(channelId) };
-  },
-
-  async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
+  async agentResume(responses: Array<{ interruptId: string; response: string }>, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user?.userId ?? 'anonymous' });
-    return { ok: true };
+    const userId = user?.userId ?? 'anonymous';
+    const chunks = [];
+    for await (const chunk of agent.streamSSE('', { conversationId, userId, interruptResponses: responses })) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
@@ -1640,8 +1643,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentInferenceOnly(message: string) {
-    const result = await inferenceAgent.stream(message);
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of inferenceAgent.streamSSE(message)) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
@@ -1653,22 +1657,22 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { deleted: true };
   },
 
-  // Deterministic canned agent methods (for reliable e2e testing without LLM)
-  async cannedStream(message: string, conversationId?: string, channelId?: string) {
+  // Deterministic canned agent methods (for reliable e2e testing without LLM).
+  // Like the live agent above, these drain the SSE generator and return the collected chunks.
+  async cannedStream(message: string, conversationId?: string) {
     // cannedAgent declares a toolContextSchema, so context is required and type-checked.
-    const result = await cannedAgent.stream(message, { conversationId, channelId, userId: 'test-user', context: { userId: 'test-user' } });
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of cannedAgent.streamSSE(message, { conversationId, userId: 'test-user', context: { userId: 'test-user' } })) chunks.push(chunk);
+    return { chunks };
   },
   async cannedCreateConversationId() {
     const conversationId = await cannedAgent.createConversationId('test-user');
     return { conversationId };
   },
-  async cannedGetChannel(channelId: string) {
-    return { channel: await cannedAgent.getChannel(channelId) };
-  },
-  async cannedResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean }>, conversationId?: string) {
-    await cannedAgent.resume(channelId, responses, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
-    return { ok: true };
+  async cannedResume(responses: Array<{ interruptId: string; response: string }>, conversationId?: string) {
+    const chunks = [];
+    for await (const chunk of cannedAgent.streamSSE('', { conversationId, userId: 'test-user', interruptResponses: responses, context: { userId: 'test-user' } })) chunks.push(chunk);
+    return { chunks };
   },
   async cannedGetPendingInterrupts(conversationId: string) {
     return { interrupts: await cannedAgent.getPendingInterrupts(conversationId) };
@@ -1678,9 +1682,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async fallbackStream(message: string) {
-    const channelId = crypto.randomUUID();
-    const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
-    return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+    const chunks = [];
+    for await (const chunk of fallbackAgent.streamSSE(message, { userId: 'test-user' })) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentPresetStream(presetName: string, message: string) {
