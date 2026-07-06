@@ -88,6 +88,21 @@ export class Database extends Scope {
   }
 
   /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed database.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope). Throw a clear, actionable
+   * message instead of the cryptic "getEngine is not a function".
+   */
+  getEngine(): never {
+    throw new Error(
+      'Database.getEngine() is unavailable during CDK synth. Create the Kysely ' +
+      'adapter and run queries at request time inside an API handler, not at ' +
+      'module scope.',
+    );
+  }
+
+  /**
    * @deprecated Use the standalone `fromExisting()` export instead.
    */
   static fromExisting(config: ExternalDatabaseRef): ExternalDatabaseRef {

@@ -108,6 +108,21 @@ export class DistributedDatabase extends Scope {
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
   }
+
+  /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed cluster.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope). Throw a clear, actionable
+   * message instead of the cryptic "getEngine is not a function".
+   */
+  getEngine(): never {
+    throw new Error(
+      'DistributedDatabase.getEngine() is unavailable during CDK synth. Create the ' +
+      'Kysely adapter and run queries at request time inside an API handler, not at ' +
+      'module scope.',
+    );
+  }
 }
 
 /** Hash all .sql files in a directory to detect changes. */
