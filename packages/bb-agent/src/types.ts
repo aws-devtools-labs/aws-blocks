@@ -178,7 +178,9 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	/**
 	 * Local-dev only. Realistic tool input for the `canned` mock provider. Shallow-merged
 	 * over the generated placeholder input (your fields win; unspecified fields fall back to
-	 * schema defaults / generic placeholders). Ignored by the bedrock/openai providers.
+	 * schema defaults / generic placeholders). The merge is one level deep — a nested-object
+	 * example replaces that whole generated sub-object rather than deep-merging into it.
+	 * Ignored by the bedrock/openai providers.
 	 */
 	cannedExamples?: Record<string, JSONValue>;
 	/**

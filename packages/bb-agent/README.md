@@ -649,7 +649,7 @@ Two optional tool fields make the canned provider more useful for local prototyp
 
 | Field | Type | Effect (canned provider only) |
 | --- | --- | --- |
-| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. |
+| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. The merge is one level deep: a nested-object example replaces that whole generated sub-object rather than deep-merging into it. |
 | `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
 
 ```typescript
