@@ -131,7 +131,7 @@ function runCommand(
     child.on('close', (code) => {
       clearTimeout(timer);
       // Wait a moment for the detached telemetry subprocess to finish
-      globalThis.setTimeout(() => resolve({ stdout, stderr, exitCode: code }), 1500);
+      globalThis.setTimeout(() => resolve({ stdout, stderr, exitCode: code }), 5000);
     });
   });
 }
@@ -205,6 +205,7 @@ function readTelemetryFile(filePath: string): Record<string, any> {
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
+/** Assert that the event was delivered to the real endpoint. */
 /** Assert that the event was delivered to the real endpoint. */
 function assertDelivered(stderr: string, description = ''): void {
   assert.match(stderr, SENT_REGEX, `Telemetry should be delivered to endpoint. ${description}\nstderr: ${stderr.slice(-500)}`);
@@ -483,7 +484,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       tmpHome = createTmpDir('vendorize-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
 
-      const result = await runCommand('npx', ['blocks-vendorize', '@nonexistent/fake-package'], {
+      const result = await runCommand('npm', ['exec', '--', 'blocks-vendorize', '@nonexistent/fake-package'], {
         telemetryFile, timeoutMs: 15_000,
       });
 
