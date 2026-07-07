@@ -32,7 +32,6 @@
     "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-sdk/dsql-signer": "^3.700.0",
     "@electric-sql/pglite": "^0.2.0",
-    "kysely": ">=0.28.12 <0.30.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {
@@ -43,6 +42,7 @@
   },
   "peerDependencies": {
     "aws-cdk-lib": ">=2.100.0",
-    "constructs": "^10.6.0"
+    "constructs": "^10.6.0",
+    "kysely": ">=0.28.12 <0.30.0"
   }
 }

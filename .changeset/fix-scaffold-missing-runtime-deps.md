@@ -1,10 +1,11 @@
 ---
 "@aws-blocks/data-common": patch
-"@aws-blocks/bb-data": patch
-"@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/bb-agent": patch
 ---
 
-Fix `ERR_MODULE_NOT_FOUND` on a fresh `create-blocks-app` scaffold by promoting required runtime packages from peer/dev dependencies to real dependencies.
+Fix `ERR_MODULE_NOT_FOUND` on a fresh `create-blocks-app` scaffold by making required runtime packages real dependencies of the block that actually loads them. npm does not install peer dependencies of transitive dependencies, so these never landed in `node_modules`.
 
-`kysely` (imported unconditionally by `data-common`'s Kysely adapter, which `bb-data` and `bb-distributed-data` re-export) and `@opentelemetry/api` (a non-optional peer of `@strands-agents/sdk`, loaded by `bb-agent`) were previously not installed by `npm install` because npm does not resolve peer dependencies of transitive dependencies. They are now direct dependencies of the blocks that load them, so `npm run dev` works without manual installs.
+- `kysely` → dependency of `@aws-blocks/data-common`. `data-common` is the only package that imports and instantiates `kysely` (in its Kysely adapter); `bb-data` and `bb-distributed-data` merely re-export `createKyselyAdapter` and keep `kysely` as a peer, which is now satisfied transitively via `data-common`. Promoting it on `data-common` alone guarantees a single hoisted instance and installs it for any app that pulls a data block.
+- `@opentelemetry/api` → dependency of `@aws-blocks/bb-agent`. It is a non-optional peer of `@strands-agents/sdk`, which the Agent block loads at runtime, so it must be installed whenever `bb-agent` is present.
+
+Both packages have zero runtime dependencies and no install scripts, so this adds no transitive tree.
