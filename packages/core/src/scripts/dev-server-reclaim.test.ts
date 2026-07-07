@@ -189,8 +189,8 @@ describe('evaluatePortBindRetry — front-door bind retry budget', () => {
 });
 
 // ── evaluateSingleton — singleton guard decision ────────────────────────────
-// Prevents two fighting supervisors while never blocking a `tsx watch` reload of
-// the SAME supervisor (same parent pid).
+// Prevents two fighting supervisors while allowing a `tsx watch` reload after
+// the previous child has exited.
 describe('evaluateSingleton — one supervisor per port, hot-reload safe', () => {
   const rec = (over: Partial<DevServerPidRecord> = {}): DevServerPidRecord => ({
     pid: 1000,
