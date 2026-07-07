@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 // Shared process-tree teardown primitives used by every dev-tooling entrypoint
 // (the dev server and the sandbox). Both spawn a long-running command with
@@ -122,6 +123,70 @@ interface CommandOutput {
 }
 
 /**
+ * Read a process's parent PID, best-effort and without throwing. Prefers the
+ * kernel's `/proc/<pid>/stat` (no subprocess) and falls back to `ps -o ppid=`;
+ * returns `null` when neither is available (e.g. Windows, or the process has
+ * already exited). `/proc/<pid>/stat` field 4 is the ppid, but field 2 (the
+ * `comm`) is wrapped in parens and may itself contain spaces/parens, so we split
+ * on the LAST `)` before tokenising the numeric tail.
+ */
+export function readParentPid(
+  pid: number,
+  readStat: (pid: number) => string | null = (p) => {
+    try {
+      return readFileSync(`/proc/${p}/stat`, 'utf-8');
+    } catch {
+      return null;
+    }
+  },
+  runner: (command: string, args: readonly string[]) => CommandOutput = (command, args) =>
+    spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true, timeout: 3000 }),
+): number | null {
+  const stat = readStat(pid);
+  if (stat) {
+    const rParen = stat.lastIndexOf(')');
+    const tail = rParen >= 0 ? stat.slice(rParen + 1) : stat;
+    const fields = tail.trim().split(/\s+/);
+    // After `comm`: field[0]=state, field[1]=ppid.
+    const ppid = Number(fields[1]);
+    if (Number.isInteger(ppid)) return ppid;
+  }
+  try {
+    const { stdout } = runner('ps', ['-o', 'ppid=', '-p', String(pid)]);
+    const ppid = Number((stdout ?? '').trim());
+    if (Number.isInteger(ppid) && ppid > 0) return ppid;
+  } catch {
+    // ps unavailable — give up.
+  }
+  return null;
+}
+
+/**
+ * Collect the current process and every ANCESTOR PID (parent, grandparent, …) up
+ * to — but excluding — init. This is the guard set that {@link findListenerPids}
+ * must never return: reclaiming a port whose listener PID is us or an ancestor
+ * would make {@link killListenerTree}'s process-group kill (`kill(-pid)`) tear
+ * down the very process (and its group) that is running the dev server — e.g. a
+ * test runner that opened the port itself before spawning the server. Walks
+ * parents via {@link readParentPid}, stopping at PID `<= 1`, on a repeat (cycle
+ * guard), or at `maxDepth`. `startPid`/`readParent` are injected for tests.
+ */
+export function collectSelfAndAncestorPids(
+  startPid: number = process.pid,
+  readParent: (pid: number) => number | null = readParentPid,
+  maxDepth = 64,
+): Set<number> {
+  const guarded = new Set<number>();
+  let pid: number | null = startPid;
+  let depth = 0;
+  while (pid != null && pid > 1 && depth++ < maxDepth && !guarded.has(pid)) {
+    guarded.add(pid);
+    pid = readParent(pid);
+  }
+  return guarded;
+}
+
+/**
  * Find the PIDs of processes holding a TCP *listener* on `port`, so a fresh dev
  * server can reclaim a port left bound by a crashed / SIGKILL'd predecessor (its
  * orphaned backend, or a detached Vite grandchild) instead of colliding on it.
@@ -138,16 +203,23 @@ interface CommandOutput {
  * listening"), or unparseable output all yield `[]`. The `spawnSync` runs with a
  * 3s `timeout` so a hung `lsof`/`netstat` (e.g. an unresponsive NFS mount) can't
  * block the event loop during startup — a timed-out probe returns `{error}`,
- * which the `catch` degrades to `[]`. PIDs `<= 1` are dropped
- * defensively (never target init / the whole current group). `runner`/`platform`
- * are injected for tests.
+ * which the `catch` degrades to `[]`. PIDs `<= 1` are dropped defensively (never
+ * target init), and so are the current process and every ANCESTOR of it (via
+ * {@link collectSelfAndAncestorPids} / the injected `protectedPids`): a listener
+ * that resolves to us or a forebear means the port is owned by the process tree
+ * running this dev server (e.g. a test runner that bound the port itself before
+ * spawning us), and reclaiming it would group-kill our own runner. `runner`/
+ * `platform`/`protectedPids` are injected for tests.
  */
 export function findListenerPids(
   port: number,
   runner: (command: string, args: readonly string[]) => CommandOutput = (command, args) =>
     spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true, timeout: 3000 }),
   platform: NodeJS.Platform = process.platform,
+  protectedPids: ReadonlySet<number> = collectSelfAndAncestorPids(),
 ): number[] {
+  const keep = (pid: number): boolean =>
+    Number.isInteger(pid) && pid > 1 && !protectedPids.has(pid);
   try {
     const pids = new Set<number>();
     if (platform === 'win32') {
@@ -160,7 +232,7 @@ export function findListenerPids(
         const local = cols[1] ?? '';
         if (!local.endsWith(`:${port}`)) continue;
         const pid = Number(cols[cols.length - 1]);
-        if (Number.isInteger(pid) && pid > 1) pids.add(pid);
+        if (keep(pid)) pids.add(pid);
       }
       return [...pids];
     }
@@ -168,7 +240,7 @@ export function findListenerPids(
     if (!stdout) return [];
     for (const token of stdout.split(/\s+/)) {
       const pid = Number(token.trim());
-      if (Number.isInteger(pid) && pid > 1) pids.add(pid);
+      if (keep(pid)) pids.add(pid);
     }
     return [...pids];
   } catch {
