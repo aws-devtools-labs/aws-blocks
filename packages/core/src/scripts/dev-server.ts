@@ -396,6 +396,15 @@ export interface BindRetryDeps {
   warn: (msg: string) => void;
 }
 
+/** Schedule a front-door rebind retry; keep it refed so the retry deterministically fires. */
+export function scheduleBindRetry(
+  fn: () => void,
+  delayMs: number,
+  setTimer: (fn: () => void, delayMs: number) => NodeJS.Timeout = setTimeout,
+): NodeJS.Timeout {
+  return setTimer(fn, delayMs);
+}
+
 /**
  * Build the `:3000` front-door EADDRINUSE bind-retry handler. Extracted from the
  * `server.on('error')` closure so the retry *wiring* — the 1-based attempt
@@ -490,10 +499,11 @@ export type SingletonDecision = { action: 'proceed' } | { action: 'exit'; reason
  *
  * - **No / corrupt pidfile** → proceed (first start; startup reclaim covers any orphan socket).
  * - **Same pid** → proceed (defensive; the record is our own).
- * - **Same parent (`ppid`)** → proceed. `tsx watch` is the stable parent across
- *   reloads, so a matching parent means the watcher is relaunching OUR OWN script
- *   — not a competitor. A second `npm run dev` runs under a *different* watcher,
- *   so it never matches here. This carve-out is what preserves hot reload.
+ * - **Same parent (`ppid`) and dead recorded child** → proceed. `tsx watch` is
+ *   the stable parent across reloads, and it relaunches after the old child exits.
+ *   A live recorded child with the same parent can also happen when two
+ *   `npm run dev` jobs share a shell, so that still goes through the live-owner
+ *   check below.
  * - **Different, still-live owner actually holding the port** → exit cleanly with
  *   a clear message (do not spawn a competing supervisor).
  * - **Otherwise** (recorded owner is dead → stale pidfile, or the port is free)
@@ -507,8 +517,9 @@ export function evaluateSingleton(
 ): SingletonDecision {
   if (!existing) return { action: 'proceed' };
   if (existing.pid === self.pid) return { action: 'proceed' };
-  if (existing.ppid === self.ppid) return { action: 'proceed' }; // tsx-watch relaunch of our own supervisor
-  const ownerAlive = isAlive(existing.pid) || (existing.ppid > 1 && isAlive(existing.ppid));
+  const existingPidAlive = isAlive(existing.pid);
+  if (existing.ppid === self.ppid && !existingPidAlive) return { action: 'proceed' }; // tsx-watch relaunch after old child exit
+  const ownerAlive = existingPidAlive || (existing.ppid > 1 && isAlive(existing.ppid));
   if (ownerAlive && portInUse) {
     return { action: 'exit', reason: `dev server already running on :${existing.port} (pid ${existing.pid})` };
   }
@@ -984,7 +995,7 @@ export async function startDevServer(options: DevServerOptions) {
   const onEaddrinuse = createBindRetryController(port, {
     reclaim: (p) => reclaimPort(p),
     relisten: () => server.listen(port, onListening),
-    scheduleRetry: (fn, delayMs) => { setTimeout(fn, delayMs).unref?.(); },
+    scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () => process.exit(1),
     warn: (msg) => console.error(msg),
   });

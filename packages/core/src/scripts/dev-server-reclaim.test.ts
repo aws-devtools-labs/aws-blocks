@@ -8,6 +8,7 @@ import {
   reclaimMessage,
   evaluatePortBindRetry,
   createBindRetryController,
+  scheduleBindRetry,
   DEFAULT_PORT_BIND_RETRY_POLICY,
   evaluateSingleton,
   parsePidRecord,
@@ -204,10 +205,17 @@ describe('evaluateSingleton — one supervisor per port, hot-reload safe', () =>
     assert.deepStrictEqual(evaluateSingleton(null, { pid: 1, ppid: 2 }, true, alive), { action: 'proceed' });
   });
 
-  it('proceeds on a tsx-watch relaunch of our own supervisor (same parent pid)', () => {
-    // New child, DIFFERENT own pid, but SAME watcher parent → not a competitor.
-    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 1001, ppid: 500 }, true, alive);
+  it('proceeds on a tsx-watch relaunch after the previous child has exited', () => {
+    // New child, DIFFERENT own pid, SAME watcher parent, and old child is dead.
+    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500 }), { pid: 1001, ppid: 500 }, true, dead);
     assert.deepStrictEqual(d, { action: 'proceed' });
+  });
+
+  it('exits when a same-parent live owner is actually holding the port', () => {
+    const d = evaluateSingleton(rec({ pid: 1000, ppid: 500, port: 3000 }), { pid: 1001, ppid: 500 }, true, alive);
+    if (d.action !== 'exit') assert.fail(`expected exit, got ${d.action}`);
+    assert.match(d.reason, /already running on :3000/);
+    assert.match(d.reason, /pid 1000/);
   });
 
   it('exits when a different, live supervisor is actually holding the port', () => {
@@ -426,5 +434,31 @@ describe('createBindRetryController — bounded EADDRINUSE reclaim-and-rebind', 
     // A failed reclaim still schedules the next attempt (the budget, not reclaim
     // success, bounds the loop).
     assert.strictEqual(c.scheduled.length, 1);
+  });
+});
+
+describe('scheduleBindRetry — front-door retry timer', () => {
+  it('does not unref the retry timer', () => {
+    let callback: (() => void) | undefined;
+    let delay: number | undefined;
+    let unrefCalls = 0;
+    const timer = {
+      unref: () => { unrefCalls += 1; return timer; },
+    } as NodeJS.Timeout;
+
+    const returned = scheduleBindRetry(
+      () => {},
+      250,
+      (fn, delayMs) => {
+        callback = fn;
+        delay = delayMs;
+        return timer;
+      },
+    );
+
+    assert.strictEqual(returned, timer);
+    assert.strictEqual(delay, 250);
+    assert.ok(callback);
+    assert.strictEqual(unrefCalls, 0, 'front-door bind retry must keep the event loop alive');
   });
 });
