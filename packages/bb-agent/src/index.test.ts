@@ -1415,3 +1415,38 @@ describe('createAgentCoreWsTransport', () => {
 		assert.match((chunks[0] as { error: string }).error, /failed/);
 	});
 });
+
+// ── AgentCore entry: server-side userId from forwarded JWT ──────────────────
+
+import { userIdFromContext } from './agentcore-entry.js';
+
+describe('userIdFromContext', () => {
+	// Build an unsigned JWT with the given claims (we only decode the payload).
+	function jwt(claims: Record<string, unknown>): string {
+		const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+		return `${b64({ alg: 'RS256' })}.${b64(claims)}.sig`;
+	}
+
+	test('reads sub from a Bearer Authorization header', () => {
+		const headers = { Authorization: `Bearer ${jwt({ sub: 'user-123', client_id: 'abc' })}` };
+		assert.strictEqual(userIdFromContext(headers), 'user-123');
+	});
+
+	test('accepts a lowercase authorization header', () => {
+		const headers = { authorization: `Bearer ${jwt({ sub: 'user-xyz' })}` };
+		assert.strictEqual(userIdFromContext(headers), 'user-xyz');
+	});
+
+	test('returns undefined when no auth header is forwarded (IAM runtime / not allowlisted)', () => {
+		assert.strictEqual(userIdFromContext({}), undefined);
+		assert.strictEqual(userIdFromContext(undefined), undefined);
+	});
+
+	test('returns undefined for a malformed token', () => {
+		assert.strictEqual(userIdFromContext({ Authorization: 'Bearer not-a-jwt' }), undefined);
+	});
+
+	test('returns undefined when the token carries no sub claim', () => {
+		assert.strictEqual(userIdFromContext({ Authorization: `Bearer ${jwt({ client_id: 'abc' })}` }), undefined);
+	});
+});

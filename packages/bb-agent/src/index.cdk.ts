@@ -77,6 +77,8 @@ export class Agent extends Scope {
 		// app's backend module path, discovered off the BlocksStack.
 		const assetPath = config?.agentcoreAssetPath ?? this.buildAgentCoreAsset();
 		if (assetPath) {
+			// Inbound auth: JWT from the app's auth BB, else IAM (SigV4) by default.
+			const authorizerConfiguration = resolveAuthorizer(config?.auth);
 			const runtime = new Runtime(this, 'AgentRuntime', {
 				agentRuntimeArtifact: AgentRuntimeArtifact.fromCodeAsset({
 					path: assetPath,
@@ -95,8 +97,13 @@ export class Agent extends Scope {
 					// match BB_AGENT_ID (`<stack>-test-app-agent`) → "No Agent registered".
 					BLOCKS_STACK_NAME: cdk.Stack.of(this).stackName,
 				},
-				// Inbound auth: JWT from the app's auth BB, else IAM (SigV4) by default.
-				authorizerConfiguration: resolveAuthorizer(config?.auth),
+				authorizerConfiguration,
+				// When a JWT authorizer is in play, forward the gateway-validated caller token to
+				// the container (`context.headers.Authorization`) so the agent can derive a
+				// trustworthy userId from its `sub` claim instead of trusting a client-supplied
+				// value (see agentcore-entry.ts `userIdFromContext`). No caller JWT exists on the
+				// IAM/SigV4 path, so only opt in when an authorizer resolved.
+				requestHeaderConfiguration: authorizerConfiguration ? { allowlistedHeaders: ['Authorization'] } : undefined,
 			});
 
 			// The runtime's execution role needs the same Bedrock access the Lambda has,
