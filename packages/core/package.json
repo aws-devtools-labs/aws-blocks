@@ -25,6 +25,10 @@
     },
     "./client": "./dist/client/index.js",
     "./lambda-handler": "./dist/lambda-handler.js",
+    "./http-server": {
+      "types": "./dist/http-server.d.ts",
+      "default": "./dist/http-server.js"
+    },
     "./bb-utils": {
       "types": "./dist/bb-utils.d.ts",
       "default": "./dist/bb-utils.js"

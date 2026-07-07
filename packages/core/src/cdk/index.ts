@@ -15,11 +15,19 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import type { ComputeApiOrigin, ComputeBindContext, ComputeTarget } from './compute-target.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
+export type {
+  ComputeTarget,
+  ComputeBindContext,
+  ComputeBindResult,
+  ComputeApiOrigin,
+  ComputePrincipal,
+} from './compute-target.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
-export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export { registerConfig, finalizeConfigRegistry, getConfigDeployment } from './config-registry.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
@@ -27,9 +35,31 @@ export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '.
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
   public readonly apiUrl: string;
-  public readonly gateway: cdk.aws_apigateway.RestApi;
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /**
+   * Structured HTTP origin for the API. Only set in container-compute mode,
+   * where `apiUrl` has no API Gateway stage segment for consumers to parse.
+   */
+  public readonly apiOrigin?: ComputeApiOrigin;
+  private readonly _gateway?: cdk.aws_apigateway.RestApi;
+  private readonly _compute?: ComputeTarget;
+  private readonly _computeCtx?: ComputeBindContext;
+
+  /**
+   * The API Gateway REST API fronting the Lambda. Not available when a
+   * container compute target is configured — the container's load balancer
+   * is the front door and no REST API is created.
+   */
+  public get gateway(): cdk.aws_apigateway.RestApi {
+    if (!this._gateway) {
+      throw new Error(
+        'BlocksStack.gateway is not available: this stack uses a container compute target, ' +
+        'so no API Gateway is created. Use `apiUrl` / `apiOrigin` for the HTTP front door.',
+      );
+    }
+    return this._gateway;
+  }
 
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
@@ -41,8 +71,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;
-    this.gateway = infra.gateway;
+    this._gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
+    this.apiOrigin = infra.apiOrigin;
+    this._compute = props.compute;
+    this._computeCtx = infra.computeCtx;
   }
 
   static async create(scope: Construct, id: string, props: BlocksStackProps) {
@@ -67,6 +100,13 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     }
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(stack, stack.handler);
+
+    // Late hook: every Building Block has attached env vars and grants by now,
+    // so the compute target can mirror the handler environment into its
+    // container definition and sequence container boot after the config upload.
+    if (stack._compute && stack._computeCtx) {
+      stack._compute.finalize(stack._computeCtx);
+    }
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
