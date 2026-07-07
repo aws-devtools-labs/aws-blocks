@@ -43,6 +43,7 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
     fetchUserAttributes(context: BlocksContext): Promise<Partial<Record<ReadAttrOf<O>, string>>>;
     forgetDevice(context: BlocksContext, deviceKey: string): Promise<void>;
     static fromExisting: typeof makeExternalUserPoolRef;
+    getAgentCoreToken(context: BlocksContext): Promise<string>;
     getCurrentUser(context: BlocksContext): Promise<CognitoUser<O> | null>;
     listPasskeys(context: BlocksContext): Promise<PasskeyDescription[]>;
     // @internal

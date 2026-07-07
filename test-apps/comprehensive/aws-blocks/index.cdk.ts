@@ -3,6 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -40,6 +41,20 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 if (process.env.E2E_FROM_EMAIL) {
   blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
+
+// Test-support: let the handler admin-provision Cognito users server-side for the WebSocket
+// long-running agent test. The e2e runner uses --conditions=browser, under which the AWS SDK
+// can't be constructed client-side, and Cognito self-signup codes aren't retrievable in-process
+// — so provisioning has to happen in the Lambda. Scoped to this test stack's account; this is a
+// test app, not a customer template.
+blocksStack.handler.addToRolePolicy(new PolicyStatement({
+  actions: [
+    'cognito-idp:AdminCreateUser',
+    'cognito-idp:AdminSetUserPassword',
+    'cognito-idp:AdminDeleteUser',
+  ],
+  resources: ['*'],
+}));
 
 // E2E test stacks must be fully deletable regardless of deploy mode.
 // Production apps would only apply these in sandbox mode.

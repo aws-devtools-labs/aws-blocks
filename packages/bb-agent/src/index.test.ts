@@ -1244,3 +1244,174 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 		assert.ok(agent);
 	});
 });
+
+// ── AgentCore WebSocket URL builder ─────────────────────────────────────────
+
+import { buildAgentCoreWsUrl } from './agent.aws.js';
+
+describe('buildAgentCoreWsUrl', () => {
+	const arn = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/my-runtime-abc123';
+
+	test('builds a wss URL against the regional data-plane host with the ARN encoded', () => {
+		const url = new URL(buildAgentCoreWsUrl(arn, 'sess-1'));
+		assert.strictEqual(url.protocol, 'wss:');
+		assert.strictEqual(url.hostname, 'bedrock-agentcore.us-east-1.amazonaws.com');
+		// The ARN is percent-encoded into the path segment.
+		assert.ok(url.pathname.startsWith(`/runtimes/${encodeURIComponent(arn)}/ws`));
+	});
+
+	test('embeds the session id as the runtime-session-id query param', () => {
+		const url = new URL(buildAgentCoreWsUrl(arn, 'conv-42'));
+		assert.strictEqual(url.searchParams.get('X-Amzn-Bedrock-AgentCore-Runtime-Session-Id'), 'conv-42');
+	});
+
+	test('derives region from the ARN (not hard-pinned)', () => {
+		const apse2 = 'arn:aws:bedrock-agentcore:ap-southeast-2:123456789012:runtime/r-xyz';
+		assert.strictEqual(new URL(buildAgentCoreWsUrl(apse2, 's')).hostname, 'bedrock-agentcore.ap-southeast-2.amazonaws.com');
+	});
+
+	test('throws on an ARN without a region', () => {
+		assert.throws(() => buildAgentCoreWsUrl('not-an-arn', 's'), /region/);
+	});
+});
+
+// ── Browser WebSocket transport ─────────────────────────────────────────────
+
+import { createAgentCoreWsTransport, buildBearerSubprotocols } from './ws-transport.js';
+
+/**
+ * Minimal fake of the browser WebSocket for driving the transport. Records the URL +
+ * subprotocols + sent frames, and lets the test push server frames / lifecycle events.
+ */
+class FakeWebSocket {
+	static CONNECTING = 0 as const;
+	static OPEN = 1 as const;
+	static CLOSING = 2 as const;
+	static CLOSED = 3 as const;
+	readonly CONNECTING = 0;
+	readonly OPEN = 1;
+	readonly CLOSING = 2;
+	readonly CLOSED = 3;
+	readyState = 0;
+	sent: string[] = [];
+	closed = false;
+	onopen: (() => void) | null = null;
+	onmessage: ((e: { data: string }) => void) | null = null;
+	onerror: (() => void) | null = null;
+	onclose: (() => void) | null = null;
+	constructor(
+		public url: string,
+		public protocols: string[],
+	) {}
+	send(data: string) {
+		this.sent.push(data);
+	}
+	close() {
+		this.closed = true;
+		this.readyState = this.CLOSED;
+	}
+	// Test drivers.
+	open() {
+		this.readyState = this.OPEN;
+		this.onopen?.();
+	}
+	emit(event: string, data?: Record<string, unknown>) {
+		this.onmessage?.({ data: JSON.stringify({ event, data }) });
+	}
+	fail() {
+		this.onerror?.();
+	}
+}
+
+describe('buildBearerSubprotocols', () => {
+	test('encodes the token base64url and pairs it with the scheme marker', () => {
+		const [encoded, marker] = buildBearerSubprotocols('a.b.c');
+		assert.strictEqual(marker, 'base64UrlBearerAuthorization');
+		assert.ok(encoded.startsWith('base64UrlBearerAuthorization.'));
+		// base64url alphabet only — no +, /, or = padding.
+		const payload = encoded.slice('base64UrlBearerAuthorization.'.length);
+		assert.doesNotMatch(payload, /[+/=]/);
+	});
+});
+
+describe('createAgentCoreWsTransport', () => {
+	function harness(endpoint = { wsUrl: 'wss://host/runtimes/arn/ws?X-Amzn-Bedrock-AgentCore-Runtime-Session-Id=c1', token: 'tok.tok.tok' }) {
+		let socket: FakeWebSocket | undefined;
+		const WebSocketImpl = function (url: string, protocols: string[]) {
+			socket = new FakeWebSocket(url, protocols);
+			return socket;
+		} as unknown as typeof WebSocket;
+		(WebSocketImpl as unknown as { CONNECTING: number }).CONNECTING = 0;
+		const streamChunks = createAgentCoreWsTransport(async () => endpoint, { WebSocketImpl });
+		return { streamChunks, getSocket: () => socket as FakeWebSocket };
+	}
+
+	test('opens the socket with the endpoint URL + bearer subprotocols and sends the prompt', async () => {
+		const { streamChunks, getSocket } = harness();
+		const gen = streamChunks({ conversationId: 'c1', message: 'hello' })[Symbol.asyncIterator]();
+		// Kick off iteration so the endpoint resolves + socket opens.
+		const first = gen.next();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		assert.strictEqual(socket.url, 'wss://host/runtimes/arn/ws?X-Amzn-Bedrock-AgentCore-Runtime-Session-Id=c1');
+		assert.deepStrictEqual(socket.protocols, buildBearerSubprotocols('tok.tok.tok'));
+		socket.open();
+		assert.deepStrictEqual(JSON.parse(socket.sent[0]), { prompt: 'hello' });
+		// Feed one chunk then complete so the pending next() resolves.
+		socket.emit('text-delta', { delta: 'hi' });
+		const { value } = await first;
+		assert.deepStrictEqual(value, { type: 'text-delta', delta: 'hi' });
+		socket.emit('turn-complete');
+	});
+
+	test('reconstructs chunks and ends on turn-complete', async () => {
+		const { streamChunks, getSocket } = harness();
+		const chunks: AgentStreamChunk[] = [];
+		const p = (async () => {
+			for await (const c of streamChunks({ conversationId: 'c1', message: 'go' })) chunks.push(c);
+		})();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		socket.emit('text-delta', { delta: 'a' });
+		socket.emit('done', { usage: { tokens: 1 } });
+		socket.emit('turn-complete');
+		await p;
+		assert.deepStrictEqual(chunks, [
+			{ type: 'text-delta', delta: 'a' },
+			{ type: 'done', usage: { tokens: 1 } },
+		]);
+		assert.ok(socket.closed, 'socket closes when the turn ends');
+	});
+
+	test('sends interruptResponses on resume', async () => {
+		const { streamChunks, getSocket } = harness();
+		const gen = streamChunks({ conversationId: 'c1', interruptResponses: [{ interruptId: 'i1', response: 'yes' }] })[Symbol.asyncIterator]();
+		const first = gen.next();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		assert.deepStrictEqual(JSON.parse(socket.sent[0]), {
+			prompt: '',
+			interruptResponses: [{ interruptId: 'i1', response: 'yes' }],
+		});
+		socket.emit('turn-complete');
+		await first;
+	});
+
+	test('emits a terminal error chunk when the socket errors', async () => {
+		const { streamChunks, getSocket } = harness();
+		const chunks: AgentStreamChunk[] = [];
+		const p = (async () => {
+			for await (const c of streamChunks({ conversationId: 'c1', message: 'go' })) chunks.push(c);
+		})();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		socket.fail();
+		await p;
+		assert.strictEqual(chunks.length, 1);
+		assert.strictEqual(chunks[0].type, 'error');
+		assert.match((chunks[0] as { error: string }).error, /failed/);
+	});
+});

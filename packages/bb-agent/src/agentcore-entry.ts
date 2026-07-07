@@ -9,6 +9,13 @@
  * handler would build — on the `BedrockAgentCoreApp` harness (Fastify, implements the
  * `/invocations` + `/ping` + SSE contract on port 8080), and streams chunks directly.
  *
+ * Two transports, one agent loop:
+ *   - `/invocations` (HTTP + SSE) — request/response streaming; used by the buffered RPC path.
+ *   - `/ws` (WebSocket) — the browser-direct path. Browsers can't open the SSE endpoint
+ *     cross-origin (no CORS), but WebSocket isn't subject to CORS and its session idle-timeout
+ *     resets on every message, so a chat/HITL conversation streams with no API-Gateway 30s cap.
+ * Both drive the SAME `agent.streamSSE()` generator and emit the SAME chunk frames.
+ *
  * How the developer's agent definition reaches this process:
  *   The `tools` callback in AgentConfig is a JS closure and cannot be serialized across a
  *   process boundary. So instead of shipping data, we ship code: this entrypoint imports
@@ -29,8 +36,15 @@ import { getAgentInstance } from './agent.js';
 const requestSchema = z.object({
 	/** User prompt. Empty on resume (interruptResponses drive the turn instead). */
 	prompt: z.string().default(''),
-	/** Owner of the conversation. Required when persistence is enabled (not inferenceOnly).
-	 * Pass 1 carries it explicitly; a later pass will derive it from the validated JWT. */
+	/**
+	 * Owner of the conversation. Required when persistence is enabled (not inferenceOnly).
+	 *
+	 * The client supplies this. Note the runtime's JWT authorizer validates the caller's token
+	 * at the GATEWAY and does NOT forward it to this container — `context.headers` is empty on
+	 * both the `/ws` and `/invocations` paths (verified live), so the server cannot re-derive the
+	 * identity from the token here. The app is responsible for scoping: it mints the WS endpoint
+	 * from an authenticated backend session and should pass that session's userId through.
+	 */
 	userId: z.string().optional(),
 	/** HITL resume: approval responses to apply instead of a new prompt. */
 	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
@@ -66,10 +80,8 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 			process: async function* (request, context) {
 				// AgentCore routes every invocation for a session to the same warm microVM.
 				// runtimeSessionId maps to the Agent BB's conversationId (session state key).
-				const conversationId = context.sessionId;
-
 				for await (const chunk of agent.streamSSE(request.prompt, {
-					conversationId,
+					conversationId: context.sessionId,
 					userId: request.userId,
 					interruptResponses: request.interruptResponses,
 					context: request.context,
@@ -79,6 +91,32 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 					yield { event: type, data };
 				}
 			},
+		},
+		// Browser-direct transport. The browser opens `wss://.../ws` (JWT via the
+		// Sec-WebSocket-Protocol subprotocol — see ws-transport client helper) and sends one
+		// JSON message per turn with the same payload shape as `/invocations`. We drive the
+		// same streamSSE() loop and send each chunk back as a JSON WS message, then close.
+		websocketHandler: async (socket, context) => {
+			socket.on('message', async (raw: unknown) => {
+				try {
+					const request = requestSchema.parse(JSON.parse(String(raw)));
+					for await (const chunk of agent.streamSSE(request.prompt, {
+						conversationId: context.sessionId,
+						userId: request.userId,
+						interruptResponses: request.interruptResponses,
+						context: request.context,
+					})) {
+						const { type, ...data } = chunk;
+						socket.send(JSON.stringify({ event: type, data }));
+					}
+					// Signal end-of-turn so the client's async iterator completes. The socket
+					// stays open for follow-up turns / HITL resume on the same session.
+					socket.send(JSON.stringify({ event: 'turn-complete', data: {} }));
+				} catch (err) {
+					const error = err instanceof Error ? err.message : String(err);
+					socket.send(JSON.stringify({ event: 'error', data: { error } }));
+				}
+			});
 		},
 	});
 
