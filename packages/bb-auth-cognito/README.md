@@ -386,6 +386,38 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
+For the `setAuthState()` path, auth failures resolve to an error state instead
+of rejecting the promise. A non-retriable failure returns the normal signed-out
+state with the available sign-in actions plus `error` and, when available,
+`errorName`:
+
+```typescript
+{
+  state: 'signedOut',
+  actions: [/* sign-in actions */],
+  error: 'Incorrect username or password',
+  errorName: AuthCognitoErrors.NotAuthorized,
+}
+```
+
+Retriable challenge failures return a thin error state:
+
+```typescript
+{
+  state: 'signedOut',
+  actions: [],
+  error: 'Invalid code',
+  errorName: AuthCognitoErrors.CodeMismatch,
+  retriable: true,
+}
+```
+
+`CodeMismatchException` from `confirmSignIn` (for example, a wrong MFA or OTP
+code) is retriable: Cognito keeps the challenge session valid, so custom UI
+should keep the current challenge form and its hidden `session` fields in place
+and show the returned `error` inline. The built-in `Authenticator` already does
+that when it sees `retriable: true`.
+
 ## UI Components
 
 Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui` — same shape as for `AuthBasic`:
