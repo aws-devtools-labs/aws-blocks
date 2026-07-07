@@ -390,7 +390,15 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
     let tmpHome: string;
 
     afterEach(async () => {
-      if (devProcess) { killProcess(devProcess); devProcess = null; }
+      if (devProcess) {
+        // Kill just the npx/tsx parent — NOT the process group.
+        // The dev server (PR #136) has internal process-tree management;
+        // group-killing propagates signals back to the test runner.
+        try { process.kill(devProcess.pid!, 'SIGKILL'); } catch {}
+        devProcess.stdout?.destroy();
+        devProcess.stderr?.destroy();
+        devProcess = null;
+      }
       if (blocker) { await new Promise<void>(r => blocker!.close(() => r())); blocker = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
