@@ -39,11 +39,11 @@ const requestSchema = z.object({
 	/**
 	 * Owner of the conversation. Required when persistence is enabled (not inferenceOnly).
 	 *
-	 * The client supplies this. Note the runtime's JWT authorizer validates the caller's token
-	 * at the GATEWAY and does NOT forward it to this container — `context.headers` is empty on
-	 * both the `/ws` and `/invocations` paths (verified live), so the server cannot re-derive the
-	 * identity from the token here. The app is responsible for scoping: it mints the WS endpoint
-	 * from an authenticated backend session and should pass that session's userId through.
+	 * This is a FALLBACK. When the runtime uses a JWT authorizer and forwards the caller's token
+	 * (CDK sets `requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] }`), the
+	 * server prefers the token's `sub` claim over this value — see `userIdFromContext`. The
+	 * client-supplied `userId` is used only when no token reaches the container: IAM/SigV4
+	 * runtimes (no caller JWT), or if header forwarding isn't available on a given path.
 	 */
 	userId: z.string().optional(),
 	/** HITL resume: approval responses to apply instead of a new prompt. */
@@ -51,6 +51,30 @@ const requestSchema = z.object({
 	/** Per-call tool context, threaded through to tool handlers. Must be JSON-serializable. */
 	context: z.unknown().optional(),
 });
+
+/**
+ * Derive the conversation owner from the request's validated JWT, if one was forwarded.
+ *
+ * When the runtime has a JWT authorizer AND `requestHeaderConfiguration` allowlists
+ * `Authorization`, AgentCore forwards the gateway-validated caller token to the container as an
+ * `Authorization` header (the SDK surfaces it on `context.headers`). Because the gateway already
+ * validated the signature, we trust the payload and read `sub` without re-verifying — giving a
+ * userId the client cannot forge. Returns `undefined` when no bearer token is present (IAM
+ * runtimes, or a path where the header wasn't forwarded), so the caller can fall back to the
+ * client-supplied `userId`.
+ */
+export function userIdFromContext(headers: Record<string, string> | undefined): string | undefined {
+	const auth = headers?.Authorization ?? headers?.authorization;
+	const token = auth?.replace(/^Bearer\s+/i, '');
+	const payload = token?.split('.')[1];
+	if (!payload) return undefined;
+	try {
+		const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { sub?: string };
+		return typeof claims.sub === 'string' ? claims.sub : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * Serve a registered Agent on the AgentCore harness.
@@ -80,9 +104,11 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 			process: async function* (request, context) {
 				// AgentCore routes every invocation for a session to the same warm microVM.
 				// runtimeSessionId maps to the Agent BB's conversationId (session state key).
+				// Prefer the gateway-validated JWT's `sub` (unforgeable); fall back to the payload.
+				const jwtUserId = userIdFromContext(context.headers);
 				for await (const chunk of agent.streamSSE(request.prompt, {
 					conversationId: context.sessionId,
-					userId: request.userId,
+					userId: jwtUserId ?? request.userId,
 					interruptResponses: request.interruptResponses,
 					context: request.context,
 				})) {
@@ -97,12 +123,17 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 		// JSON message per turn with the same payload shape as `/invocations`. We drive the
 		// same streamSSE() loop and send each chunk back as a JSON WS message, then close.
 		websocketHandler: async (socket, context) => {
+			// Prefer the gateway-validated JWT's `sub` (unforgeable) over the client payload.
+			// On the WS path the token arrives via the Sec-WebSocket-Protocol subprotocol; whether
+			// AgentCore forwards it as an Authorization header here is confirmed at deploy time —
+			// if absent, jwtUserId is undefined and we fall back to request.userId.
+			const jwtUserId = userIdFromContext(context.headers);
 			socket.on('message', async (raw: unknown) => {
 				try {
 					const request = requestSchema.parse(JSON.parse(String(raw)));
 					for await (const chunk of agent.streamSSE(request.prompt, {
 						conversationId: context.sessionId,
-						userId: request.userId,
+						userId: jwtUserId ?? request.userId,
 						interruptResponses: request.interruptResponses,
 						context: request.context,
 					})) {
