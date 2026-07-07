@@ -72,4 +72,31 @@ void describe('getSecret() runtime resolver', () => {
 		delete process.env[secretEnvVarName('MISSING')];
 		await assert.rejects(getSecret('MISSING'), /no secret reference found/);
 	});
+
+	void it('passes the store hint to the fetcher (default ssm)', async () => {
+		delete process.env.STRIPE_KEY;
+		process.env[secretEnvVarName('STRIPE_KEY')] = '/blocks/secrets/STRIPE_KEY';
+		delete process.env[`${secretEnvVarName('STRIPE_KEY')}_STORE`];
+		let seenStore = '';
+		_setSecretFetcher(async (_locator, store) => {
+			seenStore = store;
+			return 'v';
+		});
+		await getSecret('STRIPE_KEY');
+		assert.strictEqual(seenStore, 'ssm');
+	});
+
+	void it('routes to secrets-manager when the _STORE hint is set', async () => {
+		delete process.env.STRIPE_KEY;
+		process.env[secretEnvVarName('STRIPE_KEY')] = '/blocks/secrets/STRIPE_KEY';
+		process.env[`${secretEnvVarName('STRIPE_KEY')}_STORE`] = 'secrets-manager';
+		let seenStore = '';
+		_setSecretFetcher(async (_locator, store) => {
+			seenStore = store;
+			return 'v';
+		});
+		await getSecret('STRIPE_KEY');
+		assert.strictEqual(seenStore, 'secrets-manager');
+		delete process.env[`${secretEnvVarName('STRIPE_KEY')}_STORE`];
+	});
 });

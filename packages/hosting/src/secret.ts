@@ -56,6 +56,13 @@ export interface SecretValue {
 /** Unique brand symbol. `Symbol.for` so the brand survives across module/realm copies. */
 export const SECRET_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.SecretValue');
 
+/**
+ * Which backing store holds a secret value.
+ * - `'ssm'` — SSM Parameter Store SecureString (default; free, no rotation).
+ * - `'secrets-manager'` — AWS Secrets Manager (auto-rotation, ~$0.40/secret/mo).
+ */
+export type SecretStore = 'ssm' | 'secrets-manager';
+
 /** Options for {@link secret}. */
 export interface SecretOptions {
 	/**
@@ -128,8 +135,12 @@ export function isSecret(value: unknown): value is SecretValue {
  * passing an explicit `prefix` to {@link secretParameterName} (e.g. Blocks
  * passes `/blocks/secrets`), so this package never hardcodes a framework's
  * namespace into the shared upstream.
+ *
+ * NOTE: must NOT begin with `aws` or `ssm` — SSM Parameter Store reserves
+ * those prefixes and rejects create/read with "No access to reserved parameter
+ * name". (An earlier `/aws-hosting/...` default hit exactly that.)
  */
-export const DEFAULT_SECRET_PARAMETER_PREFIX = '/aws-hosting/secrets';
+export const DEFAULT_SECRET_PARAMETER_PREFIX = '/hosting/secrets';
 
 /**
  * Map a logical secret key to its SSM parameter name. This is the ONLY place
@@ -145,7 +156,7 @@ export const DEFAULT_SECRET_PARAMETER_PREFIX = '/aws-hosting/secrets';
  * @param prefix - SSM path prefix (no trailing slash). Defaults to
  *   {@link DEFAULT_SECRET_PARAMETER_PREFIX}. Consumers inject their own to keep
  *   this package brand-neutral (e.g. Blocks passes `/blocks/secrets`).
- * @example secretParameterName('STRIPE_KEY') // '/aws-hosting/secrets/STRIPE_KEY'
+ * @example secretParameterName('STRIPE_KEY') // '/hosting/secrets/STRIPE_KEY'
  * @example secretParameterName('STRIPE_KEY', '/blocks/secrets') // '/blocks/secrets/STRIPE_KEY'
  */
 export function secretParameterName(key: string, prefix: string = DEFAULT_SECRET_PARAMETER_PREFIX): string {

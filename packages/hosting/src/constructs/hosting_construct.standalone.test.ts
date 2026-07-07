@@ -8,6 +8,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostingConstruct } from './hosting_construct.js';
 import { DeployManifest } from '../manifest/types.js';
+import { secret } from '../secret.js';
 
 // ---- Test helpers ----
 
@@ -477,6 +478,59 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       // SSR is fronted by API Gateway REST API, not by a Function URL,
       // so 'default' is intentionally absent from computeFunctionUrls.
       assert.ok(!construct.computeFunctionUrls.has('default'));
+    });
+  });
+
+  // ---- secret() markers in environment (serves standalone + Amplify) ----
+  void describe('environment secret() markers', () => {
+    void it('wires a runtime secret marker: injects locator + grants read/decrypt, no value leak', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+        secrets: { prefix: '/blocks/secrets' },
+        skipRegionValidation: true,
+      });
+      const t = Template.fromStack(stack);
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
+          }),
+        },
+      });
+      t.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([Match.objectLike({ Action: 'ssm:GetParameter' })]),
+        },
+      });
+      // Marker value never appears; only the SSM locator does.
+      const json = JSON.stringify(t.toJSON());
+      assert.ok(!json.includes('"STRIPE_KEY":'), 'secret value must not be a plaintext env var');
+    });
+
+    void it('uses the neutral /hosting/secrets prefix by default', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { API_KEY: secret('API_KEY') },
+        skipRegionValidation: true,
+      });
+      const json = JSON.stringify(Template.fromStack(stack).toJSON());
+      assert.ok(json.includes('/hosting/secrets/API_KEY'), 'neutral default prefix');
+    });
+
+    void it('rejects an unresolved exposeAsEnv (synth-time) marker at construct level', () => {
+      const stack = createEnvStack();
+      assert.throws(
+        () =>
+          new HostingConstruct(stack, 'Hosting', {
+            manifest: makeSsrManifest(),
+            environment: { LEGACY: secret('LEGACY', { exposeAsEnv: true }) },
+            skipRegionValidation: true,
+          }),
+        /unresolved|UnresolvedSecret|create\(\)/,
+      );
     });
   });
 });

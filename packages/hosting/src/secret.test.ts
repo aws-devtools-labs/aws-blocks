@@ -50,8 +50,8 @@ void describe('isSecret()', () => {
 
 void describe('secret path + env naming', () => {
 	void it('uses a framework-neutral default prefix (no Blocks branding in the leaf)', () => {
-		assert.strictEqual(DEFAULT_SECRET_PARAMETER_PREFIX, '/aws-hosting/secrets');
-		assert.strictEqual(secretParameterName('STRIPE_KEY'), '/aws-hosting/secrets/STRIPE_KEY');
+		assert.strictEqual(DEFAULT_SECRET_PARAMETER_PREFIX, '/hosting/secrets');
+		assert.strictEqual(secretParameterName('STRIPE_KEY'), '/hosting/secrets/STRIPE_KEY');
 	});
 
 	void it('accepts an injected prefix so consumers pin their own namespace', () => {
