@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/hosting": minor
 "@aws-blocks/core": minor
+"@aws-blocks/pipeline": minor
 ---
 
 Add `secret()` support to hosting for self-hosted deployments.
@@ -14,6 +15,12 @@ Introduces a `secret()` reference for sensitive values (API keys, third-party cr
 - **`getSecret('KEY')` runtime resolver** — reads `process.env.KEY` first (local dev / `exposeAsEnv`), else fetches + decrypts the injected SSM parameter, caching per cold start and coalescing concurrent calls. Mirrors the existing `AppSetting` / external-DB connection-string pattern.
 - **`secret` CLI** (`runSecretCli`, `setSecret`, `listSecrets`, `removeSecret`) — `blocks secret set/list/remove` manage SecureStrings at `/blocks/secrets/<KEY>` (flat namespace, 1:1 key↔reference, no stage scoping). `list` returns names only, never values. Wired into the Next.js template as `npm run secret`.
 
-**Framework-neutral by design (decoupling).** The secret *mechanism* in `@aws-blocks/hosting` carries no Blocks branding: it defaults to a neutral `/aws-hosting/secrets` prefix (`DEFAULT_SECRET_PARAMETER_PREFIX`) and a neutral `HOSTING_SECRET_PARAM_` env prefix, and `secretParameterName(key, prefix?)` takes an injectable namespace. Blocks pins its own `/blocks/secrets` namespace in `@aws-blocks/core` (`blocksSecretParameterName`, `BLOCKS_SECRET_PARAMETER_PREFIX`), so Blocks users see **no change** while a non-Blocks consumer (a plain framework app, or a future standalone hosting package) never inherits Blocks paths. This keeps `@aws-blocks/hosting` a zero-`@aws-blocks/*`-deps leaf and makes a future extraction of the secret engine into a standalone package a mechanical move rather than a breaking SSM-path migration (which is deliberately deferred to that extraction).
+**Works for any consumer of the L3 construct.** Runtime `secret()` markers are resolved inside the shared `HostingConstruct` itself (not just `core.Hosting`), so a standalone CDK app or Amplify's `defineHosting` (which re-export the same construct) get runtime secrets with no extra plumbing: `HostingConstruct.environment` accepts markers and a `secrets` prop selects the prefix/store.
+
+**Pipeline.** `@aws-blocks/pipeline` accepts a `secret()` for `source.connectionArn`, resolved at synth time from the store via the shared hosting resolver (CodeBuild has no `.env`, so a store-backed source credential is the right mechanism). Use `await Pipeline.create(...)` for the marker path.
+
+**Pluggable store.** `secret()` values can be backed by SSM Parameter Store SecureString (default; free) or AWS Secrets Manager (`store: 'secrets-manager'`, auto-rotation).
+
+**Framework-neutral by design (decoupling).** The secret *mechanism* in `@aws-blocks/hosting` carries no Blocks branding: it defaults to a neutral `/hosting/secrets` prefix (`DEFAULT_SECRET_PARAMETER_PREFIX` — must not start with `aws`/`ssm`, which SSM reserves) and a neutral `HOSTING_SECRET_PARAM_` env prefix, and `secretParameterName(key, prefix?)` takes an injectable namespace. Blocks pins its own `/blocks/secrets` namespace in `@aws-blocks/core` (`blocksSecretParameterName`, `BLOCKS_SECRET_PARAMETER_PREFIX`), so Blocks users see **no change** while a non-Blocks consumer (a plain framework app, or a future standalone hosting package) never inherits Blocks paths. This keeps `@aws-blocks/hosting` a zero-`@aws-blocks/*`-deps leaf and makes a future extraction of the secret engine into a standalone package a mechanical move rather than a breaking SSM-path migration (which is deliberately deferred to that extraction).
 
 Path convention for Blocks is centralized in `blocksSecretParameterName()` (`/blocks/secrets/<KEY>`), alongside the existing `/blocks/{stage}/db-connection-string`. Backward compatible: `new Hosting(...)` keeps working for plain config and runtime secrets; only synth-time secrets require `Hosting.create()`.
