@@ -150,7 +150,6 @@ function spawnDevServer(options: {
     const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
       cwd: APP_ROOT,
       stdio: 'pipe',
-      detached: true,
       env: {
         ...process.env,
         ...env,
