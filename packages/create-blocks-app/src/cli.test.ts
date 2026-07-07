@@ -46,14 +46,8 @@ describe('create-blocks-app CLI argument parsing', () => {
   });
 
   it('--help includes template descriptions', () => {
-    // Guards the filesystem-driven catalog: if template discovery breaks or a
-    // template's `blocksTemplateDescription` disappears, --help output will no
-    // longer include the canonical description strings and this test fails.
     const result = run(['--help']);
     assert.strictEqual(result.exitCode, 0);
-    // "default" template's canonical description substring. Pinned to a stable
-    // fragment so wording tweaks don't require test churn but a missing
-    // description does.
     assert.match(
       result.stdout,
       /default\s+Vite \+ lit-html frontend with auth/,
@@ -96,11 +90,23 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.doesNotMatch(result.stderr, /ENOENT/);
   });
 
+  it('a template folder missing package.json is rejected as unknown, not crashed with ENOENT', () => {
+    // Latent-bug guard: a folder under templates/ with no package.json is shown
+    // in --help but excluded from validation, so selecting it fails cleanly
+    // instead of throwing ENOENT on the later template version read.
+    const brokenDir = join(__dirname, '../templates', '__broken_test_template__');
+    mkdirSync(brokenDir, { recursive: true });
+    try {
+      const result = run(['my-app', '--template', '__broken_test_template__', '--skip-install']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /Unknown template "__broken_test_template__"/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(brokenDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('--template amplify on a fresh dir exits 1 with a helpful message', () => {
-    // amplify is auto-selected when an existing Amplify Gen 2 project is
-    // detected — it's not scaffoldable as a fresh app. The CLI should
-    // reject the fresh-scaffold path up front rather than crashing partway
-    // through the file copy on missing template contents.
     const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-fresh-'));
     try {
       const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);

@@ -133,6 +133,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ## Templates
 
+Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `amplify`, `demo`.
+
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
 ```bash

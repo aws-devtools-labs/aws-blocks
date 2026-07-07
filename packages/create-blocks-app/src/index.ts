@@ -198,6 +198,12 @@ async function addBlocksWorkspace(targetDir: string, options: {
 // two fields. The CLI's --help, validation, and error messages all pick it up
 // automatically — no other code changes required.
 //
+// An optional `blocksTemplateOverlayOnly: true` marks a template as an overlay
+// that's auto-selected when the CLI detects a matching existing project (e.g.
+// `amplify`) rather than a scaffoldable fresh-app starter; `createFreshProject`
+// rejects it up front. A folder whose package.json can't be read is still shown
+// in --help (flagged) but excluded from `--template` validation.
+//
 // Display order below is preserved from the previous hardcoded list so that
 // `--help` reads in the intended progression (default → bare → richer variants
 // → framework variants → overlays → demos). New templates default to
@@ -206,6 +212,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
 type TemplateInfo = {
   name: string;
   description: string;
+  valid: boolean;
+  overlayOnly: boolean;
 };
 
 const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
@@ -229,6 +237,8 @@ async function loadTemplateCatalog(): Promise<TemplateInfo[]> {
         description: typeof pkg.blocksTemplateDescription === 'string'
           ? pkg.blocksTemplateDescription
           : '(no description — add `blocksTemplateDescription` to this template\'s package.json)',
+        valid: true,
+        overlayOnly: pkg.blocksTemplateOverlayOnly === true,
       });
     } catch {
       // Template folder without a readable package.json — surface it so it's
@@ -236,6 +246,8 @@ async function loadTemplateCatalog(): Promise<TemplateInfo[]> {
       discovered.push({
         name: entry.name,
         description: '(no package.json — template metadata missing)',
+        valid: false,
+        overlayOnly: false,
       });
     }
   }
@@ -256,7 +268,7 @@ async function loadTemplateCatalog(): Promise<TemplateInfo[]> {
 
 async function validateTemplateName(templateName: string): Promise<void> {
   const catalog = await loadTemplateCatalog();
-  const names = catalog.map(t => t.name);
+  const names = catalog.filter(t => t.valid).map(t => t.name);
   if (!names.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
     console.error(`Available templates: ${names.join(', ')}`);
@@ -269,23 +281,23 @@ async function validateTemplateName(templateName: string): Promise<void> {
 async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
   await validateTemplateName(templateName);
 
-  // The `amplify` template is not a scaffoldable starter — it's an overlay
-  // auto-selected when the CLI detects an existing Amplify Gen 2 project
-  // (see `hasAmplify()` on `amplify/backend.ts`). It ships only
-  // `amplify-blocks.ts` + the shared `aws-blocks/` snippet directory, NOT
-  // a full standalone project (no `src/`, no `index.html`, no `gitignore`).
-  // Attempting `createFreshProject` with `--template amplify` would fail
-  // partway through the copy (at the `rename(gitignore, .gitignore)` step
-  // among other missing files). Reject up front with a helpful message.
-  if (templateName === 'amplify') {
-    console.error('Error: The `amplify` template is auto-selected when the CLI detects');
-    console.error('an existing Amplify Gen 2 project (an `amplify/backend.ts` in the');
-    console.error('target directory). It cannot be scaffolded as a fresh app.');
+  // Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
+  // are auto-selected when the CLI finds a matching existing project and are
+  // flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
+  // overlay snippet — not a full standalone project (no `src/`, no `index.html`,
+  // no `gitignore`) — so a fresh scaffold would fail partway through the copy.
+  // Reject up front. Keying off the catalog flag (not a hardcoded name) means a
+  // new overlay template needs no change here — just the flag in its package.json.
+  const overlayEntry = (await loadTemplateCatalog()).find(t => t.name === templateName);
+  if (overlayEntry?.overlayOnly) {
+    console.error(`Error: The \`${templateName}\` template is an overlay that's auto-selected`);
+    console.error('when the CLI detects a compatible existing project. It cannot be');
+    console.error('scaffolded as a fresh app.');
     console.error('');
     console.error('To scaffold a fresh Blocks app, choose a different template:');
     console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
     console.error('');
-    console.error('To integrate Blocks into an existing Amplify project, run this from');
+    console.error('To integrate Blocks into an existing project, run this from');
     console.error('the project root:');
     console.error('  npx @aws-blocks/create-blocks-app');
     process.exit(1);
