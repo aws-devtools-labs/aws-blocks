@@ -1,16 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Strands is imported for types only; its model provider classes (BedrockModel,
-// OpenAIModel) are loaded lazily inside createStrandsModel() so this module — reached
-// eagerly via agent.ts — does not pull the Strands SDK onto the load path of apps
-// that never instantiate an agent. See loadStrands() in agent.ts and issue #153.
+// Strands runtime is loaded lazily inside createStrandsModel(); only types are
+// imported here. See loadStrands() in agent.ts and issue #153.
 import type { Model, BaseModelConfig } from '@strands-agents/sdk';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-// `./providers/canned` and `./providers/throwing` are NOT imported statically: their
-// classes `extend` Strands' `Model`, so importing them evaluates `@strands-agents/sdk`
-// at module-load time. They are loaded lazily inside createStrandsModel() to keep the
-// Strands SDK off the load path of apps that never instantiate an agent (issue #153).
+// `./providers/canned` and `./providers/throwing` extend Strands' `Model`, so importing
+// them would evaluate `@strands-agents/sdk` at load time — hence they're also loaded
+// lazily inside createStrandsModel(). See issue #153.
 import type { ModelConfig } from './types.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 

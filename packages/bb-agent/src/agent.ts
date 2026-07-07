@@ -9,12 +9,8 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-// `@strands-agents/sdk` is imported for types only. Its runtime values (Agent,
-// tool, SessionManager, events, ConversationManagers) are loaded lazily via
-// loadStrands() so that merely importing the Agent BB — which the @aws-blocks/blocks
-// umbrella re-exports eagerly — does not pull the Strands SDK (and its transitive
-// @modelcontextprotocol/sdk / @opentelemetry/api runtime deps) into apps that never
-// instantiate an agent. See loadStrands().
+// Runtime values from `@strands-agents/sdk` are deferred to loadStrands(); only types
+// are imported here (erased at compile time). See loadStrands() / issue #153.
 import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
 import { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
@@ -51,7 +47,11 @@ const TOOL_CONTEXT_KEY = '__bbAgentToolContext';
  */
 let strandsModulePromise: Promise<typeof import('@strands-agents/sdk')> | undefined;
 function loadStrands(): Promise<typeof import('@strands-agents/sdk')> {
-	strandsModulePromise ??= import('@strands-agents/sdk');
+	strandsModulePromise ??= import('@strands-agents/sdk').catch((err) => {
+		// Don't cache a rejected import — clear the slot so a later call can retry.
+		strandsModulePromise = undefined;
+		return Promise.reject(err);
+	});
 	return strandsModulePromise;
 }
 
