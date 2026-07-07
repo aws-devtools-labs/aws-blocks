@@ -23,6 +23,8 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 
 // @public (undocumented)
 export interface AgentConfig<TContext = DefaultToolContext> {
+    agentcoreAssetPath?: string;
+    auth?: unknown;
     // Warning: (ae-forgotten-export) The symbol "ConversationManagerConfig" needs to be exported by the entry point index.aws.d.ts
     //
     // (undocumented)
@@ -54,8 +56,10 @@ export interface AgentCoreStreamResult {
     sessionId: string;
     toJSON(): {
         runtimeArn: string;
+        wsUrl: string;
         sessionId: string;
     };
+    wsUrl: string;
 }
 
 // @public

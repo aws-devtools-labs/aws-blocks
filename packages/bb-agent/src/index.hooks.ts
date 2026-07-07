@@ -26,6 +26,15 @@ import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
 
+// Browser WebSocket transport for streaming directly from the AgentCore Runtime on AWS.
+// Re-exported here so apps get it from the same `@aws-blocks/bb-agent/client` entry as useChat.
+export {
+	createAgentCoreWsTransport,
+	buildBearerSubprotocols,
+	type AgentCoreWsEndpoint,
+	type AgentCoreWsTurn,
+} from './ws-transport.js';
+
 /** A message in the conversation (for UI rendering). */
 export interface ChatMessage {
 	id: string;
