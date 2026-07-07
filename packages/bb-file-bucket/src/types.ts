@@ -23,10 +23,16 @@ export interface FileBucketOptions {
 	 * CDK's default applies (RETAIN — the bucket and its contents are
 	 * preserved on `cdk destroy`).
 	 *
-	 * Pass `'destroy'` for sandbox / ephemeral stacks where the bucket
-	 * should be dropped on teardown. This also enables `autoDeleteObjects`
-	 * so CloudFormation can empty the bucket before deletion — required
-	 * since S3 rejects DELETE on a non-empty bucket.
+	 * Pass `'destroy'` to drop the bucket on teardown (`RemovalPolicy.DESTROY`).
+	 * `autoDeleteObjects` (which empties the bucket before deletion) is enabled
+	 * **only in sandbox mode**. In a prod stack, `'destroy'` sets DESTROY but
+	 * does NOT auto-empty — S3 rejects deleting a non-empty bucket, so a
+	 * populated prod bucket is preserved rather than silently wiped.
+	 *
+	 * Why sandbox-only: CDK implements `autoDeleteObjects` via a hidden
+	 * `Custom::S3AutoDeleteObjects` Lambda whose delete behavior stack-level
+	 * retention Aspects (`RemovalPolicies.of(stack).retain()`) cannot override.
+	 * Keeping it out of prod stacks ensures those Aspects remain effective.
 	 *
 	 * Pass `'retain'` to set the policy explicitly (identical to omitting
 	 * it today, but robust against stack-layer policy overrides).
