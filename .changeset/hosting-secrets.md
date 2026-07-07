@@ -2,6 +2,7 @@
 "@aws-blocks/hosting": minor
 "@aws-blocks/core": minor
 "@aws-blocks/pipeline": minor
+"@aws-blocks/create-blocks-app": patch
 ---
 
 Add `secret()` support to hosting for self-hosted deployments.
