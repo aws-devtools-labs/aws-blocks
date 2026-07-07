@@ -1,0 +1,30 @@
+{
+  "name": "bb-test-compute-ecs-smoke",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Smoke test app: Blocks backend on ECS Fargate via EcsFargateCompute",
+  "workspaces": [
+    "aws-blocks"
+  ],
+  "scripts": {
+    "dev": "tsx aws-blocks/scripts/server.ts",
+    "test": "echo 'Smoke tests run via test:e2e:local and test:e2e:sandbox'",
+    "test:e2e:local": "tsx test/local.test.ts",
+    "sandbox:deploy": "tsx test/sandbox-deploy.ts aws-blocks/index.cdk.ts",
+    "sandbox:destroy": "tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/compute-ecs": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0",
+    "aws-cdk-lib": "2.257.0",
+    "constructs": "^10.6.0"
+  }
+}
