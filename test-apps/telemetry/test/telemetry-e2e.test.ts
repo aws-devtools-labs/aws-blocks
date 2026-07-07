@@ -125,7 +125,7 @@ function runCommand(
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
 
     const timer = globalThis.setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch {}
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
     }, timeoutMs);
 
     child.on('close', (code) => {
@@ -150,6 +150,7 @@ function spawnDevServer(options: {
     const child = spawn('npx', ['tsx', 'aws-blocks/scripts/server.ts', `--telemetry-file=${telemetryFile}`], {
       cwd: APP_ROOT,
       stdio: 'pipe',
+      detached: true,
       env: {
         ...process.env,
         ...env,
@@ -161,7 +162,7 @@ function spawnDevServer(options: {
     });
 
     const timeout = globalThis.setTimeout(() => {
-      try { child.kill('SIGTERM'); } catch {}
+      try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
       reject(new Error(`Dev server timeout.\nstdout: ${output.stdout}\nstderr: ${output.stderr}`));
     }, 45_000);
 
@@ -183,9 +184,10 @@ function spawnDevServer(options: {
 
 function killProcess(proc: ChildProcess): void {
   try {
-    proc.kill('SIGTERM');
-    // Give it a moment to shut down gracefully, then force-kill
-    setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 2000);
+    // Process is detached (own group) — kill the group directly with SIGKILL.
+    // This is safe because detached means it's NOT in the test runner's group.
+    if (proc.pid) { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} }
+    proc.kill('SIGKILL');
     proc.removeAllListeners();
   } catch {}
 }
