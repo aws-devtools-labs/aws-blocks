@@ -314,9 +314,10 @@ jobs:
       # (cycleCount, accumulatedUsage, per-tool toolUsage/successRate/callCount)
       # written by step 2, so a run's tool calls + token spend can be inspected
       # post-hoc. On a wall-clock timeout no trace is written (step 2 emits it only
-      # on normal completion), so this upload simply finds no file. if: always() +
-      # if-no-files-found: ignore mirrors the other uploads so it never turns the
-      # cell red (e.g. when the agent step never ran, so neither file exists).
+      # on normal completion), so this upload simply finds no file. continue-on-error:
+      # true guarantees even a transient upload-artifact API/network failure never turns
+      # the cell red; if-no-files-found: ignore additionally skips the missing-file case
+      # (e.g. when the agent step never ran, so neither file exists).
       - name: 6b. Upload trace
         if: always()
         continue-on-error: true
