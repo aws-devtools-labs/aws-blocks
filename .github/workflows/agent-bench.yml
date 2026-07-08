@@ -32,6 +32,58 @@ permissions:
   contents: read
 
 jobs:
+  # Build + pack the whole monorepo to a local npm registry ONCE per run, then
+  # hand the packed dist-registry/ to every bench cell as an artifact. Before
+  # this, each of the 10 matrix cells rebuilt all 26 packages (`npm run build`,
+  # ~150s) and re-packed the tarballs (`npm run publish:dry-run`) inside its own
+  # "1. Init bench-app" step — the same monorepo build/pack repeated 10× per run.
+  # Scaffolded apps resolve @aws-blocks/* from the packed .tgz in dist-registry/
+  # (served on :4873), NOT from workspace symlinks, so a registry built once here
+  # is byte-identical and fully portable to every cell — every cell now tests the
+  # exact same packages. Mirrors the proven build-once handoff in pr-checks.yml
+  # (build-and-test-local uploads dist-registry; e2e-templates downloads it and
+  # runs test-templates-e2e.sh --skip-publish). Pure build: no OIDC/AWS, no
+  # Bedrock — contents:read only.
+  build-blocks:
+    name: build blocks (pack dist-registry once)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # Same npm transient-blip hardening as the bench/selfcheck jobs (repo
+      # convention) so a registry ECONNRESET during npm ci is retried, not fatal.
+      NPM_CONFIG_FETCH_RETRIES: '5'
+      NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
+      NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      # `npm run build` is topology-aware (runs prebuild hooks in dependency
+      # order); `publish:dry-run` packs every package to dist-registry/ as .tgz.
+      # This is the ONE build+pack that used to run redundantly in all 10 cells.
+      - name: Build + pack to dist-registry
+        run: |
+          npm run build
+          npm run publish:dry-run
+      - name: Upload dist-registry
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dist-registry
+          path: dist-registry/
+          retention-days: 1
+          # Fail loudly if the pack produced nothing — every cell depends on this
+          # artifact, so an empty registry must red build-blocks rather than
+          # silently ship 10 cells that fall back to building it themselves.
+          if-no-files-found: error
+
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
@@ -46,6 +98,12 @@ jobs:
       id-token: write
       contents: read
     environment: publish
+    # Gate every cell on the single upstream build+pack: cells download the
+    # dist-registry/ it produces (step "1a" below) instead of each rebuilding the
+    # monorepo. If the monorepo build genuinely breaks, build-blocks fails and
+    # the cells skip — one loud failure instead of 10 cells each burning ~150s to
+    # fail the same build (matches how pr-checks.yml reds a PR on a real break).
+    needs: build-blocks
     strategy:
       fail-fast: false
       # Cap concurrent cells so the 10-cell matrix fans out in waves instead of
@@ -116,7 +174,12 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with: { node-version-file: '.nvmrc' }
+        with:
+          # cache: npm — this bench job was the only one missing it; the per-cell
+          # root `npm ci` now restores from the Actions npm cache instead of a
+          # cold full-monorepo fetch on every cell.
+          node-version-file: '.nvmrc'
+          cache: npm
 
       - id: npmci
         run: npm ci
@@ -161,6 +224,23 @@ jobs:
           # before analyze-cell on slow cells. If the role's max session duration
           # is lower than this, AWS clamps to whatever the role allows.
           role-duration-seconds: 7200
+
+      # BUILD-ONCE: pull the dist-registry/ that the upstream build-blocks job
+      # packed once, so "1. Init bench-app" below can SKIP the ~150s monorepo
+      # `npm run build` + `npm run publish:dry-run` (its guard reuses this dir —
+      # see scripts/agent-bench/steps/1-init-bench-app.sh). Lands at repo-root
+      # dist-registry/, exactly where serve-local-registry.ts serves from and
+      # where the init guard looks. continue-on-error: a transient download blip
+      # can NEVER red the cell — if the dir is missing the init script falls back
+      # to building the registry itself (correct, just slower). Gated on the same
+      # oidc.outcome as init so it doesn't run when the cell is already skipping.
+      - name: 1a. Download prebuilt dist-registry
+        continue-on-error: true
+        if: steps.oidc.outcome == 'success'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: dist-registry
+          path: dist-registry/
 
       - name: 1. Init bench-app
         id: init
