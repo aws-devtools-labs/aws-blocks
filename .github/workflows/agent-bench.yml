@@ -271,6 +271,7 @@ jobs:
 
       - name: 5. Upload result
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
@@ -286,10 +287,13 @@ jobs:
       # could not be inspected post-run. Excludes deps/build output (node_modules,
       # dist), VCS (.git), the local Blocks sandbox (.blocks-sandbox), and anything
       # credential-shaped (.env*, *.pem, .aws) so NO secret is ever archived.
-      # if: always() + if-no-files-found: ignore mirrors the result upload, so it
-      # never turns the cell red (e.g. when init failed before bench-app exists).
+      # continue-on-error: true guarantees even a transient upload-artifact API/
+      # network failure never turns the cell red; if-no-files-found: ignore
+      # additionally skips the missing-file case (e.g. when init failed before
+      # bench-app exists).
       - name: 6. Upload source
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
@@ -315,6 +319,7 @@ jobs:
       # cell red (e.g. when the agent step never ran, so neither file exists).
       - name: 6b. Upload trace
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
