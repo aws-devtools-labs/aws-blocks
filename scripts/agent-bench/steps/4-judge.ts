@@ -293,12 +293,13 @@ process.exit(0);
 // — that clean "none found" is the enforce-able score-0 signal for the judge.
 function collectBlocksImports(workspace: string): string {
 	try {
-		// The --exclude-dir set MUST stay in sync with STAGE_EXCLUDE_DIRS above —
-		// the grep runs over the staged source-only copy, so blinding by absence
-		// and this scan must agree on what's off-limits. Globs are quoted so the
-		// shell can't expand them against the cwd before grep sees them.
+		// The --exclude-dir flags are DERIVED from STAGE_EXCLUDE_DIRS above (one
+		// source of truth) — the grep runs over the staged source-only copy, so
+		// blinding by absence and this scan agree on what's off-limits. Globs are
+		// quoted so the shell can't expand them against the cwd before grep sees them.
+		const excludeArgs = [...STAGE_EXCLUDE_DIRS].map((d) => `--exclude-dir=${d}`).join(' ');
 		const out = execSync(
-			'grep -rn "@aws-blocks/" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=.blocks-sandbox --exclude-dir=bench-tests | grep -Ew "import|from|require"',
+			`grep -rn "@aws-blocks/" . --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.mjs" --include="*.cjs" ${excludeArgs} | grep -Ew "import|from|require"`,
 			{ cwd: workspace, encoding: 'utf-8', maxBuffer: 4 * 1024 * 1024 },
 		).trim();
 		if (!out) return '(no @aws-blocks imports found in the workspace source)';

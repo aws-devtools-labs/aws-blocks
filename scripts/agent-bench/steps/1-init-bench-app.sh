@@ -30,6 +30,9 @@ npm run publish:dry-run
 
 npx tsx scripts/publish/serve-local-registry.ts &
 echo $! > /tmp/registry.pid
+# Reap the local registry daemon when this step exits so it never outlives the
+# script (a leaked daemon would hold :4873 and fail a re-run on a reused runner).
+trap 'kill "$(cat /tmp/registry.pid)" 2>/dev/null || true' EXIT
 registry_up=0
 for i in $(seq 1 30); do
   if curl -sf http://localhost:4873/registry/@aws-blocks/blocks > /dev/null; then

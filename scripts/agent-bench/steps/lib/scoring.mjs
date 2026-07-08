@@ -71,6 +71,10 @@ export function classifyCell(result) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
 	}
 	// The agent failing to produce a gradeable app is a real fail, not a flake.
+	// Accepted limitation: an OOM/SIGKILL of the agent at 2-agent is
+	// indistinguishable from a genuine agent timeout — both surface only as GHA
+	// outcome `failure` here — so both classify as agent_fail (composite 0). This
+	// is accepted because such infra kills at step 2 are expected to be rare.
 	if (failedAt === AGENT_FAIL_AT) {
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
 	}

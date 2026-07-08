@@ -7,7 +7,10 @@ name: Agent Bench
 #
 # Required configuration (publish environment):
 #   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
-#                           on the bench model, plus s3:PutObject on bench/* in
+#                           AND bedrock:Converse on the bench model (the builder +
+#                           judge stream via Strands => InvokeModelWithResponseStream;
+#                           the best-effort analysis steps call `aws bedrock-runtime
+#                           converse` => Converse), plus s3:PutObject on bench/* in
 #                           the registry bucket (per-cell archive + the commit-
 #                           keyed baseline aggregate + the Athena NDJSON under
 #                           bench/athena/*, all covered by the one bench/* grant).

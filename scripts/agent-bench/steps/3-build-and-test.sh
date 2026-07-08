@@ -206,7 +206,7 @@ if ! npx playwright install chromium > "${CELL_TMP}/pw-install.log" 2>&1; then
 fi
 echo "playwright_installed=true" >> "$GITHUB_OUTPUT"
 
-mkdir -p bench-tests
+rm -rf bench-tests && mkdir -p bench-tests
 cp "$TASK_DIR/test.spec.ts" bench-tests/task.spec.ts
 cat > playwright.config.ts <<'EOF'
 import { defineConfig } from '@playwright/test';
@@ -259,24 +259,24 @@ export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${TASK:-x}-$(dat
 BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee "${CELL_TMP}/pw.log" || true
 
 if [ -f "$PW_RESULTS_JSON" ]; then
-  PW_RESULTS_JSON="$PW_RESULTS_JSON" node -e "
-    const fs = require('fs');
-    const stats = JSON.parse(fs.readFileSync(process.env.PW_RESULTS_JSON, 'utf-8')).stats ?? {};
-    // Assert the field exists before the ?? fallback — a missing 'expected'
+  PW_RESULTS_JSON="$PW_RESULTS_JSON" node -e '
+    const fs = require("fs");
+    const stats = JSON.parse(fs.readFileSync(process.env.PW_RESULTS_JSON, "utf-8")).stats ?? {};
+    // Assert the field exists before the ?? fallback — a missing "expected"
     // means an unexpected reporter shape, not zero passes. Fail loudly so the
     // pessimistic defaults are retained instead of silently reporting 0/0.
     if (stats.expected === undefined) {
-      console.error('stats.expected missing — unexpected Playwright reporter shape');
+      console.error("stats.expected missing — unexpected Playwright reporter shape");
       process.exit(1);
     }
     const passed = stats.expected + (stats.flaky ?? 0);
     const failed = stats.unexpected ?? 0;
     // NB: tests_total INCLUDES skipped (for display); the scoring denominator test_rate in lib/scoring.mjs EXCLUDES skipped (passed+failed only).
     const total = passed + failed + (stats.skipped ?? 0);
-    console.log('tests_passed='+passed);
-    console.log('tests_failed='+failed);
-    console.log('tests_total='+total);
-  " >> "$GITHUB_OUTPUT" || echo "::warning::pw-results.json parse failed or unexpected shape; defaults retained"
+    console.log("tests_passed="+passed);
+    console.log("tests_failed="+failed);
+    console.log("tests_total="+total);
+  ' >> "$GITHUB_OUTPUT" || echo "::warning::pw-results.json parse failed or unexpected shape; defaults retained"
 else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
