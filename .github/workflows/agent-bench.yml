@@ -111,7 +111,7 @@ jobs:
       # tripped the account-wide tokens-per-minute (TPM) ceiling and failed 6/10
       # cells in run 28967475174 with "ModelError: Too many tokens". 5 keeps
       # throughput high (two waves) while halving peak concurrent token demand;
-      # combined with the per-index startup stagger (BENCH_CELL_INDEX below) the
+      # combined with the within-wave startup stagger (BENCH_CELL_INDEX below) the
       # first calls within each wave are also spread out. fail-fast:false so one
       # cell never cancels the rest.
       max-parallel: 5
@@ -160,13 +160,18 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
       # Deterministic startup stagger for the builder's FIRST Bedrock call (see
       # scripts/agent-bench/steps/2-agent-run.ts). BENCH_CELL_INDEX is the 0-based
-      # matrix job index; the builder sleeps index * BENCH_STAGGER_STEP_SEC seconds
-      # before its first InvokeModelWithResponseStream, so a concurrent wave (see
-      # max-parallel above) spreads its opening calls over ~0–28s instead of
-      # hammering the account TPM ceiling in one instant. Tunable here without a
-      # code change; set BENCH_STAGGER_STEP_SEC='0' to disable.
+      # matrix job index; the builder sleeps (index mod BENCH_STAGGER_WAVE_SIZE) *
+      # BENCH_STAGGER_STEP_SEC s before its first InvokeModelWithResponseStream.
+      # Staggering by the WITHIN-WAVE slot (not the raw 0–9 index) keeps the delay
+      # bounded: with max-parallel=5 each wave fans its opening calls over slots
+      # 0–4 ⇒ ~0–28s, instead of the second wave (indices 5–9) sleeping 35–63s on
+      # top of already waiting for a runner slot. BENCH_STAGGER_WAVE_SIZE MUST
+      # mirror max-parallel above (GitHub Actions expressions can't do modulo, so
+      # the wrap happens in the builder). Tunable here without a code change; set
+      # BENCH_STAGGER_STEP_SEC='0' to disable the stagger entirely.
       BENCH_CELL_INDEX: ${{ strategy.job-index }}
       BENCH_STAGGER_STEP_SEC: '7'
+      BENCH_STAGGER_WAVE_SIZE: '5' # keep in sync with strategy.max-parallel above
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:

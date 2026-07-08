@@ -193,18 +193,26 @@ process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 // account-wide Bedrock tokens-per-minute (TPM) ceiling — the burst that surfaced
 // as "ModelError: Too many tokens" across 6/10 cells in run 28967475174. Keyed to
 // the matrix job index (BENCH_CELL_INDEX = strategy.job-index in the workflow) so
-// the fan-out is DETERMINISTIC and reproducible, not random. STAGGER_STEP_SEC
-// (env-tunable) is the per-index spacing: with the workflow's max-parallel=5, each
-// wave of 5 cells fans out over ~0–4×STEP s, and because consecutive job indices
-// are always STEP s apart, two cells never start their first call together even
-// across waves. Unset index (local single runs) ⇒ 0 ⇒ no delay.
+// the fan-out is DETERMINISTIC and reproducible, not random.
+//
+// We stagger by the WITHIN-WAVE slot — cellIndex mod wave size — not the raw
+// 0..N-1 index. With max-parallel=5, raw-index staggering would make the second
+// wave (indices 5–9) sleep 35–63s ON TOP of already having waited for a runner
+// slot; keying to (index % waveSize) instead bounds every cell to slots 0..4 ⇒
+// 0,STEP,2·STEP,3·STEP,4·STEP = ~0–28s at the default STEP=7, and every wave
+// reuses that same bounded window. BENCH_STAGGER_WAVE_SIZE mirrors the workflow's
+// max-parallel (GitHub Actions expressions can't do modulo, so the wrap happens
+// here). Wave size unset (local runs) ⇒ no wrap; index 0 ⇒ slot 0 ⇒ no delay.
 const STAGGER_STEP_SEC = Number(process.env.BENCH_STAGGER_STEP_SEC ?? '7');
+const STAGGER_WAVE_SIZE = Number(process.env.BENCH_STAGGER_WAVE_SIZE ?? '0');
 const cellIndex = Number.parseInt(process.env.BENCH_CELL_INDEX ?? '0', 10);
+const staggerSlot =
+	Number.isFinite(cellIndex) && cellIndex > 0 && STAGGER_WAVE_SIZE > 0 ? cellIndex % STAGGER_WAVE_SIZE : cellIndex;
 const staggerMs =
-	Number.isFinite(cellIndex) && cellIndex > 0 && STAGGER_STEP_SEC > 0 ? cellIndex * STAGGER_STEP_SEC * 1000 : 0;
+	Number.isFinite(staggerSlot) && staggerSlot > 0 && STAGGER_STEP_SEC > 0 ? staggerSlot * STAGGER_STEP_SEC * 1000 : 0;
 if (staggerMs > 0) {
 	process.stderr.write(
-		`[bench] startup stagger: cell index ${cellIndex} → sleeping ${Math.round(staggerMs / 1000)}s before first model call\n`,
+		`[bench] startup stagger: cell index ${cellIndex} (wave slot ${staggerSlot}/${STAGGER_WAVE_SIZE || '∞'}) → sleeping ${Math.round(staggerMs / 1000)}s before first model call\n`,
 	);
 	await sleep(staggerMs);
 }
