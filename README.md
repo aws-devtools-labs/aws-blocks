@@ -88,3 +88,4 @@ Contributions, feedback, and questions are welcome.
 ## License
 
 Apache-2.0
+<!-- bench baseline comparison smoke test (no-op); safe to revert -->
