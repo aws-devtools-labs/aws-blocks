@@ -16,12 +16,7 @@ import {
   type DevServerPidRecord,
   type ReclaimResult,
 } from './dev-server.js';
-import {
-  findListenerPids,
-  killListenerTree,
-  collectSelfAndAncestorPids,
-  readParentPid,
-} from './process-tree.js';
+import { findListenerPids, killListenerTree } from './process-tree.js';
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -288,23 +283,23 @@ describe('findListenerPids — lsof/netstat listener discovery', () => {
     const pids = findListenerPids(3100, (cmd, args) => {
       calls.push([cmd, args]);
       return { stdout: '4242\n4243\n' };
-    }, 'linux', new Set<number>());
+    }, 'linux');
     assert.deepStrictEqual(pids, [4242, 4243]);
     assert.deepStrictEqual(calls, [['lsof', ['-ti', 'tcp:3100', '-sTCP:LISTEN']]]);
   });
 
   it('dedups PIDs and drops non-signalable pids (<= 1)', () => {
-    const pids = findListenerPids(3000, () => ({ stdout: '5\n5\n1\n0\n7\n' }), 'linux', new Set<number>());
+    const pids = findListenerPids(3000, () => ({ stdout: '5\n5\n1\n0\n7\n' }), 'linux');
     assert.deepStrictEqual(pids, [5, 7]);
   });
 
   it('returns [] when nothing is listening (empty stdout / non-zero exit)', () => {
-    assert.deepStrictEqual(findListenerPids(3000, () => ({ stdout: '', status: 1 }), 'linux', new Set<number>()), []);
-    assert.deepStrictEqual(findListenerPids(3000, () => ({ stdout: null }), 'linux', new Set<number>()), []);
+    assert.deepStrictEqual(findListenerPids(3000, () => ({ stdout: '', status: 1 }), 'linux'), []);
+    assert.deepStrictEqual(findListenerPids(3000, () => ({ stdout: null }), 'linux'), []);
   });
 
   it('returns [] when the discovery command cannot run (never throws)', () => {
-    assert.deepStrictEqual(findListenerPids(3000, () => { throw new Error('ENOENT'); }, 'linux', new Set<number>()), []);
+    assert.deepStrictEqual(findListenerPids(3000, () => { throw new Error('ENOENT'); }, 'linux'), []);
   });
 
   it('parses LISTENING rows for the port from `netstat -ano` on Windows', () => {
@@ -314,25 +309,8 @@ describe('findListenerPids — lsof/netstat listener discovery', () => {
       '  TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       9001', // different port
       '  TCP    127.0.0.1:3100         127.0.0.1:55123        ESTABLISHED     8888', // not listening
     ].join('\r\n');
-    const pids = findListenerPids(3100, () => ({ stdout }), 'win32', new Set<number>());
+    const pids = findListenerPids(3100, () => ({ stdout }), 'win32');
     assert.deepStrictEqual(pids, [4242]);
-  });
-
-  it('drops the current process and its ancestors (self/ancestor guard) on POSIX', () => {
-    // A listener that resolves to us or a forebear must never be returned:
-    // reclaiming it would group-kill the process tree running the dev server.
-    const guard = new Set<number>([4242, 9999]);
-    const pids = findListenerPids(3100, () => ({ stdout: '4242\n4243\n9999\n' }), 'linux', guard);
-    assert.deepStrictEqual(pids, [4243]);
-  });
-
-  it('drops guarded PIDs on Windows too', () => {
-    const stdout = [
-      '  TCP    0.0.0.0:3100           0.0.0.0:0              LISTENING       4242',
-      '  TCP    0.0.0.0:3100           0.0.0.0:0              LISTENING       4243',
-    ].join('\r\n');
-    const pids = findListenerPids(3100, () => ({ stdout }), 'win32', new Set<number>([4242]));
-    assert.deepStrictEqual(pids, [4243]);
   });
 });
 
@@ -350,53 +328,6 @@ describe('killListenerTree — reclaim reuses the process-group kill', () => {
     killListenerTree(4242, 'SIGKILL', 'win32', () => { groupCalled = true; }, (pid) => { winPids.push(pid); return true; });
     assert.strictEqual(groupCalled, false);
     assert.deepStrictEqual(winPids, [4242]);
-  });
-});
-
-// ── readParentPid / collectSelfAndAncestorPids — self+ancestor guard set ──────
-describe('readParentPid — parent PID from /proc/<pid>/stat (with ps fallback)', () => {
-  it('parses ppid (field 4) from a /proc stat line whose comm contains spaces/parens', () => {
-    // comm = "(tsx watch (dev))" — the parens/spaces inside comm must not shift field parsing.
-    const stat = '4242 (tsx watch (dev)) S 4200 4242 4242 0 -1 4194304 0 0';
-    assert.strictEqual(readParentPid(4242, () => stat), 4200);
-  });
-
-  it('falls back to `ps -o ppid=` when /proc is unavailable', () => {
-    const ppid = readParentPid(4242, () => null, (cmd, args) => {
-      assert.strictEqual(cmd, 'ps');
-      assert.deepStrictEqual(args, ['-o', 'ppid=', '-p', '4242']);
-      return { stdout: '  4200\n' };
-    });
-    assert.strictEqual(ppid, 4200);
-  });
-
-  it('returns null when neither /proc nor ps yield a ppid', () => {
-    assert.strictEqual(readParentPid(4242, () => null, () => { throw new Error('ENOENT'); }), null);
-    assert.strictEqual(readParentPid(4242, () => null, () => ({ stdout: '' })), null);
-  });
-});
-
-describe('collectSelfAndAncestorPids — walks the ancestry chain to init', () => {
-  it('collects self + every ancestor, stopping at pid <= 1', () => {
-    const parents: Record<number, number | null> = { 500: 400, 400: 300, 300: 1 };
-    const set = collectSelfAndAncestorPids(500, (pid) => parents[pid] ?? null);
-    assert.deepStrictEqual([...set].sort((a, b) => a - b), [300, 400, 500]);
-  });
-
-  it('is cycle-safe (a parent pointing back into the chain terminates the walk)', () => {
-    const parents: Record<number, number | null> = { 500: 400, 400: 500 };
-    const set = collectSelfAndAncestorPids(500, (pid) => parents[pid] ?? null);
-    assert.deepStrictEqual([...set].sort((a, b) => a - b), [400, 500]);
-  });
-
-  it('stops when the parent can no longer be read (returns null)', () => {
-    const set = collectSelfAndAncestorPids(500, () => null);
-    assert.deepStrictEqual([...set], [500]);
-  });
-
-  it('honours maxDepth', () => {
-    const set = collectSelfAndAncestorPids(1000, (pid) => pid - 1, 3);
-    assert.strictEqual(set.size, 3);
   });
 });
 
