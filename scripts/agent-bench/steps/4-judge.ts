@@ -23,19 +23,17 @@ import { execSync } from 'node:child_process';
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
-import {
-	Agent,
-	type AgentResult,
-	BedrockModel,
-	ContextWindowOverflowError,
-	MaxTokensError,
-	ModelError,
-	ModelThrottledError,
-	StructuredOutputError,
-} from '@strands-agents/sdk';
+import { Agent, type AgentResult, BedrockModel, StructuredOutputError } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { z } from 'zod';
 import { COMMON_DIMENSIONS, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
+import {
+	INVOKE_BACKOFF_MS,
+	INVOKE_MAX_ATTEMPTS,
+	describeModelError,
+	isRetryableModelError,
+	sleep,
+} from './lib/bedrock-retry.ts';
 import { WorkspaceSandbox, describeError, required, shellQuote } from './lib/run-shell.ts';
 import { hardCapPlan } from './lib/scoring.mjs';
 
@@ -178,12 +176,11 @@ function makeJudgeAgent(): Agent {
 	});
 }
 
-// invoke-layer retry budget: the initial attempt + up to 4 retries (5 tries
-// total), only on throttle/transient model failures (never a schema-validation
-// failure — that is a real grading outcome). Backoff is exponential with jitter;
-// the values are sized to sit comfortably inside the judge step's wall-clock cap.
-const JUDGE_MAX_ATTEMPTS = 5;
-const JUDGE_BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
+// invoke-layer retry budget (INVOKE_MAX_ATTEMPTS / INVOKE_BACKOFF_MS) and the
+// throttle/transient classifier (isRetryableModelError) + deep error describer
+// (describeModelError) are shared with the builder step — see lib/bedrock-retry.ts.
+// A schema-validation failure (StructuredOutputError) is a real grading outcome
+// and is never retried.
 
 // Evidence is intentionally omitted from the prompt — the orchestrator applies
 // the objective hard caps (build/test/scaffold) after the model returns.
@@ -204,7 +201,7 @@ const started = Date.now();
 let result: AgentResult | undefined;
 let lastErr: unknown;
 let attemptsUsed = 0;
-for (let attempt = 1; attempt <= JUDGE_MAX_ATTEMPTS; attempt++) {
+for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 	attemptsUsed = attempt;
 	try {
 		// structuredOutputSchema is the recommended Strands pattern (per
@@ -216,12 +213,12 @@ for (let attempt = 1; attempt <= JUDGE_MAX_ATTEMPTS; attempt++) {
 		break;
 	} catch (err) {
 		lastErr = err;
-		const retryable = isRetryableJudgeError(err);
+		const retryable = isRetryableModelError(err);
 		process.stderr.write(
-			`[judge] agent.invoke attempt ${attempt}/${JUDGE_MAX_ATTEMPTS} failed (${retryable ? 'throttle/transient' : 'non-retryable'}): ${describeJudgeError(err)}\n`,
+			`[judge] agent.invoke attempt ${attempt}/${INVOKE_MAX_ATTEMPTS} failed (${retryable ? 'throttle/transient' : 'non-retryable'}): ${describeModelError(err)}\n`,
 		);
-		if (!retryable || attempt >= JUDGE_MAX_ATTEMPTS) break;
-		const base = JUDGE_BACKOFF_MS[attempt - 1] ?? JUDGE_BACKOFF_MS[JUDGE_BACKOFF_MS.length - 1] ?? 5_000;
+		if (!retryable || attempt >= INVOKE_MAX_ATTEMPTS) break;
+		const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
 		const delayMs = base + Math.floor(Math.random() * base * 0.25);
 		process.stderr.write(`[judge] backing off ${Math.round(delayMs / 1000)}s before attempt ${attempt + 1}\n`);
 		await sleep(delayMs);
@@ -236,7 +233,7 @@ if (!result) {
 	mergeAndWrite(
 		{},
 		{
-			judge_error: describeJudgeError(lastErr),
+			judge_error: describeModelError(lastErr),
 			judge_error_type: isValidation ? 'schema_validation' : 'invoke_failed',
 			judge_error_attempts: attemptsUsed,
 		},
@@ -379,94 +376,6 @@ function mergeAndWrite(builder: Record<string, unknown>, judge: Record<string, u
 		// baseline missing — proceed with empty
 	}
 	writeFileSync(OUTPUT, JSON.stringify({ ...existing, ...builder, ...judge }, null, 2));
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((res) => setTimeout(res, ms));
-}
-
-// One node of an error's `cause` chain. Strands wraps the underlying AWS SDK
-// exception as `cause`, which carries the real name/$metadata we want to see.
-interface ErrorNode {
-	name?: unknown;
-	message?: unknown;
-	$fault?: unknown;
-	$metadata?: { httpStatusCode?: number; requestId?: string };
-	cause?: unknown;
-}
-
-// Walk the `cause` chain (bounded + cycle-safe) so both the throttle classifier
-// and the deep describer can inspect every wrapped layer, not just the top one.
-function errorChain(err: unknown): ErrorNode[] {
-	const out: ErrorNode[] = [];
-	const seen = new Set<unknown>();
-	let cur: unknown = err;
-	while (cur && typeof cur === 'object' && !seen.has(cur) && out.length < 6) {
-		seen.add(cur);
-		out.push(cur as ErrorNode);
-		cur = (cur as ErrorNode).cause;
-	}
-	return out;
-}
-
-// AWS exception names / HTTP statuses that mark a Bedrock failure as transient
-// (worth retrying) rather than deterministic.
-const TRANSIENT_NAME_RE =
-	/throttl|toomanyrequests|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|modelnotready|requesttimeout|timeouterror|partialresult|503|429/i;
-
-// True when a judge model-call failure is a throttle/transient class worth
-// retrying. A StructuredOutputError (model wouldn't emit a schema-valid grade)
-// is a REAL grading failure and is never retried; ContextWindowOverflowError /
-// MaxTokensError are deterministic for this input so retrying cannot help.
-function isRetryableJudgeError(err: unknown): boolean {
-	if (err instanceof StructuredOutputError) return false;
-	if (err instanceof ContextWindowOverflowError || err instanceof MaxTokensError) return false;
-	if (err instanceof ModelThrottledError) return true;
-	// A bare ModelError almost always wraps a transient mid-stream AWS exception
-	// (this is the "ModelError: [object Object]" case the deep-dive found).
-	if (err instanceof ModelError) return true;
-	// Fall back to the AWS exception name / HTTP status on the error or its cause.
-	for (const node of errorChain(err)) {
-		const name = typeof node.name === 'string' ? node.name : '';
-		if (TRANSIENT_NAME_RE.test(name)) return true;
-		const status = node.$metadata?.httpStatusCode;
-		if (typeof status === 'number' && (status === 429 || status >= 500)) return true;
-	}
-	return false;
-}
-
-// Deep error description for the judge invoke failure. The plain describeError
-// only sees the top wrapper, which for a wrapped Bedrock error is often
-// "ModelError: [object Object]" — masking the real AWS class. This surfaces each
-// layer's name, message, $fault and $metadata (httpStatusCode/requestId) so a
-// future run shows the actual throttle/transient class in result.json.
-function describeJudgeError(err: unknown): string {
-	const nodes = errorChain(err);
-	if (nodes.length === 0) return String(err);
-	return nodes
-		.map((n) => {
-			const name = typeof n.name === 'string' && n.name ? n.name : 'Error';
-			let msg: string;
-			if (typeof n.message === 'string') {
-				msg = n.message;
-			} else {
-				try {
-					msg = JSON.stringify(n.message) ?? String(n.message);
-				} catch {
-					msg = String(n.message);
-				}
-			}
-			const fault = n.$fault ? ` $fault=${String(n.$fault)}` : '';
-			const status = n.$metadata?.httpStatusCode;
-			const reqId = n.$metadata?.requestId;
-			const metaParts = [
-				typeof status === 'number' ? `httpStatusCode:${status}` : '',
-				reqId ? `requestId:${reqId}` : '',
-			].filter(Boolean);
-			const meta = metaParts.length ? ` $metadata={${metaParts.join(',')}}` : '';
-			return `${name}: ${msg}${fault}${meta}`;
-		})
-		.join(' ← caused by ');
 }
 
 function parseJsonEnv(name: string): Record<string, unknown> {

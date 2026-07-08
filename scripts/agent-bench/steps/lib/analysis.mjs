@@ -51,13 +51,15 @@ export const REGRESSION_DELTA = -5;
 // Benign fallback stored when the per-cell analysis can't be produced.
 export const FALLBACK_ANALYSIS = 'analysis unavailable';
 
-// Throttle/transient retry, mirrored from steps/4-judge.ts: initial try + up to
-// 4 backed-off retries, ONLY on a throttle/transient class (never a hard
-// AccessDenied/validation error, which fails fast).
+// Throttle/transient retry (initial try + up to 4 backed-off retries), ONLY on a
+// throttle/transient class (never a hard AccessDenied/validation error, which
+// fails fast). This is the app-level loop; the AWS CLI's own adaptive retry
+// (AWS_RETRY_MODE below) is the lower layer. Kept in sync with the shared SDK
+// classifier in steps/lib/bedrock-retry.ts (this .mjs can't import the .ts).
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 const TRANSIENT_RE =
-	/throttl|toomanyrequests|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|requesttimeout|timeout|partialresult|503|429|500/i;
+	/throttl|toomanyrequests|too many (tokens|requests)|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|requesttimeout|timeout|partialresult|503|429|500/i;
 
 // Per-cell analysis system prompt. Per the owner (Jon): what the agent built +
 // score context, and the STRUGGLES visible in the data — never a task restatement
@@ -276,7 +278,16 @@ export function bedrockConverse(args) {
 			const res = spawnSync(
 				'aws',
 				['bedrock-runtime', 'converse', '--cli-input-json', `file://${inputPath}`, '--region', region, '--output', 'json'],
-				{ encoding: 'utf-8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 },
+				{
+					encoding: 'utf-8',
+					timeout: 120_000,
+					maxBuffer: 8 * 1024 * 1024,
+					// AWS-CLI-layer adaptive retry — the CLI analog of the BedrockModel
+					// clientConfig { maxAttempts, retryMode:'adaptive' } on the SDK
+					// (builder/judge) path. Absorbs a transient throttle inside a single
+					// converse call before it surfaces to the app-level loop below.
+					env: { ...process.env, AWS_RETRY_MODE: 'adaptive', AWS_MAX_ATTEMPTS: '8' },
+				},
 			);
 			if (res.status === 0 && res.stdout) {
 				try {

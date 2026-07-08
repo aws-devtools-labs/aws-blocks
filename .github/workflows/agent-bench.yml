@@ -48,6 +48,15 @@ jobs:
     environment: publish
     strategy:
       fail-fast: false
+      # Cap concurrent cells so the 10-cell matrix fans out in waves instead of
+      # firing all 10 builder invokes at Bedrock at once — that simultaneous burst
+      # tripped the account-wide tokens-per-minute (TPM) ceiling and failed 6/10
+      # cells in run 28967475174 with "ModelError: Too many tokens". 5 keeps
+      # throughput high (two waves) while halving peak concurrent token demand;
+      # combined with the per-index startup stagger (BENCH_CELL_INDEX below) the
+      # first calls within each wave are also spread out. fail-fast:false so one
+      # cell never cancels the rest.
+      max-parallel: 5
       # One cell per (task, template) pair via an explicit include list.
       # Each task runs on the SINGLE template that pre-ships (or best exercises)
       # its Building Blocks. Together these 10 cells cover 18 Building Blocks
@@ -91,6 +100,15 @@ jobs:
       AWS_REGION: us-east-1
       TEMPLATE: ${{ matrix.template }}
       PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
+      # Deterministic startup stagger for the builder's FIRST Bedrock call (see
+      # scripts/agent-bench/steps/2-agent-run.ts). BENCH_CELL_INDEX is the 0-based
+      # matrix job index; the builder sleeps index * BENCH_STAGGER_STEP_SEC seconds
+      # before its first InvokeModelWithResponseStream, so a concurrent wave (see
+      # max-parallel above) spreads its opening calls over ~0–28s instead of
+      # hammering the account TPM ceiling in one instant. Tunable here without a
+      # code change; set BENCH_STAGGER_STEP_SEC='0' to disable.
+      BENCH_CELL_INDEX: ${{ strategy.job-index }}
+      BENCH_STAGGER_STEP_SEC: '7'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
