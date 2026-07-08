@@ -24,7 +24,6 @@ import {
   existsSync,
   rmSync,
 } from 'node:fs';
-import { createServer } from 'node:net';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -386,7 +385,6 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
   describe('command: dev', () => {
     let devProcess: ChildProcess | null = null;
-    let blocker: ReturnType<typeof createServer> | null = null;
     let tmpHome: string;
 
     afterEach(async () => {
@@ -399,7 +397,6 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         devProcess.stderr?.destroy();
         devProcess = null;
       }
-      if (blocker) { await new Promise<void>(r => blocker!.close(() => r())); blocker = null; }
       if (tmpHome) rmSync(tmpHome, { recursive: true, force: true });
     });
 
@@ -420,26 +417,28 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assertDelivered(result.output.stderr, 'dev SUCCESS');
     });
 
-    test('FAIL: port in use emits dev/FAIL with PORT_IN_USE', async () => {
+    test('FAIL: dev server fails to bind and emits dev/FAIL', async () => {
       tmpHome = createTmpDir('dev-fail');
       const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const port = getNextPort();
 
-      blocker = createServer();
-      await new Promise<void>((resolve, reject) => {
-        blocker!.once('error', reject);
-        blocker!.listen(port, resolve);
-      });
-
+      // Failure mode: bind the front door to a privileged port (80). As a
+      // non-root user this fails with EACCES on `server.listen`, which the dev
+      // server reports through its `server.on('error')` handler → dev/FAIL
+      // telemetry. Crucially this creates NO listener inside the test-runner
+      // process, so PR #136's startup reclaim never resolves a listener to the
+      // runner (or an ancestor) and can't group-kill the suite. We assert only
+      // command=dev / state=FAIL — the specific error code/phase is irrelevant.
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
-        telemetryFile, env: { PORT: String(port) }, timeoutMs: 15_000,
+        telemetryFile, env: { PORT: '80' }, timeoutMs: 30_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 3_000));
+      assert.ok(
+        await waitForFile(telemetryFile, 5_000),
+        `dev FAIL should emit telemetry.\nexit=${result.exitCode}\nstderr(last 800): ${result.stderr.slice(-800)}`,
+      );
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'dev');
       assert.strictEqual(body.event.state, 'FAIL');
-      assert.strictEqual(body.event.error?.code, 'PORT_IN_USE');
       assertDelivered(result.stderr, 'dev FAIL');
     });
   });
