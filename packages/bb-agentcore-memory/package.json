@@ -1,0 +1,44 @@
+{
+  "name": "@aws-blocks/bb-agentcore-memory",
+  "version": "0.1.0",
+  "description": "AWS Block for Amazon Bedrock AgentCore Memory — short-term events + long-term semantic memory. Runs locally (in-memory simulation) and on AWS (real AgentCore Memory APIs).",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "DESIGN.md",
+    "src",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/index.browser.js",
+      "cdk": {
+        "types": "./dist/index.cdk.d.ts",
+        "default": "./dist/index.cdk.js"
+      },
+      "aws-runtime": "./dist/index.aws.js",
+      "types": "./dist/index.mock.d.ts",
+      "default": "./dist/index.mock.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs AgentCoreMemory",
+    "build": "tsc --build",
+    "test": "node --test --test-concurrency=1 dist/*.test.js"
+  },
+  "dependencies": {
+    "@aws-blocks/core": "^0.1.5",
+    "@aws-sdk/client-bedrock-agentcore": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0"
+  }
+}

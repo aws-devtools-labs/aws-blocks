@@ -1,0 +1,26 @@
+{
+  "name": "example-ai-support-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Advanced AWS Blocks example — an AI support assistant composing AgentCore Memory + AgentCore Gateway (custom blocks), KVStore and AsyncJob.",
+  "scripts": {
+    "test": "tsx --test test/mock.test.ts"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/bb-async-job": "*",
+    "@aws-blocks/core": "*",
+    "@aws-blocks/bb-agentcore-memory": "*",
+    "@aws-blocks/bb-agentcore-gateway": "*",
+    "zod": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "aws-cdk-lib": "2.257.0",
+    "constructs": "^10.6.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.0"
+  }
+}
