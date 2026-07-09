@@ -1,0 +1,19 @@
+name: Issue Labeled
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  remove-pending-triage-label:
+    if: ${{ contains(fromJSON('["question", "bug", "feature-request", "enhancement"]'), github.event.label.name) }}
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Remove the pending-triage label
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-triage"

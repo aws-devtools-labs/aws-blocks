@@ -1,0 +1,19 @@
+name: Issue Closed
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  cleanup-labels:
+    if: ${{ contains(github.event.issue.labels.*.name, 'pending-community-response') || contains(github.event.issue.labels.*.name, 'pending-maintainer-response') || contains(github.event.issue.labels.*.name, 'pending-triage') }}
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Remove all pending-* labels
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-community-response" --remove-label "pending-maintainer-response" --remove-label "pending-triage"
