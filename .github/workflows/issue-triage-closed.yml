@@ -1,4 +1,4 @@
-name: Issue Closed
+name: Issue Triage - Closed
 on:
   issues:
     types: [closed]

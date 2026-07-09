@@ -1,4 +1,4 @@
-name: Issue Comment
+name: Issue Triage - Comment
 on:
   issue_comment:
     types: [created]
@@ -20,6 +20,9 @@ jobs:
       - name: Add pending-maintainer-response when a community member comments on an open issue
         if: ${{ !contains(fromJSON('["MEMBER", "OWNER"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
         run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --add-label "pending-maintainer-response"
-      - name: Remove pending-maintainer-response when a maintainer comments
-        if: ${{ contains(fromJSON('["MEMBER", "OWNER"]'), github.event.comment.author_association) && !github.event.issue.pull_request }}
+      - name: Move to awaiting-community when a maintainer comments on an open issue
+        if: ${{ contains(fromJSON('["MEMBER", "OWNER"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-maintainer-response" --add-label "pending-community-response"
+      - name: Remove pending-maintainer-response when a maintainer comments on a closed issue
+        if: ${{ contains(fromJSON('["MEMBER", "OWNER"]'), github.event.comment.author_association) && github.event.issue.state != 'open' && !github.event.issue.pull_request }}
         run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-maintainer-response"

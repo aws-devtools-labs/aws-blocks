@@ -1,4 +1,4 @@
-name: Issue Labeled
+name: Issue Triage - Labeled
 on:
   issues:
     types: [labeled]
