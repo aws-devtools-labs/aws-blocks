@@ -396,28 +396,46 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Fetch the BASELINE aggregate for this PR's base commit so the overview
-      # can show per-cell deltas. Tries the exact base sha, then the stable
-      # latest-main pointer. Best-effort: a miss (or no creds) removes the file,
-      # so summary.mjs renders absolute composites with a "no baseline" note.
-      # Only on a PR (push/dispatch have no PR base to diff against).
+      # Fetch the BASELINE aggregate the overview diffs against. Best-effort: a
+      # miss (or no creds) removes the file, so summary.mjs renders absolute
+      # composites with a "no baseline" note.
+      #   - PR / manual dispatch → ALWAYS the latest-main pointer (the MOST RECENT
+      #     main-branch bench = current main tip). NEVER the PR's recorded base
+      #     commit: github.event.pull_request.base.sha is captured at PR open /
+      #     last-sync and goes stale as main advances, so an exact-base-sha lookup
+      #     can silently diff against an outdated or never-benched commit.
+      #   - push to main → the IMMEDIATELY PRECEDING main commit (github.event.
+      #     before) by exact sha — the ONLY place a commit-keyed baseline is read —
+      #     with the latest-main pointer (its pre-persist value) as fallback.
       - name: Fetch baseline from S3 (best-effort)
         id: baseline
-        if: steps.oidc.outcome == 'success' && github.event_name == 'pull_request'
+        if: steps.oidc.outcome == 'success'
         continue-on-error: true
         env:
           BUCKET: ${{ vars.S3_BUCKET }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
         run: |
           set -u
-          if aws s3 cp "s3://${BUCKET}/bench/runs/${BASE_SHA}/results.json" "$BASELINE_PATH" 2>/dev/null; then
-            echo "baseline: exact base ${BASE_SHA}"
-          elif aws s3 cp "s3://${BUCKET}/bench/runs/latest-main.json" "$BASELINE_PATH" 2>/dev/null; then
-            echo "baseline: latest-main fallback (exact base ${BASE_SHA} not benched)"
+          if [ "$EVENT_NAME" = "push" ]; then
+            if [ -n "${BEFORE_SHA:-}" ] \
+               && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+               && aws s3 cp "s3://${BUCKET}/bench/runs/${BEFORE_SHA}/results.json" "$BASELINE_PATH" 2>/dev/null; then
+              echo "baseline: previous main commit ${BEFORE_SHA} (exact)"
+            elif aws s3 cp "s3://${BUCKET}/bench/runs/latest-main.json" "$BASELINE_PATH" 2>/dev/null; then
+              echo "baseline: latest-main pointer (previous main bench)"
+            else
+              echo "baseline: none found — overview will show absolute numbers"
+              rm -f "$BASELINE_PATH"
+            fi
           else
-            echo "baseline: none found (exact base or latest-main) — overview will show absolute numbers"
-            rm -f "$BASELINE_PATH"
+            if aws s3 cp "s3://${BUCKET}/bench/runs/latest-main.json" "$BASELINE_PATH" 2>/dev/null; then
+              echo "baseline: latest-main (current main tip)"
+            else
+              echo "baseline: none found (latest-main) — overview will show absolute numbers"
+              rm -f "$BASELINE_PATH"
+            fi
           fi
 
       # This is the ONLY step in the whole workflow that is intentionally NOT

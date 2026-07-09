@@ -11,7 +11,10 @@ import { describe, it } from 'node:test';
 import {
 	AGENT_FAIL_AT,
 	AGENT_FAIL_REASON,
+	BUILDER_PRICING,
+	PRICING,
 	buildCapDecision,
+	cellCost,
 	classifyCell,
 	COMMON_DIMENSIONS,
 	composite,
@@ -19,6 +22,7 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isScoredCell,
+	scorePerDollar,
 	testRate,
 	testStats,
 	verdict,
@@ -441,5 +445,41 @@ describe('scored-cell integrity across the judge/build-test failure modes', () =
 		assert.equal(verdictOf(cell), 'partial');
 		// Judge skipped ⇒ judge term gated to 0 ⇒ composite is the test portion: 60*(2/3) = 40.
 		assert.equal(composite(testRate(testStats(cell)), 0), 40);
+	});
+});
+
+describe('cellCost(r) — builder token spend priced at BUILDER_PRICING', () => {
+	it('BUILDER_PRICING is Sonnet ($3/$15 per 1M) — the one place to edit for pricing', () => {
+		assert.deepEqual(PRICING['claude-sonnet'], { input: 3.0, output: 15.0 });
+		assert.deepEqual(PRICING['claude-opus'], { input: 15.0, output: 75.0 });
+		assert.equal(BUILDER_PRICING, PRICING['claude-sonnet']);
+	});
+	it('prices in + out tokens at $/1M', () => {
+		// (200000*3 + 30000*15)/1e6 = (600000 + 450000)/1e6 = 1.05
+		assert.equal(cellCost({ tokens_in: 200000, tokens_out: 30000 }), 1.05);
+		// (100000*3 + 20000*15)/1e6 = 0.6
+		assert.equal(cellCost({ tokens_in: 100000, tokens_out: 20000 }), 0.6);
+	});
+	it('returns null (never a fake $0) when there are no usable token counts', () => {
+		assert.equal(cellCost({}), null);
+		assert.equal(cellCost({ tokens_in: 0, tokens_out: 0 }), null);
+		assert.equal(cellCost({ tokens_in: undefined, tokens_out: null }), null);
+	});
+	it('accepts a custom pricing table', () => {
+		// Opus rates: (1e6*15 + 1e6*75)/1e6 = 90
+		assert.equal(cellCost({ tokens_in: 1_000_000, tokens_out: 1_000_000 }, PRICING['claude-opus']), 90);
+	});
+});
+
+describe('scorePerDollar(composite, cost) — the headline SCORE (points per $)', () => {
+	it('is composite / cost, rounded to 1 decimal', () => {
+		assert.equal(scorePerDollar(92, 1.05), 87.6); // 92/1.05 = 87.619…
+		assert.equal(scorePerDollar(65, 0.6), 108.3); // 65/0.6 = 108.33…
+		assert.equal(scorePerDollar(0, 1.05), 0); // a broken cell scores 0 no matter how cheap
+	});
+	it('is null when composite or cost is missing / non-positive', () => {
+		assert.equal(scorePerDollar(null, 1.05), null);
+		assert.equal(scorePerDollar(92, null), null);
+		assert.equal(scorePerDollar(92, 0), null);
 	});
 });
