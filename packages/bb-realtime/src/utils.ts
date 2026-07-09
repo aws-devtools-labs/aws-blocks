@@ -79,9 +79,10 @@ export function mintChannelToken(channel: string, secret: string, ttlSeconds = 3
 }
 
 /**
- * Mint a connect token. Scoped to a Realtime instance prefix (not a specific
- * channel). Used to gate WebSocket connection establishment. The connect token
- * validates for any channel that starts with the given scope prefix.
+ * Mint a connect token. Scoped to a Realtime instance prefix with a `$connect`
+ * suffix (e.g., `myapp-rt/$connect`). This prevents connect tokens from being
+ * used as channel subscription tokens, since `myapp-rt/$connect` does not
+ * prefix-match real channels like `myapp-rt/chat/room-1`.
  *
  * Default TTL is 2 hours (matching API Gateway max connection duration).
  */
@@ -89,7 +90,7 @@ export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds
 	if (!secret) {
 		throw blocksError(RealtimeErrors.ConnectionFailed, 'Refusing to mint token: signing secret is empty or missing');
 	}
-	return mintChannelToken(scopePrefix, secret, ttlSeconds);
+	return mintChannelToken(scopePrefix + '/$connect', secret, ttlSeconds);
 }
 
 /**

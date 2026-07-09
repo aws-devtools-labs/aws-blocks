@@ -101,9 +101,12 @@ describe('Security: mintConnectToken secret guard', () => {
 		const token = mintConnectToken('test-app-rt', 'valid-secret');
 		assert.ok(token);
 		assert.ok(token.includes('.'), 'token should have payload.signature format');
-		// connect token authorizes any sub-channel under the scope prefix
-		const result = validateChannelToken(token, 'valid-secret', 'test-app-rt/events/room-1');
-		assert.ok(result, 'connect token should authorize sub-channels');
+		// connect token no longer authorizes sub-channels (scope isolation)
+		const subResult = validateChannelToken(token, 'valid-secret', 'test-app-rt/events/room-1');
+		assert.strictEqual(subResult, null, 'connect token must NOT authorize sub-channels');
+		// but it still validates without a requestedChannel (for connection establishment)
+		const connResult = validateChannelToken(token, 'valid-secret');
+		assert.ok(connResult, 'connect token should validate for connection establishment');
 	});
 });
 
@@ -152,7 +155,11 @@ describe('Security: getChannel() secret unavailability (AWS runtime simulation)'
 		assert.ok(chResult, 'channel token should validate');
 		assert.strictEqual(chResult!.channel, fullChannel);
 
+		// connect token no longer authorizes specific channels (scope isolation)
 		const connResult = validateChannelToken(connectToken, secret, fullChannel);
-		assert.ok(connResult, 'connect token should authorize the channel');
+		assert.strictEqual(connResult, null, 'connect token must NOT authorize specific channels');
+		// but validates for connection (no requestedChannel)
+		const connValidation = validateChannelToken(connectToken, secret);
+		assert.ok(connValidation, 'connect token should validate for connection');
 	});
 });
