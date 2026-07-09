@@ -9,6 +9,7 @@ import {
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
   patchImageOptimizerForNext16,
+  patchImageOptimizerSvgStatus,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
@@ -1241,6 +1242,95 @@ void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () =>
     const out = fs.readFileSync(bundle, 'utf-8');
     assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
     fs.rmSync(emptyProject, { recursive: true, force: true });
+  });
+});
+
+void describe('patchImageOptimizerSvgStatus — disallowed type fails closed (issue #4)', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-svg-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  // The minified catch shape OpenNext emits around the optimizer call.
+  const CATCH =
+    'async function opt(t,n){try{return await run(t,n)}catch(s){return Pl("Failed to optimize image",s),VX("Internal server error",t?.streamCreator)}}';
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  void it('rewrites the catch to forward a client-error (4xx) status + message', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // A 4xx caught error now drives the status + message, not a blanket 500.
+    assert.match(out, /__blocksStatus/);
+    assert.match(out, /s\.statusCode>=400&&s\.statusCode<500/);
+    assert.match(out, /s\.message\|\|"Bad Request"/);
+    // The streamCreator arg is preserved.
+    assert.match(out, /t\?\.streamCreator,__blocksStatus/);
+  });
+
+  void it('is idempotent — a second run does not double-patch', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerSvgStatus(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // Exactly one catch was rewritten (the marker's `var` declaration appears once).
+    assert.equal((twice.match(/var __blocksStatus=/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when the catch shape is absent', () => {
+    writeBundle('export const handler = async () => ({}); // no optimizer catch\n');
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  // Behavioral check: evaluate the patched catch to prove a 400 error → 400,
+  // and a generic error → 500. We stub Pl/VX and run the patched function.
+  void it('patched catch yields 400 for a 4xx error and 500 for a generic error', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // Extract just the patched `opt` function body and wrap it with stubs.
+    const m = out.match(/async function opt\(t,n\)\{[\s\S]*?\}\}/);
+    assert.ok(m, 'patched opt function present');
+    const harness = `
+      let captured;
+      const Pl = () => {};
+      const VX = (msg, _stream, status) => { captured = { msg, status }; return captured; };
+      ${m![0]}
+      // run(): first call throws a 4xx (SVG), second throws a generic error.
+      let mode;
+      async function run() { if (mode === 'svg') { const e = new Error('"url" parameter is valid but image type is not allowed'); e.statusCode = 400; throw e; } throw new Error('boom'); }
+      return (async () => {
+        mode = 'svg'; await opt({}, null); const svg = captured;
+        mode = 'other'; await opt({}, null); const other = captured;
+        return { svg, other };
+      })();
+    `;
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const fn = new Function(harness);
+    return (fn() as Promise<{ svg: { status: number; msg: string }; other: { status: number } }>).then(
+      ({ svg, other }) => {
+        assert.equal(svg.status, 400, 'SVG (4xx) rejection → 400');
+        assert.match(svg.msg, /image type is not allowed/);
+        assert.equal(other.status, 500, 'generic error → 500');
+      },
+    );
   });
 });
 

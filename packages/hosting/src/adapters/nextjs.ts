@@ -170,6 +170,11 @@ export const nextjsAdapter = (
     // signature change. See patchImageOptimizerForNext16.
     patchImageOptimizerForNext16(openNextDir, projectDir);
 
+    // Patch the image-optimization bundle so a disallowed image type (e.g. an
+    // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
+    // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
+    patchImageOptimizerSvgStatus(openNextDir);
+
     // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
     // See installLinuxSharpForImageOptimizer.
     installLinuxSharpForImageOptimizer(openNextDir);
@@ -1494,6 +1499,84 @@ export const patchImageOptimizerForNext16 = (
   process.stderr.write(
     `\u{1F527} Patched image-optimization bundle for Next.js 16 fetchInternalImage ` +
       `signature (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
+  );
+};
+
+/**
+ * Patch the OpenNext image-optimization bundle so a client-error rejection
+ * from Next's optimizer surfaces its real 4xx status instead of a blanket 500.
+ *
+ * When `dangerouslyAllowSVG` is disabled and the source is an SVG (or another
+ * disallowed type), Next throws a proper `new ImageError(400, '"url" parameter
+ * is valid but image type is not allowed')`. OpenNext's handler catches every
+ * optimizer throw in a single generic block:
+ *
+ *   catch (s) { return Pl("Failed to optimize image", s),
+ *               VX("Internal server error", t?.streamCreator) }
+ *
+ * — discarding the caught error's `statusCode` and always emitting 500. So an
+ * untrusted SVG (which must fail closed with a 400) instead crashes the
+ * optimizer with a 5xx (issue #4).
+ *
+ * `VX(message, streamCreator, status = 500)` already accepts a status arg. Fix:
+ * rewrite the catch to forward the caught error's status when it's a client
+ * error (4xx), using the error's own message; otherwise keep the 500
+ * "Internal server error". Structural match on the minified shape (the helper
+ * names `Pl`/`VX` are unstable across builds, so capture them). Idempotent: a
+ * catch already carrying our `__blocksStatus` marker is left alone.
+ * @internal
+ */
+export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
+  const root = path.join(openNextDir, 'image-optimization-function');
+  if (!fs.existsSync(root)) return; // image optimization disabled for this app
+  const candidates = fg.sync('**/index.mjs', {
+    cwd: root,
+    absolute: true,
+    ignore: ['**/node_modules/**'],
+  });
+
+  // catch(<e>){return <log>("Failed to optimize image",<e>),<resp>("Internal server error",<stream>)}
+  const catchRe =
+    /catch\((\w+)\)\{return (\w+)\("Failed to optimize image",\1\),(\w+)\("Internal server error",([^)]*)\)\}/g;
+
+  let filesPatched = 0;
+  for (const bundle of candidates) {
+    let src: string;
+    try {
+      src = fs.readFileSync(bundle, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    // Idempotency: skip if already patched.
+    if (src.includes('__blocksStatus')) continue;
+    if (!catchRe.test(src)) continue;
+    catchRe.lastIndex = 0;
+    // For a caught client-error (4xx), forward its status + message; else 500.
+    const next = src.replace(
+      catchRe,
+      'catch($1){var __blocksStatus=($1&&$1.statusCode>=400&&$1.statusCode<500)?$1.statusCode:500;' +
+        'return $2("Failed to optimize image",$1),' +
+        '$3(__blocksStatus!==500?($1.message||"Bad Request"):"Internal server error",$4,__blocksStatus)}',
+    );
+    if (next !== src) {
+      fs.writeFileSync(bundle, next, 'utf-8');
+      filesPatched++;
+    }
+  }
+
+  if (filesPatched === 0) {
+    process.stderr.write(
+      `⚠️  image-optimizer SVG-status patch found nothing to change under ${root}. ` +
+        `If an SVG source (dangerouslyAllowSVG disabled) 500s instead of 400, ` +
+        `the OpenNext catch-block shape changed (see patchImageOptimizerSvgStatus).\n`,
+    );
+    return;
+  }
+
+  process.stderr.write(
+    `\u{1F527} Patched image-optimization bundle so disallowed image types (e.g. SVG) ` +
+      `return their real 4xx status, not 500 (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
   );
 };
 
