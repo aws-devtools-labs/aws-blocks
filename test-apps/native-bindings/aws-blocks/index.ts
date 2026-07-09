@@ -38,7 +38,11 @@ const authBasic = new AuthBasic(scope, 'auth-basic', {});
 let lastCognitoCode: { username: string; code: string; purpose: string } | null = null;
 const authCognito = new AuthCognito(scope, 'auth-cognito', {
   passwordPolicy: { minLength: 8, requireDigits: true },
-  userAttributes: [{ name: 'email' }],
+  // NOTE: `email` is a built-in standard Cognito attribute and must NOT be
+  // declared here (see DESIGN.md — built-ins are implicit). Declaring it made
+  // the const-O-narrowed `CognitoUser.attributes` schema carry both `email`
+  // and `custom:email`, which the Dart codegen turned into a duplicate /
+  // `:`-in-identifier compile error. No custom attributes are needed here.
   groups: ['admins', 'users'],
   mfa: 'off',
   mfaTypes: ['TOTP'],
