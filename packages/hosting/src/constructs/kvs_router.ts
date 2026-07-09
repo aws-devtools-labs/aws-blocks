@@ -345,13 +345,31 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     headerChunks.length,
   );
   if (tooManyChunks > KVS_BUDGET.maxChunksPerTable) {
+    // Identify which table hit the cap for a targeted error message.
+    const culprit =
+      redirectChunks.length === tooManyChunks
+        ? 'redirects'
+        : routeChunks.length === tooManyChunks
+          ? 'routes'
+          : 'headers';
     throw new HostingError('TooManyRoutesError', {
-      message: `Edge route table needs ${tooManyChunks} chunks for one table, exceeding the safe per-request read budget of ${KVS_BUDGET.maxChunksPerTable}.`,
+      message:
+        `Edge route table needs ${tooManyChunks} chunks for the ${culprit} table, ` +
+        `exceeding the safe per-request read budget of ${KVS_BUDGET.maxChunksPerTable}. ` +
+        `(Each chunk holds ~25 entries, so the cap is roughly ${KVS_BUDGET.maxChunksPerTable * 25} entries.)`,
       resolution:
-        'Reduce the number of routes/redirects/headers, or consolidate them ' +
-        'into wildcard patterns. The KVS edge router reads chunks sequentially ' +
-        'per request, so an unbounded table risks the CloudFront Function ' +
-        'compute-utilization limit at the edge.',
+        culprit === 'redirects'
+          ? 'The most common cause is a `trailingSlash: true` Next.js config ' +
+            '— it emits one canonical-form redirect per route, which doubles ' +
+            'the redirect count. Consider switching to `trailingSlash: false` ' +
+            '(the default), reducing the number of routes, or consolidating ' +
+            'redirects into wildcard patterns. The KVS edge router reads ' +
+            'chunks sequentially per request, so an unbounded table risks the ' +
+            'CloudFront Function compute-utilization limit at the edge.'
+          : 'Reduce the number of routes/redirects/headers, or consolidate ' +
+            'them into wildcard patterns. The KVS edge router reads chunks ' +
+            'sequentially per request, so an unbounded table risks the ' +
+            'CloudFront Function compute-utilization limit at the edge.',
     });
   }
 
