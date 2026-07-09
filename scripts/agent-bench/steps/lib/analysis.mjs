@@ -36,10 +36,15 @@ export const MAX_TAIL_CHARS = 1500;
 // it can't dominate the per-cell prompt.
 export const MAX_JUDGE_EXPLANATION_CHARS = 500;
 
-// Small output budgets — the per-cell analysis is 2-4 sentences, the rollup a
-// short paragraph. maxTokens keeps both tight.
-export const CELL_MAX_TOKENS = 320;
+// Small output budgets — the per-cell analysis is 2-4 sentences + a short issue
+// list, the rollup a short paragraph + bullets. maxTokens keeps both tight.
+export const CELL_MAX_TOKENS = 420;
 export const ROLLUP_MAX_TOKENS = 700;
+
+// Caps on the per-cell POTENTIAL ISSUES the analysis emits (fed into the report's
+// "Potential issues" section) so one cell can't flood it.
+export const MAX_CELL_ISSUES = 5;
+export const MAX_ISSUE_LEN = 200;
 
 // Composite < this is "low"; a drop of more than this many points vs the
 // baseline is a "regression" — the same ±5 band the overview uses to separate a
@@ -63,25 +68,64 @@ const TRANSIENT_RE =
 
 // Per-cell analysis system prompt. Per the owner (Jon): what the agent built +
 // score context, and the STRUGGLES visible in the data — never a task restatement
-// or a code re-grade. Clean cells are allowed to say so.
-export const CELL_SYSTEM = `You are analyzing ONE benchmark cell where an AI coding agent built an app from a task prompt. Using the score context, the metrics, and the trimmed tool-call trace provided, write a CONCISE 2-4 sentence analysis:
-(1) one short clause on WHAT the agent built and its score context;
-(2) any STRUGGLES visible in the data — failed or errored tool calls (name the tool and the error), time spent hunting for missing or undocumented APIs/docs, or non-inherent trial-and-error such as dev-server wrangling or build-error loops, and any disproportionate token/turn cost.
-Cite concrete tool names or short error snippets. Do NOT restate the task, propose fixes, or re-grade the code. If the data shows a clean run with no notable struggle, say so in one sentence (e.g. "Clean run — no notable struggle in the trace.").`;
+// or a code re-grade. It ALSO emits a short POTENTIAL ISSUES list that feeds the
+// report's "Potential issues" section, in a strict two-part format the harness
+// parses (see parseCellAnalysis).
+export const CELL_SYSTEM = `You are analyzing ONE benchmark cell where an AI coding agent built an app from a task prompt. Using the score context, the metrics, and the trimmed tool-call trace provided, respond in EXACTLY this two-part format and nothing else:
 
-// Top-level roll-up system prompt: synthesize the per-cell analyses bottom-up.
-export const ROLLUP_SYSTEM = `You are writing the EXECUTIVE SUMMARY of an AI coding-agent benchmark run, synthesizing BOTTOM-UP from the PER-CELL analyses provided (each already diagnoses one cell). In 4-8 sentences:
-- state the overall outcome (mean composite and the pass/partial/fail mix);
-- surface CROSS-CELL patterns that recur across multiple cells — e.g. dev-server wrangling, shared build friction, missing-docs hunting, or repeated failed tool calls;
-- call out which cells regressed or are low and the likely why;
-- name the obvious areas to improve (failed tool calls / missing docs / non-inherent trial-and-error).
-Be concrete and cite cells by name. Do NOT restate the task list or write detailed code fixes — surface patterns and problem areas.`;
+ANALYSIS: <2-4 sentences: (1) one short clause on WHAT the agent built and its score context; (2) any STRUGGLES visible in the data — failed or errored tool calls (name the tool and the error), time hunting for missing/undocumented APIs, non-inherent trial-and-error such as dev-server wrangling or build-error loops, or disproportionate token/turn cost. Cite concrete tool names or short error snippets. Do NOT restate the task, propose fixes, or re-grade the code. If the trace shows a clean run, say so.>
+ISSUES:
+- <one concise potential issue worth a maintainer's attention (a recurring failure mode, a missing doc/API, a cost/efficiency concern), max ~15 words>
+- <another, if any>
+
+List at most a few issues, most-important first. If there are no notable issues, write exactly "ISSUES: none".`;
+
+// Top-level roll-up system prompt: synthesize the per-cell analyses bottom-up
+// into a SHORT executive summary — a lead paragraph, then bullets.
+export const ROLLUP_SYSTEM = `You are writing the EXECUTIVE SUMMARY of an AI coding-agent benchmark run, synthesizing BOTTOM-UP from the PER-CELL analyses provided (each already diagnoses one cell). Format your answer as:
+- FIRST, a SHORT lead paragraph (2-3 sentences): the overall outcome — the mean composite and the pass/partial/fail mix — and the single most important takeaway.
+- THEN 3-6 concise bullet points (start each line with "- "): CROSS-CELL patterns recurring across multiple cells (dev-server wrangling, shared build friction, missing-docs hunting, repeated failed tool calls), which cells regressed or are low and the likely why, and the obvious areas to improve.
+Be concrete and cite cells by name. Do NOT restate the task list or write detailed code fixes — surface patterns and problem areas. Keep it tight.`;
 
 export const fmt = (n) => (n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(1));
 
 /** Collapse whitespace to a single line. Safe on non-strings (→ ''). */
 export function oneLine(text) {
 	return typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+}
+
+/**
+ * Parse the per-cell model output (the strict `ANALYSIS: … ISSUES: …` format
+ * from {@link CELL_SYSTEM}) into a one-line analysis string plus a bounded list
+ * of potential-issue strings. Robust to a missing ISSUES section (→ no issues),
+ * to "ISSUES: none", to bulleted or single-line issue lists, and to a plain
+ * fallback string with no labels at all (the whole thing becomes the analysis).
+ * Never throws.
+ * @param {unknown} text raw model completion (or a fallback sentence)
+ * @returns {{analysis: string, issues: string[]}}
+ */
+export function parseCellAnalysis(text) {
+	if (typeof text !== 'string') return { analysis: '', issues: [] };
+	// Split on the FIRST "ISSUES:" section header (line-anchored, case-insensitive).
+	const m = text.match(/(^|\n)\s*ISSUES:\s*/i);
+	let analysisPart = text;
+	let issuesPart = '';
+	if (m) {
+		analysisPart = text.slice(0, m.index);
+		issuesPart = text.slice(m.index + m[0].length);
+	}
+	const analysis = oneLine(analysisPart.replace(/^\s*ANALYSIS:\s*/i, ''));
+	let issues = [];
+	const trimmed = issuesPart.trim();
+	if (trimmed && !/^none\b/i.test(trimmed)) {
+		issues = trimmed
+			.split('\n')
+			.map((l) => oneLine(l.replace(/^\s*[-*•]\s*/, '')))
+			.filter((l) => l.length > 0 && !/^none$/i.test(l))
+			.slice(0, MAX_CELL_ISSUES)
+			.map((l) => l.slice(0, MAX_ISSUE_LEN));
+	}
+	return { analysis, issues };
 }
 
 // Error-like lines to lift out of the trace for the model.

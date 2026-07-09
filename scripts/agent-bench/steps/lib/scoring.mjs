@@ -303,3 +303,69 @@ export function hardCapPlan(ev) {
 	}
 	return { caps, notes };
 }
+
+// ── Cost & score-per-dollar ──────────────────────────────────────────────────
+// Amazon Bedrock on-demand pricing, USD per 1,000,000 tokens. This is the SINGLE
+// place to edit when AWS changes Bedrock pricing or the benchmarked model. The
+// COST/SCORE columns in the report are derived from BUILDER_PRICING below.
+// Source: https://aws.amazon.com/bedrock/pricing/ (Anthropic Claude).
+export const PRICING = {
+	// $/1M tokens (input, output).
+	'claude-sonnet': { input: 3.0, output: 15.0 },
+	'claude-opus': { input: 15.0, output: 75.0 },
+};
+
+// The BUILDER (the agent under test in 2-agent-run.ts) runs on Claude Sonnet 4.6,
+// so a cell's cost is its builder token spend priced at Sonnet rates. result.json's
+// tokens_in/tokens_out are the BUILDER's accumulated usage — the judge and the
+// analysis run on Opus but that spend is the harness's, not the agent's, and is
+// NOT counted here. Point this at PRICING['claude-opus'] if the builder model
+// ever changes.
+export const BUILDER_PRICING = PRICING['claude-sonnet'];
+
+/**
+ * USD cost of a cell's BUILDER token spend at {@link BUILDER_PRICING}. Returns
+ * `null` — never a fake `$0` — when the cell recorded no usable token counts
+ * (e.g. a harness_error that died before the agent ran, so tokens are 0/0), so
+ * the report renders "—" for it. Rounded to 1/100th of a cent.
+ * @param {{tokens_in?: number, tokens_out?: number}} r a finalized result.json cell
+ * @param {{input: number, output: number}} [pricing]
+ * @returns {number|null}
+ */
+export function cellCost(r, pricing = BUILDER_PRICING) {
+	const tin = typeof r?.tokens_in === 'number' && Number.isFinite(r.tokens_in) ? r.tokens_in : 0;
+	const tout = typeof r?.tokens_out === 'number' && Number.isFinite(r.tokens_out) ? r.tokens_out : 0;
+	if (tin + tout <= 0) return null;
+	const cost = (tin * pricing.input + tout * pricing.output) / 1_000_000;
+	return Math.round(cost * 1e4) / 1e4;
+}
+
+// SCORE direction, the SINGLE knob for the headline SCORE metric:
+//   true  → SCORE = composite per dollar (higher = better) — the default.
+//   false → SCORE = dollars per composite point (lower = better).
+// Flipping this ONE constant swaps the ratio in scorePerDollar below AND the
+// green/red direction in overview.mjs (which imports it), keeping the number and
+// its coloring in sync.
+export const SCORE_PER_DOLLAR = true;
+
+/**
+ * The headline SCORE for a cell: the 0..100 composite (quality) normalized by its
+ * $ cost (efficiency) — "composite points per dollar", higher = better, by
+ * default. Cost, NOT raw token volume, is the denominator, so token count can
+ * never DOMINATE the score: a cheap-and-good cell beats an expensive-and-good
+ * one, while a broken (composite 0) cell scores 0 no matter how cheap it was.
+ * `null` when the composite or the cost is unavailable (rendered "—"). Rounded
+ * to 1 decimal.
+ * @param {number|null} baseComposite the 0..100 composite from {@link composite}
+ * @param {number|null} cost USD from {@link cellCost}
+ * @returns {number|null}
+ */
+export function scorePerDollar(baseComposite, cost) {
+	if (typeof baseComposite !== 'number' || !Number.isFinite(baseComposite)) return null;
+	if (typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0) return null;
+	// Default (SCORE_PER_DOLLAR): points per $. Inverted: $ per point — undefined
+	// at composite 0 (a free-but-worthless cell), so return null there.
+	const s = SCORE_PER_DOLLAR ? baseComposite / cost : baseComposite > 0 ? cost / baseComposite : null;
+	if (s === null || !Number.isFinite(s)) return null;
+	return Math.round(s * 10) / 10;
+}
