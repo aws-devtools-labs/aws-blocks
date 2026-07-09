@@ -1586,6 +1586,61 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('SSR cache policy excludes _rsc from the cache key (issue #11)', () => {
+      // Next appends a random `_rsc=<hash>` to every RSC prefetch. With
+      // queryStringBehavior=all() each value is a distinct cache entry and
+      // every prefetch MISSes. The policy must cache on all query strings
+      // EXCEPT `_rsc` so prefetches of the same page coalesce at the edge.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-rsc-cache',
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', defaultUrl]]),
+        computeFunctions: new Map([['default', defaultFn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+        CachePolicyConfig: Match.objectLike({
+          ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+            QueryStringsConfig: {
+              QueryStringBehavior: 'allExcept',
+              QueryStrings: ['_rsc'],
+            },
+          }),
+        }),
+      });
+    });
+
     void it('orders multi-wildcard patterns above /_next/* by literal-segment count in the KVS route table', () => {
       // Route ordering is now done by buildKvsEntries (the router scans the
       // table first-match-wins). A pattern like /api/*/data/* (2 literal

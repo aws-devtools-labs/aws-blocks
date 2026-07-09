@@ -571,7 +571,16 @@ export class CdnConstruct extends Construct {
             '__prerender_bypass',
             '__next_preview_data',
           ),
-          queryStringBehavior: CacheQueryStringBehavior.all(),
+          // Cache on all query strings EXCEPT Next's prefetch cache-buster
+          // `_rsc`. The App Router appends a fresh random `_rsc=<hash>` to
+          // every RSC prefetch; with `.all()` each distinct value is its own
+          // cache entry, so every prefetch MISSes to the origin and the edge
+          // cache is useless for RSC payloads (issue #11). `_rsc` only tags a
+          // request as RSC — the actual RSC-vs-HTML distinction is already in
+          // the cache key via the `rsc` header (allowlisted above) — so it's
+          // safe to drop from the key. denyList only affects the CACHE KEY;
+          // `_rsc` is still forwarded to the origin.
+          queryStringBehavior: CacheQueryStringBehavior.denyList('_rsc'),
           enableAcceptEncodingBrotli: true,
           enableAcceptEncodingGzip: true,
         })
