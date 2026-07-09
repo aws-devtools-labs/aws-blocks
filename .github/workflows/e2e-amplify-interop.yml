@@ -56,6 +56,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -107,6 +112,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build

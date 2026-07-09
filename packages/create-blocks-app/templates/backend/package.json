@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "backend",
+  "blocksTemplateDescription": "Backend-only — Blocks API + CDK, no frontend (bring your own client)",
   "engines": {
     "node": ">=22.0.0"
   },
