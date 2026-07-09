@@ -8,7 +8,7 @@ import {
   hasExistingMiddlewareManifest,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
-  patchImageOptimizerForNext155,
+  patchImageOptimizerForNext16,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
@@ -1138,7 +1138,7 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
   });
 });
 
-void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () => {
+void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -1156,16 +1156,29 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
     return bundle;
   };
 
+  // Write a fake project whose node_modules/next reports `version`, so the
+  // adapter's version gate (semver.major(next) < 16 ⇒ skip) can be exercised.
+  const writeProjectWithNext = (version: string): string => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-proj-'));
+    const nextPkgDir = path.join(projectDir, 'node_modules', 'next');
+    fs.mkdirSync(nextPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextPkgDir, 'package.json'),
+      JSON.stringify({ name: 'next', version }),
+    );
+    return projectDir;
+  };
+
   void it('returns silently when the image-optimization-function dir is absent', () => {
     // image optimization disabled for this app → nothing to patch
-    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
   });
 
   void it('inserts `void 0` so the request handler lands in the 5th slot', () => {
     const bundle = writeBundle(
       'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i),o=await Pc.imageOptimizer(x);',
     );
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const out = fs.readFileSync(bundle, 'utf-8');
     assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
   });
@@ -1174,9 +1187,9 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
     const bundle = writeBundle(
       'await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
     );
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const once = fs.readFileSync(bundle, 'utf-8');
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const twice = fs.readFileSync(bundle, 'utf-8');
     assert.equal(once, twice);
     // exactly one `void 0` inserted into the call
@@ -1185,7 +1198,48 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
 
   void it('warns (does not throw) when no matching call is present', () => {
     writeBundle('export const handler = async () => ({}); // already adapted\n');
-    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
+  });
+
+  // ── Version gate (regression: Next 15.x must NOT be patched) ──────────
+  // The maximumResponseBody arg was added in Next 16, not 15.5. On Next 15.x
+  // OpenNext's 4-arg call is already correct; inserting `void 0` there broke
+  // every local image (500 TypeError). See patchImageOptimizerForNext16.
+
+  void it('does NOT patch on Next 15.x (4-arg signature is already correct)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.15');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // untouched — no `void 0` shoved into the call
+    assert.doesNotMatch(out, /\{\},void 0,/);
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('DOES patch on Next 16.x (5-arg signature needs the extra slot)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('16.2.9');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('patches when the Next version is unknown (default to Next 16 behavior)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    // projectDir points at an empty dir → no resolvable `next` → default patch
+    const emptyProject = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-empty-'));
+    patchImageOptimizerForNext16(tmp, emptyProject);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(emptyProject, { recursive: true, force: true });
   });
 });
 

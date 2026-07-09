@@ -166,9 +166,9 @@ export const nextjsAdapter = (
     // nodejs20.x compatibility. See patchEdgeBundleForLambdaEdge.
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
-    // Patch the image-optimization bundle for the Next.js 15.5 image-optimizer
-    // signature change. See patchImageOptimizerForNext155.
-    patchImageOptimizerForNext155(openNextDir);
+    // Patch the image-optimization bundle for the Next.js 16 image-optimizer
+    // signature change. See patchImageOptimizerForNext16.
+    patchImageOptimizerForNext16(openNextDir, projectDir);
 
     // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
     // See installLinuxSharpForImageOptimizer.
@@ -1331,30 +1331,71 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
 };
 
 /**
- * Patch the OpenNext image-optimization bundle for the Next.js 15.5 image
- * optimizer signature change.
- *
- * Next 15.5 inserted a `maximumResponseBody` parameter into
- * `fetchInternalImage`:
- *   - was: `fetchInternalImage(href, _req, _res, handleRequest)`
- *   - now: `fetchInternalImage(href, _req, _res, maximumResponseBody, handleRequest)`
- *
- * `@opennextjs/aws` (≤3.10.x) still calls it with FOUR args
- * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`), so on Next 15.5
- * the `handleRequest` callback lands in the `maximumResponseBody` slot and the
- * real 5th arg is `undefined`. At runtime the optimizer throws
- * `TypeError: <handler> is not a function` for every LOCAL image → 500.
- *
- * Fix: insert an explicit `void 0` for `maximumResponseBody` so the handler
- * shifts into the 5th position. Match the structural minified shape
- * `fetchInternalImage)(<a>,{headers:<b>},{},<c>)` (variable names are unstable
- * across builds) and rewrite the trailing `,<c>)` → `,void 0,<c>)`. Idempotent:
- * a call that already has `,{},void 0,` is left alone.
+ * Read the installed Next.js version from the project's node_modules.
+ * Best-effort: returns `undefined` when the package isn't resolvable or the
+ * version can't be parsed (e.g. an L3 path running against a pre-built
+ * `.open-next/` with no `next` in scope).
  * @internal
  */
-export const patchImageOptimizerForNext155 = (openNextDir: string): void => {
+export const detectNextVersion = (projectDir: string): string | undefined => {
+  const info = getPackageInfoSync('next', { paths: [projectDir] });
+  const version = info?.version;
+  return version && semver.valid(version) ? version : undefined;
+};
+
+/**
+ * Patch the OpenNext image-optimization bundle for the Next.js 16
+ * image-optimizer signature change.
+ *
+ * **Next 16** inserted a `maximumResponseBody` parameter into
+ * `fetchInternalImage` — NOT 15.5 (the earlier assumption here was inverted):
+ *   | Next   | `fetchInternalImage` signature                                    |
+ *   |--------|-------------------------------------------------------------------|
+ *   | 15.5.x | `(href, _req, _res, handleRequest)` — 4 args                       |
+ *   | 16.x   | `(href, _req, _res, maximumResponseBody, handleRequest)` — 5 args  |
+ *
+ * `@opennextjs/aws` (≤3.10.x) calls it with FOUR positional args
+ * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`). That call is:
+ *   - **correct as-is on Next 15.x** (the handler is the real 4th arg), and
+ *   - **one arg short on Next 16** — the handler lands in the
+ *     `maximumResponseBody` slot and the real 5th arg (`handleRequest`) is
+ *     `undefined`, so the optimizer throws `TypeError: <handler> is not a
+ *     function` for every LOCAL image → 500.
+ *
+ * Fix: **only on Next ≥ 16**, insert an explicit `void 0` for
+ * `maximumResponseBody` so the handler shifts into the 5th position. On Next
+ * 15.x we must NOT patch — the 4-arg call is already right and inserting
+ * `void 0` would break it (the previous bug: every Next-15 local image 500'd).
+ *
+ * The match is the structural minified shape
+ * `fetchInternalImage)(<a>,{headers:<b>},{},<c>)` (variable names are unstable
+ * across builds) rewritten `,<c>)` → `,void 0,<c>)`. Idempotent: a call that
+ * already has `,{},void 0,` is left alone. When the installed Next version
+ * can't be determined (e.g. a pre-built `.open-next/` with no resolvable
+ * `next`) we default to patching, since Next 16 is the common case and that
+ * matches the historical behavior.
+ * @internal
+ */
+export const patchImageOptimizerForNext16 = (
+  openNextDir: string,
+  projectDir?: string,
+): void => {
   const root = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(root)) return; // image optimization disabled for this app
+
+  // Version gate: the `void 0` insertion is ONLY correct for Next ≥ 16 (the
+  // 5-arg `fetchInternalImage`). On Next 15.x the OpenNext 4-arg call is
+  // already correct, so patching would corrupt it. When the version is
+  // knowable and < 16, skip entirely.
+  const nextVersion = projectDir ? detectNextVersion(projectDir) : undefined;
+  if (nextVersion && semver.major(nextVersion) < 16) {
+    process.stderr.write(
+      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion} uses the ` +
+        `4-arg fetchInternalImage signature that OpenNext already calls correctly ` +
+        `(the maximumResponseBody parameter was added in Next 16).\n`,
+    );
+    return;
+  }
   const candidates = fg.sync('**/index.mjs', {
     cwd: root,
     absolute: true,
@@ -1391,16 +1432,16 @@ export const patchImageOptimizerForNext155 = (openNextDir: string): void => {
     // OpenNext's call, or OpenNext may have already adapted. Warn so a future
     // signature drift is visible, but don't block the build.
     process.stderr.write(
-      `⚠️  image-optimizer patch (Next 15.5 fetchInternalImage arity) found ` +
+      `⚠️  image-optimizer patch (Next 16 fetchInternalImage arity) found ` +
         `nothing to change under ${root}. If local-image optimization 500s with ` +
         `"is not a function", the OpenNext/Next signatures changed again ` +
-        `(see patchImageOptimizerForNext155).\n`,
+        `(see patchImageOptimizerForNext16).\n`,
     );
     return;
   }
 
   process.stderr.write(
-    `\u{1F527} Patched image-optimization bundle for Next.js 15.5 fetchInternalImage ` +
+    `\u{1F527} Patched image-optimization bundle for Next.js 16 fetchInternalImage ` +
       `signature (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
   );
 };
