@@ -4,12 +4,16 @@
 
 ```ts
 
+import { AdminAction } from '@aws-blocks/bb-auth-cognito';
+import { AdminActionGate } from '@aws-blocks/bb-auth-cognito';
 import { AdminCreateInit } from '@aws-blocks/bb-auth-cognito';
 import { AdminDisabled } from '@aws-blocks/bb-auth-cognito';
 import { AdminGetterOf } from '@aws-blocks/bb-auth-cognito';
+import { AdminGrants } from '@aws-blocks/bb-auth-cognito';
 import { AdminOptions } from '@aws-blocks/bb-auth-cognito';
 import { AdminSurface } from '@aws-blocks/bb-auth-cognito';
 import { AdminUser } from '@aws-blocks/bb-auth-cognito';
+import { AdminUserFilter } from '@aws-blocks/bb-auth-cognito';
 import { Agent } from '@aws-blocks/bb-agent';
 import { AgentConfig } from '@aws-blocks/bb-agent';
 import { AgentErrors } from '@aws-blocks/bb-agent';
@@ -144,6 +148,7 @@ import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
+import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
 import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInResult } from '@aws-blocks/bb-auth-cognito';
@@ -173,17 +178,25 @@ import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
+export { AdminAction }
+
+export { AdminActionGate }
+
 export { AdminCreateInit }
 
 export { AdminDisabled }
 
 export { AdminGetterOf }
 
+export { AdminGrants }
+
 export { AdminOptions }
 
 export { AdminSurface }
 
 export { AdminUser }
+
+export { AdminUserFilter }
 
 export { Agent }
 
@@ -541,6 +554,8 @@ export { Segment }
 export { SendBatchResult }
 
 export { SendResult }
+
+export { SetPasswordOptions }
 
 export { SignInNextStep }
 

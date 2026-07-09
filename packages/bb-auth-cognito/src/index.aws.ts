@@ -106,6 +106,7 @@ import {
 	type AdminCreateInit,
 	type AdminGetterOf,
 	type AdminUser,
+	type AdminUserFilter,
 	type GroupAdmin,
 	type LifecycleAdmin,
 	type AuthCognitoOptions,
@@ -681,6 +682,23 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		return userPoolId;
 	}
 
+	/**
+	 * Fast-fail when an admin method's action group wasn't granted by
+	 * `admin.actions` — the runtime half of the {@link AdminActionGate} compile
+	 * gate, so untyped callers get a clear error instead of Cognito's cryptic
+	 * `AccessDenied` (or, worse, an IAM failure only in production).
+	 */
+	private assertAdminAction(action: 'groups' | 'lifecycle'): void {
+		const actions = this.options.admin?.actions;
+		if (actions && !actions.includes(action)) {
+			throw new ApiError(
+				`admin.${action} actions not granted: construct AuthCognito with admin: { actions: [..., '${action}'] }`,
+				403,
+				{ name: AuthCognitoErrors.NotAuthorized },
+			);
+		}
+	}
+
 	private buildAdminSurface(): GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions> {
 		const toAdminUser = (u: UserType): AdminUser => {
 			const attributes: Record<string, string> = {};
@@ -694,10 +712,19 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				attributes,
 			};
 		};
+		// Map an AdminUserFilter to a Cognito ListUsers Filter expression.
+		// Cognito uses `^=` for prefix and `=` for exact match, value quoted.
+		const toCognitoFilter = (filter?: AdminUserFilter): string | undefined => {
+			if (!filter) return undefined;
+			const op = filter.match === 'startsWith' ? '^=' : '=';
+			const escaped = filter.value.replace(/"/g, '\\"');
+			return `${filter.attribute} ${op} "${escaped}"`;
+		};
 
 		return {
 			// ── GroupAdmin ───────────────────────────────────────────────────
 			addUserToGroup: async (username, group) => {
+				this.assertAdminAction('groups');
 				try {
 					await this.client.send(new AdminAddUserToGroupCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
@@ -705,6 +732,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			removeUserFromGroup: async (username, group) => {
+				this.assertAdminAction('groups');
 				try {
 					await this.client.send(new AdminRemoveUserFromGroupCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
@@ -712,6 +740,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			listGroupsForUser: async (username) => {
+				this.assertAdminAction('groups');
 				try {
 					const out: string[] = [];
 					let nextToken: string | undefined;
@@ -726,6 +755,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			listUsersInGroup: async (group) => {
+				this.assertAdminAction('groups');
 				try {
 					const out: AdminUser[] = [];
 					let nextToken: string | undefined;
@@ -742,6 +772,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 			// ── LifecycleAdmin ───────────────────────────────────────────────
 			createUser: async (username, init) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					const attrs: AttributeType[] = Object.entries(init?.attributes ?? {}).map(
 						([Name, Value]) => ({ Name, Value }),
@@ -757,6 +788,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			deleteUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminDeleteUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
@@ -764,6 +796,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			disableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminDisableUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
@@ -771,6 +804,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			enableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminEnableUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
@@ -778,20 +812,23 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				} catch (e) { throw asApiError(e); }
 			},
 			resetUserPassword: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminResetUserPasswordCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
 					}));
 				} catch (e) { throw asApiError(e); }
 			},
-			setUserPassword: async (username, password, permanent) => {
+			setUserPassword: async (username, password, options) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminSetUserPasswordCommand({
-						UserPoolId: this.adminUserPoolId(), Username: username, Password: password, Permanent: permanent,
+						UserPoolId: this.adminUserPoolId(), Username: username, Password: password, Permanent: options?.permanent ?? false,
 					}));
 				} catch (e) { throw asApiError(e); }
 			},
 			getUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					const resp = await this.client.send(new AdminGetUserCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,
@@ -811,28 +848,34 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					throw asApiError(e);
 				}
 			},
-			scan: async function* (this: AuthCognito<O>) {
-				let paginationToken: string | undefined;
-				do {
-					const resp = await this.client.send(new ListUsersCommand({
-						UserPoolId: this.adminUserPoolId(), Limit: 60, PaginationToken: paginationToken,
-					}));
-					for (const u of resp.Users ?? []) {
-						const attributes: Record<string, string> = {};
-						for (const a of (u.Attributes ?? []) as AttributeType[]) {
-							if (a.Name) attributes[a.Name] = a.Value ?? '';
+			scan: (filter?: AdminUserFilter) => {
+				this.assertAdminAction('lifecycle');
+				const self = this;
+				const cognitoFilter = toCognitoFilter(filter);
+				return (async function* () {
+					let paginationToken: string | undefined;
+					do {
+						const resp = await self.client.send(new ListUsersCommand({
+							UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
+						}));
+						for (const u of resp.Users ?? []) {
+							const attributes: Record<string, string> = {};
+							for (const a of (u.Attributes ?? []) as AttributeType[]) {
+								if (a.Name) attributes[a.Name] = a.Value ?? '';
+							}
+							yield {
+								username: u.Username ?? '',
+								userSub: attributes['sub'] ?? '',
+								enabled: u.Enabled ?? true,
+								attributes,
+							};
 						}
-						yield {
-							username: u.Username ?? '',
-							userSub: attributes['sub'] ?? '',
-							enabled: u.Enabled ?? true,
-							attributes,
-						};
-					}
-					paginationToken = resp.PaginationToken;
-				} while (paginationToken);
-			}.bind(this),
+						paginationToken = resp.PaginationToken;
+					} while (paginationToken);
+				})();
+			},
 			revokeUserSessions: async (username) => {
+				this.assertAdminAction('lifecycle');
 				try {
 					await this.client.send(new AdminUserGlobalSignOutCommand({
 						UserPoolId: this.adminUserPoolId(), Username: username,

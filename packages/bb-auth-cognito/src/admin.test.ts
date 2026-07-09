@@ -172,7 +172,7 @@ describe('auth.admin user lifecycle', () => {
 	test('setUserPassword(permanent) lets the user sign in with the new password', async () => {
 		const auth = new AuthCognito(ROOT, unique(), { admin: {} });
 		await signUpAndConfirm(auth, 'hank');
-		await auth.admin.setUserPassword('hank', 'NewPass!2', true);
+		await auth.admin.setUserPassword('hank', 'NewPass!2', { permanent: true });
 		const r = await auth.signIn('hank', 'NewPass!2', freshContext());
 		assert.strictEqual(r.status, 'signedIn');
 	});
@@ -186,6 +186,18 @@ describe('auth.admin user lifecycle', () => {
 		assert.deepStrictEqual(seen.sort(), ['ida', 'jack']);
 	});
 
+	test('scan with a startsWith filter narrows results (Gap 4)', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { admin: {} });
+		await auth.admin.createUser('alice');
+		await auth.admin.createUser('albert');
+		await auth.admin.createUser('bob');
+		const seen: string[] = [];
+		for await (const u of auth.admin.scan({ attribute: 'username', match: 'startsWith', value: 'al' })) {
+			seen.push(u.username);
+		}
+		assert.deepStrictEqual(seen.sort(), ['albert', 'alice']);
+	});
+
 	test('revokeUserSessions deletes the user session (forces re-auth)', async () => {
 		const auth = new AuthCognito(ROOT, unique(), { admin: {} });
 		await signUpAndConfirm(auth, 'kara');
@@ -195,5 +207,36 @@ describe('auth.admin user lifecycle', () => {
 
 		await auth.admin.revokeUserSessions('kara');
 		assert.strictEqual(await auth.checkAuth(ctx), false);
+	});
+});
+
+describe('auth.admin action-scope runtime gate (Gap 3)', () => {
+	test('groups-only pool fast-fails a lifecycle call with a clear error', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: { actions: ['groups'] } });
+		// Cast past the compile-time gate to reach the runtime guard (an untyped
+		// JS caller would hit this path). Error must be clear, not AWS AccessDenied.
+		const admin = auth.admin as unknown as { createUser(u: string): Promise<unknown> };
+		await assert.rejects(
+			() => admin.createUser('x'),
+			(e: unknown) => isBlocksError(e, AuthCognitoErrors.NotAuthorized) && /lifecycle actions not granted/.test((e as Error).message),
+		);
+	});
+
+	test('lifecycle-only pool fast-fails a groups call', async () => {
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		const admin = auth.admin as unknown as { addUserToGroup(u: string, g: string): Promise<unknown> };
+		await assert.rejects(
+			() => admin.addUserToGroup('x', 'admins'),
+			(e: unknown) => isBlocksError(e, AuthCognitoErrors.NotAuthorized) && /groups actions not granted/.test((e as Error).message),
+		);
+	});
+
+	test('granted action + admin:{} (all) do not fast-fail', async () => {
+		const groupsOnly = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: { actions: ['groups'] } });
+		await signUpAndConfirm(groupsOnly, 'gwen');
+		await groupsOnly.admin.addUserToGroup('gwen', 'admins'); // granted → no throw
+
+		const all = new AuthCognito(ROOT, unique(), { admin: {} });
+		await all.admin.createUser('hugo'); // no actions restriction → no throw
 	});
 });

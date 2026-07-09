@@ -40,20 +40,26 @@ async function fullSurface() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (3) `actions` scopes the IAM grant, NOT the typed method set — the full
-//     surface is present at the type level regardless of `actions`. (Narrowing
-//     the type by `actions` would force `AuthCognito<O>` invariant; see
-//     `AdminSurface` doc.) A method whose action wasn't granted fails at
-//     runtime with IAM AccessDenied, not at compile time.
+// (3) `actions` gates the methods at COMPILE TIME (via AdminActionGate rest
+//     params) as well as scoping the IAM grant — calling an ungranted method is
+//     a type error. This is variance-safe (the gate lives in a parameter
+//     position, not the surface shape); the variance guard is case (8).
 // ─────────────────────────────────────────────────────────────────────────────
-async function actionsScopeGrantNotTypes() {
+async function actionsGateMethodsAtCompileTime() {
 	const groupsScoped = new AuthCognito(scope, 'a3', { groups: ['admins'], admin: { actions: ['groups'] } });
-	await groupsScoped.admin.addUserToGroup('u', 'admins');
-	await groupsScoped.admin.createUser('u'); // present at type level (grant-scoped at runtime)
+	await groupsScoped.admin.addUserToGroup('u', 'admins'); // granted → ok
+	// @ts-expect-error — lifecycle not granted by actions: ['groups'].
+	await groupsScoped.admin.createUser('u');
 
 	const lifecycleScoped = new AuthCognito(scope, 'a4', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
-	await lifecycleScoped.admin.createUser('u');
-	await lifecycleScoped.admin.addUserToGroup('u', 'admins'); // present at type level
+	await lifecycleScoped.admin.createUser('u'); // granted → ok
+	// @ts-expect-error — groups not granted by actions: ['lifecycle'].
+	await lifecycleScoped.admin.addUserToGroup('u', 'admins');
+
+	// admin: {} (no actions) grants everything — both call groups compile.
+	const all = new AuthCognito(scope, 'a3b', { groups: ['admins'], admin: {} });
+	await all.admin.addUserToGroup('u', 'admins');
+	await all.admin.createUser('u');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,4 +90,61 @@ async function defaultO() {
 	const auth: AuthCognito = new AuthCognito(scope, 'a7');
 	// @ts-expect-error — admin disabled on the default (wide) O.
 	await auth.admin.createUser('u');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (8) Variance guard — an instance narrowed on groups/attributes/mfa is still
+//     assignable to the wide AuthCognito. This is the exact property the earlier
+//     shape-narrowing attempt broke (it regressed 14 call sites); the
+//     parameter-position action gate must NOT reintroduce it.
+//
+//     Note: an admin-*enabled* instance is intentionally NOT assignable to a
+//     wide instance whose O leaves admin disabled (AdminSurface vs AdminDisabled)
+//     — that is a property of the opt-in gate itself, unrelated to the action
+//     gate, and does not affect real call sites (nothing assigns an
+//     admin-enabled instance to a plain `AuthCognito`).
+// ─────────────────────────────────────────────────────────────────────────────
+function takesWide(_auth: AuthCognito) { /* no-op */ }
+function varianceGuard() {
+	takesWide(new AuthCognito(scope, 'a8a', { groups: ['admins', 'readers'] }));
+	takesWide(new AuthCognito(scope, 'a8b', { userAttributes: [{ name: 'department' }] }));
+	takesWide(new AuthCognito(scope, 'a8c', { mfa: 'optional', mfaTypes: ['TOTP'] }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (9) Gap 1 — admin reads are typed by O: `attributes` keys and `groups` narrow
+//     just like the client-side CognitoUser, catching typos with no autocomplete
+//     loss. (Previously AdminUser was un-parameterized: string[] / untyped bag.)
+// ─────────────────────────────────────────────────────────────────────────────
+async function typedAdminReads() {
+	const auth = new AuthCognito(scope, 'a9', {
+		groups: ['admins', 'readers'],
+		userAttributes: [{ name: 'department' }],
+		admin: {},
+	});
+	const user = await auth.admin.getUser('alice');
+	if (user) {
+		const dept: string | undefined = user.attributes['custom:department']; // declared attr → ok
+		const email: string | undefined = user.attributes['email'];            // standard attr → ok
+		void dept; void email;
+		// @ts-expect-error — 'custom:deparment' (typo) is not a known attribute key.
+		void user.attributes['custom:deparment'];
+		if (user.groups) {
+			const g: 'admins' | 'readers' = user.groups[0]; // groups narrowed to the union
+			void g;
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (10) Gap 4 — scan accepts an optional server-side filter.
+// ─────────────────────────────────────────────────────────────────────────────
+async function scanFilter() {
+	const auth = new AuthCognito(scope, 'a10', { admin: {} });
+	for await (const u of auth.admin.scan({ attribute: 'email', match: 'startsWith', value: 'a' })) {
+		void u.username;
+	}
+	for await (const u of auth.admin.scan()) void u.username; // filter is optional
+	// @ts-expect-error — 'contains' is not a supported match mode.
+	auth.admin.scan({ attribute: 'email', match: 'contains', value: 'a' });
 }

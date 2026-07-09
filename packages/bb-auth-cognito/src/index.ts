@@ -52,6 +52,7 @@ import {
 	type AdminCreateInit,
 	type AdminGetterOf,
 	type AdminUser,
+	type AdminUserFilter,
 	type GroupAdmin,
 	type LifecycleAdmin,
 	type AuthCognitoOptions,
@@ -282,6 +283,23 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	}
 
 	/**
+	 * Throw a clear error when an admin method's action group wasn't granted by
+	 * `admin.actions` — the runtime half of the {@link AdminActionGate} compile
+	 * gate, so untyped JS callers (or widened generics) fast-fail here instead
+	 * of getting a cryptic AWS `AccessDenied` from Cognito.
+	 */
+	private assertAdminAction(action: 'groups' | 'lifecycle'): void {
+		const actions = this.options.admin?.actions;
+		if (actions && !actions.includes(action)) {
+			throw new ApiError(
+				`admin.${action} actions not granted: construct AuthCognito with admin: { actions: [..., '${action}'] }`,
+				403,
+				{ name: AuthCognitoErrors.NotAuthorized },
+			);
+		}
+	}
+
+	/**
 	 * Build the mock admin surface against the live `this.state`. All mutators
 	 * call the existing private `flushToDisk()` so changes persist and are seen
 	 * by the next request on this instance.
@@ -308,32 +326,47 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			attributes: { ...user.attributes },
 			groups: Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username)),
 		});
+		// Apply a scan filter in memory, mirroring Cognito's ListUsers Filter.
+		const matchesFilter = (user: AdminUser, filter?: AdminUserFilter): boolean => {
+			if (!filter) return true;
+			const candidate =
+				filter.attribute === 'username' ? user.username
+				: filter.attribute === 'status' ? (user.enabled ? 'Enabled' : 'Disabled')
+				: (user.attributes as Record<string, string>)[filter.attribute];
+			if (candidate == null) return false;
+			return filter.match === 'startsWith' ? candidate.startsWith(filter.value) : candidate === filter.value;
+		};
 
 		return {
 			// ── GroupAdmin ───────────────────────────────────────────────────
 			addUserToGroup: async (username, group) => {
+				this.assertAdminAction('groups');
 				requireUser(username);
 				const members = requireGroup(group);
 				if (!members.includes(username)) members.push(username);
 				this.flushToDisk();
 			},
 			removeUserFromGroup: async (username, group) => {
+				this.assertAdminAction('groups');
 				requireUser(username);
 				const members = requireGroup(group);
 				this.state.groups[group] = members.filter((u) => u !== username);
 				this.flushToDisk();
 			},
 			listGroupsForUser: async (username) => {
+				this.assertAdminAction('groups');
 				requireUser(username);
 				return Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username));
 			},
 			listUsersInGroup: async (group) => {
+				this.assertAdminAction('groups');
 				const members = requireGroup(group);
 				return members.map((u) => toAdminUser(u, requireUser(u)));
 			},
 
 			// ── LifecycleAdmin ───────────────────────────────────────────────
 			createUser: async (username, init) => {
+				this.assertAdminAction('lifecycle');
 				if (this.state.users[username]) {
 					throw new ApiError('User already exists', 409, { name: AuthCognitoErrors.UserAlreadyExists });
 				}
@@ -361,6 +394,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 				return toAdminUser(username, record);
 			},
 			deleteUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				requireUser(username);
 				delete this.state.users[username];
 				for (const group of Object.keys(this.state.groups)) {
@@ -369,23 +403,27 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 				this.flushToDisk();
 			},
 			disableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				requireUser(username).disabled = true;
 				this.flushToDisk();
 			},
 			enableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				requireUser(username).disabled = false;
 				this.flushToDisk();
 			},
 			resetUserPassword: async (username) => {
+				this.assertAdminAction('lifecycle');
 				const user = requireUser(username) as MockUserRecord & { forcePasswordChange?: boolean };
 				user.forcePasswordChange = true;
 				this.flushToDisk();
 			},
-			setUserPassword: async (username, password, permanent) => {
+			setUserPassword: async (username, password, options) => {
+				this.assertAdminAction('lifecycle');
 				this.enforcePasswordPolicy(password);
 				const user = requireUser(username) as MockUserRecord & { forcePasswordChange?: boolean };
 				user.password = password;
-				if (permanent) {
+				if (options?.permanent) {
 					delete user.forcePasswordChange;
 				} else {
 					user.forcePasswordChange = true;
@@ -393,17 +431,25 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 				this.flushToDisk();
 			},
 			getUser: async (username) => {
+				this.assertAdminAction('lifecycle');
 				const user = this.state.users[username];
 				return user ? toAdminUser(username, user) : null;
 			},
-			scan: async function* (this: AuthCognito<O>) {
-				// Snapshot keys so concurrent mutation during iteration is safe.
-				for (const username of Object.keys(this.state.users)) {
-					const user = this.state.users[username];
-					if (user) yield toAdminUser(username, user);
-				}
-			}.bind(this),
+			scan: (filter?: AdminUserFilter) => {
+				this.assertAdminAction('lifecycle');
+				const self = this;
+				return (async function* () {
+					// Snapshot keys so concurrent mutation during iteration is safe.
+					for (const username of Object.keys(self.state.users)) {
+						const user = self.state.users[username];
+						if (!user) continue;
+						const adminUser = toAdminUser(username, user);
+						if (matchesFilter(adminUser, filter)) yield adminUser;
+					}
+				})();
+			},
 			revokeUserSessions: async (username) => {
+				this.assertAdminAction('lifecycle');
 				requireUser(username);
 				await this.sessions.deleteByUsername(username);
 			},

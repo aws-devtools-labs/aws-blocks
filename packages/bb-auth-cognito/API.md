@@ -13,8 +13,14 @@ import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // @public
-export interface AdminCreateInit {
-    attributes?: Record<string, string>;
+export type AdminAction = 'groups' | 'lifecycle';
+
+// @public
+export type AdminActionGate<O extends AuthCognitoOptions, A extends AdminAction> = AdminGrants<O, A> extends true ? [] : [ERROR_admin_action_not_granted: never];
+
+// @public
+export interface AdminCreateInit<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    attributes?: Partial<Record<AttrOf<O>, string>>;
     suppressInvite?: boolean;
     temporaryPassword?: string;
 }
@@ -30,25 +36,39 @@ export type AdminGetterOf<O extends AuthCognitoOptions> = O extends {
 } ? AdminSurface<O> : AdminDisabled;
 
 // @public
+export type AdminGrants<O extends AuthCognitoOptions, A extends AdminAction> = O extends {
+    admin: {
+        actions: infer L extends readonly string[];
+    };
+} ? (A extends L[number] ? true : false) : true;
+
+// @public
 export interface AdminOptions {
-    actions?: readonly ('groups' | 'lifecycle')[];
+    actions?: readonly AdminAction[];
 }
 
 // @public
 export type AdminSurface<O extends AuthCognitoOptions = AuthCognitoOptions> = GroupAdmin<O> & LifecycleAdmin<O>;
 
 // @public
-export interface AdminUser {
+export interface AdminUser<O extends AuthCognitoOptions = AuthCognitoOptions> {
     // (undocumented)
-    attributes: Record<string, string>;
+    attributes: Partial<Record<ReadAttrOf<O>, string>>;
     // (undocumented)
     enabled: boolean;
     // (undocumented)
-    groups?: string[];
+    groups?: GroupOf<O>[];
     // (undocumented)
     username: string;
     // (undocumented)
     userSub: string;
+}
+
+// @public
+export interface AdminUserFilter {
+    attribute: string;
+    match: 'startsWith' | 'equals';
+    value: string;
 }
 
 // Warning: (ae-incompatible-release-tags) The symbol "AttrOf" is marked as @public, but its signature references "CustomAttrNames" which is marked as @internal
@@ -314,13 +334,13 @@ export interface FetchAuthSessionOptions {
 // @public
 export interface GroupAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
     // (undocumented)
-    addUserToGroup(username: string, group: GroupOf<O>): Promise<void>;
+    addUserToGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
     // (undocumented)
-    listGroupsForUser(username: string): Promise<GroupOf<O>[]>;
+    listGroupsForUser(username: string, ...gate: AdminActionGate<O, 'groups'>): Promise<GroupOf<O>[]>;
     // (undocumented)
-    listUsersInGroup(group: GroupOf<O>): Promise<AdminUser[]>;
+    listUsersInGroup(group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<AdminUser<O>[]>;
     // (undocumented)
-    removeUserFromGroup(username: string, group: GroupOf<O>): Promise<void>;
+    removeUserFromGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
 }
 
 // @public
@@ -348,23 +368,23 @@ export interface JWT {
 // @public
 export interface LifecycleAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
     // (undocumented)
-    createUser(username: string, init?: AdminCreateInit): Promise<AdminUser>;
+    createUser(username: string, init?: AdminCreateInit<O>, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O>>;
     // (undocumented)
-    deleteUser(username: string): Promise<void>;
+    deleteUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     // (undocumented)
-    disableUser(username: string): Promise<void>;
+    disableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     // (undocumented)
-    enableUser(username: string): Promise<void>;
+    enableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     // (undocumented)
-    getUser(username: string): Promise<AdminUser | null>;
+    getUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O> | null>;
     // (undocumented)
-    resetUserPassword(username: string): Promise<void>;
+    resetUserPassword(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     // (undocumented)
-    revokeUserSessions(username: string): Promise<void>;
+    revokeUserSessions(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
     // (undocumented)
-    scan(): AsyncIterable<AdminUser>;
+    scan(filter?: AdminUserFilter, ...gate: AdminActionGate<O, 'lifecycle'>): AsyncIterable<AdminUser<O>>;
     // (undocumented)
-    setUserPassword(username: string, password: string, permanent: boolean): Promise<void>;
+    setUserPassword(username: string, password: string, options?: SetPasswordOptions, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
 }
 
 // @public
@@ -456,6 +476,11 @@ export class SessionStore {
     lookupSession(sessionId: string): Promise<SessionRecord | null>;
     // (undocumented)
     updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void>;
+}
+
+// @public
+export interface SetPasswordOptions {
+    permanent?: boolean;
 }
 
 // @public

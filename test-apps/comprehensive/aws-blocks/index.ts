@@ -970,7 +970,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { username: u.username, enabled: u.enabled };
   },
   async authCAdminSetPassword(username: string, password: string) {
-    await authC.admin.setUserPassword(username, password, true);
+    await authC.admin.setUserPassword(username, password, { permanent: true });
     return { success: true };
   },
   async authCAdminAddToGroup(username: string, group: string) {
