@@ -19,7 +19,38 @@ const CURRENT_PAGE = 'http://localhost:3000/dashboard';
 const AUTHORIZE_URL = 'https://idp.example.com/authorize';
 
 let navigatedTo = '';
+let reloaded = false;
 let store: Map<string, string>;
+
+/**
+ * Cross-tab payloads captured from `BroadcastChannel.postMessage` so tests can
+ * assert the OIDC client bridged its sign-in into `@aws-blocks/auth-common`.
+ * Cleared (in place — the stub closes over this exact array) on each install.
+ */
+const broadcasts: unknown[] = [];
+let savedBroadcastChannel: unknown;
+
+/**
+ * A no-op `BroadcastChannel`. `auth-common`'s `broadcastAuthChange()` lazily
+ * opens a real channel via `getChannel()`; a real one is a ref'd libuv handle
+ * that keeps `node --test` alive and hangs the run. This records posts instead.
+ *
+ * `auth-common` caches that channel in a module-level singleton it never resets,
+ * so whichever test triggers the first `broadcastAuthChange()` pins the live
+ * instance for the rest of the run. Every stub instance posts to the SAME
+ * module-level `broadcasts` array (emptied per test in `installBrowserGlobals`),
+ * so the captured posts stay correct regardless of which describe block ran
+ * first — preserve that shared-array invariant if this stub is refactored.
+ */
+class StubBroadcastChannel {
+	name: string;
+	onmessage: ((ev: unknown) => void) | null = null;
+	constructor(name: string) { this.name = name; }
+	postMessage(msg: unknown): void { broadcasts.push(msg); }
+	addEventListener(): void {}
+	removeEventListener(): void {}
+	close(): void {}
+}
 
 function installBrowserGlobals(currentHref: string): void {
 	const url = new URL(currentHref);
@@ -28,10 +59,22 @@ function installBrowserGlobals(currentHref: string): void {
 		set href(v: string) { navigatedTo = v; },
 		origin: url.origin,
 		pathname: url.pathname,
+		reload() { reloaded = true; },
 	};
 	store = new Map<string, string>();
+	broadcasts.length = 0;
+	reloaded = false;
 
-	(globalThis as any).window = { location: locationStub };
+	// Back `window` with a real EventTarget so auth-common's
+	// `window.dispatchEvent(new CustomEvent('blocks-auth-change', …))` works and
+	// tests can listen for the same-window auth-change event.
+	const target = new EventTarget();
+	(globalThis as any).window = {
+		location: locationStub,
+		addEventListener: target.addEventListener.bind(target),
+		removeEventListener: target.removeEventListener.bind(target),
+		dispatchEvent: target.dispatchEvent.bind(target),
+	};
 	(globalThis as any).sessionStorage = {
 		getItem: (k: string) => store.get(k) ?? null,
 		setItem: (k: string, v: string) => { store.set(k, v); },
@@ -40,12 +83,19 @@ function installBrowserGlobals(currentHref: string): void {
 	// The client builds `redirect_uri` against window.location.href; some
 	// code paths also read the global `location`. Mirror it.
 	(globalThis as any).location = locationStub;
+
+	// Swap in the no-op BroadcastChannel before any broadcastAuthChange() call
+	// caches a (real) channel instance.
+	savedBroadcastChannel = (globalThis as any).BroadcastChannel;
+	(globalThis as any).BroadcastChannel = StubBroadcastChannel;
 }
 
 function clearBrowserGlobals(): void {
 	delete (globalThis as any).window;
 	delete (globalThis as any).sessionStorage;
 	delete (globalThis as any).location;
+	if (savedBroadcastChannel === undefined) delete (globalThis as any).BroadcastChannel;
+	else (globalThis as any).BroadcastChannel = savedBroadcastChannel;
 	navigatedTo = '';
 }
 
@@ -261,5 +311,345 @@ describe('AuthOIDCClient.handleRedirectCallback — return shape', () => {
 		await client.handleRedirectCallback();
 		assert.ok(lastExchangeBody, 'exchange should have been called');
 		assert.strictEqual('iss' in lastExchangeBody, false, 'iss should be omitted, not sent as undefined');
+	});
+});
+
+describe('AuthOIDCClient.handleRedirectCallback — idempotency under double invocation', () => {
+	const STATE = 'state-dbl';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code-dbl&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google',
+			verifier: 'v',
+			state: STATE,
+			nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+			appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('concurrent double invocation shares one exchange and both resolve to the same user', async () => {
+		// React StrictMode mounts → unmounts → mounts, firing the callback effect
+		// twice synchronously. Count the exchange POSTs to prove the single-use
+		// PKCE code is exchanged exactly once and neither caller is stranded.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			// Settle on a later tick so both calls are genuinely in flight together.
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		let notifyCount = 0;
+		client.onAuthStateChange(() => { notifyCount++; });
+		// onAuthStateChange fires synchronously on subscribe with the last-known
+		// state; capture that baseline so the assertion below measures only the
+		// callback-driven notify as a delta, independent of cross-test module state.
+		const notifyBaseline = notifyCount;
+
+		// Fire twice WITHOUT awaiting the first — the double-mount race.
+		const [r1, r2] = await Promise.all([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+
+		assert.ok(r1, 'first call must resolve a user');
+		assert.ok(r2, 'second (concurrent) call must resolve a user — not null/throw');
+		assert.strictEqual(r1!.userId, 'iss:sub');
+		assert.strictEqual(r2!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once');
+		assert.strictEqual(notifyCount - notifyBaseline, 1, 'callback should notify subscribers exactly once');
+		assert.strictEqual(store.get('__blocks_oidc_pending'), undefined, 'pending entry should be consumed');
+	});
+
+	test('a sequential double invocation also shares the in-flight result', async () => {
+		// Same race, expressed as two calls captured before awaiting either.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		const p1 = client.handleRedirectCallback();
+		const p2 = client.handleRedirectCallback();
+		const r1 = await p1;
+		const r2 = await p2;
+		assert.strictEqual(r1!.userId, 'iss:sub');
+		assert.strictEqual(r2!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 1, 'only one exchange for the shared in-flight code');
+	});
+
+	test('releases the guard after settling so a fresh flow on the same page can run', async () => {
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+		const first = await client.handleRedirectCallback();
+		assert.ok(first, 'first flow resolves');
+		assert.strictEqual(exchangeCalls, 1);
+
+		// Simulate a brand-new flow (new code/state + freshly stored pending blob).
+		installBrowserGlobals('http://localhost:3000/spa-callback?code=auth-code-2&state=state-2');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'state-2', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+
+		const second = await client.handleRedirectCallback();
+		assert.ok(second, 'second independent flow resolves — guard released after the first settled');
+		assert.strictEqual(exchangeCalls, 2, 'the second flow runs its own exchange');
+	});
+
+	test('error path under concurrent double invocation rejects both callers identically and releases the guard', async () => {
+		// The guard must propagate ONE shared rejection to both callers and
+		// release on failure. Without this, a refactor that mishandled the shared
+		// rejection (stranding the page) or failed to release the guard (blocking
+		// a same-page retry) would keep the success-path tests green.
+		let exchangeCalls = 0;
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			// Settle on a later tick so both calls are genuinely in flight together.
+			await new Promise((r) => setTimeout(r, 5));
+			return { ok: false, json: async () => ({ error: 'invalid_grant' }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const client = makeClient();
+
+		// Fire twice WITHOUT awaiting the first; allSettled captures both outcomes.
+		const [s1, s2] = await Promise.allSettled([
+			client.handleRedirectCallback(),
+			client.handleRedirectCallback(),
+		]);
+
+		assert.strictEqual(s1.status, 'rejected', 'first call must reject when the exchange fails');
+		assert.strictEqual(s2.status, 'rejected', 'second (concurrent) call must reject too — never resolve null');
+		// Both callers share the one in-flight promise, so the rejection is the
+		// identical Error instance — not two independently-thrown errors.
+		const reason1 = (s1 as PromiseRejectedResult).reason;
+		const reason2 = (s2 as PromiseRejectedResult).reason;
+		assert.strictEqual(reason1, reason2, 'both callers must reject with the identical shared error');
+		assert.match(reason1.message, /exchange failed/i);
+		assert.strictEqual(exchangeCalls, 1, 'single-use PKCE code must be exchanged exactly once, even on failure');
+
+		// The finally must release the guard on failure: a fresh-code flow on the
+		// same page runs its own exchange instead of being blocked by a stale entry.
+		installBrowserGlobals('http://localhost:3000/spa-callback?code=auth-code-retry&state=state-retry');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'state-retry', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		globalThis.fetch = (async (_url: any, init?: any) => {
+			if (init?.method === 'POST') exchangeCalls++;
+			return { ok: true, json: async () => ({ user: BARE_USER }) };
+		}) as unknown as typeof globalThis.fetch;
+
+		const retry = await client.handleRedirectCallback();
+		assert.ok(retry, 'a fresh-code flow resolves — the guard was released after the failure');
+		assert.strictEqual(retry!.userId, 'iss:sub');
+		assert.strictEqual(exchangeCalls, 2, 'the fresh flow runs its own second exchange');
+	});
+});
+
+describe('AuthOIDCClient.handleRedirectCallback — @aws-blocks/auth-common bridge', () => {
+	const STATE = 'state-bridge';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=auth-code&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google',
+			verifier: 'v',
+			state: STATE,
+			nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+			appState: 'app-state',
+		}));
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	function stubExchangeOk(body: unknown): void {
+		globalThis.fetch = (async () => ({ ok: true, json: async () => body })) as unknown as typeof globalThis.fetch;
+	}
+
+	test('dispatches a same-window auth-change event so on-page onAuthChange consumers re-render', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		// auth-common's broadcastAuthChange() fires a 'blocks-auth-change'
+		// CustomEvent on window; onAuthChange listeners on THIS page rely on it.
+		let detail: any = null;
+		(globalThis as any).window.addEventListener('blocks-auth-change', (e: any) => { detail = e.detail; });
+
+		const client = makeClient();
+		const user = await client.handleRedirectCallback();
+
+		assert.ok(user, 'callback should resolve a user');
+		assert.ok(detail, 'a blocks-auth-change event should have been dispatched on window');
+		assert.strictEqual(detail.type, 'auth-change');
+		assert.strictEqual(detail.user.userId, 'iss:sub');
+		assert.strictEqual(detail.user.username, 'alice');
+	});
+
+	test('posts the signed-in user across tabs via BroadcastChannel', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		const client = makeClient();
+		await client.handleRedirectCallback();
+
+		assert.strictEqual(broadcasts.length, 1, 'exactly one cross-tab post should have been made');
+		const msg = broadcasts[0] as any;
+		assert.strictEqual(msg.type, 'auth-change');
+		assert.strictEqual(msg.user.userId, 'iss:sub');
+	});
+
+	test('does NOT broadcast when the callback fails (state mismatch)', async () => {
+		stubExchangeOk({ user: BARE_USER });
+		// Tamper the stored state so validation throws before any exchange.
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: 'a-different-state', nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		let dispatched = false;
+		(globalThis as any).window.addEventListener('blocks-auth-change', () => { dispatched = true; });
+
+		const client = makeClient();
+		await assert.rejects(() => client.handleRedirectCallback(), /state mismatch/);
+
+		assert.strictEqual(dispatched, false, 'no auth-change event on a failed callback');
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab post on a failed callback');
+	});
+});
+
+describe('AuthOIDCClient.signOut — @aws-blocks/auth-common bridge', () => {
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		installBrowserGlobals('http://localhost:3000/dashboard');
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+		// The /aws-blocks/auth/signout POST just needs to resolve OK.
+		globalThis.fetch = (async () => ({ ok: true, json: async () => ({}) })) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('posts a signed-out (null) user across tabs via BroadcastChannel', async () => {
+		const client = makeClient();
+		await client.signOut();
+
+		assert.strictEqual(broadcasts.length, 1, 'exactly one cross-tab post should have been made');
+		const msg = broadcasts[0] as any;
+		assert.strictEqual(msg.type, 'auth-change');
+		assert.strictEqual(msg.user, null, 'sign-out broadcasts a null user so other tabs re-render');
+	});
+
+	test('dispatches a same-window auth-change(null) event before reloading', async () => {
+		// Other tabs rely on the cross-tab post above; same-tab onAuthChange
+		// consumers rely on this same-window event. The page then reloads.
+		let detail: any = 'unset';
+		(globalThis as any).window.addEventListener('blocks-auth-change', (e: any) => { detail = e.detail; });
+
+		const client = makeClient();
+		await client.signOut();
+
+		assert.notStrictEqual(detail, 'unset', 'a blocks-auth-change event should have been dispatched on window');
+		assert.strictEqual(detail.type, 'auth-change');
+		assert.strictEqual(detail.user, null);
+		assert.strictEqual(reloaded, true, 'signOut should reload the page after broadcasting');
+	});
+});
+
+describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)', () => {
+	let originalFetch: typeof globalThis.fetch;
+	let savedWindow: unknown;
+	let savedLocation: unknown;
+	let savedSessionStorage: unknown;
+	let savedBroadcastChannelGlobal: unknown;
+	let signoutPosted: boolean;
+
+	beforeEach(() => {
+		// Emulate SSR: strip the browser globals that broadcastAuthChange() (a
+		// BroadcastChannel + window.dispatchEvent) and the reload depend on.
+		// Snapshot first so a sibling describe that installed them isn't disturbed.
+		// Note: Node ships a real global BroadcastChannel, so it must be removed
+		// too — otherwise an un-guarded broadcast would open a live channel.
+		savedWindow = (globalThis as any).window;
+		savedLocation = (globalThis as any).location;
+		savedSessionStorage = (globalThis as any).sessionStorage;
+		savedBroadcastChannelGlobal = (globalThis as any).BroadcastChannel;
+		delete (globalThis as any).window;
+		delete (globalThis as any).location;
+		delete (globalThis as any).sessionStorage;
+		delete (globalThis as any).BroadcastChannel;
+
+		// Reset the shared capture state (installBrowserGlobals normally does this)
+		// so the assertions below can't observe a sibling test's broadcast/reload.
+		broadcasts.length = 0;
+		reloaded = false;
+
+		// _getBaseUrl() resolves from this without touching window.
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		originalFetch = globalThis.fetch;
+		signoutPosted = false;
+		globalThis.fetch = (async (url: any, init?: any) => {
+			if (String(url).endsWith('/aws-blocks/auth/signout') && init?.method === 'POST') {
+				signoutPosted = true;
+			}
+			return { ok: true, json: async () => ({}) };
+		}) as unknown as typeof globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		// Restore exactly what we snapshotted so sibling tests are unaffected.
+		if (savedWindow === undefined) delete (globalThis as any).window;
+		else (globalThis as any).window = savedWindow;
+		if (savedLocation === undefined) delete (globalThis as any).location;
+		else (globalThis as any).location = savedLocation;
+		if (savedSessionStorage === undefined) delete (globalThis as any).sessionStorage;
+		else (globalThis as any).sessionStorage = savedSessionStorage;
+		if (savedBroadcastChannelGlobal === undefined) delete (globalThis as any).BroadcastChannel;
+		else (globalThis as any).BroadcastChannel = savedBroadcastChannelGlobal;
+	});
+
+	test('completes the server-side sign-out without a window and never broadcasts', async () => {
+		const client = makeClient();
+		// Pre-fix this rejected: broadcastAuthChange(null) ran before the window
+		// guard, so getChannel()/window.dispatchEvent threw a ReferenceError after
+		// the sign-out POST had already completed — stranding the returned promise.
+		await assert.doesNotReject(() => client.signOut());
+
+		assert.strictEqual(signoutPosted, true, 'the server-side sign-out POST should still run');
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab broadcast should be attempted with no window');
+		assert.strictEqual(reloaded, false, 'no page reload server-side');
 	});
 });

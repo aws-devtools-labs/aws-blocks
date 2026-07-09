@@ -20,6 +20,24 @@ const writeMinimalNitroOutput = (
      *  bundled routeRules). Default: empty server bundle (no rules).
      */
     bundledRouteRules?: Record<string, unknown>;
+    /**
+     * `app.baseURL` baked into the server bundle's runtime config (as Nitro
+     * does). Omit for the default (no base path). Set e.g. `'/myapp/'` to
+     * exercise the basePath extraction.
+     */
+    baseURL?: string;
+    /**
+     * Relative path → contents for files written under `.output/public/`.
+     * Used to exercise the prerendered-HTML baseURL safety net.
+     */
+    publicFiles?: Record<string, string>;
+    /**
+     * When set, inject an `ipx: { baseURL: <value> }` block into the runtime
+     * config BEFORE the `app` block, reproducing the ordering hazard where a
+     * bare `/"baseURL"/` scan would wrongly pick up `ipx.baseURL` (default
+     * `/_ipx`) instead of `app.baseURL`. Exercises the brace-scoped read.
+     */
+    ipxBaseURLBefore?: string;
   } = {},
 ): void => {
   const outputDir = path.join(projectDir, '.output');
@@ -35,10 +53,27 @@ const writeMinimalNitroOutput = (
     'export const handler = async () => {};',
   );
   // Bundled route rules — adapter scans this with a regex looking for
-  // `"routeRules":` followed by a JSON object.
+  // `"routeRules":` followed by a JSON object. The `baseURL` (when set) is
+  // embedded the same way Nitro bakes it into the runtime config blob.
   const bundledRules = extras.bundledRouteRules ?? {};
-  const bundleSource = `// nitro server bundle\n_inlineRuntimeConfig = { nitro: { "routeRules": ${JSON.stringify(bundledRules)} } };\n`;
+  const baseURLBlob =
+    extras.baseURL !== undefined
+      ? ` "baseURL": ${JSON.stringify(extras.baseURL)},`
+      : '';
+  // Optional `ipx.baseURL` serialized BEFORE the app block — the ordering that
+  // would trip a naive whole-source `/"baseURL"/` scan.
+  const ipxBlob =
+    extras.ipxBaseURLBefore !== undefined
+      ? `ipx: { "baseURL": ${JSON.stringify(extras.ipxBaseURLBefore)} }, `
+      : '';
+  const bundleSource = `// nitro server bundle\n_inlineRuntimeConfig = { ${ipxBlob}app: {${baseURLBlob} }, nitro: { "routeRules": ${JSON.stringify(bundledRules)} } };\n`;
   fs.writeFileSync(path.join(chunksDir, 'nitro.mjs'), bundleSource);
+  // Optional prerendered HTML / public files.
+  for (const [rel, content] of Object.entries(extras.publicFiles ?? {})) {
+    const dest = path.join(publicDir, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, content);
+  }
   // nitro.json — optional but commonly present.
   if (extras.nitroJson) {
     fs.writeFileSync(
@@ -852,5 +887,94 @@ void describe('nitroAdapter — routeRules header lift (cors, cache.maxAge)', ()
     const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
     const sources = manifest.headers?.map((h) => h.source).sort();
     assert.deepStrictEqual(sources, ['/api/public/*', '/news/*']);
+  });
+});
+
+void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-baseurl-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('extracts a non-root baseURL from the server bundle and normalizes it', () => {
+    writeMinimalNitroOutput(tmpDir, { baseURL: '/myapp/' });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    // Normalized: leading slash, no trailing slash.
+    assert.strictEqual(manifest.basePath, '/myapp');
+  });
+
+  void it('leaves basePath undefined for the default baseURL "/"', () => {
+    writeMinimalNitroOutput(tmpDir, { baseURL: '/' });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, undefined);
+  });
+
+  void it('reads app.baseURL even when ipx.baseURL is serialized first (brace-scoped)', () => {
+    // Ordering hazard: a bare /"baseURL"/ scan over the whole bundle would pick
+    // up ipx.baseURL (/_ipx) here and 308 the whole site. The brace-scoped read
+    // of the `app` block must still yield the real app.baseURL.
+    writeMinimalNitroOutput(tmpDir, {
+      ipxBaseURLBefore: '/_ipx',
+      baseURL: '/myapp/',
+    });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, '/myapp');
+  });
+
+  void it('does NOT mistake ipx.baseURL for a base path when app.baseURL is root', () => {
+    // ipx.baseURL=/_ipx serialized before an app block whose baseURL is "/"
+    // (root). basePath must be undefined, NOT "/_ipx".
+    writeMinimalNitroOutput(tmpDir, {
+      ipxBaseURLBefore: '/_ipx',
+      baseURL: '/',
+    });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, undefined);
+  });
+
+  void it('leaves basePath undefined when no baseURL is present', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, undefined);
+  });
+
+  void it('fails loud when prerendered HTML reveals a baseURL the bundle scan missed', () => {
+    // Bundle has no baseURL (simulating a future Nitro shape change), but the
+    // prerendered HTML clearly references `/myapp/_nuxt/...` assets — dropping
+    // the prefix would 404 every hashed asset, so synth must fail.
+    writeMinimalNitroOutput(tmpDir, {
+      publicFiles: {
+        'about/index.html':
+          '<html><head><script src="/myapp/_nuxt/abc.js"></script></head></html>',
+      },
+    });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    assert.throws(
+      () => nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+      (e: Error) => {
+        assert.strictEqual(e.name, 'NuxtBaseURLDetectionError');
+        return true;
+      },
+    );
+  });
+
+  void it('does NOT fail when prerendered HTML uses the default root asset path', () => {
+    writeMinimalNitroOutput(tmpDir, {
+      publicFiles: {
+        'about/index.html':
+          '<html><head><script src="/_nuxt/abc.js"></script></head></html>',
+      },
+    });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.strictEqual(manifest.basePath, undefined);
   });
 });

@@ -1428,4 +1428,83 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
   });
+
+  // ── basePath prop (caller-declared source of truth) ─────────
+  // Under KVS edge routing, basePath is no longer expressed as a per-behavior
+  // PathPattern prefix — it lives in the KVS route table's `meta.bp`, which the
+  // edge router uses for the canonical 308 + static strip. So these tests read
+  // the basePath out of the RouteStoreKeys custom resource's Entries.
+  describe('basePath prop', () => {
+    const metaBasePath = (root: string, basePath?: string): string => {
+      const app = new App();
+      const stack = new Stack(app, 'BasePathStack', {
+        env: { account: '123456789012', region: 'us-east-1' },
+      });
+      new Hosting(stack, 'Web', {
+        root,
+        framework: 'spa',
+        buildOutputDir: 'dist',
+        ...(basePath !== undefined ? { basePath } : {}),
+      });
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; Properties?: any }>;
+      };
+      const kvKeys = Object.entries(tpl.Resources).find(
+        ([id, r]) =>
+          r.Type === 'AWS::CloudFormation::CustomResource' &&
+          /RouteStoreKeys/.test(id),
+      );
+      assert.ok(kvKeys, 'expected a RouteStoreKeys custom resource');
+      const entries = JSON.parse(kvKeys![1].Properties.Entries);
+      const meta = JSON.parse(entries.meta);
+      return meta.bp as string;
+    };
+
+    it('records basePath in the KVS route table when set (SPA, no framework base)', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/app'), '/app');
+    });
+
+    it('normalizes a trailing slash (/app/ → /app)', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/app/'), '/app');
+    });
+
+    it('treats "/" as no base path', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/'), '');
+    });
+  });
+
+  // ── P0.4: config.json ordering dependency ────────────────────
+  describe('config.json deploy ordering (P0.4)', () => {
+    it('BlocksConfigDeployment depends on the asset deployments', () => {
+      // The asset deployments upload the whole static dir — including the
+      // placeholder `.blocks-sandbox/config.json` — to the same key the
+      // resolved config writes to. Without an ordering dependency the
+      // placeholder can clobber the real config. The previous
+      // `tryFindChild('AssetDeployment')` never matched the real child ids
+      // (AssetDeploymentImmutable/Html/Mutable), so the dep was never wired.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ConfigOrderStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; DependsOn?: string[] }>;
+      };
+      const configId = Object.keys(tpl.Resources).find(
+        (id) => /BlocksConfigDeployment/.test(id) && /CustomResource/.test(id),
+      );
+      assert.ok(configId, 'expected a BlocksConfigDeployment custom resource');
+
+      const dependsOn = tpl.Resources[configId].DependsOn ?? [];
+      const assetDeps = dependsOn.filter((d) => /AssetDeployment/.test(d));
+      assert.ok(
+        assetDeps.length >= 1,
+        `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
+          `found DependsOn=${JSON.stringify(dependsOn)}`,
+      );
+    });
+  });
 });

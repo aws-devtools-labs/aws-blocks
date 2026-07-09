@@ -69,6 +69,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
 
       - name: Lint (advisory — annotations only, non-blocking)
@@ -120,6 +125,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
 
       - name: Download registry artifact
@@ -151,6 +161,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -185,6 +200,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -218,6 +238,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -237,6 +262,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: publish
+    env:
+      # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
+      # connection in this suite runs verify-full — exercising the TLS verification
+      # feature end-to-end instead of connecting unverified. externalDbSsl() reads
+      # this; the explicit-engine tests read it too.
+      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false
@@ -250,6 +281,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -332,6 +368,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build

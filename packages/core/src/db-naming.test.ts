@@ -1,9 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { extractDbRef, dbConnectionParameterName } from './db-naming.js';
+import { getStackName } from './scripts/stack-id.js';
 
 describe('extractDbRef', () => {
   test('pooler form (postgres.{ref}@) yields ref', () => {
@@ -39,10 +43,51 @@ describe('extractDbRef', () => {
 });
 
 describe('dbConnectionParameterName', () => {
-  test('composes the stage into the SSM name', () => {
-    assert.strictEqual(
-      dbConnectionParameterName('production'),
-      '/blocks/production/db-connection-string',
+  test('formats stack name into parameter path', () => {
+    assert.strictEqual(dbConnectionParameterName('my-app-k7x2mf-prod'), '/my-app-k7x2mf-prod-db-url');
+  });
+
+  test('two distinct stack names produce distinct parameter names', () => {
+    assert.notStrictEqual(
+      dbConnectionParameterName('app-a-111111-prod'),
+      dbConnectionParameterName('app-b-222222-prod'),
     );
+  });
+});
+
+describe('cross-site invariant: write name == read name', () => {
+  let tmpDir: string;
+  let originalCwd: string;
+
+  afterEach(() => {
+    if (originalCwd) process.chdir(originalCwd);
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setupProject(stackId: string, sandboxId: string): string {
+    tmpDir = mkdtempSync(join(tmpdir(), 'cross-site-'));
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ stackId }));
+    mkdirSync(join(tmpDir, '.blocks-sandbox'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks-sandbox', 'sandbox-id.txt'), sandboxId);
+    return tmpDir;
+  }
+
+  test('write-side name == read-side name (sandbox)', () => {
+    const root = setupProject('my-app-k7x2mf', 'alice-0d7e1c');
+    const writeName = dbConnectionParameterName(getStackName({ sandbox: true, projectRoot: root }));
+    originalCwd = process.cwd();
+    process.chdir(root);
+    const readName = dbConnectionParameterName(getStackName({ sandbox: true }));
+    assert.strictEqual(writeName, readName);
+  });
+
+  test('write-side name == read-side name (production)', () => {
+    const root = setupProject('my-app-k7x2mf', 'alice-0d7e1c');
+    const writeName = dbConnectionParameterName(getStackName({ sandbox: false, projectRoot: root }));
+    originalCwd = process.cwd();
+    process.chdir(root);
+    const readName = dbConnectionParameterName(getStackName({ sandbox: false }));
+    assert.strictEqual(writeName, readName);
   });
 });

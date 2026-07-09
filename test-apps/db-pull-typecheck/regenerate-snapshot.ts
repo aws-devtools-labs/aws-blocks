@@ -5,7 +5,7 @@
  *
  * After running, review the diff and commit alongside your generator changes.
  */
-import { generateTypesFile, generateMetaFile, generateIndexFile } from '../../packages/bb-data/src/db-pull.js';
+import { generateTypesFile, generateMetaFile, generateIndexFile, generateCaFile } from '../../packages/bb-data/src/db-pull.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,12 @@ fs.mkdirSync(outDir, { recursive: true });
 
 fs.writeFileSync(path.join(outDir, 'database.types.ts'), generateTypesFile(TABLES));
 fs.writeFileSync(path.join(outDir, 'database.meta.ts'), generateMetaFile(TABLES));
+// Sample CA so the generated wiring's `import { DATABASE_CA_CERT }` resolves and
+// type-checks. Content is an illustrative placeholder, not a real certificate.
+fs.writeFileSync(
+  path.join(outDir, 'database.ca.ts'),
+  generateCaFile('-----BEGIN CERTIFICATE-----\nMIIBexampleSnapshotCertNotReal==\n-----END CERTIFICATE-----'),
+);
 fs.writeFileSync(path.join(outDir, 'index.ts'), generateIndexFile(TABLES, { projectRef: 'abcdef', runtimeConnString: 'postgresql://x:y@host:6543/postgres' }));
 
 console.log('✓ Regenerated test-apps/db-pull-typecheck/generated/');

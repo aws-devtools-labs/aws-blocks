@@ -8,11 +8,16 @@ import {
   hasExistingMiddlewareManifest,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
+  patchImageOptimizerForNext155,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
+  stripBasePathPrefix,
+  stripBakedBasePath,
+  nextPatternToCloudFront,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
+import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
   let tmpDir: string;
@@ -104,6 +109,12 @@ void describe('nextjsAdapter', () => {
 
     // Static assets directory
     assert.strictEqual(manifest.staticAssets.directory, assetsDir);
+
+    // The adapter does NOT hardcode invalidationPaths — deploy-time
+    // invalidation is scoped on `hasCompute` in the L3 (it is not
+    // Next-specific; Nuxt swr/isr and Astro SSR hit the same stale-HTML 403).
+    // The field is reserved for adapter overrides/opt-out only.
+    assert.strictEqual(manifest.invalidationPaths, undefined);
   });
 
   void it('detects ISR cache when not disabled', () => {
@@ -1127,6 +1138,57 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
   });
 });
 
+void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-img-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    // image optimization disabled for this app → nothing to patch
+    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+  });
+
+  void it('inserts `void 0` so the request handler lands in the 5th slot', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i),o=await Pc.imageOptimizer(x);',
+    );
+    patchImageOptimizerForNext155(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+  });
+
+  void it('is idempotent — a second run does not double-insert', () => {
+    const bundle = writeBundle(
+      'await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    patchImageOptimizerForNext155(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerForNext155(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // exactly one `void 0` inserted into the call
+    assert.equal((twice.match(/\{\},void 0,/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when no matching call is present', () => {
+    writeBundle('export const handler = async () => ({}); // already adapted\n');
+    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+  });
+});
+
 void describe('patchEdgeBundlesForLambdaEdge — brittleness gating', () => {
   let tmp: string;
   let envBackup: string | undefined;
@@ -1756,5 +1818,135 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       !stderrChunks.some((c) => c.includes('outside the version range')),
       `should not warn when @opennextjs/aws is absent; stderr was: ${stderrChunks.join('')}`,
     );
+  });
+});
+
+void describe('stripBasePathPrefix', () => {
+  void it('strips a leading basePath segment (no-leading-slash OpenNext form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', 'app/_next/*'), '/_next/*');
+  });
+
+  void it('strips a leading basePath segment (slash-prefixed form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/legacy'), '/legacy');
+  });
+
+  void it('maps the basePath root itself to "/"', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app'), '/');
+  });
+
+  void it('leaves a pattern that is not under basePath unchanged', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/about'), '/about');
+  });
+
+  void it('is boundary-safe: does not strip a shared-prefix substring', () => {
+    // `/application/*` is NOT under `/app` (no `/app/` boundary).
+    assert.strictEqual(
+      stripBasePathPrefix('/app', '/application/*'),
+      '/application/*',
+    );
+  });
+
+  void it('leaves an external/absolute destination unchanged', () => {
+    assert.strictEqual(
+      stripBasePathPrefix('/app', 'https://cdn.example.com/x'),
+      'https://cdn.example.com/x',
+    );
+  });
+
+  void it('round-trips: strip(prepend(x)) === x for a relative pattern', () => {
+    // /app + /foo/* -> /app/foo/*  then strip -> /foo/*
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/foo/*'), '/foo/*');
+  });
+});
+
+void describe('stripBakedBasePath', () => {
+  const baseManifest = (): DeployManifest => ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory: '/tmp/static' },
+    routes: [],
+  });
+
+  void it('is a no-op when basePath is unset', () => {
+    const m = baseManifest();
+    m.routes = [{ pattern: '/app/_next/*', target: 'static' }];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.routes[0].pattern, '/app/_next/*');
+  });
+
+  void it('strips baked basePath from route patterns so the L3 prepends exactly once', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.routes = [
+      { pattern: 'app/_next/image*', target: 'image-optimization' },
+      { pattern: 'app/_next/data/*', target: 'default' },
+      { pattern: 'app/_next/*', target: 's3' },
+      { pattern: '/*', target: 'default' }, // catch-all is not under basePath
+      // a blocks-injected relative route must be untouched
+      { pattern: '/.blocks-sandbox/*', target: 'static' },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(
+      m.routes.map((r) => r.pattern),
+      ['/_next/image*', '/_next/data/*', '/_next/*', '/*', '/.blocks-sandbox/*'],
+    );
+  });
+
+  void it('strips baked basePath from redirect source AND destination', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.redirects = [
+      { source: '/app/legacy-home', destination: '/app', statusCode: 308 },
+      { source: '/app/r/old-0', destination: '/app/r/new-0', statusCode: 308 },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(m.redirects, [
+      { source: '/legacy-home', destination: '/', statusCode: 308 },
+      { source: '/r/old-0', destination: '/r/new-0', statusCode: 308 },
+    ]);
+  });
+
+  void it('strips baked basePath from header sources', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.headers = [
+      { source: '/app/secure-headers', headers: { 'x-frame-options': 'DENY' } },
+    ];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.headers[0].source, '/secure-headers');
+  });
+});
+
+void describe('nextPatternToCloudFront', () => {
+  void it('collapses [...catchall] and [dynamic] segments', () => {
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/[slug]'),
+      '/api/edge/*',
+    );
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/catch/[...path]'),
+      '/api/edge/catch/*',
+    );
+  });
+
+  // Regression (edge 500): OpenNext joins basePath without collapsing the
+  // separator → `app//edge`. A `//` pattern matches the literal `//` URL, never
+  // the browser's `/app/edge`, so the dedicated edge behavior misses → the
+  // request falls to the default KVS router → split edge bundle never runs → 500.
+  void it('collapses an OpenNext double-slash basePath join', () => {
+    assert.strictEqual(nextPatternToCloudFront('app//edge'), '/app/edge');
+    assert.strictEqual(
+      nextPatternToCloudFront('app//api/edge'),
+      '/app/api/edge',
+    );
+  });
+
+  void it('guarantees a single leading slash', () => {
+    assert.strictEqual(nextPatternToCloudFront('app/edge'), '/app/edge');
+  });
+
+  void it('leaves a clean pattern unchanged', () => {
+    assert.strictEqual(nextPatternToCloudFront('/api/edge'), '/api/edge');
+    assert.strictEqual(nextPatternToCloudFront('/*'), '/*');
   });
 });

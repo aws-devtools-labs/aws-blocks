@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-agent",
-  "version": "0.1.3",
+  "version": "0.3.1",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -39,7 +39,7 @@
     "@aws-blocks/bb-file-bucket": "^0.1.2",
     "@aws-blocks/bb-logger": "^0.1.2",
     "@aws-blocks/bb-realtime": "^0.1.2",
-    "@aws-blocks/core": "^0.1.1",
+    "@aws-blocks/core": "^0.1.10",
     "@aws-sdk/client-bedrock": "^3.700.0",
     "@strands-agents/sdk": "~1.3.0",
     "openai": "^6.7.0",

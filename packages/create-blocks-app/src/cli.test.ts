@@ -45,6 +45,16 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stdout, /Usage: create-blocks-app/);
   });
 
+  it('--help includes template descriptions', () => {
+    const result = run(['--help']);
+    assert.strictEqual(result.exitCode, 0);
+    assert.match(
+      result.stdout,
+      /default\s+Vite \+ lit-html frontend with auth/,
+      '--help should list the default template with its blocksTemplateDescription',
+    );
+  });
+
   it('unknown flag exits 1 with error message', () => {
     const result = run(['--foo']);
     assert.strictEqual(result.exitCode, 1);
@@ -78,6 +88,35 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.match(result.stderr, /Unknown template "does-not-exist"/);
     assert.match(result.stderr, /Available templates:/);
     assert.doesNotMatch(result.stderr, /ENOENT/);
+  });
+
+  it('a template folder missing package.json is rejected as unknown, not crashed with ENOENT', () => {
+    // Latent-bug guard: a folder under templates/ with no package.json is shown
+    // in --help but excluded from validation, so selecting it fails cleanly
+    // instead of throwing ENOENT on the later template version read.
+    const brokenDir = join(__dirname, '../templates', '__broken_test_template__');
+    mkdirSync(brokenDir, { recursive: true });
+    try {
+      const result = run(['my-app', '--template', '__broken_test_template__', '--skip-install']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /Unknown template "__broken_test_template__"/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(brokenDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('--template amplify on a fresh dir exits 1 with a helpful message', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-fresh-'));
+    try {
+      const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /amplify.*auto-selected/i);
+      assert.match(result.stderr, /--template default/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('multiple positional args exits 1 with error message', () => {
@@ -181,7 +220,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('generates .blocks/config.json with stackId and uses getStackId in index.cdk.ts', () => {
+  it('generates .blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -194,8 +233,8 @@ describe('create-blocks-app auto-detection', () => {
         'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('getStackId'),
-        'generated index.cdk.ts should import getStackId from @aws-blocks/blocks/scripts'
+        cdkContent.includes('getStackName'),
+        'generated index.cdk.ts should import getStackName from @aws-blocks/blocks/scripts'
       );
       const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
       assert.ok(config.stackId, '.blocks/config.json should have a stackId');

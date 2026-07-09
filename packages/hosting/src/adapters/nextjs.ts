@@ -165,6 +165,14 @@ export const nextjsAdapter = (
     // Patch each edge bundle's process import banner for Lambda@Edge
     // nodejs20.x compatibility. See patchEdgeBundleForLambdaEdge.
     patchEdgeBundlesForLambdaEdge(openNextDir);
+
+    // Patch the image-optimization bundle for the Next.js 15.5 image-optimizer
+    // signature change. See patchImageOptimizerForNext155.
+    patchImageOptimizerForNext155(openNextDir);
+
+    // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
+    // See installLinuxSharpForImageOptimizer.
+    installLinuxSharpForImageOptimizer(openNextDir);
   }
 
   // Note: Injecting config files into server bundles is an integration-layer
@@ -229,7 +237,90 @@ export const nextjsAdapter = (
     { prefix: '_next/data/', days: 30 },
   ];
 
+  // NOTE: deploy-time CloudFront invalidation (to clear edge-cached SSG/ISR
+  // HTML that references the previous build's chunk hashes → 403) is NOT set
+  // here. It is not Next-specific — any compute-backed deploy can edge-cache
+  // stale HTML (Nuxt `routeRules` swr/isr, Astro SSR) — so the L3 issues the
+  // invalidation for ANY deploy with a compute origin (gated on `hasCompute`,
+  // default `['/*']`). Adapters set `manifest.invalidationPaths` only to
+  // override/opt out. See the field doc in manifest/types.ts.
+
+  // Strip Next's baked-in basePath from every pattern/source BEFORE returning,
+  // so the manifest honors the cross-framework contract (adapters emit
+  // basePath-RELATIVE patterns; the L3 prepends basePath exactly once). Next is
+  // the lone framework that bakes basePath into its build artifacts — see
+  // stripBakedBasePath. MUST run after applyAssetPrefix (which sets
+  // manifest.basePath and appends trailing-slash redirects).
+  stripBakedBasePath(manifest);
+
   return manifest;
+};
+
+/**
+ * Remove a single leading `basePath` segment from a pattern/source.
+ *
+ * - `('/app', 'app/_next/*')`     → `'/_next/*'`   (no-leading-slash OpenNext form)
+ * - `('/app', '/app/legacy')`     → `'/legacy'`
+ * - `('/app', '/app')`            → `'/'`          (the basePath root itself)
+ * - `('/app', '/about')`          → `'/about'`     (not under basePath — unchanged)
+ * - `('/app', 'https://x/y')`     → `'https://x/y'`(external — unchanged)
+ *
+ * Boundary-safe: `/application/*` under basePath `/app` is NOT stripped (it does
+ * not start with `'/app/'`). The inverse of {@link prependBasePath}.
+ * @internal
+ */
+export const stripBasePathPrefix = (
+  basePath: string,
+  pattern: string,
+): string => {
+  const withLeading = pattern.startsWith('/') ? pattern : `/${pattern}`;
+  if (withLeading === basePath) return '/';
+  if (withLeading.startsWith(`${basePath}/`)) {
+    return withLeading.substring(basePath.length);
+  }
+  return pattern; // not under basePath — leave exactly as-is
+};
+
+/**
+ * Strip Next's baked-in `basePath` from route patterns and redirect/header
+ * sources (and redirect destinations) so the manifest carries basePath-RELATIVE
+ * patterns, matching the contract every other adapter (Astro `base`, Nuxt
+ * `app.baseURL`) already follows.
+ *
+ * WHY: Next.js bakes its configured `basePath` into the OpenNext behavior
+ * patterns (`app/_next/*`) AND into `routes-manifest.json` redirect/header
+ * sources + destinations (`/app/legacy-home` → `/app`). The L3
+ * (`buildKvsEntries`) then prepends `manifest.basePath` to every emitted
+ * pattern — producing the DOUBLE prefix `/app/app/_next/*`, `/app/app/legacy`,
+ * which matches nothing in the route table at request time, so every asset
+ * falls through to the SSR Lambda and 404s (the reported bug). Stripping here
+ * makes the single L3 prepend land correctly.
+ *
+ * No-op when `manifest.basePath` is unset (the common case). Idempotent:
+ * stripping an already-relative pattern leaves it unchanged, and
+ * `prependBasePath` is itself idempotent as a second safety net.
+ * @internal
+ */
+export const stripBakedBasePath = (manifest: DeployManifest): void => {
+  const bp = manifest.basePath;
+  if (!bp) return;
+
+  if (manifest.routes) {
+    for (const route of manifest.routes) {
+      route.pattern = stripBasePathPrefix(bp, route.pattern);
+    }
+  }
+  if (manifest.redirects) {
+    for (const r of manifest.redirects) {
+      r.source = stripBasePathPrefix(bp, r.source);
+      r.destination = stripBasePathPrefix(bp, r.destination);
+    }
+  }
+  if (manifest.headers) {
+    for (const h of manifest.headers) {
+      h.source = stripBasePathPrefix(bp, h.source);
+    }
+  }
 };
 
 /**
@@ -361,14 +452,19 @@ const applyNextImageConfig = (
   }
 };
 
-const REDIRECT_CAP_NEXTJS = 100;
-
 /**
  * Read every Next.js manifest that lists routable URLs and emit
  * canonical-form redirects honoring the user's `trailingSlash`
- * setting. Caps at 100 entries (matches the CloudFront Function size
- * budget); user-declared redirects from `liftSimpleRoutesManifest`
- * get appended *afterwards* with the same cap split.
+ * setting. User-declared redirects from `liftSimpleRoutesManifest` are
+ * already present and these are appended afterwards.
+ *
+ * No count cap: under KVS edge routing redirects are DATA (chunked `d{n}`
+ * KVS entries the viewer-request function reads at runtime), not literals
+ * inlined into the function source — so the old 10 KB-CloudFront-Function
+ * code limit no longer applies. The real bound is the KVS store/chunk budget
+ * enforced centrally in `buildKvsEntries` (kvs_router.ts), which throws a
+ * friendly `TooManyRoutesError` / `RouteTableTooLargeError` if a deploy's
+ * tables genuinely exceed the safe per-request read budget.
  *
  * Sources read (P1.8 — previously only prerender-manifest):
  *   - `.next/prerender-manifest.json#routes` — pages prerendered via
@@ -479,21 +575,9 @@ const applyTrailingSlashRedirects = (
   const ts = emitTrailingSlashRedirects(Array.from(allPaths), mode);
   if (ts.length === 0) return;
   const existing = manifest.redirects ?? [];
-  const remaining = REDIRECT_CAP_NEXTJS - existing.length;
-  if (remaining <= 0) {
-    process.stderr.write(
-      `⚠️  ${ts.length} trailing-slash redirect(s) skipped — Next.js redirect cap of ${REDIRECT_CAP_NEXTJS} ` +
-        `already filled by user-declared redirects.\n`,
-    );
-    return;
-  }
-  if (ts.length > remaining) {
-    process.stderr.write(
-      `⚠️  ${ts.length} trailing-slash redirects requested; only ${remaining} fit ` +
-        `under the ${REDIRECT_CAP_NEXTJS}-redirect CloudFront Function cap.\n`,
-    );
-  }
-  manifest.redirects = [...existing, ...ts.slice(0, remaining)];
+  // Append ALL trailing-slash redirects — no count cap. The KVS store/chunk
+  // budget in buildKvsEntries is the authoritative limit (see comment above).
+  manifest.redirects = [...existing, ...ts];
 };
 
 /**
@@ -1247,6 +1331,192 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
 };
 
 /**
+ * Patch the OpenNext image-optimization bundle for the Next.js 15.5 image
+ * optimizer signature change.
+ *
+ * Next 15.5 inserted a `maximumResponseBody` parameter into
+ * `fetchInternalImage`:
+ *   - was: `fetchInternalImage(href, _req, _res, handleRequest)`
+ *   - now: `fetchInternalImage(href, _req, _res, maximumResponseBody, handleRequest)`
+ *
+ * `@opennextjs/aws` (≤3.10.x) still calls it with FOUR args
+ * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`), so on Next 15.5
+ * the `handleRequest` callback lands in the `maximumResponseBody` slot and the
+ * real 5th arg is `undefined`. At runtime the optimizer throws
+ * `TypeError: <handler> is not a function` for every LOCAL image → 500.
+ *
+ * Fix: insert an explicit `void 0` for `maximumResponseBody` so the handler
+ * shifts into the 5th position. Match the structural minified shape
+ * `fetchInternalImage)(<a>,{headers:<b>},{},<c>)` (variable names are unstable
+ * across builds) and rewrite the trailing `,<c>)` → `,void 0,<c>)`. Idempotent:
+ * a call that already has `,{},void 0,` is left alone.
+ * @internal
+ */
+export const patchImageOptimizerForNext155 = (openNextDir: string): void => {
+  const root = path.join(openNextDir, 'image-optimization-function');
+  if (!fs.existsSync(root)) return; // image optimization disabled for this app
+  const candidates = fg.sync('**/index.mjs', {
+    cwd: root,
+    absolute: true,
+    ignore: ['**/node_modules/**'],
+  });
+
+  // fetchInternalImage)( <arg> , { headers : <arg> } , {} , <arg> )
+  // Capture the leading args up to the empty `{}` res object, then the handler.
+  const callRe =
+    /(fetchInternalImage\)\(\s*[^,]+,\s*\{\s*headers\s*:\s*[^}]+\}\s*,\s*\{\s*\}\s*,\s*)([^),]+)\)/g;
+
+  let filesPatched = 0;
+  for (const bundle of candidates) {
+    let src: string;
+    try {
+      src = fs.readFileSync(bundle, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    // Idempotency: skip if the handler already sits in the 5th slot.
+    if (/fetchInternalImage\)\([^)]*\}\s*,\s*void 0\s*,/.test(src)) continue;
+    if (!callRe.test(src)) continue;
+    callRe.lastIndex = 0;
+    const next = src.replace(callRe, '$1void 0,$2)');
+    if (next !== src) {
+      fs.writeFileSync(bundle, next, 'utf-8');
+      filesPatched++;
+    }
+  }
+
+  if (filesPatched === 0) {
+    // Not fatal: the app may be on a Next version whose signature still matches
+    // OpenNext's call, or OpenNext may have already adapted. Warn so a future
+    // signature drift is visible, but don't block the build.
+    process.stderr.write(
+      `⚠️  image-optimizer patch (Next 15.5 fetchInternalImage arity) found ` +
+        `nothing to change under ${root}. If local-image optimization 500s with ` +
+        `"is not a function", the OpenNext/Next signatures changed again ` +
+        `(see patchImageOptimizerForNext155).\n`,
+    );
+    return;
+  }
+
+  process.stderr.write(
+    `\u{1F527} Patched image-optimization bundle for Next.js 15.5 fetchInternalImage ` +
+      `signature (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
+  );
+};
+
+/**
+ * Ensure the OpenNext image-optimization Lambda has a **linux-x64** `sharp`
+ * native binary.
+ *
+ * The image optimizer needs sharp to resize/transcode. OpenNext bundles
+ * whatever `sharp` is in the dev `node_modules`, which on a macOS build host is
+ * `sharp-darwin-arm64` — that binary can't load on the linux-x64 Lambda, so
+ * Next's optimizer silently falls back to `unoptimized` passthrough: every
+ * request returns the ORIGINAL bytes (200, but no resize, no webp/avif). Visible
+ * as `/_next/image?...&w=64` returning the full-size source `image/png`.
+ *
+ * Fix: install `sharp` into the image-optimization-function bundle forcing the
+ * Lambda's platform (`--os=linux --cpu=x64 --libc=glibc`), matching the Nitro
+ * adapter's IPX bundle. Mirrors `buildImageOptBundleIfNeeded` in nitro.ts.
+ *
+ * Best-effort + idempotent: skips when the image fn dir is absent (image
+ * optimization disabled) or a linux sharp is already present; warns (not fatal)
+ * if the install fails, since the crash-level bug is already fixed and the app
+ * still serves originals.
+ * @internal
+ */
+export const installLinuxSharpForImageOptimizer = (
+  openNextDir: string,
+): void => {
+  const imgDir = path.join(openNextDir, 'image-optimization-function');
+  if (!fs.existsSync(imgDir)) return; // image optimization disabled
+
+  // Already has a linux sharp binary? (idempotent — avoid reinstalling.)
+  const linuxSharp = fg.sync(
+    'node_modules/@img/sharp-linux*/**/*.node',
+    { cwd: imgDir, absolute: true },
+  );
+  const linuxSharpLegacy = fg.sync(
+    'node_modules/sharp/**/linux-x64*/**/*.node',
+    { cwd: imgDir, absolute: true },
+  );
+  if (linuxSharp.length > 0 || linuxSharpLegacy.length > 0) return;
+
+  // Pin a MODERN sharp (>=0.33). The `--os/--cpu/--libc` cross-install flags
+  // (which fetch the `@img/sharp-linux-x64` prebuilt) only exist on sharp
+  // 0.33+. OpenNext historically bundles sharp 0.32.6, whose darwin prebuilt
+  // sits in `node_modules/sharp/build/Release/*.node` and is NOT replaced by
+  // those flags (0.32 used `prebuild-install`/SHARP_* env, not npm os/cpu) —
+  // so reinstalling `^0.32` would leave the darwin binary in place and the
+  // optimizer would keep serving unoptimized originals. Force 0.34.x.
+  const SHARP_RANGE = '^0.34.0';
+  const sharpDir = path.join(imgDir, 'node_modules', 'sharp');
+  // Remove the wrong-platform / old bundled sharp so the reinstall is clean and
+  // the fresh linux binary is unambiguously what loads at runtime.
+  if (fs.existsSync(sharpDir)) {
+    try {
+      fs.rmSync(sharpDir, { recursive: true, force: true });
+    } catch {
+      /* best-effort — npm install below still overwrites */
+    }
+  }
+  const sharpVersion = SHARP_RANGE;
+
+  // Minimal package.json so `npm install` only pulls sharp (+ its platform
+  // optionalDependencies), not the whole app tree.
+  const pkgJsonPath = path.join(imgDir, 'package.json');
+  let restorePkgJson: string | undefined;
+  try {
+    if (fs.existsSync(pkgJsonPath)) {
+      restorePkgJson = fs.readFileSync(pkgJsonPath, 'utf-8');
+    }
+    fs.writeFileSync(
+      pkgJsonPath,
+      JSON.stringify(
+        { name: 'image-optimization-function', private: true, dependencies: { sharp: sharpVersion } },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    process.stderr.write(
+      '\u{1F4F8} Installing sharp (linux-x64) into the image-optimization Lambda bundle\n',
+    );
+    spawn.sync(
+      'npm',
+      [
+        'install',
+        '--no-audit',
+        '--no-fund',
+        '--silent',
+        '--include=optional',
+        '--omit=dev',
+        '--os=linux',
+        '--cpu=x64',
+        '--libc=glibc',
+      ],
+      { cwd: imgDir, stdio: 'inherit' },
+    );
+  } catch (error) {
+    // Restore the original package.json (if any) so we don't leave a stray file.
+    if (restorePkgJson !== undefined) {
+      try {
+        fs.writeFileSync(pkgJsonPath, restorePkgJson, 'utf-8');
+      } catch {
+        /* best-effort */
+      }
+    }
+    process.stderr.write(
+      `⚠️  Could not install linux-x64 sharp into the image-optimization Lambda ` +
+        `(${(error as Error).message}). The optimizer will serve UNOPTIMIZED ` +
+        `originals (200, full size) until sharp's linux binary is present.\n`,
+    );
+  }
+};
+
+/**
  * Check whether `.next/server/middleware-manifest.json` already exists.
  *
  * The user's CI (or a previous deploy) may have already produced this
@@ -1711,12 +1981,24 @@ const mapBehaviorsToRoutes = (
  *   `/api/edge/[slug]`            → `/api/edge/*`
  *   `/api/edge/catch/[...path]`   → `/api/edge/catch/*`
  *   `/products/[id]/reviews/[r]`  → `/products/*\/reviews/*`
+ *   `app//edge`                   → `/app/edge`   (basePath join + leading slash)
+ * @internal exported for unit testing.
  */
-const nextPatternToCloudFront = (pattern: string): string => {
+export const nextPatternToCloudFront = (pattern: string): string => {
   // Collapse catch-all `[...name]` (must come first; it's a superset).
   let out = pattern.replace(/\[\.\.\..+?\]/g, '*');
   // Collapse single dynamic segments `[name]`.
   out = out.replace(/\[[^/\]]+?\]/g, '*');
+  // Normalize slashes. With a configured basePath, OpenNext emits behavior
+  // patterns with the base joined WITHOUT a separator-collapse — e.g. basePath
+  // `/app` + route `/edge` becomes `app//edge` (no leading slash, DOUBLE inner
+  // slash). A `//` in a CloudFront path pattern matches the literal `//` URL,
+  // never the browser's single-slash `/app/edge`, so the dedicated edge-route
+  // behavior never matches → the request falls through to the default KVS
+  // router → the split edge bundle never runs → 500. Collapse repeated slashes
+  // and guarantee a single leading slash so the pattern matches the real URL.
+  out = out.replace(/\/{2,}/g, '/');
+  if (!out.startsWith('/')) out = `/${out}`;
   return out;
 };
 

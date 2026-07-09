@@ -22,10 +22,10 @@ export function classifyError(error: unknown): { code: string; phase: string } {
   if (msg.includes('cdk synth') || msg.includes('synthesis')) {
     return { code: 'CDK_SYNTH_FAILED', phase: 'synth' };
   }
-  if (msg.includes('cdk deploy') || msg.includes('deployment failed')) {
+  if (msg.includes('cdk deploy') || msg.includes('deployment failed') || (msg.includes('cdk') && msg.includes('deploy') && msg.includes('exited with code'))) {
     return { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' };
   }
-  if (msg.includes('cdk destroy') || msg.includes('destroy failed')) {
+  if (msg.includes('cdk destroy') || msg.includes('destroy failed') || (msg.includes('cdk') && msg.includes('destroy') && msg.includes('exited with code'))) {
     return { code: 'CDK_DESTROY_FAILED', phase: 'destroy' };
   }
   if (msg.includes('npm install') || msg.includes('npm err')) {
@@ -52,7 +52,7 @@ export function classifyError(error: unknown): { code: string; phase: string } {
  *
  * Measures wall-clock duration, classifies errors, and sends a single telemetry event
  * after the command completes (success or failure). The telemetry send is fire-and-forget
- * and bounded by a 5s timeout — it will never delay the command or affect its exit code.
+ * and bounded by a 500ms timeout — it will never delay the command or affect its exit code.
  *
  * If telemetry is disabled (via env var or config), the function is executed directly
  * with zero overhead.

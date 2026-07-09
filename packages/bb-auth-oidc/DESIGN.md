@@ -264,3 +264,34 @@ encode to ~43 characters, comfortably exceeding the floor. The contract is
 stated once here: `csrf` MUST be ≥32 characters; SDKs SHOULD generate 32
 random bytes (≈43 base64url chars). Source files defer to this decision rather
 than restating the threshold in bytes.
+
+### D12 — `handleRedirectCallback` shares one in-flight exchange per `(exchangePath, code)`
+
+**Status:** Accepted.
+
+**Rationale.** A PKCE `code` is single-use and must be exchanged exactly once. A
+double invocation — React StrictMode's mount → unmount → mount fires the callback
+effect twice synchronously — would otherwise race to exchange the same code twice;
+the loser finds the pending entry already consumed and resolves `null`, stranding
+the app on a signed-out screen despite a successful sign-in.
+
+`_callbackInflight` (in `index.browser.ts`) is a **module-scoped** variable, so the
+guard is shared across every `AuthOIDCClient` instance in the tab — it is not a
+per-instance field. It is keyed on `(exchangePath, code)`:
+
+- **`code`** — distinct sign-in flows carry distinct single-use codes, so they get
+  distinct exchanges. Two instances in one app (the D4 admin-auth + customer-auth
+  scenario) share the default `exchangePath`, so their codes being different is the
+  only thing keeping their in-flight exchanges isolated.
+- **`exchangePath`** — two clients configured with different exchange endpoints never
+  share each other's in-flight exchange, even if a code somehow collided.
+
+The guard is released in a `finally` once the exchange settles (success or failure),
+so a genuinely new flow on the same page is never blocked.
+
+**Cross-reload fallback.** The module variable does **not** survive a real page
+reload. Cross-reload coordination falls back to the up-front `sessionStorage`
+removal in `_exchangeCallback`: the pending PKCE entry is consumed *before* the
+network round-trip, so a late duplicate in a fresh page load (after the in-flight
+guard is gone) finds no pending entry and resolves `null` rather than replaying the
+code.
