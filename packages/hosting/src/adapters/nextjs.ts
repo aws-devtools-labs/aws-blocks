@@ -670,6 +670,30 @@ const isSimpleNextSource = (source: string): boolean => {
 };
 
 /**
+ * Normalize a Next.js redirect pattern's **trailing named catch-all** into the
+ * plain `/*` suffix wildcard the edge router understands.
+ *
+ * Next expresses a "match the rest of the path" redirect as `/:name*` (a named
+ * catch-all) on BOTH the source and destination, e.g.
+ * `{ source: '/r/legacy/:path*', destination: '/r/modern/:path*' }`. The edge
+ * router (`matchPattern` + the redirect splice in kvs_router.ts) speaks a
+ * single trailing `*`: it captures the tail and splices it into a destination
+ * ending in `*`. A trailing `/:name*` is exactly that — so we can lift it by
+ * rewriting the trailing `/:name*` → `/*` on both sides. The captured tail then
+ * round-trips correctly, INCLUDING the empty-tail case (`/r/legacy` /
+ * `/r/legacy/` → `/r/modern/`), which the b4d626b destination-shape guard
+ * already handles — instead of the literal `:path*` leaking into `Location`
+ * because the rule fell through to the Lambda un-lifted.
+ *
+ * Only the trailing catch-all (`*` quantifier at the very end) is converted;
+ * mid-pattern params, `:name+`, or bare `:name` are left intact so
+ * {@link isSimpleNextSource} still rejects them and they stay in the Lambda.
+ * @internal
+ */
+export const normalizeTrailingNamedWildcard = (pattern: string): string =>
+  pattern.replace(/\/:[a-zA-Z_][a-zA-Z0-9_]*\*$/, '/*');
+
+/**
  * Read `.next/routes-manifest.json` and lift simple redirects/headers
  * into the deploy manifest so the L3 wires them as CloudFront Functions
  * and per-pattern ResponseHeadersPolicies. Anything we don't lift stays
@@ -742,8 +766,14 @@ const applyLiftedRoutesManifest = (
       skippedRedirects++;
       continue;
     }
-    const source = normalizeSource(r.source);
-    const destination = normalizeSource(r.destination);
+    // Convert a trailing named catch-all (`/:path*`) to the plain `/*`
+    // suffix wildcard the edge router splices. Without this, `:path*`
+    // redirects fall through to the Lambda and leak the literal `:path*`
+    // token into Location on an empty/short tail (issue #5).
+    const source = normalizeTrailingNamedWildcard(normalizeSource(r.source));
+    const destination = normalizeTrailingNamedWildcard(
+      normalizeSource(r.destination),
+    );
     if (!isSimpleNextSource(source) || !isSimpleNextSource(destination)) {
       skippedRedirects++;
       continue;

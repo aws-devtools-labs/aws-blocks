@@ -15,6 +15,7 @@ import {
   stripBasePathPrefix,
   stripBakedBasePath,
   nextPatternToCloudFront,
+  normalizeTrailingNamedWildcard,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -1968,6 +1969,59 @@ void describe('stripBakedBasePath', () => {
     ];
     stripBakedBasePath(m);
     assert.strictEqual(m.headers[0].source, '/secure-headers');
+  });
+});
+
+void describe('normalizeTrailingNamedWildcard — issue #5 (:path* literal leak)', () => {
+  void it('converts a trailing /:name* to /*', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path*'),
+      '/r/legacy/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/modern/:path*'),
+      '/r/modern/*',
+    );
+  });
+
+  void it('handles multi-char param names', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/api/:rest*'),
+      '/api/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/proxy/:segments_123*'),
+      '/proxy/*',
+    );
+  });
+
+  void it('leaves exact paths unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/about'),
+      '/about',
+    );
+    assert.strictEqual(normalizeTrailingNamedWildcard('/'), '/');
+  });
+
+  void it('leaves a plain trailing /* unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/old/*'),
+      '/old/*',
+    );
+  });
+
+  void it('does NOT convert mid-pattern :name (not trailing)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/users/:id/posts'),
+      '/users/:id/posts',
+    );
+  });
+
+  void it('does NOT convert :name+ (one-or-more, not catch-all *)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path+'),
+      '/r/legacy/:path+',
+    );
   });
 });
 
