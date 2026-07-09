@@ -162,7 +162,7 @@ md.push('<summary>📖 Glossary &amp; notes — scoring, colors, the ±5% margin
 md.push('');
 md.push('- **N = 1** — one rep per cell, so a small delta may be model variance, not a real change; re-run for certainty.');
 md.push(
-	'- **Colors (vs baseline, per metric):** 🟢 same-or-better · 🟡 worse but within the margin · 🔴 worse beyond it · 🆕 no baseline value (new cell) · — nothing to diff this run · 🗑️ cell gone since the baseline.',
+	'- **Colors (vs baseline, per metric):** 🟢 same-or-better · 🟡 worse but within the margin · 🔴 worse beyond it · 🆕 no comparable baseline value (a new cell, or a baseline that predates this metric) · — nothing to diff this run · 🗑️ cell gone since the baseline.',
 );
 md.push(
 	'- **Margin = ±5%** (`MARGIN_PCT` in `overview.mjs`) — relative to the baseline value; for integer metrics (test counts, 0-10 judge dims) it is floored to 1, so a single-point nudge is 🟡, never 🔴. Edit that one constant to widen/narrow it.',
@@ -190,18 +190,27 @@ md.push('');
 if (cells.length > 0) {
 	let heading = '## Overview — PR vs `main` baseline';
 	let note;
-	const legend = '🟢 better/equal · 🟡 worse within ±5% · 🔴 worse beyond · 🆕 new cell.';
+	const legend = '🟢 better/equal · 🟡 worse within ±5% · 🔴 worse beyond · 🆕 new/uncomparable.';
+	const perMetric = diff.perMetricBaseline;
 	const baseLabel = baseline?.sha ? `\`${String(baseline.sha).slice(0, 7)}\`` : 'the recorded baseline';
+	// A baseline that predates the per-metric (schema-2) aggregate can compare
+	// only the composite mean; every per-metric cell shows 🆕 until the next
+	// `main` bench records the new schema. Say so explicitly rather than implying
+	// a full per-metric diff ran (that mismatch was the "Judge colored, rest 🆕"
+	// bug's symptom).
+	const staleNote = `A \`main\` baseline exists (${baseLabel}) but predates the per-metric schema, so per-metric cells show 🆕 — only the composite mean (in the headline) is comparable. Full per-metric coloring returns once a \`main\` bench records the new schema.`;
 	if (benchEvent === 'push') {
 		// A push-to-main run IS the new baseline; it diffs against the PREVIOUS
 		// main bench (fetched pre-persist), or shows absolute values if none.
 		heading = '## Overview — baseline run';
 		const rec = `Baseline run (push to \`main\`): recorded as the new \`main\` baseline for \`${benchSha.slice(0, 7) || '(unknown)'}\`.`;
-		note = baseline
-			? `${rec} Colored vs the PREVIOUS \`main\` baseline ${baseLabel}. ${legend}`
-			: `${rec} No earlier baseline to diff — absolute values (all 🆕).`;
-	} else if (baseline) {
+		if (!baseline) note = `${rec} No earlier baseline to diff — absolute values (all 🆕).`;
+		else if (perMetric) note = `${rec} Colored vs the PREVIOUS \`main\` baseline ${baseLabel}. ${legend}`;
+		else note = `${rec} ${staleNote}`;
+	} else if (perMetric) {
 		note = `Each metric colored vs the latest \`main\` baseline ${baseLabel}. ${legend}`;
+	} else if (baseline) {
+		note = staleNote;
 	} else {
 		note = 'No `main` baseline recorded yet — showing absolute values (every metric 🆕). PR-vs-`main` deltas appear once a `main` bench has stored one.';
 	}

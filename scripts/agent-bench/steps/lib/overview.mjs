@@ -211,16 +211,42 @@ function cellMetrics(c) {
 }
 
 /**
+ * True iff the baseline aggregate can supply the schema-2 PER-METRIC set the two
+ * tables diff (tests pass-counts, per-dimension judge, tokens, cost, score) —
+ * i.e. it is schema 2+.
+ *
+ * WHY THIS GATE EXISTS: a schema-1 (pre-redesign) baseline persisted only
+ * `composite`, `judge_score`, and `test_rate` per cell. Coloring each metric
+ * independently against it lights up ONLY the fields it happens to carry
+ * (`judge_score` → Judge colors) while every other column has no baseline value
+ * (→ 🆕). That produced the inconsistent "Judge colored, Tests/Cost/Tokens/Score
+ * all 🆕" row. So Judge must gate on baseline-COMPLETENESS exactly like the other
+ * metrics: a partial (schema-1) baseline is treated as "no per-metric baseline"
+ * — every column, Judge included, renders 🆕 — until a `main` bench records a
+ * schema-2 baseline. The composite mean/delta still uses `composite` (present in
+ * schema 1) for the headline + analysis roll-up.
+ * @param {object|null|undefined} baseline
+ * @returns {boolean}
+ */
+export function baselineHasMetrics(baseline) {
+	return !!baseline && (numOrNull(baseline.schema) ?? 0) >= 2;
+}
+
+/**
  * Diff the current run's aggregate against a baseline aggregate (or `null`).
  * Cells are matched by {@link cellKey}. Each row carries the COMPOSITE delta
  * (`current`/`baseline`/`delta`, kept for the headline + the analysis roll-up)
  * PLUS `pr` and `base` metric objects (from {@link cellMetrics}) the two tables
- * color and render. A baseline-only cell surfaces as a `removed` row.
+ * color and render. `base` is populated ONLY when the baseline carries the
+ * schema-2 per-metric set ({@link baselineHasMetrics}); against a schema-1
+ * baseline every metric — Judge included — renders 🆕 for consistency. A
+ * baseline-only cell surfaces as a `removed` row.
  * @param {object} current aggregate from {@link buildAggregate} for this run
  * @param {object|null} baseline aggregate fetched for the base commit, or null
- * @returns {{rows: object[], meanCurrent: number|null, meanBaseline: number|null, meanDelta: number|null, hasBaseline: boolean}}
+ * @returns {{rows: object[], meanCurrent: number|null, meanBaseline: number|null, meanDelta: number|null, hasBaseline: boolean, perMetricBaseline: boolean}}
  */
 export function diffAgainstBaseline(current, baseline) {
+	const perMetricBaseline = baselineHasMetrics(baseline);
 	const baseCells = new Map((baseline?.cells ?? []).map((c) => [cellKey(c), c]));
 	const curKeys = new Set((current?.cells ?? []).map((c) => cellKey(c)));
 	const rows = (current?.cells ?? []).map((c) => {
@@ -239,7 +265,10 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: !!base,
 			removed: false,
 			pr: cellMetrics(c),
-			base: base ? cellMetrics(base) : null,
+			// Only diff per-metric against a schema-2 baseline; a schema-1 baseline
+			// (composite/judge_score only) is NOT per-metric-comparable, so every
+			// column renders 🆕 rather than lighting up Judge alone.
+			base: base && perMetricBaseline ? cellMetrics(base) : null,
 		};
 	});
 	// Baseline-only cells (removed/renamed since the baseline) get their OWN row
@@ -256,14 +285,14 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: true,
 			removed: true,
 			pr: null,
-			base: cellMetrics(base),
+			base: perMetricBaseline ? cellMetrics(base) : null,
 		});
 	}
 	rows.sort((a, b) => a.key.localeCompare(b.key));
 	const meanCurrent = numOrNull(current?.mean_composite);
 	const meanBaseline = baseline ? numOrNull(baseline.mean_composite) : null;
 	const meanDelta = meanCurrent !== null && meanBaseline !== null ? round1(meanCurrent - meanBaseline) : null;
-	return { rows, meanCurrent, meanBaseline, meanDelta, hasBaseline: !!baseline };
+	return { rows, meanCurrent, meanBaseline, meanDelta, hasBaseline: !!baseline, perMetricBaseline };
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────

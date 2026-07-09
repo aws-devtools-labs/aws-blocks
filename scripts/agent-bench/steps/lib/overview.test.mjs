@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	MARGIN_PCT,
+	baselineHasMetrics,
 	buildAggregate,
 	cellComposite,
 	cellKey,
@@ -279,5 +280,55 @@ describe('renderDetailed(diff) — numbers', () => {
 		});
 		const dmd = renderDetailed(withRemoved, {}).join('\n');
 		assert.match(dmd, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+	});
+});
+
+describe('baselineHasMetrics(baseline) — the per-metric gate', () => {
+	it('true only for a schema-2+ baseline (carries the per-metric set)', () => {
+		assert.equal(baselineHasMetrics({ schema: 2, cells: [] }), true);
+		assert.equal(baselineHasMetrics({ schema: 3, cells: [] }), true);
+	});
+	it('false for schema-1, a missing schema, or null (NOT per-metric comparable)', () => {
+		assert.equal(baselineHasMetrics({ schema: 1, cells: [] }), false);
+		assert.equal(baselineHasMetrics({ cells: [] }), false);
+		assert.equal(baselineHasMetrics(null), false);
+		assert.equal(baselineHasMetrics(undefined), false);
+	});
+});
+
+// REGRESSION GUARD for the "Judge colored while Tests/Cost/Tokens/Score are all
+// 🆕" bug: a schema-1 baseline (the pre-redesign aggregate) persisted composite +
+// judge_score but NONE of the schema-2 per-metric fields. Coloring each metric
+// off its own baseline field lit up Judge alone. The fix gates ALL per-metric
+// coloring on baseline COMPLETENESS, so a schema-1 baseline renders every column
+// — Judge included — as 🆕, while the composite mean/delta stays comparable.
+describe('schema-1 baseline → every column (Judge included) is 🆕', () => {
+	// Exactly what the OLD buildAggregate wrote: composite/judge_score/test_rate only.
+	const SCHEMA1 = {
+		schema: 1,
+		mean_composite: 80,
+		cells: [{ task: 'auth-notes', template: 'demo', composite: 80, verdict: 'pass', klass: null, judge_score: 7, test_rate: 1 }],
+	};
+	const diff = diffAgainstBaseline(buildAggregate([PASS], {}), SCHEMA1);
+
+	it('is recognized as a baseline, but NOT a per-metric one', () => {
+		assert.equal(diff.hasBaseline, true); // a baseline WAS found in S3…
+		assert.equal(diff.perMetricBaseline, false); // …but it can't diff per-metric
+		assert.equal(diff.rows.every((r) => r.base === null), true); // so no base metrics
+	});
+	it('keeps the composite mean/delta comparable (the headline still works)', () => {
+		assert.equal(diff.rows.find((r) => r.key === 'auth-notes/demo').delta, 12); // 92 - 80
+		assert.equal(diff.meanDelta, round1Delta(diff.meanCurrent, 80));
+	});
+	it('Overview: Judge renders 🆕 like the rest — NOT a color (the exact bug)', () => {
+		const row = renderOverview(diff, {}).find((l) => l.includes('auth-notes'));
+		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \|/);
+		assert.doesNotMatch(row, /🟢|🟡|🔴/); // no metric may color against a schema-1 baseline
+	});
+	it('Detailed: the whole row is 🆕 + numbers, Judge included — no colors', () => {
+		const row = renderDetailed(diff, {}).find((l) => l.includes('auth-notes'));
+		assert.doesNotMatch(row, /🟢|🟡|🔴/);
+		assert.doesNotMatch(row, /->/); // 🆕 cells show the pr value only, no baseline->pr
+		assert.match(row, /🆕 functional_completeness 8/); // judge dims are 🆕, not colored
 	});
 });
