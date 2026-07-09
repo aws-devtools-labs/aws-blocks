@@ -791,6 +791,27 @@ const applyLiftedRoutesManifest = (
       destination,
       statusCode: r.statusCode as 301 | 302 | 307 | 308,
     });
+
+    // For a wildcard source (e.g. `/r/legacy/*`), also emit an exact-match
+    // companion for the bare prefix WITHOUT a trailing slash (`/r/legacy`).
+    // The edge router's matchPattern requires at least the `/` after the
+    // prefix to match `/*`, so a request to the bare prefix falls through to
+    // Lambda and leaks the raw `:path*`. The companion catches it and
+    // redirects to the destination prefix (strip the trailing `*`).
+    if (source.endsWith('/*')) {
+      const bareSource = source.slice(0, -2); // '/r/legacy/*' → '/r/legacy'
+      const bareDest = destination.endsWith('/*')
+        ? destination.slice(0, -1) // '/r/modern/*' → '/r/modern/'
+        : destination;
+      if (!seenRedirectSources.has(bareSource)) {
+        seenRedirectSources.set(bareSource, r.source + ' (bare companion)');
+        liftedRedirects.push({
+          source: bareSource,
+          destination: bareDest,
+          statusCode: r.statusCode as 301 | 302 | 307 | 308,
+        });
+      }
+    }
   }
 
   for (const h of routesManifest.headers ?? []) {
