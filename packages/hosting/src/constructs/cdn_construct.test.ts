@@ -1762,6 +1762,32 @@ void describe('CdnConstruct', () => {
         }),
       });
     });
+
+    void it('grants s3:ListBucket so missing keys 404 (not 403 AccessDenied)', () => {
+      // Issue #9: without ListBucket, S3-OAC returns 403 AccessDenied + raw
+      // XML for a missing object; granting it makes S3 return a clean 404.
+      const stack = createEnvStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::S3::BucketPolicy', {
+        PolicyDocument: Match.objectLike({
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 's3:ListBucket',
+              Principal: { Service: 'cloudfront.amazonaws.com' },
+            }),
+          ]),
+        }),
+      });
+    });
   });
 
   // ---- Multi-origin routing ----

@@ -1040,10 +1040,38 @@ export class CdnConstruct extends Construct {
     });
 
     // ---- OAC: S3 bucket policy ----
+    // GetObject for serving assets, plus ListBucket so S3 returns a real
+    // 404 (NoSuchKey) — not a 403 (AccessDenied) — for a missing key.
+    //
+    // Without s3:ListBucket, S3 hides key existence: a GET for an object the
+    // caller can't confirm exists returns 403 AccessDenied. Under OAC that
+    // 403 + S3's raw `<Error><Code>AccessDenied</Code></Error>` XML is
+    // forwarded straight to the viewer (issue #9): wrong semantics (a missing
+    // asset should be 404, not 403) and an info leak (it advertises an S3
+    // origin and its error schema). Granting ListBucket flips a missing-key
+    // GET to a clean 404 NoSuchKey. This is safe: the bucket is private and
+    // reachable only through this distribution's OAC (same SourceArn
+    // condition), so no key names are exposed to the public. We keep the fix
+    // at the bucket-policy layer rather than a distribution-wide
+    // `customErrorResponses` 403→404 map because the single-behavior KVS
+    // model shares one error-response set across the S3 AND compute origins —
+    // remapping there would clobber a framework/SSR route's own 404/403.
     bucket.addToResourcePolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject'],
         resources: [bucket.arnForObjects('*')],
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': `arn:aws:cloudfront::${account}:distribution/${this.distribution.distributionId}`,
+          },
+        },
+      }),
+    );
+    bucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [bucket.bucketArn],
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
         conditions: {
           StringEquals: {
