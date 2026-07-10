@@ -1,7 +1,7 @@
 name: Publish Packages
 
-# Real npm release, automated on push to main. Manual/canary publishes live in
-# publish-npm.yml and publish-canary.yml.
+# Real npm release, automated on push to main. Canary publishes live in
+# publish-canary.yml.
 
 on:
   push:
