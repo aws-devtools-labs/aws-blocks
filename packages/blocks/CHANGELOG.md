@@ -1,5 +1,15 @@
 # @aws-blocks/blocks
 
+## 0.2.1
+
+### Patch Changes
+
+- 8de7091: Include synced building block documentation updates.
+- Updated dependencies [c7f1e7c]
+- Updated dependencies [5491cae]
+  - @aws-blocks/bb-distributed-data@0.1.3
+  - @aws-blocks/bb-realtime@0.1.3
+
 ## 0.2.0
 
 ### Minor Changes
