@@ -11,7 +11,9 @@ import { describe, it } from 'node:test';
 import {
 	AGENT_FAIL_AT,
 	AGENT_FAIL_REASON,
+	AGENT_HARNESS_TEARDOWN_REASON,
 	BUILDER_PRICING,
+	CHECKPOINT_STOP_REASON,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -22,6 +24,7 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isScoredCell,
+	isUngracefulStepTwoDeath,
 	scorePerDollar,
 	testRate,
 	testStats,
@@ -129,7 +132,10 @@ describe('classifyCell(result)', () => {
 	});
 
 	it("an agent (2-agent) failure that is NOT a cancellation → agent_fail (INCLUDED), reason 'agent_timeout'", () => {
-		assert.deepEqual(classifyCell({ failed_at: AGENT_FAIL_AT, status: 'error' }), {
+		// A GENUINE timeout reaches the SIGTERM flush and stamps a terminal
+		// stop_reason — that graceful marker is what keeps it an agent_fail (vs an
+		// ungraceful harness teardown, covered in its own describe block below).
+		assert.deepEqual(classifyCell({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), {
 			klass: 'agent_fail',
 			reason: AGENT_FAIL_REASON,
 		});
@@ -163,9 +169,101 @@ describe('classifyCell(result)', () => {
 	});
 });
 
+describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness_error (issue #183)', () => {
+	// The bug: the agent's vended bash issues a broad process-group/pkill storm at
+	// a dying dev server and tears down the parent harness (npx tsx), producing an
+	// ungraceful exit (143/137) that BYPASSES the SIGTERM partial-envelope flush.
+	// result.json then carries the step-0 baseline (stop_reason '', tokens 0) — NO
+	// terminal exit path ran. That self-inflicted infra kill must be EXCLUDED from
+	// the mean (harness_error), not scored as a composite-0 agent_fail that drags
+	// the headline and masks spend.
+	it('exit-143 / no-flush death (baseline zeros, no stop_reason) → harness_error, EXCLUDED', () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', tokens_in: 0, tokens_out: 0 };
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON });
+		assert.equal(isScoredCell(cell), false); // EXCLUDED — a flaky teardown can't move the score
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('a totally-empty 2-agent failure (no envelope written at all) → harness_error, EXCLUDED', () => {
+		// The envelope was never even written (result.json is just the step-0 shell),
+		// so there is no stop_reason key at all — still ungraceful, still excluded.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error' };
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('a SURVIVING running checkpoint (nonzero tokens, in_progress) → harness_error EXCLUDED, but cost preserved', () => {
+		// fix (2): the incremental checkpoint leaves nonzero tokens + the NON-terminal
+		// CHECKPOINT_STOP_REASON sentinel + checkpoint:true when the process dies
+		// abruptly. Because no terminal exit path overwrote it, it stays EXCLUDED —
+		// yet the token spend is preserved so the cost signal (cellCost) is NOT masked.
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: CHECKPOINT_STOP_REASON,
+			checkpoint: true,
+			tokens_in: 240_000,
+			tokens_out: 40_000,
+		};
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false); // still excluded from the mean
+		assert.ok(cellCost(cell) > 0, 'spend must be preserved (not masked) even though excluded');
+	});
+
+	it('a GENUINE agent timeout that reached the SIGTERM flush stays agent_fail, INCLUDED', () => {
+		// The graceful path stamps a TERMINAL stop_reason and no checkpoint flag —
+		// that is exactly the marker that keeps a real timeout counted as a fail.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout', tokens_in: 500_000 };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+		assert.equal(isScoredCell(cell), true); // INCLUDED — the agent is what's under test
+		assert.equal(verdictOf(cell), 'fail');
+	});
+
+	it('an invoke-exhausted sentinel (terminal stop_reason "error") stays agent_fail, INCLUDED', () => {
+		// The retry-loop sentinel is also a graceful terminal write, so it counts.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', tokens_in: 12_000 };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('a cancellation at 2-agent is harness_error via the upstream cancel rule, NOT the teardown rule', () => {
+		// isUngracefulStepTwoDeath deliberately excludes cancellations (classifyCell
+		// handles them first) so the two harness_error paths stay distinct.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'cancelled' };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: 'cancelled' });
+	});
+
+	it('the teardown rule only fires at 2-agent — a graceful-looking non-agent step is untouched', () => {
+		assert.equal(isUngracefulStepTwoDeath({ failed_at: '3-build-test', status: 'error' }), false);
+		assert.equal(isUngracefulStepTwoDeath({ failed_at: null, status: 'scored' }), false);
+	});
+
+	it('headline-mean impact: an ungraceful teardown is dropped from the mean, a real timeout is not', () => {
+		// Mirrors the run-29085298913 signature: a self-inflicted teardown must not
+		// sit in the denominator as a composite 0. Two otherwise-identical cells,
+		// one graceful (INCLUDED as 0) and one ungraceful (EXCLUDED), prove the split.
+		const graceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
+		const ungraceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '' };
+		const good = { tests_passed: 8, tests_failed: 2 }; // scored
+		const cells = [graceful, ungraceful, good];
+		const included = cells.filter((c) => isScoredCell(c));
+		assert.deepEqual(
+			included.map((c) => (c === graceful ? 'graceful' : c === good ? 'good' : 'ungraceful?')),
+			['graceful', 'good'],
+			'the ungraceful teardown must be excluded from the scored set',
+		);
+	});
+});
+
 describe('isScoredCell(result) — the single inclusion rule for the headline mean', () => {
 	it('an agent_fail IS included (the agent is exactly what is under test)', () => {
-		assert.equal(isScoredCell({ failed_at: AGENT_FAIL_AT, status: 'error' }), true);
+		assert.equal(isScoredCell({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), true);
 		assert.equal(isScoredCell({ klass: 'agent_fail' }), true);
 	});
 
@@ -246,7 +344,7 @@ describe('testStats / testRate', () => {
 
 describe('verdictOf(result) — derives the hint from the cell then defers to verdict()', () => {
 	it("an agent_fail is a real 'fail' (must NOT read as 'unknown' and get excluded)", () => {
-		assert.equal(verdictOf({ failed_at: AGENT_FAIL_AT, status: 'error' }), 'fail');
+		assert.equal(verdictOf({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), 'fail');
 		assert.equal(verdictOf({ klass: 'agent_fail' }), 'fail');
 	});
 
@@ -268,7 +366,7 @@ describe('verdictOf(result) — derives the hint from the cell then defers to ve
 
 describe('agent_fail end-to-end invariant: verdict fail, composite 0, INCLUDED', () => {
 	it('an agent timeout scores composite 0, verdicts fail, and counts toward the mean', () => {
-		const cell = { failed_at: AGENT_FAIL_AT, status: 'error' };
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
 		const tr = testRate(testStats(cell)); // no tests ran → 0
 		assert.equal(tr, 0);
 		assert.equal(composite(tr, 10), 0); // even a generous judge cannot lift it off 0

@@ -44,7 +44,68 @@ export const HARNESS_FAIL_REASONS = {
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
+// A 2-agent death that tore down the harness itself (see isUngracefulStepTwoDeath)
+// is NOT a gradeable agent failure — it's infra — so it is reclassified as a
+// harness_error and EXCLUDED from the mean under this reason. Distinct reason
+// (vs the generic HARNESS_FAIL_REASONS steps) so the excluded section can name it.
+export const AGENT_HARNESS_TEARDOWN_REASON = 'agent_harness_teardown';
+
+// The NON-terminal stop_reason 2-agent-run.ts stamps on its running checkpoint
+// (see lib/partial-envelope.mjs). It is deliberately NOT one of the terminal
+// stop_reasons ('wall_clock_timeout' / 'cancelled' / 'error' / a real
+// result.stopReason): a checkpoint that survives to finalize means NO terminal
+// exit path ever overwrote it, i.e. the process died ungracefully. Single-sourced
+// here because BOTH the harness (which writes it) and classifyCell (which reads
+// it) must agree on the exact sentinel.
+export const CHECKPOINT_STOP_REASON = 'in_progress';
+
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
+/**
+ * Did 2-agent-run.ts reach one of its own terminal exit paths (the SIGTERM/SIGINT
+ * partial-envelope flush, the invoke-exhausted sentinel, or a normal finish)
+ * before the process ended? Those paths each stamp a real, TERMINAL `stop_reason`
+ * onto the envelope; the step-0 baseline leaves it '' and the running checkpoint
+ * leaves the non-terminal {@link CHECKPOINT_STOP_REASON} + `checkpoint:true`. So a
+ * graceful exit is: NOT a surviving checkpoint AND a non-empty, non-checkpoint
+ * stop_reason. This is the marker that separates a genuine agent timeout (which
+ * flushed) from an ungraceful harness teardown (which did not).
+ * @param {{stop_reason?: unknown, checkpoint?: unknown}} result
+ * @returns {boolean}
+ */
+function reachedGracefulExit(result) {
+	// A surviving running-checkpoint is definitionally non-terminal: it is only
+	// ever overwritten by a terminal exit path, so if it's still here, none ran.
+	if (result?.checkpoint === true) return false;
+	const sr = result?.stop_reason;
+	return typeof sr === 'string' && sr !== '' && sr !== CHECKPOINT_STOP_REASON;
+}
+
+/**
+ * Detect the harness-integrity signature: a 2-agent death whose vended `bash`
+ * process-group/pkill storm tore down the parent harness (npx tsx) itself,
+ * producing an ungraceful exit (e.g. 143/137) that BYPASSED 2-agent-run's SIGTERM
+ * partial-envelope flush — so result.json carries the step-0 baseline (stop_reason
+ * '', tokens 0) or, thanks to the incremental checkpoint, a non-terminal
+ * `checkpoint:true` envelope (nonzero tokens, stop_reason {@link CHECKPOINT_STOP_REASON}).
+ * Either way NO terminal exit path ran. Such a self-inflicted infra kill is a
+ * harness_error (EXCLUDED from the mean), NOT an `agent_fail`: it must neither
+ * drag the headline nor mask spend.
+ *
+ * The boundary is deliberately explicit: a GENUINE agent timeout reaches the
+ * SIGTERM flush and stamps a terminal stop_reason ('wall_clock_timeout' /
+ * 'cancelled'), and a real invoke-exhaustion stamps 'error' — both satisfy
+ * reachedGracefulExit and therefore stay `agent_fail` (INCLUDED). A cancellation
+ * is already handled upstream in classifyCell (harness_error), so it is excluded
+ * here to keep this predicate about UNGRACEFUL deaths only.
+ * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
+ * @returns {boolean}
+ */
+export function isUngracefulStepTwoDeath(result) {
+	if ((result?.failed_at ?? null) !== AGENT_FAIL_AT) return false;
+	if (result?.status === 'cancelled') return false;
+	return !reachedGracefulExit(result);
+}
 
 /**
  * Classify a finalized cell into one of three classes:
@@ -52,12 +113,15 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
  *     the run was CANCELLED: the cell never produced a gradeable artifact, so
  *     it is EXCLUDED from the headline mean (a flaky runner can't move the score).
  *   - `agent_fail` — the agent step (2-agent) failed on its own merits (timeout
- *     / produced no app in budget). A REAL failure: verdict 'fail', composite 0,
- *     and INCLUDED in the mean even though no tests ran.
+ *     / produced no app in budget) AND reached a graceful terminal exit. A REAL
+ *     failure: verdict 'fail', composite 0, and INCLUDED in the mean even though
+ *     no tests ran. An UNGRACEFUL 2-agent death that tore down the harness
+ *     (isUngracefulStepTwoDeath) is instead reclassified `harness_error`.
  *   - `scored` — reached build/test/judge; its outcome is a real signal (even a 0).
- * Reads `result.failed_at` and `result.status`, which finalize-result stamps
- * before calling this.
- * @param {{failed_at?: string|null, status?: string}} result
+ * Reads `result.failed_at` / `result.status` (stamped by finalize-result) plus
+ * `result.stop_reason` / `result.checkpoint` (from 2-agent-run's envelope) to tell
+ * a graceful agent timeout from an ungraceful harness teardown.
+ * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {{klass: 'scored'|'harness_error'|'agent_fail', reason: string|null}}
  */
 export function classifyCell(result) {
@@ -70,12 +134,20 @@ export function classifyCell(result) {
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
 	}
-	// The agent failing to produce a gradeable app is a real fail, not a flake.
-	// Accepted limitation: an OOM/SIGKILL of the agent at 2-agent is
-	// indistinguishable from a genuine agent timeout — both surface only as GHA
-	// outcome `failure` here — so both classify as agent_fail (composite 0). This
-	// is accepted because such infra kills at step 2 are expected to be rare.
+	// The agent failing to produce a gradeable app is a real fail, not a flake —
+	// EXCEPT when the death was an ungraceful harness teardown (the agent's bash
+	// process-group/pkill storm killed the parent harness, bypassing the SIGTERM
+	// flush). That leaves no terminal envelope (baseline zeros, or a surviving
+	// non-terminal checkpoint), which isUngracefulStepTwoDeath detects → reclassify
+	// as harness_error (EXCLUDED) so a self-inflicted infra kill can't drag the
+	// mean or mask spend. A GENUINE timeout DID flush a terminal stop_reason and
+	// stays agent_fail (composite 0, INCLUDED) — the boundary is exactly whether a
+	// terminal exit path ran (reachedGracefulExit), not the raw exit code (which
+	// GHA's step context does not even expose).
 	if (failedAt === AGENT_FAIL_AT) {
+		if (isUngracefulStepTwoDeath(result)) {
+			return { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON };
+		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
 	}
 	return { klass: 'scored', reason: null };

@@ -30,6 +30,7 @@ import {
 	isRetryableModelError,
 	sleep,
 } from './lib/bedrock-retry.ts';
+import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
 import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
 
 const WORKSPACE = required('WORKSPACE', '[bench]');
@@ -118,6 +119,11 @@ function makeBuilderAgent(): Agent {
 			partialTokensIn += inner.usage.inputTokens ?? 0;
 			partialTokensOut += inner.usage.outputTokens ?? 0;
 			partialCycles += 1;
+			// Persist a running checkpoint the moment usage advances, so an
+			// UNGRACEFUL kill (a bash process-group/pkill storm that tears down this
+			// harness without running the SIGTERM flush below) still leaves nonzero
+			// tokens + a partial cycle count on OUTPUT rather than the step-0 zeros.
+			writeCheckpoint();
 		}
 	});
 	return agent;
@@ -125,6 +131,34 @@ function makeBuilderAgent(): Agent {
 
 const started = Date.now();
 let finished = false;
+
+// Persist a running checkpoint of the accumulated token/cycle spend to OUTPUT
+// (atomically) so an UNGRACEFUL kill — the agent's vended bash issuing a broad
+// process-group / `pkill` storm that tears down this harness (npx tsx) without
+// running the SIGTERM flush below — still leaves nonzero tokens + a partial cycle
+// count on disk instead of the step-0 zeros. Skipped once `finished` is set: the
+// terminal exit paths (SIGTERM flush / invoke-exhausted sentinel / normal finish)
+// then OWN the envelope and overwrite this checkpoint with a real, TERMINAL
+// stop_reason, so a genuine timeout stays agent_fail (INCLUDED). Best-effort: a
+// failed checkpoint never disrupts the run — the next cycle retries and the
+// terminal writes remain the source of truth.
+function writeCheckpoint(): void {
+	if (finished) return;
+	try {
+		writeEnvelopeAtomic(
+			OUTPUT,
+			buildCheckpointEnvelope({
+				model: MODEL_ID,
+				startedMs: started,
+				tokensIn: partialTokensIn,
+				tokensOut: partialTokensOut,
+				cycles: partialCycles,
+			}),
+		);
+	} catch (err) {
+		process.stderr.write(`[bench] checkpoint write failed (non-fatal): ${describeError(err)}\n`);
+	}
+}
 
 // Flush a best-effort partial envelope if the runner kills us: SIGTERM on the
 // hard wall-clock timeout (`timeout-minutes`), or SIGINT on a cancellation
@@ -134,9 +168,12 @@ function writePartialEnvelopeAndExit(signal: string): void {
 	if (finished) return;
 	finished = true;
 	// Label the archived envelope by signal so a cancellation isn't mislabeled a
-	// timeout. Trace-only: cell classification/scoring keys off result.status
-	// (stamped by finalize-result from the step OUTCOME), never this envelope's
-	// stop_reason — summary.mjs merely DISPLAYS stop_reason in a column.
+	// timeout. This is a GRACEFUL terminal exit: the TERMINAL stop_reason written
+	// here (and the ABSENCE of the checkpoint flag) is what scoring.classifyCell
+	// uses to keep a genuine timeout as agent_fail (INCLUDED) — as opposed to an
+	// ungraceful teardown that never reaches this handler and leaves the baseline
+	// zeros or a surviving non-terminal checkpoint (→ harness_error, EXCLUDED).
+	// summary.mjs additionally DISPLAYS stop_reason in a column.
 	const isCancel = signal === 'SIGINT';
 	const stopReason = isCancel ? 'cancelled' : 'wall_clock_timeout';
 	const cause = isCancel ? 'cancellation' : 'workflow wall-clock timeout';
