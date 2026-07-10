@@ -168,7 +168,21 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
  */
 export const coalesceRoutes = (
   rows: [string, RouteKind][],
+  options: { isrActive?: boolean } = {},
 ): [string, RouteKind][] => {
+  // When ISR/SWR is active on a compute deploy (`manifest.cache` set), a
+  // non-prebuilt child of a coalesced STATIC group must render on-demand at the
+  // SSR Lambda — not 404 from S3 (issue #7). Nitro/Nuxt DOES support on-demand
+  // ISR (`routeRules` `isr`/`swr` → `manifest.cache = nitro-s3`), so the
+  // "frozen prerender only" assumption above does NOT hold for that subtree.
+  // Coalescing the prerendered siblings into one `/blog/*` STATIC row makes a
+  // non-prebuilt `/blog/post-99` match it → S3 → hard 404, instead of falling
+  // through to compute. Fix: with ISR active, do NOT coalesce STATIC groups —
+  // keep them as individual static rows so prebuilt pages still serve from S3
+  // AND a non-matched child falls through to the compute default for on-demand
+  // render. Compute/image groups still coalesce (a compute wildcard equals the
+  // default, so there's no shadowing risk and the table stays bounded).
+  const isrActive = options.isrActive === true;
   // Group by parent directory: strip a trailing '/*', then take everything up
   // to the last '/'. Both `/blog/p` and `/blog/p/*` → parent `/blog`.
   const groups = new Map<string, [string, RouteKind][]>();
@@ -191,7 +205,14 @@ export const coalesceRoutes = (
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
-    if (members.length >= 2 && uniformKind && parent.length > 0) {
+    // With ISR active, skip coalescing a STATIC group (see note above): its
+    // non-prebuilt children must reach compute, not the coalesced S3 wildcard.
+    const coalesceThis =
+      members.length >= 2 &&
+      uniformKind &&
+      parent.length > 0 &&
+      !(isrActive && members[0][1] === 's');
+    if (coalesceThis) {
       out.push([`${parent}/*`, members[0][1]]);
     } else {
       out.push(...members);
@@ -269,7 +290,12 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // single `parent/*` wildcard so the per-request edge scan stays bounded and
   // never trips the CloudFront Function instruction limit. See coalesceRoutes.
   // Runs on RELATIVE patterns (see note above); basePath is prepended next.
-  const coalescedRel = coalesceRoutes(rows);
+  //
+  // When ISR/SWR is active (manifest.cache set) on a compute deploy, static
+  // groups are NOT coalesced so a non-prebuilt on-demand child falls through to
+  // the SSR Lambda instead of hitting the coalesced S3 wildcard → 404 (#7).
+  const isrActive = hasServer && manifest.cache !== undefined;
+  const coalescedRel = coalesceRoutes(rows, { isrActive });
 
   // Prepend basePath ONCE, after coalescing. prependBasePath is idempotent, so
   // a pattern that somehow already carries the prefix is left intact.

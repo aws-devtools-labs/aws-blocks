@@ -1224,6 +1224,79 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     assert.deepEqual(out, [['/stress/*', 's']]);
   });
 
+  // ── ISR/SWR active: static groups must NOT coalesce (issue #7) ──────────
+  // With Nitro ISR/SWR (manifest.cache), a non-prebuilt child of a prerendered
+  // group must render on-demand at compute, not 404 from the coalesced S3
+  // wildcard. So static groups stay as individual rows when isrActive.
+
+  void it('does NOT coalesce a STATIC group when ISR is active', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    // No /blog/* wildcard — individual rows kept so a non-prebuilt child
+    // (/blog/post-99) misses them and falls through to the compute default.
+    assert.ok(!out.some(([p]) => p === '/blog/*'));
+    assert.equal(out.length, 3);
+  });
+
+  void it('STILL coalesces the same STATIC group when ISR is NOT active (frozen prerender)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: false });
+    assert.deepEqual(out, [['/blog/*', 's']]);
+  });
+
+  void it('STILL coalesces a COMPUTE group even when ISR is active (no shadowing risk)', () => {
+    // A compute wildcard equals the default origin, so coalescing it never
+    // shadows an on-demand child — safe to bound the table.
+    const rows: [string, 'c'][] = [
+      ['/api/a', 'c'],
+      ['/api/b', 'c'],
+      ['/api/c', 'c'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/api/*', 'c']]);
+  });
+
+  void it('end-to-end: ISR manifest routes a non-prebuilt child to compute, prebuilt to S3 (#7)', async () => {
+    // Nuxt prerender + ISR: /blog/post-1..3 prerendered (static) + a server
+    // origin + manifest.cache (nitro-s3) → routeRules { '/blog/**': isr }.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/blog/post-1', target: 'static' },
+          { pattern: '/blog/post-2', target: 'static' },
+          { pattern: '/blog/post-3', target: 'static' },
+          { pattern: '/*', target: 'compute' },
+        ],
+        // ISR/SWR active → shared S3 cache provisioned.
+        cache: { computeResource: 'default', driver: 'nitro-s3' },
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const code = generateKvsRouterRequestCode();
+
+    // Prebuilt page → S3 (served from the frozen prerender).
+    const prebuilt = await runRequestFn(code, entries, req('/blog/post-1'));
+    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.s3, '/blog/post-1 (prebuilt) → S3');
+
+    // Non-prebuilt ISR child → compute (renders on demand), NOT an S3 404.
+    const onDemand = await runRequestFn(code, entries, req('/blog/post-99'));
+    assert.equal(
+      onDemand.selectedOrigin,
+      ORIGIN_ID.server,
+      '/blog/post-99 (non-prebuilt ISR child) must route to compute, not S3',
+    );
+  });
+
   void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
     const rows: [string, 's' | 'c'][] = [
       ['/mix/a', 's'],
