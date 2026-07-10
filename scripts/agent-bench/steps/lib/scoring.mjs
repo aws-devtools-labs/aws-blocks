@@ -384,16 +384,19 @@ export function hardCapPlan(ev) {
 export const PRICING = {
 	// $/1M tokens (input, output).
 	'claude-sonnet': { input: 3.0, output: 15.0 },
-	'claude-opus': { input: 15.0, output: 75.0 },
+	// Claude Opus 4.5+ standard on-demand rate, which the current default model
+	// (Opus 4.8) holds — it REPLACED the legacy Opus-4.1 $15/$75.
+	'claude-opus': { input: 5.0, output: 25.0 },
 };
 
-// The BUILDER (the agent under test in 2-agent-run.ts) runs on Claude Sonnet 4.6,
-// so a cell's cost is its builder token spend priced at Sonnet rates. result.json's
+// The BUILDER (the agent under test in 2-agent-run.ts) runs on Claude Opus 4.8
+// (the BENCH_MODEL knob, default us.anthropic.claude-opus-4-8), so a cell's cost
+// is its builder token spend priced at Opus 4.8 rates. result.json's
 // tokens_in/tokens_out are the BUILDER's accumulated usage — the judge and the
-// analysis run on Opus but that spend is the harness's, not the agent's, and is
-// NOT counted here. Point this at PRICING['claude-opus'] if the builder model
-// ever changes.
-export const BUILDER_PRICING = PRICING['claude-sonnet'];
+// analysis ALSO run on Opus 4.8 (the same rate) but that spend is the harness's,
+// not the agent's, and is NOT counted here. Point this back at
+// PRICING['claude-sonnet'] if the builder model ever reverts to Sonnet.
+export const BUILDER_PRICING = PRICING['claude-opus'];
 
 /**
  * USD cost of a cell's BUILDER token spend at {@link BUILDER_PRICING}. Returns

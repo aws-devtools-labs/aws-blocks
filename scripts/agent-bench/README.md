@@ -126,10 +126,11 @@ of tests pass. A judge failure (`judge=0`) drops *only* its 40% — never the
 test-driven 60%. Bands: ≥80 🟢, ≥50 🟡, else 🔴.
 
 **Cost & Score (per cell).** COST is the **builder's** token spend priced at
-Bedrock Claude Sonnet rates — `$3` / 1M input, `$15` / 1M output
+Bedrock Claude Opus 4.8 rates — `$5` / 1M input, `$25` / 1M output
 (`PRICING` / `BUILDER_PRICING` in `lib/scoring.mjs`, the one place to edit when
-AWS pricing or the builder model changes). The judge and analysis run on Opus,
-but that spend is the harness's, not the agent's, so it is not counted. **SCORE**
+AWS pricing or the builder model changes). The judge and analysis also run on
+Opus 4.8 — the same rate — but that spend is the harness's, not the agent's, so
+it is not counted. **SCORE**
 = `composite ÷ cost` — composite points per **dollar**, higher = better. Cost, not
 raw token volume, is the denominator, so token count can't *dominate* the metric,
 and a broken (composite 0) cell scores 0 no matter how cheap it was. A cell with

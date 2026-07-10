@@ -547,16 +547,16 @@ describe('scored-cell integrity across the judge/build-test failure modes', () =
 });
 
 describe('cellCost(r) — builder token spend priced at BUILDER_PRICING', () => {
-	it('BUILDER_PRICING is Sonnet ($3/$15 per 1M) — the one place to edit for pricing', () => {
+	it('BUILDER_PRICING is Opus 4.8 ($5/$25 per 1M) — the one place to edit for pricing', () => {
 		assert.deepEqual(PRICING['claude-sonnet'], { input: 3.0, output: 15.0 });
-		assert.deepEqual(PRICING['claude-opus'], { input: 15.0, output: 75.0 });
-		assert.equal(BUILDER_PRICING, PRICING['claude-sonnet']);
+		assert.deepEqual(PRICING['claude-opus'], { input: 5.0, output: 25.0 });
+		assert.equal(BUILDER_PRICING, PRICING['claude-opus']);
 	});
 	it('prices in + out tokens at $/1M', () => {
-		// (200000*3 + 30000*15)/1e6 = (600000 + 450000)/1e6 = 1.05
-		assert.equal(cellCost({ tokens_in: 200000, tokens_out: 30000 }), 1.05);
-		// (100000*3 + 20000*15)/1e6 = 0.6
-		assert.equal(cellCost({ tokens_in: 100000, tokens_out: 20000 }), 0.6);
+		// (200000*5 + 30000*25)/1e6 = (1000000 + 750000)/1e6 = 1.75
+		assert.equal(cellCost({ tokens_in: 200000, tokens_out: 30000 }), 1.75);
+		// (100000*5 + 20000*25)/1e6 = 1.0
+		assert.equal(cellCost({ tokens_in: 100000, tokens_out: 20000 }), 1.0);
 	});
 	it('returns null (never a fake $0) when there are no usable token counts', () => {
 		assert.equal(cellCost({}), null);
@@ -564,8 +564,8 @@ describe('cellCost(r) — builder token spend priced at BUILDER_PRICING', () => 
 		assert.equal(cellCost({ tokens_in: undefined, tokens_out: null }), null);
 	});
 	it('accepts a custom pricing table', () => {
-		// Opus rates: (1e6*15 + 1e6*75)/1e6 = 90
-		assert.equal(cellCost({ tokens_in: 1_000_000, tokens_out: 1_000_000 }, PRICING['claude-opus']), 90);
+		// A custom table overrides the Opus 4.8 default — Sonnet: (1e6*3 + 1e6*15)/1e6 = 18
+		assert.equal(cellCost({ tokens_in: 1_000_000, tokens_out: 1_000_000 }, PRICING['claude-sonnet']), 18);
 	});
 });
 

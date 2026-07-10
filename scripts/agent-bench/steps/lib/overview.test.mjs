@@ -27,9 +27,9 @@ import {
 
 const DIMS = { functional_completeness: 8, selector_contract: 8, persistence: 8, code_quality: 8, blocks_fidelity: 8 };
 // composite(tr, j) = round(60*tr + 4*j*min(1, 4*tr), 1) — see scoring.mjs.
-// cost = (in*3 + out*15)/1e6 ; score = composite/cost (score per $).
-const PASS = { task: 'auth-notes', template: 'demo', tests_passed: 4, tests_failed: 0, judge_score: 8, judge_dimensions: DIMS, tokens_in: 200000, tokens_out: 30000, stop_reason: 'end_turn' }; // comp 92 · cost 1.05 · score 87.6
-const PARTIAL = { task: 'file-gallery', template: 'bare', tests_passed: 3, tests_failed: 1, judge_score: 5, tokens_in: 100000, tokens_out: 20000, stop_reason: 'end_turn' }; // comp 65 · cost 0.6 · score 108.3
+// cost = (in*5 + out*25)/1e6 ; score = composite/cost (score per $).
+const PASS = { task: 'auth-notes', template: 'demo', tests_passed: 4, tests_failed: 0, judge_score: 8, judge_dimensions: DIMS, tokens_in: 200000, tokens_out: 30000, stop_reason: 'end_turn' }; // comp 92 · cost 1.75 · score 52.6
+const PARTIAL = { task: 'file-gallery', template: 'bare', tests_passed: 3, tests_failed: 1, judge_score: 5, tokens_in: 100000, tokens_out: 20000, stop_reason: 'end_turn' }; // comp 65 · cost 1.0 · score 65
 const AGENT_FAIL = { task: 'sql-kb', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 }; // comp 0 · no tokens → cost/score null
 const HARNESS = { task: 'oidc-dsql', template: 'react', klass: 'harness_error' }; // excluded → null
 const UNKNOWN = { task: 'email-digest', template: 'demo', tests_passed: 0, tests_failed: 0 }; // gradeable, no tests → null
@@ -143,8 +143,8 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 		assert.equal(p.tests_denom, 4);
 		assert.equal(p.tokens_in, 200000);
 		assert.equal(p.tokens_out, 30000);
-		assert.equal(p.cost, 1.05); // (200000*3 + 30000*15)/1e6
-		assert.equal(p.score, 87.6); // 92 / 1.05
+		assert.equal(p.cost, 1.75); // (200000*5 + 30000*25)/1e6
+		assert.equal(p.score, 52.6); // 92 / 1.75
 		assert.equal(p.stop_reason, 'end_turn');
 		assert.deepEqual(p.judge_dimensions, DIMS);
 	});
@@ -190,7 +190,7 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 	});
 	it('attaches pr + base metric objects for the tables', () => {
 		const r = byKey['auth-notes/demo'];
-		assert.equal(r.pr.cost, 1.05);
+		assert.equal(r.pr.cost, 1.75);
 		assert.equal(r.base.cost, 2.0);
 		assert.equal(r.pr.tests_passed, 4);
 		assert.equal(r.base.judge_score, 7);
@@ -229,8 +229,8 @@ describe('renderOverview(diff) — colors only', () => {
 		assert.doesNotMatch(md, /->/); // Overview is glyphs only
 	});
 	it('colors each metric vs baseline', () => {
-		// tests 4/4 vs 4/4 → 🟢 ; judge 8 vs 8 → 🟢 ; cost $1.05 vs $2.0 (lower) → 🟢 ;
-		// tokens_in 200k vs 190k (higher=worse, beyond 5%) → 🔴 ; score 87.6 vs 46 (higher) → 🟢
+		// tests 4/4 vs 4/4 → 🟢 ; judge 8 vs 8 → 🟢 ; cost $1.75 vs $2.0 (lower) → 🟢 ;
+		// tokens_in 200k vs 190k (higher=worse, beyond 5%) → 🔴 ; score 52.6 vs 46 (higher) → 🟢
 		const row = md.split('\n').find((l) => l.includes('auth-notes'));
 		assert.match(row, /\| auth-notes \| demo \| 🟢 \| 🟢 \| 🟢 \| 🔴\/🔴 \| 🟢 \|/);
 	});
@@ -264,9 +264,9 @@ describe('renderDetailed(diff) — numbers', () => {
 		assert.match(row, /<br>/); // dimensions on separate lines
 	});
 	it('renders cost, tokens (in/out), score, and stop reason with numbers', () => {
-		assert.match(row, /🟢 \$2 -> \$1\.05/); // cost lower = better
+		assert.match(row, /🟢 \$2 -> \$1\.75/); // cost lower = better
 		assert.match(row, /in 🔴 190K -> 200K<br>out 🔴 28K -> 30K/);
-		assert.match(row, /🟢 46 -> 87\.6/); // score higher = better
+		assert.match(row, /🟢 46 -> 52\.6/); // score higher = better
 		assert.match(row, /\| end_turn \|/);
 	});
 	it('a removed cell shows a 🗑️ marker', () => {

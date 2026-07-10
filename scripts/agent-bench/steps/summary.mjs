@@ -19,7 +19,7 @@
 //   - COMPOSITE (0..100) = round(60*tr + 4*j*min(1, 4*tr), 1) — 60% objective
 //     pass-rate + 40% judge (judge gated below a 25% pass-rate). A judge error
 //     drops only the judge term, never the test-driven portion.
-//   - COST = builder token spend priced at Bedrock Sonnet rates (BUILDER_PRICING).
+//   - COST = builder token spend priced at Bedrock Opus 4.8 rates (BUILDER_PRICING).
 //   - SCORE = composite / cost — composite points per dollar (higher = better).
 //   - COLOR vs baseline, per metric: 🟢 same-or-better · 🟡 worse within ±5% ·
 //     🔴 worse beyond. Single tunable MARGIN_PCT; see the glossary + overview.mjs.
@@ -171,7 +171,7 @@ md.push('- **Directions:** tests ↑, judge ↑, score ↑ are better (higher = 
 md.push(
 	'- **Composite (0-100)** = `round(60·test_rate + 4·judge·min(1, 4·test_rate), 1)` — 60% objective pass-rate + 40% judge, the judge term gated below a 25% pass-rate.',
 );
-md.push('- **Cost** = builder token spend at Bedrock Claude Sonnet rates ($3 in / $15 out per 1M tokens; `BUILDER_PRICING` in `scoring.mjs`).');
+md.push('- **Cost** = builder token spend at Bedrock Claude Opus 4.8 rates ($5 in / $25 out per 1M tokens; `BUILDER_PRICING` in `scoring.mjs`).');
 md.push(
 	'- **SCORE = composite ÷ cost** — composite points per dollar (higher = better). Cost, not raw token volume, is the denominator, so tokens can\'t dominate; a broken (composite 0) cell scores 0 no matter how cheap. Flip `SCORE_PER_DOLLAR` in `scoring.mjs` for cost-per-point (lower = better).',
 );
