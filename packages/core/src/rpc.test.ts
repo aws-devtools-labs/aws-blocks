@@ -71,3 +71,65 @@ describe('-32600 Invalid Request error shape', () => {
     }
   });
 });
+
+describe('-32602 Invalid Params validation', () => {
+  it('accepts positional array params', () => {
+    const result = parseRpcRequest(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'api.echo',
+      params: ['hello', 42],
+      id: 1,
+    }));
+
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.deepStrictEqual(result.request.args, ['hello', 42]);
+    }
+  });
+
+  it('accepts named object params using their value order', () => {
+    const result = parseRpcRequest(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'api.echo',
+      params: { message: 'hello', count: 42 },
+      id: 2,
+    }));
+
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.deepStrictEqual(result.request.args, ['hello', 42]);
+    }
+  });
+
+  it('treats omitted params as no arguments', () => {
+    const result = parseRpcRequest(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'api.ping',
+      id: 3,
+    }));
+
+    assert.strictEqual(result.ok, true);
+    if (result.ok) {
+      assert.deepStrictEqual(result.request.args, []);
+    }
+  });
+
+  for (const params of ['abc', 42, true, null]) {
+    it(`rejects ${JSON.stringify(params)} params`, () => {
+      const result = parseRpcRequest(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'api.echo',
+        params,
+        id: 'request-1',
+      }));
+
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        const response = JSON.parse(result.response);
+        assert.strictEqual(response.error.code, RpcErrorCode.InvalidParams);
+        assert.strictEqual(response.error.data.name, 'InvalidParams');
+        assert.strictEqual(response.id, 'request-1');
+      }
+    });
+  }
+});
