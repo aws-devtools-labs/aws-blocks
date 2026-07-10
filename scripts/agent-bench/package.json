@@ -1,0 +1,19 @@
+{
+	"name": "@aws-blocks/agent-bench",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Per-PR agent benchmark on Bedrock + Strands. Private workspace package — not published.",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "echo \"agent-bench tests run in agent-bench.yml (see test:ci)\" && exit 0",
+		"test:ci": "tsc --noEmit && node --test steps/lib/*.test.mjs"
+	},
+	"devDependencies": {
+		"@strands-agents/sdk": "^1.6.0",
+		"@types/node": "^20.0.0",
+		"tsx": "^4.7.0",
+		"typescript": "^5.3.0",
+		"zod": "^4.1.12"
+	}
+}

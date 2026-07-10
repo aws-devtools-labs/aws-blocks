@@ -1,0 +1,311 @@
+// Shared, mostly-pure helpers for the agent-bench analysis feature. The analysis
+// is generated in TWO places, bottom-up:
+//   1. PER-CELL (steps/analyze-cell.mjs) — runs inside each matrix cell right
+//      after the judge, reads THAT cell's fresh result.json + trace.json +
+//      metrics.json, and writes a concise per-cell `analysis` string back into
+//      result.json.
+//   2. TOP-LEVEL ROLL-UP (steps/analyze.mjs) — runs once in the summary job,
+//      CONSUMES the per-cell `analysis` fields already on each result.json and
+//      synthesizes an executive summary over them.
+//
+// BOTH levels are LLM-driven (Bedrock, Opus 4.8 by default) and BEST-EFFORT: the
+// callers wrap everything so a failure can never fail a cell, never turn a job
+// red, and never touch the score or the green-regardless bench. Bedrock is
+// reached via `aws bedrock-runtime converse` (the CLI, no SDK import) so both
+// callers run under bare `node`; the model id + region + throttle-retry pattern
+// mirror steps/4-judge.ts.
+//
+// Everything here except bedrockConverse/sleepSync is a PURE function of its
+// inputs (no fs / env / process), so the prompt-building and trimming are
+// unit-tested under bare `node --test` in lib/analysis.test.mjs.
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Judge model, reused for the analysis calls (per the owner: Opus 4.8 for both
+// the per-cell analysis and the top-level synthesis). Same id as 4-judge.ts.
+export const DEFAULT_MODEL_ID = 'us.anthropic.claude-opus-4-8';
+
+// Keep the model INPUT small (cost + latency). Caps on each slice of the trace.
+export const MAX_TOOL_NAMES = 40;
+export const MAX_ERROR_LINES = 40;
+export const MAX_ERROR_LINE_LEN = 200;
+export const MAX_TAIL_CHARS = 1500;
+// The judge explanation grounds "what the agent built" cheaply; trim it hard so
+// it can't dominate the per-cell prompt.
+export const MAX_JUDGE_EXPLANATION_CHARS = 500;
+
+// Small output budgets — the per-cell analysis is 2-4 sentences, the rollup a
+// short paragraph. maxTokens keeps both tight.
+export const CELL_MAX_TOKENS = 320;
+export const ROLLUP_MAX_TOKENS = 700;
+
+// Composite < this is "low"; a drop of more than this many points vs the
+// baseline is a "regression" — the same ±5 band the overview uses to separate a
+// real move from N=1 model variance. Used only to FLAG cells for the rollup
+// (never to gate a Bedrock call — the per-cell analysis already ran per cell).
+export const LOW_THRESHOLD = 50;
+export const REGRESSION_DELTA = -5;
+
+// Benign fallback stored when the per-cell analysis can't be produced.
+export const FALLBACK_ANALYSIS = 'analysis unavailable';
+
+// Throttle/transient retry, mirrored from steps/4-judge.ts: initial try + up to
+// 4 backed-off retries, ONLY on a throttle/transient class (never a hard
+// AccessDenied/validation error, which fails fast).
+const MAX_ATTEMPTS = 5;
+const BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
+const TRANSIENT_RE =
+	/throttl|toomanyrequests|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|requesttimeout|timeout|partialresult|503|429|500/i;
+
+// Per-cell analysis system prompt. Per the owner (Jon): what the agent built +
+// score context, and the STRUGGLES visible in the data — never a task restatement
+// or a code re-grade. Clean cells are allowed to say so.
+export const CELL_SYSTEM = `You are analyzing ONE benchmark cell where an AI coding agent built an app from a task prompt. Using the score context, the metrics, and the trimmed tool-call trace provided, write a CONCISE 2-4 sentence analysis:
+(1) one short clause on WHAT the agent built and its score context;
+(2) any STRUGGLES visible in the data — failed or errored tool calls (name the tool and the error), time spent hunting for missing or undocumented APIs/docs, or non-inherent trial-and-error such as dev-server wrangling or build-error loops, and any disproportionate token/turn cost.
+Cite concrete tool names or short error snippets. Do NOT restate the task, propose fixes, or re-grade the code. If the data shows a clean run with no notable struggle, say so in one sentence (e.g. "Clean run — no notable struggle in the trace.").`;
+
+// Top-level roll-up system prompt: synthesize the per-cell analyses bottom-up.
+export const ROLLUP_SYSTEM = `You are writing the EXECUTIVE SUMMARY of an AI coding-agent benchmark run, synthesizing BOTTOM-UP from the PER-CELL analyses provided (each already diagnoses one cell). In 4-8 sentences:
+- state the overall outcome (mean composite and the pass/partial/fail mix);
+- surface CROSS-CELL patterns that recur across multiple cells — e.g. dev-server wrangling, shared build friction, missing-docs hunting, or repeated failed tool calls;
+- call out which cells regressed or are low and the likely why;
+- name the obvious areas to improve (failed tool calls / missing docs / non-inherent trial-and-error).
+Be concrete and cite cells by name. Do NOT restate the task list or write detailed code fixes — surface patterns and problem areas.`;
+
+export const fmt = (n) => (n === null || n === undefined || Number.isNaN(n) ? '—' : Number(n).toFixed(1));
+
+/** Collapse whitespace to a single line. Safe on non-strings (→ ''). */
+export function oneLine(text) {
+	return typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+}
+
+// Error-like lines to lift out of the trace for the model.
+const ERROR_LINE_RE =
+	/(error|failed|failure|denied|exception|timed?\s?out|timeout|not found|no such|cannot|refused|traceback|non-zero|exit code|enoent|econnreset)/i;
+
+/**
+ * Trim a trace into a small, model-friendly slice: distinct tool/span names,
+ * error-like lines, and the tail — never the whole tree. Works on the normalized
+ * (2-space) JSON string so it is line-oriented regardless of trace schema.
+ * @param {unknown} trace parsed trace.json (any shape) or null
+ * @returns {{toolNames: string[], errorLines: string[], tail: string}}
+ */
+export function trimTrace(trace) {
+	if (trace === null || trace === undefined) return { toolNames: [], errorLines: [], tail: '' };
+	let str;
+	try {
+		str = JSON.stringify(trace, null, 2);
+	} catch {
+		return { toolNames: [], errorLines: [], tail: '' };
+	}
+	if (typeof str !== 'string') return { toolNames: [], errorLines: [], tail: '' };
+	const lines = str.split('\n');
+	const names = new Set();
+	const errorLines = [];
+	for (const line of lines) {
+		const m = line.match(/"name":\s*"([^"]+)"/);
+		if (m && names.size < MAX_TOOL_NAMES) names.add(m[1]);
+		if (errorLines.length < MAX_ERROR_LINES && ERROR_LINE_RE.test(line)) {
+			errorLines.push(line.trim().slice(0, MAX_ERROR_LINE_LEN));
+		}
+	}
+	return { toolNames: [...names], errorLines, tail: str.slice(-MAX_TAIL_CHARS) };
+}
+
+/**
+ * Compact one-line-ish metrics summary: cycles, tokens, and per-tool call/error
+ * counts. Defensive about the exact toolUsage/toolMetrics shape (Strands
+ * aggregate) — reads whatever call/error/success/time fields are present.
+ * @param {unknown} metrics parsed metrics.json (result.metrics) or null
+ * @returns {string}
+ */
+export function summarizeMetrics(metrics) {
+	if (!metrics || typeof metrics !== 'object') return '(no metrics)';
+	const parts = [];
+	if (typeof metrics.cycleCount === 'number') parts.push(`cycles=${metrics.cycleCount}`);
+	const usage = metrics.accumulatedUsage;
+	if (usage && typeof usage === 'object') {
+		parts.push(`tokens_in=${usage.inputTokens ?? '?'}`, `tokens_out=${usage.outputTokens ?? '?'}`);
+	}
+	// Strands names this `toolUsage`; accept `toolMetrics` too (defensive).
+	const tu = metrics.toolUsage ?? metrics.toolMetrics;
+	if (tu && typeof tu === 'object') {
+		const rows = [];
+		for (const [name, v] of Object.entries(tu)) {
+			if (!v || typeof v !== 'object') continue;
+			const calls = v.callCount ?? v.calls ?? v.executionCount ?? v.count;
+			const errors = v.errorCount ?? v.failedCount ?? v.errors ?? v.failures;
+			const rate = typeof v.successRate === 'number' ? `${Math.round(v.successRate * 100)}%ok` : null;
+			const time = typeof v.totalTime === 'number' ? `${Math.round(v.totalTime)}ms` : null;
+			const bits = [
+				calls !== undefined ? `calls=${calls}` : '',
+				errors !== undefined ? `errors=${errors}` : '',
+				rate,
+				time,
+			]
+				.filter(Boolean)
+				.join(',');
+			rows.push(bits ? `${name}(${bits})` : name);
+		}
+		if (rows.length) parts.push(`tools: ${rows.join(' ')}`);
+	}
+	return parts.length ? parts.join(' ') : '(metrics present, no recognizable fields)';
+}
+
+/**
+ * Build the per-cell analysis prompt user text from a cell's own data. Pure.
+ * @param {{task?: string, template?: string, composite?: number|null, verdict?: string,
+ *   judgeScore?: number|null, judgeExplanation?: string, klass?: string|null,
+ *   metrics?: unknown, trace?: unknown}} input
+ * @returns {string}
+ */
+export function buildCellUserText(input) {
+	const task = input.task ?? '—';
+	const template = input.template ?? '—';
+	const { toolNames, errorLines, tail } = input.trace
+		? trimTrace(input.trace)
+		: { toolNames: [], errorLines: [], tail: '' };
+	const scoreCtx = [
+		typeof input.composite === 'number' ? `composite ${fmt(input.composite)}/100` : null,
+		input.verdict ? `verdict ${input.verdict}` : null,
+		typeof input.judgeScore === 'number' ? `judge ${input.judgeScore}/10` : null,
+		input.klass ? `klass ${input.klass}` : null,
+	]
+		.filter(Boolean)
+		.join(', ');
+	const explanation = oneLine(input.judgeExplanation).slice(0, MAX_JUDGE_EXPLANATION_CHARS);
+	return [
+		`Cell: ${task}/${template}`,
+		`Score context: ${scoreCtx || '(none)'}`,
+		explanation ? `Judge notes (what was built): ${explanation}` : 'Judge notes: (none)',
+		`Metrics: ${summarizeMetrics(input.metrics)}`,
+		`Tool/span names seen: ${toolNames.length ? toolNames.join(', ') : '(none captured)'}`,
+		'Error-like lines from trace:',
+		errorLines.length ? errorLines.join('\n') : '(none)',
+		'Trace tail:',
+		tail || '(no trace tail)',
+	].join('\n');
+}
+
+/**
+ * Build the top-level roll-up prompt from the collected per-cell analyses +
+ * aggregate. Pure. `cells` rows carry the per-cell `analysis` string plus the
+ * low/regressed flags computed from the baseline diff.
+ * @param {{meanComposite?: number|null, scoredCount?: number, verdictCounts?: Record<string, number>,
+ *   cells: Array<{task?: string, template?: string, composite?: number|null, verdict?: string,
+ *     delta?: number|null, low?: boolean, regressed?: boolean, analysis?: string}>}} input
+ * @returns {string}
+ */
+export function buildRollupUserText(input) {
+	const verdictCounts = input.verdictCounts ?? {};
+	const verdictLine =
+		Object.entries(verdictCounts)
+			.filter(([, n]) => n > 0)
+			.map(([k, n]) => `${n} ${k}`)
+			.join(', ') || '(none)';
+	const cellLines = (input.cells ?? []).map((c) => {
+		const flags = [c.low ? 'LOW' : '', c.regressed ? `REGRESSED Δ${fmt(c.delta)}` : '']
+			.filter(Boolean)
+			.join(' ');
+		const head = `${c.task ?? '—'}/${c.template ?? '—'} — composite ${fmt(c.composite)} (${c.verdict ?? '—'})${flags ? ` [${flags}]` : ''}`;
+		return `- ${head}: ${oneLine(c.analysis) || '(no per-cell analysis)'}`;
+	});
+	const low = (input.cells ?? []).filter((c) => c.low).map((c) => `${c.task}/${c.template}`);
+	const regressed = (input.cells ?? []).filter((c) => c.regressed).map((c) => `${c.task}/${c.template}`);
+	return [
+		`Run: mean composite ${fmt(input.meanComposite)}/100 over ${input.scoredCount ?? 0} scored cell(s). Verdicts: ${verdictLine}.`,
+		'',
+		'Per-cell analyses (already diagnosed bottom-up — synthesize across them):',
+		...(cellLines.length ? cellLines : ['(no per-cell analyses available)']),
+		'',
+		`Cells flagged low (< ${LOW_THRESHOLD}): ${low.length ? low.join(', ') : '(none)'}`,
+		`Cells flagged regressed (Δ < ${REGRESSION_DELTA} vs baseline): ${regressed.length ? regressed.join(', ') : '(none)'}`,
+	].join('\n');
+}
+
+// Block synchronously between retries (bare-node, no async loop to yield to).
+function sleepSync(ms) {
+	try {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, ms | 0));
+	} catch {
+		// SharedArrayBuffer unavailable — skip the backoff wait rather than fail.
+	}
+}
+
+/**
+ * One Bedrock Converse call via the AWS CLI. Returns { text } on success or
+ * { error } on failure — NEVER throws. Uses --cli-input-json (a file) so the
+ * trimmed trace text can't break shell quoting. Retries only on a
+ * throttle/transient class, mirroring steps/4-judge.ts.
+ * @param {{system: string, userText: string, modelId?: string, region?: string, maxTokens?: number}} args
+ * @returns {{text: string}|{error: string}}
+ */
+export function bedrockConverse(args) {
+	const modelId = args.modelId ?? DEFAULT_MODEL_ID;
+	const region = args.region ?? process.env.AWS_REGION ?? 'us-east-1';
+	const maxTokens = args.maxTokens ?? CELL_MAX_TOKENS;
+	let tmpDir;
+	try {
+		tmpDir = mkdtempSync(join(tmpdir(), 'bench-analysis-'));
+	} catch (err) {
+		return { error: `tmp dir failed: ${err?.message ?? err}` };
+	}
+	const inputPath = join(tmpDir, 'converse.json');
+	try {
+		try {
+			writeFileSync(
+				inputPath,
+				JSON.stringify({
+					modelId,
+					system: [{ text: args.system }],
+					messages: [{ role: 'user', content: [{ text: args.userText }] }],
+					// No temperature — the judge model (Opus 4.8) rejects it; determinism
+					// isn't required for a best-effort analysis. maxTokens keeps it short.
+					inferenceConfig: { maxTokens },
+				}),
+			);
+		} catch (err) {
+			return { error: `write input failed: ${err?.message ?? err}` };
+		}
+
+		let lastErr = 'unknown error';
+		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+			const res = spawnSync(
+				'aws',
+				['bedrock-runtime', 'converse', '--cli-input-json', `file://${inputPath}`, '--region', region, '--output', 'json'],
+				{ encoding: 'utf-8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 },
+			);
+			if (res.status === 0 && res.stdout) {
+				try {
+					const parsed = JSON.parse(res.stdout);
+					const text = (parsed?.output?.message?.content ?? [])
+						.map((b) => (b && typeof b.text === 'string' ? b.text : ''))
+						.filter(Boolean)
+						.join('\n')
+						.trim();
+					if (text) return { text };
+					lastErr = 'empty completion';
+				} catch (err) {
+					lastErr = `unparseable response: ${err?.message ?? err}`;
+				}
+			} else {
+				const raw = (res.stderr || res.error?.message || `exit ${res.status}`).toString().trim();
+				lastErr = raw.split('\n').slice(-3).join(' ').slice(0, 300);
+			}
+			if (!TRANSIENT_RE.test(lastErr) || attempt >= MAX_ATTEMPTS) break;
+			const base = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1];
+			sleepSync(base + Math.floor(Math.random() * base * 0.25));
+		}
+		return { error: lastErr };
+	} finally {
+		// Best-effort cleanup of the per-call tmp dir — never mask the result.
+		try {
+			rmSync(tmpDir, { recursive: true, force: true });
+		} catch {
+			// ignore
+		}
+	}
+}
