@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Pre-release changeset guards. Two independent subcommands share the same
- * changeset parsing, but their logic is otherwise separate:
+ * Changeset guards used in CI. All subcommands share one changeset frontmatter
+ * parser; their logic is otherwise independent:
+ *
+ *   verify-coverage Exit non-zero if any publishable package with file changes
+ *                   (vs origin/main) has no changeset entry. Prevents the root
+ *                   cause of EINTEGRITY errors: a package changes but its version
+ *                   isn't bumped because the changeset forgot to mention it.
  *
  *   block-major     Exit non-zero if any changeset declares a `major` bump.
  *                   A `major` (0.x → 1.0.0) means leaving pre-release, which
@@ -19,6 +24,7 @@
  *   - `major` (0.x   → 1.0.0): leaving pre-release / committing to a stable API
  *
  * Usage:
+ *   tsx scripts/changeset-guard.ts verify-coverage
  *   tsx scripts/changeset-guard.ts block-major
  *   tsx scripts/changeset-guard.ts report-breaking
  *
@@ -27,11 +33,14 @@
  *   - GITHUB_OUTPUT:     appends `has-breaking=true|false`
  */
 
+import { execSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
+const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
+const SCOPE = "@aws-blocks/";
 const MARKER = "<!-- changeset-breaking-changes -->";
 
 type BumpType = "major" | "minor" | "patch";
@@ -41,8 +50,6 @@ interface Entry {
 	pkg: string;
 	type: BumpType;
 }
-
-// ── Shared parsing ──────────────────────────────────────────────────
 
 function parseChangesets(): Entry[] {
 	const entries: Entry[] = [];
@@ -69,7 +76,69 @@ function parseChangesets(): Entry[] {
 	return entries;
 }
 
-// ── Subcommand: block-major ─────────────────────────────────────────
+/** Package names (@aws-blocks/*) covered by any changeset entry. */
+function getCoveredPackages(): Set<string> {
+	return new Set(parseChangesets().map((e) => e.pkg));
+}
+
+/** Publishable @aws-blocks/* packages with file changes vs origin/main. */
+function getChangedPackages(): Set<string> {
+	const mergeBase = execSync("git merge-base origin/main HEAD", {
+		cwd: ROOT,
+		encoding: "utf-8",
+	}).trim();
+	const changedFiles = execSync(`git diff --name-only ${mergeBase}`, {
+		cwd: ROOT,
+		encoding: "utf-8",
+	})
+		.trim()
+		.split("\n")
+		.filter(Boolean);
+
+	const packages = new Set<string>();
+	for (const file of changedFiles) {
+		const match = file.match(/^packages\/([^/]+)\//);
+		if (!match) continue;
+
+		const pkgJsonPath = join(PACKAGES_DIR, match[1], "package.json");
+		if (!existsSync(pkgJsonPath)) continue;
+
+		try {
+			const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+			if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
+				packages.add(pkgJson.name);
+			}
+		} catch {
+			// skip unreadable package.json
+		}
+	}
+	return packages;
+}
+
+function verifyCoverage(): number {
+	const changedPackages = getChangedPackages();
+	const coveredPackages = getCoveredPackages();
+	const missing = [...changedPackages].filter((pkg) => !coveredPackages.has(pkg));
+
+	if (missing.length > 0) {
+		console.error("\n❌ The following packages have file changes but no changeset entry:\n");
+		for (const pkg of missing.sort()) {
+			console.error(`   • ${pkg}`);
+		}
+		console.error(
+			"\nAdd a changeset covering these packages: npx changeset\n" +
+			"An empty changeset (--empty) does NOT satisfy this check.\n",
+		);
+		return 1;
+	}
+
+	if (changedPackages.size > 0) {
+		console.log(`✓ All ${changedPackages.size} changed package(s) are covered by changesets.`);
+	} else {
+		console.log("✓ No publishable packages were changed.");
+	}
+	return 0;
+}
 
 function blockMajor(): number {
 	const majors = parseChangesets().filter((e) => e.type === "major");
@@ -92,8 +161,6 @@ function blockMajor(): number {
 	);
 	return 1;
 }
-
-// ── Subcommand: report-breaking ─────────────────────────────────────
 
 function breakingBody(pkgs: string[]): string {
 	return [
@@ -145,11 +212,12 @@ function reportBreaking(): number {
 	return 0; // informational only — never fails the build
 }
 
-// ── CLI dispatch ────────────────────────────────────────────────────
-
 const command = process.argv[2];
 
 switch (command) {
+	case "verify-coverage":
+		process.exit(verifyCoverage());
+		break;
 	case "block-major":
 		process.exit(blockMajor());
 		break;
@@ -159,7 +227,7 @@ switch (command) {
 	default:
 		console.error(
 			`Unknown command: ${command ?? "(none)"}\n` +
-			"Usage: tsx scripts/changeset-guard.ts <block-major|report-breaking>",
+			"Usage: tsx scripts/changeset-guard.ts <verify-coverage|block-major|report-breaking>",
 		);
 		process.exit(2);
 }
