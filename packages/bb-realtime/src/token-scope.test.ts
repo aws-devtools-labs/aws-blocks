@@ -75,4 +75,19 @@ describe('Token scope isolation: connect tokens cannot subscribe to channels', (
 		const result = validateChannelToken(nsToken, SECRET, `${INSTANCE_PREFIX}/chat/room-1`);
 		assert.ok(result, 'namespace token should authorize sub-channels');
 	});
+
+	it('instance name containing $connect does not create ambiguity', () => {
+		// If an instance is literally named "foo$connect", its connect token
+		// channel field is "foo$connect$connect". This must NOT authorize
+		// channels under the instance like "foo$connect/cursors/room-1".
+		const weirdPrefix = 'foo$connect';
+		const connectToken = mintConnectToken(weirdPrefix, SECRET);
+		const channel = `${weirdPrefix}/cursors/room-1`;
+		const result = validateChannelToken(connectToken, SECRET, channel);
+		assert.strictEqual(result, null, 'connect token for $connect-named instance must NOT authorize its channels');
+
+		// But it still validates for connection establishment
+		const connResult = validateChannelToken(connectToken, SECRET);
+		assert.ok(connResult, 'connect token should still validate for connection');
+	});
 });
