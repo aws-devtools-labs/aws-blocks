@@ -1,11 +1,14 @@
 name: Publish Packages
 
-# Real npm release, automated on push to main. Canary publishes live in
-# publish-canary.yml.
+# Real npm release, run daily on a schedule or manually. Canary publishes live
+# in publish-canary.yml.
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    # 09:00 EST, Mon–Fri. GitHub cron is UTC and does not observe DST, so this is
+    # 10:00 local during EDT.
+    - cron: '0 14 * * 1-5'
+  workflow_dispatch:
 
 concurrency:
   group: publish-packages
@@ -24,6 +27,13 @@ jobs:
       NODE_OPTIONS: '--test-reporter=spec'
       HUSKY: '0'
     steps:
+      - name: Enforce main branch
+        # workflow_dispatch always offers a branch picker; reject any non-main ref.
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::This workflow can only run from main (got '${{ github.ref_name }}')."
+          exit 1
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
