@@ -37,6 +37,19 @@ import {
 export const INVOKE_MAX_ATTEMPTS = 5;
 export const INVOKE_BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 
+// Backoff (ms) to wait BEFORE the given 1-based retry attempt: the exponential
+// base from INVOKE_BACKOFF_MS (last value once the ladder is exhausted) plus up
+// to +25% jitter so concurrent cells don't re-hit Bedrock in lockstep. Shared by
+// the builder (2-agent-run.ts) and judge (4-judge.ts) invoke-retry loops.
+/**
+ * @param {number} attempt 1-based attempt number that is about to be retried
+ * @returns {number}
+ */
+export function nextBackoffMs(attempt) {
+	const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
+	return base + Math.floor(Math.random() * base * 0.25);
+}
+
 /**
  * @param {number} ms
  * @returns {Promise<void>}

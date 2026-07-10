@@ -24,10 +24,10 @@ import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
 import { builderSystem } from '../prompts.ts';
 import {
-	INVOKE_BACKOFF_MS,
 	INVOKE_MAX_ATTEMPTS,
 	describeModelError,
 	isRetryableModelError,
+	nextBackoffMs,
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
@@ -273,8 +273,7 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 			`[bench] agent.invoke attempt ${attempt}/${INVOKE_MAX_ATTEMPTS} failed (${retryable ? 'throttle/transient' : 'non-retryable'}): ${describeModelError(err)}\n`,
 		);
 		if (!retryable || attempt >= INVOKE_MAX_ATTEMPTS) break;
-		const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
-		const delayMs = base + Math.floor(Math.random() * base * 0.25);
+		const delayMs = nextBackoffMs(attempt);
 		process.stderr.write(`[bench] backing off ${Math.round(delayMs / 1000)}s before attempt ${attempt + 1}\n`);
 		await sleep(delayMs);
 	}

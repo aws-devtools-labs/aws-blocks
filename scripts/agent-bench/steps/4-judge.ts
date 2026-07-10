@@ -28,10 +28,10 @@ import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { z } from 'zod';
 import { COMMON_DIMENSIONS, JUDGE_SYSTEM, judgeRubric } from '../prompts.ts';
 import {
-	INVOKE_BACKOFF_MS,
 	INVOKE_MAX_ATTEMPTS,
 	describeModelError,
 	isRetryableModelError,
+	nextBackoffMs,
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { WorkspaceSandbox, describeError, required, shellQuote } from './lib/run-shell.ts';
@@ -218,8 +218,7 @@ for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
 			`[judge] agent.invoke attempt ${attempt}/${INVOKE_MAX_ATTEMPTS} failed (${retryable ? 'throttle/transient' : 'non-retryable'}): ${describeModelError(err)}\n`,
 		);
 		if (!retryable || attempt >= INVOKE_MAX_ATTEMPTS) break;
-		const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
-		const delayMs = base + Math.floor(Math.random() * base * 0.25);
+		const delayMs = nextBackoffMs(attempt);
 		process.stderr.write(`[judge] backing off ${Math.round(delayMs / 1000)}s before attempt ${attempt + 1}\n`);
 		await sleep(delayMs);
 	}

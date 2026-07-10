@@ -13,6 +13,7 @@ export {
 	describeModelError,
 	errorChain,
 	isRetryableModelError,
+	nextBackoffMs,
 	sleep,
 } from './bedrock-retry.mjs';
 

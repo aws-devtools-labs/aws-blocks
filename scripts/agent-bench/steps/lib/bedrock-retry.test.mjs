@@ -16,7 +16,14 @@ import {
 	ModelThrottledError,
 	StructuredOutputError,
 } from '@strands-agents/sdk';
-import { describeModelError, errorChain, isRetryableModelError } from './bedrock-retry.mjs';
+import {
+	INVOKE_BACKOFF_MS,
+	INVOKE_MAX_ATTEMPTS,
+	describeModelError,
+	errorChain,
+	isRetryableModelError,
+	nextBackoffMs,
+} from './bedrock-retry.mjs';
 
 // A minimal assistant Message for the MaxTokensError constructor — its second
 // arg (partialMessage) is required by the type but irrelevant to the classifier.
@@ -137,5 +144,26 @@ describe('describeModelError — surfaces the real wrapped AWS class', () => {
 	});
 	it('falls back to String(err) for a non-object input', () => {
 		assert.equal(describeModelError('boom'), 'boom');
+	});
+});
+
+// nextBackoffMs is the shared builder/judge backoff (base from the ladder + up to
+// +25% jitter). Pin the [base, base*1.25) envelope and the ladder-exhausted /
+// out-of-range fallback so both retry loops wait within their step budgets.
+describe('nextBackoffMs — exponential base + bounded jitter', () => {
+	it('stays within [base, base*1.25) for every ladder rung (sampled)', () => {
+		for (let attempt = 1; attempt <= INVOKE_BACKOFF_MS.length; attempt++) {
+			const base = INVOKE_BACKOFF_MS[attempt - 1];
+			for (let i = 0; i < 200; i++) {
+				const ms = nextBackoffMs(attempt);
+				assert.ok(ms >= base, `attempt ${attempt}: ${ms} < base ${base}`);
+				assert.ok(ms < base * 1.25, `attempt ${attempt}: ${ms} >= base*1.25 ${base * 1.25}`);
+			}
+		}
+	});
+	it('clamps to the last rung once the ladder is exhausted (attempt beyond length)', () => {
+		const base = INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1];
+		const ms = nextBackoffMs(INVOKE_MAX_ATTEMPTS + 3);
+		assert.ok(ms >= base && ms < base * 1.25);
 	});
 });
