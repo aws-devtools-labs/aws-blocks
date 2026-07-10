@@ -53,6 +53,67 @@ jobs:
             echo "source-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+  blocks-integrity:
+    name: Blocks Package Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync block docs (prebuild step)
+        run: node scripts/sync-block-docs.mjs
+
+      - name: Check blocks package integrity
+        run: |
+          cd packages/blocks
+
+          # Pack the local package to get its shasum
+          LOCAL_TARBALL=$(npm pack --pack-destination /tmp 2>/dev/null)
+          LOCAL_INTEGRITY=$(shasum -a 512 "/tmp/$LOCAL_TARBALL" | awk '{print $1}')
+
+          # Get the current published version
+          VERSION=$(node -p "require('./package.json').version")
+
+          # Fetch the published integrity hash — if the version isn't published yet, skip
+          PUBLISHED_INTEGRITY=$(npm view "@aws-blocks/blocks@$VERSION" dist.shasum 2>/dev/null || echo "")
+
+          if [ -z "$PUBLISHED_INTEGRITY" ]; then
+            echo "✅ Version $VERSION is not yet published on npm — nothing to compare."
+            exit 0
+          fi
+
+          echo "Local shasum:     $LOCAL_INTEGRITY"
+          echo "Published shasum: $PUBLISHED_INTEGRITY"
+
+          if [ "$LOCAL_INTEGRITY" = "$PUBLISHED_INTEGRITY" ]; then
+            echo "✅ Package content matches the published version."
+            exit 0
+          fi
+
+          # Content differs — check if a changeset already bumps @aws-blocks/blocks
+          cd "$GITHUB_WORKSPACE"
+          CHANGESET_BUMPS=$(find .changeset -name '*.md' ! -name 'README.md' -exec grep -l '"@aws-blocks/blocks"' {} \;)
+
+          if [ -n "$CHANGESET_BUMPS" ]; then
+            echo "✅ Package content changed but a changeset already bumps @aws-blocks/blocks:"
+            echo "$CHANGESET_BUMPS"
+            exit 0
+          fi
+
+          echo "❌ The @aws-blocks/blocks package content has changed (synced docs from sibling packages), but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to your changeset file."
+          exit 1
+
   build-and-test-local:
     name: Build, Unit Tests, E2E Local
     runs-on: ubuntu-latest
@@ -401,12 +462,17 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
+    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
+          if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
+            echo "blocks-integrity failed"
+            exit 1
+          fi
+
           if [[ "${{ needs.build-and-test-local.result }}" != "success" ]]; then
             echo "build-and-test-local failed"
             exit 1
