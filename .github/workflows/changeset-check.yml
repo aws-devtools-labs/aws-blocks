@@ -20,29 +20,26 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
-      - run: npx @changesets/cli status --since=origin/main
-      - name: Verify changeset covers all changed packages
-        run: npx tsx scripts/changeset-guard.ts verify-coverage
-      - name: Block major version bumps (pre-release)
-        run: npx tsx scripts/changeset-guard.ts block-major
 
-      # Surface (do not block) pre-release breaking changes as a sticky PR comment.
       - name: Detect breaking (minor) changesets
-        id: breaking
-        if: always()
         env:
           COMMENT_BODY_FILE: ${{ runner.temp }}/breaking-comment.md
         run: npx tsx scripts/changeset-guard.ts report-breaking
 
       - name: Upsert breaking-change PR comment
-        # Skip on fork PRs — their GITHUB_TOKEN is read-only and cannot comment.
-        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        # Fork PRs get a read-only token and cannot comment.
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # --edit-last reuses the bot's existing comment (sticky); --create-if-none
-        # posts the first one. report-breaking always writes the body file, so the
-        # comment updates in both directions (breaking ⇄ resolved).
+        # --edit-last updates the bot's existing comment; --create-if-none posts the first.
         run: |
           gh pr comment "${{ github.event.pull_request.number }}" \
             --body-file "${{ runner.temp }}/breaking-comment.md" \
             --edit-last --create-if-none
+
+      - run: npx @changesets/cli status --since=origin/main
+      - name: Verify changeset covers all changed packages
+        run: npx tsx scripts/changeset-guard.ts verify-coverage
+      - name: Block major version bumps (pre-release)
+        run: npx tsx scripts/changeset-guard.ts block-major
