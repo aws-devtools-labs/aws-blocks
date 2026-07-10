@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "default",
+  "blocksTemplateDescription": "Vite + lit-html frontend with auth, DynamoDB, and realtime (safe default)",
   "engines": {
     "node": ">=22.0.0"
   },
