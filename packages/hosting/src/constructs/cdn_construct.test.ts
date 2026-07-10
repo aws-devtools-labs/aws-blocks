@@ -1641,6 +1641,80 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    void it('default S3-origin behavior uses a CUSTOM origin request policy, not the restricted managed one', () => {
+      // CloudFront rejects the managed ALL_VIEWER_EXCEPT_HOST_HEADER on an S3
+      // origin ("S3 Origins can only use ... CORS-CustomOrigin, CORS-S3Origin,
+      // UserAgentRefererHeaders"). The default behavior's static origin is S3,
+      // so it must reference a synthesized custom policy (a Ref), not a managed
+      // policy id string.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-orp',
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', defaultUrl]]),
+        computeFunctions: new Map([['default', defaultFn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      // A custom OriginRequestPolicy is synthesized, forwarding all viewer data
+      // except the Host header.
+      template.hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
+        OriginRequestPolicyConfig: Match.objectLike({
+          HeadersConfig: Match.objectLike({
+            HeaderBehavior: 'allExcept',
+            Headers: ['host'],
+          }),
+          CookiesConfig: { CookieBehavior: 'all' },
+          QueryStringsConfig: { QueryStringBehavior: 'all' },
+        }),
+      });
+
+      // The default behavior references it via Ref (not a managed policy id).
+      const json = template.toJSON() as Record<string, unknown>;
+      const resources = json['Resources'] as Record<string, Record<string, unknown>>;
+      const dist = Object.values(resources).find(
+        (r) => r['Type'] === 'AWS::CloudFront::Distribution',
+      );
+      const distProps = dist!['Properties'] as Record<string, unknown>;
+      const distConfig = distProps['DistributionConfig'] as Record<string, unknown>;
+      const defaultBehavior = distConfig['DefaultCacheBehavior'] as Record<string, unknown>;
+      const orp = defaultBehavior['OriginRequestPolicyId'];
+      assert.equal(
+        typeof orp === 'object' && orp !== null && 'Ref' in (orp as Record<string, unknown>),
+        true,
+        'default behavior must reference a synthesized custom OriginRequestPolicy via Ref',
+      );
+    });
+
     void it('orders multi-wildcard patterns above /_next/* by literal-segment count in the KVS route table', () => {
       // Route ordering is now done by buildKvsEntries (the router scans the
       // table first-match-wins). A pattern like /api/*/data/* (2 literal

@@ -21,7 +21,10 @@ import {
   IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
+  OriginRequestCookieBehavior,
+  OriginRequestHeaderBehavior,
   OriginRequestPolicy,
+  OriginRequestQueryStringBehavior,
   PriceClass,
   SecurityPolicyProtocol,
   ViewerProtocolPolicy,
@@ -719,15 +722,40 @@ export class CdnConstruct extends Construct {
     // ---- Origin-request / cache policies for the single behavior ----
     // The default behavior must accept ALL methods (the router may send a
     // request to the SSR origin) and forward viewer data to the origin.
+    //
+    // Origin request policy: forward all viewer headers (except Host), cookies,
+    // and query strings to whichever origin the KVS router selects. We can NOT
+    // use the AWS-managed `ALL_VIEWER_EXCEPT_HOST_HEADER` here: the default
+    // behavior's STATICALLY-attached origin is S3, and CloudFront rejects that
+    // managed policy on an S3 origin — "S3 Origins can only use the following
+    // managed request policies: CORS-CustomOrigin, CORS-S3Origin,
+    // UserAgentRefererHeaders" (a 400 InvalidRequest at distribution create,
+    // observed intermittently across regions). A CUSTOM policy with the same
+    // forwarding is allowed on S3 origins. One custom policy is created per
+    // distribution and shared by the default + sentinel behaviors, so it costs
+    // a single origin-request-policy against the account quota (default 20).
+    // Forward all viewer headers EXCEPT Host — matching the managed
+    // ALL_VIEWER_EXCEPT_HOST_HEADER semantics. CDK has no "all except host"
+    // constructor, so use denyList('host'): CloudFront still sends the correct
+    // origin Host, and the KVS router injects `x-forwarded-host` for the
+    // compute origin so the real viewer host is not lost.
+    const forwardAllOriginRequestPolicy = hasCompute
+      ? new OriginRequestPolicy(this, 'ForwardAllOriginRequestPolicy', {
+          comment:
+            'KVS router: forward all viewer data (except Host) to the selected origin',
+          headerBehavior: OriginRequestHeaderBehavior.denyList('host'),
+          cookieBehavior: OriginRequestCookieBehavior.all(),
+          queryStringBehavior: OriginRequestQueryStringBehavior.all(),
+        })
+      : undefined;
+
     const defaultBehavior: BehaviorOptions = {
       origin: s3Origin,
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: AllowedMethods.ALLOW_ALL,
       cachePolicy: defaultCachePolicy,
       compress: true,
-      originRequestPolicy: hasCompute
-        ? OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER
-        : undefined,
+      originRequestPolicy: forwardAllOriginRequestPolicy,
       responseHeadersPolicy: props.securityHeadersPolicy,
       ...(edgeLambdas ? { edgeLambdas } : {}),
       functionAssociations: [
