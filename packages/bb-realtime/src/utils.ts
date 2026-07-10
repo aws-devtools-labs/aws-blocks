@@ -111,7 +111,10 @@ export function validateChannelToken(
 		const expectedSig = createHmac('sha256', secret).update(JSON.stringify(payload)).digest('base64url');
 		if (!constantTimeEquals(sig, expectedSig)) return null;
 		if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
-		if (requestedChannel && payload.channel && requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+		if (requestedChannel) {
+			if (!payload.channel) return null;
+			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+		}
 		return payload;
 	} catch {
 		return null;
