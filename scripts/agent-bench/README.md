@@ -41,8 +41,10 @@ Nine steps per cell, all on the GitHub runner (4b and 6b are best-effort auxilia
      by step 2; on a wall-clock timeout step 2 emits no trace, so nothing uploads
 
 No microVM, no S3 transport between runner and sandbox. The runner is the
-sandbox; Bedrock provides the model. Builder and judge use different models
-(Sonnet 4.6 vs Opus 4.8) to limit same-model self-evaluation bias.
+sandbox; Bedrock provides the model. Builder and judge currently both run on
+Opus 4.8 (the builder model is the `BENCH_MODEL` knob, default Opus 4.8); set
+`BENCH_MODEL` back to a Sonnet id to de-correlate and limit same-model
+self-evaluation bias.
 
 ## Security
 
@@ -192,10 +194,12 @@ exactly one `result.json`, and the summary scores that one rep directly: there
 is no multi-rep aggregation, median, or IQR. Re-introducing multi-rep support
 (execution loop + dispersion reporting) is tracked in #96.
 
-**Reproducibility pins.** The builder pins `temperature=0` (Sonnet 4.6); the
-judge (Opus 4.8) rejects `temperature`, so its determinism rests on the
-structured-output schema + the deterministic hard caps. Model IDs are pinned
-snapshots (the Claude 4.x IDs carry no date suffix — the version *is* the
+**Reproducibility pins.** The builder pins `temperature=0` only for models that
+accept it (e.g. Sonnet); on Opus 4.8 — the current default — `temperature` is
+omitted because Opus rejects it, so builder determinism (like the judge's) rests
+on the tool/loop structure. The judge (Opus 4.8) likewise omits `temperature`,
+resting on the structured-output schema + the deterministic hard caps. Model IDs
+are pinned snapshots (the Claude 4.x IDs carry no date suffix — the version *is* the
 snapshot). Playwright is pinned to `1.60.0` and runs with `retries: 0` — a retry
 would mask realtime-propagation flake, and the bench wants an honest pass/fail
 for the judge. A run-stable `RUN_ID` seeds the specs' unique-but-deterministic

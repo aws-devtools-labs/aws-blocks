@@ -5,7 +5,7 @@
  *   WORKSPACE        absolute path to the scaffolded bench-app
  *   TASK_PROMPT      path to PROMPT.md
  *   OUTPUT           path to write the builder envelope JSON
- *   BENCH_MODEL      Bedrock model ID (default: us.anthropic.claude-sonnet-4-6)
+ *   BENCH_MODEL      Bedrock model ID (default: us.anthropic.claude-opus-4-8)
  *   TRACE            (optional) path to write the Strands built-in hierarchical
  *                    tool-call trace tree (result.traces). Only written on normal
  *                    completion; on a wall-clock timeout no trace is emitted (the
@@ -38,7 +38,12 @@ const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
 const OUTPUT = required('OUTPUT', '[bench]');
 const TRACE_PATH = process.env.TRACE;
 const METRICS_PATH = process.env.METRICS;
-const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-sonnet-4-6';
+const MODEL_ID = process.env.BENCH_MODEL ?? 'us.anthropic.claude-opus-4-8';
+// Opus 4.8 REJECTS the `temperature` parameter (same as the judge model — see
+// 4-judge.ts, which omits it). Only pin temperature=0 for models that accept it
+// (e.g. Sonnet); for Opus, determinism rests on the tool/loop structure, matching
+// the judge. Keyed off the model id so the BENCH_MODEL knob stays self-configuring.
+const MODEL_ACCEPTS_TEMPERATURE = !/opus/i.test(MODEL_ID);
 // Backstop against runaway tool-call loops (v1's long prompts caused
 // over-iteration). The Strands TS SDK enforces this per-invocation; hitting it
 // yields stopReason 'limitTurns'. This is only a runaway-loop backstop: the real
@@ -101,7 +106,7 @@ function makeBuilderAgent(): Agent {
 		model: new BedrockModel({
 			modelId: MODEL_ID,
 			region: process.env.AWS_REGION ?? 'us-east-1',
-			temperature: 0,
+			...(MODEL_ACCEPTS_TEMPERATURE ? { temperature: 0 } : {}),
 			// AWS-SDK-layer adaptive retry — the lower half of a two-layer throttle
 			// defense (the app-level retry loop around invoke() below is the upper
 			// half). Mirrors the judge: retryMode 'adaptive' adds client-side rate

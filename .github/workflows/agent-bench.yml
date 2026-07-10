@@ -145,9 +145,12 @@ jobs:
       # both resolve in us-east-1 today (verified by live, scored bench runs):
       #   Sonnet 4.6: docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
       #   Opus 4.8:   docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
-      BENCH_MODEL: us.anthropic.claude-sonnet-4-6
-      # Different model from the builder, on purpose — limits same-model
-      # self-evaluation bias.
+      # Builder model knob: overridable here (or via the BENCH_MODEL env) without a
+      # code change; 2-agent-run.ts defaults to this same Opus 4.8 id when unset.
+      # NOTE: builder and judge now share Opus 4.8, so the judge is no longer a
+      # DIFFERENT model from the builder — same-model self-evaluation bias is
+      # accepted for now (set BENCH_MODEL back to a Sonnet id to de-correlate).
+      BENCH_MODEL: us.anthropic.claude-opus-4-8
       BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
       AWS_REGION: us-east-1
       TEMPLATE: ${{ matrix.template }}
