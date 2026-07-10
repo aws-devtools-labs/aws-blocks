@@ -103,11 +103,12 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const api = getApi();
 
 				// Get raw descriptors to extract tokens and channel paths
-				const publicRaw = await api.realtimeGetRawDescriptor('public-room') as unknown as { descriptor: { connectToken: string; wsUrl: string; token: string; channel: string } };
-				const privateRaw = await api.realtimeGetRawDescriptor('private-room') as unknown as { descriptor: { channel: string; token: string } };
+				// realtimeGetRawDescriptor strips __blocks so middleware won't hydrate them
+				const publicDescriptor = await api.realtimeGetRawDescriptor('public-room') as unknown as { connectToken: string; wsUrl: string; token: string; channel: string };
+				const privateDescriptor = await api.realtimeGetRawDescriptor('private-room') as unknown as { channel: string; token: string };
 
-				const { connectToken, wsUrl } = publicRaw.descriptor;
-				const { channel: privateChannel } = privateRaw.descriptor;
+				const { connectToken, wsUrl } = publicDescriptor;
+				const { channel: privateChannel } = privateDescriptor;
 
 				assert.ok(connectToken, 'Descriptor should include a connectToken');
 				assert.ok(wsUrl, 'Descriptor should include a wsUrl');

@@ -1222,10 +1222,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async realtimeGetRawDescriptor(subChannel: string) {
-    // Return the raw toJSON() descriptor wrapped in { descriptor: ... } so client middleware
-    // does NOT hydrate it (middleware only hydrates top-level { __blocks: 'realtime/channel' }).
+    // Return the raw toJSON() descriptor with __blocks removed so client middleware
+    // does NOT hydrate it into a channel client. Tests need the raw token fields.
     const ch = await realtime.getChannel('cursors', subChannel);
-    return { descriptor: ch.toJSON() };
+    const raw = ch.toJSON() as Record<string, unknown>;
+    const { __blocks, ...descriptor } = raw;
+    return descriptor;
   },
 
   async realtimeGetPoisonedChannel(subChannel: string) {
