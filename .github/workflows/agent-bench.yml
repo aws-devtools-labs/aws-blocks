@@ -183,6 +183,29 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # AGENT-SHELL ISOLATION (issue #184). The builder runs the agent's vended
+      # bash inside an unprivileged user+PID+mount namespace (scripts/agent-bench/
+      # steps/lib/run-shell.ts) so a broad `pkill -f node` / `killall` the agent
+      # issues during dev-server thrash cannot reach — and kill — the parent
+      # harness (`npx tsx 2-agent-run.ts`), the teardown that killed 2 cells in
+      # run 29107536283. The ubuntu-24.04 runner ships
+      # kernel.apparmor_restrict_unprivileged_userns=1, which BLOCKS unprivileged
+      # user-namespace creation, so without this flip the isolation silently
+      # degrades to a bare shell (2-agent-run.ts logs ACTIVE vs DISABLED). The
+      # runner grants passwordless sudo, so turn the restriction off to permit the
+      # namespace. Best-effort: on a kernel without the knob the writes no-op
+      # (|| true) and the runtime probe simply reports DISABLED — never reds a cell.
+      - name: Enable unprivileged user namespaces (agent-shell isolation)
+        continue-on-error: true
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+          if unshare --map-current-user --pid --fork --mount-proc true 2>/dev/null; then
+            echo "unprivileged user+pid+mount namespaces: AVAILABLE (agent-shell isolation will be ACTIVE)"
+          else
+            echo "unprivileged user+pid+mount namespaces: UNAVAILABLE (agent-shell isolation will be DISABLED)"
+          fi
+
       - id: npmci
         run: npm ci
         continue-on-error: true
@@ -665,6 +688,23 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+      # Same unprivileged-userns enablement as the bench job (see there). This job
+      # is FREE (no Bedrock/OIDC) and its unit suite includes the issue-#184
+      # isolation tests (scripts/agent-bench/steps/lib/run-shell.test.mjs), so on
+      # the real ubuntu-latest runner it PROVES — at no Bedrock cost — that the
+      # sysctl flip enables the namespace AND that the agent's shell can no longer
+      # signal the harness. If the flip fails on this runner, the FIX test skips
+      # (visible in the log) rather than proving containment.
+      - name: Enable unprivileged user namespaces (agent-shell isolation)
+        continue-on-error: true
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+          if unshare --map-current-user --pid --fork --mount-proc true 2>/dev/null; then
+            echo "unprivileged user+pid+mount namespaces: AVAILABLE (isolation tests will run)"
+          else
+            echo "unprivileged user+pid+mount namespaces: UNAVAILABLE (isolation FIX test will skip)"
+          fi
       - run: npm ci
       - name: Type-check + unit-test the bench harness
         run: npm run test:ci -w scripts/agent-bench

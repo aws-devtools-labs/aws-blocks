@@ -31,7 +31,7 @@ import {
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
-import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
+import { WorkspaceSandbox, describeError, isolationAvailable, required } from './lib/run-shell.ts';
 
 const WORKSPACE = required('WORKSPACE', '[bench]');
 const TASK_PROMPT_PATH = required('TASK_PROMPT', '[bench]');
@@ -61,6 +61,22 @@ const MAX_TURNS = 120;
 const BASH_MIN_TIMEOUT_SEC = 600;
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
+
+// Loud, auditable startup log of whether the agent's shell is namespace-ISOLATED
+// (issue #184): the builder's WorkspaceSandbox requests isolation, but the actual
+// wrap only happens when the kernel supports unprivileged user+PID+mount
+// namespaces (probed in run-shell.ts). We do NOT hard-fail when it is unavailable
+// — that would break local dev and the green-regardless contract — so this line
+// is how a CI run records that the containment was (or was not) active for the
+// cell. On the GitHub-hosted ubuntu runner unprivileged userns is enabled, so
+// this should log ACTIVE.
+process.stderr.write(
+	`[bench] agent shell isolation: ${
+		isolationAvailable()
+			? 'ACTIVE (unshare user+pid+mount namespace — agent cannot signal the harness)'
+			: 'DISABLED (kernel lacks unprivileged user+pid+mount namespaces; falling back to bare bash)'
+	}\n`,
+);
 
 // INTENTIONALLY MINIMAL: a bare agent given only the framework's vended tools
 // (`bash` + `fileEditor`, routed through a WORKSPACE-rooted Sandbox), no planner,
@@ -115,7 +131,7 @@ function makeBuilderAgent(): Agent {
 			clientConfig: { maxAttempts: 8, retryMode: 'adaptive' },
 		}),
 		systemPrompt: builderSystem(WORKSPACE),
-		sandbox: new WorkspaceSandbox(WORKSPACE, BASH_MIN_TIMEOUT_SEC),
+		sandbox: new WorkspaceSandbox(WORKSPACE, BASH_MIN_TIMEOUT_SEC, true),
 		tools: [makeBash(), fileEditor],
 	});
 	agent.addHook(ModelStreamUpdateEvent, (event) => {
