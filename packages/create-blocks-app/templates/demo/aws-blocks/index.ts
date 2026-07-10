@@ -101,33 +101,30 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     
     // ULID: timestamp-based sortable ID
-    const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
-    
-    const todo = {
-      userId: user.username,
-      todoId: ulid,
-      title,
-      completed: false,
-      priority,
-      createdAt: Date.now()
-    };
+    const now = Date.now();
+    const ulid = now.toString(36) + crypto.randomBytes(8).toString('hex');
+    const todo = { userId: user.username, todoId: ulid, title, completed: false, priority, createdAt: now };
     await todos.put(todo);
     return todo;
   },
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
     const user = await auth.requireAuth(context);
-    
-    const indexMap = { 
-      priority: 'byPriority', 
-      title: 'byTitle', 
-      createdAt: 'byCreatedAt' 
+
+    const indexMap = {
+      priority: 'byPriority',
+      title: 'byTitle',
+      createdAt: 'byCreatedAt'
     } as const;
-    
-    const iterator = sortBy 
-      ? todos.query(indexMap[sortBy], { userId: { equals: user.username } })
-      : todos.scan();
-    
+
+    // The default path queries the byCreatedAt GSI, which is eventually consistent:
+    // a todo just written by createTodo() may not appear in the immediately following call.
+    const iterator = todos.query({
+      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
+      where: { userId: { equals: user.username } }
+    });
+
+    // demo only: loads all todos into memory, no pagination. query() accepts a `limit` for real apps.
     return await Array.fromAsync(iterator);
   },
 

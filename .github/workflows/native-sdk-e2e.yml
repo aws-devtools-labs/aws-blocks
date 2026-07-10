@@ -99,6 +99,11 @@ jobs:
         with:
           sdk: '3.11.0'
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -108,12 +113,25 @@ jobs:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
 
+      - name: Pick a free port for the local server
+        run: |
+          # Pick a free port so the local server never collides on the runner.
+          # python3 bind-to-0 is portable (the ubuntu runner ships python3);
+          # fall back to 3001 if it fails. Thread the value to later steps via
+          # $GITHUB_ENV so the server (reads PORT) and the suite (reads
+          # BLOCKS_URL) agree on it without a hardcoded literal.
+          PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
+          echo "PORT=${PORT}" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "Picked local server port ${PORT}"
+
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
         run: |
+          # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
           npx tsx aws-blocks/scripts/server.ts &
           for i in $(seq 1 30); do
-            curl -s -X POST http://localhost:3001/aws-blocks/api \
+            curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
               -d '{"jsonrpc":"2.0","method":"api.kvGet","params":{"key":"healthcheck"},"id":1}' && break
             sleep 1
@@ -143,8 +161,7 @@ jobs:
 
       - name: Run E2E tests
         working-directory: native/dart/example
-        env:
-          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+        # BLOCKS_URL is provided via $GITHUB_ENV from the "Pick a free port" step.
         run: dart run bin/e2e_test.dart
 
   # Kotlin E2E (TODO: add when ready)
@@ -171,6 +188,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -179,6 +201,18 @@ jobs:
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
+
+      - name: Pick a free port for the local server
+        run: |
+          # Pick a free port so the local server never collides on the runner.
+          # python3 bind-to-0 is portable (the macOS runner ships python3);
+          # fall back to 3001 if it fails. Thread the value to later steps via
+          # $GITHUB_ENV so the server (reads PORT) and the suite (reads
+          # BLOCKS_URL) agree on it without a hardcoded literal.
+          PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
+          echo "PORT=${PORT}" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "Picked local server port ${PORT}"
 
       - name: Run Swift codegen
         working-directory: native/swift
@@ -190,17 +224,33 @@ jobs:
       - name: Start native-bindings server
         working-directory: test-apps/native-bindings
         run: |
+          # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
           npx tsx aws-blocks/scripts/server.ts &
           for i in $(seq 1 30); do
-            curl -s -X POST http://localhost:3001/aws-blocks/api \
+            curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
               -d '{"jsonrpc":"2.0","method":"api.kvGet","params":["healthcheck"],"id":1}' && break
             sleep 1
           done
 
+      - name: Verify server is ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf -X POST "$BLOCKS_URL" \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"api.kvGet","params":["healthcheck"],"id":1}' > /dev/null 2>&1; then
+              echo "✅ Server ready"
+              exit 0
+            fi
+            echo "⏳ attempt $i/30: server not ready; retrying in 2s..."
+            sleep 2
+          done
+          echo "❌ Server never became ready"
+          exit 1
+
       - name: Run E2E tests
         env:
-          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+          BLOCKS_URL: ${{ env.BLOCKS_URL }}
         run: |
           xcodebuild clean test \
             -project native/swift/Tests/BlocksE2ETests/BlocksE2ETestApp.xcodeproj \
@@ -219,7 +269,12 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Deploy sandbox alone is ~21 min (sequential DynamoDB GSI custom-resource
+    # backfill), plus npm ci (~2m) + build (~4m) ≈ 27 min before any test runs.
+    # 30 left too little headroom (test squeaked in but the job tripped the
+    # wall / Destroy could be skipped → leaked stacks). Stop-gap until
+    # deploy-once-per-run lands.
+    timeout-minutes: 45
     environment: publish
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -238,6 +293,11 @@ jobs:
         with:
           sdk: '3.11.0'
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -251,12 +311,58 @@ jobs:
         working-directory: test-apps/native-bindings
         run: npm run deploy
 
+      - name: Seed Cognito returning-customer test user
+        working-directory: test-apps/native-bindings
+        # Real Cognito emails the confirmation code, so the sign-up→code→confirm
+        # leg can't be verified in CI (auth_cognito_test.dart skips it against a
+        # deployed pool). Instead, admin-provision a confirmed user so the suite
+        # can exercise the real returning-customer sign-in path. AWS_REGION +
+        # BLOCKS_STACK_SUFFIX are inherited from the job/credentials step.
+        run: npm run seed:cognito
+
       - name: Resolve BLOCKS_URL
         id: url
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
-          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
+          # so emit it as-is. (Appending /aws-blocks/api here previously doubled
+          # the path: the non-OIDC suites still worked because API Gateway routes
+          # /prod/aws-blocks/api/* to the JSON-RPC Lambda, but the OIDC suite
+          # derived a wrong origin and misrouted its /auth/* relay request.)
+          echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
+
+      - name: Warm up sandbox API (post-deploy readiness gate)
+        env:
+          BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
+        run: |
+          # A freshly-deployed per-run stack's Lambda/API Gateway can cold-start:
+          # the very first request against a brand-new sandbox intermittently
+          # fails before the function is warm. That is what made the OIDC suite's
+          # first raw `POST /authorize-params` (assertion A1) flaky in CI while it
+          # passed 5/5 against already-warm sandboxes. Poll the JSON-RPC endpoint
+          # until it answers HTTP 200 (it returns 200 with a JSON-RPC error body
+          # for any payload, which proves the Lambda is up and serving) BEFORE
+          # running the suite, so no suite eats the cold-start on its first call.
+          # This hits the same Lambda that serves the /auth/* OIDC routes, so it
+          # protects the OIDC suite's first request too. Bounded backoff; fails
+          # loudly if the API never becomes ready.
+          attempts=24
+          delay=2
+          for i in $(seq 1 "$attempts"); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST -H 'content-type: application/json' -d '{}' \
+              "$BLOCKS_URL" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ Sandbox API warm after $i attempt(s) (http=200)."
+              exit 0
+            fi
+            echo "⏳ attempt $i/$attempts: API not ready (http=$code); retrying in ${delay}s..."
+            sleep "$delay"
+            if [ "$delay" -lt 10 ]; then delay=$((delay + 2)); fi
+          done
+          echo "❌ Sandbox API did not return HTTP 200 after $attempts attempts."
+          exit 1
 
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
@@ -301,7 +407,10 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15
-    timeout-minutes: 30
+    # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
+    # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
+    # Stop-gap until deploy-once-per-run lands.
+    timeout-minutes: 45
     environment: publish
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
@@ -315,6 +424,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -346,6 +460,27 @@ jobs:
           swift run swift-code-generator \
             ../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
             Tests/BlocksE2ETests/Generated
+
+      - name: Warm up sandbox API
+        env:
+          BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
+        run: |
+          attempts=24
+          delay=2
+          for i in $(seq 1 "$attempts"); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST -H 'content-type: application/json' -d '{}' \
+              "$BLOCKS_URL" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ Sandbox API warm after $i attempt(s) (http=200)."
+              exit 0
+            fi
+            echo "⏳ attempt $i/$attempts: API not ready (http=$code); retrying in ${delay}s..."
+            sleep "$delay"
+            if [ "$delay" -lt 10 ]; then delay=$((delay + 2)); fi
+          done
+          echo "❌ Sandbox API did not return HTTP 200 after $attempts attempts."
+          exit 1
 
       - name: Run Swift E2E against sandbox
         env:

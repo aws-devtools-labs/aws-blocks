@@ -2,18 +2,20 @@ import { describe, it } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import assert from 'node:assert';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
 
-function run(args: string[], cwd?: string): { stdout: string; stderr: string; exitCode: number } {
+function run(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
   try {
     const stdout = execFileSync('node', [CLI_PATH, ...args], {
       encoding: 'utf-8',
       timeout: 30000,
       cwd,
+      env: env ? { ...process.env, ...env } : undefined,
     });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (err: any) {
@@ -31,6 +33,8 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
   });
@@ -39,6 +43,16 @@ describe('create-blocks-app CLI argument parsing', () => {
     const result = run(['-h']);
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
+  });
+
+  it('--help includes template descriptions', () => {
+    const result = run(['--help']);
+    assert.strictEqual(result.exitCode, 0);
+    assert.match(
+      result.stdout,
+      /default\s+Vite \+ lit-html frontend with auth/,
+      '--help should list the default template with its blocksTemplateDescription',
+    );
   });
 
   it('unknown flag exits 1 with error message', () => {
@@ -52,6 +66,57 @@ describe('create-blocks-app CLI argument parsing', () => {
     const result = run(['-z']);
     assert.strictEqual(result.exitCode, 1);
     assert.match(result.stderr, /Unknown option: -z/);
+  });
+
+  it('--template without a value exits 1 with error message', () => {
+    const result = run(['--template']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+
+  it('--template followed by another option exits 1 with error message', () => {
+    const result = run(['--template', '--skip-install']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Missing value for --template/);
+    assert.match(result.stderr, /--help/);
+  });
+  
+  it('unknown template exits 1 with a friendly error message', () => {
+    const result = run(['--template', 'does-not-exist']);
+    assert.strictEqual(result.exitCode, 1);
+    assert.match(result.stderr, /Unknown template "does-not-exist"/);
+    assert.match(result.stderr, /Available templates:/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  });
+
+  it('a template folder missing package.json is rejected as unknown, not crashed with ENOENT', () => {
+    // Latent-bug guard: a folder under templates/ with no package.json is shown
+    // in --help but excluded from validation, so selecting it fails cleanly
+    // instead of throwing ENOENT on the later template version read.
+    const brokenDir = join(__dirname, '../templates', '__broken_test_template__');
+    mkdirSync(brokenDir, { recursive: true });
+    try {
+      const result = run(['my-app', '--template', '__broken_test_template__', '--skip-install']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /Unknown template "__broken_test_template__"/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(brokenDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('--template amplify on a fresh dir exits 1 with a helpful message', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-fresh-'));
+    try {
+      const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /amplify.*auto-selected/i);
+      assert.match(result.stderr, /--template default/);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('multiple positional args exits 1 with error message', () => {
@@ -155,7 +220,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('replaces my-blocks-stack placeholder in generated aws-blocks/index.cdk.ts', () => {
+  it('generates .blocks/config.json with stackId and uses getStackName in index.cdk.ts', () => {
     const tmpDir = join(__dirname, '../.test-stack-name-rewrite');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-cool-app', version: '1.0.0' }));
@@ -165,35 +230,37 @@ describe('create-blocks-app auto-detection', () => {
       const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
       assert.ok(
         !cdkContent.includes('my-blocks-stack'),
-        'generated index.cdk.ts should not contain the placeholder "my-blocks-stack"'
+        'generated index.cdk.ts should not contain the static placeholder'
       );
       assert.ok(
-        cdkContent.includes('-stack'),
-        'generated index.cdk.ts should contain the derived stack name'
+        cdkContent.includes('getStackName'),
+        'generated index.cdk.ts should import getStackName from @aws-blocks/blocks/scripts'
       );
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.ok(config.stackId.startsWith('my-cool-app-'), 'stackId should start with truncated app name');
+      assert.strictEqual(config.stackId.length, 'my-cool-app-'.length + 6, 'stackId should have 6-char random suffix');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
 
-  it('sanitizes directory names with special characters for CDK stack IDs', () => {
+  it('truncates long names to 16 chars in stackId', () => {
     const tmpDir = join(__dirname, '../.test-sanitize-stack-name');
     mkdirSync(tmpDir, { recursive: true });
     writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: '@scope/my_app.test', version: '1.0.0' }));
     try {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
-      const cdkContent = readFileSync(join(tmpDir, 'aws-blocks', 'index.cdk.ts'), 'utf-8');
-      assert.ok(
-        !cdkContent.includes('my-blocks-stack'),
-        'placeholder should be replaced'
-      );
-      // Stack name should only contain [A-Za-z][A-Za-z0-9-]* characters
-      const stackNameMatch = cdkContent.match(/`([^`]+)-\$\{getSandboxId/);
-      assert.ok(stackNameMatch, 'regex should match stack name pattern in CDK output');
-      if (stackNameMatch) {
-        assert.match(stackNameMatch[1], /^[A-Za-z][A-Za-z0-9-]*$/, 'stack name should be CDK-safe');
-      }
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      // Name part (before the random suffix) should be at most 16 chars
+      const parts = config.stackId.split('-');
+      const suffix = parts.pop();
+      const namepart = parts.join('-');
+      assert.ok(namepart.length <= 16, `name portion "${namepart}" should be at most 16 chars`);
+      assert.strictEqual(suffix!.length, 6, 'random suffix should be 6 chars');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -208,6 +275,66 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
       assert.match(result.stdout, /Created aws-blocks/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('generates .blocks/config.json with stackId for fresh project scaffolding', () => {
+    const tmpDir = join(__dirname, '../.test-fresh-project-stackid');
+    try {
+      const result = run([tmpDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.match(config.stackId, /^[a-z][a-z0-9-]*$/i, 'stackId must be CDK/CFN-safe');
+      assert.strictEqual(config.stackId.split('-').pop()!.length, 6, 'suffix should be 6 chars');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('honors --template when adding to an existing project (nextjs uses next dev)', () => {
+    const tmpDir = join(__dirname, '../.test-existing-nextjs-template');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0' }));
+    try {
+      const result = run(['.', '--template', 'nextjs', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+      assert.match(serverContent, /next dev/, 'nextjs template should start the Next.js dev server');
+      assert.ok(!serverContent.includes('vite'), 'nextjs template should not start a Vite dev server');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('defaults to the default template (vite) when no --template is given for an existing project', () => {
+    const tmpDir = join(__dirname, '../.test-existing-default-template');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0' }));
+    try {
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const serverContent = readFileSync(join(tmpDir, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+      assert.match(serverContent, /vite/, 'default template should start the Vite dev server');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('skips npm install when creating a fresh project with --skip-install', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-fresh-skip-install-'));
+    const targetDir = join(tmpDir, 'fresh-app');
+    try {
+      const result = run([targetDir, '-y', '--skip-install'], undefined, {
+        NPM_CONFIG_REGISTRY: 'http://127.0.0.1:9',
+      });
+      assert.strictEqual(result.exitCode, 0);
+      assert.match(result.stdout, /Blocks app created/);
+      assert.doesNotMatch(result.stdout, /Installing dependencies/);
+      assert.match(result.stdout, /\n  npm install\n/);
+      assert.strictEqual(existsSync(join(targetDir, 'node_modules')), false);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

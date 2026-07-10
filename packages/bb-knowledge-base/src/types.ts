@@ -49,9 +49,17 @@ export interface ChunkingConfig {
 	strategy?: ChunkingStrategy;
 	/** Max tokens per chunk. Only used with `'fixed'` strategy. Default: 300. */
 	chunkSize?: number;
-	/** Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20. */
+	/**
+	 * Overlap percentage between consecutive chunks (0–100). Only used with `'fixed'` strategy. Default: 20.
+	 *
+	 * **Parity note:** Interpreted as a *percentage* of `chunkSize` in both local
+	 * development and production — the mock overlaps by `chunkSize * chunkOverlap / 100`
+	 * words, and the CDK layer maps it to Bedrock's `overlapPercentage`. The value is
+	 * directly transferable between environments. Bedrock accepts 1–99; the local mock
+	 * also accepts 0 (no overlap).
+	 */
 	chunkOverlap?: number;
-	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. */
+	/** Breakpoint percentile threshold for topic boundary detection (0–100). Only used with `'semantic'` strategy. Higher values = fewer, larger chunks. Default: 95. (No effect in local dev / mock.) */
 	breakpointPercentile?: number;
 }
 
@@ -146,4 +154,65 @@ export interface RetrieveResult {
 	metadata: Record<string, string>;
 }
 
+// ── Sync Options ───────────────────────────────────────────────────────────
 
+/**
+ * Options for the `waitUntilSynced()` method.
+ *
+ * @example
+ * ```typescript
+ * // Wait up to 10 minutes, polling every 10 seconds
+ * await kb.waitUntilSynced({ timeoutMs: 600_000, pollIntervalMs: 10_000 });
+ * ```
+ */
+export interface WaitUntilSyncedOptions {
+	/**
+	 * Maximum time to wait for ingestion to complete, in milliseconds. Default: 300000 (5 minutes).
+	 *
+	 * `timeoutMs: 0` is a one-shot check, not a no-poll fast-fail: the deadline is
+	 * evaluated *after* the first `isSynced()` poll, so exactly one poll always
+	 * runs (and can resolve the wait) before a `KnowledgeBaseTimeoutException` is
+	 * thrown. No inter-poll sleep occurs in this case either — the sleep is
+	 * `min(jitter, deadline − now)`, and the remaining-budget clamp drives it to 0
+	 * when the budget is already spent. Clamped to a minimum of 0.
+	 */
+	timeoutMs?: number;
+	/**
+	 * Delay between sync polls, in milliseconds. Clamped to a minimum of 1ms.
+	 * A small amount of random jitter (±20%) is applied to each delay so that many
+	 * knowledge bases polling after a shared deploy do not fall into lockstep — the
+	 * jitter only varies the wait *between* polls (never the number of polls) and is
+	 * still clamped so a sleep never overruns `timeoutMs`. Default: 5000 (5 seconds).
+	 */
+	pollIntervalMs?: number;
+	/**
+	 * Maximum number of *consecutive* transient control-plane errors to tolerate
+	 * before giving up, instead of aborting the wait on the first blip. Two kinds
+	 * of error are treated as transient during a sync poll:
+	 * - `RetrievalFailedException` — the catch-all for network failures, throttling,
+	 *   and other unrecognized SDK errors.
+	 * - A *not-yet-visible* knowledge base: in the post-deploy window the control
+	 *   plane can briefly return `ResourceNotFoundException` (the KB or data source
+	 *   isn't visible yet), which surfaces as `KnowledgeBaseNotReadyException`. Only
+	 *   this control-plane variant is transient — riding it out is the whole point
+	 *   of `waitUntilSynced()`.
+	 *
+	 * Each clean poll (ingestion still in progress, or synced) resets the counter,
+	 * so only an unbroken run of failures counts toward the limit.
+	 *
+	 * Terminal errors always short-circuit immediately regardless of this value:
+	 * `IngestionFailedException` (the job failed), a *config* `KnowledgeBaseNotReadyException`
+	 * (the `KB_ID` env var is unset — distinct from the transient not-yet-visible case
+	 * above), and validation errors. Set to `0` to fail fast on the first transient
+	 * error. Clamped to a minimum of 0. Default: 3.
+	 */
+	maxConsecutiveTransientErrors?: number;
+	/**
+	 * Optional {@link AbortSignal} to cancel the wait. When the signal is aborted,
+	 * `waitUntilSynced()` rejects promptly — checked before each poll and during the
+	 * inter-poll delay — with the signal's abort reason (by default a `DOMException`
+	 * named `'AbortError'`, or whatever value was passed to `AbortController.abort(reason)`).
+	 * An already-aborted signal rejects immediately, before any polling.
+	 */
+	signal?: AbortSignal;
+}

@@ -12,7 +12,7 @@
 
 # Package Files #
 *.jar
-!gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.jar
 *.war
 *.nar
 *.ear
@@ -56,6 +56,9 @@ replay_pid*
 **/.externalNativeBuild
 **/.cxx
 **/build/
+
+# Node (changeset tooling)
+node_modules/
 
 # Blocks local caches
 **/.bb-data

@@ -9,7 +9,7 @@
  * embeddings instead.
  *
  * **Algorithm:**
- * 1. Documents are tokenized into lowercase alphanumeric tokens.
+ * 1. Documents are tokenized into lowercase Unicode-aware tokens.
  * 2. Term frequencies (TF) are normalized by document length.
  * 3. Inverse document frequencies (IDF) use smoothed log: `log((N+1)/(df+1)) + 1`.
  * 4. Query scores are the sum of `TF * IDF` for each query token.
@@ -41,12 +41,65 @@ export interface TfIdfIndex {
 	docCount: number;
 }
 
+// Explicit CJK blocks (Hiragana/Katakana, CJK Unified Ideographs incl. Extension A,
+// and compatibility ideographs) rather than one broad \u3040-\ufaff sweep, which
+// would also capture unrelated ranges such as Hangul, Yi, surrogates and the
+// private-use area. The range is defined once here and reused by the regexes below.
+const CJK_RANGE = '\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff';
+// Non-global: detects CJK presence, safe to use with `.test()`.
+const CJK_CHAR = new RegExp(`[${CJK_RANGE}]`, 'u');
+// Replaces every non-CJK character with a space, isolating CJK runs for bigrams.
+const CJK_STRIP = new RegExp(`[^${CJK_RANGE}]`, 'gu');
+// Erases CJK characters from the word-token path (they are indexed as bigrams).
+const CJK_ERASE = new RegExp(`[${CJK_RANGE}]`, 'gu');
+
+// CJK languages don't use spaces between words, so whitespace splitting
+// produces zero useful tokens. Bigram overlap enables approximate matching.
+function extractCjkBigrams(text: string): string[] {
+	const cleaned = text.replace(CJK_STRIP, ' ');
+	const segments = cleaned.split(/\s+/).filter(Boolean);
+	const bigrams: string[] = [];
+	for (const seg of segments) {
+		const chars = [...seg];
+		if (chars.length === 1) {
+			// A single-character CJK segment (e.g. "第") produces no bigram; index
+			// the lone character as a unigram so it stays searchable. `[...seg]` is
+			// surrogate-pair-safe (iterates by code point).
+			bigrams.push(chars[0]);
+			continue;
+		}
+		for (let i = 0; i < chars.length - 1; i++) {
+			bigrams.push(chars[i] + chars[i + 1]);
+		}
+	}
+	return bigrams;
+}
+
+// NFD decomposition separates combining marks from their base characters (e.g.
+// "é" → "e" + accent) so `\p{Mn}` can strip them, enabling accent-insensitive
+// matching ("résumé" → "resume"). The final NFC recompose isn't for the Latin
+// strip — it reassembles Korean Hangul, which NFD splits into separate Jamo.
 function tokenize(text: string): string[] {
-	return text
+	const normalized = text
 		.toLowerCase()
-		.replace(/[^a-z0-9\s]/g, ' ')
+		.normalize('NFD')
+		.replace(/\p{Mn}/gu, '')
+		.normalize('NFC');
+
+	const tokens: string[] = [];
+
+	if (CJK_CHAR.test(normalized)) {
+		tokens.push(...extractCjkBigrams(normalized));
+	}
+
+	const words = normalized
+		.replace(/[^\p{L}\p{N}\s]/gu, ' ')
+		.replace(CJK_ERASE, ' ')
 		.split(/\s+/)
-		.filter(t => t.length > 1);
+		.filter((t) => t.length > 1);
+	tokens.push(...words);
+
+	return tokens;
 }
 
 /**
@@ -103,11 +156,7 @@ export function buildIndex(documents: string[]): TfIdfIndex {
  * @returns Sorted array of `{ docIndex, score }` pairs, highest score first.
  *   Empty array if the query has no matching tokens or the index is empty.
  */
-export function search(
-	index: TfIdfIndex,
-	query: string,
-	maxResults: number,
-): { docIndex: number; score: number }[] {
+export function search(index: TfIdfIndex, query: string, maxResults: number): { docIndex: number; score: number }[] {
 	if (index.docCount === 0) return [];
 
 	const queryTokens = tokenize(query);
@@ -131,7 +180,7 @@ export function search(
 	if (scores.length === 0) return [];
 
 	// Normalize scores to [0, 1]
-	const maxScore = Math.max(...scores.map(s => s.score));
+	const maxScore = Math.max(...scores.map((s) => s.score));
 	if (maxScore > 0) {
 		for (const s of scores) {
 			s.score = s.score / maxScore;

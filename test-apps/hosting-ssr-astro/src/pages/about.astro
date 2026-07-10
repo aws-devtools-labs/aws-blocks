@@ -1,0 +1,14 @@
+---
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Astro on Blocks — About">
+  <h1 data-testid="page-id">About</h1>
+  <p data-testid="about-marker">
+    A second distinct static page. If this shows on /about (not the Home
+    heading), multi-page directory-index routing works — the SPA-fallback
+    misclassification is fixed.
+  </p>
+</Layout>

@@ -500,3 +500,44 @@ describe('validateStatement — unsupported features after bind parameters', () 
     assert.doesNotThrow(() => validateStatement("INSERT INTO audit (id, action) VALUES ($1, 'TRUNCATE')"));
   });
 });
+
+describe('validateStatement — index key sort order', () => {
+  it('rejects DESC on an index key', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at DESC)'),
+      /sort order/i,
+    );
+  });
+
+  it('rejects DESC on a CREATE INDEX ASYNC key', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX ASYNC idx_persons_user_recent ON persons (user_id, last_encounter_at DESC)'),
+      /sort order/i,
+    );
+  });
+
+  it('rejects an explicit ASC on an index key', () => {
+    assert.throws(() => validateStatement('CREATE INDEX idx ON t (col ASC)'), /sort order/i);
+  });
+
+  it('allows NULLS FIRST / NULLS LAST on an index key (supported by DSQL)', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS FIRST)'));
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS LAST)'));
+  });
+
+  it('allows a plain CREATE INDEX without sort order', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at)'));
+  });
+
+  it('allows a partial index whose WHERE mentions a column like "description"', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t (name) WHERE description IS NOT NULL'));
+  });
+
+  it('allows an expression index without sort order', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t ((lower(name)))'));
+  });
+
+  it('does not flag ORDER BY ... DESC in a SELECT (no false positive outside CREATE INDEX)', () => {
+    assert.doesNotThrow(() => validateStatement('SELECT * FROM persons ORDER BY last_encounter_at DESC'));
+  });
+});

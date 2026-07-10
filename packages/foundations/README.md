@@ -191,4 +191,4 @@ See the Building Block Guide (see docs/reference/building-block-structure.md) fo
 
 ## License
 
-ISC
+Apache-2.0

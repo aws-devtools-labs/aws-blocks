@@ -118,8 +118,8 @@ export function authCognitoSandboxTests(getApi: () => typeof apiType) {
 
 				try {
 					const r = await api.authCSignIn(username, password);
-					assert.ok(r.isSignedIn);
-					if (r.isSignedIn) {
+					assert.strictEqual(r.status, 'signedIn');
+					if (r.status === 'signedIn') {
 						assert.strictEqual(r.user.username, username);
 					}
 					await api.authCSignOut();
@@ -217,8 +217,8 @@ export function authCognitoSandboxTests(getApi: () => typeof apiType) {
 				try {
 					await api.authCSignIn(username, password);
 					const s = await api.authCFetchAuthSession();
-					assert.strictEqual(s.signedIn, true);
-					if (!s.signedIn) throw new Error('unreachable');
+					assert.strictEqual(s.status, 'signedIn');
+					if (s.status !== 'signedIn') throw new Error('unreachable');
 					assert.ok(s.idToken.length > 0);
 					assert.ok(s.accessToken.length > 0);
 					assert.ok(s.userSub);

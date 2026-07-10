@@ -28,4 +28,8 @@ export const KnowledgeBaseErrors = {
 	ValidationError: 'KnowledgeBaseValidationError',
 	/** KnowledgeBase is server-side only and cannot be used in browser contexts. */
 	BrowserNotSupported: 'BrowserNotSupportedException',
+	/** The data source's most recent Bedrock ingestion job failed. The error message includes the reported `failureReasons`. */
+	IngestionFailed: 'IngestionFailedException',
+	/** `waitUntilSynced()` exceeded its timeout before the knowledge base finished ingesting. */
+	Timeout: 'KnowledgeBaseTimeoutException',
 } as const;

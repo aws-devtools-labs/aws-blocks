@@ -373,8 +373,12 @@ export interface OIDCClient<Provider extends string = string> {
 	 *   registered with the provider. Defaults to the current page. Use this for
 	 *   SPAs that handle the callback on a dedicated route rather than the
 	 *   backend's `/aws-blocks/auth/callback`.
+	 *
+	 * @returns A promise that resolves once the browser navigates to the IdP and
+	 *   **rejects** if PKCE setup fails. `await` it (or `.catch()`) to surface
+	 *   sign-in failures instead of leaving them as unhandled rejections.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void;
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void>;
 	handleRedirectCallback(): Promise<{ userId: string; username: string } | null>;
 	signOut(): Promise<void>;
 	onAuthStateChange(handler: (user: OIDCUser | null, meta: { state?: string } | null) => void): () => void;

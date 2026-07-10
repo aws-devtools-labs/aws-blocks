@@ -6,6 +6,8 @@ Serverless SQL database backed by Amazon Aurora DSQL. Zero-ops, instant provisio
 
 **When NOT to use:** If you need foreign keys, Row Level Security, triggers, views, or stored procedures — use `Database` (Aurora). If you need transactions that must not fail at commit under contention — use `Database`. If you're connecting to Supabase — use `Database` with `fromExisting()`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -106,6 +108,7 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 | LISTEN / NOTIFY | AppSync Events, EventBridge, or polling |
 | Extensions | Not available |
 | ADD COLUMN with DEFAULT | Add column without default, handle nulls in app |
+| Index key sort direction (`ASC`/`DESC`) | Omit it; enforce ordering with `ORDER BY` in queries (`NULLS FIRST/LAST` is supported) |
 
 ### Transaction Constraints
 

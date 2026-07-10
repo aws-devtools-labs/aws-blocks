@@ -333,6 +333,20 @@ void describe('redirect runtime semantics (executed against the generated code)'
     };
     assert.equal(result.headers?.location.value, '/about');
   });
+
+  // Regression (Finding 3): an exact hit on the wildcard prefix (empty tail)
+  // must not leak the literal '*' into the destination.
+  void it('empty tail does NOT leak a literal * into the destination', () => {
+    const code = generateForwardedHostAndRedirectFunctionCode([
+      { source: '/old/*', destination: '/new/*', statusCode: 308 },
+    ]);
+    const handler = evalFn(code);
+    const result = handler({
+      request: { uri: '/old/', headers: {} },
+    }) as { headers?: { location: { value: string } } };
+    assert.equal(result.headers?.location.value, '/new/');
+    assert.ok(!result.headers?.location.value.includes('*'));
+  });
 });
 
 void describe('generateAssetPrefixStripFunctionCode (B17)', () => {

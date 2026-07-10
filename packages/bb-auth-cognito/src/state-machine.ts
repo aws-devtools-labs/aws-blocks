@@ -65,6 +65,8 @@ export interface SignedOutInput {
 	 */
 	signInWith?: SignInWith | readonly SignInWith[];
 	error?: string;
+	/** Structured name of the failing error (e.g. `ApiError.name`), surfaced on the signed-out state. */
+	errorName?: string;
 }
 
 /**
@@ -185,7 +187,12 @@ export function signedOut(input: SignedOutInput): AuthState {
 		fields: [usernameField()],
 	});
 
-	return { state: 'signedOut', actions, ...(input.error ? { error: input.error } : {}) };
+	return {
+		state: 'signedOut',
+		actions,
+		...(input.error ? { error: input.error } : {}),
+		...(input.errorName ? { errorName: input.errorName } : {}),
+	};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

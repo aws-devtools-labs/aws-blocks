@@ -13,7 +13,7 @@ import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
+import type { RetrieveOptions, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
@@ -266,7 +266,7 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
 });
 
 // Agent BB - AI agent with tools and conversation persistence
-import { Agent } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   removalPolicy: 'destroy',
@@ -377,6 +377,23 @@ const cannedAgent = new Agent(scope, 'canned', {
   }),
 });
 
+
+// Preset agents — one per live BedrockModels preset, used to verify presets work e2e.
+// Skip the deprecated aliases (DEFAULT/BUDGET/MICRO) so we don't provision dead
+// agents that the suite never exercises.
+const LIVE_PRESETS = ['BALANCED', 'SMART', 'FAST'] as const;
+
+const presetAgents = Object.fromEntries(
+	LIVE_PRESETS.map((name) => [
+		name,
+		new Agent(scope, `preset-${name.toLowerCase()}`, {
+			removalPolicy: 'destroy',
+			inferenceOnly: true,
+			model: { deployed: BedrockModels[name], local: { provider: 'canned' } },
+			systemPrompt: 'Reply with exactly one word.',
+		}),
+	]),
+);
 
 // Agent with model fallback — first candidate is unreachable, should fall through to canned
 const fallbackAgent = new Agent(scope, 'fallback', {
@@ -1005,11 +1022,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // project to strings + narrowed claims for the RPC boundary.
   async authCFetchAuthSession() {
     const session = await authC.fetchAuthSession(context);
-    if (!session.tokens) return { signedIn: false as const };
+    if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
     return {
-      signedIn: true as const,
+      status: 'signedIn' as const,
       userSub: session.userSub ?? null,
       idToken: session.tokens.idToken.toString(),
       accessToken: session.tokens.accessToken.toString(),
@@ -1021,11 +1038,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async authCFetchAuthSessionForceRefresh() {
     const session = await authC.fetchAuthSession(context, { forceRefresh: true });
-    if (!session.tokens) return { signedIn: false as const };
+    if (!session.tokens) return { status: 'signedOut' as const };
     const payload = session.tokens.idToken.payload;
     const sub = typeof payload.sub === 'string' ? payload.sub : null;
     return {
-      signedIn: true as const,
+      status: 'signedIn' as const,
       userSub: session.userSub ?? null,
       idToken: session.tokens.idToken.toString(),
       accessToken: session.tokens.accessToken.toString(),
@@ -1205,9 +1222,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async realtimeGetRawDescriptor(subChannel: string) {
-    // Return the raw toJSON() descriptor (not hydrated) so tests can inspect/tamper with tokens
+    // Return the raw toJSON() descriptor with __blocks removed so client middleware
+    // does NOT hydrate it into a channel client. Tests need the raw token fields.
     const ch = await realtime.getChannel('cursors', subChannel);
-    return ch.toJSON();
+    const raw = ch.toJSON() as Record<string, unknown>;
+    const { __blocks, ...descriptor } = raw;
+    return descriptor;
   },
 
   async realtimeGetPoisonedChannel(subChannel: string) {
@@ -1663,6 +1683,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { channelId, channel: await fallbackAgent.getChannel(channelId) };
   },
 
+  async agentPresetStream(presetName: string, message: string) {
+    const presetAgent = presetAgents[presetName];
+    if (!presetAgent) throw new Error(`Unknown preset: ${presetName}. Available: ${Object.keys(presetAgents).join(', ')}`);
+    const result = await presetAgent.stream(message);
+    const done = await result.complete();
+    return { text: done.text ?? '' };
+  },
+
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
     // Puts a test value into the secret setting, then resolves it via the same
@@ -1836,6 +1864,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async kbRetrieve(query: string, options?: RetrieveOptions) {
     return await kb.retrieve(query, options);
+  },
+
+  // Ingestion sync — Bedrock ingests asynchronously after deploy, so e2e
+  // tests gate retrieval on these instead of polling retrieve() for results.
+  // The local mock reports synced immediately.
+  async kbSynced() {
+    return await kb.isSynced();
+  },
+
+  async kbWaitUntilSynced(options?: WaitUntilSyncedOptions) {
+    await kb.waitUntilSynced(options);
+    return { success: true };
   },
 
   // ------------------------------------------------------------------------

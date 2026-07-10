@@ -70,7 +70,7 @@ cd "$TEST_DIR"
 npm install @aws-blocks/create-blocks-app@latest 2>&1
 CREATE_CMD="$TEST_DIR/node_modules/.bin/create-blocks-app"
 
-TEMPLATES=("default" "demo")
+TEMPLATES=("default" "demo" "backend" "bare")
 FAILED=0
 
 for TEMPLATE in "${TEMPLATES[@]}"; do

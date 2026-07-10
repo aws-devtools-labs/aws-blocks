@@ -49,6 +49,33 @@ export type DeployManifest = {
      * must never serve stale content even briefly.
      */
     noCachePaths?: string[];
+    /**
+     * Whether this static deploy is a single-page app (SPA) that relies
+     * on client-side routing, versus a multi-page site where each route
+     * is its own prerendered HTML file.
+     *
+     * Controls how the CloudFront viewer-request function resolves
+     * extensionless URLs:
+     *
+     *   - `true`  (SPA): every navigation request (no file extension) is
+     *     rewritten to `/index.html` so the client-side router can handle
+     *     deep links. Missing paths serve `index.html` at HTTP 200.
+     *     Correct for Vite/React-Router/Vue-Router single-page apps.
+     *   - `false` (multi-page): each request resolves to its own
+     *     `<path>/index.html` (directory-index resolution). A request for
+     *     `/about` serves `about/index.html`, NOT the home page. Correct
+     *     for static-site generators (Astro static, Hugo, Eleventy) that
+     *     prerender every route to a separate HTML file.
+     *
+     * Set by the adapter, which is the only layer that knows the
+     * framework's routing model (the L3 is framework-blind). When
+     * omitted, the L3 falls back to a heuristic: SPA mode when the deploy
+     * has no compute AND no `errorPages` (preserved for back-compat with
+     * adapters that don't yet declare this). Ignored when the manifest
+     * has compute resources (SSR), since routing then flows through the
+     * compute origin rather than static index resolution.
+     */
+    spaFallback?: boolean;
   };
 
   /** Route behaviors (maps URL patterns to compute/static) */
@@ -103,6 +130,47 @@ export type DeployManifest = {
 
   /** Build ID for atomic deployments. */
   buildId?: string;
+
+  /**
+   * OVERRIDE for the CloudFront invalidation paths issued on every deploy,
+   * AFTER the atomic KVS cutover. Most adapters leave this UNSET and let the
+   * L3 pick the default (see below); set it only to customize the paths or to
+   * opt out (`[]`).
+   *
+   * Why an invalidation is needed at all — the stale-HTML→403 problem:
+   *
+   * Atomic deploys write every object under a brand-new immutable
+   * `builds/<buildId>/` prefix, so there is nothing stale to invalidate, and
+   * HTML served from S3 carries `no-cache` (the 3-tier Cache-Control split in
+   * hosting_construct). So a PURE-STATIC deploy (no compute) needs no
+   * invalidation — Astro/Nuxt static pages prerender to S3 and propagate on
+   * the next request.
+   *
+   * But ANY compute-backed deploy can edge-cache HTML that goes stale. The
+   * shared SSR cache policy honors the origin's `Cache-Control`, so HTML
+   * served by the compute origin with a long `s-maxage` is edge-cached keyed
+   * on the VIEWER path (`/about`), NOT the build-id prefix. After a redeploy
+   * that HTML still references the previous build's hashed assets
+   * (`_next/static/*`, `_nuxt/*`, `_astro/*`), and the router rewrites those
+   * asset requests to the CURRENT build prefix — which no longer contains
+   * them → 403. This is NOT Next-specific:
+   *   - Next/OpenNext: SSG/ISR HTML from the SSR Lambda → `s-maxage=31536000`.
+   *   - Nuxt/Nitro: `routeRules` `cache.maxAge` / `swr` / `isr` emit
+   *     `s-maxage=N` on compute-origin HTML (see nitro adapter).
+   *   - Astro SSR: pages that set `Cache-Control` on the response.
+   * The common trigger is "a compute origin serving cacheable HTML that
+   * references build-prefixed hashed assets" — so the L3 scopes the
+   * invalidation on `hasCompute`, not on the framework.
+   *
+   * Default (when this field is unset): the L3 issues `['/*']` for any deploy
+   * with a compute origin, and nothing for pure-static deploys. The
+   * invalidation is gated after the KvKeys cutover, so it only flushes the
+   * previous build's cached pages — the new build's `builds/<id>/...` objects
+   * were never cached, making `/*` effectively free. A compute app that emits
+   * only `no-store` HTML still gets the invalidation, but it is a harmless
+   * no-op. Set `[]` to opt out; set explicit patterns to narrow it.
+   */
+  invalidationPaths?: string[];
 
   /**
    * Adapter-supplied S3 lifecycle rules for orphaned per-build data

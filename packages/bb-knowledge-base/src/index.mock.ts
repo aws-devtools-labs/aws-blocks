@@ -4,23 +4,25 @@
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, dirname, extname, resolve } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
+import { join, relative, dirname, extname, resolve, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
-import type {
-	KnowledgeBaseOptions, RetrieveOptions, RetrieveResult,
-	MetadataFilter,
-} from './types.js';
+import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy, WaitUntilSyncedOptions } from './types.js';
 import { KnowledgeBaseErrors } from './errors.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export type {
-	KnowledgeBaseOptions, SourceConfig,
-	ChunkingConfig, ChunkingStrategy,
-	RetrieveOptions, RetrieveResult,
+	KnowledgeBaseOptions,
+	SourceConfig,
+	ChunkingConfig,
+	ChunkingStrategy,
+	RetrieveOptions,
+	RetrieveResult,
 	MetadataFilter,
+	WaitUntilSyncedOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -56,8 +58,41 @@ function walkDir(dir: string): string[] {
 function chunkByParagraphs(text: string): string[] {
 	return text
 		.split(/\n\s*\n/)
-		.map(p => p.trim())
-		.filter(p => p.length >= 20);
+		.map((p) => p.trim())
+		.filter((p) => p.length >= 20);
+}
+
+/**
+ * Split text into overlapping windows of ~maxTokens words. Windows under 20
+ * chars are dropped as noise, except the final window — emitting it always
+ * keeps trailing words indexed (e.g. with zero overlap, where step === maxTokens).
+ */
+function chunkByFixedSize(text: string, maxTokens: number, overlapPct: number): string[] {
+	// A non-positive window size has no valid chunk to emit. Bail out before the
+	// clamp below, whose upper bound (maxTokens - 1) would otherwise go negative.
+	if (maxTokens <= 0) return [];
+	const words = text.split(/\s+/);
+	if (words.length <= maxTokens) return text.trim().length >= 20 ? [text.trim()] : [];
+
+	// Clamp overlap to [0, maxTokens-1]: a negative percentage would push `step`
+	// past maxTokens and silently skip words, while overlap >= maxTokens would
+	// stall progress. This keeps step >= 1 and guarantees full word coverage.
+	const overlap = Math.min(Math.max(Math.floor((maxTokens * overlapPct) / 100), 0), maxTokens - 1);
+	const step = Math.max(1, maxTokens - overlap);
+	const chunks: string[] = [];
+
+	for (let i = 0; i < words.length; i += step) {
+		const isFinal = i + maxTokens >= words.length;
+		const chunk = words
+			.slice(i, i + maxTokens)
+			.join(' ')
+			.trim();
+		// The 20-char floor drops short windows as noise, but the final window is
+		// always emitted (when non-empty) so trailing words are never lost.
+		if (chunk.length >= 20 || (isFinal && chunk.length > 0)) chunks.push(chunk);
+		if (isFinal) break;
+	}
+	return chunks;
 }
 
 /**
@@ -95,9 +130,11 @@ function matchesFilter(metadata: Record<string, string>, filter: MetadataFilter)
 /**
  * Semantic document retrieval backed by a local TF-IDF engine.
  *
- * Reads documents from a local folder, chunks by paragraphs, and uses TF-IDF
- * for relevance scoring. Chunks are cached to `.bb-data/{fullId}/chunks.json`
- * for fast restarts. Wipe cached data with `rm -rf .bb-data`.
+ * Reads documents from a local folder, splits them using the configured
+ * chunking strategy (default `'semantic'`), and uses TF-IDF for relevance
+ * scoring. Chunks are cached to `.bb-data/{fullId}/chunks.json` alongside a
+ * `source.hash` fingerprint for fast restarts; the cache is rebuilt when the
+ * source contents or chunking config change. Wipe cached data with `rm -rf .bb-data`.
  *
  * **When to use:** You need natural-language search over your own documents —
  * FAQs, product guides, support articles, internal wikis. Point it at a
@@ -149,6 +186,16 @@ export class KnowledgeBase extends Scope {
 	}
 
 	/**
+	 * Local-dev diagnostic warning. Routed through `console.warn` (not
+	 * `this.log.warn`) deliberately: the default logger is capped at 'error'
+	 * level, which would suppress these genuinely useful local-dev diagnostics
+	 * (corrupt cache, cache-write failure, skipped unsupported file).
+	 */
+	private warn(msg: string): void {
+		console.warn(`[KnowledgeBase] ${msg}`);
+	}
+
+	/**
 	 * Retrieve relevant document chunks for a natural language query.
 	 *
 	 * @param query - Natural language search query. Must be non-empty.
@@ -169,23 +216,29 @@ export class KnowledgeBase extends Scope {
 	 * ```
 	 */
 	async retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]> {
-		if (!query || !query.trim()) {
-			throw blocksError(
-				KnowledgeBaseErrors.ValidationError,
-				'Query must be a non-empty string.',
-			);
+		if (typeof query !== 'string' || !query.trim()) {
+			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
 		const maxResults = Math.min(Math.max(options?.maxResults ?? 10, 1), 100);
 		const filter = options?.filter;
 
 		await this.ensureLoaded();
+		// ensureLoaded() populates both fields or throws; copy into locals so the
+		// nullable types narrow for the remainder of the method.
+		const index = this.index;
+		const chunks = this.chunks;
+		if (!index || !chunks) {
+			throw blocksError(KnowledgeBaseErrors.InvalidSource, 'Knowledge base failed to load.');
+		}
 
-		const searchResults = search(this.index!, query, filter ? Math.min(maxResults * 10, this.chunks!.length) : maxResults);
+		// When filtering, score all chunks so post-filter doesn't silently drop valid matches.
+		// Acceptable for local dev corpus sizes; production uses Bedrock's server-side filtering.
+		const searchResults = search(index, query, filter ? chunks.length : maxResults);
 
 		const results: RetrieveResult[] = [];
 		for (const hit of searchResults) {
-			const chunk = this.chunks![hit.docIndex];
+			const chunk = chunks[hit.docIndex];
 			if (filter && !matchesFilter(chunk.metadata, filter)) continue;
 			results.push({
 				text: chunk.text,
@@ -199,35 +252,190 @@ export class KnowledgeBase extends Scope {
 		return results;
 	}
 
+	/**
+	 * Report whether the knowledge base is synced with your latest data.
+	 *
+	 * Local development has no asynchronous ingestion window — the corpus is read
+	 * and indexed synchronously on the first `retrieve()` — so it is always in
+	 * sync and this resolves `true`. (In production the AWS runtime polls the
+	 * Bedrock ingestion-job status, which reports `false` until the latest
+	 * ingestion job reaches `COMPLETE`.)
+	 *
+	 * @returns Always `true` in local development.
+	 */
+	async isSynced(): Promise<boolean> {
+		return true;
+	}
+
+	/**
+	 * Resolve once the knowledge base is synced with your latest data.
+	 *
+	 * Local development has no asynchronous ingestion window (see {@link isSynced}),
+	 * so this resolves immediately. The options are accepted for API parity
+	 * with the AWS runtime and are otherwise ignored locally.
+	 *
+	 * @param {WaitUntilSyncedOptions} _options - Accepted for API parity; ignored in local development.
+	 */
+	async waitUntilSynced(_options?: WaitUntilSyncedOptions): Promise<void> {
+		// No-op: the local corpus loads synchronously, so there is nothing to wait for.
+	}
+
 	// ── Lazy loading ──────────────────────────────────────────────────────
 
 	private ensureLoaded(): Promise<void> {
 		if (this.chunks && this.index) return Promise.resolve();
 		if (this.loadPromise) return this.loadPromise;
 
-		this.loadPromise = Promise.resolve().then(() => {
-			const cachePath = join(this.dataDir, 'chunks.json');
-			if (existsSync(cachePath)) {
-				try {
-					this.chunks = JSON.parse(readFileSync(cachePath, 'utf8'));
-					this.index = buildIndex(this.chunks!.map(c => c.text));
-					return;
-				} catch (err) {
-					console.warn('[KnowledgeBase] Cache corrupt, rebuilding from source:', (err as Error).message);
+		this.loadPromise = Promise.resolve()
+			.then(() => {
+				// Validate the source path up-front — before any filesystem
+				// enumeration — so an out-of-bounds path never triggers stat/readdir
+				// on disk. S3 URIs are rejected later by loadFromSource() with an
+				// actionable message.
+				const source = this.options.source;
+				if (!source.startsWith('s3://')) {
+					this.validateSourcePath(source);
 				}
-			}
 
-			this.loadFromSource();
-			try {
-				const cachePath2 = join(this.dataDir, 'chunks.json');
-				mkdirSync(dirname(cachePath2), { recursive: true });
-				writeFileSync(cachePath2, JSON.stringify(this.chunks));
-			} catch (err) {
-				console.warn('[KnowledgeBase] Failed to write cache:', (err as Error).message);
-			}
-		});
+				const sourceHash = this.computeSourceHash();
+				const cachePath = join(this.dataDir, 'chunks.json');
+				const hashPath = join(this.dataDir, 'source.hash');
+
+				// Serve cache only when the source still exists (non-empty hash) and
+				// its content hash matches. A deleted source yields an empty hash, so
+				// we fall through to loadFromSource() — which throws InvalidSource —
+				// instead of serving stale chunks.
+				if (sourceHash !== '' && existsSync(cachePath)) {
+					try {
+						const cachedHash = existsSync(hashPath) ? readFileSync(hashPath, 'utf8') : '';
+						if (cachedHash === sourceHash) {
+							const cached: Chunk[] = JSON.parse(readFileSync(cachePath, 'utf8'));
+							this.chunks = cached;
+							this.index = buildIndex(cached.map((c) => c.text));
+							return;
+						}
+					} catch (err) {
+						this.warn(`Cache corrupt, rebuilding from source: ${(err as Error).message}`);
+					}
+				}
+
+				this.loadFromSource();
+				try {
+					mkdirSync(dirname(cachePath), { recursive: true });
+					writeFileSync(cachePath, JSON.stringify(this.chunks));
+					writeFileSync(hashPath, sourceHash);
+				} catch (err) {
+					this.warn(`Failed to write cache: ${(err as Error).message}`);
+				}
+			})
+			.catch((err) => {
+				this.loadPromise = null;
+				throw err;
+			});
 
 		return this.loadPromise;
+	}
+
+	/**
+	 * Resolve the chunking config with defaults applied, centralizing the
+	 * `'semantic'`/300/20 defaults shared by `computeSourceHash()` and
+	 * `loadFromSource()` so they can never drift apart.
+	 */
+	private resolvedChunking(): { strategy: ChunkingStrategy; chunkSize: number; chunkOverlap: number } {
+		return {
+			strategy: this.options.chunking?.strategy ?? 'semantic',
+			chunkSize: this.options.chunking?.chunkSize ?? 300,
+			chunkOverlap: this.options.chunking?.chunkOverlap ?? 20,
+		};
+	}
+
+	private computeSourceHash(): string {
+		const source = this.options.source;
+		const sourceDir = resolve(process.cwd(), source);
+		if (!existsSync(sourceDir)) return '';
+		const hash = createHash('sha256');
+		hash.update(sourceDir);
+		// Key the cache on the chunking config so changing strategy/size/overlap
+		// for the same kb id invalidates the cache and forces a re-chunk.
+		hash.update(JSON.stringify(this.resolvedChunking()));
+		// `breakpointPercentile` is intentionally omitted from the key: the mock's
+		// 'semantic' strategy splits purely on blank-line paragraphs and never reads
+		// it, so it cannot change the produced chunks.
+		//
+		// Hash only the files that are actually indexed (supported extensions,
+		// excluding `.metadata.json` sidecars) so adding an unsupported file
+		// (e.g. a .png) doesn't force a needless rebuild.
+		const files = walkDir(sourceDir)
+			.filter((f) => SUPPORTED_EXTENSIONS.has(extname(f).toLowerCase()) && !f.endsWith('.metadata.json'))
+			.sort();
+		for (const f of files) {
+			hash.update(f);
+			try {
+				const stat = statSync(f);
+				// Trade-off: key on mtime+size (rsync-style heuristic), not byte content —
+				// fast for local dev, though a same-second, same-size edit could be missed.
+				hash.update(String(stat.mtimeMs));
+				hash.update(String(stat.size));
+			} catch {
+				hash.update('deleted');
+			}
+		}
+		return hash.digest('hex');
+	}
+
+	/**
+	 * Validate that `source` resolves to a path inside the project directory.
+	 *
+	 * Rejects absolute paths (POSIX `/`, Windows UNC `\\`, and drive-letter
+	 * `C:\`) and any path that escapes the project via `..`, using
+	 * separator-aware containment so a sibling like `<cwd>-secrets` is not
+	 * mistaken for being inside `<cwd>`. After lexical containment passes the
+	 * source is resolved through the filesystem (`realpathSync`) and re-checked,
+	 * so a symlink inside the project cannot point at a target outside it.
+	 *
+	 * @throws {InvalidSourceConfigException} If the path is absolute or escapes the project directory.
+	 */
+	private validateSourcePath(source: string): void {
+		// `source.startsWith('\\')` catches Windows UNC paths (e.g. \\server\share).
+		if (source.startsWith('/') || source.startsWith('\\') || /^[A-Z]:/i.test(source)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be a relative path within the project directory: ${source}`,
+			);
+		}
+		// `source: '.'` resolves to the project root and would index the whole tree — use a dedicated docs folder.
+		const cwdResolved = resolve(process.cwd());
+		const sourceDir = resolve(cwdResolved, source);
+		if (sourceDir === cwdResolved) {
+			this.warn(
+				`Source "${source}" resolves to the project root — this indexes the entire project tree (including node_modules and .bb-data). Point it at a dedicated docs subfolder instead.`,
+			);
+		}
+		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be within project directory: ${source}`,
+			);
+		}
+		// Defeat a symlink bypass: resolve symlinks and re-check containment against
+		// the real cwd. A missing source makes realpathSync(sourceDir) throw ENOENT —
+		// swallow only that so the canonical "Source folder not found" check reports
+		// InvalidSource. A realpathSync(cwdResolved) failure (e.g. a deleted CWD) is a
+		// hard environment error: let it propagate rather than skip the symlink re-check.
+		let realSource: string;
+		try {
+			realSource = realpathSync(sourceDir);
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+			return; // ENOENT → missing source; loadFromSource() reports InvalidSource
+		}
+		const realCwd = realpathSync(cwdResolved);
+		if (realSource !== realCwd && !realSource.startsWith(realCwd + sep)) {
+			throw blocksError(
+				KnowledgeBaseErrors.InvalidSource,
+				`Source path must be within project directory: ${source}`,
+			);
+		}
 	}
 
 	private loadFromSource(): void {
@@ -241,26 +449,18 @@ export class KnowledgeBase extends Scope {
 		}
 
 		const sourceDir = resolve(process.cwd(), source);
-		if (!sourceDir.startsWith(resolve(process.cwd()))) {
-			throw blocksError(
-				KnowledgeBaseErrors.InvalidSource,
-				`Source path must be within project directory: ${source}`,
-			);
-		}
 		if (!existsSync(sourceDir)) {
-			throw blocksError(
-				KnowledgeBaseErrors.InvalidSource,
-				`Source folder not found: ${source}`,
-			);
+			throw blocksError(KnowledgeBaseErrors.InvalidSource, `Source folder not found: ${source}`);
 		}
 
 		const files = walkDir(sourceDir);
 		const chunks: Chunk[] = [];
+		const { strategy, chunkSize, chunkOverlap: overlapPct } = this.resolvedChunking();
 
 		for (const filePath of files) {
 			const ext = extname(filePath).toLowerCase();
 			if (!SUPPORTED_EXTENSIONS.has(ext)) {
-				console.warn(`[KnowledgeBase] Skipping unsupported file: ${relative(sourceDir, filePath)}`);
+				this.warn(`Skipping unsupported file: ${relative(sourceDir, filePath)}`);
 				continue;
 			}
 
@@ -272,19 +472,26 @@ export class KnowledgeBase extends Scope {
 			const relDir = dirname(relPath);
 
 			// Customer-provided sidecar takes precedence; skip auto-generated folder metadata
-			const sidecar = parseSidecarMetadata(filePath + '.metadata.json');
+			const sidecar = parseSidecarMetadata(`${filePath}.metadata.json`);
 			const metadata: Record<string, string> = sidecar ?? {};
 			if (!sidecar && relDir !== '.') {
 				metadata.folder = relDir.replace(/\\/g, '/').split('/')[0];
 			}
 
-			const paragraphs = chunkByParagraphs(content);
-			for (const text of paragraphs) {
+			let textChunks: string[];
+			if (strategy === 'fixed') {
+				textChunks = chunkByFixedSize(content, chunkSize, overlapPct);
+			} else if (strategy === 'none') {
+				textChunks = content.trim().length >= 20 ? [content.trim()] : [];
+			} else {
+				textChunks = chunkByParagraphs(content);
+			}
+			for (const text of textChunks) {
 				chunks.push({ text, source: relPath.replace(/\\/g, '/'), metadata: { ...metadata } });
 			}
 		}
 
 		this.chunks = chunks;
-		this.index = buildIndex(chunks.map(c => c.text));
+		this.index = buildIndex(chunks.map((c) => c.text));
 	}
 }

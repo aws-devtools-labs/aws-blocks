@@ -2,11 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Construct } from 'constructs';
 import {
+  Annotations,
   CfnOutput,
+  CfnResource,
   CustomResource,
   Duration,
   Fn,
   RemovalPolicy,
+  Size,
   Stack,
 } from 'aws-cdk-lib';
 import { Provider } from 'aws-cdk-lib/custom-resources';
@@ -46,19 +49,25 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { HostingResources } from '../types.js';
-import { ERROR_PAGE_KEY, generateBuildId } from '../defaults.js';
+import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
 import { StorageConstruct } from './storage_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { WafConstruct } from './waf_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { CdnConstruct } from './cdn_construct.js';
+import type { QuotaOverrides } from './quota_budget.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
 import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 
 // Re-export build ID helpers for public API + tests
 export { generateBuildIdFunctionCode, generateBuildId } from '../defaults.js';
 export type { SkewProtectionConfig } from './skew_protection.js';
+
+// CloudFormation hard limit: 500 resources per stack (not adjustable). We warn
+// well before it so the operator can split the stack before a deploy fails.
+const CFN_MAX_RESOURCES_PER_STACK = 500;
+const CFN_RESOURCE_WARNING_THRESHOLD = 450;
 
 // ---- Public types ----
 
@@ -138,6 +147,20 @@ export type HostingConstructProps = {
     timeout?: Duration | number;
     reservedConcurrency?: number;
     /**
+     * Reserved concurrent executions for the image-optimization Lambda.
+     * Default: undefined (no reservation).
+     *
+     * Historically this was hardcoded to 10, which broke `cdk deploy` on
+     * fresh AWS accounts: the default account-level unreserved-concurrency
+     * limit is 10, so reserving all 10 for image-opt drops the account
+     * below its required minimum and Lambda rejects the stack with a 400.
+     * Defaulting to no reservation keeps deploys working out of the box
+     * while still letting operators cap image-opt explicitly.
+     */
+    imageOptimization?: {
+      reservedConcurrency?: number;
+    };
+    /**
      * Provisioned concurrency for the SSR Lambda (cold-start elimination).
      * When > 0, the construct creates a `live` alias with this many
      * always-warm execution environments and points the SSR REST API
@@ -205,6 +228,19 @@ export type HostingConstructProps = {
      * construct is not created.
      */
     webAclArn?: string;
+    /**
+     * Overrides for the adjustable AWS Service Quotas this distribution draws
+     * on — `cacheBehaviors` (CloudFront behaviors per distribution),
+     * `edgeFunctions` (Lambda@Edge associations), and `headerPolicies`
+     * (response-headers policies per account). Omitted fields use AWS
+     * defaults.
+     *
+     * Set a field ONLY to match a quota increase AWS has actually granted:
+     * synth cannot verify your real quota, so an over-set value does not raise
+     * the AWS ceiling — it just moves the failure from a clear synth error to
+     * an opaque CloudFormation rollback at deploy.
+     */
+    quotas?: QuotaOverrides;
   };
   /** S3 storage configuration. */
   storage?: {
@@ -214,6 +250,20 @@ export type HostingConstructProps = {
     buildRetentionDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };
+    /**
+     * Resources for the Lambda that uploads static assets to S3 (CDK's
+     * `BucketDeployment`). CDK defaults this Lambda to 128 MB memory and a
+     * 512 MiB `/tmp` — too small for large static sites, which then OOM or
+     * run out of disk with an opaque CloudFormation error at deploy time.
+     * The L3 raises the defaults to 1024 MB / 1024 MiB; override here if a
+     * very large build still hits the ceiling.
+     */
+    deployment?: {
+      /** Memory (MiB) for the asset-upload Lambda. @default 1024 */
+      memoryLimit?: number;
+      /** `/tmp` size (MiB) for the asset-upload Lambda. @default 1024 */
+      ephemeralStorageMiB?: number;
+    };
   };
   /** CloudFront access logging configuration. */
   logging?: {
@@ -650,6 +700,16 @@ export class HostingConstruct extends Construct {
           // Lambda via the SDK, never served through CloudFront), but set
           // a private directive so an accidental public read is non-cacheable.
           cacheControl: [CacheControl.fromString('private, no-store')],
+          // A large `generateStaticParams` fan-out (e.g. 1000 prerendered
+          // product pages) produces thousands of small `.cache` files. CDK's
+          // default 128 MB BucketDeployment Lambda uploads these at a crawl
+          // (low memory → low network throughput) and the sync times out at
+          // 900 s mid-upload, hanging the stack on the custom resource. More
+          // memory yields proportionally more CPU + network bandwidth, so the
+          // upload completes well within the window. Memory + timeout track
+          // the seed size; cap timeout at the 15-min Lambda max.
+          memoryLimit: 1024,
+          ephemeralStorageSize: Size.gibibytes(2),
         });
       }
 
@@ -695,7 +755,11 @@ export class HostingConstruct extends Construct {
           memorySize: 1024,
           timeout: 25,
         },
-        reservedConcurrency: 10,
+        // No reservation by default. Reserving concurrency here used to be
+        // hardcoded to 10, which made deploys fail on fresh accounts whose
+        // account-level unreserved limit is also 10. Operators who need to
+        // cap image-opt can set `compute.imageOptimization.reservedConcurrency`.
+        reservedConcurrency: props.compute?.imageOptimization?.reservedConcurrency,
         // Propagate the SSR Lambda's logRetention to image-opt so a
         // user who bumped retention for debugability gets the same
         // window for image-opt logs (intermittent SVG/SSRF rejects
@@ -1091,6 +1155,7 @@ export class HostingConstruct extends Construct {
       skewProtection: props.skewProtection ?? { enabled: true },
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
+      quotas: props.cdn?.quotas,
       customErrorPages: props.errorPages
         ? {
             notFound: !!props.errorPages.notFound,
@@ -1244,9 +1309,31 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 11. Error page deployment (SSR only) ----
+    // Every BucketDeployment that writes to the new build's
+    // `builds/${buildId}/` prefix is collected here. After they are all
+    // declared, the CloudFront build-id functions are made to depend on
+    // them (see `cdn.addBuildAssetDependency` at the end of this method) so
+    // the buildId cutover never races ahead of the asset uploads.
+    const buildAssetDeployments: BucketDeployment[] = [];
     if (hasCompute) {
-      new BucketDeployment(this, 'ErrorPageDeployment', {
-        sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'ErrorPageDeployment', {
+          sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
+    }
+
+    // ---- 11-bis. Default 404 page (multi-page static only) ----
+    // Set by the CDN construct only for multi-page static sites
+    // (spaFallback === false) that shipped no 404.html and got no
+    // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
+    // → /builds/<id>/_not_found.html responses resolve from S3.
+    if (cdn.defaultNotFoundPageHtml) {
+      new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
+        sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
         destinationBucket: this.bucket,
         destinationKeyPrefix: `builds/${buildId}/`,
         prune: false,
@@ -1282,12 +1369,14 @@ export class HostingConstruct extends Construct {
             'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
-      new BucketDeployment(this, 'Custom404Deployment', {
-        sources: [Source.data('404.html', notFoundContent)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'Custom404Deployment', {
+          sources: [Source.data('404.html', notFoundContent)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
     if (props.errorPages?.serverError) {
       if (!fs.existsSync(props.errorPages.serverError)) {
@@ -1317,12 +1406,14 @@ export class HostingConstruct extends Construct {
             'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
-      new BucketDeployment(this, 'Custom500Deployment', {
-        sources: [Source.data('500.html', serverErrorContent)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'Custom500Deployment', {
+          sources: [Source.data('500.html', serverErrorContent)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
 
     // ---- 11b. Build cache bucket ----
@@ -1357,6 +1448,21 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 12. Atomic Deployment (static assets) ----
+    // Atomicity: every object below is written under a brand-new, immutable
+    // `builds/${buildId}/` prefix that was never requested before, so there
+    // is nothing stale to invalidate. The CloudFront build-id functions are
+    // gated on these uploads (`cdn.addBuildAssetDependency`, end of method)
+    // so the distribution only starts routing at the new buildId AFTER the
+    // assets land - closing the window where new/cookieless visitors would
+    // otherwise hit 403 Access Denied on the not-yet-uploaded prefix.
+    //
+    // This is also why these deployments deliberately carry NO
+    // `distribution` / `distributionPaths: ['/*']` invalidation: with
+    // immutable build-id prefixes a `/*` invalidation is useless (the new
+    // prefix was never cached) AND it would force the uploads to run AFTER
+    // the distribution update, which is the exact ordering that re-opens
+    // the 403 window.
+    //
     // Cache-Control split (3 tiers):
     //
     //   1. Hashed assets (`immutablePaths`): `max-age=31536000, immutable`
@@ -1364,8 +1470,10 @@ export class HostingConstruct extends Construct {
     //      must always revalidate so new deploys propagate immediately.
     //   3. Other mutable assets (images, JSON, etc.):
     //      `s-maxage=31536000, max-age=0, must-revalidate` — CloudFront
-    //      edge caches for 1y (flushed via `/*` invalidation on deploy);
-    //      browsers always revalidate.
+    //      edge caches for 1y. Each deploy writes them under a fresh
+    //      `builds/<id>/` prefix (the path is part of the cache key), so the
+    //      new objects are cold-fetched on first request with no
+    //      invalidation needed; browsers always revalidate.
     //
     // Font MIME pass (12b below): aws s3 sync (driver inside
     // BucketDeployment) infers Content-Type via Python's mimetypes which
@@ -1396,6 +1504,18 @@ export class HostingConstruct extends Construct {
     // minute before the asset deployment that overwrote it.
     const assetDeployments: BucketDeployment[] = [];
 
+    // Sizing for the asset-upload Lambda (CDK's BucketDeployment custom
+    // resource). CDK defaults to 128 MB memory + 512 MiB /tmp, which a large
+    // static site overruns — the deploy then fails opaquely in CloudFormation
+    // (OOM / "no space left on device") with no hint it was a sizing issue.
+    // Raise the defaults to 1024/1024; allow an override for extreme builds.
+    const deploymentSizing = {
+      memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
+      ephemeralStorageSize: Size.mebibytes(
+        props.storage?.deployment?.ephemeralStorageMiB ?? 1024,
+      ),
+    };
+
     // Deploy no-cache paths (e.g. config.json) — always revalidate.
     if (noCachePaths && noCachePaths.length > 0) {
       assetDeployments.push(
@@ -1407,6 +1527,7 @@ export class HostingConstruct extends Construct {
           include: noCachePaths,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     }
@@ -1423,8 +1544,7 @@ export class HostingConstruct extends Construct {
             CacheControl.fromString('public, max-age=31536000, immutable'),
           ],
           prune: false,
-          distribution: this.distribution,
-          distributionPaths: ['/*'],
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1436,6 +1556,7 @@ export class HostingConstruct extends Construct {
           include: htmlGlobs,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1446,6 +1567,7 @@ export class HostingConstruct extends Construct {
           exclude: [...immutablePaths, ...htmlGlobs, ...(noCachePaths ?? [])],
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     } else {
@@ -1458,8 +1580,7 @@ export class HostingConstruct extends Construct {
           include: htmlGlobs,
           cacheControl: [CacheControl.fromString(htmlCacheControl)],
           prune: false,
-          distribution: this.distribution,
-          distributionPaths: ['/*'],
+          ...deploymentSizing,
         }),
       );
       assetDeployments.push(
@@ -1470,9 +1591,11 @@ export class HostingConstruct extends Construct {
           exclude: [...htmlGlobs, ...(noCachePaths ?? [])],
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         }),
       );
     }
+    buildAssetDeployments.push(...assetDeployments);
 
     // ---- 12b. Font Content-Type pass ----
     // S3's `binary/octet-stream` default for font extensions makes
@@ -1531,6 +1654,7 @@ export class HostingConstruct extends Construct {
           contentType: mime,
           cacheControl: [CacheControl.fromString(mutableCacheControl)],
           prune: false,
+          ...deploymentSizing,
         },
       );
       // Force ordering: the font deployment must run AFTER the asset
@@ -1542,7 +1666,49 @@ export class HostingConstruct extends Construct {
       for (const dep of assetDeployments) {
         fontDeployment.node.addDependency(dep);
       }
+      buildAssetDeployments.push(fontDeployment);
     }
+
+    // ---- 12c. Gate the build-id cutover on the asset uploads ----
+    // Make the CloudFront build-id functions (viewer-request, and the
+    // Next.js assetPrefix strip function) depend on every BucketDeployment
+    // that writes the new build's `builds/${buildId}/` prefix. CloudFormation
+    // therefore uploads all assets FIRST and only then publishes the
+    // functions / updates the distribution to route at the new buildId.
+    // Without this, the buildId could propagate globally before the assets
+    // landed, 403-ing new/cookieless visitors for the deploy window.
+    for (const dep of buildAssetDeployments) {
+      cdn.addBuildAssetDependency(dep);
+    }
+
+    // ---- CloudFormation resource-count guard ----
+    // A stack can hold at most 500 resources (a true hard limit — not
+    // adjustable). The hosting construct emits many resources, and they
+    // multiply with routes/behaviors/policies/asset-deployments, so a large
+    // app can approach the ceiling and then fail opaquely at deploy. Emit a
+    // synth-time warning as the stack nears the limit so the operator can
+    // split the stack BEFORE CloudFormation rejects it. This warns (never
+    // fails) — CDK itself errors at 500, and a legitimate stack just under
+    // the limit must still deploy.
+    this.node.addValidation({
+      validate: (): string[] => {
+        const resourceCount = Stack.of(this)
+          .node.findAll()
+          .filter((c) => CfnResource.isCfnResource(c)).length;
+        if (resourceCount >= CFN_RESOURCE_WARNING_THRESHOLD) {
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CfnResourceCount',
+            `This stack synthesizes ~${resourceCount} CloudFormation resources, ` +
+              `approaching the hard limit of ${CFN_MAX_RESOURCES_PER_STACK} per ` +
+              `stack. Large hosting deploys (many routes, header rules, or asset ` +
+              `tiers) can hit this and fail at deploy time. Consider splitting ` +
+              `the backend and hosting into separate stacks, or reducing ` +
+              `per-pattern routes/headers.`,
+          );
+        }
+        return [];
+      },
+    });
   }
 
   /**

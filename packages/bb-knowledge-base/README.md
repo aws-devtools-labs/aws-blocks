@@ -6,6 +6,8 @@ Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 
 **When NOT to use:** If you need structured key-value lookups, use `KVStore`. If you need relational queries, use `Database`. If you need full-text keyword search only (no semantic understanding), roll your own with `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -36,6 +38,8 @@ const kb = new KnowledgeBase(scope, id, options)
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `retrieve(query, options?)` | `Promise<RetrieveResult[]>` | Search for relevant document chunks. Returns results ranked by relevance score. |
+| `isSynced()` | `Promise<boolean>` | Whether the KB is synced with your latest data. `true` once the latest ingestion job is `COMPLETE` (or there is no BB-managed data source to track). Reports data *freshness*, not availability — `retrieve()` is always callable and serves the prior snapshot while a re-ingestion is in flight. Throws `IngestionFailed` if the latest job failed. |
+| `waitUntilSynced(options?)` | `Promise<void>` | Poll `isSynced()` until the KB is synced with your latest data or the timeout elapses. Throws `Timeout` if it does not sync in time. Accepts an optional `AbortSignal` to cancel the wait. |
 
 ### Options
 
@@ -101,6 +105,30 @@ chunking: { strategy: 'fixed', chunkSize: 500, chunkOverlap: 10 }
 | `source` | `string` | Source document path or URL. |
 | `metadata` | `Record<string, string>` | Document metadata. Includes auto-populated `folder` from subfolders. |
 
+### Sync
+
+Bedrock ingestion runs asynchronously after deploy, so immediately after `cdk deploy` the knowledge base is not yet synced with your latest data — during that initial pre-sync window `retrieve()` returns an empty array even for queries that will later match. (Once at least one ingestion job has completed, `retrieve()` always serves the most recent synced snapshot, even while a later re-ingestion is in flight.) Use `isSynced()` / `waitUntilSynced()` to gate on ingestion completion:
+
+```typescript
+// Block until the KB is synced with your latest data (e.g. right after deploy), then query
+await kb.waitUntilSynced({ timeoutMs: 600_000 });
+const results = await kb.retrieve('getting started');
+
+// Or check without blocking
+if (await kb.isSynced()) {
+  const results = await kb.retrieve('getting started');
+}
+
+// Cancel the wait with an AbortSignal (e.g. an overall request deadline)
+await kb.waitUntilSynced({ signal: AbortSignal.timeout(120_000) });
+```
+
+`waitUntilSynced(options?)` accepts `timeoutMs` (default `300_000`), `pollIntervalMs` (default `5_000`, clamped to a 1ms minimum), `maxConsecutiveTransientErrors` (default `3`, minimum `0`), and an optional `signal` (`AbortSignal`). The poll interval carries a small amount of random jitter (±20%) so that many knowledge bases polling after a shared deploy don't fall into lockstep — the jitter only varies the delay *between* polls and never pushes a sleep past `timeoutMs`.
+
+`maxConsecutiveTransientErrors` is the number of *consecutive* transient control-plane errors tolerated before giving up; the counter resets on any clean poll. Two conditions are treated as transient and ridden out: throttling / transient network failures, **and** a *not-yet-visible* knowledge base — in the post-deploy window the control plane can briefly return `ResourceNotFoundException` (the freshly-created KB or data source hasn't propagated yet), which `waitUntilSynced()` absorbs rather than giving up on. Terminal errors always short-circuit immediately regardless of the limit: a `FAILED` ingestion job, and a *missing-KB config* error (the `KB_ID` env var is unset — distinct from the transient not-yet-visible case). When `signal` is provided, the wait is cancelled promptly (checked before each poll and during the inter-poll delay), rejecting with the signal's abort reason (by default a `DOMException` named `'AbortError'`).
+
+Both local-folder and imported `s3://` sources register a BB-managed data source, so sync state reflects that data source's ingestion job in either case. (A deployment predating this sync API has no data source id injected, so `isSynced()` returns `true` immediately — there is nothing to track.) This pre-feature deployment is the **only** case where `isSynced()` returns `true` without consulting an actual ingestion job — re-deploying injects `DATA_SOURCE_ID` and restores real tracking, so a freshly deployed KB always reflects a real job status (don't mistake the "nothing to track" shortcut for "ingestion confirmed complete" when gating live traffic). In local development the mock is always synced. Note that a local `isSynced()` of `true` does **not** imply `retrieve()` works for an `s3://` source — the mock rejects `s3://` with `InvalidSourceConfigException` (the inverse of the production contract), so validate `s3://` sources in sandbox/production where sync state genuinely reflects queryability.
+
 ## Metadata Filtering
 
 Filter results by document metadata. All conditions use AND semantics:
@@ -145,6 +173,8 @@ try {
 |---|---|---|
 | `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
 | `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
+| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed (message includes `failureReasons`) — thrown by `isSynced()` / `waitUntilSynced()` |
+| `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilSynced()` exceeded its timeout before ingestion completed |
 | `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
 | `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |
 | `KnowledgeBaseErrors.ValidationError` | `KnowledgeBaseValidationError` | Empty or invalid query |
@@ -152,7 +182,7 @@ try {
 
 ## Deploy Behavior
 
-`cdk deploy` automatically triggers document ingestion (fire-and-forget). Ingestion runs asynchronously after the deploy completes. Check the AWS console to monitor ingestion progress.
+`cdk deploy` automatically triggers document ingestion (fire-and-forget). Ingestion runs asynchronously after the deploy completes. Check the AWS console to monitor ingestion progress, or call [`isSynced()` / `waitUntilSynced()`](#sync) from your code to gate queries on ingestion completion.
 
 ## Scaling & Cost (AWS)
 
@@ -166,13 +196,16 @@ try {
 
 ## Local Development
 
-In local dev mode, KnowledgeBase reads documents from the source folder, chunks by paragraphs, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts.
+In local dev mode, KnowledgeBase reads documents from the source folder, splits them into chunks according to the configured `chunking` strategy, and uses TF-IDF for relevance scoring. Results are cached to `.bb-data/{fullId}/chunks.json` for fast restarts; the cache is keyed on the source folder's contents and the chunking configuration, and is rebuilt automatically when documents are added, edited, or removed, or the chunking settings change.
 
 **Parity notes:**
 - Scoring uses TF-IDF (keyword-based) rather than real embeddings. Scores are relative within the mock and won't match production Bedrock scores exactly.
+- The TF-IDF tokenizer is Unicode-aware: accents are normalized (so `resume` matches `résumé`) and CJK text is matched via character bigrams.
+- Chunking is approximated locally: `'fixed'` uses word-count windows (`chunkSize`/`chunkOverlap`), `'none'` keeps each document whole, and `'semantic'` (and `'hierarchical'`) split on paragraph boundaries.
+- `chunkOverlap` is a **percentage** of `chunkSize` in both environments: locally the mock overlaps by `chunkSize × chunkOverlap / 100` words, and the CDK layer maps it to Bedrock's `overlapPercentage` (1–99). The value is directly transferable between local dev and production.
 - The API contract (method signatures, error types, result shape) is identical to AWS.
-- Metadata filtering and `maxResults` work identically.
-- S3 URI sources are not supported in local development — use a local folder path.
+- `maxResults` works identically. Metadata filtering uses the same `equals`/AND semantics, with one asymmetry: in production an unknown or invalid filter key is *typically* rejected server-side by Bedrock (surfaced as `InvalidFilterException` when the service flags the filter), whereas locally the mock silently matches nothing and returns an empty result set.
+- `source` must be a relative path inside the project directory — absolute paths and paths that escape the project (via `..`) are rejected with `InvalidSourceConfigException`. S3 URI sources are not supported in local development — use a local folder path.
 
 Wipe cached data with `rm -rf .bb-data`.
 

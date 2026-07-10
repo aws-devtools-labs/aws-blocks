@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PGlite } from '@electric-sql/pglite';
-import { existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError } from '../errors.js';
@@ -12,6 +13,17 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 /** PostgreSQL error code class for connection exceptions. */
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
+const PGLITE_INITIALIZED_DATA_DIR_ENTRIES = ['PG_VERSION', 'base', 'global', 'global/pg_control'];
+const PGLITE_DATA_DIR_MARKERS = [
+  'PG_VERSION',
+  'base',
+  'global',
+  'pg_wal',
+  'pg_xact',
+  'postgresql.conf',
+  'postgresql.auto.conf',
+  'postmaster.pid',
+];
 
 /**
  * Translate a PGlite/PostgreSQL error to a standardized DatabaseErrors name.
@@ -53,6 +65,49 @@ function cleanStaleLock(dataDir: string): void {
   }
 }
 
+function hasInitializedPgliteDataDir(dataDir: string): boolean {
+  // PGlite loadTar writes PG_VERSION before the directory tree. Requiring
+  // global/pg_control ensures base/global exist and contain PostgreSQL state.
+  return PGLITE_INITIALIZED_DATA_DIR_ENTRIES.every((entry) => existsSync(join(dataDir, entry)));
+}
+
+function hasInitializedPgliteChildDataDir(dataDir: string, entries: string[]): boolean {
+  return entries.some((entry) => hasInitializedPgliteDataDir(join(dataDir, entry)));
+}
+
+function looksLikePgliteDataDir(entries: string[]): boolean {
+  return entries.some((entry) => PGLITE_DATA_DIR_MARKERS.includes(entry));
+}
+
+function isErrnoException(error: unknown): error is { code?: string } {
+  return typeof error === 'object' && error !== null && 'code' in error;
+}
+
+function nextCorruptDataDir(dataDir: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${dataDir}.corrupt-${timestamp}-${process.pid}-${randomUUID().slice(0, 8)}`;
+}
+
+function recoverIncompletePgliteDataDir(dataDir: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dataDir);
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (entries.length === 0 || hasInitializedPgliteDataDir(dataDir)) return;
+
+  if (!looksLikePgliteDataDir(entries) || hasInitializedPgliteChildDataDir(dataDir, entries)) return;
+
+  const corruptDataDir = nextCorruptDataDir(dataDir);
+  renameSync(dataDir, corruptDataDir);
+  mkdirSync(dataDir, { recursive: true });
+  console.log(
+    `[PGliteEngine] Moved incomplete PGlite data directory from ${dataDir} to ${corruptDataDir}; created a fresh directory. Delete matching .corrupt-* directories when they are no longer needed.`
+  );
+}
+
 /**
  * DatabaseEngine implementation using PGlite (WASM PostgreSQL).
  * Used for local development. Data persists in the specified directory.
@@ -72,6 +127,7 @@ export class PGliteEngine implements DatabaseEngine {
     // a fresh checkout or `rm -rf .bb-data` would otherwise ENOENT on first
     // boot. Create the full path up front (matches DsqlMockEngine).
     mkdirSync(dataDir, { recursive: true });
+    recoverIncompletePgliteDataDir(dataDir);
     cleanStaleLock(dataDir);
     this.db = new PGlite(dataDir);
   }

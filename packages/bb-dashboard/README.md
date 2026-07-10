@@ -2,6 +2,8 @@
 
 Auto-generated CloudWatch Dashboard for application observability.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## When to Use
 
 - You've deployed your app and want a single URL to view application health

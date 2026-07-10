@@ -1,5 +1,11 @@
 # AWS Blocks Kotlin
 
+[![Maven Central](https://img.shields.io/maven-central/v/com.aws.blocks.kotlin/runtime)](https://central.sonatype.com/search?namespace=com.aws.blocks.kotlin)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.1.21-blue.svg?logo=kotlin)](https://kotlinlang.org)
+![Android](http://img.shields.io/badge/platform-android-6EDB8D.svg?style=flat)
+![iOS](http://img.shields.io/badge/platform-ios-CDCDCD.svg?style=flat)
+![Desktop](http://img.shields.io/badge/platform-desktop-DB413D.svg?style=flat)
+
 A Gradle plugin and Kotlin Multiplatform runtime that generates type-safe client code from an AWS Blocks spec. It parses your spec at build time and produces Kotlin interfaces, data classes, and a suspending client implementation that calls your backend methods with full type safety across Android, iOS, and JVM.
 
 ## Quick Start
