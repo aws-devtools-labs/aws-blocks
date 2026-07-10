@@ -1,13 +1,18 @@
 // Top-level ROLL-UP of the per-cell analyses. This runs ONCE in the summary job
-// and is BOTTOM-UP: it CONSUMES the `analysis` string each cell already wrote
-// into its own result.json (steps/analyze-cell.mjs, right after that cell's
-// judge) — it no longer re-reads raw traces centrally. It produces:
-//   - an `## Executive summary` that SYNTHESIZES the per-cell analyses via ONE
-//     Bedrock call (Opus 4.8) over the collected analyses + the run aggregate
-//     (mean, verdict mix, low/regressed flags), and
-//   - a per-cell one-liner list (cell → composite/verdict → its analysis),
-// appended to $GITHUB_STEP_SUMMARY, plus a run-level bench-analysis.json
-// artifact assembled from the per-cell analyses.
+// and is BOTTOM-UP: it CONSUMES the `analysis` string + `analysis_issues` array
+// each cell already wrote into its own result.json (steps/analyze-cell.mjs, right
+// after that cell's judge) — it no longer re-reads raw traces centrally. It
+// appends THREE sections to $GITHUB_STEP_SUMMARY, after the Glossary/Overview/
+// Detailed tables that steps/summary.mjs renders:
+//   - `## Executive summary` — a SHORT paragraph + bullets, synthesized via ONE
+//     best-effort Bedrock call (Opus 4.8) over the per-cell analyses + the run
+//     aggregate (mean, verdict mix, low/regressed flags);
+//   - `## ⚠️ Potential issues` — deterministic severity flags (harness/agent
+//     failures, low/regressed composites) plus every issue the per-cell analyses
+//     emitted, each attributed to its cell;
+//   - `## Per-cell analysis` — the whole section collapsed, and EACH cell also
+//     collapsed within it (compact analysis + its potential issues).
+// It also writes a run-level bench-analysis.json artifact.
 //
 // The scoreboard table + PR-vs-baseline overview are rendered separately by
 // steps/summary.mjs and are unchanged.
@@ -31,7 +36,7 @@ import {
 	buildRollupUserText,
 	fmt,
 } from './lib/analysis.mjs';
-import { verdictOf } from './lib/scoring.mjs';
+import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -57,8 +62,8 @@ function main() {
 		}
 	}
 	if (cells.length === 0) {
-		emit(['## Agent analysis', '', '_No cell results to roll up._', '']);
-		writeAnalysis({ executive_summary: null, cells: [], note: 'no cell results' });
+		emit(['## Executive summary', '', '_No cell results to roll up._', '']);
+		writeAnalysis({ executive_summary: null, potential_issues: [], cells: [], note: 'no cell results' });
 		return;
 	}
 
@@ -91,28 +96,58 @@ function main() {
 			template: c.template ?? '—',
 			composite,
 			verdict,
+			klass: c.klass ?? null,
 			delta,
 			low: composite !== null && composite < LOW_THRESHOLD,
 			regressed: delta !== null && delta < REGRESSION_DELTA,
 			analysis: c.analysis || null,
+			issues: Array.isArray(c.analysis_issues) ? c.analysis_issues.filter((s) => typeof s === 'string' && s.trim()) : [],
 		};
 	});
 
 	// ── Executive summary: ONE best-effort Bedrock synthesis over the analyses ─
 	const execSummary = synthesize(aggregate, verdictCounts, rows);
 
-	// ── Render ────────────────────────────────────────────────────────────────
-	const out = ['## Agent analysis', ''];
-	out.push('### Executive summary', '');
+	// ── Potential issues: deterministic flags + each cell's emitted issues ─────
+	const potential = collectPotentialIssues(rows);
+
+	// ── Render: Executive summary → Potential issues → collapsible per-cell ────
+	const out = [];
+	out.push('## Executive summary', '');
 	out.push(execSummary.text, '');
-	out.push('### Per-cell analysis', '');
-	out.push(`_Each cell's analysis was generated in-cell right after its judge. Model: \`${MODEL_ID}\`._`, '');
-	for (const r of rows) {
-		const flags = [r.low ? '🔴 low' : '', r.regressed ? `▼ regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
-		const head = `\`${r.task}/${r.template}\` — composite ${fmt(r.composite)} (${r.verdict})${flags ? ` [${flags}]` : ''}`;
-		out.push(`- ${head}: ${r.analysis ?? '_no per-cell analysis_'}`);
+
+	out.push('## ⚠️ Potential issues', '');
+	if (potential.length === 0) {
+		out.push('_None surfaced — no low or regressed cells, and no per-cell analysis flagged an issue._', '');
+	} else {
+		for (const line of potential) out.push(`- ${line}`);
+		out.push('');
 	}
+
+	// Whole section collapsed; EACH cell also collapsed within it.
+	out.push('## Per-cell analysis', '');
+	out.push('<details>');
+	out.push(
+		`<summary>Per-cell analysis — ${rows.length} cell(s), generated in-cell right after each judge · model <code>${MODEL_ID}</code> (click to expand)</summary>`,
+	);
 	out.push('');
+	for (const r of rows) {
+		const band = typeof r.composite === 'number' ? compositeBand(r.composite) : '⚪';
+		const flags = [r.low ? '🔴 low' : '', r.regressed ? `▼ regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
+		const head = `${band} \`${r.task}/${r.template}\` — composite ${fmt(r.composite)} (${r.verdict})${flags ? ` [${flags}]` : ''}`;
+		out.push('<details>');
+		out.push(`<summary>${head}</summary>`);
+		out.push('');
+		out.push(`- ${r.analysis ?? '_no per-cell analysis_'}`);
+		if (r.issues.length > 0) {
+			out.push('- **Potential issues:**');
+			for (const iss of r.issues) out.push(`  - ${iss}`);
+		}
+		out.push('');
+		out.push('</details>');
+		out.push('');
+	}
+	out.push('</details>', '');
 	emit(out);
 
 	writeAnalysis({
@@ -121,8 +156,37 @@ function main() {
 		verdict_counts: verdictCounts,
 		executive_summary: execSummary.text,
 		executive_summary_error: execSummary.error ?? null,
+		potential_issues: potential,
 		cells: rows,
 	});
+}
+
+// Deterministic "Potential issues" list, synthesized from the per-cell rows:
+// harness/agent failures and low/regressed composites first (severity-flagged),
+// then every issue the per-cell analyses emitted, each attributed to its cell.
+function collectPotentialIssues(rows) {
+	const out = [];
+	for (const r of rows) {
+		const cell = `\`${r.task}/${r.template}\``;
+		if (r.verdict === 'harness_error') {
+			out.push(`🧰 ${cell} — harness error (no gradeable app; excluded from the mean)`);
+			continue;
+		}
+		if (r.klass === 'agent_fail') {
+			out.push(`🔴 ${cell} — agent produced no app within budget (scored composite 0)`);
+			continue;
+		}
+		const flags = [];
+		if (r.low) flags.push(`low composite ${fmt(r.composite)}`);
+		if (r.regressed) flags.push(`regressed Δ${fmt(r.delta)} vs \`main\``);
+		if (flags.length) out.push(`🔴 ${cell} — ${flags.join('; ')}`);
+	}
+	for (const r of rows) {
+		if (r.issues.length === 0) continue;
+		const cell = `\`${r.task}/${r.template}\``;
+		for (const iss of r.issues) out.push(`${cell} — ${iss}`);
+	}
+	return out;
 }
 
 // One Bedrock call synthesizing the per-cell analyses into an executive summary.
@@ -169,7 +233,7 @@ function writeAnalysis(extra) {
 			ANALYSIS_PATH,
 			`${JSON.stringify(
 				{
-					schema: 2,
+					schema: 3,
 					generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
 					model: MODEL_ID,
 					low_threshold: LOW_THRESHOLD,

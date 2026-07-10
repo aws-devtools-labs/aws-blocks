@@ -22,11 +22,30 @@ export NPM_CONFIG_FETCH_RETRIES="${NPM_CONFIG_FETCH_RETRIES:-5}"
 export NPM_CONFIG_FETCH_RETRY_MINTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MINTIMEOUT:-20000}"
 export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-120000}"
 
+# BUILD-ONCE: the reusable workflow's upstream `build-blocks` job builds the
+# whole monorepo and packs it to dist-registry/ once per run, then hands that
+# directory to every cell as an artifact (see .github/workflows/agent-bench.yml).
+# If it's already here, SKIP the ~150s per-cell monorepo build + pack and reuse
+# the prebuilt registry — scaffolded apps resolve @aws-blocks/* from the packed
+# .tgz here, so a registry built once upstream is byte-identical for every cell.
+# The guard requires the dir to actually contain a packed *.tgz — not merely to
+# exist — because the cell's download step is continue-on-error and
+# actions/download-artifact creates the target path even when extraction is
+# skipped/partial, leaving an EMPTY (or tarball-less) dist-registry/. Treating
+# that as "prebuilt" would skip the build and then serve an empty registry, so
+# the very next `npm install` 404s. When the tarballs are absent (a local run, or
+# a download blip in CI) we fall back to building here exactly as before — so this
+# cell is always self-sufficient.
 # `npm run build` is topology-aware and runs prebuild hooks in the right order.
 # `build:packages` runs alphabetically and trips over bb-data needing
 # bb-app-setting's generated version.ts.
-npm run build
-npm run publish:dry-run
+if [ -d dist-registry ] && [ -n "$(find dist-registry -name '*.tgz' -type f 2>/dev/null)" ]; then
+  echo "1. Init: reusing prebuilt dist-registry/ (from the build-blocks job) — skipping monorepo build + pack"
+else
+  echo "1. Init: no prebuilt dist-registry/ — building + packing the monorepo locally"
+  npm run build
+  npm run publish:dry-run
+fi
 
 npx tsx scripts/publish/serve-local-registry.ts &
 echo $! > /tmp/registry.pid

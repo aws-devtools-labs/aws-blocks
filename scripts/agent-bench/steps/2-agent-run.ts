@@ -19,10 +19,17 @@
  * floored to BASH_MIN_TIMEOUT_SEC so npm install/build survive.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { Agent, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
+import { Agent, type AgentResult, BedrockModel, ModelStreamUpdateEvent } from '@strands-agents/sdk';
 import { makeBash } from '@strands-agents/sdk/vended-tools/bash';
 import { fileEditor } from '@strands-agents/sdk/vended-tools/file-editor';
 import { builderSystem } from '../prompts.ts';
+import {
+	INVOKE_BACKOFF_MS,
+	INVOKE_MAX_ATTEMPTS,
+	describeModelError,
+	isRetryableModelError,
+	sleep,
+} from './lib/bedrock-retry.ts';
 import { WorkspaceSandbox, describeError, required } from './lib/run-shell.ts';
 
 const WORKSPACE = required('WORKSPACE', '[bench]');
@@ -69,17 +76,6 @@ const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 // set on the Agent and the timeout floor lives in WorkspaceSandbox (see above).
 // NOTE: the barrel `bash` export is a host-only persistent session that ignores
 // the sandbox — `makeBash()` is the sandbox-aware tool, so we use that.
-const agent = new Agent({
-	model: new BedrockModel({
-		modelId: MODEL_ID,
-		region: process.env.AWS_REGION ?? 'us-east-1',
-		temperature: 0,
-	}),
-	systemPrompt: builderSystem(WORKSPACE),
-	sandbox: new WorkspaceSandbox(WORKSPACE, BASH_MIN_TIMEOUT_SEC),
-	tools: [makeBash(), fileEditor],
-});
-
 // Best-effort live usage accounting. The workflow caps step 2 at a hard
 // wall-clock timeout; when it fires, the Actions runner SIGTERMs this process
 // mid-invoke, so agent.invoke() never returns and the final envelope below
@@ -87,18 +83,45 @@ const agent = new Agent({
 // (often large) spend that triggered the timeout. We accumulate usage from the
 // model metadata events the agent emits after each model call (the same source
 // result.metrics.accumulatedUsage is built from) and flush a partial envelope
-// from the signal handler.
+// from the signal handler. The counters live at module scope so they also
+// survive across invoke retries and stay readable from the signal handler.
 let partialTokensIn = 0;
 let partialTokensOut = 0;
 let partialCycles = 0;
-agent.addHook(ModelStreamUpdateEvent, (event) => {
-	const inner = event.event;
-	if (inner.type === 'modelMetadataEvent' && inner.usage) {
-		partialTokensIn += inner.usage.inputTokens ?? 0;
-		partialTokensOut += inner.usage.outputTokens ?? 0;
-		partialCycles += 1;
-	}
-});
+
+// Fresh agent per invoke attempt (mirrors the judge). A throttle/transient
+// failure can surface mid-stream and leave a half-built conversation on the
+// Agent instance; reusing it on retry could replay a corrupt turn, so each
+// attempt gets a clean agent. The ModelStreamUpdateEvent hook is re-attached on
+// every build and feeds the module-scope counters above, so tokens burned on a
+// failed attempt are still counted.
+function makeBuilderAgent(): Agent {
+	const agent = new Agent({
+		model: new BedrockModel({
+			modelId: MODEL_ID,
+			region: process.env.AWS_REGION ?? 'us-east-1',
+			temperature: 0,
+			// AWS-SDK-layer adaptive retry — the lower half of a two-layer throttle
+			// defense (the app-level retry loop around invoke() below is the upper
+			// half). Mirrors the judge: retryMode 'adaptive' adds client-side rate
+			// limiting on top of the 8-attempt budget, so a TPM throttle is often
+			// absorbed inside a single invoke before it surfaces as a ModelError.
+			clientConfig: { maxAttempts: 8, retryMode: 'adaptive' },
+		}),
+		systemPrompt: builderSystem(WORKSPACE),
+		sandbox: new WorkspaceSandbox(WORKSPACE, BASH_MIN_TIMEOUT_SEC),
+		tools: [makeBash(), fileEditor],
+	});
+	agent.addHook(ModelStreamUpdateEvent, (event) => {
+		const inner = event.event;
+		if (inner.type === 'modelMetadataEvent' && inner.usage) {
+			partialTokensIn += inner.usage.inputTokens ?? 0;
+			partialTokensOut += inner.usage.outputTokens ?? 0;
+			partialCycles += 1;
+		}
+	});
+	return agent;
+}
 
 const started = Date.now();
 let finished = false;
@@ -165,13 +188,65 @@ function writePartialEnvelopeAndExit(signal: string): void {
 process.on('SIGTERM', () => writePartialEnvelopeAndExit('SIGTERM'));
 process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 
-let result;
-try {
-	result = await agent.invoke(taskPrompt, { limits: { turns: MAX_TURNS } });
-} catch (err) {
+// Startup stagger: spread each concurrent wave's FIRST Bedrock call so N cells
+// don't all hit InvokeModelWithResponseStream in the same instant and trip the
+// account-wide Bedrock tokens-per-minute (TPM) ceiling — the burst that surfaced
+// as "ModelError: Too many tokens" across 6/10 cells in run 28967475174. Keyed to
+// the matrix job index (BENCH_CELL_INDEX = strategy.job-index in the workflow) so
+// the fan-out is DETERMINISTIC and reproducible, not random.
+//
+// We stagger by the WITHIN-WAVE slot — cellIndex mod wave size — not the raw
+// 0..N-1 index. With max-parallel=5, raw-index staggering would make the second
+// wave (indices 5–9) sleep 35–63s ON TOP of already having waited for a runner
+// slot; keying to (index % waveSize) instead bounds every cell to slots 0..4 ⇒
+// 0,STEP,2·STEP,3·STEP,4·STEP = ~0–28s at the default STEP=7, and every wave
+// reuses that same bounded window. BENCH_STAGGER_WAVE_SIZE mirrors the workflow's
+// max-parallel (GitHub Actions expressions can't do modulo, so the wrap happens
+// here). Wave size unset (local runs) ⇒ no wrap; index 0 ⇒ slot 0 ⇒ no delay.
+const STAGGER_STEP_SEC = Number(process.env.BENCH_STAGGER_STEP_SEC ?? '7');
+const STAGGER_WAVE_SIZE = Number(process.env.BENCH_STAGGER_WAVE_SIZE ?? '0');
+const cellIndex = Number.parseInt(process.env.BENCH_CELL_INDEX ?? '0', 10);
+const staggerSlot =
+	Number.isFinite(cellIndex) && cellIndex > 0 && STAGGER_WAVE_SIZE > 0 ? cellIndex % STAGGER_WAVE_SIZE : cellIndex;
+const staggerMs =
+	Number.isFinite(staggerSlot) && staggerSlot > 0 && STAGGER_STEP_SEC > 0 ? staggerSlot * STAGGER_STEP_SEC * 1000 : 0;
+if (staggerMs > 0) {
+	process.stderr.write(
+		`[bench] startup stagger: cell index ${cellIndex} (wave slot ${staggerSlot}/${STAGGER_WAVE_SIZE || '∞'}) → sleeping ${Math.round(staggerMs / 1000)}s before first model call\n`,
+	);
+	await sleep(staggerMs);
+}
+
+// App-level throttle-retry around invoke() — the upper half of the two-layer
+// defense (clientConfig adaptive retry is the lower half, inside each invoke).
+// Only throttle/transient failures are retried (isRetryableModelError); a
+// non-retryable error breaks immediately. Backoff mirrors the judge. On every
+// path the SIGTERM handler stays armed, so a cancellation during a backoff sleep
+// still flushes the partial envelope.
+let result: AgentResult | undefined;
+let lastErr: unknown;
+for (let attempt = 1; attempt <= INVOKE_MAX_ATTEMPTS; attempt++) {
+	try {
+		result = await makeBuilderAgent().invoke(taskPrompt, { limits: { turns: MAX_TURNS } });
+		break;
+	} catch (err) {
+		lastErr = err;
+		const retryable = isRetryableModelError(err);
+		process.stderr.write(
+			`[bench] agent.invoke attempt ${attempt}/${INVOKE_MAX_ATTEMPTS} failed (${retryable ? 'throttle/transient' : 'non-retryable'}): ${describeModelError(err)}\n`,
+		);
+		if (!retryable || attempt >= INVOKE_MAX_ATTEMPTS) break;
+		const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
+		const delayMs = base + Math.floor(Math.random() * base * 0.25);
+		process.stderr.write(`[bench] backing off ${Math.round(delayMs / 1000)}s before attempt ${attempt + 1}\n`);
+		await sleep(delayMs);
+	}
+}
+
+if (!result) {
 	finished = true;
-	const desc = describeError(err);
-	process.stderr.write(`[bench] agent.invoke failed: ${desc}\n`);
+	const desc = describeModelError(lastErr);
+	process.stderr.write(`[bench] agent.invoke failed after ${INVOKE_MAX_ATTEMPTS} attempt(s): ${desc}\n`);
 	// Write a sentinel envelope so the judge step has something to read and the
 	// cell still produces a usable result.json artifact. Use the best-effort
 	// usage accumulated so far rather than hardcoded zeros, so a mid-run failure
