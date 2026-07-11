@@ -108,15 +108,15 @@ else
 fi
 
 # ── Dev server: launch fresh + discover its port from the framework banner ───
-# The verifier OWNS the server now (step 1 no longer starts one, so the agent's
-# edit phase ran with nothing bound). Free the public front-door ports the
-# framework may bind — 3000/3001 ONLY (never :3100, the internal Vite port) —
-# then wait for them to actually free up before launching `npm run dev`. A dev
-# server the AGENT left running during its edit phase squats these ports, and
-# under shell isolation that process is owned by benchagent — which the harness
-# user cannot signal (cross-uid EPERM, the same containment that stops the agent
-# killing the harness). So the free/probe below go through sudo when available
-# (unprivileged fallback for the non-isolated path).
+# The verifier OWNS the server now. The agent's edit phase (step 2) may itself
+# have run `npm run dev` to exercise its work, leaving a `tsx watch` SUPERVISOR
+# alive — so before launching our own we must (a) reap that leftover server tree
+# and (b) free the public front-door ports the framework binds — 3000/3001 ONLY
+# (never :3100, the internal Vite port). Under shell isolation the agent's
+# processes are owned by benchagent, which the harness user cannot signal
+# (cross-uid EPERM, the same containment that stops the agent killing the
+# harness), so both the reap and the port free/probe go through sudo when
+# available (unprivileged fallback for the non-isolated path).
 # The dev server prints an EXACT banner inside server.listen(), BEFORE Vite starts:
 #   AWS Blocks local server running on http://localhost:<port>
 # We anchor discovery on THAT line — no port guessing, no CANDIDATE_PORTS probe.
@@ -124,6 +124,45 @@ fi
 # ready). Bounded (~60s): if the banner never appears we leave APP_BASE_URL EMPTY
 # and PROCEED (green-regardless — the cell fails honestly rather than hanging,
 # hard-failing, or being pointed at a guessed port).
+
+# Reap any dev server the AGENT left running during its edit phase. The framework
+# records each running server in $WORKSPACE/.blocks-sandbox/dev-server.<port>.pid
+# as {pid, ppid, port} — `pid` is the process that bound the port, `ppid` is the
+# `tsx watch` SUPERVISOR that respawns it on file change. A plain `fuser -k` on
+# the port (below) only kills the child socket-holder; the supervisor immediately
+# respawns it, and the stale pidfile is never cleared — so the framework's
+# singleton guard (evaluateSingleton in packages/core dev-server.ts) then REFUSES
+# our own `npm run dev` ("dev server already running on :3000"), leaving
+# APP_BASE_URL empty and every spec failing against nothing (composite 0 for a
+# working app). So kill the supervisor tree FIRST (ppid before pid, so it can't
+# respawn; TERM then KILL) and delete the stale pidfile, before the port free.
+# Only node/tsx/npm processes are signalled (a reused pid can't take out anything
+# unrelated). sudo covers the cross-uid isolated case; plain kill is the fallback.
+reap_stale_dev_servers() {
+  local sandbox="${WORKSPACE}/.blocks-sandbox"
+  [ -d "$sandbox" ] || return 0
+  local pf ids ppid pid sig target
+  for pf in "$sandbox"/dev-server.*.pid; do
+    [ -f "$pf" ] || continue
+    ids="$(node -e 'try{const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(`${Number.isInteger(r.ppid)?r.ppid:""} ${Number.isInteger(r.pid)?r.pid:""}`)}catch{}' "$pf" 2>/dev/null || true)"
+    read -r ppid pid <<< "$ids" || true
+    for sig in TERM KILL; do
+      for target in "$ppid" "$pid"; do
+        [ -n "${target:-}" ] || continue
+        # Guard against pid reuse: only signal a live node/tsx/npm process.
+        # /proc/<pid>/comm is world-readable even for benchagent-owned procs.
+        case "$(cat "/proc/${target}/comm" 2>/dev/null || true)" in
+          node|tsx|npm*) sudo -n kill "-${sig}" "$target" 2>/dev/null || kill "-${sig}" "$target" 2>/dev/null || true ;;
+        esac
+      done
+      [ "$sig" = TERM ] && sleep 1
+    done
+    # Drop the stale pidfile so the framework singleton guard won't refuse our start.
+    sudo -n rm -f "$pf" 2>/dev/null || rm -f "$pf" 2>/dev/null || true
+  done
+}
+reap_stale_dev_servers
+
 for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
   # Probe via sudo too: under shell isolation the squatter is benchagent-owned and
