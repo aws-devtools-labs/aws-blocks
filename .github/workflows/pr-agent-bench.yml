@@ -17,25 +17,32 @@ name: PR Agent Bench
 #   S3_BUCKET     variable  Registry bucket (existing).
 
 on:
-  # Runs on same-repo PR open/update AND on every push to main (a main run
-  # records the merged commit's baseline for later PRs to diff against). There
-  # is NO label gate: the bench is green-regardless — a failed cell /
-  # agent-timeout lands in the run summary, not the check status. Fork PRs get
-  # no secrets/OIDC under `pull_request` and are blocked by the same-repo `if`.
+  # Runs on same-repo PR open/update AND on push to main (a main run records the
+  # merged commit's baseline for later PRs to diff against). NO label gate: the
+  # bench is green-regardless — a failed cell / agent-timeout lands in the run
+  # summary, not the check status. Fork PRs get no secrets/OIDC under
+  # `pull_request` and are blocked by the same-repo `if`.
   #
-  # paths-ignore skips the (paid) bench when EVERY changed file is agent-inert:
-  # .github/** (CI/workflow config) and .changeset/** (release metadata). Docs
-  # and markdown are NOT ignored — the bench grades an agent that reads framework
-  # docs (packages/**/*.md, guides), so a docs change may be made to improve agent
-  # outcomes and should be benchable. A PR touching any real code still benches,
-  # since paths-ignore only skips when ALL files match.
+  # ALLOWLIST: the bench only runs when something the building/grading agent
+  # actually consumes changes — the framework (packages/**, incl. agent-facing
+  # packages/**/*.md), the bench harness (scripts/agent-bench/**), or the task
+  # prompts + graded specs (tasks/**). Everything else is skipped as agent-inert:
+  # .github/** (CI/workflow config), docs/** and root prose, .changeset/**.
+  # NOTE: the task↔template matrix is defined INLINE in agent-bench.yml (under
+  # .github/**, intentionally NOT allowlisted so CI edits stay $0) — changes to
+  # those inline cell defs won't auto-trigger; use workflow_dispatch to bench them.
   pull_request:
     types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '.github/**'
-      - '.changeset/**'
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
   push:
     branches: [main]
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
   workflow_dispatch:
 
 concurrency:
