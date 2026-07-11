@@ -14,10 +14,6 @@
  *                   A `major` (0.x → 1.0.0) means leaving pre-release, which
  *                   requires explicit sign-off — so we hard-block it in CI.
  *
- *   report-breaking Surface (do NOT block) `minor` bumps. Pre-1.0, a `minor`
- *                   (0.x → 0.(x+1).0) is the semver signal for a breaking
- *                   change. Writes a Markdown body for a sticky PR comment.
- *
  * Pre-1.0 semver convention:
  *   - `patch` (0.1.1 → 0.1.2): non-breaking change
  *   - `minor` (0.1.x → 0.2.0): BREAKING change — the pre-release breaking channel
@@ -26,22 +22,16 @@
  * Usage:
  *   tsx scripts/changeset-guard.ts verify-coverage
  *   tsx scripts/changeset-guard.ts block-major
- *   tsx scripts/changeset-guard.ts report-breaking
- *
- * report-breaking honors:
- *   - COMMENT_BODY_FILE: path to write the Markdown comment body
- *   - GITHUB_OUTPUT:     appends `has-breaking=true|false`
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
 const SCOPE = "@aws-blocks/";
-const MARKER = "<!-- changeset-breaking-changes -->";
 
 type BumpType = "major" | "minor" | "patch";
 
@@ -162,56 +152,6 @@ function blockMajor(): number {
 	return 1;
 }
 
-function breakingBody(pkgs: string[]): string {
-	return [
-		MARKER,
-		"### ⚠️ Breaking change detected (pre-release)",
-		"",
-		"This PR includes a `minor` changeset. While Blocks is pre-`1.0.0`, a `minor`",
-		"bump (`0.x` → `0.(x+1).0`) is the semver signal for a **breaking change**.",
-		"",
-		"Breaking changes are allowed pre-release — this is just a heads-up so reviewers",
-		"and consumers are aware. Make sure the changeset summary explains the break and",
-		"any migration steps.",
-		"",
-		"**Packages with a breaking (`minor`) bump:**",
-		...pkgs.map((p) => `- \`${p}\``),
-		"",
-		"_Non-breaking changes should use `patch`. A `major` bump (→ `1.0.0`) is blocked_",
-		"_separately until we deliberately leave pre-release._",
-	].join("\n");
-}
-
-function resolvedBody(): string {
-	return [
-		MARKER,
-		"### ✅ No breaking changes",
-		"",
-		"The current changesets contain no `minor` (breaking) bumps for `@aws-blocks/*`",
-		"packages. Only non-breaking (`patch`) changes are queued.",
-	].join("\n");
-}
-
-function reportBreaking(): number {
-	const minors = parseChangesets().filter((e) => e.type === "minor");
-	const hasBreaking = minors.length > 0;
-	const pkgs = [...new Set(minors.map((m) => m.pkg))].sort();
-	const body = hasBreaking ? breakingBody(pkgs) : resolvedBody();
-
-	if (process.env.COMMENT_BODY_FILE) writeFileSync(process.env.COMMENT_BODY_FILE, body, "utf-8");
-	if (process.env.GITHUB_OUTPUT) {
-		appendFileSync(process.env.GITHUB_OUTPUT, `has-breaking=${hasBreaking}\n`);
-	}
-
-	if (hasBreaking) {
-		console.log(`Found ${minors.length} breaking (minor) entr(ies):`);
-		for (const { pkg, file } of minors) console.log(`   • ${pkg}  (.changeset/${file})`);
-	} else {
-		console.log("No breaking (minor) changesets found.");
-	}
-	return 0; // informational only — never fails the build
-}
-
 const command = process.argv[2];
 
 switch (command) {
@@ -221,13 +161,10 @@ switch (command) {
 	case "block-major":
 		process.exit(blockMajor());
 		break;
-	case "report-breaking":
-		process.exit(reportBreaking());
-		break;
 	default:
 		console.error(
 			`Unknown command: ${command ?? "(none)"}\n` +
-			"Usage: tsx scripts/changeset-guard.ts <verify-coverage|block-major|report-breaking>",
+			"Usage: tsx scripts/changeset-guard.ts <verify-coverage|block-major>",
 		);
 		process.exit(2);
 }

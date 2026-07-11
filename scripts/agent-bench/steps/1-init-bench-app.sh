@@ -26,7 +26,7 @@ export NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT="${NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT:-1
 # `build:packages` runs alphabetically and trips over bb-data needing
 # bb-app-setting's generated version.ts.
 npm run build
-npm run publish:dry-run
+npm run publish:local
 
 npx tsx scripts/publish/serve-local-registry.ts &
 echo $! > /tmp/registry.pid

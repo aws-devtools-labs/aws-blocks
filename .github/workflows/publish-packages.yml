@@ -81,7 +81,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "chore: version packages [skip ci]"
+          git pull --rebase origin main
 
+      # Publish after the rebase so changeset publish tags the final commit
+      # (a post-publish rebase would orphan those tags).
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
         env:
@@ -91,9 +94,7 @@ jobs:
 
       - name: Push version commit and tags
         if: steps.version.outputs.changed == 'true'
-        run: |
-          git pull --rebase origin main
-          git push --follow-tags
+        run: git push --follow-tags
 
       - name: Summary
         if: always()
