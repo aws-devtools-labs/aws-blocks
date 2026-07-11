@@ -141,7 +141,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     request: {
       apiNamespace: parsed.method.substring(0, dotIndex),
       method: parsed.method.substring(dotIndex + 1),
-      // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
+      // JSON-RPC 2.0 §4.2: params may be array (positional), object (named), or omitted (empty).
       args,
       id,
     },
