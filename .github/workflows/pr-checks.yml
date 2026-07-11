@@ -88,6 +88,7 @@ jobs:
           pack_blocks() {
             local dest="$1"
             node scripts/sync-block-docs.mjs >/dev/null
+            # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null 2>&1 )
             shasum -a 512 "$dest"/*.tgz | awk '{print $1}'
           }
