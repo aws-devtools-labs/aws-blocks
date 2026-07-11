@@ -10,8 +10,8 @@
 
 import assert from 'node:assert/strict';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
@@ -297,6 +297,60 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 			);
 		} finally {
 			spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'pkill', '-9', '-f', srv], { timeout: 5000 });
+		}
+	});
+
+	// The run-1/5 regression: a workspace ACL alone is NOT enough. The CI
+	// workspace lives under /home/runner/work/<repo>/<repo>/bench-app, whose
+	// parents (/home/runner, 0750) are not world-searchable, so benchagent could
+	// rwx the workspace yet every ABSOLUTE-path open (npm/node/tsc/require resolve
+	// modules by absolute path) failed EACCES — builds broke and agents thrashed
+	// to MAX_TURNS. prepareWorkspaceIsolation must ALSO grant benchagent search
+	// (x) on every ancestor. This pins both the failure (workspace ACL only) and
+	// the fix (ancestor search grants) with a real `npm run build`.
+	it('FIX: absolute-path module resolution works under a NON-world-searchable parent (run-1/5 regression)', { skip: !isolation }, () => {
+		// A restrictive parent chain (0750) mimicking /home/runner, with a real
+		// npm project whose build requires a node_modules dep BY NAME.
+		const base = mkdtempSync(join(homedir(), 'bench-trav.'));
+		chmodSync(base, 0o750);
+		const ws = join(base, 'work', 'repo', 'repo', 'bench-app');
+		mkdirSync(join(ws, 'node_modules', 'mydep'), { recursive: true });
+		writeFileSync(join(ws, 'package.json'), JSON.stringify({ name: 'bench-app', private: true, scripts: { build: 'node build.js' } }));
+		writeFileSync(join(ws, 'build.js'), "const d=require('mydep');console.log('BUILD_OK '+d());");
+		writeFileSync(join(ws, 'node_modules', 'mydep', 'package.json'), JSON.stringify({ name: 'mydep', version: '1.0.0', main: 'index.js' }));
+		writeFileSync(join(ws, 'node_modules', 'mydep', 'index.js'), "module.exports=()=>'dep-loaded';");
+		const me = spawnSync('id', ['-un'], { encoding: 'utf-8' }).stdout.trim();
+		// Mirror buildAgentSpawn: re-materialize PATH/HOME after the privilege drop
+		// (runuser runs no login shell) so npm/node are found, exactly as the
+		// runtime does via `env KEY=VAL … bash -c`.
+		const runAs = (cmd) =>
+			spawnSync(
+				'sudo',
+				['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', `PATH=${process.env.PATH}`, `HOME=/home/${BENCH_AGENT_USER}`, 'bash', '-c', cmd],
+				{ encoding: 'utf-8', timeout: 30000 },
+			);
+		try {
+			// Workspace ACL ONLY (no ancestor search) — reproduces the failure.
+			spawnSync('setfacl', ['-R', '-m', `u:${BENCH_AGENT_USER}:rwx,u:${me}:rwx`, ws]);
+			spawnSync('setfacl', ['-R', '-d', '-m', `u:${BENCH_AGENT_USER}:rwx,u:${me}:rwx`, ws]);
+			const before = runAs(`cat ${join(ws, 'package.json')}`);
+			assert.notEqual(before.status, 0, 'BASELINE: absolute-path open should FAIL with only the workspace ACL (parent not searchable)');
+
+			// Grant benchagent search (x) on every ancestor — the fix.
+			let dir = join(ws, '..');
+			let prev = '';
+			while (dir && dir !== prev && dir !== '/') {
+				spawnSync('setfacl', ['-m', `u:${BENCH_AGENT_USER}:x`, dir]);
+				prev = dir;
+				dir = join(dir, '..');
+			}
+			const build = runAs(`cd ${ws} && npm run build 2>&1`);
+			assert.equal(build.status, 0, `npm run build should succeed after ancestor grants; out=${build.stdout}`);
+			assert.ok(build.stdout.includes('BUILD_OK dep-loaded'), `expected BUILD_OK; got ${build.stdout}`);
+		} finally {
+			chmodSync(base, 0o755);
+			spawnSync('sudo', ['-n', 'pkill', '-9', '-u', BENCH_AGENT_USER], { timeout: 5000 });
+			rmSync(base, { recursive: true, force: true });
 		}
 	});
 });

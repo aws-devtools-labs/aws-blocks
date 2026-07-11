@@ -11,6 +11,7 @@
  * own 120s per-command default stands) — that stays at the call sites.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
 import {
 	type ExecuteOptions,
 	type ExecutionResult,
@@ -107,9 +108,22 @@ export function isolationAvailable(): boolean {
 // ACL so files EITHER user creates later stay accessible to the other — the agent
 // (benchagent) edits/builds harness-scaffolded files, and the later verify/judge
 // steps (harness user) must read/write the dist/test outputs the agent produced.
-// Returns true only if both setfacl calls succeed; the caller disables isolation
-// (falls back to bare bash) when it returns false so the agent can never be left
-// unable to write its own workspace.
+//
+// It ALSO grants benchagent SEARCH (x) on every ANCESTOR of the workspace. This
+// is essential and easy to miss: the kernel checks search (x) on EACH parent
+// directory when resolving an ABSOLUTE path, and npm/node/tsc/require resolve
+// modules by absolute path. The workspace lives under e.g.
+// /home/runner/work/<repo>/<repo>/bench-app, whose parents (/home/runner, 0750)
+// are NOT world-searchable, so without this benchagent could rwx the workspace
+// yet fail every absolute-path open with EACCES (only cwd-relative opens work) —
+// which silently breaks `npm run build`, module resolution and the file editor.
+// The ancestor grant is best-effort per dir: the runner-owned parents (the ones
+// that block traversal) succeed; root-owned ancestors (/home, /) are already
+// world-searchable so a failed setfacl there is harmless.
+//
+// Returns true only if the workspace grants succeed; the caller disables
+// isolation (falls back to bare bash) when it returns false so the agent can
+// never be left unable to write its own workspace.
 export function prepareWorkspaceIsolation(root: string): boolean {
 	if (!isolationAvailable()) return false;
 	let me = process.env.USER ?? '';
@@ -120,10 +134,21 @@ export function prepareWorkspaceIsolation(root: string): boolean {
 			me = '';
 		}
 	}
+	const abs = resolve(root);
 	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync('setfacl', ['-R', '-m', spec, root], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, root], { stdio: 'ignore', timeout: 120_000 });
-	return access.status === 0 && !access.error && dflt.status === 0 && !dflt.error;
+	const access = spawnSync('setfacl', ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
+	// Walk up from the workspace granting benchagent search (x) on each ancestor
+	// so absolute-path opens into the workspace can traverse the parent chain.
+	let dir = dirname(abs);
+	let prev = '';
+	while (dir && dir !== prev && dir !== '/') {
+		spawnSync('setfacl', ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
+		prev = dir;
+		dir = dirname(dir);
+	}
+	return true;
 }
 
 // Build the argv for one agent shell command: `cd <cwd> && <command>` run under a
