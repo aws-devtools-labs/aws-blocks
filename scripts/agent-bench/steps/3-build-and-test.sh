@@ -111,17 +111,27 @@ fi
 # The verifier OWNS the server now (step 1 no longer starts one, so the agent's
 # edit phase ran with nothing bound). Free the public front-door ports the
 # framework may bind — 3000/3001 ONLY (never :3100, the internal Vite port) —
-# then wait for them to actually free up before launching `npm run dev`. The
-# dev server prints an EXACT banner inside server.listen(), BEFORE Vite starts:
+# then wait for them to actually free up before launching `npm run dev`. A dev
+# server the AGENT left running during its edit phase squats these ports, and
+# under shell isolation that process is owned by benchagent — which the harness
+# user cannot signal (cross-uid EPERM, the same containment that stops the agent
+# killing the harness). So the free/probe below go through sudo when available
+# (unprivileged fallback for the non-isolated path).
+# The dev server prints an EXACT banner inside server.listen(), BEFORE Vite starts:
 #   AWS Blocks local server running on http://localhost:<port>
 # We anchor discovery on THAT line — no port guessing, no CANDIDATE_PORTS probe.
 # A readiness gate then waits for the named port to answer HTTP <500 (5xx = not
 # ready). Bounded (~60s): if the banner never appears we leave APP_BASE_URL EMPTY
 # and PROCEED (green-regardless — the cell fails honestly rather than hanging,
 # hard-failing, or being pointed at a guessed port).
-for p in 3000 3001; do fuser -k "${p}/tcp" 2>/dev/null || true; done
+for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
-  fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || break
+  # Probe via sudo too: under shell isolation the squatter is benchagent-owned and
+  # an unprivileged fuser cannot see it, so a plain probe would report the port
+  # free while `npm run dev` still hits "address in use".
+  { sudo -n fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || fuser 3000/tcp 3001/tcp >/dev/null 2>&1; } || break
+  # Still held (e.g. a respawn) — re-issue the privileged kill before waiting.
+  for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
   sleep 1
 done
 
