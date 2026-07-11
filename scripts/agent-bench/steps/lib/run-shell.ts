@@ -33,63 +33,125 @@ import {
 // (oidc-dsql-notes SIGKILL/137, file-gallery SIGTERM/143): the agents, thrashing
 // on a leftover dev server, ran "kill all node processes" and killed `2-agent-run.ts`.
 //
-// The fix: run the agent's shell inside an UNPRIVILEGED USER + PID + MOUNT
-// namespace via `unshare --map-current-user --pid --fork --mount-proc`. Effects:
-//   - `--map-current-user` keeps the agent running as the REAL uid (whoami is
-//     unchanged, NOT root/nobody), so file ownership stays seamless for the later
-//     build/test step and there is no root-behavior npm breakage — FAIRNESS is
-//     preserved: the agent keeps a full shell, installs deps, runs a dev server,
-//     runs tests exactly as before.
-//   - `--pid --fork` makes the agent's bash PID 1 in a fresh PID namespace; it can
-//     only see (and therefore only signal) processes it started. The harness lives
-//     in the parent namespace and is INVISIBLE + unsignalable from inside, so
-//     `pkill`/`killall`/`fuser -k` are structurally contained — a kernel boundary,
-//     not a convention.
-//   - `--mount-proc` mounts a fresh /proc so `ps`/`pgrep`/`pkill -f` enumerate only
-//     the namespace's own processes (without it they would read the host /proc).
-//   - No network namespace, so Bedrock, npm, and localhost dev servers all work.
-// When the agent's PID-1 bash exits, the kernel reaps every remaining process in
-// the namespace, so a backgrounded dev server is torn down automatically — the
-// same wedge the group-kill below guards, handled here by the namespace lifetime.
+// The fix: run the agent's shell as a DEDICATED UNPRIVILEGED USER (`benchagent`)
+// via `sudo -n runuser -u benchagent -- env <full-env> bash -c '<cmd>'`. The
+// kernel forbids signalling a process owned by a different uid (EPERM), so the
+// agent's `pkill`/`killall`/`fuser -k`/`kill -1` cannot reach the harness — a
+// kernel boundary, not a convention.
 //
-// The wrapper is used ONLY when the kernel supports unprivileged user+PID+mount
-// namespaces (probed once, memoized). When unavailable (older/locked-down kernel,
-// local dev without unprivileged userns) we fall back to the bare `bash -c` spawn
-// so the bench stays green-regardless; the builder logs which mode is active.
-export const UNSHARE_ARGS = ['--map-current-user', '--pid', '--fork', '--mount-proc'] as const;
+// Why UID isolation rather than a PID namespace (`unshare --pid --fork`): a
+// per-command PID namespace SIGKILLs every process in it when the command's
+// PID-1 bash exits, which tears down a `setsid`/`nohup` dev server the agent
+// started to keep alive ACROSS bash calls — the exact web-app workflow the bench
+// must support. UID isolation has no per-command lifetime: a `setsid` server the
+// agent backgrounds keeps running as `benchagent` across calls, so cross-call
+// server persistence is preserved (the pre-existing behavior) while the harness
+// stays unsignalable.
+//
+// Env / fairness: `runuser` does not run a login shell (no `-l`), so we hand it
+// the agent's FULL resolved env explicitly via `env KEY=VAL … bash -c` (built
+// from the same env object the bare spawn uses) — this survives sudo's env scrub,
+// so PATH (incl. the mise node), AWS/Bedrock creds, npm config and the bench vars
+// all reach the agent unchanged. HOME is pointed at benchagent's home so npm/mise
+// caches are writable. The workspace is granted to benchagent (and back to the
+// harness user) with a recursive + default ACL by prepareWorkspaceIsolation, so
+// the agent keeps a full shell — installs deps, runs a dev server, runs tests,
+// reads/writes every workspace file exactly as before.
+//
+// Used ONLY when `sudo -n runuser -u benchagent` works (passwordless, user
+// present — probed once, memoized) AND the workspace ACL is granted. Otherwise
+// (local dev without the user, no passwordless sudo) we fall back to the bare
+// `bash -c` spawn so the bench stays green regardless; the builder logs the mode.
+export const BENCH_AGENT_USER = process.env.BENCH_AGENT_USER || 'benchagent';
 
 let isolationProbe: boolean | undefined;
+let agentHome: string | undefined;
 
-// Probe (once, memoized) whether this kernel can create the unprivileged
-// user+PID+mount namespace the isolation wrapper needs. Runs the EXACT arg set
-// runShell uses against a trivial `true`, so a green probe guarantees the real
-// spawn's namespace setup (including the /proc mount, the part most likely to be
-// restricted) succeeds. Any failure — `unshare` absent, userns disabled, mount
-// denied — yields false and the caller falls back to the bare `bash -c` spawn.
+// benchagent's home dir (from its passwd entry) so HOME points somewhere the
+// agent can write (npm/mise caches). Falls back to the conventional path.
+function resolveAgentHome(): string {
+	try {
+		const r = spawnSync('getent', ['passwd', BENCH_AGENT_USER], { encoding: 'utf8', timeout: 5000 });
+		if (r.status === 0 && typeof r.stdout === 'string') {
+			const home = r.stdout.trim().split(':')[5];
+			if (home) return home;
+		}
+	} catch {
+		/* fall through */
+	}
+	return `/home/${BENCH_AGENT_USER}`;
+}
+
+// Probe (once, memoized) whether the agent shell can be run as benchagent via
+// passwordless sudo+runuser. Runs the EXACT privilege transition runShell uses
+// against a trivial `true`, so a green probe guarantees the real spawn's sudo
+// policy + user lookup succeed. Any failure — sudo needs a password, user
+// absent, runuser missing — yields false and the caller falls back to bare bash.
 export function isolationAvailable(): boolean {
 	if (isolationProbe !== undefined) return isolationProbe;
 	try {
-		const r = spawnSync('unshare', [...UNSHARE_ARGS, 'true'], { stdio: 'ignore', timeout: 5000 });
+		const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'true'], {
+			stdio: 'ignore',
+			timeout: 5000,
+		});
 		isolationProbe = r.status === 0 && !r.error;
+		if (isolationProbe) agentHome = resolveAgentHome();
 	} catch {
 		isolationProbe = false;
 	}
 	return isolationProbe;
 }
 
+// Grant benchagent (and, symmetrically, the harness user) rwx on the workspace
+// with a recursive ACL for the files the harness already scaffolded and a default
+// ACL so files EITHER user creates later stay accessible to the other — the agent
+// (benchagent) edits/builds harness-scaffolded files, and the later verify/judge
+// steps (harness user) must read/write the dist/test outputs the agent produced.
+// Returns true only if both setfacl calls succeed; the caller disables isolation
+// (falls back to bare bash) when it returns false so the agent can never be left
+// unable to write its own workspace.
+export function prepareWorkspaceIsolation(root: string): boolean {
+	if (!isolationAvailable()) return false;
+	let me = process.env.USER ?? '';
+	if (!me) {
+		try {
+			me = spawnSync('id', ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
+		} catch {
+			me = '';
+		}
+	}
+	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
+	const access = spawnSync('setfacl', ['-R', '-m', spec, root], { stdio: 'ignore', timeout: 120_000 });
+	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, root], { stdio: 'ignore', timeout: 120_000 });
+	return access.status === 0 && !access.error && dflt.status === 0 && !dflt.error;
+}
+
 // Build the argv for one agent shell command: `cd <cwd> && <command>` run under a
-// POSIX shell, wrapped in the unprivileged namespace when isolation is requested
-// AND the kernel supports it. Split out (and exported) so the wrap decision is
-// unit-testable without spawning. `isolate` defaults false so the judge's
-// read-only shell keeps the bare spawn.
+// POSIX shell, wrapped so it runs as benchagent when isolation is requested AND
+// available. Split out (and exported) so the wrap decision is unit-testable
+// without spawning. `env` is the fully-resolved environment (process.env merged
+// with the per-call overrides); when isolated we re-materialize it AFTER the
+// privilege transition via `env KEY=VAL …` so it survives sudo's env scrub.
+// `isolate` defaults false so the judge's read-only shell keeps the bare spawn.
 export function buildAgentSpawn(
 	command: string,
 	cwd: string,
 	isolate: boolean,
+	env: Record<string, string>,
 ): { file: string; args: string[]; isolated: boolean } {
 	const inner = `cd ${shellQuote(cwd)} && ${command}`;
 	if (isolate && isolationAvailable()) {
-		return { file: 'unshare', args: [...UNSHARE_ARGS, 'bash', '-c', inner], isolated: true };
+		const forwarded: Record<string, string> = { ...env, HOME: agentHome ?? `/home/${BENCH_AGENT_USER}` };
+		// Only forward valid shell identifier names (drops exported-function keys
+		// like `BASH_FUNC_x%%`); values are passed as argv so they need no quoting.
+		const envPairs = Object.entries(forwarded)
+			.filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+			.map(([k, v]) => `${k}=${v}`);
+		return {
+			file: 'sudo',
+			args: ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', ...envPairs, 'bash', '-c', inner],
+			isolated: true,
+		};
 	}
 	return { file: 'bash', args: ['-c', inner], isolated: false };
 }
@@ -110,10 +172,10 @@ export const EXIT_DRAIN_GRACE_MS = 2000;
 // is executeStreaming. `minTimeoutSec` floors the per-command timeout (builder
 // passes BASH_MIN_TIMEOUT_SEC so npm install/build survive; judge leaves it 0).
 export class WorkspaceSandbox extends PosixShellSandbox {
-	// `isolate` runs each command inside the unprivileged user+PID+mount namespace
-	// (see UNSHARE_ARGS / runShell) so the agent's shell cannot signal the parent
-	// harness. The builder passes true; the judge leaves it false (its shell is a
-	// read-only, disposable copy that never issues process kills).
+	// `isolate` runs each command as the dedicated unprivileged user benchagent
+	// (see buildAgentSpawn / runShell) so the agent's shell cannot signal the
+	// parent harness (cross-uid EPERM). The builder passes true; the judge leaves
+	// it false (its shell is a read-only, disposable copy that never issues kills).
 	constructor(
 		private readonly root: string,
 		private readonly minTimeoutSec = 0,
@@ -149,13 +211,12 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 // Backgrounded-process containment (the post-invoke-hang fix): the agent may
 // background a long-lived process (e.g. `npm run dev &`). Two safeguards keep
 // that from wedging the harness:
-//   1. Spawn `detached: true` so the shell (or, when isolated, the `unshare`
-//      parent) leads its OWN process group (pgid == pid). Under non-interactive
+//   1. Spawn `detached: true` so the spawned process (bash, or `sudo` when
+//      isolated) leads its OWN process group (pgid == pid). Under non-interactive
 //      job control a `&` child stays in that group, so a negative-pid signal
-//      reaps the whole tree in one shot. When isolated, killing the group also
-//      kills the PID-namespace init (the forked bash), and the kernel then reaps
-//      every remaining process in that namespace — so backgrounded children are
-//      torn down by the namespace lifetime as well as by the group signal.
+//      reaps the whole tree in one shot. A `setsid`-detached server the agent
+//      starts to persist ACROSS calls escapes this group by design, so the group
+//      kill reaps only the foreground tree and leaves that server running.
 //   2. Resolve on 'close' (all stdio drained to EOF) so the buffered stdout is
 //      COMPLETE — the vended fileEditor reads files via `base64 < file` and
 //      decodes result.stdout, so a truncated capture would corrupt reads/writes.
@@ -168,8 +229,10 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 //      (EXIT_DRAIN_GRACE_MS) resolves anyway if a child escaped the group (e.g.
 //      via `setsid`) and still holds the pipes, so we never hang.
 //
-// `isolate` (builder only) wraps the command in the unprivileged user+PID+mount
-// namespace (see UNSHARE_ARGS) so the agent's shell cannot signal the harness.
+// `isolate` (builder only) runs the command as benchagent via sudo+runuser (see
+// buildAgentSpawn) so the agent's shell cannot signal the harness. Because that
+// group is owned by benchagent, the harness (a different uid) cannot signal it
+// directly, so the group kill is escalated through `sudo kill` when isolated.
 export function runShell(
 	command: string,
 	cwd: string,
@@ -179,9 +242,15 @@ export function runShell(
 	isolate = false,
 ): Promise<ExecutionResult> {
 	return new Promise<ExecutionResult>((resolve, reject) => {
-		const { file, args } = buildAgentSpawn(command, cwd, isolate);
+		// Resolve the full environment ONCE (process.env + per-call overrides) so
+		// both the spawn and buildAgentSpawn's `env KEY=VAL …` re-materialization
+		// (isolated path) see identical values.
+		const merged: Record<string, string> = {};
+		for (const [k, v] of Object.entries(process.env)) if (v !== undefined) merged[k] = v;
+		if (env) for (const [k, v] of Object.entries(env)) merged[k] = v;
+		const { file, args } = buildAgentSpawn(command, cwd, isolate, merged);
 		const proc = spawn(file, args, {
-			env: env ? { ...process.env, ...env } : process.env,
+			env: merged,
 			detached: true,
 			// Give stdin an explicit EOF (ignore) so an interactive prompt (npx
 			// install y/n, a bare `read`) fails fast instead of blocking on a TTY
@@ -199,9 +268,16 @@ export function runShell(
 		// are exactly what keeps 'close' from firing (blocking the tool call for
 		// the full timeout) and holds libuv's loop open so Node never exits after
 		// invoke() returns. Guarded: pid is undefined if spawn failed, and the
-		// group may already be gone (ESRCH).
+		// group may already be gone (ESRCH). When isolated the group is owned by
+		// benchagent, which the harness uid cannot signal directly, so escalate
+		// through `sudo kill`; a `setsid` server escapes this group either way and
+		// keeps running (cross-call persistence).
 		const killGroup = (): void => {
 			if (proc.pid === undefined) return;
+			if (isolate) {
+				spawnSync('sudo', ['-n', 'kill', '-9', `-${proc.pid}`], { stdio: 'ignore', timeout: 5000 });
+				return;
+			}
 			try {
 				process.kill(-proc.pid, 'SIGKILL');
 			} catch {

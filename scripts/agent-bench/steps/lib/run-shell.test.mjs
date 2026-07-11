@@ -17,17 +17,21 @@ import { describe, it } from 'node:test';
 
 const EXIT_DRAIN_GRACE_MS = 2000;
 
-// MUST stay in sync with UNSHARE_ARGS in run-shell.ts — the unprivileged
-// user+PID+mount namespace wrap that isolates the agent's shell from the harness.
-const UNSHARE_ARGS = ['--map-current-user', '--pid', '--fork', '--mount-proc'];
+// MUST stay in sync with BENCH_AGENT_USER in run-shell.ts — the dedicated
+// unprivileged user the agent's shell runs as so it cannot signal the harness.
+const BENCH_AGENT_USER = process.env.BENCH_AGENT_USER || 'benchagent';
 
-// Mirror isolationAvailable() in run-shell.ts: is unprivileged user+PID+mount
-// namespacing supported on this kernel? When not (older/locked-down kernel), the
-// isolation tests are skipped rather than failed — the runtime falls back to the
-// bare spawn there too, so there is nothing to assert.
-function unshareAvailable() {
+// Mirror isolationAvailable() in run-shell.ts: can the agent's shell be run as
+// benchagent via passwordless sudo+runuser on this host? When not (local dev
+// without the user, no passwordless sudo), the isolation tests are skipped
+// rather than failed — the runtime falls back to the bare spawn there too, so
+// there is nothing to assert.
+function isolationAvailable() {
 	try {
-		const r = spawnSync('unshare', [...UNSHARE_ARGS, 'true'], { stdio: 'ignore', timeout: 5000 });
+		const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'true'], {
+			stdio: 'ignore',
+			timeout: 5000,
+		});
 		return r.status === 0 && !r.error;
 	} catch {
 		return false;
@@ -160,19 +164,25 @@ describe('agent-bench judge spec-leak detection', () => {
 // able to signal the parent harness. Baseline (bare `bash -c`, faithful to the
 // pre-fix run-shell.ts spawn) reproduces the teardown: a broad by-name kill the
 // agent issues reaches a same-user "harness" process in another process group
-// and kills it. The fix wraps the agent's shell in the unprivileged
-// user+PID+mount namespace (UNSHARE_ARGS), which puts a kernel boundary between
-// the agent and the harness so the SAME kill is contained.
+// and kills it. The fix runs the agent's shell as a DEDICATED unprivileged user
+// (benchagent) via `sudo -n runuser -u benchagent`, so the kernel forbids
+// signalling the harness (a different uid) — the SAME kill is contained by an
+// EPERM boundary, not a convention. Crucially (unlike a per-command PID
+// namespace) a distinct uid has no per-command lifetime, so a `setsid` server
+// the agent backgrounds SURVIVES across bash calls — the cross-call persistence
+// the web-app cells depend on, and the property whose regression this suite pins.
 //
 // Faithful + SAFE: each test uses a unique random marker so `pkill -f <marker>`
 // can only match the test's own victim/agent, never unrelated CI processes.
 describe('agent-bench shell runner — process-identity isolation (issue #184)', () => {
-	const isolation = unshareAvailable();
+	const isolation = isolationAvailable();
 
-	// Spawn a detached, same-user "harness" stand-in whose argv carries `marker`
-	// so a broad `pkill -f <marker>` can target it. Detached => its OWN process
-	// group, mirroring how the real harness and the agent's shell live in
-	// different groups (the group isolation that is NOT enough on its own).
+	// Spawn a detached, harness-user "harness" stand-in whose argv carries
+	// `marker` so a broad `pkill -f <marker>` can target it. Detached => its OWN
+	// process group, mirroring how the real harness and the agent's shell live in
+	// different groups (the group isolation that is NOT enough on its own). It is
+	// owned by the TEST's uid (the harness uid), which is exactly what the
+	// benchagent-uid agent must NOT be able to kill.
 	function spawnVictim(marker) {
 		const proc = spawn('node', ['-e', 'setInterval(() => {}, 1e9)', marker], {
 			detached: true,
@@ -183,11 +193,12 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 	}
 
 	// Run the "agent" shell issuing the broad by-name kill, exactly like the real
-	// agents did in run 29107536283. `isolate` wraps it in the namespace (the fix).
+	// agents did in run 29107536283. `isolate` runs it as benchagent via
+	// sudo+runuser (the fix), mirroring buildAgentSpawn in run-shell.ts.
 	function runAgentKill(marker, isolate) {
 		const inner = `pkill -9 -f ${marker}; sleep 0.2`;
 		const { file, args } = isolate
-			? { file: 'unshare', args: [...UNSHARE_ARGS, 'bash', '-c', inner] }
+			? { file: 'sudo', args: ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'bash', '-c', inner] }
 			: { file: 'bash', args: ['-c', inner] };
 		return new Promise((resolve) => {
 			const proc = spawn(file, args, { detached: true, stdio: 'ignore' });
@@ -212,8 +223,8 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 		assert.equal(survived, false, 'BASELINE must reproduce the teardown: the bare-bash kill should reach the victim');
 	});
 
-	it('FIX: the namespace-isolated agent kill CANNOT reach the harness (it survives)', { skip: !isolation }, async () => {
-		const marker = `BENCH_VICTIM_NS_${process.pid}_${Math.random().toString(36).slice(2)}`;
+	it('FIX: the benchagent-isolated agent kill CANNOT reach the harness (it survives)', { skip: !isolation }, async () => {
+		const marker = `BENCH_VICTIM_UID_${process.pid}_${Math.random().toString(36).slice(2)}`;
 		const victim = spawnVictim(marker);
 		try {
 			await sleep(300);
@@ -223,7 +234,7 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 			assert.equal(
 				isAlive(victim.pid),
 				true,
-				'FIX regressed: the isolated agent kill reached the harness — #184 teardown is back',
+				'FIX regressed: the benchagent agent kill reached the harness — #184 teardown is back',
 			);
 		} finally {
 			try {
@@ -232,26 +243,60 @@ describe('agent-bench shell runner — process-identity isolation (issue #184)',
 		}
 	});
 
-	it('FIX preserves fairness: the isolated shell runs as the REAL user and can build/write in the workspace', { skip: !isolation }, async () => {
-		const dir = mkdtempSync(join(tmpdir(), 'bench-ns-'));
+	it('FIX preserves fairness: the benchagent shell can build/write in an ACL-granted workspace', { skip: !isolation }, async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'bench-uid-'));
 		try {
+			// Grant benchagent (and back to the harness user) rwx, mirroring
+			// prepareWorkspaceIsolation, so the agent has full read/write.
+			const me = spawnSync('id', ['-un'], { encoding: 'utf-8' }).stdout.trim();
+			const spec = `u:${BENCH_AGENT_USER}:rwx,u:${me}:rwx`;
+			assert.equal(spawnSync('setfacl', ['-R', '-m', spec, dir]).status, 0, 'setfacl access ACL should succeed');
+			assert.equal(spawnSync('setfacl', ['-R', '-d', '-m', spec, dir]).status, 0, 'setfacl default ACL should succeed');
+
 			const inner = `cd ${dir} && whoami && echo built > artifact.txt && cat artifact.txt`;
-			const r = spawnSync('unshare', [...UNSHARE_ARGS, 'bash', '-c', inner], {
+			const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'bash', '-c', inner], {
 				encoding: 'utf-8',
 				timeout: 10000,
 			});
 			assert.equal(r.status, 0, `isolated shell should exit 0; stderr=${r.stderr}`);
-			// Same real user inside the namespace (--map-current-user), NOT root/nobody —
-			// so files it writes stay owned by the harness user for the later build/test step.
-			const expectedUser = spawnSync('whoami', { encoding: 'utf-8' }).stdout.trim();
-			assert.equal(r.stdout.includes(expectedUser), true, `expected user ${expectedUser} in output: ${r.stdout}`);
+			// Runs as benchagent (a DISTINCT uid) — that is what makes the harness
+			// unsignalable; the workspace ACL is what keeps it fully writable.
+			assert.equal(r.stdout.includes(BENCH_AGENT_USER), true, `expected user ${BENCH_AGENT_USER} in output: ${r.stdout}`);
 			assert.equal(r.stdout.includes('built'), true, 'isolated shell should have written+read the workspace file');
-			// The artifact is visible OUTSIDE the namespace (shared filesystem) and
-			// owned by the real user — the build/test step reads it seamlessly.
+			// The artifact is visible to the harness user (bidirectional ACL) — the
+			// later build/test/judge step reads it seamlessly.
 			const outside = execSync(`cat ${join(dir, 'artifact.txt')}`, { encoding: 'utf-8' }).trim();
-			assert.equal(outside, 'built', 'workspace write should be visible outside the namespace');
+			assert.equal(outside, 'built', 'workspace write should be readable by the harness user');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('FIX preserves cross-call server persistence: a setsid server started as benchagent survives into a later call', { skip: !isolation }, async () => {
+		const srv = `BENCH_SRV_${process.pid}_${Math.random().toString(36).slice(2)}`;
+		try {
+			// Call #1: agent backgrounds a setsid server (as the web-app cells do to
+			// keep a dev server alive across bash tool calls), then the call returns.
+			spawnSync(
+				'sudo',
+				['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'bash', '-c', `setsid bash -c 'exec -a ${srv} sleep 30' </dev/null >/dev/null 2>&1 & disown; sleep 0.3`],
+				{ timeout: 10000 },
+			);
+			await sleep(500);
+			// Call #2 (a separate runuser invocation): the server must still be alive.
+			// A per-command PID namespace would have reaped it when call #1's PID-1
+			// exited — this assertion is what pins the regression fixed here.
+			const seen = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'pgrep', '-u', BENCH_AGENT_USER, '-f', srv], {
+				encoding: 'utf-8',
+				timeout: 10000,
+			});
+			assert.equal(
+				seen.stdout.trim().length > 0,
+				true,
+				'cross-call persistence regressed: the setsid server did not survive into the next call',
+			);
+		} finally {
+			spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'pkill', '-9', '-f', srv], { timeout: 5000 });
 		}
 	});
 });
