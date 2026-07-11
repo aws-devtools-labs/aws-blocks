@@ -58,6 +58,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx changeset version
+          # Sync package-lock.json with the versions changeset just bumped
+          # (--package-lock-only skips the network).
           npm install --package-lock-only
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -102,7 +104,7 @@ jobs:
           echo "## Publish Packages" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.version.outputs.changed }}" != "true" ]; then
-            echo "_No version bumps detected — nothing to publish._" >> "$GITHUB_STEP_SUMMARY"
+            echo "_No version bumps detected. Nothing to publish._" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo "- **Mode:** LIVE publish to npm" >> "$GITHUB_STEP_SUMMARY"

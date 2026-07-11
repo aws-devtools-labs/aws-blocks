@@ -12,16 +12,16 @@
  *
  *   block-major     Exit non-zero if any changeset declares a `major` bump.
  *                   A `major` (0.x → 1.0.0) means leaving pre-release, which
- *                   requires explicit sign-off — so we hard-block it in CI.
+ *                   requires explicit sign-off, so CI hard-blocks it.
  *
  * Pre-1.0 semver convention:
  *   - `patch` (0.1.1 → 0.1.2): non-breaking change
- *   - `minor` (0.1.x → 0.2.0): BREAKING change — the pre-release breaking channel
+ *   - `minor` (0.1.x → 0.2.0): BREAKING change (the pre-release breaking channel)
  *   - `major` (0.x   → 1.0.0): leaving pre-release / committing to a stable API
  *
  * Usage:
- *   tsx scripts/changeset-guard.ts verify-coverage
- *   tsx scripts/changeset-guard.ts block-major
+ *   node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
+ *   node --experimental-strip-types scripts/changeset-guard.ts block-major
  */
 
 import { execSync } from "node:child_process";
@@ -144,7 +144,7 @@ function blockMajor(): number {
 		console.error(`   • ${pkg}  (.changeset/${file})`);
 	}
 	console.error(
-		"\nA `major` bump graduates the package to 1.0.0 — i.e. out of pre-release.\n" +
+		"\nA `major` bump graduates the package to 1.0.0 (i.e. out of pre-release).\n" +
 		"While pre-release, breaking changes ship as `minor` (0.x → 0.(x+1).0) and\n" +
 		"non-breaking changes as `patch`. Change these entries to `minor` or `patch`.\n" +
 		"Actually leaving pre-release (1.0.0) needs explicit sign-off.\n",
@@ -164,7 +164,7 @@ switch (command) {
 	default:
 		console.error(
 			`Unknown command: ${command ?? "(none)"}\n` +
-			"Usage: tsx scripts/changeset-guard.ts <verify-coverage|block-major>",
+			"Usage: node --experimental-strip-types scripts/changeset-guard.ts <verify-coverage|block-major>",
 		);
 		process.exit(2);
 }

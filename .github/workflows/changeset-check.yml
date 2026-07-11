@@ -18,8 +18,8 @@ jobs:
         with:
           node-version-file: '.nvmrc'
 
-      # Guards import only Node built-ins, so Node runs the TS directly (type
-      # stripping) — no npm ci, no tsx.
+      # Guards import only Node built-ins, so Node type-strips and runs the TS
+      # directly.
       - name: Verify changeset covers all changed packages
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
       - name: Block major version bumps (pre-release)
