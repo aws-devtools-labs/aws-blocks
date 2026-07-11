@@ -321,7 +321,15 @@ jobs:
         # backoff plus the re-invokes) on top of a single grade.
         timeout-minutes: 20
         run: |
-          chmod -R a-w "$WORKSPACE"
+          # Freeze the workspace read-only so the judge cannot mutate the app it
+          # is grading. Under shell isolation the agent's files are owned by
+          # benchagent, and the harness user cannot chmod files it does not own
+          # (EPERM on dist/.vite/.bb-data/.blocks-sandbox) — so freeze via sudo,
+          # which covers both owners. The freeze is an integrity guard, not a
+          # gate: it must never abort the judge (the plain-chmod branch is the
+          # non-isolated fallback; the final `|| true` defends against a stray
+          # unfreezable path so grading always proceeds).
+          sudo -n chmod -R a-w "$WORKSPACE" 2>/dev/null || chmod -R a-w "$WORKSPACE" || true
           npx tsx scripts/agent-bench/steps/4-judge.ts
         env:
           BUILDER_RESULT: /tmp/builder-result.json
