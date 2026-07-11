@@ -1,23 +1,9 @@
-// Per-cell analysis: runs INSIDE each matrix cell right after the judge +
-// finalize, colocated with that cell's fresh trace/metrics. It reads THIS cell's
-// result.json (score context stamped by the judge + finalize), trace.json and
-// metrics.json (both written locally by step 2 at /tmp), asks the judge Bedrock
-// model (Opus 4.8) for a CONCISE 2-4 sentence analysis of what the agent built +
-// any struggles visible in the data, and writes that back into result.json as an
-// `analysis` string PLUS an `analysis_issues` string[] (potential issues worth a
-// maintainer's attention). The top-level summary job later ROLLS UP these per-cell
-// analyses and aggregates the issues (steps/analyze.mjs) — it no longer re-reads
-// raw traces centrally.
-//
-// ISOLATION CONTRACT — purely additive, must NEVER affect the green-regardless
-// bench:
-//   - The whole run is wrapped so it can NEVER throw; it always exits 0.
-//   - It only ADDS the `analysis`/`analysis_issues` fields — it never touches the
-//     score, verdict, klass, or any other field finalize-result stamped.
-//   - No trace/metrics, a harness/agent failure, or any Bedrock error → it
-//     writes a benign fallback string (and no issues) and still exits 0.
-// Runs under bare `node` in the cell (which DID `npm ci`, but this uses only
-// Node built-ins + the runner's AWS CLI via lib/analysis.mjs — no SDK import).
+// Per-cell analysis: runs INSIDE each matrix cell right after the judge, colocated with that cell's
+// fresh trace/metrics. Reads this cell's result.json + trace.json + metrics.json, asks the judge model
+// (Opus 4.8) for a concise analysis, and writes it back as `analysis` + `analysis_issues[]`
+// (analyze.mjs rolls these up later). Additive & isolated: wrapped so it can NEVER throw (always exits
+// 0), only ADDS those two fields, and falls back to a benign string on any error. Runs under bare
+// `node`: Node built-ins + AWS CLI via lib/analysis.mjs, no SDK.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { CELL_MAX_TOKENS, CELL_SYSTEM, DEFAULT_MODEL_ID, FALLBACK_ANALYSIS, bedrockConverse, buildCellUserText, parseCellAnalysis } from './lib/analysis.mjs';
 
@@ -35,10 +21,8 @@ function readJson(path) {
 	}
 }
 
-// Decide the per-cell analysis. Returns `{ analysis, issues }` — never throws.
-// Only calls Bedrock when there is actual data to analyze; a harness/agent
-// failure with no trace gets a benign, self-describing note (and no issues)
-// without spending a model call.
+// Decide the per-cell analysis — never throws. Only calls Bedrock when there's data; a failure with
+// no trace gets a benign note and no model call.
 function analyze(result, trace, metrics) {
 	const klass = result?.klass ?? null;
 	if (klass === 'harness_error') {
@@ -108,8 +92,7 @@ function main() {
 	}
 }
 
-// TOP-LEVEL ISOLATION: never throw, never non-zero. A per-cell analysis failure
-// must never block the cell's result upload or turn the cell red.
+// TOP-LEVEL ISOLATION: never throw, never non-zero — must not block the result upload or red the cell.
 try {
 	main();
 } catch (err) {

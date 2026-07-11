@@ -1,38 +1,8 @@
-// Step "Render summary": read every bench-result-*/result.json downloaded as
-// artifacts and render a markdown report to $GITHUB_STEP_SUMMARY — the result
-// lives in the Actions run summary, NOT a PR comment (the commenting step is
-// intentionally disabled; see agent-bench.yml).
-//
-// The report has TWO tables built from the SAME rows (lib/overview.mjs):
-//   1. Overview — colors ONLY (🟢/🟡/🔴 per metric vs baseline), at-a-glance.
-//   2. Detailed results — the same rows widened WITH numbers (baseline -> pr).
-// A collapsible Glossary (scoring, colors, the ±5% margin) sits at the very top;
-// the executive summary, potential issues, and per-cell analysis are appended
-// AFTER these by the separate best-effort roll-up step (steps/analyze.mjs).
-//
-// The bench runs N=1 (a single rep) per cell: each cell artifact holds exactly
-// one result.json, read directly here.
-//
-// Scoring model — the formulas live in ONE place, ./lib/scoring.mjs, and are
-// also stamped onto each result.json by finalize-result.mjs, so the published
-// artifact and this report can't diverge:
-//   - COMPOSITE (0..100) = round(60*tr + 4*j*min(1, 4*tr), 1) — 60% objective
-//     pass-rate + 40% judge (judge gated below a 25% pass-rate). A judge error
-//     drops only the judge term, never the test-driven portion.
-//   - COST = builder token spend priced at Bedrock Opus 4.8 rates (BUILDER_PRICING).
-//   - SCORE = composite / cost — composite points per dollar (higher = better).
-//   - COLOR vs baseline, per metric: 🟢 same-or-better · 🟡 worse within ±5% ·
-//     🔴 worse beyond. Single tunable MARGIN_PCT; see the glossary + overview.mjs.
-//
-// The BASELINE a PR diffs against is the MOST RECENT main-branch bench
-// (bench/runs/latest-main.json), fetched by the job's "Fetch baseline" step —
-// never the PR's (possibly stale) base commit. With no baseline the tables show
-// absolute PR values (every metric 🆕), never an error.
-//
-// The headline is the MEAN composite over SCORED cells (harness_error AND
-// no-test-result cells excluded). Scoring is OBSERVATIONAL by default; set
-// `BENCH_MIN_SCORE` to gate: the job exits non-zero when the mean composite
-// falls below it.
+// "Render summary": read every bench-result-*/result.json artifact and render a markdown report to
+// $GITHUB_STEP_SUMMARY (Overview colors + Detailed numbers, glossary on top; exec summary/analysis
+// appended later by analyze.mjs). N=1 per cell. Formulas live in ./lib/scoring.mjs. Baseline = most
+// recent main bench (bench/runs/latest-main.json). Headline = mean composite over scored cells;
+// observational unless BENCH_MIN_SCORE gates.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
@@ -40,9 +10,7 @@ import { buildAggregate, cellComposite, deltaArrow, diffAgainstBaseline, renderD
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
-// The bench matrix is skipped when the gating label is absent, so the results
-// directory may never be created. Treat a missing dir as "no results" instead
-// of hard-crashing — the empty-run path below renders a benign note and exits 0.
+// Matrix may be skipped (no gating label) so the dir may never exist — treat missing as "no results".
 let dirs = [];
 try {
 	dirs = readdirSync(RESULTS_DIR).filter((d) => d.startsWith('bench-result-'));
@@ -56,8 +24,7 @@ const cells = dirs.map((d) => {
 	try {
 		return JSON.parse(readFileSync(file, 'utf-8'));
 	} catch {
-		// No parseable result.json — surface the raw artifact suffix
-		// (<task>-<template>); can't split it reliably (both names have dashes).
+		// No parseable result.json — surface the raw artifact suffix (names can't be split reliably).
 		return { task: d.replace('bench-result-', ''), template: '', error: 'unreadable' };
 	}
 });
@@ -65,16 +32,13 @@ const cells = dirs.map((d) => {
 // ── Buckets ──────────────────────────────────────────────────────────────────
 const dataCells = cells.filter((c) => !c.error);
 const errorCells = cells.filter((c) => c.error);
-// A cell enters the composite mean iff gradeable (not harness_error) AND it
-// produced test results — single-sourced via isScoredCell.
+// A cell enters the composite mean iff gradeable AND it produced test results (via isScoredCell).
 const compositeCells = dataCells.filter((c) => isScoredCell(c));
 const judgeScoredCells = dataCells.filter((c) => c.klass !== 'harness_error' && typeof c.judge_score === 'number');
 const harnessErrors = dataCells.filter((c) => c.klass === 'harness_error');
 
-// Judge/test harness errors, tracked SEPARATELY from test signals so they can
-// never flip a verdict or zero a test_rate (see the long-form note that used to
-// live in the removed scoreboard table). An agent_fail ran neither, so it is
-// neither — excluded from both.
+// Judge/test harness errors tracked SEPARATELY so they can't flip a verdict or zero a test_rate.
+// An agent_fail ran neither, so it's excluded from both.
 const testErr = (r) => r.klass !== 'harness_error' && r.klass !== 'agent_fail' && testStats(r).denom === 0;
 const judgeErr = (r) =>
 	r.klass !== 'harness_error' &&
@@ -128,8 +92,7 @@ const judgeMean = judgeScoredCells.length
 	? judgeScoredCells.reduce((acc, r) => acc + r.judge_score, 0) / judgeScoredCells.length
 	: null;
 
-// The deterministic headline line rendered under the Overview heading. (The
-// LLM-written executive summary is a SEPARATE section appended by analyze.mjs.)
+// Deterministic headline under the Overview heading (the LLM exec summary is separate, from analyze.mjs).
 function headlineLine() {
 	if (compositeCells.length === 0) {
 		if (cells.length > 0 && harnessErrors.length === cells.length) {
@@ -193,15 +156,11 @@ if (cells.length > 0) {
 	const legend = '🟢 better/equal · 🟡 worse within ±5% · 🔴 worse beyond · 🆕 new/uncomparable.';
 	const perMetric = diff.perMetricBaseline;
 	const baseLabel = baseline?.sha ? `\`${String(baseline.sha).slice(0, 7)}\`` : 'the recorded baseline';
-	// A baseline that predates the per-metric (schema-2) aggregate can compare
-	// only the composite mean; every per-metric cell shows 🆕 until the next
-	// `main` bench records the new schema. Say so explicitly rather than implying
-	// a full per-metric diff ran (that mismatch was the "Judge colored, rest 🆕"
-	// bug's symptom).
+	// A baseline predating the per-metric (schema-2) aggregate can compare only the composite mean;
+	// per-metric cells show 🆕 until the next main bench records the new schema.
 	const staleNote = `A \`main\` baseline exists (${baseLabel}) but predates the per-metric schema, so per-metric cells show 🆕 — only the composite mean (in the headline) is comparable. Full per-metric coloring returns once a \`main\` bench records the new schema.`;
 	if (benchEvent === 'push') {
-		// A push-to-main run IS the new baseline; it diffs against the PREVIOUS
-		// main bench (fetched pre-persist), or shows absolute values if none.
+		// A push-to-main run IS the new baseline; diffs against the previous main bench, else absolute.
 		heading = '## Overview — baseline run';
 		const rec = `Baseline run (push to \`main\`): recorded as the new \`main\` baseline for \`${benchSha.slice(0, 7) || '(unknown)'}\`.`;
 		if (!baseline) note = `${rec} No earlier baseline to diff — absolute values (all 🆕).`;
@@ -263,9 +222,8 @@ if (caveats.length > 0) {
 	md.push('### Caveats & exclusions', '', ...caveats, '');
 }
 
-// ── Persist the aggregate (S3 baseline) + Athena NDJSON ───────────────────────
-// Only when ≥1 cell produced a result, so an empty run never clobbers a real
-// baseline for this commit with an empty one.
+// Persist aggregate (S3 baseline) + Athena NDJSON. Only when ≥1 cell produced a result, so an empty
+// run never clobbers a real baseline.
 if (process.env.AGGREGATE_PATH && cells.length > 0) {
 	try {
 		writeFileSync(process.env.AGGREGATE_PATH, `${JSON.stringify(aggregate, null, 2)}\n`);
@@ -274,9 +232,7 @@ if (process.env.AGGREGATE_PATH && cells.length > 0) {
 	}
 }
 
-// One flat NDJSON line per SCORED cell for the date-partitioned Athena prefix,
-// so bench history (incl. cost + score-per-$) is queryable without parsing
-// per-cell result.json. Best-effort: warn and carry on, never fail the job.
+// One flat NDJSON line per SCORED cell for the Athena prefix. Best-effort: warn and carry on.
 if (process.env.ATHENA_NDJSON_PATH) {
 	try {
 		const scored = dataCells.filter((c) => isScoredCell(c));
@@ -313,8 +269,7 @@ if (process.env.ATHENA_NDJSON_PATH) {
 // ── Emit ──────────────────────────────────────────────────────────────────────
 const out = `${md.join('\n')}\n`;
 if (process.env.GITHUB_STEP_SUMMARY) {
-	// A >1MB step summary (GitHub's per-step limit) or any IO error here must NOT
-	// turn the check red — fall back to stdout so the summary is still visible.
+	// A >1MB step summary or any IO error must NOT turn the check red — fall back to stdout.
 	try {
 		appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
 	} catch (err) {

@@ -1,9 +1,5 @@
-// Unit tests for the PR-vs-baseline report helpers (overview.mjs).
-//
-// These pin the diff math, the margin/color engine, the formatters, and the two
-// render modes (Overview = colors only, Detailed = numbers) so the report stays
-// correct and can't silently drift from lib/scoring.mjs. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test.
+// Unit tests for the PR-vs-baseline report helpers (overview.mjs): the diff math, margin/color engine,
+// formatters, and the two render modes (Overview = colors, Detailed = numbers). Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -296,12 +292,9 @@ describe('baselineHasMetrics(baseline) — the per-metric gate', () => {
 	});
 });
 
-// REGRESSION GUARD for the "Judge colored while Tests/Cost/Tokens/Score are all
-// 🆕" bug: a schema-1 baseline (the pre-redesign aggregate) persisted composite +
-// judge_score but NONE of the schema-2 per-metric fields. Coloring each metric
-// off its own baseline field lit up Judge alone. The fix gates ALL per-metric
-// coloring on baseline COMPLETENESS, so a schema-1 baseline renders every column
-// — Judge included — as 🆕, while the composite mean/delta stays comparable.
+// REGRESSION GUARD for the "Judge colored while everything else is 🆕" bug: a schema-1 baseline lacked
+// the per-metric fields, so coloring lit up Judge alone. The fix gates all per-metric coloring on
+// baseline completeness → schema-1 renders every column 🆕 while the composite mean/delta stays comparable.
 describe('schema-1 baseline → every column (Judge included) is 🆕', () => {
 	// Exactly what the OLD buildAggregate wrote: composite/judge_score/test_rate only.
 	const SCHEMA1 = {

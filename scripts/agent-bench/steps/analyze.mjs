@@ -1,29 +1,10 @@
-// Top-level ROLL-UP of the per-cell analyses. This runs ONCE in the summary job
-// and is BOTTOM-UP: it CONSUMES the `analysis` string + `analysis_issues` array
-// each cell already wrote into its own result.json (steps/analyze-cell.mjs, right
-// after that cell's judge) — it no longer re-reads raw traces centrally. It
-// appends THREE sections to $GITHUB_STEP_SUMMARY, after the Glossary/Overview/
-// Detailed tables that steps/summary.mjs renders:
-//   - `## Executive summary` — a SHORT paragraph + bullets, synthesized via ONE
-//     best-effort Bedrock call (Opus 4.8) over the per-cell analyses + the run
-//     aggregate (mean, verdict mix, low/regressed flags);
-//   - `## ⚠️ Potential issues` — deterministic severity flags (harness/agent
-//     failures, low/regressed composites) plus every issue the per-cell analyses
-//     emitted, each attributed to its cell;
-//   - `## Per-cell analysis` — the whole section collapsed, and EACH cell also
-//     collapsed within it (compact analysis + its potential issues).
-// It also writes a run-level bench-analysis.json artifact.
-//
-// The scoreboard table + PR-vs-baseline overview are rendered separately by
-// steps/summary.mjs and are unchanged.
-//
-// ISOLATION CONTRACT — purely additive, must NEVER fail the summary job:
-//   - The whole run is wrapped so it can NEVER throw; on any failure it exits 0.
-//   - The executive-summary Bedrock call is best-effort: on any error (no creds /
-//     permission / throttled out) it emits a benign note and still exits 0.
-// It runs under bare `node` in the summary job, which does NOT `npm ci`, so it
-// uses ONLY Node built-ins + the runner's AWS CLI (via lib/analysis.mjs, no SDK)
-// and the pure .mjs scoring/overview helpers.
+// Top-level ROLL-UP of the per-cell analyses. Runs ONCE in the summary job and is BOTTOM-UP: it
+// consumes each cell's `analysis` string + `analysis_issues` array (written by analyze-cell.mjs). It
+// appends three sections to $GITHUB_STEP_SUMMARY — Executive summary (one best-effort Bedrock call,
+// Opus 4.8), ⚠️ Potential issues (deterministic flags + per-cell issues), Per-cell analysis
+// (collapsed) — and writes bench-analysis.json. Additive: wrapped so it can NEVER fail the summary
+// job (any error → benign note, exit 0). Runs under bare `node` (no npm ci): Node built-ins + AWS CLI
+// (via lib/analysis.mjs, no SDK) + the pure scoring/overview helpers only.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -161,9 +142,8 @@ function main() {
 	});
 }
 
-// Deterministic "Potential issues" list, synthesized from the per-cell rows:
-// harness/agent failures and low/regressed composites first (severity-flagged),
-// then every issue the per-cell analyses emitted, each attributed to its cell.
+// Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
+// every per-cell issue, each attributed to its cell.
 function collectPotentialIssues(rows) {
 	const out = [];
 	for (const r of rows) {
@@ -206,8 +186,7 @@ function synthesize(aggregate, verdictCounts, rows) {
 		maxTokens: ROLLUP_MAX_TOKENS,
 	});
 	if (error) return { text: `_Executive summary unavailable: ${error}_`, error };
-	// Keep the model's paragraph structure (don't collapse to one line) so the
-	// executive summary renders as prose, not a wall of run-on text.
+	// Keep the model's paragraph structure so it renders as prose, not run-on text.
 	const clean = text.trim();
 	return clean ? { text: clean } : { text: '_Executive summary unavailable: empty completion_', error: 'empty completion' };
 }
@@ -249,8 +228,7 @@ function writeAnalysis(extra) {
 	}
 }
 
-// TOP-LEVEL ISOLATION: never throw, never non-zero. A roll-up failure must never
-// turn the summary job red or block the green-regardless bench.
+// TOP-LEVEL ISOLATION: never throw, never non-zero — a roll-up failure must not turn the job red.
 try {
 	main();
 } catch (err) {

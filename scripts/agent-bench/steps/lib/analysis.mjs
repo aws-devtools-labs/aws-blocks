@@ -1,30 +1,15 @@
-// Shared, mostly-pure helpers for the agent-bench analysis feature. The analysis
-// is generated in TWO places, bottom-up:
-//   1. PER-CELL (steps/analyze-cell.mjs) — runs inside each matrix cell right
-//      after the judge, reads THAT cell's fresh result.json + trace.json +
-//      metrics.json, and writes a concise per-cell `analysis` string back into
-//      result.json.
-//   2. TOP-LEVEL ROLL-UP (steps/analyze.mjs) — runs once in the summary job,
-//      CONSUMES the per-cell `analysis` fields already on each result.json and
-//      synthesizes an executive summary over them.
-//
-// BOTH levels are LLM-driven (Bedrock, Opus 4.8 by default) and BEST-EFFORT: the
-// callers wrap everything so a failure can never fail a cell, never turn a job
-// red, and never touch the score or the green-regardless bench. Bedrock is
-// reached via `aws bedrock-runtime converse` (the CLI, no SDK import) so both
-// callers run under bare `node`; the model id + region + throttle-retry pattern
-// mirror steps/4-judge.ts.
-//
-// Everything here except bedrockConverse/sleepSync is a PURE function of its
-// inputs (no fs / env / process), so the prompt-building and trimming are
-// unit-tested under bare `node --test` in lib/analysis.test.mjs.
+// Shared helpers for the agent-bench analysis feature, generated bottom-up in two places: PER-CELL
+// (analyze-cell.mjs, right after each judge, writes an `analysis` string into result.json) and
+// TOP-LEVEL ROLL-UP (analyze.mjs, synthesizes an exec summary over those). Both are LLM-driven
+// (Bedrock Opus 4.8) and BEST-EFFORT — callers wrap everything so a failure never fails a cell/job or
+// touches the score. Bedrock via `aws bedrock-runtime converse` (CLI, no SDK) so both run under bare
+// `node`. Everything except bedrockConverse/sleepSync is pure and unit-tested in analysis.test.mjs.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Judge model, reused for the analysis calls (per the owner: Opus 4.8 for both
-// the per-cell analysis and the top-level synthesis). Same id as 4-judge.ts.
+// Judge model, reused for analysis (Opus 4.8 for both per-cell + synthesis). Same id as 4-judge.ts.
 export const DEFAULT_MODEL_ID = 'us.anthropic.claude-opus-4-8';
 
 // Keep the model INPUT small (cost + latency). Caps on each slice of the trace.
@@ -32,45 +17,34 @@ export const MAX_TOOL_NAMES = 40;
 export const MAX_ERROR_LINES = 40;
 export const MAX_ERROR_LINE_LEN = 200;
 export const MAX_TAIL_CHARS = 1500;
-// The judge explanation grounds "what the agent built" cheaply; trim it hard so
-// it can't dominate the per-cell prompt.
+// The judge explanation grounds "what the agent built"; trim it hard so it can't dominate the prompt.
 export const MAX_JUDGE_EXPLANATION_CHARS = 500;
 
-// Small output budgets — the per-cell analysis is 2-4 sentences + a short issue
-// list, the rollup a short paragraph + bullets. maxTokens keeps both tight.
+// Small output budgets: per-cell = 2-4 sentences + short issue list, rollup = paragraph + bullets.
 export const CELL_MAX_TOKENS = 420;
 export const ROLLUP_MAX_TOKENS = 700;
 
-// Caps on the per-cell POTENTIAL ISSUES the analysis emits (fed into the report's
-// "Potential issues" section) so one cell can't flood it.
+// Caps on the per-cell POTENTIAL ISSUES so one cell can't flood the report section.
 export const MAX_CELL_ISSUES = 5;
 export const MAX_ISSUE_LEN = 200;
 
-// Composite < this is "low"; a drop of more than this many points vs the
-// baseline is a "regression" — the same ±5 band the overview uses to separate a
-// real move from N=1 model variance. Used only to FLAG cells for the rollup
-// (never to gate a Bedrock call — the per-cell analysis already ran per cell).
+// Composite < LOW is "low"; a drop worse than REGRESSION_DELTA vs baseline is a "regression" (the same
+// ±5 band the overview uses). Only FLAGS cells for the rollup, never gates a Bedrock call.
 export const LOW_THRESHOLD = 50;
 export const REGRESSION_DELTA = -5;
 
 // Benign fallback stored when the per-cell analysis can't be produced.
 export const FALLBACK_ANALYSIS = 'analysis unavailable';
 
-// Throttle/transient retry (initial try + up to 4 backed-off retries), ONLY on a
-// throttle/transient class (never a hard AccessDenied/validation error, which
-// fails fast). This is the app-level loop; the AWS CLI's own adaptive retry
-// (AWS_RETRY_MODE below) is the lower layer. Kept in sync with the shared SDK
-// classifier in steps/lib/bedrock-retry.ts (this .mjs can't import the .ts).
+// App-level throttle/transient retry (initial + up to 4 backoffs), transient class only. Duplicated
+// from bedrock-retry.ts intentionally (this .mjs can't import the .ts); keep in sync.
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 const TRANSIENT_RE =
 	/throttl|toomanyrequests|too many (tokens|requests)|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|requesttimeout|timeout|partialresult|503|429|500/i;
 
-// Per-cell analysis system prompt. Per the owner (Jon): what the agent built +
-// score context, and the STRUGGLES visible in the data — never a task restatement
-// or a code re-grade. It ALSO emits a short POTENTIAL ISSUES list that feeds the
-// report's "Potential issues" section, in a strict two-part format the harness
-// parses (see parseCellAnalysis).
+// Per-cell analysis system prompt: what the agent built + score context + STRUGGLES visible in the
+// data (not a task restatement or code re-grade). Emits a strict two-part format parseCellAnalysis reads.
 export const CELL_SYSTEM = `You are analyzing ONE benchmark cell where an AI coding agent built an app from a task prompt. Using the score context, the metrics, and the trimmed tool-call trace provided, respond in EXACTLY this two-part format and nothing else:
 
 ANALYSIS: <2-4 sentences: (1) one short clause on WHAT the agent built and its score context; (2) any STRUGGLES visible in the data — failed or errored tool calls (name the tool and the error), time hunting for missing/undocumented APIs, non-inherent trial-and-error such as dev-server wrangling or build-error loops, or disproportionate token/turn cost. Cite concrete tool names or short error snippets. Do NOT restate the task, propose fixes, or re-grade the code. If the trace shows a clean run, say so.>
@@ -80,8 +54,7 @@ ISSUES:
 
 List at most a few issues, most-important first. If there are no notable issues, write exactly "ISSUES: none".`;
 
-// Top-level roll-up system prompt: synthesize the per-cell analyses bottom-up
-// into a SHORT executive summary — a lead paragraph, then bullets.
+// Top-level roll-up system prompt: synthesize the per-cell analyses into a SHORT executive summary.
 export const ROLLUP_SYSTEM = `You are writing the EXECUTIVE SUMMARY of an AI coding-agent benchmark run, synthesizing BOTTOM-UP from the PER-CELL analyses provided (each already diagnoses one cell). Format your answer as:
 - FIRST, a SHORT lead paragraph (2-3 sentences): the overall outcome — the mean composite and the pass/partial/fail mix — and the single most important takeaway.
 - THEN 3-6 concise bullet points (start each line with "- "): CROSS-CELL patterns recurring across multiple cells (dev-server wrangling, shared build friction, missing-docs hunting, repeated failed tool calls), which cells regressed or are low and the likely why, and the obvious areas to improve.
@@ -95,12 +68,9 @@ export function oneLine(text) {
 }
 
 /**
- * Parse the per-cell model output (the strict `ANALYSIS: … ISSUES: …` format
- * from {@link CELL_SYSTEM}) into a one-line analysis string plus a bounded list
- * of potential-issue strings. Robust to a missing ISSUES section (→ no issues),
- * to "ISSUES: none", to bulleted or single-line issue lists, and to a plain
- * fallback string with no labels at all (the whole thing becomes the analysis).
- * Never throws.
+ * Parse the per-cell model output (strict `ANALYSIS: … ISSUES: …` from {@link CELL_SYSTEM}) into a
+ * one-line analysis + bounded issue list. Robust to a missing/`none` ISSUES section and to a plain
+ * fallback with no labels (whole thing becomes the analysis). Never throws.
  * @param {unknown} text raw model completion (or a fallback sentence)
  * @returns {{analysis: string, issues: string[]}}
  */
@@ -162,9 +132,8 @@ export function trimTrace(trace) {
 }
 
 /**
- * Compact one-line-ish metrics summary: cycles, tokens, and per-tool call/error
- * counts. Defensive about the exact toolUsage/toolMetrics shape (Strands
- * aggregate) — reads whatever call/error/success/time fields are present.
+ * Compact metrics summary: cycles, tokens, per-tool call/error counts. Defensive about the exact
+ * toolUsage/toolMetrics shape.
  * @param {unknown} metrics parsed metrics.json (result.metrics) or null
  * @returns {string}
  */
@@ -282,10 +251,8 @@ function sleepSync(ms) {
 }
 
 /**
- * One Bedrock Converse call via the AWS CLI. Returns { text } on success or
- * { error } on failure — NEVER throws. Uses --cli-input-json (a file) so the
- * trimmed trace text can't break shell quoting. Retries only on a
- * throttle/transient class, mirroring steps/4-judge.ts.
+ * One Bedrock Converse call via the AWS CLI. Returns { text } or { error } — never throws. Uses
+ * --cli-input-json so trace text can't break shell quoting. Retries only on a transient class.
  * @param {{system: string, userText: string, modelId?: string, region?: string, maxTokens?: number}} args
  * @returns {{text: string}|{error: string}}
  */
@@ -308,8 +275,7 @@ export function bedrockConverse(args) {
 					modelId,
 					system: [{ text: args.system }],
 					messages: [{ role: 'user', content: [{ text: args.userText }] }],
-					// No temperature — the judge model (Opus 4.8) rejects it; determinism
-					// isn't required for a best-effort analysis. maxTokens keeps it short.
+					// No temperature — Opus 4.8 rejects it and best-effort analysis needs no determinism.
 					inferenceConfig: { maxTokens },
 				}),
 			);
@@ -326,10 +292,8 @@ export function bedrockConverse(args) {
 					encoding: 'utf-8',
 					timeout: 120_000,
 					maxBuffer: 8 * 1024 * 1024,
-					// AWS-CLI-layer adaptive retry — the CLI analog of the BedrockModel
-					// clientConfig { maxAttempts, retryMode:'adaptive' } on the SDK
-					// (builder/judge) path. Absorbs a transient throttle inside a single
-					// converse call before it surfaces to the app-level loop below.
+					// AWS-CLI-layer adaptive retry (the CLI analog of the SDK's adaptive retryMode);
+					// absorbs a transient throttle within one converse call before the app loop.
 					env: { ...process.env, AWS_RETRY_MODE: 'adaptive', AWS_MAX_ATTEMPTS: '8' },
 				},
 			);

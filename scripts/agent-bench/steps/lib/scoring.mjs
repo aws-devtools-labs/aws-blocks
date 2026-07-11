@@ -1,22 +1,10 @@
-// Single source of truth for bench scoring: cell classification (`klass`), the
-// test pass-rate, the verdict tiers, the composite formula + its band, and the
-// inclusion/exclusion rule for the headline mean.
-//
-// Imported by BOTH:
-//   - steps/finalize-result.mjs — stamps klass/test_rate/verdict/composite onto
-//     each cell's result.json so the uploaded artifact is self-describing.
-//   - steps/summary.mjs — recomputes the table + headline from these same
-//     formulas.
-//
-// Keeping these pure functions in one module is what prevents the two scripts
-// from drifting apart on what counts, how it is scored, and what is excluded.
-// Plain .mjs (no TS): summary.mjs/finalize-result.mjs run under bare `node` in
-// CI, which can't import a .ts module without a loader.
+// Single source of truth for bench scoring: cell classification (`klass`), the test pass-rate, the
+// verdict tiers, the composite formula + band, and the inclusion/exclusion rule for the headline mean.
+// Imported by finalize-result.mjs (stamps these onto each result.json) and summary.mjs (recomputes
+// the table), so the two can't drift. Plain .mjs so both run under bare `node` in CI.
 
-// The judge rubric's shared (task-independent) dimensions, scored 0-10 and
-// averaged equally. This lives HERE (plain .mjs) rather than in prompts.ts so
-// the bare `node --test` scoring suite can pin it without a TS loader; prompts.ts
-// imports + re-exports it, keeping ONE source of truth for the dimension set.
+// The judge rubric's shared dimensions, scored 0-10 and averaged equally. Here (not prompts.ts) so
+// the `node --test` suite can pin it without a TS loader; prompts.ts re-exports it (one source).
 export const COMMON_DIMENSIONS = [
 	'functional_completeness',
 	'selector_contract',
@@ -25,79 +13,52 @@ export const COMMON_DIMENSIONS = [
 	'blocks_fidelity',
 ];
 
-// Steps whose failure means the cell never produced a gradeable artifact AND
-// the fault is the harness's, not the agent's. Such cells are classed
-// `harness_error` and EXCLUDED from the headline mean — a flaky runner can't
-// move the score. The map also gives each a short, stable reason for the
-// summary's excluded section.
+// Pre-grade steps whose failure means no gradeable artifact AND the fault is the harness's, not the
+// agent's → classed `harness_error`, EXCLUDED from the mean. Value = short reason for the summary.
 export const HARNESS_FAIL_REASONS = {
 	'pre-oidc': 'preflight_failed',
 	'0-oidc': 'oidc_failed',
 	'1-init': 'init_abort',
 };
 
-// The agent step (2-agent) failing is NOT a harness flake — it's the thing
-// under test failing: the agent timed out, or never produced an app within its
-// budget. Such a cell is a GENUINE failure (verdict 'fail', composite 0) and IS
-// counted in the headline mean, even though it ran no tests. (A CI
-// *cancellation* at this step is still an infra abort — see classifyCell.)
+// The agent step (2-agent) failing is the thing under test failing (timed out / produced no app), so
+// it's a GENUINE failure (verdict 'fail', composite 0) and IS counted. (A CI cancellation here is
+// still an infra abort — see classifyCell.)
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
-// A 2-agent death that tore down the harness itself (see isUngracefulStepTwoDeath)
-// is NOT a gradeable agent failure — it's infra — so it is reclassified as a
-// harness_error and EXCLUDED from the mean under this reason. Distinct reason
-// (vs the generic HARNESS_FAIL_REASONS steps) so the excluded section can name it.
+// An ungraceful 2-agent death that tore down the harness itself (isUngracefulStepTwoDeath) is infra,
+// not a gradeable failure → reclassified harness_error, EXCLUDED under this (distinct) reason.
 export const AGENT_HARNESS_TEARDOWN_REASON = 'agent_harness_teardown';
 
-// The NON-terminal stop_reason 2-agent-run.ts stamps on its running checkpoint
-// (see lib/partial-envelope.mjs). It is deliberately NOT one of the terminal
-// stop_reasons ('wall_clock_timeout' / 'cancelled' / 'error' / a real
-// result.stopReason): a checkpoint that survives to finalize means NO terminal
-// exit path ever overwrote it, i.e. the process died ungracefully. Single-sourced
-// here because BOTH the harness (which writes it) and classifyCell (which reads
-// it) must agree on the exact sentinel.
+// The NON-terminal stop_reason 2-agent-run.ts stamps on its running checkpoint (lib/partial-envelope.mjs).
+// A checkpoint surviving to finalize means no terminal exit path overwrote it (the process died
+// ungracefully). Single-sourced here so the harness (writes it) and classifyCell (reads it) agree.
 export const CHECKPOINT_STOP_REASON = 'in_progress';
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 /**
- * Did 2-agent-run.ts reach one of its own terminal exit paths (the SIGTERM/SIGINT
- * partial-envelope flush, the invoke-exhausted sentinel, or a normal finish)
- * before the process ended? Those paths each stamp a real, TERMINAL `stop_reason`
- * onto the envelope; the step-0 baseline leaves it '' and the running checkpoint
- * leaves the non-terminal {@link CHECKPOINT_STOP_REASON} + `checkpoint:true`. So a
- * graceful exit is: NOT a surviving checkpoint AND a non-empty, non-checkpoint
- * stop_reason. This is the marker that separates a genuine agent timeout (which
- * flushed) from an ungraceful harness teardown (which did not).
+ * Did 2-agent-run.ts reach a terminal exit path (SIGTERM/SIGINT flush, invoke-exhausted sentinel, or
+ * normal finish)? Those stamp a terminal `stop_reason`; the step-0 baseline leaves it '' and the
+ * running checkpoint leaves {@link CHECKPOINT_STOP_REASON} + `checkpoint:true`. Graceful = NOT a
+ * surviving checkpoint AND a non-empty, non-checkpoint stop_reason. Separates a genuine agent timeout
+ * (which flushed) from an ungraceful harness teardown (which did not).
  * @param {{stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {boolean}
  */
 function reachedGracefulExit(result) {
-	// A surviving running-checkpoint is definitionally non-terminal: it is only
-	// ever overwritten by a terminal exit path, so if it's still here, none ran.
 	if (result?.checkpoint === true) return false;
 	const sr = result?.stop_reason;
 	return typeof sr === 'string' && sr !== '' && sr !== CHECKPOINT_STOP_REASON;
 }
 
 /**
- * Detect the harness-integrity signature: a 2-agent death whose vended `bash`
- * process-group/pkill storm tore down the parent harness (npx tsx) itself,
- * producing an ungraceful exit (e.g. 143/137) that BYPASSED 2-agent-run's SIGTERM
- * partial-envelope flush — so result.json carries the step-0 baseline (stop_reason
- * '', tokens 0) or, thanks to the incremental checkpoint, a non-terminal
- * `checkpoint:true` envelope (nonzero tokens, stop_reason {@link CHECKPOINT_STOP_REASON}).
- * Either way NO terminal exit path ran. Such a self-inflicted infra kill is a
- * harness_error (EXCLUDED from the mean), NOT an `agent_fail`: it must neither
- * drag the headline nor mask spend.
- *
- * The boundary is deliberately explicit: a GENUINE agent timeout reaches the
- * SIGTERM flush and stamps a terminal stop_reason ('wall_clock_timeout' /
- * 'cancelled'), and a real invoke-exhaustion stamps 'error' — both satisfy
- * reachedGracefulExit and therefore stay `agent_fail` (INCLUDED). A cancellation
- * is already handled upstream in classifyCell (harness_error), so it is excluded
- * here to keep this predicate about UNGRACEFUL deaths only.
+ * Detect the harness-integrity signature: a 2-agent death whose bash process-group/pkill storm tore
+ * down the parent harness, bypassing the SIGTERM flush — so result.json has the step-0 baseline or a
+ * surviving non-terminal checkpoint (no terminal exit ran). Such a self-inflicted infra kill is a
+ * harness_error (EXCLUDED), NOT agent_fail. A genuine timeout / invoke-exhaustion reaches a terminal
+ * stop_reason (reachedGracefulExit) and stays agent_fail; a cancellation is handled in classifyCell.
  * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {boolean}
  */
@@ -108,42 +69,25 @@ export function isUngracefulStepTwoDeath(result) {
 }
 
 /**
- * Classify a finalized cell into one of three classes:
- *   - `harness_error` — a pre-grade step (pre-OIDC, OIDC, scaffold) failed, or
- *     the run was CANCELLED: the cell never produced a gradeable artifact, so
- *     it is EXCLUDED from the headline mean (a flaky runner can't move the score).
- *   - `agent_fail` — the agent step (2-agent) failed on its own merits (timeout
- *     / produced no app in budget) AND reached a graceful terminal exit. A REAL
- *     failure: verdict 'fail', composite 0, and INCLUDED in the mean even though
- *     no tests ran. An UNGRACEFUL 2-agent death that tore down the harness
- *     (isUngracefulStepTwoDeath) is instead reclassified `harness_error`.
- *   - `scored` — reached build/test/judge; its outcome is a real signal (even a 0).
- * Reads `result.failed_at` / `result.status` (stamped by finalize-result) plus
- * `result.stop_reason` / `result.checkpoint` (from 2-agent-run's envelope) to tell
- * a graceful agent timeout from an ungraceful harness teardown.
+ * Classify a finalized cell:
+ *   - `harness_error` — a pre-grade step failed or the run was CANCELLED (EXCLUDED from the mean).
+ *   - `agent_fail` — the agent step failed on its own merits AND exited gracefully (verdict 'fail',
+ *     composite 0, INCLUDED). An ungraceful 2-agent teardown is reclassified `harness_error`.
+ *   - `scored` — reached build/test/judge; its outcome is a real signal.
  * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {{klass: 'scored'|'harness_error'|'agent_fail', reason: string|null}}
  */
 export function classifyCell(result) {
 	const failedAt = result?.failed_at ?? null;
-	// A cancellation is an infra abort wherever it lands (including mid-agent) —
-	// never a gradeable signal, so it is a harness_error, not an agent failure.
+	// A cancellation is an infra abort wherever it lands → harness_error.
 	if (result?.status === 'cancelled') {
 		return { klass: 'harness_error', reason: 'cancelled' };
 	}
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
 	}
-	// The agent failing to produce a gradeable app is a real fail, not a flake —
-	// EXCEPT when the death was an ungraceful harness teardown (the agent's bash
-	// process-group/pkill storm killed the parent harness, bypassing the SIGTERM
-	// flush). That leaves no terminal envelope (baseline zeros, or a surviving
-	// non-terminal checkpoint), which isUngracefulStepTwoDeath detects → reclassify
-	// as harness_error (EXCLUDED) so a self-inflicted infra kill can't drag the
-	// mean or mask spend. A GENUINE timeout DID flush a terminal stop_reason and
-	// stays agent_fail (composite 0, INCLUDED) — the boundary is exactly whether a
-	// terminal exit path ran (reachedGracefulExit), not the raw exit code (which
-	// GHA's step context does not even expose).
+	// Agent failure is a real fail — except an ungraceful harness teardown (no terminal envelope),
+	// which is reclassified harness_error so a self-inflicted infra kill can't drag the mean.
 	if (failedAt === AGENT_FAIL_AT) {
 		if (isUngracefulStepTwoDeath(result)) {
 			return { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON };
@@ -154,16 +98,9 @@ export function classifyCell(result) {
 }
 
 /**
- * Test counts for a cell. Missing / non-numeric fields read as 0.
- *
- * DENOMINATOR = passed + failed (NOT the audit-only `tests_total`). `tests_total`
- * (passed + failed + skipped) is recorded on result.json for auditing only and
- * is deliberately NOT the scoring divisor: skipped/interrupted tests never ran,
- * so counting them would dilute the rate with cases that produced no signal. A
- * per-test TIMEOUT is not "skipped" — Playwright records it as an unexpected
- * failure, so it already lands in `failed` and IS penalized here. Net effect:
- * the rate rewards passes and penalizes real failures/timeouts, while genuinely
- * un-run (skipped/interrupted) tests are excluded rather than counted as losses.
+ * Test counts for a cell (missing/non-numeric read as 0). DENOMINATOR = passed + failed, NOT the
+ * audit-only `tests_total` (which includes skipped): skipped/interrupted tests never ran, so counting
+ * them would dilute the rate. A per-test timeout is an unexpected failure (in `failed`), so penalized.
  * @param {{tests_passed?: number, tests_failed?: number}} result
  * @returns {{passed: number, failed: number, denom: number}}
  */
@@ -184,10 +121,8 @@ export function testRate(stats) {
 }
 
 /**
- * Verdict tier from a pass-rate, with a hint for the two non-rate states.
- * `harnessHint` of 'harness_error' (never gradeable) or 'unknown' (no tests
- * ran) short-circuits; otherwise the rate alone decides pass/partial/fail. The
- * judge plays NO part in the verdict — tests are the source of truth.
+ * Verdict tier from a pass-rate. `harnessHint` 'harness_error' or 'unknown' (no tests ran)
+ * short-circuits; otherwise the rate decides. The judge plays no part — tests are the source of truth.
  * @param {number} tr pass-rate in [0,1]
  * @param {('harness_error'|'unknown'|null)} [harnessHint]
  * @returns {'pass'|'partial'|'fail'|'harness_error'|'unknown'}
@@ -195,11 +130,7 @@ export function testRate(stats) {
 export function verdict(tr, harnessHint) {
 	if (harnessHint === 'harness_error') return 'harness_error';
 	if (harnessHint === 'unknown') return 'unknown';
-	// `>= 0.999` (not `=== 1`) is a floating-point guard: a full pass computed as
-	// e.g. 7/7 can land a hair under 1.0, and this keeps it a 'pass'. It is a
-	// float-equality guard, NOT intentional leniency — no real partial pass-rate
-	// on a small-N suite reaches 0.999 (the nearest, 1 failure in a large suite,
-	// is far below it).
+	// `>= 0.999` (not `=== 1`) is a float-equality guard so a full pass computed as e.g. 7/7 stays 'pass'.
 	if (tr >= 0.999) return 'pass';
 	if (tr > 0) return 'partial';
 	return 'fail';
@@ -215,8 +146,7 @@ export function verdict(tr, harnessHint) {
 export function verdictOf(result) {
 	const klass = result?.klass ?? classifyCell(result).klass;
 	if (klass === 'harness_error') return verdict(0, 'harness_error');
-	// An agent failure is a real 'fail' even though it ran no tests — it must NOT
-	// read as 'unknown' (the denom-0 path below), which would exclude it.
+	// An agent failure is a real 'fail' even with no tests — must not read as 'unknown' (excluded).
 	if (klass === 'agent_fail') return 'fail';
 	const stats = testStats(result);
 	if (stats.denom === 0) return verdict(0, 'unknown');
@@ -235,14 +165,8 @@ export function verdictOf(result) {
 export function composite(tr, j) {
 	const rate = num(tr);
 	const judge = num(j);
-	// The min(1, 4*rate) gate ramps the judge term from 0 (at rate 0) to its
-	// FULL weight at rate 0.25, and holds full above that. Rationale: a 25%
-	// pass-rate is the minimum objective evidence that the agent produced
-	// genuinely runnable code, so below it the qualitative (judge) score is
-	// discounted proportionally — a polished-looking app that almost nothing
-	// passes can't ride the judge to a high composite — and at/above 25% the
-	// judge counts in full. At rate 0 the whole judge term is gated off, so a
-	// zero-test cell floors to 0 regardless of the judge.
+	// The min(1, 4*rate) gate ramps the judge term from 0 (rate 0) to full weight at rate 0.25: below
+	// 25% passing there's too little objective evidence to let the judge ride a high composite.
 	const c = 60 * rate + 4 * judge * Math.min(1, 4 * rate);
 	return Math.round(c * 10) / 10;
 }
@@ -257,12 +181,8 @@ export function compositeBand(c) {
 }
 
 /**
- * The single inclusion rule for the headline mean. A cell counts iff:
- *   - it is an `agent_fail` (a genuine failure that ran no tests — included as
- *     a composite 0, because the agent is exactly what's under test), OR
- *   - it is gradeable (not a `harness_error`) AND actually produced test
- *     results (denom>0).
- * `harness_error` cells are always excluded.
+ * The single inclusion rule for the headline mean. A cell counts iff it is an `agent_fail` (a genuine
+ * failure counted as composite 0), OR it is gradeable (not harness_error) and produced tests (denom>0).
  * @param {object} result
  * @returns {boolean}
  */
@@ -274,25 +194,11 @@ export function isScoredCell(result) {
 }
 
 /**
- * Interpret the objective build signal for the judge's `functional_completeness`
- * hard cap. Some templates (e.g. backend/tsx) ship NO `build` script, so a bare
- * `npm run build` prints `npm error Missing script: "build"` and exits non-zero —
- * which is NOT a build failure and must NOT cap the qualitative score (this is
- * what unfairly capped observability-api to 3 despite 18/18 tests). Step 3
- * therefore reports a tri-state `build_status`:
- *   - `na`     → no `build` script in the template → build is not applicable →
- *                NO cap (a run is never penalised for a script that never existed).
- *   - `ok`     → a `build` script exists and exited 0 → NO cap.
- *   - `failed` → a `build` script exists and exited non-zero → a REAL build
- *                failure (e.g. file-gallery's `tsc` failing on the agent's type
- *                errors) → cap. This legitimate penalty is preserved.
- * Back-compat: when `build_status` is absent (older evidence), fall back to the
- * boolean `build_succeeded` flag — a non-truthy value is treated as a failure,
- * preserving the original cap behaviour for any caller that predates the tri-state.
+ * Interpret the objective build signal for the judge's `functional_completeness` cap. Step 3 reports
+ * a tri-state `build_status`: `na` (no build script → no cap), `ok` (built → no cap), `failed` (real
+ * failure → cap). Back-compat: when absent, fall back to the boolean `build_succeeded`.
  * @param {{build_status?: unknown, build_succeeded?: unknown}} ev objective evidence
  * @returns {{status: ('na'|'ok'|'failed'), cap: boolean, note: (string|null)}}
- *   `cap` true ⇒ functional_completeness should be capped for a build failure;
- *   `note` is a non-null audit line only for the N/A case.
  */
 export function buildCapDecision(ev) {
 	const raw = ev?.build_status;
@@ -304,14 +210,10 @@ export function buildCapDecision(ev) {
 			note = 'build N/A — template ships no `build` script; build-cap not applicable';
 		}
 	} else {
-		// Legacy evidence without the tri-state: a truthy build_succeeded (the
-		// workflow may pass the GITHUB_OUTPUT strings "true"/"false") is a pass;
-		// anything else is a real failure — the original pre-tri-state behaviour.
+		// Legacy evidence: a truthy build_succeeded (may be the "true"/"false" string) is a pass.
 		const ok = ev?.build_succeeded === true || ev?.build_succeeded === 'true';
 		status = ok ? 'ok' : 'failed';
-		// When NEITHER the tri-state NOR a build_succeeded flag is present, the
-		// resulting 'failed' is a pessimistic default (no evidence either way),
-		// not an observed build failure — record that so the cap is explainable.
+		// No tri-state AND no flag → the 'failed' is a pessimistic default, not an observed failure.
 		const evidenceAbsent =
 			(raw === undefined || raw === null) &&
 			(ev?.build_succeeded === undefined || ev?.build_succeeded === null);
@@ -327,31 +229,14 @@ export function buildCapDecision(ev) {
 }
 
 /**
- * The deterministic hard-cap plan for the judge's qualitative dimensions given
- * the objective evidence. Returns the CEILINGS each affected dimension is
- * clamped to (a ceiling only ever LOWERS a dim above it — it never raises one),
- * plus audit reasons and notes. This is the single source of truth for WHICH
- * objective failure caps WHICH dimension and by how much, so 4-judge.ts can't
- * drift from these tests.
+ * The deterministic hard-cap plan for the judge's qualitative dimensions given the objective evidence.
+ * Returns the CEILINGS each affected dimension is clamped to (only ever LOWERS), plus audit notes.
+ * Single source of truth for which objective failure caps which dimension, so 4-judge.ts can't drift.
  *
- * FAIRNESS — a single root failure must not double-penalize one dimension:
- *   - A REAL build failure (`build_status`=='failed', deterministically NOT the
- *     'na' case where a template ships no `build` script) caps
- *     functional_completeness to 3. buildCapDecision owns that 'failed' vs 'na'
- *     distinction, so an absent build script never triggers a cap.
- *   - A dev server that never started caps selector_contract to 2 (its selectors
- *     were never verifiable at runtime) and functional_completeness to 2 — but
- *     the functional_completeness cap fires ONLY when the build did NOT itself
- *     fail. When the build DID fail, a not-started dev server is a downstream
- *     SYMPTOM of that same root failure, so the build cap already owns
- *     functional_completeness and the dev-server rule does not stack a second,
- *     lower fc ceiling on top of it. (This never weakens "a broken app scores
- *     low": a failed build floors the objective test-rate — no test can pass —
- *     so the composite headline is ~0 regardless of whether fc lands at 2 or 3;
- *     these caps only shape the raw qualitative dims, not the composite.)
- * The caller applies each ceiling through a `cur > ceiling` guard, so a
- * dimension the judge already scored at/below a ceiling is never lowered again
- * nor recorded as a no-op cap — an already-low dim can't be double-counted.
+ * FAIRNESS — one root failure must not double-penalize: a real build failure caps
+ * functional_completeness to 3; a not-started dev server caps selector_contract to 2 and
+ * functional_completeness to 2, but the fc cap fires ONLY if the build didn't already fail (else the
+ * not-started server is a downstream symptom the build cap already owns).
  * @param {{build_status?: unknown, build_succeeded?: unknown, dev_server_started?: unknown}} ev objective evidence
  * @returns {{caps: {dimension: string, ceiling: number, reason: string}[], notes: string[]}}
  */
@@ -364,10 +249,8 @@ export function hardCapPlan(ev) {
 	// dev_server_started reaches us as a real bool or its GITHUB_OUTPUT string.
 	const devOk = ev?.dev_server_started === true || ev?.dev_server_started === 'true';
 	if (!devOk) {
-		// Only cap functional_completeness for a not-started dev server when the
-		// build did NOT already fail — otherwise this is the SAME root failure and
-		// the build cap already owns fc (see FAIRNESS above). selector_contract is
-		// a distinct dimension the build cap never touches, so it always applies.
+		// Cap fc for a not-started server only if the build didn't already fail (same root → build cap
+		// owns fc). selector_contract is distinct and always applies.
 		if (!build.cap) {
 			caps.push({ dimension: 'functional_completeness', ceiling: 2, reason: 'dev server not started' });
 		}
@@ -377,32 +260,22 @@ export function hardCapPlan(ev) {
 }
 
 // ── Cost & score-per-dollar ──────────────────────────────────────────────────
-// Amazon Bedrock on-demand pricing, USD per 1,000,000 tokens. This is the SINGLE
-// place to edit when AWS changes Bedrock pricing or the benchmarked model. The
-// COST/SCORE columns in the report are derived from BUILDER_PRICING below.
+// Bedrock on-demand pricing, USD per 1M tokens — the single place to edit on a pricing/model change.
 // Source: https://aws.amazon.com/bedrock/pricing/ (Anthropic Claude).
 export const PRICING = {
-	// $/1M tokens (input, output).
 	'claude-sonnet': { input: 3.0, output: 15.0 },
-	// Claude Opus 4.5+ standard on-demand rate, which the current default model
-	// (Opus 4.8) holds — it REPLACED the legacy Opus-4.1 $15/$75.
+	// Claude Opus 4.5+ standard rate (the current default, Opus 4.8); replaced the legacy Opus-4.1 $15/$75.
 	'claude-opus': { input: 5.0, output: 25.0 },
 };
 
-// The BUILDER (the agent under test in 2-agent-run.ts) runs on Claude Opus 4.8
-// (the BENCH_MODEL knob, default us.anthropic.claude-opus-4-8), so a cell's cost
-// is its builder token spend priced at Opus 4.8 rates. result.json's
-// tokens_in/tokens_out are the BUILDER's accumulated usage — the judge and the
-// analysis ALSO run on Opus 4.8 (the same rate) but that spend is the harness's,
-// not the agent's, and is NOT counted here. Point this back at
-// PRICING['claude-sonnet'] if the builder model ever reverts to Sonnet.
+// The builder (agent under test) runs on Opus 4.8, so a cell's cost is its builder tokens_in/out at
+// Opus rates. The judge/analysis also run on Opus but that spend is the harness's, not counted here.
+// Point back at PRICING['claude-sonnet'] if the builder model ever reverts to Sonnet.
 export const BUILDER_PRICING = PRICING['claude-opus'];
 
 /**
- * USD cost of a cell's BUILDER token spend at {@link BUILDER_PRICING}. Returns
- * `null` — never a fake `$0` — when the cell recorded no usable token counts
- * (e.g. a harness_error that died before the agent ran, so tokens are 0/0), so
- * the report renders "—" for it. Rounded to 1/100th of a cent.
+ * USD cost of a cell's builder token spend at {@link BUILDER_PRICING}. Returns `null` (never a fake
+ * $0) when the cell has no usable token counts, so the report renders "—". Rounded to 1/100th of a cent.
  * @param {{tokens_in?: number, tokens_out?: number}} r a finalized result.json cell
  * @param {{input: number, output: number}} [pricing]
  * @returns {number|null}
@@ -415,22 +288,16 @@ export function cellCost(r, pricing = BUILDER_PRICING) {
 	return Math.round(cost * 1e4) / 1e4;
 }
 
-// SCORE direction, the SINGLE knob for the headline SCORE metric:
+// SCORE direction, the single knob for the headline SCORE metric:
 //   true  → SCORE = composite per dollar (higher = better) — the default.
 //   false → SCORE = dollars per composite point (lower = better).
-// Flipping this ONE constant swaps the ratio in scorePerDollar below AND the
-// green/red direction in overview.mjs (which imports it), keeping the number and
-// its coloring in sync.
+// Flipping this swaps the ratio in scorePerDollar AND the green/red direction in overview.mjs.
 export const SCORE_PER_DOLLAR = true;
 
 /**
- * The headline SCORE for a cell: the 0..100 composite (quality) normalized by its
- * $ cost (efficiency) — "composite points per dollar", higher = better, by
- * default. Cost, NOT raw token volume, is the denominator, so token count can
- * never DOMINATE the score: a cheap-and-good cell beats an expensive-and-good
- * one, while a broken (composite 0) cell scores 0 no matter how cheap it was.
- * `null` when the composite or the cost is unavailable (rendered "—"). Rounded
- * to 1 decimal.
+ * The headline SCORE for a cell: the 0..100 composite normalized by its $ cost ("points per dollar",
+ * higher = better, by default). Cost (not raw tokens) is the denominator so a cheap-and-good cell
+ * beats an expensive one; a composite-0 cell scores 0. `null` when composite or cost is unavailable.
  * @param {number|null} baseComposite the 0..100 composite from {@link composite}
  * @param {number|null} cost USD from {@link cellCost}
  * @returns {number|null}
@@ -438,8 +305,7 @@ export const SCORE_PER_DOLLAR = true;
 export function scorePerDollar(baseComposite, cost) {
 	if (typeof baseComposite !== 'number' || !Number.isFinite(baseComposite)) return null;
 	if (typeof cost !== 'number' || !Number.isFinite(cost) || cost <= 0) return null;
-	// Default (SCORE_PER_DOLLAR): points per $. Inverted: $ per point — undefined
-	// at composite 0 (a free-but-worthless cell), so return null there.
+	// Default: points per $. Inverted: $ per point — undefined at composite 0, so null there.
 	const s = SCORE_PER_DOLLAR ? baseComposite / cost : baseComposite > 0 ? cost / baseComposite : null;
 	if (s === null || !Number.isFinite(s)) return null;
 	return Math.round(s * 10) / 10;

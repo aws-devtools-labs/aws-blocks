@@ -1,29 +1,11 @@
 name: Agent Bench
 
-# Per-PR LLM-agent benchmark. Each cell scaffolds one template, hands the
-# scaffolded app to a builder agent, runs the build + Playwright spec, then a
-# judge agent grades. Runs entirely on the GitHub runner — no microVM, no S3
-# round-trip. Bedrock provides the model; the runner provides the sandbox.
-#
-# Required configuration (publish environment):
-#   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
-#                           AND bedrock:Converse on the bench model (the builder +
-#                           judge stream via Strands => InvokeModelWithResponseStream;
-#                           the best-effort analysis steps call `aws bedrock-runtime
-#                           converse` => Converse), plus s3:PutObject on bench/* in
-#                           the registry bucket (per-cell archive + the commit-
-#                           keyed baseline aggregate + the Athena NDJSON under
-#                           bench/athena/*, all covered by the one bench/* grant).
-#                           The PR-vs-baseline
-#                           overview also reads the baseline back, which needs
-#                           s3:GetObject on bench/* — without it the overview
-#                           degrades to "no baseline" (never an error).
-#   S3_BUCKET     variable  Registry bucket (existing).
-#
-# Invoked by the thin caller .github/workflows/pr-agent-bench.yml, which owns
-# the triggers and the same-repo (fork) gate. `environment: publish` and the
-# OIDC steps stay on the jobs HERE because a calling (`uses:`) job cannot set
-# `environment`.
+# Per-PR LLM-agent benchmark: each cell scaffolds a template, a builder agent builds it, then
+# build + Playwright spec run and a judge agent grades. Runs entirely on the GitHub runner.
+# Requires (publish env): AWS_ROLE_ARN secret (OIDC role with bedrock InvokeModelWithResponseStream
+# + Converse on the bench model, and s3 Put/Get on bench/* in the registry bucket) and S3_BUCKET var.
+# Invoked by pr-agent-bench.yml, which owns the triggers + same-repo gate; the OIDC steps and
+# `environment: publish` live on the jobs here because a `uses:` caller job cannot set environment.
 
 on:
   workflow_call:
@@ -31,31 +13,17 @@ on:
 permissions:
   contents: read
 
-# Harden npm against transient registry blips (ECONNRESET/timeouts mid-`npm ci`
-# or `npm install`) so a network hiccup RETRIES with backoff instead of failing a
-# job — matches the repo's NPM_CONFIG_* convention (scripts/test-templates-e2e.sh).
-# Set at workflow level so every job (build-blocks / bench / selfcheck) and every
-# child process (create-blocks-app's internal install, the init script) inherits
-# it. These only retry transient fetch failures; they never mask real 4xx/auth/
-# version errors.
+# Harden npm against transient registry blips so a network hiccup retries with backoff; set at
+# workflow level so every job and child process inherits it (never masks real 4xx/auth errors).
 env:
   NPM_CONFIG_FETCH_RETRIES: '5'
   NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
   NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
 
 jobs:
-  # Build + pack the whole monorepo to a local npm registry ONCE per run, then
-  # hand the packed dist-registry/ to every bench cell as an artifact. Before
-  # this, each of the 10 matrix cells rebuilt all 26 packages (`npm run build`,
-  # ~150s) and re-packed the tarballs (`npm run publish:dry-run`) inside its own
-  # "1. Init bench-app" step — the same monorepo build/pack repeated 10× per run.
-  # Scaffolded apps resolve @aws-blocks/* from the packed .tgz in dist-registry/
-  # (served on :4873), NOT from workspace symlinks, so a registry built once here
-  # is byte-identical and fully portable to every cell — every cell now tests the
-  # exact same packages. Mirrors the proven build-once handoff in pr-checks.yml
-  # (build-and-test-local uploads dist-registry; e2e-templates downloads it and
-  # runs test-templates-e2e.sh --skip-publish). Pure build: no OIDC/AWS, no
-  # Bedrock — contents:read only.
+  # Build + pack the whole monorepo to a local npm registry ONCE per run, handed to every cell
+  # as the dist-registry/ artifact (cells resolve @aws-blocks/* from the packed .tgz, not symlinks,
+  # so every cell tests byte-identical packages). Replaces the per-cell monorepo rebuild. No AWS.
   build-blocks:
     name: build blocks (pack dist-registry once)
     runs-on: ubuntu-latest
@@ -72,9 +40,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
       - run: npm ci
-      # `npm run build` is topology-aware (runs prebuild hooks in dependency
-      # order); `publish:dry-run` packs every package to dist-registry/ as .tgz.
-      # This is the ONE build+pack that used to run redundantly in all 10 cells.
+      # build packs every package to dist-registry/ as .tgz; the one build+pack all cells consume.
       - name: Build + pack to dist-registry
         run: |
           npm run build
@@ -85,47 +51,27 @@ jobs:
           name: dist-registry
           path: dist-registry/
           retention-days: 1
-          # Fail loudly if the pack produced nothing — every cell depends on this
-          # artifact, so an empty registry must red build-blocks rather than
-          # silently ship 10 cells that fall back to building it themselves.
+          # Every cell depends on this artifact, so an empty pack must red build-blocks.
           if-no-files-found: error
 
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
     runs-on: ubuntu-latest
-    # Must hold the full sum of the step budgets so no step is starved by the
-    # job cap (the judge now retries throttled Bedrock calls and can use its
-    # whole 20-min budget). Capped steps: agent 35 + build/test 12 + judge 20 =
-    # 67; plus ~13 for the uncapped ones (checkout + setup-node + npm ci + init +
-    # OIDC + scaffold, then finalize + artifact upload + S3) ≈ 80. 85 leaves a
-    # ~5-min buffer.
+    # Must cover the sum of all step budgets (agent 35 + build/test 12 + judge 20 + ~13 uncapped).
     timeout-minutes: 85
     permissions:
       id-token: write
       contents: read
     environment: publish
-    # Gate every cell on the single upstream build+pack: cells download the
-    # dist-registry/ it produces (step "1a" below) instead of each rebuilding the
-    # monorepo. If the monorepo build genuinely breaks, build-blocks fails and
-    # the cells skip — one loud failure instead of 10 cells each burning ~150s to
-    # fail the same build (matches how pr-checks.yml reds a PR on a real break).
+    # Gate cells on the single upstream build+pack; if it breaks, cells skip (one loud failure).
     needs: build-blocks
     strategy:
       fail-fast: false
-      # Cap concurrent cells so the 10-cell matrix fans out in waves instead of
-      # firing all 10 builder invokes at Bedrock at once — that simultaneous burst
-      # tripped the account-wide tokens-per-minute (TPM) ceiling and failed 6/10
-      # cells in run 28967475174 with "ModelError: Too many tokens". 5 keeps
-      # throughput high (two waves) while halving peak concurrent token demand;
-      # combined with the within-wave startup stagger (BENCH_CELL_INDEX below) the
-      # first calls within each wave are also spread out. fail-fast:false so one
-      # cell never cancels the rest.
+      # Cap concurrent cells so builder invokes fan out in waves instead of hitting the account
+      # tokens-per-minute ceiling all at once (that failed 6/10 cells in run 28967475174).
       max-parallel: 5
-      # One cell per (task, template) pair via an explicit include list.
-      # Each task runs on the SINGLE template that pre-ships (or best exercises)
-      # its Building Blocks. Together these 10 cells cover 18 Building Blocks
-      # across 7 templates without a task x template cross-product, keeping the
-      # cell count — and Bedrock spend — bounded.
+      # One cell per (task, template) pair: each task runs on the single template that best
+      # exercises its Building Blocks — 10 cells cover 18 Blocks without a full cross-product.
       matrix:
         include:
           - { task: auth-notes, template: demo } # AuthBasic + KVStore
@@ -141,31 +87,16 @@ jobs:
     env:
       WORKSPACE: ${{ github.workspace }}/bench-app
       TASK: ${{ matrix.task }}
-      # Current Bedrock geo (cross-Region) inference-profile IDs actually in use —
-      # both resolve in us-east-1 today (verified by live, scored bench runs):
-      #   Sonnet 4.6: docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
-      #   Opus 4.8:   docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
-      # Builder model knob: overridable here (or via the BENCH_MODEL env) without a
-      # code change; 2-agent-run.ts defaults to this same Opus 4.8 id when unset.
-      # NOTE: builder and judge now share Opus 4.8, so the judge is no longer a
-      # DIFFERENT model from the builder — same-model self-evaluation bias is
-      # accepted for now (set BENCH_MODEL back to a Sonnet id to de-correlate).
+      # Bedrock geo inference-profile IDs (both resolve in us-east-1). Overridable via BENCH_MODEL;
+      # builder and judge share Opus 4.8 (same-model self-eval bias accepted for now).
       BENCH_MODEL: us.anthropic.claude-opus-4-8
       BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
       AWS_REGION: us-east-1
       TEMPLATE: ${{ matrix.template }}
       PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
-      # Deterministic startup stagger for the builder's FIRST Bedrock call (see
-      # scripts/agent-bench/steps/2-agent-run.ts). BENCH_CELL_INDEX is the 0-based
-      # matrix job index; the builder sleeps (index mod BENCH_STAGGER_WAVE_SIZE) *
-      # BENCH_STAGGER_STEP_SEC s before its first InvokeModelWithResponseStream.
-      # Staggering by the WITHIN-WAVE slot (not the raw 0–9 index) keeps the delay
-      # bounded: with max-parallel=5 each wave fans its opening calls over slots
-      # 0–4 ⇒ ~0–28s, instead of the second wave (indices 5–9) sleeping 35–63s on
-      # top of already waiting for a runner slot. BENCH_STAGGER_WAVE_SIZE MUST
-      # mirror max-parallel above (GitHub Actions expressions can't do modulo, so
-      # the wrap happens in the builder). Tunable here without a code change; set
-      # BENCH_STAGGER_STEP_SEC='0' to disable the stagger entirely.
+      # Deterministic startup stagger for the builder's first Bedrock call (see 2-agent-run.ts):
+      # it sleeps (BENCH_CELL_INDEX mod BENCH_STAGGER_WAVE_SIZE) * BENCH_STAGGER_STEP_SEC. Staggering
+      # by within-wave slot keeps the delay bounded; WAVE_SIZE must mirror max-parallel above.
       BENCH_CELL_INDEX: ${{ strategy.job-index }}
       BENCH_STAGGER_STEP_SEC: '7'
       BENCH_STAGGER_WAVE_SIZE: '5' # keep in sync with strategy.max-parallel above
@@ -177,27 +108,16 @@ jobs:
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          # cache: npm — this bench job was the only one missing it; the per-cell
-          # root `npm ci` now restores from the Actions npm cache instead of a
-          # cold full-monorepo fetch on every cell.
+          # cache: npm so the per-cell root `npm ci` restores from the Actions cache.
           node-version-file: '.nvmrc'
           cache: npm
 
-      # AGENT-SHELL ISOLATION (issue #184). The builder runs the agent's vended
-      # bash as a dedicated unprivileged user (benchagent) via `sudo -n runuser -u
-      # benchagent` (scripts/agent-bench/steps/lib/run-shell.ts), so a broad
-      # `pkill -f node` / `killall` the agent issues during dev-server thrash
-      # cannot reach — and kill — the parent harness (`npx tsx 2-agent-run.ts`),
-      # which runs as `runner`: the kernel forbids signalling another uid's
-      # process (EPERM). This is the teardown that killed 2 cells in run
-      # 29107536283. Unlike a per-command PID namespace, a distinct uid has no
-      # per-command lifetime, so a `setsid` dev server the agent backgrounds keeps
-      # running across bash calls (cross-call server persistence, which the web-app
-      # cells need). The runner grants passwordless sudo, so create the user here;
-      # the workspace ACL that lets benchagent read/write it is granted at runtime
-      # by prepareWorkspaceIsolation. Best-effort: if the user can't be created the
-      # runtime probe reports DISABLED and the agent falls back to a bare shell —
-      # never reds a cell.
+      # AGENT-SHELL ISOLATION (issue #184): the builder runs the agent's vended bash as an
+      # unprivileged user (benchagent) via sudo+runuser, so broad kills the agent issues can't
+      # signal the parent harness (cross-uid EPERM). A distinct uid (not a PID namespace) lets a
+      # setsid dev server persist across bash calls. Create the user here; the workspace ACL is
+      # granted at runtime by prepareWorkspaceIsolation. Best-effort: if it fails, isolation is
+      # disabled at runtime and the agent falls back to a bare shell (never reds a cell).
       - name: Create isolation user (agent-shell isolation)
         continue-on-error: true
         run: |
@@ -212,25 +132,11 @@ jobs:
         run: npm ci
         continue-on-error: true
 
-      # GREEN-REGARDLESS (change #2): every fallible cell step is
-      # `continue-on-error: true`, so a cell NEVER turns the PR check red — the
-      # result lives in result.json + the run summary, not the check status.
-      # Because continue-on-error keeps `success()` true after a failure, the
-      # explicit `if: steps.<prev>.outcome == 'success'` chain below — NOT
-      # success() — is what stops the pipeline at the first failed step,
-      # exactly reproducing the old implicit skip-chain. finalize-result reads
-      # each step's TRUE .outcome and stamps klass/composite, so an agent
-      # timeout still scores composite 0 (its tests/judge are skipped, never run
-      # against a partial app). That timeout→composite-0 invariant is load-bearing
-      # on the wall-clock timeout surfacing as a NON-SUCCESS step outcome: a
-      # `timeout-minutes` hit makes step 2's .outcome 'failure', so the
-      # `if: outcome == 'success'` chain skips steps 3-4 and finalize-result
-      # classifies failed_at='2-agent' as agent_fail — keep any future edit from
-      # ever letting a timed-out agent surface as 'success'.
-      #
-      # Write a baseline result.json BEFORE OIDC/AWS so even an OIDC failure
-      # produces a cell row in the summary table. Every later step augments
-      # this; finalize-result stamps the final status.
+      # GREEN-REGARDLESS: every fallible cell step is continue-on-error so a cell never reds the PR
+      # check; the explicit `if: steps.<prev>.outcome == 'success'` chain stops at the first failure.
+      # A timed-out agent surfaces as a NON-SUCCESS outcome (skips steps 3-4) so it scores composite 0
+      # — that invariant is load-bearing; never let a timed-out agent surface as 'success'.
+      # Write a baseline result.json BEFORE OIDC so even an OIDC failure yields a summary-table row.
       - name: 0. Init result
         id: initresult
         continue-on-error: true
@@ -247,20 +153,12 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          # Extend the OIDC session beyond the ~1h default so it doesn't expire
-          # before analyze-cell on slow cells. If the role's max session duration
-          # is lower than this, AWS clamps to whatever the role allows.
+          # Extend the OIDC session past the ~1h default so it survives slow cells (AWS clamps
+          # to the role's max if lower).
           role-duration-seconds: 7200
 
-      # BUILD-ONCE: pull the dist-registry/ that the upstream build-blocks job
-      # packed once, so "1. Init bench-app" below can SKIP the ~150s monorepo
-      # `npm run build` + `npm run publish:dry-run` (its guard reuses this dir —
-      # see scripts/agent-bench/steps/1-init-bench-app.sh). Lands at repo-root
-      # dist-registry/, exactly where serve-local-registry.ts serves from and
-      # where the init guard looks. continue-on-error: a transient download blip
-      # can NEVER red the cell — if the dir is missing the init script falls back
-      # to building the registry itself (correct, just slower). Gated on the same
-      # oidc.outcome as init so it doesn't run when the cell is already skipping.
+      # BUILD-ONCE: pull the dist-registry/ build-blocks packed so "1. Init bench-app" can skip the
+      # ~150s monorepo build. Best-effort: a download blip never reds the cell (init rebuilds it).
       - name: 1a. Download prebuilt dist-registry
         continue-on-error: true
         if: steps.oidc.outcome == 'success'
@@ -277,14 +175,9 @@ jobs:
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
 
-      # SECURITY: this step runs an LLM-driven agent (shell tool) with the LIVE
-      # OIDC/AWS session in its environment, so a prompt-injected/malicious task
-      # could in principle reach any AWS API in the role's scope (Bedrock + the
-      # bench/* S3 prefix), not just the build. Bounded by the same-repo guard in
-      # pr-agent-bench.yml: fork PRs get no secrets/OIDC and cannot trigger this
-      # with credentials (no external/fork triggering). Future hardening (not
-      # done): give the builder a minimal Bedrock-invoke-only role. See README
-      # "Security".
+      # SECURITY: this step runs an LLM agent (shell tool) with the live OIDC session, so a
+      # prompt-injected task could reach any AWS API in the role's scope. Bounded by the same-repo
+      # guard in pr-agent-bench.yml (fork PRs get no secrets/OIDC). See README "Security".
       - name: 2. Agent run
         id: agent
         continue-on-error: true
@@ -294,11 +187,8 @@ jobs:
         env:
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
           OUTPUT: /tmp/builder-result.json
-          # Full hierarchical tool-call trace tree + run metrics (cycleCount,
-          # accumulatedUsage, per-tool toolUsage, …), uploaded as bench-trace-*.
-          # Written ONLY on normal completion: the SDK exposes no mid-run trace
-          # accessor, so on a wall-clock timeout NO trace is emitted (the SIGTERM
-          # handler flushes only a partial builder envelope to OUTPUT, not a trace).
+          # Trace tree + run metrics, uploaded as bench-trace-*. Written only on normal completion
+          # (no mid-run trace accessor), so a wall-clock timeout emits no trace.
           TRACE: /tmp/trace.json
           METRICS: /tmp/metrics.json
 
@@ -315,39 +205,21 @@ jobs:
         id: judge
         continue-on-error: true
         if: steps.tests.outcome == 'success'
-        # 20-min cap (was 8): the judge's own Bedrock calls now retry with
-        # exponential backoff on throttling/transient failures (4-judge.ts), so
-        # the step needs room for a few escalating retries (~5s+15s+40s+90s of
-        # backoff plus the re-invokes) on top of a single grade.
+        # 20-min cap: the judge's Bedrock calls now retry with backoff, so the step needs room
+        # for a few escalating retries on top of a single grade.
         timeout-minutes: 20
         run: |
-          # Freeze the workspace read-only so the judge cannot mutate the app it
-          # is grading. Under shell isolation the agent's files are owned by
-          # benchagent, and the harness user cannot chmod files it does not own
-          # (EPERM on dist/.vite/.bb-data/.blocks-sandbox) — so freeze via sudo,
-          # which covers both owners. The freeze is an integrity guard, not a
-          # gate: it must never abort the judge (the plain-chmod branch is the
-          # non-isolated fallback; the final `|| true` defends against a stray
-          # unfreezable path so grading always proceeds).
+          # Freeze the workspace read-only so the judge can't mutate the app it grades. Isolated
+          # files are benchagent-owned, so freeze via sudo (covers both owners); never abort grading.
           sudo -n chmod -R a-w "$WORKSPACE" 2>/dev/null || chmod -R a-w "$WORKSPACE" || true
           npx tsx scripts/agent-bench/steps/4-judge.ts
         env:
           BUILDER_RESULT: /tmp/builder-result.json
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
           OUTPUT: /tmp/result.json
-          # EVIDENCE = objective signals for the judge's hard caps (consumed by
-          # 4-judge.ts, then spread onto result.json for the summary). The BOOLEAN
-          # flags are QUOTED so a step output that is ever not exactly true/false
-          # can't turn this into an invalid JSON literal; 4-judge.ts coerces them
-          # with truthy() and summary.mjs does the same before rendering. The
-          # quoted string build_status (na|ok|failed) is the tri-state the build
-          # cap keys off (via lib/scoring.mjs buildCapDecision): "na" means the
-          # template ships no `build` script, so the build is N/A and is NOT capped
-          # — only a real "failed" build caps. Its `|| 'failed'` default matches
-          # build_succeeded's pessimistic default. The numeric counts are left as
-          # BARE JSON numbers on purpose — the shared scoring module (lib/scoring.mjs
-          # `num()`) reads them as raw numbers and the `|| '0'` default already
-          # guarantees a valid numeric literal.
+          # EVIDENCE = objective signals for the judge's hard caps. Boolean flags are QUOTED so a
+          # non-true/false value can't break the JSON; build_status is the tri-state (na|ok|failed)
+          # the build cap keys off ("na" = no build script, not capped). Counts stay bare numbers.
           EVIDENCE: |
             {
               "build_succeeded": "${{ steps.tests.outputs.build_succeeded || 'false' }}",
@@ -359,18 +231,15 @@ jobs:
               "tests_total": ${{ steps.tests.outputs.tests_total || '0' }}
             }
 
-      # Stamp final status on result.json — always runs so the summary table
-      # gets a row for failed cells too.
+      # Stamp final status on result.json — always runs so failed cells get a summary-table row too.
       - name: Finalize result
         if: always()
         continue-on-error: true
         run: node scripts/agent-bench/steps/finalize-result.mjs
         env:
           RESULT_PATH: /tmp/result.json
-          # On a wall-clock agent timeout, steps 3-4 are SKIPPED and this
-          # if:always() step is the only survivor, so it must fold the builder's
-          # partial envelope (the judge does it on the normal path). Path matches
-          # step 2's OUTPUT.
+          # On a wall-clock agent timeout, steps 3-4 are skipped and only this if:always() step
+          # survives, so it folds the builder's partial envelope. Path matches step 2's OUTPUT.
           BUILDER_RESULT: /tmp/builder-result.json
           OUTCOME_OIDC: ${{ steps.oidc.outcome }}
           OUTCOME_INIT: ${{ steps.init.outcome }}
@@ -378,18 +247,10 @@ jobs:
           OUTCOME_TESTS: ${{ steps.tests.outcome }}
           OUTCOME_JUDGE: ${{ steps.judge.outcome }}
 
-      # PER-CELL ANALYSIS: colocated with this cell's fresh trace/metrics, right
-      # after the judge + finalize. Reads THIS cell's result.json (score context)
-      # + trace.json + metrics.json (both written locally by step 2) and asks the
-      # judge model (Opus 4.8) for a concise 2-4 sentence analysis of what the
-      # agent built + any struggles in the data, then writes it back into
-      # result.json as an `analysis` string — which flows through the bench-result
-      # artifact + S3 and is ROLLED UP by the summary job. Best-effort + ISOLATED:
-      # analyze-cell.mjs always exits 0 and only ADDS the `analysis` field (never
-      # touches the score), and continue-on-error is belt-and-suspenders on top, so
-      # it can NEVER fail the cell or affect green-regardless. Reuses the cell's
-      # OIDC creds for Bedrock; if creds/data are missing it writes a benign
-      # fallback. Runs BEFORE the uploads/S3 so the analysis is included.
+      # PER-CELL ANALYSIS: reads this cell's result.json + trace + metrics and asks the judge model
+      # for a 2-4 sentence analysis, written back into result.json as `analysis` (rolled up by the
+      # summary job). Best-effort + isolated: only ADDS the field, never touches the score or reds
+      # the cell. Runs before the uploads so the analysis is included.
       - name: 4b. Analyze cell (best-effort)
         if: always()
         continue-on-error: true
@@ -399,8 +260,7 @@ jobs:
           RESULT_PATH: /tmp/result.json
           TRACE: /tmp/trace.json
           METRICS: /tmp/metrics.json
-          # BENCH_JUDGE_MODEL (Opus 4.8, same as 4-judge.ts) and AWS_REGION are
-          # inherited from the job-level env — analyze-cell.mjs reads them directly.
+          # BENCH_JUDGE_MODEL and AWS_REGION are inherited from the job-level env.
 
       - name: 5. Upload result
         if: always()
@@ -411,19 +271,11 @@ jobs:
           path: /tmp/result.json
           retention-days: 90
           overwrite: true
-          # If npm ci fails before 0-init writes /tmp/result.json, there's no file
-          # to upload — ignore rather than fail the step (green-regardless).
+          # No file to upload if npm ci fails before 0-init writes result.json — ignore.
           if-no-files-found: ignore
 
-      # Archive the agent's GENERATED SOURCE so a run can be audited after the
-      # fact — until now only result.json was uploaded, so the generated app
-      # could not be inspected post-run. Excludes deps/build output (node_modules,
-      # dist), VCS (.git), the local Blocks sandbox (.blocks-sandbox), and anything
-      # credential-shaped (.env*, *.pem, .aws) so NO secret is ever archived.
-      # continue-on-error: true guarantees even a transient upload-artifact API/
-      # network failure never turns the cell red; if-no-files-found: ignore
-      # additionally skips the missing-file case (e.g. when init failed before
-      # bench-app exists).
+      # Archive the agent's generated source for post-run audit. Excludes deps/build output, VCS,
+      # the Blocks sandbox, and anything credential-shaped so no secret is archived.
       - name: 6. Upload source
         if: always()
         continue-on-error: true
@@ -443,14 +295,8 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
 
-      # Archive the agent's FULL trace (hierarchical tool-call tree) + run metrics
-      # (cycleCount, accumulatedUsage, per-tool toolUsage/successRate/callCount)
-      # written by step 2, so a run's tool calls + token spend can be inspected
-      # post-hoc. On a wall-clock timeout no trace is written (step 2 emits it only
-      # on normal completion), so this upload simply finds no file. continue-on-error:
-      # true guarantees even a transient upload-artifact API/network failure never turns
-      # the cell red; if-no-files-found: ignore additionally skips the missing-file case
-      # (e.g. when the agent step never ran, so neither file exists).
+      # Archive the agent's full trace + run metrics (step 2) for post-hoc inspection. A wall-clock
+      # timeout writes no trace, so this simply finds no file.
       - name: 6b. Upload trace
         if: always()
         continue-on-error: true
@@ -464,11 +310,8 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
 
-      # Archive the raw per-cell result under a COMMIT-keyed prefix so every
-      # run's cells are grouped by the exact commit under test (PR head sha, or
-      # the pushed/merged sha on main). The summary job builds the aggregate
-      # (per-cell composites + mean) from the artifacts and writes the baseline
-      # at bench/runs/<sha>/results.json — see the summary job below.
+      # Archive the raw per-cell result under a COMMIT-keyed prefix; the summary job builds the
+      # aggregate + baseline from these.
       - name: Persist to S3 (best-effort)
         if: always()
         continue-on-error: true
@@ -484,27 +327,22 @@ jobs:
     needs: bench
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # id-token: OIDC -> S3 to READ the PR's baseline aggregate and WRITE this
-    # run's baseline. contents: read for checkout. NO pull-requests:write — the
-    # bench posts no PR comment any more; the scoreboard IS the Actions run
-    # summary ($GITHUB_STEP_SUMMARY).
+    # id-token: OIDC -> S3 to read/write the baseline. No pull-requests:write — the scoreboard IS
+    # the Actions run summary.
     permissions:
       id-token: write
       contents: read
-    # `publish` env holds AWS_ROLE_ARN / S3_BUCKET (same as the bench job),
-    # required here now that the summary reads + writes the S3 baseline.
+    # `publish` env holds AWS_ROLE_ARN / S3_BUCKET, needed to read + write the S3 baseline.
     environment: publish
-    # Defense-in-depth same-repo gate (the caller already gates same-repo). Keep
-    # always() so the table still renders when bench cells fail. push-to-main is
-    # same-repo by definition.
+    # Defense-in-depth same-repo gate (caller already gates). always() so the table renders even
+    # when bench cells fail.
     if: >-
       always() &&
       (github.event_name == 'workflow_dispatch' ||
        github.event_name == 'push' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     steps:
-      # Checkout first — it would wipe the workspace if it ran after the
-      # artifact download.
+      # Checkout first — it would wipe the workspace if it ran after the artifact download.
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -512,15 +350,13 @@ jobs:
           sparse-checkout: scripts/agent-bench
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with: { node-version-file: '.nvmrc' }
-      # Each result.json now already carries its own per-cell `analysis` (written
-      # in-cell after the judge), so the roll-up consumes these directly — no
-      # central re-download of the bench-trace-* artifacts is needed any more.
+      # Each result.json already carries its per-cell `analysis`, so the roll-up consumes these
+      # directly — no re-download of bench-trace-* needed.
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with: { path: results, pattern: bench-result-* }
 
-      # OIDC for S3 (read the baseline, write this run's baseline). Best-effort:
-      # on any creds failure the overview simply degrades to "no baseline" and
-      # the persist is skipped — it must NEVER turn the summary job red.
+      # OIDC for S3 (read/write the baseline). Best-effort: a creds failure degrades the overview
+      # to "no baseline" and skips the persist — never reds the summary job.
       - name: Configure AWS credentials (OIDC)
         id: oidc
         continue-on-error: true
@@ -529,17 +365,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Fetch the BASELINE aggregate the overview diffs against. Best-effort: a
-      # miss (or no creds) removes the file, so summary.mjs renders absolute
-      # composites with a "no baseline" note.
-      #   - PR / manual dispatch → ALWAYS the latest-main pointer (the MOST RECENT
-      #     main-branch bench = current main tip). NEVER the PR's recorded base
-      #     commit: github.event.pull_request.base.sha is captured at PR open /
-      #     last-sync and goes stale as main advances, so an exact-base-sha lookup
-      #     can silently diff against an outdated or never-benched commit.
-      #   - push to main → the IMMEDIATELY PRECEDING main commit (github.event.
-      #     before) by exact sha — the ONLY place a commit-keyed baseline is read —
-      #     with the latest-main pointer (its pre-persist value) as fallback.
+      # Fetch the baseline aggregate the overview diffs against. Best-effort (a miss => "no baseline").
+      #   - PR / manual dispatch → the latest-main pointer (current main tip), never the PR's
+      #     recorded base.sha (which goes stale as main advances).
+      #   - push to main → the immediately preceding main commit (github.event.before) by exact sha,
+      #     falling back to the latest-main pointer.
       - name: Fetch baseline from S3 (best-effort)
         id: baseline
         if: steps.oidc.outcome == 'success'
@@ -571,47 +401,30 @@ jobs:
             fi
           fi
 
-      # This is the ONLY step in the whole workflow that is intentionally NOT
-      # green-regardless. summary.mjs exits non-zero (fails the summary job) in
-      # exactly two cases: (1) the optional BENCH_MIN_SCORE merge gate is set and
-      # the scored-cell mean falls below it; (2) summary.mjs itself crashes (a
-      # bench harness bug). Every other failure mode — missing artifacts, no
-      # baseline, S3/OIDC errors, empty results — is handled gracefully and exits 0.
+      # The ONLY step intentionally not green-regardless: summary.mjs fails the job only if the
+      # optional BENCH_MIN_SCORE merge gate is set and unmet, or if summary.mjs itself crashes.
       - name: Render summary table
         timeout-minutes: 5
         run: node scripts/agent-bench/steps/summary.mjs
         env:
           RESULTS_DIR: results
-          # Optional opt-in merge gate: when this repo/org variable is UNSET the
-          # summary is purely observational and exits 0 (green-regardless). Set
-          # BENCH_MIN_SCORE to a number to FAIL this job when the scored-cell
-          # mean is below it — the one intentional exception to green-regardless.
+          # Optional opt-in merge gate: unset => observational (exits 0); set to a number => fails
+          # the job when the scored-cell mean is below it.
           BENCH_MIN_SCORE: ${{ vars.BENCH_MIN_SCORE }}
-          # PR-vs-baseline overview inputs (all optional; summary.mjs degrades
-          # gracefully when any are absent):
+          # PR-vs-baseline overview inputs (all optional; summary.mjs degrades gracefully):
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           BENCH_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BENCH_EVENT: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
-          # Baseline the fetch step wrote (file ABSENT => "no baseline" note).
+          # Baseline the fetch step wrote (absent => "no baseline").
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
-          # summary.mjs writes the compact aggregate (per-cell composites + mean)
-          # here; the persist step below uploads it as this commit's baseline.
+          # summary.mjs writes the compact aggregate here; the persist step uploads it as the baseline.
           AGGREGATE_PATH: ${{ github.workspace }}/bench-aggregate.json
-          # summary.mjs writes one flat NDJSON line per scored cell here; the
-          # "Persist Athena NDJSON" step below uploads it to a date-partitioned
-          # Athena prefix. Existing bench/* IAM covers it (best-effort).
+          # summary.mjs writes one NDJSON line per scored cell here; persisted to the Athena prefix.
           ATHENA_NDJSON_PATH: ${{ github.workspace }}/bench-athena.ndjson
 
-      # Best-effort, ISOLATED top-level ROLL-UP: reads the per-cell `analysis`
-      # each cell already wrote into its result.json (in-cell, after its judge)
-      # and synthesizes an `## Executive summary` from them via ONE Bedrock call
-      # (Opus 4.8), plus a per-cell one-liner list, appended to the step summary,
-      # and writes bench-analysis.json. It can NEVER fail this job — analyze.mjs is
-      # wrapped to always exit 0, and continue-on-error is belt-and-suspenders on
-      # top. Reuses the OIDC creds above for Bedrock; if creds/permission are
-      # missing it emits an "unavailable" note. BASELINE_PATH (PR-only) enables the
-      # low/regressed flags fed into the synthesis; on push it degrades to low-only.
+      # Best-effort, isolated top-level roll-up: synthesizes an executive summary from each cell's
+      # `analysis` via one Bedrock call and appends it to the step summary. Never reds the job.
       - name: Roll up per-cell analyses (best-effort)
         if: always()
         continue-on-error: true
@@ -621,7 +434,7 @@ jobs:
           RESULTS_DIR: results
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
           ANALYSIS_PATH: ${{ github.workspace }}/bench-analysis.json
-          # Same judge model as 4-judge.ts / the per-cell analysis (Opus 4.8).
+          # Same judge model as 4-judge.ts / the per-cell analysis.
           BENCH_JUDGE_MODEL: us.anthropic.claude-opus-4-8
           AWS_REGION: us-east-1
 
@@ -636,12 +449,8 @@ jobs:
           retention-days: 90
           overwrite: true
 
-      # Persist this run's aggregate (per-cell composites + mean) as the
-      # COMMIT-keyed baseline. A push-to-main run thus leaves the baseline that
-      # later PRs diff their base commit against; it ALSO updates a stable
-      # latest-main pointer for the fallback path. PR runs persist their head
-      # sha too (harmless archive — PRs only ever READ a main commit's baseline).
-      # Best-effort: never turns the summary job red.
+      # Persist this run's aggregate as the COMMIT-keyed baseline (and update the latest-main pointer
+      # on push-to-main). Best-effort: never reds the summary job.
       - name: Persist baseline to S3 (best-effort)
         if: always() && steps.oidc.outcome == 'success'
         env:
@@ -655,12 +464,8 @@ jobs:
             bash scripts/agent-bench/steps/lib/s3-put.sh "$AGG" "s3://${BUCKET}/bench/runs/latest-main.json" "latest-main pointer"
           fi
 
-      # Persist the Athena NDJSON (one flat row per scored cell, written by
-      # summary.mjs) to a DATE-PARTITIONED prefix so bench history is queryable in
-      # Athena without parsing per-cell result.json blobs. Key:
-      # bench/athena/year=YYYY/month=MM/<sha-short>.json (Hive-style partitions).
-      # The existing bench/* IAM (s3:PutObject) already covers this prefix — no
-      # new grant needed. Best-effort: warn on any failure, never turn the job red.
+      # Persist the Athena NDJSON to a date-partitioned prefix so bench history is Athena-queryable.
+      # Existing bench/* IAM covers it. Best-effort: never reds the job.
       - name: Persist Athena NDJSON to S3 (best-effort)
         if: always() && steps.oidc.outcome == 'success'
         env:
@@ -675,14 +480,9 @@ jobs:
           KEY="bench/athena/year=${YEAR}/month=${MONTH}/${SHA_SHORT}.json"
           bash scripts/agent-bench/steps/lib/s3-put.sh "$NDJSON" "s3://${BUCKET}/${KEY}" "Athena NDJSON"
 
-  # Bench harness SELF-CHECK: type-check + unit-test the bench's OWN code
-  # (scoring / overview / run-shell libs) via its `test:ci` script. This is the
-  # real check for the bench package, and it lives HERE — deliberately NOT in the
-  # repo-wide `test:unit` fan-out (`npm run test --workspaces`). The workspace
-  # `test` script is a no-op (see scripts/agent-bench/package.json) so a
-  # bench-only typing/dependency issue surfaces on THIS bench workflow instead of
-  # reddening the main Unit Tests gate for PRs that don't touch the bench. Runs
-  # ONCE per bench run (not per-cell) and needs no AWS/OIDC — just contents:read.
+  # Bench harness SELF-CHECK: tsc + unit-test the bench's own code via test:ci. Lives here (not the
+  # repo-wide test:unit fan-out) so a bench-only issue reds THIS workflow, not the main Unit Tests
+  # gate. Runs once per bench run, no AWS/OIDC.
   selfcheck:
     name: bench self-check (tsc + unit)
     runs-on: ubuntu-latest
@@ -698,14 +498,9 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
-      # Same isolation-user creation as the bench job (see there). This job is
-      # FREE (no Bedrock/OIDC) and its unit suite includes the issue-#184
-      # isolation tests (scripts/agent-bench/steps/lib/run-shell.test.mjs), so on
-      # the real ubuntu-latest runner it PROVES — at no Bedrock cost — that
-      # benchagent can be created AND that the agent's shell (running as
-      # benchagent) can no longer signal the harness. If the user can't be
-      # created on this runner, the FIX test skips (visible in the log) rather
-      # than proving containment.
+      # Same isolation-user creation as the bench job. Free (no Bedrock/OIDC); its unit suite runs
+      # the issue-#184 isolation tests, proving benchagent containment at no Bedrock cost (the FIX
+      # test skips if the user can't be created).
       - name: Create isolation user (agent-shell isolation)
         continue-on-error: true
         run: |

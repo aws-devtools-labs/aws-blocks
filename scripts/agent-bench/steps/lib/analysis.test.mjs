@@ -1,10 +1,5 @@
-// Unit tests for the analysis helpers (analysis.mjs) — the PURE pieces of the
-// two-level, bottom-up analysis feature: per-cell trimming + prompt building,
-// and the top-level roll-up prompt. These pin the trace-trimming caps and the
-// prompt shapes so the LLM input stays small and the roll-up correctly consumes
-// the per-cell `analysis` fields + low/regressed flags. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test. The
-// Bedrock call (bedrockConverse) is I/O and intentionally NOT exercised here.
+// Unit tests for the PURE analysis helpers (analysis.mjs): trace trimming caps + prompt building for
+// the per-cell and roll-up prompts. Run under bare `node --test`. bedrockConverse (I/O) is not exercised.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';

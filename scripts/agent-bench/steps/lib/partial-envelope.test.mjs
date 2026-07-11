@@ -1,11 +1,7 @@
-// Unit tests for the builder's incremental partial-envelope checkpoint
-// (lib/partial-envelope.mjs) — fix (2) for the harness-integrity bug (#183).
-//
-// These prove the round-trip contract WITHOUT importing 2-agent-run.ts (which
-// would execute the whole top-level agent script): the checkpoint envelope has
-// the non-terminal shape, the atomic write survives being read back, and the
-// resulting cell classifies as an EXCLUDED harness_error whose cost is still
-// preserved. Run under bare `node --test` — plain .mjs, same as the modules.
+// Unit tests for the builder's incremental partial-envelope checkpoint (partial-envelope.mjs) — fix
+// (2) for #183. Prove the round-trip without importing 2-agent-run.ts: the envelope has the
+// non-terminal shape, the atomic write survives read-back, and the cell classifies as an EXCLUDED
+// harness_error whose cost is preserved. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';

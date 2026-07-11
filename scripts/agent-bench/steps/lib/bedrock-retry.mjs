@@ -1,26 +1,10 @@
-// Shared Bedrock invoke-layer retry primitives for the bench steps (pure logic).
-//
-// Both model-calling steps — the builder (2-agent-run.ts) and the judge
-// (4-judge.ts) — call `agent.invoke()` against Amazon Bedrock and must survive
-// the account-wide tokens-per-minute (TPM) throttle. When many matrix cells hit
-// InvokeModelWithResponseStream at once, Bedrock returns a throttle that Strands
-// surfaces as `ModelThrottledError` or a bare `ModelError` ("Too many tokens,
-// please wait before trying again."). That is transient: a short backoff-and-
-// retry clears it. This module is the single source of truth for:
-//   - the backoff budget (attempts + delays),
-//   - which failures are retryable (throttle/transient) vs. terminal,
-//   - a deep, cause-chain-aware error describer so the real AWS class is visible.
-//
-// The AWS-SDK-layer adaptive retry (`clientConfig: { maxAttempts, retryMode }`
-// on the BedrockModel) is a complementary, lower layer and is set inline at each
-// call site; this module is the APPLICATION-level loop wrapped around invoke().
-//
-// This is a plain .mjs (not .ts) on purpose: `isRetryableModelError` is the
-// load-bearing decision for whether a throttled invoke retries or gives up, and
-// the bench unit suite runs under bare `node --test steps/lib/*.test.mjs` — which
-// can import this module directly but cannot import a .ts. The sibling
-// bedrock-retry.ts is a thin typed re-export so the builder/judge imports stay
-// unchanged. Types are carried via JSDoc (matching scoring.mjs's convention).
+// Shared Bedrock invoke-layer retry primitives for the bench steps (pure logic). Both the builder
+// (2-agent-run.ts) and judge (4-judge.ts) invoke() against Bedrock and must survive the account TPM
+// throttle (surfaced as ModelThrottledError or a bare ModelError "Too many tokens"), which is
+// transient. Single source of truth for the backoff budget, the retryable/terminal classifier, and
+// a cause-chain-aware error describer. Complements the lower AWS-SDK adaptive retry set at each call
+// site. Plain .mjs (not .ts) so the `node --test` suite can import it directly; bedrock-retry.ts is
+// a thin typed re-export. Types via JSDoc (matching scoring.mjs).
 import {
 	ContextWindowOverflowError,
 	MaxTokensError,
@@ -29,18 +13,13 @@ import {
 	StructuredOutputError,
 } from '@strands-agents/sdk';
 
-// invoke-layer retry budget: the initial attempt + up to 4 retries (5 tries
-// total), only on throttle/transient model failures (never a schema-validation
-// failure — that is a real grading outcome). Backoff is exponential with jitter
-// applied at the call site; the values are sized to sit comfortably inside each
-// step's wall-clock cap even if every retry is exhausted.
+// invoke-layer retry budget: initial attempt + up to 4 retries, only on throttle/transient failures.
+// Exponential backoff (jitter applied at the call site), sized to fit inside each step's wall-clock cap.
 export const INVOKE_MAX_ATTEMPTS = 5;
 export const INVOKE_BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 
-// Backoff (ms) to wait BEFORE the given 1-based retry attempt: the exponential
-// base from INVOKE_BACKOFF_MS (last value once the ladder is exhausted) plus up
-// to +25% jitter so concurrent cells don't re-hit Bedrock in lockstep. Shared by
-// the builder (2-agent-run.ts) and judge (4-judge.ts) invoke-retry loops.
+// Backoff (ms) before the given 1-based retry: the exponential base (last value once exhausted) plus
+// up to +25% jitter so concurrent cells don't re-hit Bedrock in lockstep.
 /**
  * @param {number} attempt 1-based attempt number that is about to be retried
  * @returns {number}
@@ -58,8 +37,7 @@ export function sleep(ms) {
 	return new Promise((res) => setTimeout(res, ms));
 }
 
-// One node of an error's `cause` chain. Strands wraps the underlying AWS SDK
-// exception as `cause`, which carries the real name/$metadata we want to see.
+// One node of an error's `cause` chain (Strands wraps the AWS SDK exception as `cause`).
 /**
  * @typedef {object} ErrorNode
  * @property {unknown} [name]
@@ -69,8 +47,7 @@ export function sleep(ms) {
  * @property {unknown} [cause]
  */
 
-// Walk the `cause` chain (bounded + cycle-safe) so both the throttle classifier
-// and the deep describer can inspect every wrapped layer, not just the top one.
+// Walk the `cause` chain (bounded + cycle-safe) so the classifier and describer see every layer.
 /**
  * @param {unknown} err
  * @returns {ErrorNode[]}
@@ -88,15 +65,12 @@ export function errorChain(err) {
 	return out;
 }
 
-// AWS exception names / HTTP statuses that mark a Bedrock failure as transient
-// (worth retrying) rather than deterministic.
+// AWS exception names / HTTP statuses marking a Bedrock failure as transient (worth retrying).
 const TRANSIENT_NAME_RE =
 	/throttl|toomanyrequests|too many (tokens|requests)|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|modelnotready|requesttimeout|timeouterror|partialresult|503|429/i;
 
-// True when a model-call failure is a throttle/transient class worth retrying.
-// A StructuredOutputError (model wouldn't emit a schema-valid grade) is a REAL
-// outcome and is never retried; ContextWindowOverflowError / MaxTokensError are
-// deterministic for a given input so retrying cannot help.
+// True when a model-call failure is a throttle/transient class worth retrying. StructuredOutputError
+// is a real grading outcome; ContextWindowOverflowError / MaxTokensError are deterministic — none retry.
 /**
  * @param {unknown} err
  * @returns {boolean}
@@ -105,8 +79,7 @@ export function isRetryableModelError(err) {
 	if (err instanceof StructuredOutputError) return false;
 	if (err instanceof ContextWindowOverflowError || err instanceof MaxTokensError) return false;
 	if (err instanceof ModelThrottledError) return true;
-	// A bare ModelError almost always wraps a transient mid-stream AWS exception
-	// (this is the "ModelError: Too many tokens" / "[object Object]" case).
+	// A bare ModelError almost always wraps a transient mid-stream AWS exception.
 	if (err instanceof ModelError) return true;
 	// Fall back to the AWS exception name / HTTP status on the error or its cause.
 	for (const node of errorChain(err)) {
@@ -118,11 +91,8 @@ export function isRetryableModelError(err) {
 	return false;
 }
 
-// Deep error description for an invoke failure. A plain top-level describe only
-// sees the outer wrapper, which for a wrapped Bedrock error is often
-// "ModelError: [object Object]" — masking the real AWS class. This surfaces each
-// layer's name, message, $fault and $metadata (httpStatusCode/requestId) so a
-// future run shows the actual throttle/transient class in result.json.
+// Deep error description for an invoke failure: surfaces each cause-chain layer's name, message,
+// $fault and $metadata, so the real AWS class shows through a "ModelError: [object Object]" wrapper.
 /**
  * @param {unknown} err
  * @returns {string}

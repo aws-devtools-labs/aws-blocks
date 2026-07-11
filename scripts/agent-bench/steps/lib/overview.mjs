@@ -1,26 +1,8 @@
-// PR-vs-baseline overview + detailed-results helpers, kept as PURE functions (no
-// fs / env / process side effects) so the diff math + coloring are unit-testable
-// under bare `node --test`, the same way lib/scoring.mjs is. summary.mjs does the
-// I/O (read the downloaded baseline, write the new aggregate, append markdown to
-// $GITHUB_STEP_SUMMARY) and calls these to render the two report tables.
-//
-// The baseline is a small commit-keyed aggregate (built by buildAggregate and
-// persisted to S3 as bench/runs/latest-main.json — the MOST RECENT main-branch
-// bench). A PR run fetches that pointer and renders the delta so the PR's effect
-// vs the current state of `main` is obvious. No baseline → the tables render the
-// PR's absolute numbers, every cell flagged 🆕 (never an error).
-//
-// TWO tables from the SAME rows:
-//   - renderOverview  — colors ONLY (🟢/🟡/🔴), at-a-glance.
-//   - renderDetailed  — the same rows widened WITH numbers (baseline -> pr).
-//
-// COLOR SEMANTICS (per metric, vs baseline): 🟢 same-or-better · 🟡 worse but
-// within the margin · 🔴 worse beyond it. The margin is a SINGLE tunable,
-// MARGIN_PCT (5%). Directions: tests↑ judge↑ score↑ are better; cost↓ tokens↓
-// are better. See metricColor + the glossary in summary.mjs.
-//
-// Composite, cost, and score-per-$ all come from lib/scoring.mjs — the ONE
-// source of truth — so the aggregate's numbers can't drift from the tables.
+// PR-vs-baseline overview + detailed-results helpers, kept as PURE functions (no fs/env/process) so
+// the diff math + coloring are unit-testable under `node --test`. summary.mjs does the I/O and calls
+// these to render two tables from the same rows: renderOverview (colors only) and renderDetailed
+// (colors + numbers). Baseline = commit-keyed aggregate (bench/runs/latest-main.json); no baseline →
+// absolute numbers, all 🆕. Composite/cost/score all come from lib/scoring.mjs.
 import {
 	SCORE_PER_DOLLAR,
 	cellCost,
@@ -32,9 +14,7 @@ import {
 	verdictOf,
 } from './scoring.mjs';
 
-// Stable identity for a cell across runs: a baseline cell is matched to the
-// current cell by this key. Both task + template are part of it because a task
-// can in principle run on more than one template.
+// Stable cross-run identity for a cell (task + template, since a task may run on multiple templates).
 export const cellKey = (c) => `${c?.task ?? ''}/${c?.template ?? ''}`;
 
 const round1 = (n) => Math.round(n * 10) / 10;
@@ -48,25 +28,18 @@ export const NEW = '🆕';
 export const GONE = '🗑️';
 export const NONE = '—';
 
-// The SINGLE tunable that separates 🟡 (worse, but within noise) from 🔴 (worse
-// beyond it): a relative margin of 5%. Change ONLY this line to widen/narrow the
-// tolerance for EVERY metric.
+// The single tunable separating 🟡 (worse within noise) from 🔴 (worse beyond): a 5% relative margin.
 export const MARGIN_PCT = 0.05;
 
-// DEFAULT boundary policy: a metric that is worse-but-within-margin renders 🟡.
-// Set true to treat within-margin as 🟢 (equal-or-better-OR-within-margin = 🟢).
+// Default boundary policy: worse-but-within-margin renders 🟡. Set true to treat within-margin as 🟢.
 export const MARGIN_IS_GREEN = false;
 
-// SCORE is higher-better iff scoring.mjs computes it as composite-per-$ (the
-// default). Imported so the ONE knob in scoring.mjs also drives the color here.
+// SCORE is higher-better iff scoring.mjs computes composite-per-$ (default); imported so one knob drives both.
 export const SCORE_HIGHER_BETTER = SCORE_PER_DOLLAR;
 
 /**
- * The absolute tolerance around a baseline value below which a WORSE move is
- * still 🟡 (noise) rather than 🔴. `MARGIN_PCT` of |baseline|; for INTEGER
- * metrics (test counts, 0-10 judge dims) it is floored to 1, so a ±1 nudge on a
- * small integer metric always reads as within-margin — 5% of 8 is 0.4, which
- * would otherwise round to 0 and make every single-point drop red.
+ * Absolute tolerance around a baseline below which a WORSE move stays 🟡. MARGIN_PCT of |baseline|;
+ * floored to 1 for integer metrics so a ±1 nudge on a small integer reads as within-margin.
  * @param {number} baseline
  * @param {boolean} integer
  * @returns {number}
@@ -77,12 +50,9 @@ export function marginAbs(baseline, integer) {
 }
 
 /**
- * Color one metric vs its baseline. Returns 🟢/🟡/🔴, or `null` when either side
- * is missing (the caller then renders 🆕 for a new cell / — for nothing to diff).
- *   - `direction` 'up'   → higher is better (tests, judge, score)
- *   - `direction` 'down' → lower is better  (cost, tokens)
- * Equal counts as better (🟢). A worse move within {@link marginAbs} is 🟡 (or
- * 🟢 when MARGIN_IS_GREEN); beyond it, 🔴.
+ * Color one metric vs its baseline. Returns 🟢/🟡/🔴, or `null` when either side is missing.
+ * `direction` 'up' = higher-better (tests/judge/score), 'down' = lower-better (cost/tokens). Equal = 🟢.
+ * A worse move within {@link marginAbs} is 🟡 (or 🟢 when MARGIN_IS_GREEN); beyond it, 🔴.
  * @param {number|null|undefined} baseline
  * @param {number|null|undefined} pr
  * @param {{direction?: 'up'|'down', integer?: boolean}} [opts]
@@ -101,8 +71,7 @@ export function metricColor(baseline, pr, opts = {}) {
 
 // ── Cell scoring (shared with the mean/headline) ─────────────────────────────
 /**
- * Composite (0..100) for a cell from the shared scoring formula, or `null` when
- * the cell isn't scored (a harness_error, or a gradeable cell that ran no tests).
+ * Composite (0..100) for a cell, or `null` when unscored (harness_error, or gradeable but ran no tests).
  * @param {object} r a finalized result.json cell
  * @returns {number|null}
  */
@@ -112,8 +81,7 @@ export function cellComposite(r) {
 }
 
 /**
- * Mean composite over the SCORED cells only (same inclusion rule as the
- * headline), rounded to 1 decimal; `null` when no cell was scored.
+ * Mean composite over SCORED cells only (same rule as the headline), rounded to 1 dp; `null` if none.
  * @param {object[]} cells
  * @returns {number|null}
  */
@@ -126,16 +94,10 @@ export function meanComposite(cells) {
 
 // ── Aggregate (schema 2) ─────────────────────────────────────────────────────
 /**
- * Build the compact, self-describing aggregate persisted to S3 as the
- * commit-keyed baseline. Schema 2 holds everything the two report tables diff
- * against — per cell: the base composite + verdict/klass, the test counts, the
- * judge overall + per-dimension scores, the builder token spend, its $ cost, and
- * the score-per-$ — plus the mean and provenance (sha / event) for auditing.
- * Artifact-unreadable cells (carrying an `error` field) are dropped.
- *
- * Back-compat: a schema-1 baseline (composite/judge_score/test_rate only) still
- * diffs — the fields it lacks simply render 🆕/— on the baseline side until a
- * `main` bench records a schema-2 baseline.
+ * Build the compact schema-2 aggregate persisted to S3 as the commit-keyed baseline: per-cell
+ * composite/verdict/klass, test counts, judge overall + per-dimension, tokens, $ cost, score-per-$,
+ * plus mean + provenance. Artifact-unreadable cells dropped. Schema-1 baselines still diff (missing
+ * fields render 🆕/— until a main bench records schema-2).
  * @param {object[]} cells finalized result.json cells for this run
  * @param {{sha?: string, base_sha?: string, pr_number?: string, event?: string, generated_at?: string}} [meta]
  * @returns {object}
@@ -180,9 +142,8 @@ export function buildAggregate(cells, meta = {}) {
 }
 
 /**
- * Direction marker for a COMPOSITE delta (used by the headline + the roll-up).
- * ±5 near-equal band (wide on purpose: N=1, so a small delta is as likely model
- * variance as a real change). `''` for a missing/NaN delta.
+ * Direction marker for a COMPOSITE delta. ±5 near-equal band (wide: N=1, so a small delta is as
+ * likely variance as signal). `''` for a missing/NaN delta.
  * @param {number|null} delta
  * @returns {'▲'|'▼'|'≈'|''}
  */
@@ -193,8 +154,7 @@ export function deltaArrow(delta) {
 	return '≈';
 }
 
-// The metric fields the two tables read, defaulted to null so a schema-1 (or
-// partial) baseline cell degrades gracefully to 🆕/— instead of throwing.
+// The metric fields the tables read, defaulted to null so a schema-1/partial baseline degrades to 🆕/—.
 function cellMetrics(c) {
 	return {
 		composite: numOrNull(c?.composite),
@@ -211,20 +171,10 @@ function cellMetrics(c) {
 }
 
 /**
- * True iff the baseline aggregate can supply the schema-2 PER-METRIC set the two
- * tables diff (tests pass-counts, per-dimension judge, tokens, cost, score) —
- * i.e. it is schema 2+.
- *
- * WHY THIS GATE EXISTS: a schema-1 (pre-redesign) baseline persisted only
- * `composite`, `judge_score`, and `test_rate` per cell. Coloring each metric
- * independently against it lights up ONLY the fields it happens to carry
- * (`judge_score` → Judge colors) while every other column has no baseline value
- * (→ 🆕). That produced the inconsistent "Judge colored, Tests/Cost/Tokens/Score
- * all 🆕" row. So Judge must gate on baseline-COMPLETENESS exactly like the other
- * metrics: a partial (schema-1) baseline is treated as "no per-metric baseline"
- * — every column, Judge included, renders 🆕 — until a `main` bench records a
- * schema-2 baseline. The composite mean/delta still uses `composite` (present in
- * schema 1) for the headline + analysis roll-up.
+ * True iff the baseline is schema 2+, i.e. carries the per-metric set the tables diff (test counts,
+ * per-dimension judge, tokens, cost, score). A schema-1 baseline is treated as "no per-metric
+ * baseline" — every column (Judge included) renders 🆕 — so coloring stays consistent; the composite
+ * mean/delta still uses `composite` (present in schema 1) for the headline + analysis roll-up.
  * @param {object|null|undefined} baseline
  * @returns {boolean}
  */
@@ -233,14 +183,10 @@ export function baselineHasMetrics(baseline) {
 }
 
 /**
- * Diff the current run's aggregate against a baseline aggregate (or `null`).
- * Cells are matched by {@link cellKey}. Each row carries the COMPOSITE delta
- * (`current`/`baseline`/`delta`, kept for the headline + the analysis roll-up)
- * PLUS `pr` and `base` metric objects (from {@link cellMetrics}) the two tables
- * color and render. `base` is populated ONLY when the baseline carries the
- * schema-2 per-metric set ({@link baselineHasMetrics}); against a schema-1
- * baseline every metric — Judge included — renders 🆕 for consistency. A
- * baseline-only cell surfaces as a `removed` row.
+ * Diff the current run's aggregate against a baseline (or `null`). Cells matched by {@link cellKey}.
+ * Each row carries the COMPOSITE delta plus `pr`/`base` metric objects the tables color. `base` is
+ * populated only for a schema-2 baseline ({@link baselineHasMetrics}); against schema-1 every metric
+ * renders 🆕. A baseline-only cell surfaces as a `removed` row.
  * @param {object} current aggregate from {@link buildAggregate} for this run
  * @param {object|null} baseline aggregate fetched for the base commit, or null
  * @returns {{rows: object[], meanCurrent: number|null, meanBaseline: number|null, meanDelta: number|null, hasBaseline: boolean, perMetricBaseline: boolean}}
@@ -265,14 +211,11 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: !!base,
 			removed: false,
 			pr: cellMetrics(c),
-			// Only diff per-metric against a schema-2 baseline; a schema-1 baseline
-			// (composite/judge_score only) is NOT per-metric-comparable, so every
-			// column renders 🆕 rather than lighting up Judge alone.
+			// Per-metric diff only against a schema-2 baseline; schema-1 → every column 🆕.
 			base: base && perMetricBaseline ? cellMetrics(base) : null,
 		};
 	});
-	// Baseline-only cells (removed/renamed since the baseline) get their OWN row
-	// so a dropped cell is VISIBLE instead of silently vanishing.
+	// Baseline-only cells (removed/renamed) get their OWN row so a dropped cell stays visible.
 	for (const [key, base] of baseCells) {
 		if (curKeys.has(key)) continue;
 		rows.push({
@@ -315,13 +258,10 @@ export function fmtScore(s) {
 	return String(+s.toFixed(1));
 }
 
-// The metric spec shared by BOTH renderers so a metric is colored/directed
-// identically in the Overview and the Detailed table. `pick` reads the value
-// off a cellMetrics object; `format` renders it for the Detailed table.
+// Metric spec shared by both renderers so a metric is colored/directed identically in both tables.
 const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
 
-// Glyph for the colors-only Overview: the metric color, else 🆕 (scored now, no
-// baseline value) / — (nothing to diff this run).
+// Glyph for the colors-only Overview: metric color, else 🆕 (scored now, no baseline) / — (nothing to diff).
 function overviewGlyph(baseVal, prVal, opts) {
 	if (prVal === null || prVal === undefined) return NONE;
 	const col = metricColor(baseVal, prVal, opts);
@@ -337,8 +277,7 @@ function detailPair(baseVal, prVal, fmtVal, opts) {
 	return `${col} ${fmtVal(baseVal)} -> ${fmtVal(prVal)}`;
 }
 
-// Union of judge-dimension keys across baseline + pr, in a stable order (pr
-// first, then any baseline-only dims), so the multi-line judge cell is consistent.
+// Union of judge-dimension keys across baseline + pr (pr first), stable order for the multi-line cell.
 function dimKeys(baseDims, prDims) {
 	const keys = [];
 	for (const k of Object.keys(prDims ?? {})) if (!keys.includes(k)) keys.push(k);
@@ -346,9 +285,7 @@ function dimKeys(baseDims, prDims) {
 	return keys;
 }
 
-// Multi-line judge cell for the Detailed table: one "<color> <dim> base -> pr"
-// line per dimension, joined with <br> (GitHub renders it as a line break in a
-// table cell).
+// Multi-line judge cell for the Detailed table: one "<color> <dim> base -> pr" line per dim, <br>-joined.
 function judgeDetailCell(base, pr) {
 	const baseDims = base?.judge_dimensions ?? null;
 	const prDims = pr?.judge_dimensions ?? null;
@@ -367,9 +304,8 @@ function judgeDetailCell(base, pr) {
 
 // ── Render: Overview (colors only) ───────────────────────────────────────────
 /**
- * Colors-only, at-a-glance overview: TASK | TEMPLATE | TESTS | JUDGE | COST |
- * TOKENS (in/out) | SCORE, one 🟢/🟡/🔴 glyph per metric vs baseline (🆕 new,
- * — nothing to diff). No numbers — see {@link renderDetailed} for those.
+ * Colors-only overview: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE, one glyph
+ * per metric vs baseline (🆕 new, — nothing to diff). See {@link renderDetailed} for numbers.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -404,10 +340,8 @@ export function renderOverview(diff, opts = {}) {
 
 // ── Render: Detailed results (numbers) ───────────────────────────────────────
 /**
- * The same rows as {@link renderOverview}, widened WITH numbers: TASK | TEMPLATE
- * | TESTS (🟡 10/14 -> 9/14) | JUDGE (one colored dim per line) | COST (🟢 $3.5
- * -> $2) | TOKENS (in/out, each colored) | SCORE (colored base -> pr) | STOP
- * REASON. Colors + directions are identical to the Overview.
+ * The Overview rows widened WITH numbers: TESTS (🟡 10/14 -> 9/14) | JUDGE (one colored dim per line)
+ * | COST | TOKENS (in/out) | SCORE (base -> pr) | STOP REASON. Colors/directions match the Overview.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -427,8 +361,7 @@ export function renderDetailed(diff, opts = {}) {
 		}
 		const b = r.base;
 		const p = r.pr ?? {};
-		// TESTS is a "passed/denom" string colored by the passed COUNT (not a
-		// scalar), so it's built explicitly rather than via detailPair.
+		// TESTS is "passed/denom" colored by the passed COUNT, built explicitly rather than via detailPair.
 		const fmtTests = (m) => `${m.tests_passed ?? NONE}/${m.tests_denom ?? NONE}`;
 		let testsCell;
 		if (p.tests_passed === null || p.tests_passed === undefined || p.tests_denom === 0) {

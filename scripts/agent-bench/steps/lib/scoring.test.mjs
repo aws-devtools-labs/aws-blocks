@@ -1,10 +1,5 @@
-// Unit tests for the bench scoring single-source-of-truth (scoring.mjs).
-//
-// These pin the integrity-critical invariants — the composite formula, the
-// verdict tiers, cell classification, and the headline-mean inclusion rule — so
-// finalize-result.mjs and summary.mjs can never silently drift from the
-// pre-registered scoring methodology documented in the README. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test.
+// Unit tests for the bench scoring single-source-of-truth (scoring.mjs): the composite formula,
+// verdict tiers, cell classification, and the headline-mean inclusion rule. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -170,13 +165,9 @@ describe('classifyCell(result)', () => {
 });
 
 describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness_error (issue #183)', () => {
-	// The bug: the agent's vended bash issues a broad process-group/pkill storm at
-	// a dying dev server and tears down the parent harness (npx tsx), producing an
-	// ungraceful exit (143/137) that BYPASSES the SIGTERM partial-envelope flush.
-	// result.json then carries the step-0 baseline (stop_reason '', tokens 0) — NO
-	// terminal exit path ran. That self-inflicted infra kill must be EXCLUDED from
-	// the mean (harness_error), not scored as a composite-0 agent_fail that drags
-	// the headline and masks spend.
+	// The bug: the agent's bash pkill storm tears down the harness (npx tsx) with an ungraceful exit
+	// (143/137) that BYPASSES the SIGTERM flush, leaving step-0 zeros. That self-inflicted kill must be
+	// EXCLUDED (harness_error), not scored as a composite-0 agent_fail.
 	it('exit-143 / no-flush death (baseline zeros, no stop_reason) → harness_error, EXCLUDED', () => {
 		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', tokens_in: 0, tokens_out: 0 };
 		assert.equal(isUngracefulStepTwoDeath(cell), true);
@@ -195,10 +186,8 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 	});
 
 	it('a SURVIVING running checkpoint (nonzero tokens, in_progress) → harness_error EXCLUDED, but cost preserved', () => {
-		// fix (2): the incremental checkpoint leaves nonzero tokens + the NON-terminal
-		// CHECKPOINT_STOP_REASON sentinel + checkpoint:true when the process dies
-		// abruptly. Because no terminal exit path overwrote it, it stays EXCLUDED —
-		// yet the token spend is preserved so the cost signal (cellCost) is NOT masked.
+		// fix (2): the checkpoint leaves nonzero tokens + the non-terminal CHECKPOINT_STOP_REASON +
+		// checkpoint:true on an abrupt death. No terminal path overwrote it → EXCLUDED, but cost preserved.
 		const cell = {
 			failed_at: AGENT_FAIL_AT,
 			status: 'error',
@@ -476,11 +465,8 @@ describe('hardCapPlan(ev) — deterministic, non-stacking hard caps (fairness)',
 	});
 
 	it('FAIRNESS: build failed + dev NOT started (same root failure) → fc capped ONCE to 3, NOT stacked to 2', () => {
-		// A broken build can't serve a dev server, so the not-started dev server is
-		// a downstream symptom of the SAME root failure. The build cap owns
-		// functional_completeness (ceiling 3); the dev-server rule must NOT add a
-		// second, lower fc ceiling (2) on top — that would double-penalize one
-		// cause. selector_contract, a distinct dimension, is still capped to 2.
+		// A broken build can't serve a dev server (same root failure). The build cap owns fc (ceiling 3);
+		// the dev-server rule must NOT stack a second fc cap. selector_contract is still capped to 2.
 		const plan = hardCapPlan({ build_status: 'failed', dev_server_started: 'false' });
 		const fcCaps = plan.caps.filter((c) => c.dimension === 'functional_completeness');
 		assert.equal(fcCaps.length, 1, 'functional_completeness must be capped exactly once');

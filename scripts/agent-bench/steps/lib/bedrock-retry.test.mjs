@@ -1,11 +1,6 @@
-// Unit tests for the Bedrock invoke-layer retry classifier (bedrock-retry.mjs).
-//
-// `isRetryableModelError` is the load-bearing decision for whether a throttled
-// builder/judge invoke RETRIES (throttle/transient) or GIVES UP (a real,
-// deterministic outcome). Getting it wrong either burns the retry budget on an
-// unrecoverable error or — worse — surrenders a whole cell to a transient TPM
-// throttle it would have survived. These tests pin that boundary. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test.
+// Unit tests for the Bedrock invoke-layer retry classifier (bedrock-retry.mjs). `isRetryableModelError`
+// decides whether a throttled invoke RETRIES (throttle/transient) or GIVES UP (real outcome); these
+// pin that boundary. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -86,10 +81,8 @@ describe('isRetryableModelError — throttle/transient ⇒ retry; deterministic/
 	}
 });
 
-// The three ModelError SUBCLASSES that must be non-retryable exist precisely
-// because a naive `instanceof ModelError` check would wrongly retry them. Pin
-// the classifier's ordering that keeps them terminal despite extending ModelError
-// (and keeps ModelThrottledError — also a subclass — retryable).
+// Pin that non-retryable ModelError subclasses stay terminal despite extending ModelError (while
+// ModelThrottledError, also a subclass, stays retryable) — a naive instanceof check would retry them.
 describe('ModelError subclass ordering (specific subclasses classified before the base)', () => {
 	it('ContextWindowOverflowError / MaxTokensError extend ModelError yet are NOT retryable', () => {
 		assert.ok(new ContextWindowOverflowError('x') instanceof ModelError);
