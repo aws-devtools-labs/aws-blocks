@@ -17,14 +17,22 @@ name: PR Agent Bench
 #   S3_BUCKET     variable  Registry bucket (existing).
 
 on:
-  # Runs unconditionally on same-repo PR open/update AND on every push to main
-  # (a main run records the merged commit's baseline for later PRs to diff
-  # against). There is NO label gate: the bench is green-regardless — a failed
-  # cell / agent-timeout lands in the run summary, not the check status — so it
-  # is safe to run on every commit. Fork PRs get no secrets/OIDC under
-  # `pull_request` and are additionally blocked by the same-repo `if` below.
+  # Runs on same-repo PR open/update AND on every push to main (a main run
+  # records the merged commit's baseline for later PRs to diff against). There
+  # is NO label gate: the bench is green-regardless — a failed cell /
+  # agent-timeout lands in the run summary, not the check status. Fork PRs get
+  # no secrets/OIDC under `pull_request` and are blocked by the same-repo `if`.
+  #
+  # paths-ignore skips the (paid) bench when EVERY changed file is CI/docs-only
+  # (a PR touching any real code — packages/**, scripts/agent-bench/**, etc. —
+  # still benches, since paths-ignore only skips when ALL files match).
   pull_request:
     types: [opened, synchronize, reopened]
+    paths-ignore:
+      - '.github/**'
+      - '**/*.md'
+      - 'docs/**'
+      - '.changeset/**'
   push:
     branches: [main]
   workflow_dispatch:
