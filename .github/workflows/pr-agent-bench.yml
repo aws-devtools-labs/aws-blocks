@@ -23,15 +23,16 @@ on:
   # agent-timeout lands in the run summary, not the check status. Fork PRs get
   # no secrets/OIDC under `pull_request` and are blocked by the same-repo `if`.
   #
-  # paths-ignore skips the (paid) bench when EVERY changed file is CI/docs-only
-  # (a PR touching any real code — packages/**, scripts/agent-bench/**, etc. —
-  # still benches, since paths-ignore only skips when ALL files match).
+  # paths-ignore skips the (paid) bench when EVERY changed file is agent-inert:
+  # .github/** (CI/workflow config) and .changeset/** (release metadata). Docs
+  # and markdown are NOT ignored — the bench grades an agent that reads framework
+  # docs (packages/**/*.md, guides), so a docs change may be made to improve agent
+  # outcomes and should be benchable. A PR touching any real code still benches,
+  # since paths-ignore only skips when ALL files match.
   pull_request:
     types: [opened, synchronize, reopened]
     paths-ignore:
       - '.github/**'
-      - '**/*.md'
-      - 'docs/**'
       - '.changeset/**'
   push:
     branches: [main]
