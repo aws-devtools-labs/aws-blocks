@@ -501,17 +501,12 @@ export class Hosting extends Construct {
     );
 
     // ── 5a. Mark config.json as a no-cache path ─────────────────────
-    //    config.json is a fixed-name, mutable runtime-config file — it must
+    //    config.json is a fixed-name, mutable runtime-config file: it must
     //    NOT inherit the content-hashed mutable-asset cache-control
-    //    (`s-maxage=31536000`) the static-asset deployment applies to
-    //    `/assets/<hash>.js` and friends. If it did, an edge that cached the
-    //    build-time *placeholder* (`{_placeholder:true}`) during the deploy
-    //    window would keep serving it for up to a year — `getApiUrl()` then
-    //    throws and every client API call fails. Registering it as a
-    //    no-cache path routes the placeholder into the `no-cache, no-store,
-    //    must-revalidate` deployment tier so the edge never caches it
-    //    long-term; the real config is deployed in step 8 with its own
-    //    short `max-age=60`.
+    //    (`s-maxage=31536000`) applied to `/assets/<hash>.js`. Registering it
+    //    as a no-cache path uploads the build-time placeholder with
+    //    `no-cache, no-store, must-revalidate` so an edge never caches it
+    //    long-term; the real config is deployed in step 8 with `max-age=60`.
     const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
     const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
     manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)

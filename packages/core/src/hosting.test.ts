@@ -1508,7 +1508,6 @@ describe('Hosting', () => {
     });
   });
 
-  // ── #173: stale placeholder config.json never served long-term ──
   describe('config.json stale-placeholder guard (#173)', () => {
     // Helper: pull every BucketDeployment custom resource's Properties.
     const bucketDeployments = (stack: Stack) => {
@@ -1571,6 +1570,28 @@ describe('Hosting', () => {
       );
     });
 
+    it('registers the placeholder as a no-cache path even for a static-only site (no api)', () => {
+      // The placeholder is always written (step 5), so its no-cache
+      // registration must not depend on `props.api`. This guards against a
+      // regression that moves the registration inside an `if (props.api)`
+      // block, which would reopen the stale-placeholder window for
+      // static-only sites.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'StaticOnlyPlaceholderStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir });
+
+      Template.fromStack(stack).hasResourceProperties(
+        'Custom::CDKBucketDeployment',
+        Match.objectLike({
+          Include: Match.arrayWith(['.blocks-sandbox/config.json']),
+          SystemMetadata: Match.objectLike({
+            'cache-control': 'no-cache, no-store, must-revalidate',
+          }),
+        }),
+      );
+    });
+
     it('invalidates the post-rewrite cache key (/builds/<id>/.blocks-sandbox/*)', () => {
       // The viewer-request skew-protection function rewrites the URI to
       // `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the cache
@@ -1581,28 +1602,15 @@ describe('Hosting', () => {
       const stack = new Stack(app, 'InvalidationPathStack');
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
 
-      const deployments = bucketDeployments(stack);
-      // The BlocksConfigDeployment is the one targeting the .blocks-sandbox
-      // key prefix with an invalidation configured.
-      const configDeploy = deployments.find(
-        (p) =>
-          typeof p.DestinationBucketKeyPrefix === 'string' &&
-          (p.DestinationBucketKeyPrefix as string).endsWith('.blocks-sandbox') &&
-          Array.isArray(p.DistributionPaths),
-      );
-      assert.ok(
-        configDeploy,
-        'expected a BlocksConfigDeployment with distributionPaths',
-      );
-
-      const paths = configDeploy.DistributionPaths as string[];
-      const matchesRewrittenKey = paths.some((p) =>
-        /^\/builds\/.+\/\.blocks-sandbox\/\*$/.test(p),
-      );
-      assert.ok(
-        matchesRewrittenKey,
-        `distributionPaths must invalidate the post-rewrite cache key ` +
-          `(/builds/<id>/.blocks-sandbox/*); found ${JSON.stringify(paths)}`,
+      // Assert via Template + Match so a CDK property rename fails loudly here
+      // rather than silently skipping a structural-heuristic lookup.
+      Template.fromStack(stack).hasResourceProperties(
+        'Custom::CDKBucketDeployment',
+        Match.objectLike({
+          DistributionPaths: Match.arrayWith([
+            Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$'),
+          ]),
+        }),
       );
     });
   });
