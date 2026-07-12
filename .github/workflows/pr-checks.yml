@@ -90,7 +90,9 @@ jobs:
             node scripts/sync-block-docs.mjs >/dev/null
             # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null 2>&1 )
-            shasum -a 512 "$dest"/*.tgz | awk '{print $1}'
+            set -- "$dest"/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in $dest, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
           }
 
           mkdir -p /tmp/head-pack
@@ -103,7 +105,9 @@ jobs:
             cd /tmp/blocks-base
             node scripts/sync-block-docs.mjs >/dev/null
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null 2>&1 )
-            shasum -a 512 /tmp/base-pack/*.tgz | awk '{print $1}'
+            set -- /tmp/base-pack/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
           )
           git worktree remove --force /tmp/blocks-base
 
