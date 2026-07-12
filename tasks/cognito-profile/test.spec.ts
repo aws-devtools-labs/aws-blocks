@@ -68,6 +68,7 @@ test.describe('cognito-profile', () => {
 	// --- Framework surface: identity from the auth session over the api ---
 
 	test('api.whoami reflects the signed-in identity and is gated to authenticated callers', async ({ page, request }) => {
+		const errors = watchErrors(page);
 		// Unauthenticated (top-level request, no cookie): refused.
 		const anon = await rpc(request, 'api.whoami', []);
 		expect(anon.status, `unexpected HTTP ${anon.status}`).toBeLessThan(500);
@@ -81,9 +82,12 @@ test.describe('cognito-profile', () => {
 		const me = await rpc(page.request, 'api.whoami', []);
 		expect(me.body?.error, `JSON-RPC error: ${JSON.stringify(me.body?.error)}`).toBeFalsy();
 		expect(String(me.body?.result?.username)).toContain(email);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('after sign-out the session is gone — api.whoami is unauthenticated again', async ({ page, request }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page, request, uniq('user'));
 		const before = await rpc(page.request, 'api.whoami', []);
@@ -95,6 +99,8 @@ test.describe('cognito-profile', () => {
 		const after = await rpc(page.request, 'api.whoami', []);
 		expect(after.body?.error, 'whoami must be unauthenticated after sign-out').toBeTruthy();
 		expect(after.body?.result ?? null).toBeNull();
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	// --- Page smoke: the multi-view OTP flow ---

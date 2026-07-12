@@ -153,7 +153,9 @@ test.describe('kb-chat-agent', () => {
 		await expect.poll(() => bubbleWith(page, 'QUOKKA-9F42').count(), { timeout: REPLY }).toBeGreaterThan(0);
 
 		// Both turns' questions and distinct answers survive in the running log.
-		await expect(messages(page).filter({ hasText: q1 })).toHaveAttribute('data-role', 'user');
+		// Scope to the user role: an assistant bubble that quotes q1 must not
+		// satisfy this — only the user's own echoed bubble.
+		await expect(page.locator('[data-testid=message][data-role=user]').filter({ hasText: q1 })).toHaveCount(1);
 		await expect(orderReply()).toHaveCount(1);
 		await expect.poll(() => messages(page).count(), { timeout: T }).toBeGreaterThan(3);
 

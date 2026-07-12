@@ -70,16 +70,24 @@ test.describe('collab-presence-board', () => {
 	});
 
 	test('a blank or whitespace-only name is rejected and does not change the roster', async ({ request }) => {
-		const before = (await roster(request)).length;
-		for (const bad of ['', '   ', '\t\n']) {
+		// A real name of our own, so we can assert on OUR entry rather than the
+		// shared roster's absolute length (which other workers/tests mutate).
+		const mine = uniq('valid');
+		await join(request, mine);
+		expect(count(await roster(request), mine)).toBe(1);
+
+		const bads = ['', '   ', '\t\n'];
+		for (const bad of bads) {
 			const j = await join(request, bad);
 			expect(j.status, `unexpected HTTP ${j.status}`).toBeLessThan(500);
 			expect(j.body?.error, `blank name must be rejected, got result ${JSON.stringify(j.body?.result)}`).toBeTruthy();
 		}
-		// No phantom entry was added by the rejected joins.
+
+		// No phantom entry was added by the rejected joins, and our own valid entry
+		// is untouched — neither depends on the global roster length.
 		const after = await roster(request);
-		expect(after).not.toContain('');
-		expect(after.length).toBe(before);
+		for (const bad of bads) expect(after, `rejected input ${JSON.stringify(bad)} leaked into the roster`).not.toContain(bad);
+		expect(count(after, mine), 'the rejected joins must not disturb this visitor\u2019s entry').toBe(1);
 	});
 
 	test('multiple distinct visitors all persist in the shared roster', async ({ request }) => {

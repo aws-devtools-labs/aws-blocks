@@ -93,15 +93,19 @@ test.describe('auth-notes', () => {
 	// --- Framework surface: notes read/written through the api namespace ---
 
 	test('a fresh user\u2019s api.getNote is the empty string', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('fresh'));
 
 		const { body } = await rpc(page.request, 'api.getNote', []);
 		expect(body?.error, `JSON-RPC error: ${JSON.stringify(body?.error)}`).toBeFalsy();
 		expect(body?.result, 'getNote must return a string').toBe('');
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('api.saveNote overwrites (does not append) and api.getNote reads it back', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
@@ -115,9 +119,12 @@ test.describe('auth-notes', () => {
 		expect(s2.body?.error, `JSON-RPC error: ${JSON.stringify(s2.body?.error)}`).toBeFalsy();
 		// Overwrite, not append — the stored value is exactly the second note.
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe(second);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('saving an empty string clears the note (not a no-op)', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
@@ -125,9 +132,12 @@ test.describe('auth-notes', () => {
 		const cleared = await rpc(page.request, 'api.saveNote', ['']);
 		expect(cleared.body?.error, `JSON-RPC error: ${JSON.stringify(cleared.body?.error)}`).toBeFalsy();
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe('');
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('notes are stored verbatim — markup round-trips as a literal string', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
@@ -135,18 +145,24 @@ test.describe('auth-notes', () => {
 		await rpc(page.request, 'api.saveNote', [raw]);
 		// Exact string equality: no HTML escaping (&amp;) and no stripping.
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe(raw);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('a long note round-trips unchanged through the api', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
 		const note = (uniq('long') + ' ' + 'lorem ipsum dolor sit amet '.repeat(45)).trim();
 		await rpc(page.request, 'api.saveNote', [note]);
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe(note);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('a missing / non-string argument is rejected and leaves the note unchanged', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
@@ -165,9 +181,12 @@ test.describe('auth-notes', () => {
 
 		// The known-good note survived both rejections.
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe(keep);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('note methods require a session — an unauthenticated call is refused', async ({ page, request }) => {
+		const errors = watchErrors(page);
 		// Establish a real note as a signed-in user.
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
@@ -183,6 +202,8 @@ test.describe('auth-notes', () => {
 		const anonSave = await rpc(request, 'api.saveNote', ['hijack']);
 		expect(anonSave.body?.error, 'an unauthenticated saveNote must yield a JSON-RPC error envelope').toBeTruthy();
 		expect(anonSave.body?.result ?? null).toBeNull();
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('per-user isolation: each user\u2019s api.getNote returns only their own note', async ({ browser }) => {

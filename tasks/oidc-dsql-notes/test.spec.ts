@@ -56,6 +56,7 @@ test.describe('oidc-dsql-notes', () => {
 	// --- Framework surface: notes stored/queried through the api + DSQL ---
 
 	test('api.addNote inserts a row that api.listNotes reads back with a numeric id', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 
@@ -67,9 +68,12 @@ test.describe('oidc-dsql-notes', () => {
 
 		const rows = await listNotes(page.request);
 		expect(rows.some((r) => r?.text === text), 'the note must be listed').toBe(true);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('notes are stored verbatim via parameterized SQL (quotes/markup round-trip, no injection)', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 
@@ -79,18 +83,24 @@ test.describe('oidc-dsql-notes', () => {
 		// Exact string equality: a concatenated-SQL impl would break or mangle it.
 		expect(body?.result?.text).toBe(text);
 		expect((await listNotes(page.request)).find((r) => r?.text === text)?.text).toBe(text);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('a unicode / emoji note round-trips unchanged', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 
 		const text = `${uniq('uni')} caf\u00e9 \u65e5\u672c\u8a9e \ud83d\ude42 \u2014 na\u00efve`;
 		await rpc(page.request, 'api.addNote', [text]);
 		expect((await listNotes(page.request)).find((r) => r?.text === text)?.text).toBe(text);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('adding the same text twice creates two separate rows (no dedup)', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 
@@ -100,9 +110,12 @@ test.describe('oidc-dsql-notes', () => {
 		const matches = (await listNotes(page.request)).filter((r) => r?.text === text);
 		expect(matches, 'both identical notes must be stored as separate rows').toHaveLength(2);
 		expect(matches[0].id).not.toBe(matches[1].id);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('listNotes returns notes oldest-first with strictly increasing ids, stable across calls', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 
@@ -125,9 +138,12 @@ test.describe('oidc-dsql-notes', () => {
 		const [j1, j2, j3] = indicesOf(again, [t1, t2, t3]);
 		expect(j1).toBeLessThan(j2);
 		expect(j2).toBeLessThan(j3);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('api.addNote rejects blank / whitespace / non-string text (no row inserted)', async ({ page }) => {
+		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signIn(page);
 		const before = (await listNotes(page.request)).length;
@@ -142,6 +158,8 @@ test.describe('oidc-dsql-notes', () => {
 		expect(missing.body?.error, 'a missing argument must be rejected').toBeTruthy();
 
 		expect((await listNotes(page.request)).length, 'no rejected note may be inserted').toBe(before);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
 	test('note methods require a session — an unauthenticated call is refused', async ({ request }) => {
