@@ -2,9 +2,11 @@
 
 Build a passwordless sign-in flow in this AWS Blocks app. A visitor enters their email, receives a one-time code, enters the code, and lands on a profile page that shows who they're signed in as. They can sign out.
 
+The sign-in flow is an intrinsically multi-view browser experience, but the signed-in **identity** is a framework surface: an **`api` namespace** method reads the current user from the **auth session** on the server. The page reflects that identity.
+
 ## Setup (do this first)
 
-The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md (and any AGENTS.md), then do all your edits in this workspace.
 
 ## Requirements
 
@@ -12,27 +14,26 @@ The workspace has already been scaffolded. Begin by reading README.md, then do a
 2. The view then shows a **code field** and its own **submit button**. Submitting the code completes authentication and establishes a session.
 3. Once authenticated, the visitor sees a **profile** view that renders the signed-in user's identity (their email / username) — and the email/code fields are gone.
 4. The profile view has a **sign-out** button that returns the visitor to the signed-out email form.
-5. **Reject bad codes.** If the submitted code is wrong **or blank/empty**, catch the error and stay on the code-entry view — do **not** establish a session or throw an unhandled error. When a code is actually rejected, show a message in `[data-testid=auth-error]`; that hook must be **absent until a code is rejected** (don't render an empty error element on the fresh code-entry view). A wrong code does **not** end the attempt: the verification session stays valid (retriable), so the visitor can immediately re-enter the **correct** code on the same view and sign in — and once they do, the error must be **cleared** (`auth-error` is removed again).
-6. **Session persistence.** The session lives in a cookie: on a full page reload the visitor stays signed in and the profile re-renders their identity (restore it on load). The signed-out and code-entry hooks must be absent while signed in.
+5. **Reject bad codes.** If the submitted code is wrong **or blank/empty**, catch the error and stay on the code-entry view — do **not** establish a session or throw an unhandled error. When a code is actually rejected, show a message in `[data-testid=auth-error]`; that hook must be **absent until a code is rejected**. A wrong code does **not** end the attempt: the verification session stays valid (retriable), so the visitor can immediately re-enter the **correct** code and sign in — and once they do, the error must be **cleared** (`auth-error` removed again).
+6. **Session persistence.** The session lives in a cookie: on a full page reload the visitor stays signed in and the profile re-renders their identity (restore it on load).
 7. **Clean sign-out.** Signing out fully clears the session so a *different* email can sign in afterward and the profile shows the new identity (no stale cached user). A full page reload **after** signing out must **not** restore the session — it stays on the signed-out email form.
 
-This is email-OTP / passwordless: the visitor never types a password. One identifier (the email) on the way in, then the emailed code.
+This is email-OTP / passwordless: the visitor never types a password.
 
-## Test harness contract (required)
+## The `api` namespace (required)
 
-The grader has no mailbox, so it reads the OTP over JSON-RPC. **Expose an `api` namespace method `getLastCode()`** that returns the most recently delivered code as `{ username, code }` (or `null`). The grader retrieves it by POSTing to `/aws-blocks/api`:
+Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
 
-```
-POST /aws-blocks/api
-Content-Type: application/json
-{ "jsonrpc": "2.0", "method": "api.getLastCode", "params": [], "id": 1 }
-```
+1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered code as `{ username, code }` (or `null`). Retrieved via:
+   ```
+   POST /aws-blocks/api
+   { "jsonrpc": "2.0", "method": "api.getLastCode", "params": [], "id": 1 }
+   ```
+2. **`api.whoami()`** — returns the **currently signed-in** user's identity as `{ username }` (their email), derived on the server from the **auth session cookie** — not from a client-supplied argument. Called with **no session** (a request carrying no sign-in cookie), it returns a JSON-RPC **error** envelope (unauthenticated) — never a `result` and never a stale/other identity. After sign-out the session is gone, so `whoami` is again unauthenticated.
 
 ## Selector contract
 
-The Playwright test grades your work using these `data-testid` hooks. Implement them exactly. The signed-out, code-entry, and signed-in views are told apart by which hooks are present.
-
-An inactive view's hooks must be REMOVED from the DOM (the grader asserts `toHaveCount(0)`); hiding them with CSS (`display:none` / `hidden`) will fail.
+The Playwright test grades your work using these `data-testid` hooks. Implement them exactly. The signed-out, code-entry, and signed-in views are told apart by which hooks are present. An inactive view's hooks must be **removed** from the DOM (not merely hidden with CSS).
 
 | Selector | Element | Purpose |
 |---|---|---|
