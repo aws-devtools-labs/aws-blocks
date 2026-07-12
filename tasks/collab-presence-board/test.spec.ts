@@ -32,7 +32,11 @@ async function roster(ctx: APIRequestContext): Promise<string[]> {
 	return rows.map((r: any) => String(r?.name ?? r));
 }
 // The shared board holds every name every test joins, so scope roster reads to
-// this call's own unique names rather than asserting on absolute counts.
+// this call's own unique names rather than asserting on absolute counts. The
+// `count(...) === 1` assertions below are race-free only because the harness
+// runs specs serially (fullyParallel:false / workers:1 in
+// scripts/agent-bench/steps/3-build-and-test.sh); moving to >1 worker would
+// require reworking them to tolerate concurrent joins of the same unique name.
 const count = (names: string[], name: string) => names.filter((n) => n === name).length;
 
 const presence = (page: Page, name: string) => page.getByTestId('presence-item').filter({ hasText: name });

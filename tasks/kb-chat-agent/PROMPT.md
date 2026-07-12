@@ -6,7 +6,7 @@ The core of this task is **using the framework**: the agent turn — retrieval, 
 
 ## Setup (do this first)
 
-The workspace has already been scaffolded. Begin by reading `README.md` and `AGENTS.md`, then do all your edits in this workspace.
+The workspace has already been scaffolded. Begin by reading README.md (and any AGENTS.md), then do all your edits in this workspace.
 
 Replace the scaffold's starter content with your chat UI.
 

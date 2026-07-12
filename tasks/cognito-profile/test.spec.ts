@@ -149,7 +149,7 @@ test.describe('cognito-profile', () => {
 		// Retriable: the real code on the same view signs in and clears the error.
 		await page.getByTestId('otp-input').fill(real);
 		await page.getByTestId('otp-submit').click();
-		await expect(page.getByTestId('profile-username')).toContainText(user, { timeout: T });
+		await expect(page.getByTestId('profile-username')).toContainText(`${user}@test.com`, { timeout: T });
 		await expect(page.getByTestId('auth-error')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
