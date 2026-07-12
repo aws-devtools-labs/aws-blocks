@@ -220,20 +220,21 @@ describe('renderOverview(diff) — colors only', () => {
 	};
 	const md = renderOverview(diffAgainstBaseline(current, baseline), { heading: '## Overview' }).join('\n');
 
-	it('has the colors-only column header and no baseline->pr numbers', () => {
-		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \(in\/out\) \| Score \|/);
+	it('has the colors-only column header incl. the Δ vs base column and no baseline->pr numbers', () => {
+		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \(in\/out\) \| Score \| Δ vs base \|/);
 		assert.doesNotMatch(md, /->/); // Overview is glyphs only
 	});
-	it('colors each metric vs baseline', () => {
+	it('colors each metric vs baseline + a per-row composite Δ ball', () => {
 		// tests 4/4 vs 4/4 → 🟢 ; judge 8 vs 8 → 🟢 ; cost $1.75 vs $2.0 (lower) → 🟢 ;
-		// tokens_in 200k vs 190k (higher=worse, beyond 5%) → 🔴 ; score 52.6 vs 46 (higher) → 🟢
+		// tokens_in 200k vs 190k (higher=worse, beyond 5%) → 🔴 ; score 52.6 vs 46 (higher) → 🟢 ;
+		// composite 92 vs 92 → Δ 0 → 🟡 (flat, within the ±5-point band)
 		const row = md.split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(row, /\| auth-notes \| demo \| 🟢 \| 🟢 \| 🟢 \| 🔴\/🔴 \| 🟢 \|/);
+		assert.match(row, /\| auth-notes \| demo \| 🟢 \| 🟢 \| 🟢 \| 🔴\/🔴 \| 🟢 \| 🟡 \|/);
 	});
-	it('no-baseline mode flags every metric 🆕', () => {
+	it('no-baseline mode flags every metric AND the Δ column 🆕', () => {
 		const noBase = renderOverview(diffAgainstBaseline(current, null), {}).join('\n');
 		const row = noBase.split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \|/);
+		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \| 🆕 \|/);
 	});
 });
 
@@ -247,8 +248,8 @@ describe('renderDetailed(diff) — numbers', () => {
 	const md = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n');
 	const row = md.split('\n').find((l) => l.includes('auth-notes'));
 
-	it('has the detailed column header incl. Stop reason', () => {
-		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \| Score \| Stop reason \|/);
+	it('has the detailed column header incl. Δ vs base and Stop reason', () => {
+		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \| Score \| Δ vs base \| Stop reason \|/);
 	});
 	it('renders tests as colored baseline->pr counts', () => {
 		assert.match(row, /🟢 4\/4 -> 4\/4/);
@@ -259,10 +260,11 @@ describe('renderDetailed(diff) — numbers', () => {
 		assert.match(row, /🟢 code_quality 7 -> 8/);
 		assert.match(row, /<br>/); // dimensions on separate lines
 	});
-	it('renders cost, tokens (in/out), score, and stop reason with numbers', () => {
+	it('renders cost, tokens (in/out), score, Δ vs base, and stop reason with numbers', () => {
 		assert.match(row, /🟢 \$2 -> \$1\.75/); // cost lower = better
 		assert.match(row, /in 🔴 190K -> 200K<br>out 🔴 28K -> 30K/);
 		assert.match(row, /🟢 46 -> 52\.6/); // score higher = better
+		assert.match(row, /🟡 0\.0 \| end_turn \|/); // composite 92 vs 92 → Δ 0 → 🟡 flat, ball + signed number
 		assert.match(row, /\| end_turn \|/);
 	});
 	it('a removed cell shows a 🗑️ marker', () => {
@@ -276,6 +278,38 @@ describe('renderDetailed(diff) — numbers', () => {
 		});
 		const dmd = renderDetailed(withRemoved, {}).join('\n');
 		assert.match(dmd, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+	});
+});
+
+describe('Δ vs base column — per-row composite delta ball', () => {
+	const mk = (task, tp, tf, judge) => ({ task, template: 'demo', tests_passed: tp, tests_failed: tf, judge_score: judge, tokens_in: 100000, tokens_out: 10000, stop_reason: 'end_turn' });
+	// composites: imp 4/4·8 → 92 ; reg 1/4·3 → 27 ; flat 4/4·8 → 92 ; fresh 4/4·8 → 92 (no baseline cell)
+	const current = buildAggregate([mk('imp', 4, 0, 8), mk('reg', 1, 3, 3), mk('flat', 4, 0, 8), mk('fresh', 4, 0, 8)], {});
+	const baseline = {
+		schema: 2,
+		mean_composite: 80,
+		cells: [
+			{ task: 'imp', template: 'demo', composite: 60 }, // 92 - 60 = +32 → 🟢 improved
+			{ task: 'reg', template: 'demo', composite: 90 }, // 27 - 90 = -63 → 🔴 regressed
+			{ task: 'flat', template: 'demo', composite: 90 }, // 92 - 90 = +2 → 🟡 flat (within ±5)
+			// 'fresh' has no baseline cell → 🆕
+		],
+	};
+	const ov = renderOverview(diffAgainstBaseline(current, baseline), {}).join('\n');
+	const de = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n');
+	const cellOf = (md, task) => md.split('\n').find((l) => l.includes(`| ${task} |`));
+
+	it('Overview shows 🟢 improved / 🔴 regressed / 🟡 flat / 🆕 no-base as the trailing column', () => {
+		assert.match(cellOf(ov, 'imp'), /🟢 \|$/);
+		assert.match(cellOf(ov, 'reg'), /🔴 \|$/);
+		assert.match(cellOf(ov, 'flat'), /🟡 \|$/);
+		assert.match(cellOf(ov, 'fresh'), /🆕 \|$/);
+	});
+	it('Detailed shows the ball + signed delta (🆕 for a no-base cell)', () => {
+		assert.match(cellOf(de, 'imp'), /🟢 \+32\.0 \| end_turn \|/);
+		assert.match(cellOf(de, 'reg'), /🔴 -63\.0 \| end_turn \|/);
+		assert.match(cellOf(de, 'flat'), /🟡 \+2\.0 \| end_turn \|/);
+		assert.match(cellOf(de, 'fresh'), /🆕 \| end_turn \|/);
 	});
 });
 
@@ -313,14 +347,19 @@ describe('schema-1 baseline → every column (Judge included) is 🆕', () => {
 		assert.equal(diff.rows.find((r) => r.key === 'auth-notes/demo').delta, 12); // 92 - 80
 		assert.equal(diff.meanDelta, round1Delta(diff.meanCurrent, 80));
 	});
-	it('Overview: Judge renders 🆕 like the rest — NOT a color (the exact bug)', () => {
+	it('Overview: per-METRIC columns render 🆕 (the bug) — but the composite Δ still colors', () => {
 		const row = renderOverview(diff, {}).find((l) => l.includes('auth-notes'));
-		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \|/);
-		assert.doesNotMatch(row, /🟢|🟡|🔴/); // no metric may color against a schema-1 baseline
+		// metric columns 🆕 (schema-1 has no per-metric baseline), Δ vs base 🟢 (composite 92 vs 80 → +12)
+		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \| 🟢 \|/);
+		// The composite Δ is the ONLY colored cell — composite persists in schema 1, so its delta is comparable.
+		const metricsOnly = row.replace(/ 🟢 \|$/, ' |');
+		assert.doesNotMatch(metricsOnly, /🟢|🟡|🔴/); // no PER-METRIC cell colors against a schema-1 baseline
 	});
-	it('Detailed: the whole row is 🆕 + numbers, Judge included — no colors', () => {
+	it('Detailed: per-metric columns are 🆕 + numbers — only the composite Δ colors', () => {
 		const row = renderDetailed(diff, {}).find((l) => l.includes('auth-notes'));
-		assert.doesNotMatch(row, /🟢|🟡|🔴/);
+		assert.match(row, /🟢 \+12\.0/); // composite 92 vs 80 → Δ +12 → 🟢 (comparable even for schema-1)
+		const metricsOnly = row.replace(/🟢 \+12\.0 \|/, '|');
+		assert.doesNotMatch(metricsOnly, /🟢|🟡|🔴/); // no PER-METRIC cell colors against a schema-1 baseline
 		assert.doesNotMatch(row, /->/); // 🆕 cells show the pr value only, no baseline->pr
 		assert.match(row, /🆕 functional_completeness 8/); // judge dims are 🆕, not colored
 	});

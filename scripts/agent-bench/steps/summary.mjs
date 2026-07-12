@@ -128,6 +128,9 @@ md.push(
 	'- **Colors (vs baseline, per metric):** 🟢 same-or-better · 🟡 worse but within the margin · 🔴 worse beyond it · 🆕 no comparable baseline value (a new cell, or a baseline that predates this metric) · — nothing to diff this run · 🗑️ cell gone since the baseline.',
 );
 md.push(
+	'- **Δ vs base (per row):** the cell\'s COMPOSITE change vs the same cell on the baseline — 🟢 improved · 🟡 flat · 🔴 regressed, over the same ±5-point band as the headline delta (wider than the per-metric ±5% margin — it\'s absolute composite points, since N=1 makes a small swing likely noise). 🆕 no baseline cell to diff. The Detailed table also shows the signed number.',
+);
+md.push(
 	'- **Margin = ±5%** (`MARGIN_PCT` in `overview.mjs`) — relative to the baseline value; for integer metrics (test counts, 0-10 judge dims) it is floored to 1, so a single-point nudge is 🟡, never 🔴. Edit that one constant to widen/narrow it.',
 );
 md.push('- **Directions:** tests ↑, judge ↑, score ↑ are better (higher = 🟢); cost ↓, tokens ↓ are better (lower = 🟢).');

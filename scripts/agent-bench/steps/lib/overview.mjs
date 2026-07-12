@@ -303,10 +303,27 @@ function judgeDetailCell(base, pr) {
 	return lines.join('<br>');
 }
 
+// Per-row base→PR COMPOSITE delta as a status ball: 🟢/🟡/🔴 over the same ±5-point band as the
+// headline; 🆕 for a scored cell with no baseline counterpart; — for an unscored/undiffable cell.
+function overviewDeltaGlyph(r) {
+	if (r.delta !== null && r.delta !== undefined) return deltaBall(r.delta);
+	return r.current !== null && r.current !== undefined ? NEW : NONE;
+}
+
+// Detailed variant: the ball plus the signed numeric delta (e.g. "🟢 +12.4"); 🆕 / — like above.
+function detailDeltaCell(r) {
+	if (r.delta !== null && r.delta !== undefined) {
+		return `${deltaBall(r.delta)} ${r.delta > 0 ? '+' : ''}${r.delta.toFixed(1)}`;
+	}
+	return r.current !== null && r.current !== undefined ? NEW : NONE;
+}
+
 // ── Render: Overview (colors only) ───────────────────────────────────────────
 /**
- * Colors-only overview: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE, one glyph
- * per metric vs baseline (🆕 new, — nothing to diff). See {@link renderDetailed} for numbers.
+ * Colors-only overview: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE | Δ VS BASE,
+ * one glyph per metric vs baseline (🆕 new, — nothing to diff). The trailing Δ vs base column is the
+ * cell's COMPOSITE change vs the same cell on the baseline as a {@link deltaBall}. See
+ * {@link renderDetailed} for numbers.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -315,12 +332,12 @@ export function renderOverview(diff, opts = {}) {
 	const lines = [opts.heading ?? '## Overview', ''];
 	if (opts.note) lines.push(opts.note, '');
 	lines.push(
-		'| Task | Template | Tests | Judge | Cost | Tokens (in/out) | Score |',
-		'|------|----------|:-----:|:-----:|:----:|:---------------:|:-----:|',
+		'| Task | Template | Tests | Judge | Cost | Tokens (in/out) | Score | Δ vs base |',
+		'|------|----------|:-----:|:-----:|:----:|:---------------:|:-----:|:---------:|',
 	);
 	for (const r of diff.rows) {
 		if (r.removed) {
-			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} |`);
+			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} |`);
 			continue;
 		}
 		const b = r.base;
@@ -331,8 +348,9 @@ export function renderOverview(diff, opts = {}) {
 		const tin = overviewGlyph(b?.tokens_in, p.tokens_in, { direction: 'down' });
 		const tout = overviewGlyph(b?.tokens_out, p.tokens_out, { direction: 'down' });
 		const score = overviewGlyph(b?.score, p.score, { direction: SCORE_DIR });
+		const vsBase = overviewDeltaGlyph(r);
 		lines.push(
-			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${tests} | ${judge} | ${cost} | ${tin}/${tout} | ${score} |`,
+			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${tests} | ${judge} | ${cost} | ${tin}/${tout} | ${score} | ${vsBase} |`,
 		);
 	}
 	lines.push('');
@@ -342,7 +360,8 @@ export function renderOverview(diff, opts = {}) {
 // ── Render: Detailed results (numbers) ───────────────────────────────────────
 /**
  * The Overview rows widened WITH numbers: TESTS (🟡 10/14 -> 9/14) | JUDGE (one colored dim per line)
- * | COST | TOKENS (in/out) | SCORE (base -> pr) | STOP REASON. Colors/directions match the Overview.
+ * | COST | TOKENS (in/out) | SCORE (base -> pr) | Δ VS BASE (ball + signed composite delta) | STOP
+ * REASON. Colors/directions match the Overview.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -351,13 +370,13 @@ export function renderDetailed(diff, opts = {}) {
 	const lines = [opts.heading ?? '## Detailed results', ''];
 	if (opts.note) lines.push(opts.note, '');
 	lines.push(
-		'| Task | Template | Tests | Judge | Cost | Tokens | Score | Stop reason |',
-		'|------|----------|-------|-------|------|--------|-------|-------------|',
+		'| Task | Template | Tests | Judge | Cost | Tokens | Score | Δ vs base | Stop reason |',
+		'|------|----------|-------|-------|------|--------|-------|-----------|-------------|',
 	);
 	for (const r of diff.rows) {
 		if (r.removed) {
 			const was = r.base && r.base.tests_passed !== null ? ` (was ${r.base.tests_passed}/${r.base.tests_denom})` : '';
-			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${NONE} | ${NONE} | ${NONE} | ${NONE} | ${NONE} |`);
+			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${NONE} | ${NONE} | ${NONE} | ${NONE} | ${GONE} | ${NONE} |`);
 			continue;
 		}
 		const b = r.base;
@@ -380,9 +399,10 @@ export function renderDetailed(diff, opts = {}) {
 		const tokens =
 			p.tokens_in === null && p.tokens_out === null ? NONE : `in ${tinCell}<br>out ${toutCell}`;
 		const score = detailPair(b?.score ?? null, p.score, fmtScore, { direction: SCORE_DIR });
+		const vsBase = detailDeltaCell(r);
 		const stop = p.stop_reason || NONE;
 		lines.push(
-			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${testsCell} | ${judge} | ${cost} | ${tokens} | ${score} | ${stop} |`,
+			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${testsCell} | ${judge} | ${cost} | ${tokens} | ${score} | ${vsBase} | ${stop} |`,
 		);
 	}
 	lines.push('');
