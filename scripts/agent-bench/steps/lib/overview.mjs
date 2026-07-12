@@ -142,16 +142,17 @@ export function buildAggregate(cells, meta = {}) {
 }
 
 /**
- * Direction marker for a COMPOSITE delta. ±5 near-equal band (wide: N=1, so a small delta is as
- * likely variance as signal). `''` for a missing/NaN delta.
+ * Status ball for a COMPOSITE delta, reusing the report's 🟢/🟡/🔴 convention. ±5 near-equal band
+ * (wide: N=1, so a small delta is as likely variance as signal): improved beyond it 🟢, regressed
+ * beyond it 🔴, within it (flat / noise) 🟡. `''` for a missing/NaN delta.
  * @param {number|null} delta
- * @returns {'▲'|'▼'|'≈'|''}
+ * @returns {'🟢'|'🟡'|'🔴'|''}
  */
-export function deltaArrow(delta) {
+export function deltaBall(delta) {
 	if (delta === null || delta === undefined || Number.isNaN(delta)) return '';
-	if (delta > 5) return '▲';
-	if (delta < -5) return '▼';
-	return '≈';
+	if (delta > 5) return GREEN;
+	if (delta < -5) return RED;
+	return YELLOW;
 }
 
 // The metric fields the tables read, defaulted to null so a schema-1/partial baseline degrades to 🆕/—.

@@ -6,7 +6,7 @@
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
-import { buildAggregate, cellComposite, deltaArrow, diffAgainstBaseline, renderDetailed, renderOverview } from './lib/overview.mjs';
+import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderOverview } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
@@ -103,10 +103,10 @@ function headlineLine() {
 	}
 	const mean = aggregate.mean_composite;
 	const judgeNote = judgeMean !== null ? ` · judge mean **${judgeMean.toFixed(2)}**/10` : '';
-	// Composite mean delta vs the baseline (▲/▼/≈ over the ±5 band), when present.
+	// Composite mean delta vs the baseline (🟢/🔴/🟡 over the ±5 band), when present.
 	const deltaNote =
 		diff.hasBaseline && diff.meanDelta !== null
-			? ` · ${deltaArrow(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
+			? ` · ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
 			: '';
 	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${judgeNote}${deltaNote}.`;
 	if (!gateEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so it does not gate the merge._`;

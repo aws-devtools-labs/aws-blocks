@@ -9,7 +9,7 @@ import {
 	buildAggregate,
 	cellComposite,
 	cellKey,
-	deltaArrow,
+	deltaBall,
 	diffAgainstBaseline,
 	fmtCost,
 	fmtScore,
@@ -155,13 +155,13 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 	});
 });
 
-describe('deltaArrow(delta)', () => {
-	it('▲ / ▼ beyond ±5, ≈ within (inclusive), empty for null', () => {
-		assert.equal(deltaArrow(5.2), '▲');
-		assert.equal(deltaArrow(-6.4), '▼');
-		assert.equal(deltaArrow(0), '≈');
-		assert.equal(deltaArrow(5), '≈');
-		assert.equal(deltaArrow(null), '');
+describe('deltaBall(delta)', () => {
+	it('🟢 / 🔴 beyond ±5, 🟡 within (inclusive), empty for null', () => {
+		assert.equal(deltaBall(5.2), '🟢');
+		assert.equal(deltaBall(-6.4), '🔴');
+		assert.equal(deltaBall(0), '🟡');
+		assert.equal(deltaBall(5), '🟡');
+		assert.equal(deltaBall(null), '');
 	});
 });
 

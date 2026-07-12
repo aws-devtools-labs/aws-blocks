@@ -114,7 +114,7 @@ function main() {
 	out.push('');
 	for (const r of rows) {
 		const band = typeof r.composite === 'number' ? compositeBand(r.composite) : '⚪';
-		const flags = [r.low ? '🔴 low' : '', r.regressed ? `▼ regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
+		const flags = [r.low ? '🔴 low' : '', r.regressed ? `🔴 regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
 		const head = `${band} \`${r.task}/${r.template}\` — composite ${fmt(r.composite)} (${r.verdict})${flags ? ` [${flags}]` : ''}`;
 		out.push('<details>');
 		out.push(`<summary>${head}</summary>`);
