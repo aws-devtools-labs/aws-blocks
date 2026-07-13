@@ -1,12 +1,12 @@
 // "Render summary": read every bench-result-*/result.json artifact and render a markdown report to
-// $GITHUB_STEP_SUMMARY (Overview colors + Detailed numbers, glossary on top; exec summary/analysis
-// appended later by analyze.mjs). N=1 per cell. Formulas live in ./lib/scoring.mjs. Baseline = most
-// recent main bench (bench/runs/latest-main.json). Headline = mean composite over scored cells;
-// observational unless BENCH_MIN_SCORE gates.
+// $GITHUB_STEP_SUMMARY (ONE results table with a value + colored delta per metric, glossary on top;
+// exec summary/analysis appended later by analyze.mjs). N=1 per cell. Formulas live in ./lib/scoring.mjs.
+// Baseline = most recent main bench (bench/runs/latest-main.json). Headline = mean composite over
+// scored cells; observational unless BENCH_MIN_SCORE gates.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
-import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed, renderOverview } from './lib/overview.mjs';
+import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
@@ -121,19 +121,16 @@ const md = [];
 // 1) Glossary & notes — collapsed, at the very top.
 const lastRun = (process.env.GITHUB_RUN_STARTED_AT || new Date().toISOString()).replace(/\.\d{3}Z$/, 'Z');
 md.push('<details>');
-md.push('<summary>📖 Glossary &amp; notes — scoring, colors, the ±5% margin (click to expand)</summary>');
+md.push('<summary>📖 Glossary &amp; notes — scoring, colors, per-metric thresholds (click to expand)</summary>');
 md.push('');
 md.push('- **N = 1** — one rep per cell, so a small delta may be model variance, not a real change; re-run for certainty.');
 md.push(
-	'- **Colors (vs baseline, per metric):** 🟢 same-or-better · 🟡 worse but within the margin · 🔴 worse beyond it · 🆕 no comparable baseline value (a new cell, or a baseline that predates this metric) · — nothing to diff this run · 🗑️ cell gone since the baseline.',
+	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows the current value on top and the signed delta vs `main` below it.',
 );
 md.push(
-	'- **Δ vs base (per row):** the cell\'s COMPOSITE change vs the same cell on the baseline — 🟢 improved · 🟡 flat · 🔴 regressed, over the same ±5-point band as the headline delta (wider than the per-metric ±5% margin — it\'s absolute composite points, since N=1 makes a small swing likely noise). 🆕 no baseline cell to diff. The Detailed table also shows the signed number.',
+	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge ±0.3 · tests ±1 pass · cost ±10% · tokens ±10% (in+out combined). A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
 );
-md.push(
-	'- **Margin = ±5%** (`MARGIN_PCT` in `overview.mjs`) — relative to the baseline value; for integer metrics (test counts, 0-10 judge dims) it is floored to 1, so a single-point nudge is 🟡, never 🔴. Edit that one constant to widen/narrow it.',
-);
-md.push('- **Directions:** tests ↑, judge ↑, score ↑ are better (higher = 🟢); cost ↓, tokens ↓ are better (lower = 🟢).');
+md.push('- **Directions:** higher is better for tests, judge, and score; lower is better for cost and tokens.');
 md.push(
 	'- **Composite (0-100)** = `round(60·test_rate + 4·judge·min(1, 4·test_rate), 1)` — 60% objective pass-rate + 40% judge, the judge term gated below a 25% pass-rate.',
 );
@@ -152,38 +149,29 @@ md.push('');
 md.push('</details>');
 md.push('');
 
-// 2) Overview — colors only.
+// 2) Results — one table: current value + colored delta per metric, headline underneath the heading.
 if (cells.length > 0) {
-	let heading = '## Overview — PR vs `main` baseline';
+	let heading = '## Results — PR vs `main` baseline';
 	let note;
-	const legend = '🟢 better/equal · 🟡 worse within ±5% · 🔴 worse beyond · 🆕 new/uncomparable.';
-	const perMetric = diff.perMetricBaseline;
+	const legend = '🟢 improved · 🟡 within noise · 🔴 regressed · ⚪ no baseline yet (value shown, tagged `(new)`).';
 	const baseLabel = baseline?.sha ? `\`${String(baseline.sha).slice(0, 7)}\`` : 'the recorded baseline';
-	// A baseline predating the per-metric (schema-2) aggregate can compare only the composite mean;
-	// per-metric cells show 🆕 until the next main bench records the new schema.
-	const staleNote = `A \`main\` baseline exists (${baseLabel}) but predates the per-metric schema, so per-metric cells show 🆕 — only the composite mean (in the headline) is comparable. Full per-metric coloring returns once a \`main\` bench records the new schema.`;
 	if (benchEvent === 'push') {
 		// A push-to-main run IS the new baseline; diffs against the previous main bench, else absolute.
-		heading = '## Overview — baseline run';
+		heading = '## Results — baseline run';
 		const rec = `Baseline run (push to \`main\`): recorded as the new \`main\` baseline for \`${benchSha.slice(0, 7) || '(unknown)'}\`.`;
-		if (!baseline) note = `${rec} No earlier baseline to diff — absolute values (all 🆕).`;
-		else if (perMetric) note = `${rec} Colored vs the PREVIOUS \`main\` baseline ${baseLabel}. ${legend}`;
-		else note = `${rec} ${staleNote}`;
-	} else if (perMetric) {
-		note = `Each metric colored vs the latest \`main\` baseline ${baseLabel}. ${legend}`;
+		note = baseline
+			? `${rec} Each metric colored vs the PREVIOUS \`main\` baseline ${baseLabel}. ${legend}`
+			: `${rec} No earlier baseline to diff — current values only (every metric ⚪).`;
 	} else if (baseline) {
-		note = staleNote;
+		note = `Each metric shows its current value colored by the change vs the latest \`main\` baseline ${baseLabel}. ${legend}`;
 	} else {
-		note = 'No `main` baseline recorded yet — showing absolute values (every metric 🆕). PR-vs-`main` deltas appear once a `main` bench has stored one.';
+		note = 'No `main` baseline recorded yet — showing current values only (every metric ⚪). Colored deltas vs `main` appear once a `main` bench has stored one.';
 	}
-	md.push(...renderOverview(diff, { heading, note }));
-	// Deterministic headline directly under the Overview.
+	md.push(heading, '');
+	md.push(note, '');
+	// Deterministic headline directly under the heading, above the table.
 	md.push(headlineLine(), '');
-}
-
-// 3) Detailed results — numbers.
-if (cells.length > 0) {
-	md.push(...renderDetailed(diff, { heading: '## Detailed results', note: 'Same rows, colored `baseline -> pr`.' }));
+	md.push(...renderDetailed(diff, {}));
 }
 
 // 4) Compact caveats (deterministic) — excluded / harness / judge-error cells.
