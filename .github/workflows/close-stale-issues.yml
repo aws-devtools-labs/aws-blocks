@@ -1,4 +1,4 @@
-name: Close pending-community-response issues
+name: Close stale questions (pending-community-response)
 on:
   schedule:
     - cron: '30 2 * * *'

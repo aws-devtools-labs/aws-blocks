@@ -3,6 +3,10 @@ on:
   issues:
     types: [opened, reopened]
 
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 permissions:
   issues: write
 

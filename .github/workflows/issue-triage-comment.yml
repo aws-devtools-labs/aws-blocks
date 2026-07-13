@@ -3,6 +3,10 @@ on:
   issue_comment:
     types: [created]
 
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 permissions:
   issues: write
 
@@ -14,12 +18,9 @@ jobs:
       REPOSITORY_NAME: ${{ github.repository }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Remove pending-community-response when a community member comments on an open issue
+      - name: Swap to pending-maintainer-response when a community member comments on an open issue
         if: ${{ !contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
-        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-community-response"
-      - name: Add pending-maintainer-response when a community member comments on an open issue
-        if: ${{ !contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
-        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --add-label "pending-maintainer-response"
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-community-response" --add-label "pending-maintainer-response"
       - name: Move to awaiting-community when a maintainer comments on an open issue
         if: ${{ contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
         run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-maintainer-response" --add-label "pending-community-response"
