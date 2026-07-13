@@ -1,5 +1,11 @@
 # @aws-blocks/blocks
 
+## 0.2.2
+
+### Patch Changes
+
+- d898838: Include synced building block documentation updates.
+
 ## 0.2.1
 
 ### Patch Changes
