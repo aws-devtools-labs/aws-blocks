@@ -138,15 +138,25 @@ test.describe('auth-notes', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('notes are stored verbatim — markup round-trips as a literal string', async ({ page }) => {
+	test('notes are stored verbatim AND rendered as literal text — markup is never interpreted as HTML', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 		await signUp(page, uniq('alice'));
 
 		const raw = `<b>${uniq('x')}</b> & <i>plain</i>`;
+
+		// API round-trip: exact string equality — no HTML escaping (&amp;) and no stripping.
 		await rpc(page.request, 'api.saveNote', [raw]);
-		// Exact string equality: no HTML escaping (&amp;) and no stripping.
 		expect((await rpc(page.request, 'api.getNote', [])).body?.result).toBe(raw);
+
+		// DOM smoke (XSS): save the markup THROUGH the page and confirm note-display treats it as a
+		// literal string, not HTML. An unsafe `innerHTML = note` sink would parse the <b>/<i> into
+		// real child elements; a correct textContent render yields ZERO such nodes and the exact text.
+		await page.getByTestId('note-textarea').fill(raw);
+		await page.getByTestId('note-save').click();
+		await expect(page.getByTestId('note-display')).toHaveText(raw, { timeout: T });
+		await expect(page.getByTestId('note-display').locator('b')).toHaveCount(0);
+		await expect(page.getByTestId('note-display').locator('i')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});

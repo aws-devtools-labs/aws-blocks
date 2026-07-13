@@ -126,14 +126,43 @@ test.describe('async-word-counter', () => {
 		const id = await enqueue(request, text);
 		await countOf(request, id);
 
-		// A fresh caller (new request context has no client memory) must still
-		// see the persisted job via listJobs — proof it lives in the store.
+		// The `request` fixture is a raw API client (reused here, NOT a new context) — it holds no
+		// in-page/client-side list state, so seeing the job via listJobs proves it was restored from
+		// the server-side store, not replayed from any client memory.
 		const { body } = await rpc(request, 'api.listJobs', []);
 		expect(body?.error, `JSON-RPC error: ${JSON.stringify(body?.error)}`).toBeFalsy();
 		expect(Array.isArray(body?.result), 'listJobs must return an array').toBe(true);
 		const mine = body.result.find((j: any) => j?.id === id);
 		expect(mine, 'listJobs must include the enqueued job').toBeTruthy();
 		expect(mine.text).toBe(text);
+	});
+
+	test('a job is persisted at enqueue time as "processing" — not only when it finishes', async ({ request }) => {
+		// PROMPT (lines 3, 19, 22, 32): enqueue must persist the job IMMEDIATELY with status
+		// "processing" (keyed by id in the KV block), not only on completion. The background job
+		// runs asynchronously, so reading right after enqueue returns must surface a persisted
+		// "processing" job — whereas a persist-on-done impl 404s here (unknown id) or omits it
+		// from listJobs. (DONE=20s / "background job + poll interval" confirms jobs are not
+		// instant, so this window is real and the read is not racy.)
+		const text = `${uniq('proc')} alpha beta gamma delta`; // 5 tokens
+		const id = await enqueue(request, text);
+
+		const { body } = await rpc(request, 'api.getJob', [id]);
+		expect(body?.error, `getJob right after enqueue must not error: ${JSON.stringify(body?.error)}`).toBeFalsy();
+		const job = body?.result;
+		expect(job?.id, 'the job must be readable the instant it is enqueued').toBe(id);
+		expect(job?.text).toBe(text);
+		expect(job?.status, 'a just-enqueued job must be persisted as "processing"').toBe('processing');
+		expect(job?.count ?? null, 'count is null/absent while still processing').toBeNull();
+
+		// listJobs must ALSO surface the still-processing job (restored from the store, PROMPT line 22).
+		const listed = (await rpc(request, 'api.listJobs', [])).body?.result ?? [];
+		const mine = Array.isArray(listed) ? listed.find((j: any) => j?.id === id) : null;
+		expect(mine, 'listJobs must include the still-processing job (not only done ones)').toBeTruthy();
+		expect(mine.status, 'the listed job is still processing').toBe('processing');
+
+		// And it still resolves to done with the correct count.
+		expect(await countOf(request, id)).toBe(5);
 	});
 
 	// --- Page smoke: the thin client enqueues, polls, and persists ---

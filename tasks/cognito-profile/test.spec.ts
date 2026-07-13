@@ -69,20 +69,18 @@ async function signIn(page: Page, request: APIRequestContext, user: string): Pro
 test.describe('cognito-profile', () => {
 	// --- Framework surface: identity from the auth session over the api ---
 
-	test('api.getLastCode is a mock-only backdoor — gated off outside BLOCKS_MOCK', async ({ request }) => {
-		// The OTP-reader hook must never leak codes in a real deployment. In the
-		// bench (BLOCKS_MOCK=true) it is live so the grader can read the code;
-		// with the flag unset it must be gated off and return null.
+	test('api.getLastCode is live in mock mode (the grader can read the OTP) and never errors', async ({ request }) => {
+		// The OTP-reader hook is a mock-only backdoor: the PROMPT requires it to gate on
+		// BLOCKS_MOCK and return null in a real deployment. This grader can only exercise the
+		// LIVE (mock) side — the bench always runs with BLOCKS_MOCK=true (3-build-and-test.sh),
+		// so the production-gate branch (getLastCode → null when the flag is unset) never runs
+		// here. That gate is PROMPT-enforced and codegen-skipped but grader-UNVERIFIED; asserting
+		// it under a `else` that can never execute would be a misleading dead assertion, so we
+		// assert only what the bench actually reaches: in mock mode the call must succeed (so the
+		// OTP flow is graded) and must never surface a JSON-RPC error envelope.
 		const { status, body } = await rpc(request, 'api.getLastCode', []);
 		expect(status, `unexpected HTTP ${status}`).toBeLessThan(500);
-		if (process.env.BLOCKS_MOCK === 'true') {
-			// Live in mock mode: null (nothing delivered yet) or a { username, code }
-			// record — but never a JSON-RPC error envelope.
-			expect(body?.error, `getLastCode must not error in mock mode: ${JSON.stringify(body?.error)}`).toBeFalsy();
-		} else {
-			// Production / non-mock: the backdoor is closed — no code is exposed.
-			expect(body?.result ?? null, 'getLastCode must be gated off (null) outside BLOCKS_MOCK').toBeNull();
-		}
+		expect(body?.error, `getLastCode must not error in mock mode: ${JSON.stringify(body?.error)}`).toBeFalsy();
 	});
 
 	test('api.whoami reflects the signed-in identity and is gated to authenticated callers', async ({ page, request }) => {
