@@ -353,9 +353,11 @@ export function renderDetailed(diff, opts = {}) {
 		const b = r.base;
 		const p = r.pr ?? {};
 		const stop = p.stop_reason || NONE;
-		lines.push(
-			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${testsCell(b, p)} | ${judgeCell(b, p)} | ${costCell(b, p)} | ${tokensCell(b, p)} | ${scoreCell(b, p)} | ${stop} |`,
-		);
+		// Guarantee the 8-column invariant: coerce any empty metric cell to NONE so a crashed/null-metric
+		// cell (no tokens/score/composite) can never drop a column and misalign the row.
+		const cell = (v) => (typeof v === 'string' && v.trim() ? v : NONE);
+		const cells = [testsCell(b, p), judgeCell(b, p), costCell(b, p), tokensCell(b, p), scoreCell(b, p)].map(cell);
+		lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${cells.join(' | ')} | ${cell(stop)} |`);
 	}
 	lines.push('');
 	return lines;
