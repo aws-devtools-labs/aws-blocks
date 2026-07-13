@@ -1,8 +1,9 @@
-// PR-vs-baseline overview + detailed-results helpers, kept as PURE functions (no fs/env/process) so
-// the diff math + coloring are unit-testable under `node --test`. summary.mjs does the I/O and calls
-// these to render two tables from the same rows: renderOverview (colors only) and renderDetailed
-// (colors + numbers). Baseline = commit-keyed aggregate (bench/runs/latest-main.json); no baseline →
-// absolute numbers, all 🆕. Composite/cost/score all come from lib/scoring.mjs.
+// PR-vs-baseline results helpers, kept as PURE functions (no fs/env/process) so the diff math +
+// coloring are unit-testable under `node --test`. summary.mjs does the I/O and calls these to render
+// ONE results table: renderDetailed. Each metric cell shows the CURRENT value plus a color for the
+// SIGNIFICANCE + DIRECTION of its change vs the baseline, with the signed delta on a second line.
+// Baseline = most recent main bench (bench/runs/latest-main.json); a missing baseline VALUE for a
+// field renders ⚪ + the current value + "(new)". Composite/cost/score all come from lib/scoring.mjs.
 import {
 	SCORE_PER_DOLLAR,
 	cellCost,
@@ -24,49 +25,45 @@ const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null
 export const GREEN = '🟢';
 export const YELLOW = '🟡';
 export const RED = '🔴';
-export const NEW = '🆕';
+export const WHITE = '⚪'; // no baseline value for this field/cell — current value still shown, tagged "(new)"
 export const GONE = '🗑️';
 export const NONE = '—';
 
-// The single tunable separating 🟡 (worse within noise) from 🔴 (worse beyond): a 5% relative margin.
-export const MARGIN_PCT = 0.05;
-
-// Default boundary policy: worse-but-within-margin renders 🟡. Set true to treat within-margin as 🟢.
-export const MARGIN_IS_GREEN = false;
-
 // SCORE is higher-better iff scoring.mjs computes composite-per-$ (default); imported so one knob drives both.
 export const SCORE_HIGHER_BETTER = SCORE_PER_DOLLAR;
+const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
+
+// Per-metric significance thresholds for the delta coloring — the ONE place they live. A change within
+// ±threshold reads as 🟡 (noise, since N=1); beyond it, 🟢 (improved) / 🔴 (regressed) by direction.
+// Absolute units unless the key ends in `Pct` (then it's a fraction of |baseline|).
+export const DELTA_THRESHOLDS = {
+	composite: 5, // composite points — also the headline mean-delta band (deltaBall)
+	score: 5, // composite-per-$ points
+	judge: 0.3, // judge score (0-10)
+	tests: 1, // test pass count (a ±1 nudge is noise)
+	costPct: 0.1, // cost: ±10% of the baseline cost
+	tokensPct: 0.1, // tokens (in+out combined): ±10% of the baseline total
+};
 
 /**
- * Absolute tolerance around a baseline below which a WORSE move stays 🟡. MARGIN_PCT of |baseline|;
- * floored to 1 for integer metrics so a ±1 nudge on a small integer reads as within-margin.
- * @param {number} baseline
- * @param {boolean} integer
- * @returns {number}
- */
-export function marginAbs(baseline, integer) {
-	const raw = Math.abs(baseline) * MARGIN_PCT;
-	return integer ? Math.max(1, Math.round(raw)) : raw;
-}
-
-/**
- * Color one metric vs its baseline. Returns 🟢/🟡/🔴, or `null` when either side is missing.
- * `direction` 'up' = higher-better (tests/judge/score), 'down' = lower-better (cost/tokens). Equal = 🟢.
- * A worse move within {@link marginAbs} is 🟡 (or 🟢 when MARGIN_IS_GREEN); beyond it, 🔴.
+ * Color a metric by the SIGNIFICANCE + DIRECTION of its delta vs baseline (NOT absolute quality).
+ * `direction` 'up' = higher-is-better (tests/judge/score), 'down' = lower-is-better (cost/tokens).
+ * A change beyond `threshold` in the improving direction → 🟢; beyond it in the worsening direction →
+ * 🔴; within ±threshold (either way) → 🟡. Missing either side → ⚪.
  * @param {number|null|undefined} baseline
  * @param {number|null|undefined} pr
- * @param {{direction?: 'up'|'down', integer?: boolean}} [opts]
- * @returns {'🟢'|'🟡'|'🔴'|null}
+ * @param {number} threshold absolute tolerance in the metric's own units
+ * @param {'up'|'down'} direction
+ * @returns {'🟢'|'🟡'|'🔴'|'⚪'}
  */
-export function metricColor(baseline, pr, opts = {}) {
-	const direction = opts.direction ?? 'up';
-	const integer = opts.integer ?? false;
-	if (baseline === null || baseline === undefined || Number.isNaN(baseline)) return null;
-	if (pr === null || pr === undefined || Number.isNaN(pr)) return null;
-	const better = direction === 'up' ? pr >= baseline : pr <= baseline;
-	if (better) return GREEN;
-	const worseBy = direction === 'up' ? baseline - pr : pr - baseline; // > 0
-	return worseBy <= marginAbs(baseline, integer) ? (MARGIN_IS_GREEN ? GREEN : YELLOW) : RED;
+export function deltaColor(baseline, pr, threshold, direction = 'up') {
+	if (baseline === null || baseline === undefined || Number.isNaN(baseline)) return WHITE;
+	if (pr === null || pr === undefined || Number.isNaN(pr)) return WHITE;
+	const raw = pr - baseline; // signed change in the metric's units
+	const improvement = direction === 'up' ? raw : -raw; // > 0 means "better"
+	if (improvement > threshold) return GREEN;
+	if (improvement < -threshold) return RED;
+	return YELLOW;
 }
 
 // ── Cell scoring (shared with the mean/headline) ─────────────────────────────
@@ -96,8 +93,8 @@ export function meanComposite(cells) {
 /**
  * Build the compact schema-2 aggregate persisted to S3 as the commit-keyed baseline: per-cell
  * composite/verdict/klass, test counts, judge overall + per-dimension, tokens, $ cost, score-per-$,
- * plus mean + provenance. Artifact-unreadable cells dropped. Schema-1 baselines still diff (missing
- * fields render 🆕/— until a main bench records schema-2).
+ * plus mean + provenance. Artifact-unreadable cells dropped. An older baseline that lacks some
+ * per-metric fields still diffs per-field: fields it carries color, fields it lacks render ⚪ "(new)".
  * @param {object[]} cells finalized result.json cells for this run
  * @param {{sha?: string, base_sha?: string, pr_number?: string, event?: string, generated_at?: string}} [meta]
  * @returns {object}
@@ -142,20 +139,21 @@ export function buildAggregate(cells, meta = {}) {
 }
 
 /**
- * Status ball for a COMPOSITE delta, reusing the report's 🟢/🟡/🔴 convention. ±5 near-equal band
- * (wide: N=1, so a small delta is as likely variance as signal): improved beyond it 🟢, regressed
- * beyond it 🔴, within it (flat / noise) 🟡. `''` for a missing/NaN delta.
+ * Status ball for a COMPOSITE delta (headline mean-delta), over the ±{@link DELTA_THRESHOLDS}.composite
+ * band: improved beyond it 🟢, regressed beyond it 🔴, within it (flat / noise) 🟡. `''` for a
+ * missing/NaN delta.
  * @param {number|null} delta
  * @returns {'🟢'|'🟡'|'🔴'|''}
  */
 export function deltaBall(delta) {
 	if (delta === null || delta === undefined || Number.isNaN(delta)) return '';
-	if (delta > 5) return GREEN;
-	if (delta < -5) return RED;
+	if (delta > DELTA_THRESHOLDS.composite) return GREEN;
+	if (delta < -DELTA_THRESHOLDS.composite) return RED;
 	return YELLOW;
 }
 
-// The metric fields the tables read, defaulted to null so a schema-1/partial baseline degrades to 🆕/—.
+// The per-cell metric fields the table reads, defaulted to null so any field an older baseline lacks
+// degrades to ⚪ "(new)" for THAT metric only (never forcing the whole row).
 function cellMetrics(c) {
 	return {
 		composite: numOrNull(c?.composite),
@@ -172,28 +170,15 @@ function cellMetrics(c) {
 }
 
 /**
- * True iff the baseline is schema 2+, i.e. carries the per-metric set the tables diff (test counts,
- * per-dimension judge, tokens, cost, score). A schema-1 baseline is treated as "no per-metric
- * baseline" — every column (Judge included) renders 🆕 — so coloring stays consistent; the composite
- * mean/delta still uses `composite` (present in schema 1) for the headline + analysis roll-up.
- * @param {object|null|undefined} baseline
- * @returns {boolean}
- */
-export function baselineHasMetrics(baseline) {
-	return !!baseline && (numOrNull(baseline.schema) ?? 0) >= 2;
-}
-
-/**
  * Diff the current run's aggregate against a baseline (or `null`). Cells matched by {@link cellKey}.
- * Each row carries the COMPOSITE delta plus `pr`/`base` metric objects the tables color. `base` is
- * populated only for a schema-2 baseline ({@link baselineHasMetrics}); against schema-1 every metric
- * renders 🆕. A baseline-only cell surfaces as a `removed` row.
+ * Each row carries the COMPOSITE delta plus `pr`/`base` metric objects the table colors. `base` is
+ * populated for ANY matched baseline cell (per-field: fields it lacks simply read null → ⚪ "(new)").
+ * A baseline-only cell surfaces as a `removed` row.
  * @param {object} current aggregate from {@link buildAggregate} for this run
  * @param {object|null} baseline aggregate fetched for the base commit, or null
- * @returns {{rows: object[], meanCurrent: number|null, meanBaseline: number|null, meanDelta: number|null, hasBaseline: boolean, perMetricBaseline: boolean}}
+ * @returns {{rows: object[], meanCurrent: number|null, meanBaseline: number|null, meanDelta: number|null, hasBaseline: boolean}}
  */
 export function diffAgainstBaseline(current, baseline) {
-	const perMetricBaseline = baselineHasMetrics(baseline);
 	const baseCells = new Map((baseline?.cells ?? []).map((c) => [cellKey(c), c]));
 	const curKeys = new Set((current?.cells ?? []).map((c) => cellKey(c)));
 	const rows = (current?.cells ?? []).map((c) => {
@@ -212,8 +197,8 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: !!base,
 			removed: false,
 			pr: cellMetrics(c),
-			// Per-metric diff only against a schema-2 baseline; schema-1 → every column 🆕.
-			base: base && perMetricBaseline ? cellMetrics(base) : null,
+			// Per-field diff against whatever the baseline cell carries (missing fields → ⚪ "(new)").
+			base: base ? cellMetrics(base) : null,
 		};
 	});
 	// Baseline-only cells (removed/renamed) get their OWN row so a dropped cell stays visible.
@@ -229,14 +214,14 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: true,
 			removed: true,
 			pr: null,
-			base: perMetricBaseline ? cellMetrics(base) : null,
+			base: cellMetrics(base),
 		});
 	}
 	rows.sort((a, b) => a.key.localeCompare(b.key));
 	const meanCurrent = numOrNull(current?.mean_composite);
 	const meanBaseline = baseline ? numOrNull(baseline.mean_composite) : null;
 	const meanDelta = meanCurrent !== null && meanBaseline !== null ? round1(meanCurrent - meanBaseline) : null;
-	return { rows, meanCurrent, meanBaseline, meanDelta, hasBaseline: !!baseline, perMetricBaseline };
+	return { rows, meanCurrent, meanBaseline, meanDelta, hasBaseline: !!baseline };
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────
@@ -259,150 +244,117 @@ export function fmtScore(s) {
 	return String(+s.toFixed(1));
 }
 
-// Metric spec shared by both renderers so a metric is colored/directed identically in both tables.
-const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
-
-// Glyph for the colors-only Overview: metric color, else 🆕 (scored now, no baseline) / — (nothing to diff).
-function overviewGlyph(baseVal, prVal, opts) {
-	if (prVal === null || prVal === undefined) return NONE;
-	const col = metricColor(baseVal, prVal, opts);
-	if (col) return col;
-	return baseVal === null || baseVal === undefined ? NEW : NONE;
+/** Judge score 0-10: integer as-is, else 1 decimal. 8 → "8", 7.5 → "7.5". */
+export function fmtJudge(j) {
+	if (j === null || j === undefined || Number.isNaN(j)) return NONE;
+	return Number.isInteger(j) ? String(j) : String(+j.toFixed(1));
 }
 
-// "baseline -> pr" for the Detailed table, colored. `fmtVal` formats each side.
-function detailPair(baseVal, prVal, fmtVal, opts) {
-	if (prVal === null || prVal === undefined) return NONE;
-	const col = metricColor(baseVal, prVal, opts);
-	if (col === null) return `${NEW} ${fmtVal(prVal)}`; // scored now, no baseline
-	return `${col} ${fmtVal(baseVal)} -> ${fmtVal(prVal)}`;
+// Signed-delta formatters for the second line of each cell (no arrows — sign only).
+const signOf = (n) => (n > 0 ? '+' : n < 0 ? '-' : '');
+const signedInt = (d) => `${d > 0 ? '+' : ''}${Math.round(d)}`;
+const signed1 = (d) => {
+	const v = Math.round(d * 10) / 10;
+	return `${v > 0 ? '+' : ''}${v}`;
+};
+const signedCost = (d) => `${signOf(d)}$${+Math.abs(d).toFixed(2)}`;
+const signedTokens = (d) => `${signOf(d)}${humanTokens(Math.abs(d))}`;
+
+// ── Metric cells ──────────────────────────────────────────────────────────────
+// Every cell is two lines joined by <br>: line 1 `<ball> <current value>`, line 2 `(<signed delta>)`.
+// No baseline value for the field → `⚪ <current value><br>(new)` (the current value is ALWAYS shown).
+// A missing CURRENT value → NONE (nothing this run to show).
+
+// TESTS: "passed/denom", colored by the pass COUNT (higher better, ±1 noise). denom 0 → NONE.
+function testsCell(base, pr) {
+	const pp = numOrNull(pr?.tests_passed);
+	const pd = numOrNull(pr?.tests_denom);
+	if (pp === null || pd === null || pd === 0) return NONE;
+	const value = `${pp}/${pd}`;
+	const bp = numOrNull(base?.tests_passed);
+	if (bp === null) return `${WHITE} ${value}<br>(new)`;
+	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value}<br>(${signedInt(pp - bp)})`;
 }
 
-// Union of judge-dimension keys across baseline + pr (pr first), stable order for the multi-line cell.
-function dimKeys(baseDims, prDims) {
-	const keys = [];
-	for (const k of Object.keys(prDims ?? {})) if (!keys.includes(k)) keys.push(k);
-	for (const k of Object.keys(baseDims ?? {})) if (!keys.includes(k)) keys.push(k);
-	return keys;
+// JUDGE: overall judge score (0-10, higher better, ±0.3 noise).
+function judgeCell(base, pr) {
+	const pv = numOrNull(pr?.judge_score);
+	if (pv === null) return NONE;
+	const value = fmtJudge(pv);
+	const bv = numOrNull(base?.judge_score);
+	if (bv === null) return `${WHITE} ${value}<br>(new)`;
+	return `${deltaColor(bv, pv, DELTA_THRESHOLDS.judge, 'up')} ${value}<br>(${signed1(pv - bv)})`;
 }
 
-// Multi-line judge cell for the Detailed table: one "<color> <dim> base -> pr" line per dim, <br>-joined.
-function judgeDetailCell(base, pr) {
-	const baseDims = base?.judge_dimensions ?? null;
-	const prDims = pr?.judge_dimensions ?? null;
-	const keys = dimKeys(baseDims, prDims);
-	if (keys.length === 0) return NONE;
-	const lines = keys.map((k) => {
-		const bv = baseDims ? numOrNull(baseDims[k]) : null;
-		const pv = prDims ? numOrNull(prDims[k]) : null;
-		if (pv === null) return `${NONE} ${k} ${bv ?? NONE} -> ${NONE}`;
-		const col = metricColor(bv, pv, { direction: 'up', integer: true });
-		if (col === null) return `${NEW} ${k} ${pv}`;
-		return `${col} ${k} ${bv} -> ${pv}`;
-	});
-	return lines.join('<br>');
+// COST: $ builder spend (lower better, ±10% of baseline noise).
+function costCell(base, pr) {
+	const pv = numOrNull(pr?.cost);
+	if (pv === null) return NONE;
+	const value = fmtCost(pv);
+	const bv = numOrNull(base?.cost);
+	if (bv === null) return `${WHITE} ${value}<br>(new)`;
+	const threshold = DELTA_THRESHOLDS.costPct * Math.abs(bv);
+	return `${deltaColor(bv, pv, threshold, 'down')} ${value}<br>(${signedCost(pv - bv)})`;
 }
 
-// Per-row base→PR COMPOSITE delta as a status ball: 🟢/🟡/🔴 over the same ±5-point band as the
-// headline; 🆕 for a scored cell with no baseline counterpart; — for an unscored/undiffable cell.
-function overviewDeltaGlyph(r) {
-	if (r.delta !== null && r.delta !== undefined) return deltaBall(r.delta);
-	return r.current !== null && r.current !== undefined ? NEW : NONE;
+// TOKENS (in/out): value shows both; colored by the COMBINED total (lower better, ±10% noise).
+function tokensCell(base, pr) {
+	const pin = numOrNull(pr?.tokens_in);
+	const pout = numOrNull(pr?.tokens_out);
+	if (pin === null && pout === null) return NONE;
+	const value = `${humanTokens(pr?.tokens_in)}/${humanTokens(pr?.tokens_out)}`;
+	const prTotal = (pin ?? 0) + (pout ?? 0);
+	const bin = numOrNull(base?.tokens_in);
+	const bout = numOrNull(base?.tokens_out);
+	if (bin === null && bout === null) return `${WHITE} ${value}<br>(new)`;
+	const baseTotal = (bin ?? 0) + (bout ?? 0);
+	const threshold = DELTA_THRESHOLDS.tokensPct * Math.abs(baseTotal);
+	return `${deltaColor(baseTotal, prTotal, threshold, 'down')} ${value}<br>(${signedTokens(prTotal - baseTotal)})`;
 }
 
-// Detailed variant: the ball plus the signed numeric delta (e.g. "🟢 +12.4"); 🆕 / — like above.
-function detailDeltaCell(r) {
-	if (r.delta !== null && r.delta !== undefined) {
-		return `${deltaBall(r.delta)} ${r.delta > 0 ? '+' : ''}${r.delta.toFixed(1)}`;
-	}
-	return r.current !== null && r.current !== undefined ? NEW : NONE;
+// SCORE: composite-per-$ (direction from SCORE_HIGHER_BETTER, ±5 noise).
+function scoreCell(base, pr) {
+	const pv = numOrNull(pr?.score);
+	if (pv === null) return NONE;
+	const value = fmtScore(pv);
+	const bv = numOrNull(base?.score);
+	if (bv === null) return `${WHITE} ${value}<br>(new)`;
+	return `${deltaColor(bv, pv, DELTA_THRESHOLDS.score, SCORE_DIR)} ${value}<br>(${signed1(pv - bv)})`;
 }
 
-// ── Render: Overview (colors only) ───────────────────────────────────────────
+// ── Render: single results table ──────────────────────────────────────────────
 /**
- * Colors-only overview: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE | Δ VS BASE,
- * one glyph per metric vs baseline (🆕 new, — nothing to diff). The trailing Δ vs base column is the
- * cell's COMPOSITE change vs the same cell on the baseline as a {@link deltaBall}. See
- * {@link renderDetailed} for numbers.
- * @param {ReturnType<typeof diffAgainstBaseline>} diff
- * @param {{heading?: string, note?: string}} [opts]
- * @returns {string[]}
- */
-export function renderOverview(diff, opts = {}) {
-	const lines = [opts.heading ?? '## Overview', ''];
-	if (opts.note) lines.push(opts.note, '');
-	lines.push(
-		'| Task | Template | Tests | Judge | Cost | Tokens (in/out) | Score | Δ vs base |',
-		'|------|----------|:-----:|:-----:|:----:|:---------------:|:-----:|:---------:|',
-	);
-	for (const r of diff.rows) {
-		if (r.removed) {
-			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} | ${GONE} |`);
-			continue;
-		}
-		const b = r.base;
-		const p = r.pr ?? {};
-		const tests = overviewGlyph(b?.tests_passed, p.tests_passed, { direction: 'up', integer: true });
-		const judge = overviewGlyph(b?.judge_score, p.judge_score, { direction: 'up' });
-		const cost = overviewGlyph(b?.cost, p.cost, { direction: 'down' });
-		const tin = overviewGlyph(b?.tokens_in, p.tokens_in, { direction: 'down' });
-		const tout = overviewGlyph(b?.tokens_out, p.tokens_out, { direction: 'down' });
-		const score = overviewGlyph(b?.score, p.score, { direction: SCORE_DIR });
-		const vsBase = overviewDeltaGlyph(r);
-		lines.push(
-			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${tests} | ${judge} | ${cost} | ${tin}/${tout} | ${score} | ${vsBase} |`,
-		);
-	}
-	lines.push('');
-	return lines;
-}
-
-// ── Render: Detailed results (numbers) ───────────────────────────────────────
-/**
- * The Overview rows widened WITH numbers: TESTS (🟡 10/14 -> 9/14) | JUDGE (one colored dim per line)
- * | COST | TOKENS (in/out) | SCORE (base -> pr) | Δ VS BASE (ball + signed composite delta) | STOP
- * REASON. Colors/directions match the Overview.
+ * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE | STOP REASON.
+ * Every metric cell is a two-line `<ball> <current value><br>(<signed delta vs main>)` (⚪ "(new)" when
+ * the baseline has no value for it). Color = significance + direction of the change (see {@link deltaColor}).
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
  */
 export function renderDetailed(diff, opts = {}) {
-	const lines = [opts.heading ?? '## Detailed results', ''];
+	const lines = [];
+	if (opts.heading) lines.push(opts.heading, '');
 	if (opts.note) lines.push(opts.note, '');
 	lines.push(
-		'| Task | Template | Tests | Judge | Cost | Tokens | Score | Δ vs base | Stop reason |',
-		'|------|----------|-------|-------|------|--------|-------|-----------|-------------|',
+		'| Task | Template | Tests | Judge | Cost | Tokens (in/out) | Score | Stop reason |',
+		'|------|----------|-------|-------|------|-----------------|-------|-------------|',
 	);
 	for (const r of diff.rows) {
 		if (r.removed) {
-			const was = r.base && r.base.tests_passed !== null ? ` (was ${r.base.tests_passed}/${r.base.tests_denom})` : '';
-			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${NONE} | ${NONE} | ${NONE} | ${NONE} | ${GONE} | ${NONE} |`);
+			const was =
+				r.base && r.base.tests_passed !== null && r.base.tests_passed !== undefined
+					? ` (was ${r.base.tests_passed}/${r.base.tests_denom})`
+					: '';
+			lines.push(
+				`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${NONE} | ${NONE} | ${NONE} | ${NONE} | ${NONE} |`,
+			);
 			continue;
 		}
 		const b = r.base;
 		const p = r.pr ?? {};
-		// TESTS is "passed/denom" colored by the passed COUNT, built explicitly rather than via detailPair.
-		const fmtTests = (m) => `${m.tests_passed ?? NONE}/${m.tests_denom ?? NONE}`;
-		let testsCell;
-		if (p.tests_passed === null || p.tests_passed === undefined || p.tests_denom === 0) {
-			testsCell = NONE;
-		} else if (!b || b.tests_passed === null) {
-			testsCell = `${NEW} ${fmtTests(p)}`;
-		} else {
-			const col = metricColor(b.tests_passed, p.tests_passed, { direction: 'up', integer: true });
-			testsCell = `${col} ${fmtTests(b)} -> ${fmtTests(p)}`;
-		}
-		const judge = judgeDetailCell(b, p);
-		const cost = detailPair(b?.cost ?? null, p.cost, fmtCost, { direction: 'down' });
-		const tinCell = detailPair(b?.tokens_in ?? null, p.tokens_in, humanTokens, { direction: 'down' });
-		const toutCell = detailPair(b?.tokens_out ?? null, p.tokens_out, humanTokens, { direction: 'down' });
-		const tokens =
-			p.tokens_in === null && p.tokens_out === null ? NONE : `in ${tinCell}<br>out ${toutCell}`;
-		const score = detailPair(b?.score ?? null, p.score, fmtScore, { direction: SCORE_DIR });
-		const vsBase = detailDeltaCell(r);
 		const stop = p.stop_reason || NONE;
 		lines.push(
-			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${testsCell} | ${judge} | ${cost} | ${tokens} | ${score} | ${vsBase} | ${stop} |`,
+			`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${testsCell(b, p)} | ${judgeCell(b, p)} | ${costCell(b, p)} | ${tokensCell(b, p)} | ${scoreCell(b, p)} | ${stop} |`,
 		);
 	}
 	lines.push('');
