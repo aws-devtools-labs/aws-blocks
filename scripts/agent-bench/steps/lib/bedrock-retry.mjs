@@ -18,15 +18,17 @@ import {
 export const INVOKE_MAX_ATTEMPTS = 5;
 export const INVOKE_BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 
-// Backoff (ms) before the given 1-based retry: the exponential base (last value once exhausted) plus
-// up to +25% jitter so concurrent cells don't re-hit Bedrock in lockstep.
+// Backoff (ms) before the given 1-based retry: the exponential base (last value once exhausted)
+// spread across a FULL base-wide jitter window [0.5·base, 1.5·base). Equal jitter (half fixed, half
+// random) de-correlates concurrent cells that throttle together far better than the old +25% window
+// (which barely spread them); the mean stays at base and the half-base floor stops a near-instant retry.
 /**
  * @param {number} attempt 1-based attempt number that is about to be retried
  * @returns {number}
  */
 export function nextBackoffMs(attempt) {
 	const base = INVOKE_BACKOFF_MS[attempt - 1] ?? INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1] ?? 5_000;
-	return base + Math.floor(Math.random() * base * 0.25);
+	return Math.floor(base * 0.5 + Math.random() * base);
 }
 
 /**
@@ -69,6 +71,27 @@ export function errorChain(err) {
 const TRANSIENT_NAME_RE =
 	/throttl|toomanyrequests|too many (tokens|requests)|serviceunavailable|service_unavailable|internalserver|internalfailure|modelstream|modeltimeout|modelnotready|requesttimeout|timeouterror|partialresult|503|429/i;
 
+// AWS exception names marking a TERMINAL client-side 4xx — a misconfig / bad request that a retry can
+// never fix (unlike a 429 throttle, which IS transient). Matched against each cause-chain node's name.
+const TERMINAL_CLIENT_ERROR_NAME_RE =
+	/validationexception|accessdenied|unrecognizedclient|incompletesignature|invalidsignature|expiredtoken|notauthorized|malformed|invalidrequest/i;
+
+// True when the error (or any cause-chain node) is a terminal client-side 4xx that will never succeed
+// on retry — a non-429 4xx httpStatusCode, or a matching AWS exception name.
+/**
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+function hasTerminalClientError(err) {
+	for (const node of errorChain(err)) {
+		const status = node.$metadata?.httpStatusCode;
+		if (typeof status === 'number' && status >= 400 && status < 500 && status !== 429) return true;
+		const name = typeof node.name === 'string' ? node.name : '';
+		if (name && TERMINAL_CLIENT_ERROR_NAME_RE.test(name)) return true;
+	}
+	return false;
+}
+
 // True when a model-call failure is a throttle/transient class worth retrying. StructuredOutputError
 // is a real grading outcome; ContextWindowOverflowError / MaxTokensError are deterministic — none retry.
 /**
@@ -79,6 +102,12 @@ export function isRetryableModelError(err) {
 	if (err instanceof StructuredOutputError) return false;
 	if (err instanceof ContextWindowOverflowError || err instanceof MaxTokensError) return false;
 	if (err instanceof ModelThrottledError) return true;
+	// A fatal client-side 4xx (ValidationException / AccessDeniedException / UnrecognizedClientException…)
+	// will NEVER succeed on retry. Strands often surfaces these mid-stream as a BARE ModelError with the
+	// real AWS class on `.cause`, so inspect the cause chain for a terminal 4xx BEFORE the blanket
+	// ModelError→retry below — else a misconfigured role burns the full ~150s ladder on an unrecoverable
+	// error. 429 (throttling) is deliberately excluded above and stays retryable.
+	if (hasTerminalClientError(err)) return false;
 	// A bare ModelError almost always wraps a transient mid-stream AWS exception.
 	if (err instanceof ModelError) return true;
 	// Fall back to the AWS exception name / HTTP status on the error or its cause.

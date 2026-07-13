@@ -30,6 +30,8 @@ describe('buildCheckpointEnvelope(state) — the non-terminal running checkpoint
 		assert.equal(env.checkpoint, true);
 		assert.equal(env.partial, true);
 		assert.equal(env.final_message, '');
+		// isolationActive omitted ⇒ defaults to false (never exclude on an unproven-isolation flag).
+		assert.equal(env.isolation_active, false);
 	});
 
 	it('defaults `now` to the wall clock (duration is a finite, non-negative number)', () => {
@@ -52,6 +54,7 @@ describe('writeEnvelopeAtomic(path, envelope) — survives an abrupt kill, then 
 				tokensIn: 210_000,
 				tokensOut: 35_000,
 				cycles: 7,
+				isolationActive: true,
 			});
 			writeEnvelopeAtomic(out, checkpoint);
 
@@ -62,9 +65,10 @@ describe('writeEnvelopeAtomic(path, envelope) — survives an abrupt kill, then 
 			assert.equal(onDisk.tokens_out, 35_000);
 			assert.equal(onDisk.checkpoint, true);
 			assert.equal(onDisk.stop_reason, CHECKPOINT_STOP_REASON);
+			assert.equal(onDisk.isolation_active, true, 'isolation flag must survive so scoring can gate the exclusion');
 
 			const cell = { ...onDisk, failed_at: '2-agent', status: 'error' };
-			// EXCLUDED from the mean (no terminal exit path ran) …
+			// EXCLUDED from the mean — no terminal exit ran AND isolation was active …
 			assert.equal(classifyCell(cell).klass, 'harness_error');
 			assert.equal(isScoredCell(cell), false);
 			// … yet the cost signal is preserved rather than masked as $0.

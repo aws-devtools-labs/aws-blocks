@@ -67,6 +67,46 @@ const CASES = [
 		Object.assign(new Error('denied'), { name: 'AccessDeniedException', $metadata: { httpStatusCode: 403 } }),
 		false,
 	],
+	// --- NOT retryable: a fatal 4xx WRAPPED in a bare ModelError (the I-3 fix) — the cause-chain
+	// terminal-4xx check must fire BEFORE the blanket ModelError→retry, so these give up immediately
+	// instead of burning the full backoff ladder on an unrecoverable misconfig. 429 stays retryable.
+	[
+		'ValidationException (400) wrapped in a bare ModelError cause',
+		new ModelError('mid-stream failure', {
+			cause: Object.assign(new Error('bad input'), {
+				name: 'ValidationException',
+				$metadata: { httpStatusCode: 400 },
+			}),
+		}),
+		false,
+	],
+	[
+		'AccessDeniedException (403) wrapped in a bare ModelError cause',
+		new ModelError('mid-stream failure', {
+			cause: Object.assign(new Error('denied'), {
+				name: 'AccessDeniedException',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		}),
+		false,
+	],
+	[
+		'UnrecognizedClientException (403) wrapped in a bare ModelError cause',
+		new ModelError('mid-stream failure', {
+			cause: Object.assign(new Error('bad creds'), {
+				name: 'UnrecognizedClientException',
+				$metadata: { httpStatusCode: 403 },
+			}),
+		}),
+		false,
+	],
+	[
+		'a 429 wrapped in a bare ModelError stays RETRYABLE (throttle is transient, not a terminal 4xx)',
+		new ModelError('Too many tokens', {
+			cause: Object.assign(new Error('rl'), { name: 'ThrottlingException', $metadata: { httpStatusCode: 429 } }),
+		}),
+		true,
+	],
 	// --- non-object / empty inputs are never retryable (defensive) ---
 	['null', null, false],
 	['undefined', undefined, false],
@@ -140,23 +180,23 @@ describe('describeModelError — surfaces the real wrapped AWS class', () => {
 	});
 });
 
-// nextBackoffMs is the shared builder/judge backoff (base from the ladder + up to
-// +25% jitter). Pin the [base, base*1.25) envelope and the ladder-exhausted /
-// out-of-range fallback so both retry loops wait within their step budgets.
-describe('nextBackoffMs — exponential base + bounded jitter', () => {
-	it('stays within [base, base*1.25) for every ladder rung (sampled)', () => {
+// nextBackoffMs is the shared builder/judge backoff (equal jitter: half the base fixed, the other
+// half-to-full random, giving a full base-wide window [0.5·base, 1.5·base)). Pin that envelope and the
+// ladder-exhausted / out-of-range fallback so both retry loops wait within their step budgets.
+describe('nextBackoffMs — exponential base + equal jitter across a full base-wide window', () => {
+	it('stays within [0.5·base, 1.5·base) for every ladder rung (sampled)', () => {
 		for (let attempt = 1; attempt <= INVOKE_BACKOFF_MS.length; attempt++) {
 			const base = INVOKE_BACKOFF_MS[attempt - 1];
 			for (let i = 0; i < 200; i++) {
 				const ms = nextBackoffMs(attempt);
-				assert.ok(ms >= base, `attempt ${attempt}: ${ms} < base ${base}`);
-				assert.ok(ms < base * 1.25, `attempt ${attempt}: ${ms} >= base*1.25 ${base * 1.25}`);
+				assert.ok(ms >= base * 0.5, `attempt ${attempt}: ${ms} < base*0.5 ${base * 0.5}`);
+				assert.ok(ms < base * 1.5, `attempt ${attempt}: ${ms} >= base*1.5 ${base * 1.5}`);
 			}
 		}
 	});
 	it('clamps to the last rung once the ladder is exhausted (attempt beyond length)', () => {
 		const base = INVOKE_BACKOFF_MS[INVOKE_BACKOFF_MS.length - 1];
 		const ms = nextBackoffMs(INVOKE_MAX_ATTEMPTS + 3);
-		assert.ok(ms >= base && ms < base * 1.25);
+		assert.ok(ms >= base * 0.5 && ms < base * 1.5);
 	});
 });

@@ -56,9 +56,11 @@ function reachedGracefulExit(result) {
 /**
  * Detect the harness-integrity signature: a 2-agent death whose bash process-group/pkill storm tore
  * down the parent harness, bypassing the SIGTERM flush — so result.json has the step-0 baseline or a
- * surviving non-terminal checkpoint (no terminal exit ran). Such a self-inflicted infra kill is a
- * harness_error (EXCLUDED), NOT agent_fail. A genuine timeout / invoke-exhaustion reaches a terminal
- * stop_reason (reachedGracefulExit) and stays agent_fail; a cancellation is handled in classifyCell.
+ * surviving non-terminal checkpoint (no terminal exit ran). This detects the SIGNATURE only; whether
+ * it is EXCLUDED (harness_error) or counted (agent_fail) is gated by the caller on `isolation_active`
+ * (classifyCell) — the reclassification is sound only when isolation was active. A genuine timeout /
+ * invoke-exhaustion reaches a terminal stop_reason (reachedGracefulExit) and is not this signature;
+ * a cancellation is handled in classifyCell.
  * @param {{failed_at?: string|null, status?: string, stop_reason?: unknown, checkpoint?: unknown}} result
  * @returns {boolean}
  */
@@ -86,10 +88,16 @@ export function classifyCell(result) {
 	if (failedAt && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
 		return { klass: 'harness_error', reason: HARNESS_FAIL_REASONS[failedAt] };
 	}
-	// Agent failure is a real fail — except an ungraceful harness teardown (no terminal envelope),
-	// which is reclassified harness_error so a self-inflicted infra kill can't drag the mean.
+	// Agent failure is a real fail — except an ungraceful harness teardown (no terminal envelope) that
+	// happened WHILE agent-shell isolation was active, which is reclassified harness_error so a
+	// self-inflicted infra kill can't drag the mean. The isolation gate is load-bearing: only WITH
+	// isolation on is an ungraceful step-2 death necessarily genuine infra (runner OOM / GHA cancel),
+	// because cross-uid EPERM stops the agent from signalling the harness. With isolation OFF (or its
+	// state unproven — `isolation_active` absent), the #184 pkill-storm is exactly an ungraceful death
+	// the agent inflicted on itself, so it stays agent_fail (composite 0, INCLUDED) rather than being
+	// quietly excluded and inflating the headline mean.
 	if (failedAt === AGENT_FAIL_AT) {
-		if (isUngracefulStepTwoDeath(result)) {
+		if (isUngracefulStepTwoDeath(result) && result?.isolation_active === true) {
 			return { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON };
 		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };

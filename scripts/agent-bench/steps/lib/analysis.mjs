@@ -36,8 +36,12 @@ export const REGRESSION_DELTA = -5;
 // Benign fallback stored when the per-cell analysis can't be produced.
 export const FALLBACK_ANALYSIS = 'analysis unavailable';
 
-// App-level throttle/transient retry (initial + up to 4 backoffs), transient class only. Duplicated
-// from bedrock-retry.ts intentionally (this .mjs can't import the .ts); keep in sync.
+// App-level throttle/transient retry (initial + up to 4 backoffs) for the post-run ANALYSIS
+// model calls. TRANSIENT_RE is a deliberately BROAD text heuristic matched against stringified
+// error output (bare `timeout`, `500`, `503`, etc.) — it is NOT the same classifier as
+// bedrock-retry.mjs's `isRetryableModelError`, which inspects typed SDK error classes and now
+// short-circuits terminal 4xx. These serve different layers (log-text scan vs SDK error object)
+// and intentionally diverge; do not try to keep them identical.
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [5_000, 15_000, 40_000, 90_000];
 const TRANSIENT_RE =

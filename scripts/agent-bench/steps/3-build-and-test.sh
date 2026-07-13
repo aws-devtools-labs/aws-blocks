@@ -99,6 +99,9 @@ reap_stale_dev_servers() {
       for target in "$ppid" "$pid"; do
         [ -n "${target:-}" ] || continue
         # pid-reuse guard: only signal a live node/tsx/npm process (/proc/<pid>/comm).
+        # This is a comm-CLASS heuristic (matches any node/tsx/npm), not process IDENTITY — a
+        # recycled pid now running an UNRELATED node/tsx/npm would still match. Acceptable here:
+        # the window is tiny and the sole workload on this ephemeral runner is our own dev server.
         case "$(cat "/proc/${target}/comm" 2>/dev/null || true)" in
           node|tsx|npm*) sudo -n kill "-${sig}" "$target" 2>/dev/null || kill "-${sig}" "$target" 2>/dev/null || true ;;
         esac

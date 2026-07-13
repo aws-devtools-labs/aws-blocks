@@ -167,22 +167,40 @@ describe('classifyCell(result)', () => {
 describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness_error (issue #183)', () => {
 	// The bug: the agent's bash pkill storm tears down the harness (npx tsx) with an ungraceful exit
 	// (143/137) that BYPASSES the SIGTERM flush, leaving step-0 zeros. That self-inflicted kill must be
-	// EXCLUDED (harness_error), not scored as a composite-0 agent_fail.
-	it('exit-143 / no-flush death (baseline zeros, no stop_reason) → harness_error, EXCLUDED', () => {
-		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', tokens_in: 0, tokens_out: 0 };
+	// EXCLUDED (harness_error), not scored as a composite-0 agent_fail — BUT only when agent-shell
+	// isolation was ACTIVE (isolation_active === true). With isolation on, cross-uid EPERM means the
+	// only ungraceful deaths left are genuine infra; with it OFF the pkill-storm is the agent's own
+	// doing and must stay agent_fail (see the isolation-gate tests below).
+	it('exit-143 / no-flush death UNDER ISOLATION (baseline zeros, no stop_reason) → harness_error, EXCLUDED', () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: '',
+			tokens_in: 0,
+			tokens_out: 0,
+			isolation_active: true,
+		};
 		assert.equal(isUngracefulStepTwoDeath(cell), true);
 		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON });
 		assert.equal(isScoredCell(cell), false); // EXCLUDED — a flaky teardown can't move the score
 		assert.equal(verdictOf(cell), 'harness_error');
 	});
 
-	it('a totally-empty 2-agent failure (no envelope written at all) → harness_error, EXCLUDED', () => {
-		// The envelope was never even written (result.json is just the step-0 shell),
-		// so there is no stop_reason key at all — still ungraceful, still excluded.
+	it('the SAME ungraceful death with isolation OFF → agent_fail, INCLUDED (the #184 pkill-storm is the agent)', () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: false };
+		assert.equal(isUngracefulStepTwoDeath(cell), true); // same signature…
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON }); // …but NOT excluded
+		assert.equal(isScoredCell(cell), true); // INCLUDED (composite 0) — isolation was not protecting the harness
+		assert.equal(verdictOf(cell), 'fail');
+	});
+
+	it('an ungraceful death with UNPROVEN isolation (flag absent) → agent_fail, INCLUDED (never exclude unproven)', () => {
+		// The honest default: excluding requires PROOF isolation was active. An absent flag (e.g. the
+		// envelope was never written) is treated as not-isolated so a self-inflicted kill can't hide.
 		const cell = { failed_at: AGENT_FAIL_AT, status: 'error' };
 		assert.equal(isUngracefulStepTwoDeath(cell), true);
-		assert.equal(classifyCell(cell).klass, 'harness_error');
-		assert.equal(isScoredCell(cell), false);
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+		assert.equal(isScoredCell(cell), true);
 	});
 
 	it('a SURVIVING running checkpoint (nonzero tokens, in_progress) → harness_error EXCLUDED, but cost preserved', () => {
@@ -195,6 +213,7 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 			checkpoint: true,
 			tokens_in: 240_000,
 			tokens_out: 40_000,
+			isolation_active: true,
 		};
 		assert.equal(isUngracefulStepTwoDeath(cell), true);
 		assert.equal(classifyCell(cell).klass, 'harness_error');
@@ -238,7 +257,7 @@ describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness
 		// sit in the denominator as a composite 0. Two otherwise-identical cells,
 		// one graceful (INCLUDED as 0) and one ungraceful (EXCLUDED), prove the split.
 		const graceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
-		const ungraceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '' };
+		const ungraceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
 		const good = { tests_passed: 8, tests_failed: 2 }; // scored
 		const cells = [graceful, ungraceful, good];
 		const included = cells.filter((c) => isScoredCell(c));

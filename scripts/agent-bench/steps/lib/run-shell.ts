@@ -40,6 +40,12 @@ function resolveAgentHome(): string {
 
 // Probe (once, memoized) whether the agent shell can run as benchagent via passwordless
 // sudo+runuser, using the EXACT privilege transition runShell uses; false → caller falls back.
+// NOTE (probe breadth): this only exercises `sudo -n runuser`, but the reap path (killGroup)
+// also relies on `sudo -n kill` — and the harness's stale-server sweep on `sudo -n fuser`/`rm`.
+// We probe just the one verb because the runner grants benchagent's sudoers entry as
+// `NOPASSWD:ALL` (a single rule covering every command), so a passing `runuser` probe implies
+// the others pass too. If that sudoers policy is ever narrowed to per-command rules, this probe
+// must be widened to verify each verb the reap/sweep depends on.
 export function isolationAvailable(): boolean {
 	if (isolationProbe !== undefined) return isolationProbe;
 	try {
@@ -101,6 +107,12 @@ export function buildAgentSpawn(
 		const forwarded: Record<string, string> = { ...env, HOME: agentHome ?? `/home/${BENCH_AGENT_USER}` };
 		// Only forward valid shell identifier names (drops exported-function keys like
 		// `BASH_FUNC_x%%`); values pass as argv so need no quoting.
+		// NOTE (secrets-on-argv): any OIDC/AWS creds in the env land here on `env KEY=VAL … bash`
+		// argv, so they're briefly world-readable via `/proc/<pid>/cmdline`. Writing them to a
+		// 0600 env-file and `env -S "$(cat file)"` would avoid the exposure, but the file must be
+		// readable by benchagent (defeating 0600 across the uid boundary) and complicates the
+		// isolation path. Deferred: the runner is a single-tenant ephemeral GitHub-hosted VM, so
+		// the only local reader is benchagent itself, which already receives the creds by design.
 		const envPairs = Object.entries(forwarded)
 			.filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
 			.map(([k, v]) => `${k}=${v}`);

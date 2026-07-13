@@ -12,8 +12,8 @@ import { CHECKPOINT_STOP_REASON } from './scoring.mjs';
  * envelopes so finalize-result folds it identically, but with the non-terminal
  * {@link CHECKPOINT_STOP_REASON} + `checkpoint:true` so a surviving checkpoint classifies as
  * harness_error (excluded) while still carrying tokens for the cost signal.
- * @param {{model: string, startedMs: number, tokensIn: number, tokensOut: number, cycles: number, now?: number}} state
- * @returns {{model: string, duration_sec: number, tokens_in: number, tokens_out: number, stop_reason: string, cycle_count: number, final_message: string, partial: true, checkpoint: true}}
+ * @param {{model: string, startedMs: number, tokensIn: number, tokensOut: number, cycles: number, isolationActive?: boolean, now?: number}} state
+ * @returns {{model: string, duration_sec: number, tokens_in: number, tokens_out: number, stop_reason: string, cycle_count: number, final_message: string, partial: true, checkpoint: true, isolation_active: boolean}}
  */
 export function buildCheckpointEnvelope(state) {
 	const now = typeof state.now === 'number' ? state.now : Date.now();
@@ -27,6 +27,10 @@ export function buildCheckpointEnvelope(state) {
 		final_message: '',
 		partial: true,
 		checkpoint: true,
+		// Stamp whether agent-shell isolation was active so scoring can gate the ungraceful-death
+		// exclusion on it: a checkpoint is exactly what survives an ungraceful teardown, and that
+		// reclassification is only sound when isolation was on (see scoring.mjs classifyCell).
+		isolation_active: state.isolationActive === true,
 	};
 }
 

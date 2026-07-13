@@ -159,9 +159,11 @@ jobs:
 
       # BUILD-ONCE: pull the dist-registry/ build-blocks packed so "1. Init bench-app" can skip the
       # ~150s monorepo build. Best-effort: a download blip never reds the cell (init rebuilds it).
+      # Gated on initresult (not oidc): download-artifact uses no AWS, so an OIDC failure must not
+      # skip it — the packed registry is still worth pulling regardless of the AWS session.
       - name: 1a. Download prebuilt dist-registry
         continue-on-error: true
-        if: steps.oidc.outcome == 'success'
+        if: steps.initresult.outcome == 'success'
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: dist-registry

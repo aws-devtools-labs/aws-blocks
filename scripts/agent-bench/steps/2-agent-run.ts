@@ -66,7 +66,9 @@ process.stderr.write(
 //     FRAMEWORK change, not agent tweaks.
 //   - Accounting control: the token hook + SIGTERM envelope flush need direct in-process control of
 //     the invoke loop, which a higher-level agent abstraction would hide.
-//   - Reproducibility: pinned model + temperature 0 + hard MAX_TURNS; extra tools reintroduce variance.
+//   - Reproducibility: pinned model + hard MAX_TURNS (and temperature 0 for models that accept it —
+//     the default Opus rejects the knob, so its reproducibility rests on the pinned model + MAX_TURNS);
+//     extra tools reintroduce variance.
 // The vended bash routes through context.agent.sandbox, so the Sandbox is set on the Agent and the
 // timeout floor lives in WorkspaceSandbox. Use makeBash() (sandbox-aware), not the host-only barrel `bash`.
 // Best-effort live usage accounting: on a wall-clock timeout the runner SIGTERMs mid-invoke so the
@@ -123,6 +125,7 @@ function writeCheckpoint(): void {
 				tokensIn: partialTokensIn,
 				tokensOut: partialTokensOut,
 				cycles: partialCycles,
+				isolationActive: ISOLATE,
 			}),
 		);
 	} catch (err) {
@@ -155,6 +158,7 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					final_message: '',
 					partial: true,
 					builder_error: `killed by ${signal} (${cause}) after ${partialCycles} model call(s)`,
+					isolation_active: ISOLATE,
 				},
 				null,
 				2,
@@ -178,6 +182,12 @@ function writePartialEnvelopeAndExit(signal: string): void {
 }
 process.on('SIGTERM', () => writePartialEnvelopeAndExit('SIGTERM'));
 process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
+
+// Seed an initial checkpoint NOW — before the first model call — so `isolation_active` is on disk even
+// if the cell dies ungracefully before any model cycle (e.g. an OOM during agent/sandbox setup). Without
+// it such an early death would leave the step-0 baseline with no isolation flag, and scoring.mjs would
+// have to assume isolation was off. A later model cycle (or a terminal exit) overwrites this.
+writeCheckpoint();
 
 // Startup stagger: spread each wave's FIRST Bedrock call so N cells don't all hit invoke at once and
 // trip the account TPM ceiling (the burst that failed 6/10 cells in run 28967475174). Keyed to the
@@ -236,6 +246,7 @@ if (!result) {
 				cycle_count: partialCycles,
 				final_message: '',
 				builder_error: desc,
+				isolation_active: ISOLATE,
 			},
 			null,
 			2,
@@ -246,9 +257,15 @@ if (!result) {
 finished = true;
 const duration_sec = Math.round((Date.now() - started) / 1000);
 
-const usage = result.metrics?.accumulatedUsage;
-const tokensIn = usage?.inputTokens ?? 0;
-const tokensOut = usage?.outputTokens ?? 0;
+// Cost must reflect TOTAL spend across EVERY invoke attempt, not just the winning one. The per-cycle
+// token hook accumulates partialTokensIn/out across ALL attempts (each retried agent re-attaches it),
+// so a throttled-then-succeeded cell already carries the failed attempts' tokens here — whereas
+// result.metrics.accumulatedUsage covers only the final (winning) agent and would undercount cellCost
+// / overstate scorePerDollar. Take the max so we never report below the winner's own accounting (guards
+// a hook under-capture) while still folding in the retried-attempt spend.
+const winnerUsage = result.metrics?.accumulatedUsage;
+const tokensIn = Math.max(partialTokensIn, winnerUsage?.inputTokens ?? 0);
+const tokensOut = Math.max(partialTokensOut, winnerUsage?.outputTokens ?? 0);
 
 writeFileSync(
 	OUTPUT,
@@ -261,6 +278,7 @@ writeFileSync(
 			stop_reason: result.stopReason,
 			cycle_count: result.metrics?.cycleCount ?? 0,
 			final_message: messageText(result.lastMessage),
+			isolation_active: ISOLATE,
 		},
 		null,
 		2,
