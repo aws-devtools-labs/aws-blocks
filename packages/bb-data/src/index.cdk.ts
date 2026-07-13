@@ -96,9 +96,8 @@ export class Database extends Scope {
    */
   getEngine(): never {
     throw new Error(
-      'Database.getEngine() is unavailable during CDK synth. Create the Kysely ' +
-      'adapter and run queries at request time inside an API handler, not at ' +
-      'module scope.',
+      'Database.getEngine() is unavailable during CDK synth. Queries must run ' +
+      'at request time inside an API handler, not at module scope.',
     );
   }
 

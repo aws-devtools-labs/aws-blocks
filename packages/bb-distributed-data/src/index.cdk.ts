@@ -118,9 +118,8 @@ export class DistributedDatabase extends Scope {
    */
   getEngine(): never {
     throw new Error(
-      'DistributedDatabase.getEngine() is unavailable during CDK synth. Create the ' +
-      'Kysely adapter and run queries at request time inside an API handler, not at ' +
-      'module scope.',
+      'DistributedDatabase.getEngine() is unavailable during CDK synth. Queries ' +
+      'must run at request time inside an API handler, not at module scope.',
     );
   }
 }

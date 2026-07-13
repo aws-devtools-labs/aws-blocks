@@ -13,21 +13,13 @@ import {
 import type { DatabaseEngine, TransactionHandle } from './engine.js';
 
 /**
- * An engine value that may not be resolved yet. The public `Database` class
- * exposes `getEngine(): Promise<DatabaseEngine>` (it lazily initializes the
- * underlying pool/Data API client), while the lower-level
- * `RLSEnabledDatabase`/`DatabaseBase` expose it synchronously. The adapter
- * accepts either and resolves lazily inside its already-async hooks.
+ * A thunk that produces the engine, either synchronously
+ * (`RLSEnabledDatabase`/`DatabaseBase`) or as a `Promise` (the public
+ * `Database` class, which initializes its pool/Data API client lazily).
+ * Invoked lazily on the first query, never at adapter creation — see
+ * {@link createKyselyAdapter} for why.
  */
-type EngineSource = DatabaseEngine | Promise<DatabaseEngine>;
-/**
- * A thunk that produces the engine. The engine is obtained lazily — only when a
- * query actually runs — so `createKyselyAdapter()` itself never calls the
- * underlying `getEngine()`. This keeps adapter creation safe at module scope,
- * which matters because backend files are also loaded during CDK synth, where
- * the infra-only block builds expose no engine.
- */
-type EngineFactory = () => EngineSource;
+type EngineFactory = () => DatabaseEngine | Promise<DatabaseEngine>;
 
 /**
  * Kysely connection that routes queries through a DatabaseEngine.
@@ -42,7 +34,16 @@ class EngineConnection implements DatabaseConnection {
 
   /** Resolve the engine on first use, memoizing it for this connection. */
   private engine(): Promise<DatabaseEngine> {
-    return (this.enginePromise ??= Promise.resolve(this.getEngine()));
+    if (!this.enginePromise) {
+      try {
+        this.enginePromise = Promise.resolve(this.getEngine());
+      } catch (err) {
+        // Don't memoize a synchronous failure — a later call may retry after a
+        // transient initialization error.
+        return Promise.reject(err);
+      }
+    }
+    return this.enginePromise;
   }
 
   async executeQuery<R>(compiledQuery: CompiledQuery): Promise<QueryResult<R>> {
@@ -186,6 +187,5 @@ class EngineDialect implements Dialect {
 export function createKyselyAdapter<T>(
   db: { getEngine(): DatabaseEngine | Promise<DatabaseEngine> },
 ): Kysely<T> {
-  // Pass a thunk, not `db.getEngine()`: defer the call to the first query.
   return new Kysely<T>({ dialect: new EngineDialect(() => db.getEngine()) });
 }

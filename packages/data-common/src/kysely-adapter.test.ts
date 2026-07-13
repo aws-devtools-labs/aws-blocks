@@ -163,3 +163,23 @@ test('createKyselyAdapter defers getEngine() until the first query (safe during 
   await assert.rejects(() => kysely.selectFrom('t').selectAll().execute());
   assert.strictEqual(calls, 1, 'getEngine() should be invoked lazily on first query');
 });
+
+test('getEngine() is called once per EngineConnection across begin/execute/commit', async () => {
+  // begin(), executeQuery() and commit() each resolve the engine; memoization
+  // must collapse them into a single getEngine() call per connection so the
+  // one-engine-per-transaction guarantee holds.
+  let calls = 0;
+  const engine = new RecordingEngine();
+  const kysely = createKyselyAdapter<Schema>({
+    getEngine: () => {
+      calls++;
+      return engine;
+    },
+  });
+
+  await kysely.transaction().execute(async (trx) => {
+    await trx.insertInto('t').values({ id: 'a', value: 'one' }).execute();
+  });
+
+  assert.strictEqual(calls, 1, `expected a single memoized getEngine() call, saw ${calls}`);
+});
