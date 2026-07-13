@@ -268,6 +268,23 @@ describe('renderDetailed(diff) — the single results table', () => {
 		assert.match(r, /⚪ 200K\/30K<br>\(new\)/); // tokens: ⚪ (new)
 		assert.match(r, /⚪ 52\.6<br>\(new\)/); // score: ⚪ (new)
 	});
+	it('EVERY row emits exactly 8 columns — even a crashed cell with null tokens/score/composite/judge', () => {
+		// A crashed cell (agent_fail/PGlite crash): 0 tests, no tokens → cost/score null, no judge. Its
+		// metric cells fall back to placeholders, but the row must NEVER drop a column and misalign.
+		const CRASH = { task: 'crash', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 }; // no tokens/judge → cost/score null
+		const withCrash = buildAggregate([PASS, CRASH], {});
+		const cmd = renderDetailed(diffAgainstBaseline(withCrash, null), {}).join('\n');
+		const dataRows = cmd.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Task') && !l.startsWith('|--'));
+		assert.equal(dataRows.length, 2);
+		for (const line of dataRows) {
+			// Inner cells between the outer pipes must be exactly 8 (Task|Template|Tests|Judge|Cost|Tokens|Score|Stop).
+			const inner = line.split('|').slice(1, -1);
+			assert.equal(inner.length, 8, `row must have 8 columns, got ${inner.length}: ${line}`);
+			assert.ok(inner.every((c) => c.trim().length > 0), `no column may be empty: ${line}`);
+		}
+		const crashRow = dataRows.find((l) => l.includes('| crash |'));
+		assert.match(crashRow, /\| crash \| nextjs \| — \| — \| — \| — \| — \| — \|/); // every crashed metric → placeholder, 8 cols
+	});
 	it('a removed cell shows a 🗑️ marker with the last-known test count', () => {
 		const withRemoved = diffAgainstBaseline(current, {
 			schema: 2,
