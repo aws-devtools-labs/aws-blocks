@@ -18,6 +18,8 @@ async function getAvailablePort(): Promise<number> {
   const address = server.address();
   assert.ok(address && typeof address === 'object');
   const { port } = address;
+  // TOCTOU: brief window between closing this probe and the dev server binding
+  // the port; port: 0 would require the dev server to expose its assigned port.
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   return port;
 }
@@ -52,6 +54,7 @@ export const testApi = {
   pingVoid: async () => undefined,
 };
 `);
+    // Polyfill process.loadEnvFile for Node <20.6; ENOENT means no .env file.
     writeFileSync(join(tempDir, 'preload.mjs'), `
 if (!process.loadEnvFile) {
   process.loadEnvFile = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
@@ -68,6 +71,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
       env: {
         ...process.env,
         AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        // Empty is falsy, keeping verbose logging on even if the parent sets quiet mode.
         BLOCKS_DEV_QUIET: '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],

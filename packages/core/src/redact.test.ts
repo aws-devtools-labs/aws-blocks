@@ -205,6 +205,14 @@ describe('redactToJson', () => {
     assert.equal(redactToJson(undefined), 'undefined');
   });
 
+  it('returns a string for function values', () => {
+    assert.equal(redactToJson(() => {}), 'undefined');
+  });
+
+  it('returns a string for symbol values', () => {
+    assert.equal(redactToJson(Symbol('x')), 'undefined');
+  });
+
   it('does not leak secrets even when truncation would apply downstream', () => {
     const json = redactToJson([{ action: 'signIn', username: 'u', password: 'p'.repeat(50) }]);
     assert.ok(!json.includes('pppp'));
