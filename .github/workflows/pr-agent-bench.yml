@@ -17,16 +17,39 @@ name: PR Agent Bench
 #   S3_BUCKET     variable  Registry bucket (existing).
 
 on:
-  # Runs unconditionally on same-repo PR open/update AND on every push to main
-  # (a main run records the merged commit's baseline for later PRs to diff
-  # against). There is NO label gate: the bench is green-regardless — a failed
-  # cell / agent-timeout lands in the run summary, not the check status — so it
-  # is safe to run on every commit. Fork PRs get no secrets/OIDC under
-  # `pull_request` and are additionally blocked by the same-repo `if` below.
+  # Runs on same-repo PR open/update AND on push to main (a main run records the
+  # merged commit's baseline for later PRs to diff against). NO label gate: the
+  # bench is green-regardless — a failed cell / agent-timeout lands in the run
+  # summary, not the check status. Fork PRs get no secrets/OIDC under
+  # `pull_request` and are blocked by the same-repo `if`.
+  #
+  # ALLOWLIST: the bench only runs when something the building/grading agent
+  # actually consumes changes — the framework (packages/**, incl. agent-facing
+  # packages/**/*.md), the bench harness (scripts/agent-bench/**), the task
+  # prompts + graded specs (tasks/**), or the root dependency manifests
+  # (package.json / package-lock.json — a transitive/dev-dep bump can shift what
+  # the agent builds against, so it's worth a bench). Everything else is skipped
+  # as agent-inert: .github/** (CI/workflow config), docs/** and root prose,
+  # .changeset/**.
+  # NOTE: the task↔template matrix is defined INLINE in agent-bench.yml (under
+  # .github/**, intentionally NOT allowlisted so CI edits stay $0) — changes to
+  # those inline cell defs won't auto-trigger; use workflow_dispatch to bench them.
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
   push:
     branches: [main]
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
 
 concurrency:
