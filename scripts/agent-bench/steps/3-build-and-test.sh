@@ -32,6 +32,13 @@ CELL_TMP="/tmp/bench-${TASK:-default}-$$"
 mkdir -p "$CELL_TMP"
 export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
 
+# Test-only mock switch, inherited by both the dev server and Playwright. Tasks
+# whose grader needs a server-side test backdoor gate that surface on BLOCKS_MOCK
+# and return null otherwise, so it is inert in a real deployment. Example:
+# cognito-profile's api.getLastCode exposes the most-recently delivered OTP
+# (the grader has no mailbox) only when this is set.
+export BLOCKS_MOCK=true
+
 # Write pessimistic defaults up front, then update on success. If any step
 # below fails (npm install, playwright install, the parser), the workflow
 # still sees valid values and the EVIDENCE JSON in step 4 is well-formed.

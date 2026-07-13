@@ -4,8 +4,9 @@ const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
 const T = 10_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -19,7 +20,7 @@ async function rpc(
 ): Promise<{ status: number; body: any }> {
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
-		data: { jsonrpc: '2.0', method, params, id: ++seq },
+		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
 	});
 	return { status: res.status(), body: await res.json().catch(() => null) };
 }
@@ -64,8 +65,25 @@ async function signIn(page: Page, request: APIRequestContext, user: string): Pro
 	return email;
 }
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('cognito-profile', () => {
 	// --- Framework surface: identity from the auth session over the api ---
+
+	test('api.getLastCode is a mock-only backdoor — gated off outside BLOCKS_MOCK', async ({ request }) => {
+		// The OTP-reader hook must never leak codes in a real deployment. In the
+		// bench (BLOCKS_MOCK=true) it is live so the grader can read the code;
+		// with the flag unset it must be gated off and return null.
+		const { status, body } = await rpc(request, 'api.getLastCode', []);
+		expect(status, `unexpected HTTP ${status}`).toBeLessThan(500);
+		if (process.env.BLOCKS_MOCK === 'true') {
+			// Live in mock mode: null (nothing delivered yet) or a { username, code }
+			// record — but never a JSON-RPC error envelope.
+			expect(body?.error, `getLastCode must not error in mock mode: ${JSON.stringify(body?.error)}`).toBeFalsy();
+		} else {
+			// Production / non-mock: the backdoor is closed — no code is exposed.
+			expect(body?.result ?? null, 'getLastCode must be gated off (null) outside BLOCKS_MOCK').toBeNull();
+		}
+	});
 
 	test('api.whoami reflects the signed-in identity and is gated to authenticated callers', async ({ page, request }) => {
 		const errors = watchErrors(page);

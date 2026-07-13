@@ -4,8 +4,9 @@ const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
 const T = 8_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -18,7 +19,7 @@ async function rpc(
 	params: unknown[] | undefined,
 	opts: { omitParams?: boolean } = {},
 ): Promise<{ status: number; body: any }> {
-	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++seq };
+	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++rpcSeq };
 	if (!opts.omitParams) data.params = params ?? [];
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -29,7 +30,7 @@ async function rpc(
 
 const toB64 = (buf: Buffer) => buf.toString('base64');
 // Download URLs may be absolute (presigned) or root-relative (served locally).
-const absUrl = (u: string) => (/^https?:\/\//.test(u) ? u : `${BASE}${u.startsWith('/') ? '' : '/'}${u}`);
+const absUrl = (u: string) => (/^https?:\/\//.test(u) ? u : `${BASE.replace(/\/$/, '')}/${u.replace(/^\//, '')}`);
 
 async function putFile(ctx: APIRequestContext, name: string, buf: Buffer): Promise<any> {
 	const { body } = await rpc(ctx, 'api.putFile', [name, toB64(buf)]);
@@ -45,6 +46,7 @@ async function list(ctx: APIRequestContext): Promise<any[]> {
 
 const entryFor = (files: any[], name: string) => files.find((f) => f?.name === name);
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('file-gallery', () => {
 	// --- Framework surface: store / list / serve / delete through the api ---
 
@@ -147,6 +149,18 @@ test.describe('file-gallery', () => {
 
 		const noParams = await rpc(request, 'api.putFile', undefined, { omitParams: true });
 		expect(noParams.body?.error, 'no params must yield a JSON-RPC error envelope').toBeTruthy();
+	});
+
+	test('putFile rejects a present-but-empty name (nothing stored under a blank key)', async ({ request }) => {
+		// A name that is present but blank must be rejected just like a missing
+		// one — never stored under an empty key.
+		const empty = await rpc(request, 'api.putFile', ['', toB64(Buffer.from('x'))]);
+		expect(empty.status, `unexpected HTTP ${empty.status}`).toBeLessThan(500);
+		expect(empty.body?.error, 'an empty name must yield a JSON-RPC error envelope').toBeTruthy();
+		expect(empty.body?.result ?? null).toBeNull();
+
+		// No phantom entry leaked in under the blank name.
+		expect(entryFor(await list(request), ''), 'no file may be stored under an empty name').toBeFalsy();
 	});
 
 	// --- Page smoke: the thin client wires the input/list to the api ---

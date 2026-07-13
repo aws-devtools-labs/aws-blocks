@@ -5,8 +5,9 @@ const APPEAR = 8_000;
 const DONE = 20_000; // background job + poll interval
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -19,7 +20,7 @@ async function rpc(
 	params: unknown[] | undefined,
 	opts: { omitParams?: boolean } = {},
 ): Promise<{ status: number; body: any }> {
-	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++seq };
+	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++rpcSeq };
 	if (!opts.omitParams) data.params = params ?? [];
 	const res = await request.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -53,6 +54,7 @@ async function countOf(request: APIRequestContext, id: string): Promise<number> 
 // The DOM row for a submission, located by its unique phrase text.
 const rowFor = (page: Page, phrase: string) => page.getByTestId('wc-item').filter({ hasText: phrase });
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('async-word-counter', () => {
 	// --- Framework surface: counting + persistence graded through the api ---
 

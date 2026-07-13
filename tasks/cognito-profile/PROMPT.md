@@ -24,7 +24,7 @@ This is email-OTP / passwordless: the visitor never types a password.
 
 Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
 
-1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered code as `{ username, code }` (or `null`). Retrieved via:
+1. **`api.getLastCode()`** — test harness hook (the grader has no mailbox): returns the most recently delivered code as `{ username, code }` (or `null`). **This is a test-only backdoor and MUST NOT be a production attack surface:** annotate it `@blocksSkipCodegen` (keep it out of the generated client/types) and gate its body so it returns `null` unless `process.env.BLOCKS_MOCK === 'true'`. Under real Cognito the code is emailed and never retained, so outside mock/test mode this method must reveal nothing. The bench harness runs the dev server with `BLOCKS_MOCK=true`, so the grader can still read the code. Retrieved via:
    ```
    POST /aws-blocks/api
    { "jsonrpc": "2.0", "method": "api.getLastCode", "params": [], "id": 1 }

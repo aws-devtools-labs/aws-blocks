@@ -7,8 +7,9 @@ const T = 10_000;
 const REPLY = 45_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -23,7 +24,7 @@ async function ask(
 ): Promise<{ status: number; body: any; reply: string; toolsUsed: string[]; citations: string[] }> {
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
-		data: { jsonrpc: '2.0', method: 'api.ask', params: [message], id: ++seq },
+		data: { jsonrpc: '2.0', method: 'api.ask', params: [message], id: ++rpcSeq },
 	});
 	const body = await res.json().catch(() => null);
 	const r = body?.result ?? {};
@@ -39,6 +40,7 @@ async function ask(
 const messages = (page: Page) => page.getByTestId('message');
 const bubbleWith = (page: Page, text: string) => messages(page).filter({ hasText: text });
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('kb-chat-agent', () => {
 	// --- Framework surface: the agent turn runs through api.ask ---
 

@@ -5,8 +5,9 @@ const T = 8_000;
 const PASSWORD = 'correct-horse-battery-staple';
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 // Per-test no-error gate: ONLY uncaught page errors (4xx/JSON-RPC errors are expected).
 function watchErrors(page: Page, sink: string[] = []): string[] {
@@ -23,7 +24,7 @@ async function rpc(
 	params: unknown[] | undefined,
 	opts: { omitParams?: boolean } = {},
 ): Promise<{ status: number; body: any }> {
-	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++seq };
+	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++rpcSeq };
 	if (!opts.omitParams) data.params = params ?? [];
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -42,6 +43,7 @@ async function signUp(page: Page, username: string): Promise<void> {
 	await expect(page.getByTestId('note-textarea')).toBeVisible({ timeout: T });
 }
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('auth-notes', () => {
 	// --- Page smoke: the thin client wires up and reflects server state ---
 

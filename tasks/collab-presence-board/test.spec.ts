@@ -4,8 +4,9 @@ const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
 const SYNC = 8_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -19,7 +20,7 @@ async function rpc(
 ): Promise<{ status: number; body: any }> {
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
-		data: { jsonrpc: '2.0', method, params, id: ++seq },
+		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
 	});
 	return { status: res.status(), body: await res.json().catch(() => null) };
 }
@@ -41,6 +42,7 @@ const count = (names: string[], name: string) => names.filter((n) => n === name)
 
 const presence = (page: Page, name: string) => page.getByTestId('presence-item').filter({ hasText: name });
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('collab-presence-board', () => {
 	// --- Framework surface: the shared board runs through the api ---
 
@@ -59,7 +61,7 @@ test.describe('collab-presence-board', () => {
 		expect(count(await roster(request), name), 'name-keyed board must hold at most one row per name').toBe(1);
 	});
 
-	test('names are stored and read back verbatim (markup preserved as literal text)', async ({ request }) => {
+	test('names round-trip verbatim through the store', async ({ request }) => {
 		const name = `${uniq('xss')} <b>BOOM</b>`;
 		await join(request, name);
 		const names = await roster(request);
@@ -152,6 +154,25 @@ test.describe('collab-presence-board', () => {
 		// A blank first-paint that only fills on the next realtime event would fail:
 		// the stored roster must be fetched and rendered on load.
 		await expect(presence(page, name)).toHaveCount(1, { timeout: SYNC });
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('a freshly-opened tab paints the pre-existing roster on mount (first-paint from listPresent)', async ({ page, request }) => {
+		const errors = watchErrors(page);
+		// Seed the shared board over the api BEFORE this tab ever opens — these
+		// joins are "already present" from the new tab's point of view.
+		const a = uniq('early');
+		const b = uniq('early');
+		await join(request, a);
+		await join(request, b);
+
+		// Opening the page now must render the already-present roster on load
+		// (a mount-time api.listPresent), not sit blank waiting for a future
+		// realtime event. Deterministic: the joins completed before goto.
+		await page.goto(BASE);
+		await expect(presence(page, a)).toHaveCount(1, { timeout: SYNC });
+		await expect(presence(page, b)).toHaveCount(1, { timeout: SYNC });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});

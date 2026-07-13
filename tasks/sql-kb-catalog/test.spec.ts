@@ -4,8 +4,9 @@ const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
 const T = 10_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
@@ -18,7 +19,7 @@ async function rpc(
 	params: unknown[] | undefined,
 	opts: { omitParams?: boolean } = {},
 ): Promise<{ status: number; body: any }> {
-	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++seq };
+	const data: Record<string, unknown> = { jsonrpc: '2.0', method, id: ++rpcSeq };
 	if (!opts.omitParams) data.params = params ?? [];
 	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
 		headers: { 'Content-Type': 'application/json' },
@@ -35,6 +36,7 @@ async function listProducts(ctx: APIRequestContext): Promise<any[]> {
 
 const product = (page: Page, name: string) => page.getByTestId('product-item').filter({ hasText: name });
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('sql-kb-catalog', () => {
 	// --- Framework surface: products in real SQL, FAQ via knowledge base ---
 
