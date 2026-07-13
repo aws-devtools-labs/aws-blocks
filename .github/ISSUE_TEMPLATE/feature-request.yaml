@@ -1,3 +1,5 @@
+# Labels are applied by the issue-triage-opened workflow, not this template.
+# Adding a labels: field here would race with that workflow on the 'opened' event.
 name: Feature Request
 description: Suggest an idea to help us improve AWS Blocks
 body:
