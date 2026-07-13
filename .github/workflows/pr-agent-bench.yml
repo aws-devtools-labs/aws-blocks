@@ -25,9 +25,12 @@ on:
   #
   # ALLOWLIST: the bench only runs when something the building/grading agent
   # actually consumes changes — the framework (packages/**, incl. agent-facing
-  # packages/**/*.md), the bench harness (scripts/agent-bench/**), or the task
-  # prompts + graded specs (tasks/**). Everything else is skipped as agent-inert:
-  # .github/** (CI/workflow config), docs/** and root prose, .changeset/**.
+  # packages/**/*.md), the bench harness (scripts/agent-bench/**), the task
+  # prompts + graded specs (tasks/**), or the root dependency manifests
+  # (package.json / package-lock.json — a transitive/dev-dep bump can shift what
+  # the agent builds against, so it's worth a bench). Everything else is skipped
+  # as agent-inert: .github/** (CI/workflow config), docs/** and root prose,
+  # .changeset/**.
   # NOTE: the task↔template matrix is defined INLINE in agent-bench.yml (under
   # .github/**, intentionally NOT allowlisted so CI edits stay $0) — changes to
   # those inline cell defs won't auto-trigger; use workflow_dispatch to bench them.
@@ -37,12 +40,16 @@ on:
       - 'packages/**'
       - 'scripts/agent-bench/**'
       - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
   push:
     branches: [main]
     paths:
       - 'packages/**'
       - 'scripts/agent-bench/**'
       - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
   workflow_dispatch:
 
 concurrency:
