@@ -89,7 +89,7 @@ jobs:
             local dest="$1"
             node scripts/sync-block-docs.mjs >/dev/null
             # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
-            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null 2>&1 )
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null )
             set -- "$dest"/*.tgz
             [ $# -eq 1 ] || { echo "expected exactly one .tgz in $dest, found $#" >&2; exit 1; }
             shasum -a 512 "$1" | awk '{print $1}'
@@ -99,12 +99,12 @@ jobs:
           HEAD_INTEGRITY=$(pack_blocks /tmp/head-pack)
 
           # BASE_SHA is present locally (checkout uses fetch-depth: 0).
-          git worktree add --detach /tmp/blocks-base "$BASE_SHA" >/dev/null 2>&1
+          git worktree add --detach /tmp/blocks-base "$BASE_SHA" >/dev/null
           mkdir -p /tmp/base-pack
           BASE_INTEGRITY=$(
             cd /tmp/blocks-base
             node scripts/sync-block-docs.mjs >/dev/null
-            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null 2>&1 )
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null )
             set -- /tmp/base-pack/*.tgz
             [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }
             shasum -a 512 "$1" | awk '{print $1}'
@@ -114,6 +114,7 @@ jobs:
           echo "Head packed shasum: $HEAD_INTEGRITY"
           echo "Base packed shasum: $BASE_INTEGRITY"
 
+          # Relies on npm's reproducible packing (fixed mtimes); head & base pack on the same runner, so identical content ⇒ identical tarball hash.
           if [ "$HEAD_INTEGRITY" = "$BASE_INTEGRITY" ]; then
             echo "✅ @aws-blocks/blocks packaged content is unchanged vs the base branch — no version bump required."
             exit 0
