@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -113,14 +113,10 @@ export class DistributedDatabase extends Scope {
    * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
    * has no engine — queries run in the app Lambda against the deployed cluster.
    * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
-   * query ran at synth time (e.g. at module scope). Throw a clear, actionable
-   * message instead of the cryptic "getEngine is not a function".
+   * query ran at synth time (e.g. at module scope).
    */
   getEngine(): never {
-    throw new Error(
-      'DistributedDatabase.getEngine() is unavailable during CDK synth. Queries ' +
-      'must run at request time inside an API handler, not at module scope.',
-    );
+    return synthGuard('DistributedDatabase', 'getEngine');
   }
 }
 

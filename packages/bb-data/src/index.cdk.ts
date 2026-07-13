@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -91,14 +91,10 @@ export class Database extends Scope {
    * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
    * has no engine — queries run in the app Lambda against the deployed database.
    * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
-   * query ran at synth time (e.g. at module scope). Throw a clear, actionable
-   * message instead of the cryptic "getEngine is not a function".
+   * query ran at synth time (e.g. at module scope).
    */
   getEngine(): never {
-    throw new Error(
-      'Database.getEngine() is unavailable during CDK synth. Queries must run ' +
-      'at request time inside an API handler, not at module scope.',
-    );
+    return synthGuard('Database', 'getEngine');
   }
 
   /**
