@@ -1,33 +1,20 @@
 #!/usr/bin/env bash
-# Step 3 (verifier): run `npm run build`, then launch the dev server FRESH and
-# run the task's Playwright spec against it. This step OWNS the dev server: the
-# agent's edit phase (step 2) ran with no server bound, so here we free the
-# front-door ports, start `npm run dev`, discover the port it binds from the
-# framework's own startup banner, and point Playwright at it via APP_BASE_URL.
-# Writes the build/dev-server/playwright/test signals to $GITHUB_OUTPUT (the
-# judge step folds them into EVIDENCE for its hard caps).
-#
-# Required env:
-#   WORKSPACE     absolute path to the bench-app
-#   TASK_DIR      absolute path to the task directory (PROMPT.md + test.spec.ts)
-# The dev port is NO LONGER passed in — it is discovered internally below.
+# Step 3 (verifier): `npm run build`, then launch the dev server FRESH and run the task's Playwright
+# spec against it. This step OWNS the dev server (step 2 ran with none bound): it frees the ports,
+# starts `npm run dev`, discovers the port from the framework banner, and points Playwright at it.
+# Writes build/dev-server/playwright/test signals to $GITHUB_OUTPUT (the judge folds them into EVIDENCE).
+# Required env: WORKSPACE (bench-app path), TASK_DIR (task dir with PROMPT.md + test.spec.ts).
 set -euo pipefail
 
 : "${WORKSPACE:?WORKSPACE must be set}"
 : "${TASK_DIR:?TASK_DIR must be set}"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT must be set (run inside GitHub Actions)}"
 
-# Pin to the version the monorepo lockfile already resolves, so the bench
-# browser/runner stay reproducible run-to-run.
+# Pin to the lockfile-resolved version so the browser/runner stay reproducible.
 PW_VERSION="1.60.0"
 
-# Isolate this cell's scratch files under a per-run, per-cell prefix so a re-run
-# on a reused runner (or a concurrent local invocation) can never collide on the
-# fixed /tmp paths this step used to hard-code. TASK is inherited from the job
-# env (defaulted for local runs); $$ adds per-invocation uniqueness. Every
-# dev/build/playwright scratch file below lives under here. PW_RESULTS_JSON is
-# exported so the generated playwright.config.ts (a quoted heredoc that can't
-# expand shell vars) can read the report path from the environment.
+# Per-run, per-cell scratch prefix so a re-run on a reused runner can't collide on fixed /tmp paths.
+# PW_RESULTS_JSON is exported so the generated playwright.config.ts heredoc can read the report path.
 CELL_TMP="/tmp/bench-${TASK:-default}-$$"
 mkdir -p "$CELL_TMP"
 export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
@@ -39,13 +26,8 @@ export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
 # (the grader has no mailbox) only when this is set.
 export BLOCKS_MOCK=true
 
-# Write pessimistic defaults up front, then update on success. If any step
-# below fails (npm install, playwright install, the parser), the workflow
-# still sees valid values and the EVIDENCE JSON in step 4 is well-formed.
-# build_status is the tri-state the judge's build-cap keys off (na|ok|failed);
-# its pessimistic default is "failed" so an early abort still caps, matching
-# build_succeeded=false. The build step below overwrites BOTH on every path
-# (GITHUB_OUTPUT is last-write-wins per key).
+# Pessimistic defaults up front, updated on success, so a failure still yields well-formed EVIDENCE.
+# build_status defaults "failed" (matches build_succeeded=false); the build step overwrites both.
 {
   echo "build_succeeded=false"
   echo "build_status=failed"
@@ -56,36 +38,20 @@ export BLOCKS_MOCK=true
   echo "tests_total=0"
 } >> "$GITHUB_OUTPUT"
 
-# The dev server is launched + discovered further below (after the build), since
-# this verifier now OWNS the server. First make sure the workspace exists and cd
-# into it — the build and the dev launch both need to run from the bench-app root.
+# cd into the workspace (build + dev launch run from the bench-app root).
 cd "$WORKSPACE" || {
-  # A missing workspace (e.g. the agent never produced bench-app) must not hard-abort
-  # this step: the pessimistic defaults written to $GITHUB_OUTPUT above already record
-  # build_status=failed / dev_server_started=false / tests_*=0, so honour the step's
-  # exit-0 green-regardless guarantee rather than masking it as a job failure.
+  # Missing workspace: pessimistic defaults are already recorded, so exit 0 (green-regardless).
   echo "::warning::workspace missing at $WORKSPACE — recording pessimistic build/test signals and skipping"
   exit 0
 }
 
-# Build detection (scoring correctness). Some templates (e.g. backend/tsx) ship
-# NO `build` script, so a bare `npm run build` prints `npm error Missing script:
-# "build"` and exits non-zero. Recording THAT as build_succeeded=false wrongly
-# caps the judge's functional_completeness (observability-api was capped to 3
-# despite 18/18 tests). So FIRST confirm package.json is readable, THEN detect
-# whether a `build` script exists:
-#   - package.json missing/malformed → build_status=failed, build_succeeded=false
-#                           (a broken workspace IS a build failure; cap preserved).
-#   - no `build` script   → build is N/A: build_status=na, build_succeeded=true
-#                           (not a failure; step 4 applies NO build-cap).
-#   - `build` exists, ok  → build_status=ok,     build_succeeded=true.
-#   - `build` exists, !=0 → build_status=failed, build_succeeded=false — a REAL
-#                           failure (e.g. file-gallery's `tsc` type errors), whose
-#                           cap is intentionally preserved.
-# The readability probe (`node -e 'require("./package.json")'`) THROWS on a
-# missing/malformed file; without it that throw would look identical to "no
-# build script" and wrongly skip the cap. The second `node -e` exits 0 iff
-# scripts.build is a non-empty string. Guarded `if`s keep both safe under `set -e`.
+# Build detection (scoring correctness): some templates ship no `build` script, so a bare
+# `npm run build` exits non-zero — recording that as a failure would wrongly cap the judge. So:
+#   - package.json missing/malformed → build_status=failed (a broken workspace IS a failure).
+#   - no `build` script   → build_status=na, build_succeeded=true (N/A, step 4 applies no cap).
+#   - `build` ok / failed → build_status=ok / failed (a real failure keeps the cap).
+# The require() probe throws on a missing/malformed file (distinct from "no build script"); the
+# second node -e exits 0 iff scripts.build is non-empty. Guarded `if`s stay safe under `set -e`.
 if ! node -e 'require("./package.json")' 2>/dev/null; then
   echo "::warning::package.json missing or malformed — treating as build failure"
   {
@@ -115,30 +81,57 @@ else
 fi
 
 # ── Dev server: launch fresh + discover its port from the framework banner ───
-# The verifier OWNS the server now (step 1 no longer starts one, so the agent's
-# edit phase ran with nothing bound). Free the public front-door ports the
-# framework may bind — 3000/3001 ONLY (never :3100, the internal Vite port) —
-# then wait for them to actually free up before launching `npm run dev`. The
-# dev server prints an EXACT banner inside server.listen(), BEFORE Vite starts:
-#   AWS Blocks local server running on http://localhost:<port>
-# We anchor discovery on THAT line — no port guessing, no CANDIDATE_PORTS probe.
-# A readiness gate then waits for the named port to answer HTTP <500 (5xx = not
-# ready). Bounded (~60s): if the banner never appears we leave APP_BASE_URL EMPTY
-# and PROCEED (green-regardless — the cell fails honestly rather than hanging,
-# hard-failing, or being pointed at a guessed port).
-for p in 3000 3001; do fuser -k "${p}/tcp" 2>/dev/null || true; done
+# The verifier OWNS the server. Step 2 may have left a `tsx watch` supervisor alive, so first reap
+# that tree and free the front-door ports (3000/3001 only, never :3100). Under shell isolation the
+# agent's procs are benchagent-owned, so reap/free/probe go through sudo (unprivileged fallback).
+# Discovery anchors on the exact banner `AWS Blocks local server running on http://localhost:<port>`,
+# then a readiness gate waits (~60s) for it to answer HTTP <500; if it never does, APP_BASE_URL stays
+# empty and we proceed (the cell fails honestly rather than hanging).
+
+# Reap any dev server the agent left running. The framework records each in
+# .blocks-sandbox/dev-server.<port>.pid as {pid, ppid, port}; `ppid` is the `tsx watch` supervisor
+# that respawns `pid` on change. A plain `fuser -k` only kills the child, the supervisor respawns it,
+# and the stale pidfile makes the framework singleton guard REFUSE our own `npm run dev`. So kill the
+# supervisor tree first (ppid before pid; TERM then KILL) and delete the pidfile before freeing ports.
+# Only node/tsx/npm procs are signalled (pid-reuse guard); sudo covers the cross-uid isolated case.
+reap_stale_dev_servers() {
+  local sandbox="${WORKSPACE}/.blocks-sandbox"
+  [ -d "$sandbox" ] || return 0
+  local pf ids ppid pid sig target
+  for pf in "$sandbox"/dev-server.*.pid; do
+    [ -f "$pf" ] || continue
+    ids="$(node -e 'try{const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(`${Number.isInteger(r.ppid)?r.ppid:""} ${Number.isInteger(r.pid)?r.pid:""}`)}catch{}' "$pf" 2>/dev/null || true)"
+    read -r ppid pid <<< "$ids" || true
+    for sig in TERM KILL; do
+      for target in "$ppid" "$pid"; do
+        [ -n "${target:-}" ] || continue
+        # pid-reuse guard: only signal a live node/tsx/npm process (/proc/<pid>/comm).
+        # This is a comm-CLASS heuristic (matches any node/tsx/npm), not process IDENTITY — a
+        # recycled pid now running an UNRELATED node/tsx/npm would still match. Acceptable here:
+        # the window is tiny and the sole workload on this ephemeral runner is our own dev server.
+        case "$(cat "/proc/${target}/comm" 2>/dev/null || true)" in
+          node|tsx|npm*) sudo -n kill "-${sig}" "$target" 2>/dev/null || kill "-${sig}" "$target" 2>/dev/null || true ;;
+        esac
+      done
+      [ "$sig" = TERM ] && sleep 1
+    done
+    # Drop the stale pidfile so the framework singleton guard won't refuse our start.
+    sudo -n rm -f "$pf" 2>/dev/null || rm -f "$pf" 2>/dev/null || true
+  done
+}
+reap_stale_dev_servers
+
+for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
 for i in $(seq 1 10); do
-  fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || break
+  # Probe via sudo too: an isolated squatter is benchagent-owned and invisible to an unprivileged fuser.
+  { sudo -n fuser 3000/tcp 3001/tcp >/dev/null 2>&1 || fuser 3000/tcp 3001/tcp >/dev/null 2>&1; } || break
+  # Still held — re-issue the privileged kill before waiting.
+  for p in 3000 3001; do sudo -n fuser -k "${p}/tcp" 2>/dev/null || fuser -k "${p}/tcp" 2>/dev/null || true; done
   sleep 1
 done
 
-# Reap the dev server when this step exits. It must stay alive through the
-# Playwright run below (which happens before any exit), and no later step (judge
-# grades a static source copy) needs it — so killing it on EXIT only reclaims the
-# port/process and records no signal, leaving scoring untouched. Defined + trapped
-# BEFORE the launch so an interrupt during/just-after `npm run dev` is still
-# reaped; guarded so it is a no-op on the early-exit paths that run before the
-# server was launched (no pidfile) and never itself changes the step's exit status.
+# Reap the dev server on EXIT (it stays alive through the Playwright run; no later step needs it).
+# Trapped before launch so an interrupt is still reaped; guarded to no-op before the server started.
 cleanup_dev_server() {
   [ -f "${CELL_TMP}/dev.pid" ] || return 0
   local dev_pid
@@ -168,11 +161,8 @@ if [ -n "$APP_BASE_URL" ]; then
   echo "dev_server_started=true" >> "$GITHUB_OUTPUT"
   echo "[discover] APP_BASE_URL=${APP_BASE_URL}"
 else
-  # The banner never appeared (or its named port never answered <500) within the
-  # bounded window. Record the signal (already defaulted to false above) + a brief
-  # diagnostic (pid liveness + log tail) onto result.json, then PROCEED with
-  # APP_BASE_URL EMPTY so the specs fail honestly instead of being pointed at a
-  # guessed :3000. RESULT_PATH matches steps 0/4/finalize; extra keys are carried through.
+  # Banner never appeared / port never became ready within the window. Record the signal + a brief
+  # diagnostic (pid liveness + log tail) onto result.json, then proceed with APP_BASE_URL empty.
   echo "::warning::dev server banner never appeared / port never became ready within ~60s"
   dev_pid=""; [ -f "${CELL_TMP}/dev.pid" ] && dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
@@ -197,12 +187,8 @@ else
 fi
 export APP_BASE_URL
 
-# Record whether Playwright installed. On failure tests can't run, so we emit
-# the signal and bail — the judge treats playwright_installed=false explicitly
-# rather than mistaking the resulting tests_total=0 for "no caps needed".
-# Both the package install AND the browser download must succeed before the
-# signal flips true; a failed chromium download would otherwise leave specs
-# unable to run while playwright_installed wrongly claimed true.
+# Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
+# Both the package install AND the chromium download must succeed before the signal flips true.
 if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
   echo "::warning::playwright install failed; functional tests will not run"
   exit 0
@@ -218,10 +204,8 @@ cp "$TASK_DIR/test.spec.ts" bench-tests/task.spec.ts
 cat > playwright.config.ts <<'EOF'
 import { defineConfig } from '@playwright/test';
 
-// Serial, single-worker: cells share one dev server whose backing store
-// (KVStore / SQL / DSQL) persists for the whole run, so parallel tests would
-// race on that shared state. retries: 0 on purpose — a retry would mask
-// realtime-propagation flake, and we want an honest pass/fail signal for the judge.
+// Serial, single-worker: cells share one dev server whose backing store persists for the run,
+// so parallel tests would race on shared state. retries: 0 for an honest pass/fail signal.
 export default defineConfig({
   testDir: './bench-tests',
   fullyParallel: false,
@@ -231,10 +215,8 @@ export default defineConfig({
   globalTimeout: 600_000,
   expect: { timeout: 15_000 },
   use: {
-    // The discovered dev-server URL (exported as APP_BASE_URL by this step).
-    // The specs use their own absolute goto() via BLOCKS_URL (set on the run
-    // line below to the same value); baseURL is set too so any relative
-    // navigation also resolves against the real port.
+    // The discovered dev-server URL (exported as APP_BASE_URL); specs also use their own
+    // absolute goto() via BLOCKS_URL, but baseURL is set for any relative navigation.
     baseURL: process.env.APP_BASE_URL,
     actionTimeout: 30_000,
     navigationTimeout: 45_000,
@@ -245,23 +227,14 @@ export default defineConfig({
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
     },
   },
-  // Report path is injected by step 3 via PW_RESULTS_JSON (the script isolates
-  // it under a per-cell /tmp prefix); the literal fallback keeps a local run
-  // that forgets to export it working.
+  // Report path injected via PW_RESULTS_JSON; literal fallback keeps a local run working.
   reporter: [['json', { outputFile: process.env.PW_RESULTS_JSON || '/tmp/pw-results.json' }]],
 });
 EOF
 
-# The specs read BLOCKS_URL for their absolute goto() (they don't rely on
-# Playwright's baseURL). Point it at the port the verifier discovered above
-# (APP_BASE_URL); pass APP_BASE_URL through too so the config's baseURL resolves.
-#
-# RUN_ID is a run-stable seed the specs fold into their unique-but-deterministic
-# test data (usernames, file names, notes …). It carries the cell's TASK so two
-# cells sharing a run/attempt id still seed distinct data. Exported once here so
-# it stays identical across a spec's internal navigation; the specs' uniq()
-# helper adds a per-call counter + timestamp on top, so identifiers stay
-# collision-free.
+# Specs read BLOCKS_URL for their absolute goto(); point it (and APP_BASE_URL) at the discovered port.
+# RUN_ID is a run-stable seed the specs fold into deterministic-but-unique test data; it carries TASK
+# so cells sharing a run id still seed distinct data. Exported once so it's stable across navigation.
 export RUN_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${TASK:-x}-$(date +%s)"
 BLOCKS_URL="$APP_BASE_URL" APP_BASE_URL="$APP_BASE_URL" npx playwright test 2>&1 | tee "${CELL_TMP}/pw.log" || true
 
@@ -269,16 +242,15 @@ if [ -f "$PW_RESULTS_JSON" ]; then
   PW_RESULTS_JSON="$PW_RESULTS_JSON" node -e '
     const fs = require("fs");
     const stats = JSON.parse(fs.readFileSync(process.env.PW_RESULTS_JSON, "utf-8")).stats ?? {};
-    // Assert the field exists before the ?? fallback — a missing "expected"
-    // means an unexpected reporter shape, not zero passes. Fail loudly so the
-    // pessimistic defaults are retained instead of silently reporting 0/0.
+    // Assert the field exists before the ?? fallback — a missing "expected" is an unexpected
+    // reporter shape, not zero passes. Fail loudly so the pessimistic defaults are retained.
     if (stats.expected === undefined) {
       console.error("stats.expected missing — unexpected Playwright reporter shape");
       process.exit(1);
     }
     const passed = stats.expected + (stats.flaky ?? 0);
     const failed = stats.unexpected ?? 0;
-    // NB: tests_total INCLUDES skipped (for display); the scoring denominator test_rate in lib/scoring.mjs EXCLUDES skipped (passed+failed only).
+    // NB: tests_total INCLUDES skipped (display); the scoring test_rate denominator EXCLUDES skipped.
     const total = passed + failed + (stats.skipped ?? 0);
     console.log("tests_passed="+passed);
     console.log("tests_failed="+failed);
@@ -288,8 +260,6 @@ else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
 
-# Always exit 0: this step records signals to $GITHUB_OUTPUT for the judge's
-# hard caps; a non-zero exit here would fail the job and break the
-# green-regardless guarantee. Every real failure is already captured as a signal
-# (build_status / dev_server_started / tests_*), so the step itself must not abort.
+# Always exit 0: real failures are already captured as $GITHUB_OUTPUT signals for the judge, and a
+# non-zero exit would break green-regardless.
 exit 0
