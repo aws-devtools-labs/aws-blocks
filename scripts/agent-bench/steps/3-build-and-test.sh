@@ -15,7 +15,7 @@ PW_VERSION="1.60.0"
 
 # Per-run, per-cell scratch prefix so a re-run on a reused runner can't collide on fixed /tmp paths.
 # PW_RESULTS_JSON is exported so the generated playwright.config.ts heredoc can read the report path.
-CELL_TMP="/tmp/bench-${TASK:-default}-$"
+CELL_TMP="/tmp/bench-${TASK:-default}-$$"
 mkdir -p "$CELL_TMP"
 export PW_RESULTS_JSON="${CELL_TMP}/pw-results.json"
 
