@@ -1,14 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { describe, test } from 'node:test';
 import { Scope } from '@aws-blocks/core';
-import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
-import { CannedProvider } from './providers/canned.js';
-import { checkModelHealth } from './model-factory.js';
 import { z } from 'zod';
-import { createStrandsModel } from './model-factory.js';
+import { Agent, AgentErrors, BedrockModels, OllamaModels } from './index.mock.js';
+import { checkModelHealth, createStrandsModel } from './model-factory.js';
+import { CannedProvider } from './providers/canned.js';
+import type { AgentStreamChunk } from './types.js';
+
+/** Drain an agent SSE generator into an array of chunks (test helper). */
+async function drain(gen: AsyncGenerator<AgentStreamChunk>): Promise<AgentStreamChunk[]> {
+	const chunks: AgentStreamChunk[] = [];
+	for await (const c of gen) chunks.push(c);
+	return chunks;
+}
 
 // ── AgentErrors ─────────────────────────────────────────────────────────────
 
@@ -25,16 +32,22 @@ describe('AgentErrors', () => {
 describe('createConversationId', () => {
 	test('returns a valid UUID', async () => {
 		const scope = new Scope('test-uuid');
-		const agent = new Agent(scope, 'a', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const id = await agent.createConversationId("test-user");
+		const agent = new Agent(scope, 'a', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
+		const id = await agent.createConversationId('test-user');
 		assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 	});
 
 	test('returns unique IDs', async () => {
 		const scope = new Scope('test-uuid2');
-		const agent = new Agent(scope, 'b', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const id1 = await agent.createConversationId("test-user");
-		const id2 = await agent.createConversationId("test-user");
+		const agent = new Agent(scope, 'b', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
+		const id1 = await agent.createConversationId('test-user');
+		const id2 = await agent.createConversationId('test-user');
 		assert.notStrictEqual(id1, id2);
 	});
 });
@@ -47,15 +60,18 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 		const agent = new Agent(scope, 'mx', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ badTool: tool({ description: 'has both',
-				parameters: z.object({}),
-				needsApproval: true,
-				interrupt: () => {},
-				handler: async () => ({}), }) }),
+			tools: (tool) => ({
+				badTool: tool({
+					description: 'has both',
+					parameters: z.object({}),
+					needsApproval: true,
+					interrupt: () => {},
+					handler: async () => ({}),
+				}),
+			}),
 		});
-		const result = await agent.stream('hello', { userId: 'test-user' });
 		await assert.rejects(
-			() => result.complete(),
+			() => drain(agent.streamSSE('hello', { userId: 'test-user' })),
 			(err: any) => {
 				assert.ok(err.message.includes("'needsApproval' or 'trustable' alongside 'interrupt'"));
 				assert.ok(err.message.includes('badTool'));
@@ -69,15 +85,18 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 		const agent = new Agent(scope, 'mx2', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ badTool2: tool({ description: 'has trustable + interrupt',
-				parameters: z.object({}),
-				trustable: true,
-				interrupt: () => {},
-				handler: async () => ({}), }) }),
+			tools: (tool) => ({
+				badTool2: tool({
+					description: 'has trustable + interrupt',
+					parameters: z.object({}),
+					trustable: true,
+					interrupt: () => {},
+					handler: async () => ({}),
+				}),
+			}),
 		});
-		const result = await agent.stream('hello', { userId: 'test-user' });
 		await assert.rejects(
-			() => result.complete(),
+			() => drain(agent.streamSSE('hello', { userId: 'test-user' })),
 			(err: any) => {
 				assert.ok(err.message.includes("'needsApproval' or 'trustable' alongside 'interrupt'"));
 				assert.ok(err.message.includes('badTool2'));
@@ -91,13 +110,17 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 		const agent = new Agent(scope, 'ap', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ approvalTool: tool({ description: 'approval only',
-				parameters: z.object({}),
-				needsApproval: false,
-				handler: async () => ({ ok: true }), }) }),
+			tools: (tool) => ({
+				approvalTool: tool({
+					description: 'approval only',
+					parameters: z.object({}),
+					needsApproval: false,
+					handler: async () => ({ ok: true }),
+				}),
+			}),
 		});
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		assert.ok(result.channelId);
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		assert.ok(chunks.some((c) => c.type === 'done'));
 	});
 
 	test('interrupt alone works', async () => {
@@ -105,46 +128,47 @@ describe('needsApproval and interrupt mutual exclusivity', () => {
 		const agent = new Agent(scope, 'it', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ interruptTool: tool({ description: 'interrupt only',
-				parameters: z.object({}),
-				interrupt: () => {},
-				handler: async () => ({ ok: true }), }) }),
+			tools: (tool) => ({
+				interruptTool: tool({
+					description: 'interrupt only',
+					parameters: z.object({}),
+					interrupt: () => {},
+					handler: async () => ({ ok: true }),
+				}),
+			}),
 		});
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		assert.ok(result.channelId);
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		assert.ok(chunks.some((c) => c.type === 'done'));
 	});
 });
 
-// ── AgentStreamResult.toJSON() ───────────────────────────────────────────────
+// ── streamSSE() ──────────────────────────────────────────────────────────────
 
-describe('AgentStreamResult.toJSON()', () => {
-	test('serializes to { channelId, channel: null }', async () => {
-		const scope = new Scope('test-tojson');
-		const agent = new Agent(scope, 'tj', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		const serialized = JSON.parse(JSON.stringify(result));
-		assert.deepStrictEqual(serialized, { channelId: result.channelId, channel: null });
-		assert.strictEqual('complete' in serialized, false);
-	});
-});
-
-// ── stream() empty channelId fallback ────────────────────────────────────────
-
-describe('stream() empty channelId fallback', () => {
-	test('empty channelId is treated as unset', async () => {
-		const scope = new Scope('test-empty-ch');
-		const agent = new Agent(scope, 'ec', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const result = await agent.stream('hello', { userId: 'test-user', channelId: '' });
-		assert.notStrictEqual(result.channelId, '');
-		assert.ok(result.channelId.length > 0);
+describe('streamSSE()', () => {
+	test('yields a done chunk for a simple turn (inferenceOnly, no persistence)', async () => {
+		const scope = new Scope('test-sse');
+		const agent = new Agent(scope, 'sse', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
+		const chunks = await drain(agent.streamSSE('hello'));
+		assert.ok(
+			chunks.some((c) => c.type === 'done'),
+			'should yield a done chunk',
+		);
 	});
 
-	test('empty conversationId is treated as unset', async () => {
-		const scope = new Scope('test-empty-conv');
-		const agent = new Agent(scope, 'ev', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const result = await agent.stream('hello', { userId: 'test-user', conversationId: '' });
-		assert.notStrictEqual(result.channelId, '');
-		assert.ok(result.channelId.length > 0);
+	test('requires userId when persistence is enabled', async () => {
+		const scope = new Scope('test-sse-uid');
+		const agent = new Agent(scope, 'su', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
+		await assert.rejects(
+			() => drain(agent.streamSSE('hello')),
+			(err: any) => err.name === AgentErrors.PersistenceRequired,
+		);
 	});
 });
 
@@ -219,7 +243,11 @@ describe('AgentConfig name/description forwarding', () => {
 
 describe('inferenceOnly error handling', () => {
 	const scope = new Scope('test-io');
-	const agent = new Agent(scope, 'io', { inferenceOnly: true, systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+	const agent = new Agent(scope, 'io', {
+		inferenceOnly: true,
+		systemPrompt: 'test',
+		model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+	});
 
 	test('getConversation throws PersistenceRequired', async () => {
 		await assert.rejects(
@@ -236,28 +264,11 @@ describe('inferenceOnly error handling', () => {
 	});
 
 	test('stream still works', async () => {
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		assert.ok(result.channelId);
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		assert.ok(chunks.some((c) => c.type === 'done'));
 	});
 
-	// Regression: resuming an interrupted agent needs a conversationId to restore
-	// the paused session (the SessionManager is keyed by conversationId). Without
-	// one — as is always the case for inferenceOnly agents — resume() previously
-	// submitted a job that ran a fresh agent with nothing to apply the responses to.
-	// It must now fail fast with a clear error instead of silently doing nothing.
-	test('resume without a conversationId throws InterruptRequired', async () => {
-		await assert.rejects(
-			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }]),
-			(err: any) => {
-				assert.strictEqual(err.name, AgentErrors.InterruptRequired);
-				assert.match(err.message, /conversationId/);
-				// For an inferenceOnly agent the message must explain it's a
-				// fundamental limitation (no persistent session), not a missing param.
-				assert.match(err.message, /inferenceOnly/);
-				return true;
-			},
-		);
-	});
+	// (removed: resume() replaced by streamSSE interruptResponses; conversationId guard no longer applies)
 });
 
 // ── deleteConversation ownership scoping ─────────────────────────────────────
@@ -272,12 +283,14 @@ describe('deleteConversation ownership scoping', () => {
 	// record survived. A non-owner call must now be a no-op for the owner's data.
 	test("does not delete another user's messages when userId does not match", async () => {
 		const scope = new Scope('test-del-owner');
-		const agent = new Agent(scope, 'do', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const agent = new Agent(scope, 'do', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
 
 		const ownerId = 'owner-1';
 		const convId = await agent.createConversationId(ownerId);
-		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
-		await r.complete();
+		await drain(agent.streamSSE('hello', { conversationId: convId, userId: ownerId }));
 
 		const before = await agent.getConversation(convId);
 		assert.ok(before.length > 0, 'owner should have messages before delete');
@@ -292,12 +305,14 @@ describe('deleteConversation ownership scoping', () => {
 
 	test('owner can still delete their own conversation', async () => {
 		const scope = new Scope('test-del-owner2');
-		const agent = new Agent(scope, 'do2', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const agent = new Agent(scope, 'do2', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
 
 		const ownerId = 'owner-1';
 		const convId = await agent.createConversationId(ownerId);
-		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
-		await r.complete();
+		await drain(agent.streamSSE('hello', { conversationId: convId, userId: ownerId }));
 		assert.ok((await agent.getConversation(convId)).length > 0);
 
 		await agent.deleteConversation(convId, ownerId);
@@ -325,7 +340,9 @@ describe('CannedProvider', () => {
 	test('returns keyword response for weather', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
-		for await (const event of provider.stream([{ role: 'user', content: [{ text: 'tell me about the weather' }] }] as any)) {
+		for await (const event of provider.stream([
+			{ role: 'user', content: [{ text: 'tell me about the weather' }] },
+		] as any)) {
 			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') {
 				chunks.push(event.delta.text);
 			}
@@ -364,8 +381,12 @@ describe('CannedProvider', () => {
 		for (const { prompt, tool } of cases) {
 			const toolSpecs = [{ name: tool, description: '', inputSchema: {} }];
 			const started: string[] = [];
-			for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
-				if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+			for await (const event of provider.stream(
+				[{ role: 'user', content: [{ text: prompt }] }] as any,
+				{ toolSpecs } as any,
+			)) {
+				if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart')
+					started.push(event.start.name);
 			}
 			assert.deepStrictEqual(started, [], `prompt "${prompt}" must not trigger ${tool}`);
 		}
@@ -376,8 +397,12 @@ describe('CannedProvider', () => {
 		const provider = new CannedProvider();
 		const toolSpecs = [{ name: 'getOrder', description: '', inputSchema: {} }];
 		const started: string[] = [];
-		for await (const event of provider.stream([{ role: 'user', content: [{ text: 'what is the status of my order' }] }] as any, { toolSpecs } as any)) {
-			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+		for await (const event of provider.stream(
+			[{ role: 'user', content: [{ text: 'what is the status of my order' }] }] as any,
+			{ toolSpecs } as any,
+		)) {
+			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart')
+				started.push(event.start.name);
 		}
 		assert.deepStrictEqual(started, ['getOrder']);
 	});
@@ -385,9 +410,9 @@ describe('CannedProvider', () => {
 	test('responds to tool result with acknowledgment', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
-		for await (const event of provider.stream(
-			[{ role: 'user', content: [{ toolResult: { toolUseId: 'test', content: [{ text: 'result' }] } }] }] as any,
-		)) {
+		for await (const event of provider.stream([
+			{ role: 'user', content: [{ toolResult: { toolUseId: 'test', content: [{ text: 'result' }] } }] },
+		] as any)) {
 			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') {
 				chunks.push(event.delta.text);
 			}
@@ -406,24 +431,29 @@ describe('CannedProvider', () => {
 		assert.strictEqual(usage.outputTokens, 0);
 	});
 
-	test("test canned provider", async () => {
+	test('test canned provider', async () => {
 		const scope = new Scope('test-canned');
-		const agent = new Agent(scope, 'canned', { inferenceOnly: false, systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		assert.ok(result.channelId);
-		const done = await result.complete();
-		assert.strictEqual(done.type, 'done');
+		const agent = new Agent(scope, 'canned', {
+			inferenceOnly: false,
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		const done = chunks.find((c) => c.type === 'done');
+		assert.ok(done, 'should yield a done chunk');
 		assert.ok(done.text && done.text.length > 0, 'should have response text');
 	});
 
-	test("getConversation with limit returns most recent messages", async () => {
+	test('getConversation with limit returns most recent messages', async () => {
 		const scope = new Scope('test-limit');
-		const agent = new Agent(scope, 'lim', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const agent = new Agent(scope, 'lim', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
 		const convId = await agent.createConversationId('test-user');
 		// Send 3 messages to create at least 6 entries (user + assistant each)
 		for (const msg of ['first', 'second', 'third']) {
-			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
-			await r.complete();
+			await drain(agent.streamSSE(msg, { conversationId: convId, userId: 'test-user' }));
 		}
 		const all = await agent.getConversation(convId);
 		const limited = await agent.getConversation(convId, { limit: 2 });
@@ -437,107 +467,128 @@ describe('CannedProvider', () => {
 	// not "unlimited". Previously the `options?.limit &&` guard treated 0 as falsy
 	// and negatives fell through (result.length >= negative is never true), so ALL
 	// messages were returned in both cases. Any limit <= 0 must return an empty array.
-	test("getConversation with limit 0 or negative returns no messages", async () => {
+	test('getConversation with limit 0 or negative returns no messages', async () => {
 		const scope = new Scope('test-limit-zero');
-		const agent = new Agent(scope, 'lim0', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } } });
+		const agent = new Agent(scope, 'lim0', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+		});
 		const convId = await agent.createConversationId('test-user');
 		for (const msg of ['first', 'second']) {
-			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
-			await r.complete();
+			await drain(agent.streamSSE(msg, { conversationId: convId, userId: 'test-user' }));
 		}
 		assert.ok((await agent.getConversation(convId)).length > 0, 'sanity: conversation has messages');
-		assert.strictEqual((await agent.getConversation(convId, { limit: 0 })).length, 0, 'limit 0 should return an empty array, not all messages');
-		assert.strictEqual((await agent.getConversation(convId, { limit: -1 })).length, 0, 'negative limit should return an empty array, not all messages');
+		assert.strictEqual(
+			(await agent.getConversation(convId, { limit: 0 })).length,
+			0,
+			'limit 0 should return an empty array, not all messages',
+		);
+		assert.strictEqual(
+			(await agent.getConversation(convId, { limit: -1 })).length,
+			0,
+			'negative limit should return an empty array, not all messages',
+		);
 	});
 
-	test("token mode publishes multiple chunks", async () => {
+	test('token mode publishes multiple chunks', async () => {
 		const scope = new Scope('test-token');
-		const agent = new Agent(scope, 'tok', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } }, streamingMode: 'token' });
-		const chunks: any[] = [];
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		const ch = await result.channel;
-		const sub = ch.subscribe((chunk: any) => { chunks.push(chunk); });
-		await result.complete();
-		sub.unsubscribe();
-		const textChunks = chunks.filter(c => c.type === 'text-delta');
+		const agent = new Agent(scope, 'tok', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			streamingMode: 'token',
+		});
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		const textChunks = chunks.filter((c) => c.type === 'text-delta');
 		assert.ok(textChunks.length > 1, 'token mode should produce multiple text-delta chunks');
 	});
 
-	test("block mode publishes fewer chunks than token mode", async () => {
+	test('block mode publishes fewer chunks than token mode', async () => {
 		const scope = new Scope('test-block');
-		const agent = new Agent(scope, 'blk', { systemPrompt: 'test', model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } }, streamingMode: 'block' });
-		const chunks: any[] = [];
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		const ch = await result.channel;
-		const sub = ch.subscribe((chunk: any) => { chunks.push(chunk); });
-		await result.complete();
-		sub.unsubscribe();
-		const textChunks = chunks.filter(c => c.type === 'text-delta');
+		const agent = new Agent(scope, 'blk', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			streamingMode: 'block',
+		});
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		const textChunks = chunks.filter((c) => c.type === 'text-delta');
 		assert.ok(textChunks.length === 1, 'block mode should produce a single text-delta chunk with full content');
-		assert.ok(textChunks[0].text.length > 0, 'block chunk should have content');
+		assert.ok(textChunks[0].text && textChunks[0].text.length > 0, 'block chunk should have content');
 	});
 
-	test("block mode flushes partial buffer on stream error", async () => {
+	test('block mode flushes partial buffer on stream error', async () => {
 		const scope = new Scope('test-block-err');
 		const agent = new Agent(scope, 'blkerr', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'throwing' as any }, local: { provider: 'throwing' as any } },
 			streamingMode: 'block',
 		});
-		const chunks: any[] = [];
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		const ch = await result.channel;
-		ch.subscribe((chunk: any) => { chunks.push(chunk); });
-		// Wait for error to propagate through AsyncJob
-		await new Promise(resolve => setTimeout(resolve, 2000));
-		const textChunks = chunks.filter((c: any) => c.type === 'text-delta');
-		const errorChunk = chunks.find((c: any) => c.type === 'error');
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		const textChunks = chunks.filter((c) => c.type === 'text-delta');
+		const errorChunk = chunks.find((c) => c.type === 'error');
 		assert.ok(textChunks.length > 0, 'should flush partial block buffer before error');
 		assert.strictEqual(textChunks[0].text, 'partial text', 'flushed text should contain buffered content');
 		assert.ok(errorChunk, 'should receive an error chunk after buffer flush');
 	});
 
-	test("complete() rejects on error chunk", async () => {
+	test('surfaces an error chunk on a mid-stream provider failure', async () => {
 		const scope = new Scope('test-complete-err');
 		const agent = new Agent(scope, 'cerr', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'throwing' as any }, local: { provider: 'throwing' as any } },
 		});
-		const result = await agent.stream('hello', { userId: 'test-user' });
-		await assert.rejects(() => result.complete(), (err: any) => {
-			assert.strictEqual(err.name, 'StreamFailedException');
-			assert.ok(err.message.includes('simulated mid-stream failure'));
-			return true;
-		});
+		const chunks = await drain(agent.streamSSE('hello', { userId: 'test-user' }));
+		const errChunk = chunks.find((c) => c.type === 'error');
+		assert.ok(errChunk, 'should yield an error chunk');
+		assert.ok(errChunk.error && errChunk.error.includes('simulated mid-stream failure'));
 	});
 
-	test("complete() resolves when a tool throws", async () => {
+	test('stream completes when a tool throws (Strands contains the tool error)', async () => {
 		const scope = new Scope('test-tool-err');
 		const agent = new Agent(scope, 'terr', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ failingTool: tool({ description: 'fails', parameters: z.object({}), needsApproval: false, handler: async () => { throw new Error('boom'); } }) }),
+			tools: (tool) => ({
+				failingTool: tool({
+					description: 'fails',
+					parameters: z.object({}),
+					needsApproval: false,
+					handler: async () => {
+						throw new Error('boom');
+					},
+				}),
+			}),
 		});
-		const result = await agent.stream('run failingTool', { userId: 'test-user' });
-		const chunk = await result.complete();
-		assert.strictEqual(chunk.type, 'done', 'Strands catches tool errors — stream completes normally');
-		assert.ok(chunk.text && chunk.text.length > 0, 'should have response text');
+		// Strands catches a throwing tool handler and surfaces it as a tool result the model
+		// handles, so the stream still runs the tool and completes rather than erroring out.
+		const chunks = await drain(agent.streamSSE('run failingTool', { userId: 'test-user' }));
+		assert.ok(
+			chunks.some((c) => c.type === 'tool-call' && c.toolName === 'failingTool'),
+			'should call the tool',
+		);
+		assert.ok(
+			chunks.some((c) => c.type === 'done'),
+			'stream should complete',
+		);
 	});
 
-	test("complete() rejects with InterruptError on interrupt chunk", async () => {
+	test('yields an interrupt chunk on an approval-gated tool', async () => {
 		const scope = new Scope('test-interrupt');
 		const agent = new Agent(scope, 'itr', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ getWeather: tool({ description: 'Get weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async (input: any) => ({ temp: 22 }) }) }),
+			tools: (tool) => ({
+				getWeather: tool({
+					description: 'Get weather',
+					parameters: z.object({ city: z.string() }),
+					needsApproval: true,
+					handler: async (input: any) => ({ temp: 22 }),
+				}),
+			}),
 		});
-		const result = await agent.stream('What is the weather in Paris?', { userId: 'test-user' });
-		await assert.rejects(() => result.complete(), (err: any) => {
-			assert.strictEqual(err.name, 'InterruptRequiredException');
-			assert.ok(err instanceof InterruptError, 'should be an InterruptError instance');
-			assert.ok(err.interrupts.length > 0, 'should have interrupts attached');
-			return true;
-		});
+		const chunks = await drain(agent.streamSSE('What is the weather in Paris?', { userId: 'test-user' }));
+		const interrupt = chunks.find((c) => c.type === 'interrupt');
+		assert.ok(interrupt, 'should yield an interrupt chunk');
+		assert.ok(Array.isArray(interrupt.interrupts) && interrupt.interrupts.length > 0);
 	});
 });
 
@@ -550,13 +601,19 @@ describe('tool context', () => {
 		const agent = new Agent(scope, 'ctx', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ whoAmI: tool({ description: 'reports the caller',
-				parameters: z.object({}),
-				needsApproval: false,
-				handler: async ({ context }) => { seenContext = context; return { userId: context.userId }; }, }) }),
+			tools: (tool) => ({
+				whoAmI: tool({
+					description: 'reports the caller',
+					parameters: z.object({}),
+					needsApproval: false,
+					handler: async ({ context }) => {
+						seenContext = context;
+						return { userId: context.userId };
+					},
+				}),
+			}),
 		});
-		const result = await agent.stream('use whoAmI', { userId: 'u-1', context: { userId: 'u-1' } });
-		await result.complete();
+		await drain(agent.streamSSE('use whoAmI', { userId: 'u-1', context: { userId: 'u-1' } }));
 		assert.deepStrictEqual(seenContext, { userId: 'u-1' }, 'handler should receive the per-call context');
 	});
 
@@ -566,14 +623,18 @@ describe('tool context', () => {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
 			toolContextSchema: z.object({ userId: z.string() }),
-			tools: (tool) => ({ whoAmI: tool({ description: 'reports the caller',
-				parameters: z.object({}),
-				needsApproval: false,
-				handler: async ({ context }) => ({ userId: context.userId }), }) }),
+			tools: (tool) => ({
+				whoAmI: tool({
+					description: 'reports the caller',
+					parameters: z.object({}),
+					needsApproval: false,
+					handler: async ({ context }) => ({ userId: context.userId }),
+				}),
+			}),
 		});
-		// Missing required context — should throw synchronously from stream()
+		// Missing required context — should throw from streamSSE()
 		await assert.rejects(
-			() => agent.stream('use whoAmI', { userId: 'u-1' } as any),
+			() => drain(agent.streamSSE('use whoAmI', { userId: 'u-1' } as any)),
 			(err: any) => err.name === AgentErrors.InvalidModelConfig,
 		);
 	});
@@ -585,13 +646,19 @@ describe('tool context', () => {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
 			toolContextSchema: z.object({ userId: z.string() }),
-			tools: (tool) => ({ whoAmI: tool({ description: 'reports the caller',
-				parameters: z.object({}),
-				needsApproval: false,
-				handler: async ({ context }) => { seenContext = context; return { userId: context.userId }; }, }) }),
+			tools: (tool) => ({
+				whoAmI: tool({
+					description: 'reports the caller',
+					parameters: z.object({}),
+					needsApproval: false,
+					handler: async ({ context }) => {
+						seenContext = context;
+						return { userId: context.userId };
+					},
+				}),
+			}),
 		});
-		const result = await agent.stream('use whoAmI', { userId: 'u-2', context: { userId: 'u-2' } });
-		await result.complete();
+		await drain(agent.streamSSE('use whoAmI', { userId: 'u-2', context: { userId: 'u-2' } }));
 		assert.deepStrictEqual(seenContext, { userId: 'u-2' });
 	});
 
@@ -601,21 +668,25 @@ describe('tool context', () => {
 		const agent = new Agent(scope, 'ctxi', {
 			systemPrompt: 'test',
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
-			tools: (tool) => ({ getWeather: tool({ description: 'Get weather',
-				parameters: z.object({ city: z.string() }),
-				needsApproval: false,
-				handler: async ({ input }) => { seenInput = input; return { ok: true }; }, }) }),
+			tools: (tool) => ({
+				getWeather: tool({
+					description: 'Get weather',
+					parameters: z.object({ city: z.string() }),
+					needsApproval: false,
+					handler: async ({ input }) => {
+						seenInput = input;
+						return { ok: true };
+					},
+				}),
+			}),
 		});
-		const result = await agent.stream('what is the weather', { userId: 'u-3' });
-		await result.complete();
+		await drain(agent.streamSSE('what is the weather', { userId: 'u-3' }));
 		assert.ok(seenInput && typeof seenInput.city === 'string', 'handler should receive validated input with city');
 	});
 });
 
-
-
-import { FileBucketSnapshotStorage } from './file-bucket-snapshot-storage.js';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import { FileBucketSnapshotStorage } from './file-bucket-snapshot-storage.js';
 
 describe('FileBucketSnapshotStorage', () => {
 	const scope = new Scope('test-snap');
@@ -623,7 +694,11 @@ describe('FileBucketSnapshotStorage', () => {
 	const storage = new FileBucketSnapshotStorage(bucket);
 
 	const location = { sessionId: 'sess-1', scope: 'agent' as const, scopeId: 'default' };
-	const snapshot = { data: { messages: [{ role: 'user', content: [{ text: 'hello' }] }], state: {}, systemPrompt: 'test' }, schemaVersion: '1.0', createdAt: new Date().toISOString() };
+	const snapshot = {
+		data: { messages: [{ role: 'user', content: [{ text: 'hello' }] }], state: {}, systemPrompt: 'test' },
+		schemaVersion: '1.0',
+		createdAt: new Date().toISOString(),
+	};
 
 	test('saveSnapshot with isLatest and loadSnapshot', async () => {
 		await storage.saveSnapshot({ location, snapshotId: 'latest-1', isLatest: true, snapshot: snapshot as any });
@@ -662,7 +737,10 @@ describe('FileBucketSnapshotStorage', () => {
 	test('deleteSession removes all data', async () => {
 		const loc = { sessionId: 'sess-del', scope: 'agent' as const, scopeId: 'default' };
 		await storage.saveSnapshot({ location: loc, snapshotId: 'x', isLatest: true, snapshot: snapshot as any });
-		await storage.saveManifest({ location: loc, manifest: { schemaVersion: '1.0', updatedAt: new Date().toISOString() } });
+		await storage.saveManifest({
+			location: loc,
+			manifest: { schemaVersion: '1.0', updatedAt: new Date().toISOString() },
+		});
 		await storage.deleteSession({ sessionId: 'sess-del' });
 		const loaded = await storage.loadSnapshot({ location: loc });
 		assert.strictEqual(loaded, null);
@@ -739,54 +817,61 @@ describe('model-factory', () => {
 import { useChat } from './index.hooks.js';
 
 describe('useChat', () => {
+	/** Build a `streamChunks` transport that yields a fixed list of chunks for each turn. */
+	function fixedStream(chunks: AgentStreamChunk[]) {
+		return async function* () {
+			for (const c of chunks) yield c;
+		};
+	}
+
 	test('onError is called when error chunk arrives', async () => {
-		let chunkHandler: (chunk: any) => void;
 		let errorReceived: string | undefined;
 		const loadingStates: boolean[] = [];
 
 		const chat = useChat({
 			api: {
-				sendMessage: async () => {},
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
-				return { unsubscribe() {}, established: Promise.resolve() };
+			streamChunks: fixedStream([{ type: 'error', error: 'model throttled' }]),
+			onLoadingChange: (l) => {
+				loadingStates.push(l);
 			},
-			onLoadingChange: (l) => { loadingStates.push(l); },
-			onError: (err) => { errorReceived = err; },
+			onError: (err) => {
+				errorReceived = err;
+			},
 		});
 
 		await chat.sendMessage('hello');
-		// Simulate error chunk from server
-		chunkHandler!({ type: 'error', error: 'model throttled' });
 
 		assert.strictEqual(errorReceived, 'model throttled');
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
 	});
 
 	test('onInterrupt is called when interrupt chunk arrives', async () => {
-		let chunkHandler: (chunk: any) => void;
 		let interruptsReceived: any[] | undefined;
 		const loadingStates: boolean[] = [];
 
 		const chat = useChat({
 			api: {
-				sendMessage: async () => {},
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
-				return { unsubscribe() {}, established: Promise.resolve() };
+			streamChunks: fixedStream([
+				{
+					type: 'interrupt',
+					interrupts: [{ id: 'int-1', name: 'approve:deleteRecords', reason: { tool: 'deleteRecords' } }],
+				},
+			]),
+			onLoadingChange: (l) => {
+				loadingStates.push(l);
 			},
-			onLoadingChange: (l) => { loadingStates.push(l); },
-			onInterrupt: (interrupts) => { interruptsReceived = interrupts; },
+			onInterrupt: (interrupts) => {
+				interruptsReceived = interrupts;
+			},
 		});
 
 		await chat.sendMessage('hello');
-		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:deleteRecords', reason: { tool: 'deleteRecords' } }] });
 
 		assert.ok(interruptsReceived, 'onInterrupt should be called');
 		assert.strictEqual(interruptsReceived!.length, 1);
@@ -794,78 +879,60 @@ describe('useChat', () => {
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after interrupt');
 	});
 
-	test('respondToInterrupt calls api.resume and adds approval message', async () => {
-		let chunkHandler: (chunk: any) => void;
-		let resumeCalled = false;
-		let resumeArgs: any;
-
+	test('respondToInterrupt streams the resume turn and adds an approval message', async () => {
+		const calls: Array<{ message?: string; interruptResponses?: any }> = [];
 		const chat = useChat({
 			api: {
-				sendMessage: async () => {},
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
-				resume: async (channelId, responses, convId) => { resumeCalled = true; resumeArgs = { channelId, responses, convId }; },
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
-				return { unsubscribe() {}, established: Promise.resolve() };
+			streamChunks: (args) => {
+				calls.push({ message: args.message, interruptResponses: args.interruptResponses });
+				// First turn interrupts; resume turn completes.
+				const chunks: AgentStreamChunk[] = args.interruptResponses
+					? [{ type: 'done', text: 'resumed' }]
+					: [{ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] }];
+				return (async function* () {
+					for (const c of chunks) yield c;
+				})();
 			},
 		});
 
 		await chat.sendMessage('hello');
-		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
 		await chat.respondToInterrupt([{ interruptId: 'int-1', approved: true }]);
 
-		assert.ok(resumeCalled, 'api.resume should be called');
-		assert.strictEqual(resumeArgs.responses[0].approved, true);
+		// The resume turn passed interruptResponses through the transport.
+		const resumeCall = calls.find((c) => c.interruptResponses);
+		assert.ok(resumeCall, 'resume turn should stream with interruptResponses');
+		assert.strictEqual(resumeCall!.interruptResponses[0].response, 'yes');
 		// Approval message should be in messages
 		const messages = chat.getMessages();
-		assert.ok(messages.some(m => m.role === 'approval' && m.content === 'Approved'), 'should have approval message');
-	});
-
-	test('respondToInterrupt throws if api.resume not configured', async () => {
-		let chunkHandler: (chunk: any) => void;
-
-		const chat = useChat({
-			api: {
-				sendMessage: async () => {},
-				createConversation: async () => ({ conversationId: 'conv-1' }),
-				getConversation: async () => ({ messages: [] }),
-			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
-				return { unsubscribe() {}, established: Promise.resolve() };
-			},
-		});
-
-		await chat.sendMessage('hello');
-		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
-		await assert.rejects(() => chat.respondToInterrupt([{ interruptId: 'int-1', approved: true }]), /api.resume/);
+		assert.ok(
+			messages.some((m) => m.role === 'approval' && m.content === 'Approved'),
+			'should have approval message',
+		);
 	});
 
 	test('interrupt removes empty assistant placeholder', async () => {
-		let chunkHandler: (chunk: any) => void;
 		let lastMessages: any[] = [];
 
 		const chat = useChat({
 			api: {
-				sendMessage: async () => {},
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
-				return { unsubscribe() {}, established: Promise.resolve() };
+			streamChunks: fixedStream([{ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] }]),
+			onMessagesChange: (msgs) => {
+				lastMessages = msgs;
 			},
-			onMessagesChange: (msgs) => { lastMessages = msgs; },
 		});
 
 		await chat.sendMessage('hello');
-		// At this point there's a user message + empty assistant placeholder
-		assert.ok(lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'should have empty placeholder');
-		// Interrupt arrives — placeholder should be removed
-		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
-		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'empty placeholder should be removed');
+		// After the interrupt, the empty assistant placeholder should be removed.
+		assert.ok(
+			!lastMessages.some((m) => m.role === 'assistant' && m.content === ''),
+			'empty placeholder should be removed',
+		);
 	});
 });
 
@@ -878,37 +945,73 @@ describe('checkModelHealth', () => {
 
 	test('bedrock foundation model found returns true', async () => {
 		let callCount = 0;
-		const mockClient = { send: async () => {
-			callCount++;
-			if (callCount === 1) throw new Error('not an inference profile');
-			return { modelDetails: { modelId: 'anthropic.claude-3-haiku' } };
-		} };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), true);
+		const mockClient = {
+			send: async () => {
+				callCount++;
+				if (callCount === 1) throw new Error('not an inference profile');
+				return { modelDetails: { modelId: 'anthropic.claude-3-haiku' } };
+			},
+		};
+		assert.strictEqual(
+			await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient),
+			true,
+		);
 	});
 
 	test('bedrock model not found returns false', async () => {
-		const mockClient = { send: async () => { throw new Error('not found'); } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, mockClient), false);
+		const mockClient = {
+			send: async () => {
+				throw new Error('not found');
+			},
+		};
+		assert.strictEqual(
+			await checkModelHealth({ provider: 'bedrock', modelId: 'bad.model' }, log, mockClient),
+			false,
+		);
 	});
 
 	test('bedrock credential error returns false', async () => {
-		const err = new Error('no creds'); err.name = 'CredentialsProviderError';
-		const mockClient = { send: async () => { throw err; } };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient), false);
+		const err = new Error('no creds');
+		err.name = 'CredentialsProviderError';
+		const mockClient = {
+			send: async () => {
+				throw err;
+			},
+		};
+		assert.strictEqual(
+			await checkModelHealth({ provider: 'bedrock', modelId: 'anthropic.claude-3-haiku' }, log, mockClient),
+			false,
+		);
 	});
 
 	test('bedrock inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'US Claude Sonnet' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, mockClient), true);
+		assert.strictEqual(
+			await checkModelHealth({ provider: 'bedrock', modelId: 'us.anthropic.claude-sonnet-4' }, log, mockClient),
+			true,
+		);
 	});
 
 	test('bedrock global inference profile found returns true', async () => {
 		const mockClient = { send: async () => ({ inferenceProfileName: 'Global Claude Opus' }) };
-		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, mockClient), true);
+		assert.strictEqual(
+			await checkModelHealth(
+				{ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' },
+				log,
+				mockClient,
+			),
+			true,
+		);
 	});
 
 	test('openai-api with unreachable endpoint returns false', async () => {
-		assert.strictEqual(await checkModelHealth({ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://localhost:19999/v1' }, log), false);
+		assert.strictEqual(
+			await checkModelHealth(
+				{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://localhost:19999/v1' },
+				log,
+			),
+			false,
+		);
 	});
 
 	// Regression: an endpoint that responds HTTP 200 with a NON-JSON body (an HTML
@@ -937,7 +1040,7 @@ describe('checkModelHealth', () => {
 				capturingLog,
 			);
 			assert.strictEqual(healthy, false, 'non-JSON 200 response should be treated as unhealthy, not throw');
-			const warned = warnings.find(w => w.meta && 'bodySnippet' in w.meta);
+			const warned = warnings.find((w) => w.meta && 'bodySnippet' in w.meta);
 			assert.ok(warned, 'should warn about the non-JSON body');
 			assert.match(warned!.meta.bodySnippet, /<html>/, 'warning should include a snippet of the offending body');
 		} finally {
@@ -956,7 +1059,12 @@ describe('checkModelHealth', () => {
 		const port = (server.address() as import('node:net').AddressInfo).port;
 		try {
 			const healthy = await checkModelHealth(
-				{ provider: 'openai-api', modelId: 'test-model', endpoint: `http://localhost:${port}/v1`, apiKey: 'sk-explicit' },
+				{
+					provider: 'openai-api',
+					modelId: 'test-model',
+					endpoint: `http://localhost:${port}/v1`,
+					apiKey: 'sk-explicit',
+				},
 				log,
 			);
 			assert.strictEqual(healthy, true);
@@ -978,7 +1086,12 @@ describe('checkModelHealth', () => {
 		const port = (server.address() as import('node:net').AddressInfo).port;
 		try {
 			const healthy = await checkModelHealth(
-				{ provider: 'openai-api', modelId: 'test-model', endpoint: `http://localhost:${port}/v1`, apiKey: () => Promise.resolve('sk-from-resolver') },
+				{
+					provider: 'openai-api',
+					modelId: 'test-model',
+					endpoint: `http://localhost:${port}/v1`,
+					apiKey: () => Promise.resolve('sk-from-resolver'),
+				},
 				log,
 			);
 			assert.strictEqual(healthy, true);
@@ -1048,7 +1161,11 @@ describe('OllamaModels presets', () => {
 		for (const [name, config] of Object.entries(OllamaModels)) {
 			assert.strictEqual(config.provider, 'openai-api', `${name} should have provider openai-api`);
 			assert.ok(config.modelId, `${name} should have a modelId`);
-			assert.strictEqual(config.endpoint, 'http://localhost:11434/v1', `${name} should use default Ollama endpoint`);
+			assert.strictEqual(
+				config.endpoint,
+				'http://localhost:11434/v1',
+				`${name} should use default Ollama endpoint`,
+			);
 		}
 	});
 });
@@ -1060,10 +1177,10 @@ describe('OllamaModels presets', () => {
 // so snapshots hit a cross-region 301 PermanentRedirect. index.test.ts otherwise only
 // drives the mock/local path, so this covers agent.aws.ts by spying the S3Storage ctor.
 
-import { Agent as DeployedAgent } from './index.aws.js';
-import { createDeployedSnapshotStorage } from './agent.aws.js';
-import type { SnapshotStorage, SnapshotManifest } from '@strands-agents/sdk';
+import type { SnapshotManifest, SnapshotStorage } from '@strands-agents/sdk';
 import type { S3StorageConfig } from '@strands-agents/sdk/session/s3-storage';
+import { createDeployedSnapshotStorage } from './agent.aws.js';
+import { Agent as DeployedAgent } from './index.aws.js';
 
 describe('deployed Agent S3Storage region (multi-region)', () => {
 	// Type-safe stand-in for S3Storage that records every config it's constructed with,
@@ -1120,7 +1237,216 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	});
 
 	test('deployed Agent constructs on the aws-runtime path', () => {
-		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
+		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' } },
+		});
 		assert.ok(agent);
+	});
+});
+
+// ── AgentCore WebSocket URL builder ─────────────────────────────────────────
+
+import { buildAgentCoreWsUrl } from './agent.aws.js';
+
+describe('buildAgentCoreWsUrl', () => {
+	const arn = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/my-runtime-abc123';
+
+	test('builds a wss URL against the regional data-plane host with the ARN encoded', () => {
+		const url = new URL(buildAgentCoreWsUrl(arn, 'sess-1'));
+		assert.strictEqual(url.protocol, 'wss:');
+		assert.strictEqual(url.hostname, 'bedrock-agentcore.us-east-1.amazonaws.com');
+		// The ARN is percent-encoded into the path segment.
+		assert.ok(url.pathname.startsWith(`/runtimes/${encodeURIComponent(arn)}/ws`));
+	});
+
+	test('embeds the session id as the runtime-session-id query param', () => {
+		const url = new URL(buildAgentCoreWsUrl(arn, 'conv-42'));
+		assert.strictEqual(url.searchParams.get('X-Amzn-Bedrock-AgentCore-Runtime-Session-Id'), 'conv-42');
+	});
+
+	test('derives region from the ARN (not hard-pinned)', () => {
+		const apse2 = 'arn:aws:bedrock-agentcore:ap-southeast-2:123456789012:runtime/r-xyz';
+		assert.strictEqual(new URL(buildAgentCoreWsUrl(apse2, 's')).hostname, 'bedrock-agentcore.ap-southeast-2.amazonaws.com');
+	});
+
+	test('throws on an ARN without a region', () => {
+		assert.throws(() => buildAgentCoreWsUrl('not-an-arn', 's'), /region/);
+	});
+});
+
+// ── Browser WebSocket transport ─────────────────────────────────────────────
+
+import { createAgentCoreWsTransport, buildBearerSubprotocols } from './ws-transport.js';
+
+/**
+ * Minimal fake of the browser WebSocket for driving the transport. Records the URL +
+ * subprotocols + sent frames, and lets the test push server frames / lifecycle events.
+ */
+class FakeWebSocket {
+	static CONNECTING = 0 as const;
+	static OPEN = 1 as const;
+	static CLOSING = 2 as const;
+	static CLOSED = 3 as const;
+	readonly CONNECTING = 0;
+	readonly OPEN = 1;
+	readonly CLOSING = 2;
+	readonly CLOSED = 3;
+	readyState = 0;
+	sent: string[] = [];
+	closed = false;
+	onopen: (() => void) | null = null;
+	onmessage: ((e: { data: string }) => void) | null = null;
+	onerror: (() => void) | null = null;
+	onclose: (() => void) | null = null;
+	constructor(
+		public url: string,
+		public protocols: string[],
+	) {}
+	send(data: string) {
+		this.sent.push(data);
+	}
+	close() {
+		this.closed = true;
+		this.readyState = this.CLOSED;
+	}
+	// Test drivers.
+	open() {
+		this.readyState = this.OPEN;
+		this.onopen?.();
+	}
+	emit(event: string, data?: Record<string, unknown>) {
+		this.onmessage?.({ data: JSON.stringify({ event, data }) });
+	}
+	fail() {
+		this.onerror?.();
+	}
+}
+
+describe('buildBearerSubprotocols', () => {
+	test('encodes the token base64url and pairs it with the scheme marker', () => {
+		const [encoded, marker] = buildBearerSubprotocols('a.b.c');
+		assert.strictEqual(marker, 'base64UrlBearerAuthorization');
+		assert.ok(encoded.startsWith('base64UrlBearerAuthorization.'));
+		// base64url alphabet only — no +, /, or = padding.
+		const payload = encoded.slice('base64UrlBearerAuthorization.'.length);
+		assert.doesNotMatch(payload, /[+/=]/);
+	});
+});
+
+describe('createAgentCoreWsTransport', () => {
+	function harness(endpoint = { wsUrl: 'wss://host/runtimes/arn/ws?X-Amzn-Bedrock-AgentCore-Runtime-Session-Id=c1', token: 'tok.tok.tok' }) {
+		let socket: FakeWebSocket | undefined;
+		const WebSocketImpl = function (url: string, protocols: string[]) {
+			socket = new FakeWebSocket(url, protocols);
+			return socket;
+		} as unknown as typeof WebSocket;
+		(WebSocketImpl as unknown as { CONNECTING: number }).CONNECTING = 0;
+		const streamChunks = createAgentCoreWsTransport(async () => endpoint, { WebSocketImpl });
+		return { streamChunks, getSocket: () => socket as FakeWebSocket };
+	}
+
+	test('opens the socket with the endpoint URL + bearer subprotocols and sends the prompt', async () => {
+		const { streamChunks, getSocket } = harness();
+		const gen = streamChunks({ conversationId: 'c1', message: 'hello' })[Symbol.asyncIterator]();
+		// Kick off iteration so the endpoint resolves + socket opens.
+		const first = gen.next();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		assert.strictEqual(socket.url, 'wss://host/runtimes/arn/ws?X-Amzn-Bedrock-AgentCore-Runtime-Session-Id=c1');
+		assert.deepStrictEqual(socket.protocols, buildBearerSubprotocols('tok.tok.tok'));
+		socket.open();
+		assert.deepStrictEqual(JSON.parse(socket.sent[0]), { prompt: 'hello' });
+		// Feed one chunk then complete so the pending next() resolves.
+		socket.emit('text-delta', { delta: 'hi' });
+		const { value } = await first;
+		assert.deepStrictEqual(value, { type: 'text-delta', delta: 'hi' });
+		socket.emit('turn-complete');
+	});
+
+	test('reconstructs chunks and ends on turn-complete', async () => {
+		const { streamChunks, getSocket } = harness();
+		const chunks: AgentStreamChunk[] = [];
+		const p = (async () => {
+			for await (const c of streamChunks({ conversationId: 'c1', message: 'go' })) chunks.push(c);
+		})();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		socket.emit('text-delta', { delta: 'a' });
+		socket.emit('done', { usage: { tokens: 1 } });
+		socket.emit('turn-complete');
+		await p;
+		assert.deepStrictEqual(chunks, [
+			{ type: 'text-delta', delta: 'a' },
+			{ type: 'done', usage: { tokens: 1 } },
+		]);
+		assert.ok(socket.closed, 'socket closes when the turn ends');
+	});
+
+	test('sends interruptResponses on resume', async () => {
+		const { streamChunks, getSocket } = harness();
+		const gen = streamChunks({ conversationId: 'c1', interruptResponses: [{ interruptId: 'i1', response: 'yes' }] })[Symbol.asyncIterator]();
+		const first = gen.next();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		assert.deepStrictEqual(JSON.parse(socket.sent[0]), {
+			prompt: '',
+			interruptResponses: [{ interruptId: 'i1', response: 'yes' }],
+		});
+		socket.emit('turn-complete');
+		await first;
+	});
+
+	test('emits a terminal error chunk when the socket errors', async () => {
+		const { streamChunks, getSocket } = harness();
+		const chunks: AgentStreamChunk[] = [];
+		const p = (async () => {
+			for await (const c of streamChunks({ conversationId: 'c1', message: 'go' })) chunks.push(c);
+		})();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		socket.fail();
+		await p;
+		assert.strictEqual(chunks.length, 1);
+		assert.strictEqual(chunks[0].type, 'error');
+		assert.match((chunks[0] as { error: string }).error, /failed/);
+	});
+});
+
+// ── AgentCore entry: server-side userId from forwarded JWT ──────────────────
+
+import { userIdFromContext } from './agentcore-entry.js';
+
+describe('userIdFromContext', () => {
+	// Build an unsigned JWT with the given claims (we only decode the payload).
+	function jwt(claims: Record<string, unknown>): string {
+		const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+		return `${b64({ alg: 'RS256' })}.${b64(claims)}.sig`;
+	}
+
+	test('reads sub from a Bearer Authorization header', () => {
+		const headers = { Authorization: `Bearer ${jwt({ sub: 'user-123', client_id: 'abc' })}` };
+		assert.strictEqual(userIdFromContext(headers), 'user-123');
+	});
+
+	test('accepts a lowercase authorization header', () => {
+		const headers = { authorization: `Bearer ${jwt({ sub: 'user-xyz' })}` };
+		assert.strictEqual(userIdFromContext(headers), 'user-xyz');
+	});
+
+	test('returns undefined when no auth header is forwarded (IAM runtime / not allowlisted)', () => {
+		assert.strictEqual(userIdFromContext({}), undefined);
+		assert.strictEqual(userIdFromContext(undefined), undefined);
+	});
+
+	test('returns undefined for a malformed token', () => {
+		assert.strictEqual(userIdFromContext({ Authorization: 'Bearer not-a-jwt' }), undefined);
+	});
+
+	test('returns undefined when the token carries no sub claim', () => {
+		assert.strictEqual(userIdFromContext({ Authorization: `Bearer ${jwt({ client_id: 'abc' })}` }), undefined);
 	});
 });

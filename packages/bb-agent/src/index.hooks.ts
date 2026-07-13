@@ -7,16 +7,33 @@
  * useChat() provides state management for agent conversations.
  * Works with any framework — not React-specific (no JSX, no React imports).
  *
+ * Transport: the app supplies a single `streamChunks(...)` function that yields
+ * AgentStreamChunk objects for a turn. There is ONE contract for both environments:
+ * - AWS: `streamChunks` opens an SSE connection to the AgentCore Runtime and yields
+ *   frames as they arrive (true streaming).
+ * - Local dev: the dev-server RPC layer can't stream, so `streamChunks` calls the app's
+ *   buffered `agentStream`/`agentResume` (backed by `Agent.collect()`) and yields the
+ *   returned chunks (optionally with small delays to simulate streaming).
+ * Either way the chunks flow through the same `handleChunk` state machine below.
+ *
  * Flow:
- * 1. Subscribe to Realtime channel + await established
- * 2. Load existing history from DB
- * 3. Show history — any in-flight chunks are caught by the subscription
- * 4. User sends message — chunks arrive via the already-open subscription
+ * 1. Load existing history from DB (loadConversation)
+ * 2. User sends message → iterate streamChunks(), applying each chunk
+ * 3. Interrupt → user approves → respondToInterrupt() streams the resume turn
  */
 
 import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
+
+// Browser WebSocket transport for streaming directly from the AgentCore Runtime on AWS.
+// Re-exported here so apps get it from the same `@aws-blocks/bb-agent/client` entry as useChat.
+export {
+	createAgentCoreWsTransport,
+	buildBearerSubprotocols,
+	type AgentCoreWsEndpoint,
+	type AgentCoreWsTurn,
+} from './ws-transport.js';
 
 /** A message in the conversation (for UI rendering). */
 export interface ChatMessage {
@@ -26,21 +43,38 @@ export interface ChatMessage {
 	metadata?: Record<string, any>;
 }
 
+/** An interrupt approval decision from the user. */
+export interface InterruptDecision {
+	interruptId: string;
+	approved: boolean;
+	trust?: boolean;
+	toolName?: string;
+	input?: any;
+}
+
 /** Options for creating a chat instance. */
 export interface UseChatOptions {
 	api: {
-		sendMessage(conversationId: string, message: string, channelId: string): Promise<void>;
 		createConversation(): Promise<{ conversationId: string }>;
-		getConversation(id: string): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
-		resume?(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string): Promise<void>;
-		getPendingInterrupts?(conversationId: string): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
+		getConversation(
+			id: string,
+		): Promise<{ messages: { role: string; content: string; metadata?: Record<string, any> }[] }>;
+		getPendingInterrupts?(
+			conversationId: string,
+		): Promise<{ interrupts: Array<{ id: string; name: string; reason?: any }> }>;
 	};
 	/**
-	 * Subscribe to a Realtime channel. Must return an object with:
-	 * - unsubscribe(): stop receiving messages
-	 * - established: Promise that resolves when the WS subscription is confirmed
+	 * Stream a turn's chunks. Called for both the initial message and HITL resume:
+	 * - initial: `{ conversationId, message }`
+	 * - resume:  `{ conversationId, interruptResponses }`
+	 * Must return an async-iterable of chunks. On AWS this wraps an SSE fetch to AgentCore;
+	 * locally it wraps the buffered RPC response (see Agent.collect()).
 	 */
-	subscribe: (channelId: string, handler: (chunk: AgentStreamChunk) => void) => Promise<{ unsubscribe(): void; established: Promise<void> }>;
+	streamChunks: (args: {
+		conversationId: string;
+		message?: string;
+		interruptResponses?: Array<{ interruptId: string; response: string }>;
+	}) => AsyncIterable<AgentStreamChunk>;
 	/** Called whenever the message list changes. */
 	onMessagesChange?: (messages: ChatMessage[]) => void;
 	/** Called whenever loading state changes. */
@@ -55,25 +89,30 @@ export interface UseChatOptions {
 
 /** Returned by useChat(). */
 export interface ChatInstance {
-	/** Send a message. Creates a conversation and subscribes if needed. */
+	/** Send a message and stream the response. Creates a conversation on first call. */
 	sendMessage(text: string): Promise<void>;
-	/** Respond to an interrupt (tool approval). Resumes the agent. */
-	respondToInterrupt(responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>): Promise<void>;
+	/** Respond to an interrupt (tool approval) and stream the resumed response. */
+	respondToInterrupt(responses: Array<InterruptDecision>): Promise<void>;
 	/** Current messages. */
 	getMessages(): ChatMessage[];
 	/** Whether the agent is currently responding. */
 	isLoading(): boolean;
 	/** Current conversation ID (null until first message). */
 	getConversationId(): string | null;
-	/** Open a conversation: subscribe to Realtime, then load history. */
+	/** Open a conversation: load history + surface any pending interrupt. */
 	loadConversation(conversationId: string): Promise<void>;
-	/** Clean up the active subscription. */
+	/** No-op; retained for API compatibility (no long-lived subscription to tear down). */
 	destroy(): void;
 }
 
 let messageCounter = 0;
 function nextId(): string {
 	return `msg-${++messageCounter}-${Date.now()}`;
+}
+
+/** Translate a UI interrupt decision into the wire `response` string the agent expects. */
+function decisionToResponse(r: InterruptDecision): string {
+	return r.approved ? (r.trust ? 'trust' : 'yes') : 'no';
 }
 
 /**
@@ -83,14 +122,10 @@ function nextId(): string {
  * ```typescript
  * const chat = useChat({
  *   api: {
- *     sendMessage: (convId, msg, chId) => api.agentStream(msg, convId, chId),
  *     createConversation: () => api.agentCreateConversationId(),
  *     getConversation: (id) => api.agentGetConversation(id),
  *   },
- *   subscribe: async (channelId, handler) => {
- *     const result = await api.agentGetChannel(channelId);
- *     return result.channel.subscribe(handler);
- *   },
+ *   streamChunks: (args) => agentStreamTransport(args), // SSE on AWS, buffered locally
  *   onMessagesChange: (msgs) => renderMessages(msgs),
  *   onLoadingChange: (loading) => updateSpinner(loading),
  * });
@@ -103,23 +138,22 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	let messages: ChatMessage[] = [];
 	let loading = false;
 	let conversationId: string | null = null;
-	let activeSub: { unsubscribe(): void } | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
 
-	/** Handle a chunk from the Realtime subscription. */
+	/** Apply a single chunk to the message state. Identical for streamed (AWS) and buffered (local) chunks. */
 	function handleChunk(chunk: AgentStreamChunk) {
 		options.onChunk?.(chunk);
 
 		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
 			assistantText += chunk.text;
-			messages = messages.map(m => m.id === assistantId ? { ...m, content: assistantText } : m);
+			messages = messages.map((m) => (m.id === assistantId ? { ...m, content: assistantText } : m));
 			options.onMessagesChange?.(messages);
 		}
 
 		if (chunk.type === 'done') {
 			if (chunk.text && assistantId) {
-				messages = messages.map(m => m.id === assistantId ? { ...m, content: chunk.text! } : m);
+				messages = messages.map((m) => (m.id === assistantId ? { ...m, content: chunk.text! } : m));
 				options.onMessagesChange?.(messages);
 			}
 			loading = false;
@@ -135,9 +169,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		if (chunk.type === 'interrupt' && chunk.interrupts) {
 			// Remove empty assistant placeholder (no text was generated before interrupt)
 			if (assistantId) {
-				const assistant = messages.find(m => m.id === assistantId);
+				const assistant = messages.find((m) => m.id === assistantId);
 				if (assistant && !assistant.content) {
-					messages = messages.filter(m => m.id !== assistantId);
+					messages = messages.filter((m) => m.id !== assistantId);
 					options.onMessagesChange?.(messages);
 				}
 			}
@@ -148,37 +182,21 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		}
 	}
 
-	/** Subscribe to a conversation's Realtime channel and wait for WS confirmation. Retries with fresh token on auth failure. */
-	async function ensureSubscribed(channelId: string) {
-		if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
-
-		const sub = await options.subscribe(channelId, handleChunk);
+	/** Drive a turn's chunk stream through handleChunk. Surfaces transport errors as an error chunk. */
+	async function consume(stream: AsyncIterable<AgentStreamChunk>) {
 		try {
-			await sub.established;
+			for await (const chunk of stream) handleChunk(chunk);
 		} catch (err) {
-			console.warn('Subscription failed, retrying with fresh token:', err);
-			sub.unsubscribe();
-			const retrySub = await options.subscribe(channelId, handleChunk);
-			await retrySub.established;
-			activeSub = retrySub;
-			return;
+			handleChunk({ type: 'error', error: err instanceof Error ? err.message : String(err) });
 		}
-		activeSub = sub;
 	}
 
 	return {
 		async sendMessage(text: string) {
 			if (loading) return;
-			// Create conversation + subscribe on first message
 			if (!conversationId) {
 				const result = await options.api.createConversation();
 				conversationId = result.conversationId;
-				await ensureSubscribed(conversationId);
-			}
-
-			// Subscribe if not already (e.g., sendMessage without loadConversation)
-			if (!activeSub) {
-				await ensureSubscribed(conversationId);
 			}
 
 			// Add user message + assistant placeholder
@@ -191,19 +209,26 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			loading = true;
 			options.onLoadingChange?.(loading);
 
-			// Submit — chunks arrive via the already-open subscription
-			await options.api.sendMessage(conversationId, text, conversationId);
+			await consume(options.streamChunks({ conversationId, message: text }));
 		},
 
-		async respondToInterrupt(responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>) {
+		async respondToInterrupt(responses: Array<InterruptDecision>) {
 			if (loading) return;
 			if (!conversationId) throw new Error('No active conversation');
 			// Add approval messages to chat immediately
 			for (const r of responses) {
-				messages = [...messages, { id: nextId(), role: 'approval' as const, content: r.approved ? 'Approved' : 'Denied', metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input } }];
+				messages = [
+					...messages,
+					{
+						id: nextId(),
+						role: 'approval' as const,
+						content: r.approved ? 'Approved' : 'Denied',
+						metadata: { approved: r.approved, trust: r.trust, toolName: r.toolName, input: r.input },
+					},
+				];
 			}
 			// Reuse existing empty assistant placeholder or create one
-			const existingEmpty = messages.find(m => m.role === 'assistant' && !m.content);
+			const existingEmpty = messages.find((m) => m.role === 'assistant' && !m.content);
 			if (existingEmpty) {
 				assistantId = existingEmpty.id;
 			} else {
@@ -215,26 +240,31 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			options.onMessagesChange?.(messages);
 			loading = true;
 			options.onLoadingChange?.(loading);
-			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
-			await options.api.resume(conversationId, responses, conversationId);
+
+			const interruptResponses = responses.map((r) => ({
+				interruptId: r.interruptId,
+				response: decisionToResponse(r),
+			}));
+			await consume(options.streamChunks({ conversationId, interruptResponses }));
 		},
 
-		getMessages() { return messages; },
-		isLoading() { return loading; },
-		getConversationId() { return conversationId; },
+		getMessages() {
+			return messages;
+		},
+		isLoading() {
+			return loading;
+		},
+		getConversationId() {
+			return conversationId;
+		},
 
 		async loadConversation(id: string) {
 			conversationId = id;
 
-			// 1. Subscribe FIRST — catch any in-flight chunks
-			await ensureSubscribed(id);
-
-			// 2. THEN load history from DB
-			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
 			const { messages: history } = await options.api.getConversation(id);
 			messages = history
-				.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
-				.map(m => ({
+				.filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'approval')
+				.map((m) => ({
 					id: nextId(),
 					role: m.role as 'user' | 'assistant' | 'approval',
 					content: m.content,
@@ -250,7 +280,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		},
 
 		destroy() {
-			if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
+			// No long-lived subscription in the SSE model — nothing to tear down.
 		},
 	};
 }

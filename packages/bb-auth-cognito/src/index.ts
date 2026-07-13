@@ -1062,6 +1062,23 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 		};
 	}
 
+	/**
+	 * Return the Cognito ACCESS token for the current session — the JWT an AWS Bedrock AgentCore
+	 * Runtime JWT-authorizer accepts for a browser-direct WebSocket (see the AWS runtime for the
+	 * `client_id`-claim rationale). Mirrors the AWS surface so app code typechecks against the
+	 * mock; here it just reads the session record's access token. Throws 401 if not signed in.
+	 *
+	 * @category client
+	 */
+	async getAgentCoreToken(context: BlocksContext): Promise<string> {
+		const id = await this.sessionIdFromCookie(context);
+		const record = id ? await this.sessions.lookupSession(id) : undefined;
+		if (!record) {
+			throw new ApiError('Authentication required', 401, { name: AuthCognitoErrors.NotAuthenticated });
+		}
+		return record.accessToken;
+	}
+
 	async requireRole(context: BlocksContext, role: GroupOf<O>): Promise<CognitoUser<O>> {
 		const user = await this.requireAuth(context);
 		if (!user.groups.includes(role)) {

@@ -4,6 +4,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { createAgentCoreWsTransport } from '@aws-blocks/bb-agent/client';
+
+// The direct browser→AgentCore WebSocket path only exists on a deployed runtime
+// (wsAgentGetStreamEndpoint resolves a live runtime ARN); locally there's no runtime to
+// connect to. Gate the WS long-running test to sandbox/production.
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isSandbox = ENV === 'sandbox' || ENV === 'production';
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -21,37 +28,16 @@ export function agentTests(getApi: () => typeof apiType) {
   describe('Agent BB', () => {
 
     describe('Streaming', () => {
-      test('stream returns channelId immediately', async () => {
+      test('stream returns chunks with a done chunk', async () => {
         const api = getApi();
-        const result = await api.agentStream('Say hello');
-        assert.ok(result.channelId, 'should return a channelId');
+        const { chunks } = await api.agentStream('Say hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive a done chunk');
       });
 
-      test('getChannel returns a subscribable Realtime channel handle', async () => {
-        const api = getApi();
-        const result = await api.agentStream('Say hello');
-        const { channel } = await api.agentGetChannel(result.channelId);
-        assert.ok(channel, 'should return a channel handle');
-        assert.strictEqual(typeof channel.subscribe, 'function', 'channel should have subscribe method');
-      });
-
-      test('subscription receives streaming chunks', { timeout: 60_000 }, async () => {
+      test('stream yields streaming chunks', { timeout: 60_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.agentCreateConversationId();
-        // Subscribe BEFORE sending, await established before stream
-        const { channel } = await api.agentGetChannel(conversationId);
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 60s')), 60_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established
-            .then(() => api.agentStream('Say hello', conversationId, conversationId))
-            .catch(reject);
-        });
-        await done;
+        const { chunks } = await api.agentStream('Say hello', conversationId);
         assert.ok(chunks.filter((c: any) => c.type === 'text-delta').length > 0, 'should receive text-delta chunks');
         assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive done chunk');
       });
@@ -130,21 +116,21 @@ export function agentTests(getApi: () => typeof apiType) {
     });
 
     describe('Inference Only', () => {
-      test('inferenceOnly agent returns channelId', async () => {
+      test('inferenceOnly agent returns chunks with a done chunk', async () => {
         const api = getApi();
-        const result = await api.agentInferenceOnly('Say hello');
-        assert.ok(result.channelId, 'should return a channelId');
+        const { chunks } = await api.agentInferenceOnly('Say hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should return a done chunk');
       });
     });
 
-    // TODO: Realtime streaming e2e — test when useChat() hook is built (M7)
-    // TODO: Token usage — delivered via Realtime done chunk, test with useChat()
+    // TODO: SSE streaming e2e — test when useChat() hook is built (M7)
+    // TODO: Token usage — delivered via the SSE done chunk, test with useChat()
 
     describe('Tool Calling', () => {
       test('tool call persists to conversation history', async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        await api.cannedStream('use kvWrite', conversationId, conversationId);
+        await api.cannedStream('use kvWrite', conversationId);
 
         // Tool calls produce 4 messages: user, tool-call, tool-result, assistant
         const messages = await waitForMessages(api, conversationId, 4, 60000, true);
@@ -192,26 +178,11 @@ export function agentTests(getApi: () => typeof apiType) {
     describe('Model Fallback', () => {
       test('agent falls through to next candidate when first model is unreachable', { timeout: 10_000 }, async () => {
         const api = getApi();
-        const { channelId } = await api.fallbackStream('hello');
-        assert.ok(channelId, 'should return a channelId — agent resolved to canned fallback');
+        const { chunks } = await api.fallbackStream('hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should return a done chunk — agent resolved to canned fallback');
       });
     });
 
-
-    describe('Long-Running Agent (>29s)', () => {
-      test('agent with slow tool completes beyond API Gateway timeout', async () => {
-        const api = getApi();
-        const { conversationId } = await api.cannedCreateConversationId();
-        await api.cannedStream('Use the slowTask now.', conversationId);
-
-        const messages = await waitForMessages(api, conversationId, 4, 90000, true);
-        assert.ok(messages.length >= 4, 'should have all messages after slow tool completes');
-        const toolResult = messages.find((m: any) => m.role === 'tool-result');
-        assert.ok(toolResult, 'should have tool-result');
-        const meta = toolResult!.metadata;
-        assert.ok(meta.toolName === 'slowTask', 'tool result should reference slowTask');
-      });
-    });
     describe('Conversation Isolation', () => {
       test('different conversations do not share messages', async () => {
         const api = getApi();
@@ -335,74 +306,39 @@ export function agentTests(getApi: () => typeof apiType) {
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
 
-        const chunks: any[] = [];
-        const interrupted = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No interrupt chunk within 10s')), 10_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'interrupt') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(() => {
-            api.cannedStream('use deleteRecords', conversationId, conversationId);
-          }).catch(reject);
-        });
-
-        await interrupted;
         const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
         assert.ok(interruptChunk, 'should receive interrupt chunk');
-        assert.ok(interruptChunk.interrupts.length > 0, 'should have pending interrupts');
-        assert.ok(interruptChunk.interrupts[0].name.includes('deleteRecords'), 'interrupt should reference deleteRecords');
+        assert.ok(interruptChunk.interrupts!.length > 0, 'should have pending interrupts');
+        assert.ok(interruptChunk.interrupts![0].name.includes('deleteRecords'), 'interrupt should reference deleteRecords');
       });
 
       test('resume after approval completes the agent turn', { timeout: 20_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(async () => {
-            await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            // Wait for interrupt to arrive
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-            }
-          }).catch(reject);
-        });
-
-        await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should have received done after resume');
+        const { chunks: resumed } = await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'yes' })),
+          conversationId,
+        );
+        assert.ok(resumed.some((c: any) => c.type === 'done'), 'should have received done after resume');
       });
 
       test('approval is persisted to conversation history', { timeout: 20_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const interruptReceived = new Promise<any>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No interrupt within 10s')), 10_000);
-          const sub = channel.subscribe((chunk: any) => {
-            if (chunk.type === 'interrupt') { clearTimeout(timer); resolve(chunk); }
-          });
-          sub.established.then(() => {
-            api.cannedStream('use deleteRecords', conversationId, conversationId);
-          }).catch(reject);
-        });
-
-        const interruptChunk = await interruptReceived;
-        await api.cannedResume(conversationId, interruptChunk.interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-        // Wait for agent to complete
-        await new Promise(r => setTimeout(r, 2000));
+        await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'yes' })),
+          conversationId,
+        );
 
         const { messages } = await api.cannedGetConversation(conversationId);
         const roles = messages.map((m: any) => m.role);
@@ -413,34 +349,67 @@ export function agentTests(getApi: () => typeof apiType) {
       test('denial skips tool execution and agent continues', { timeout: 60_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(async () => {
-            await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: false })), conversationId);
-            }
-          }).catch(reject);
-        });
-
-        await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'agent should complete after denial');
+        const { chunks: resumed } = await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'no' })),
+          conversationId,
+        );
+        assert.ok(resumed.some((c: any) => c.type === 'done'), 'agent should complete after denial');
         // After denial, conversation history should show the tool was cancelled (not executed successfully)
         const { messages } = await api.cannedGetConversation(conversationId);
         const toolResult = messages.find((m: any) => m.role === 'tool-result');
         assert.ok(toolResult, 'should have tool-result message');
         const output = toolResult.metadata.toolOutput;
         assert.ok(JSON.stringify(output).includes('denied'), 'tool-result should contain denial message');
+      });
+    });
+
+    // Direct browser→AgentCore WebSocket streaming. This is the whole point of moving off
+    // Lambda: a turn can run far past the API-Gateway ~30s cap. wsAgent runs a `slowStream`
+    // tool that sleeps 35s; the buffered RPC path (agentStream) would 504 at the gateway, but
+    // the WS transport streams the turn to completion. Sandbox-only (needs a deployed runtime).
+    describe('WebSocket long-running streaming (>35s)', { skip: !isSandbox || 'requires a deployed runtime' }, () => {
+      test('a >35s turn streams to completion over the direct WebSocket', { timeout: 120_000 }, async () => {
+        const api = getApi();
+
+        // wsAgentGetStreamEndpoint requires a session (it calls requireAuth) and sources the
+        // server-trusted userId from it — the runtime can't derive identity itself because its
+        // JWT authorizer validates the token at the gateway, not in the container. Provision the
+        // Cognito user server-side (the e2e runner's --conditions=browser can't construct the AWS
+        // SDK client-side, and Cognito self-signup codes aren't retrievable in-process), then
+        // sign in from here to establish the cookie session.
+        const { username, password } = await api.wsAgentTestCreateUser();
+
+        try {
+          await api.authCSignIn(username, password);
+
+          // Wire the shipped client transport exactly as an app would: the endpoint method
+          // returns { wsUrl, token, userId }; the transport opens the socket (JWT via the
+          // Sec-WebSocket-Protocol subprotocol) and yields chunks through useChat's seam.
+          const streamChunks = createAgentCoreWsTransport(
+            async ({ conversationId }) => await api.wsAgentGetStreamEndpoint(conversationId),
+          );
+
+          const conversationId = crypto.randomUUID();
+          const start = Date.now();
+          const chunks: string[] = [];
+          for await (const chunk of streamChunks({ conversationId, message: 'Please run slowStream now' })) {
+            chunks.push((chunk as any).type);
+          }
+          const elapsedMs = Date.now() - start;
+
+          assert.ok(elapsedMs > 35_000, `turn should run past the 35s slow tool (took ${elapsedMs}ms)`);
+          assert.ok(chunks.includes('tool-call'), 'should have called the slow tool');
+          assert.ok(chunks.includes('tool-result'), 'slow tool should have returned a result');
+          assert.ok(chunks.includes('done'), 'turn should complete with a done chunk');
+          assert.ok(!chunks.includes('error'), `turn should not error, got chunks: ${JSON.stringify(chunks)}`);
+        } finally {
+          await api.authCSignOut();
+          await api.wsAgentTestDeleteUser(username);
+        }
       });
     });
   });

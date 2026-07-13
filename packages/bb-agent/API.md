@@ -6,7 +6,6 @@
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { SnapshotStorage } from '@strands-agents/sdk';
@@ -17,10 +16,15 @@ import type { z } from 'zod';
 // @public (undocumented)
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>);
+    getStreamEndpoint(options?: {
+        conversationId?: string;
+    }): Promise<AgentCoreStreamResult>;
 }
 
 // @public (undocumented)
 export interface AgentConfig<TContext = DefaultToolContext> {
+    agentcoreAssetPath?: string;
+    auth?: unknown;
     // Warning: (ae-forgotten-export) The symbol "ConversationManagerConfig" needs to be exported by the entry point index.aws.d.ts
     //
     // (undocumented)
@@ -44,6 +48,18 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     systemPrompt: string;
     toolContextSchema?: z.ZodType<TContext>;
     tools?: ToolsConfig<TContext>;
+}
+
+// @public
+export interface AgentCoreStreamResult {
+    runtimeArn: string;
+    sessionId: string;
+    toJSON(): {
+        runtimeArn: string;
+        wsUrl: string;
+        sessionId: string;
+    };
+    wsUrl: string;
 }
 
 // @public
@@ -89,14 +105,8 @@ export interface AgentStreamChunk {
 }
 
 // @public
-export interface AgentStreamResult {
-    channel: Promise<RealtimeChannel<AgentStreamChunk>>;
-    channelId: string;
-    complete: () => Promise<AgentStreamChunk>;
-    toJSON(): {
-        channelId: string;
-        channel: null;
-    };
+export interface AgentStreamResult extends AsyncIterable<AgentStreamChunk> {
+    complete(): Promise<AgentStreamChunk>;
 }
 
 // @public
@@ -249,7 +259,6 @@ export const OllamaModels: {
 
 // @public (undocumented)
 export interface StreamOptions<TContext = DefaultToolContext> {
-    channelId?: string;
     context?: TContext;
     // (undocumented)
     conversationId?: string;

@@ -4,7 +4,7 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient, getSdkIdentifiers } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
@@ -374,6 +374,27 @@ const cannedAgent = new Agent(scope, 'canned', {
       parameters: z.object({}),
       // `context` is typed as { userId: string } from `toolContextSchema` — no casting needed.
       handler: async ({ context }) => { await store.put('agent-whoami', context.userId); return { userId: context.userId }; } }),
+  }),
+});
+
+// WS-spike agent: a JWT-authorized runtime (usingCognito via `auth: authC`) so we can validate
+// the browser-direct WebSocket path (JWT passed via the Sec-WebSocket-Protocol subprotocol).
+// Canned model = deterministic, no Bedrock dependency. Approval-gated tool exercises HITL over WS.
+const wsAgent = new Agent(scope, 'wsagent', {
+  removalPolicy: 'destroy',
+  auth: authC,
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'You are a test agent for WebSocket streaming. Use tools when asked.',
+  tools: (tool) => ({
+    sendEmail: tool({ description: 'Send an email',
+      parameters: z.object({ to: z.string(), body: z.string() }),
+      needsApproval: true,
+      handler: async ({ input }) => ({ sent: true, to: input.to }) }),
+    // Sleeps past the API-Gateway ~30s cap: proves a WS turn streams to completion when the
+    // browser talks DIRECTLY to AgentCore (the whole point of moving off Lambda RPC).
+    slowStream: tool({ description: 'A slow long-running task',
+      parameters: z.object({}),
+      handler: async () => { await new Promise((r) => setTimeout(r, 35_000)); return { done: true, sleptMs: 35_000 }; } }),
   }),
 });
 
@@ -1608,21 +1629,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversations: await agent.listConversations(user?.userId ?? 'anonymous') };
   },
 
-  async agentStream(message: string, conversationId?: string, channelId?: string) {
+  // Streaming now runs on AgentCore (SSE) — no Realtime channel. These RPC methods drain the
+  // agent's SSE generator and return the collected chunks (the dev-server RPC layer buffers a
+  // single response). A real browser client would instead open the SSE stream directly (dev
+  // route locally, AgentCore Runtime on AWS) via useChat's `streamChunks` transport.
+  async agentStream(message: string, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
     const userId = user?.userId ?? 'anonymous';
-    const result = await agent.stream(message, conversationId ? { conversationId, channelId, userId } : { channelId, userId });
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of agent.streamSSE(message, { conversationId, userId })) chunks.push(chunk);
+    return { chunks };
   },
 
-  async agentGetChannel(channelId: string) {
-    return { channel: await agent.getChannel(channelId) };
-  },
-
-  async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
+  async agentResume(responses: Array<{ interruptId: string; response: string }>, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user?.userId ?? 'anonymous' });
-    return { ok: true };
+    const userId = user?.userId ?? 'anonymous';
+    const chunks = [];
+    for await (const chunk of agent.streamSSE('', { conversationId, userId, interruptResponses: responses })) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
@@ -1633,6 +1657,55 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { messages: await agent.getConversation(conversationId) };
   },
 
+  // Browser-direct WebSocket streaming: hand the client everything it needs to open a socket
+  // straight to the JWT-authorized AgentCore Runtime (wsAgent, auth: authC). The Agent BB stays
+  // auth-agnostic — it returns { wsUrl, sessionId } and we pair it with the Cognito ACCESS token
+  // from authC (the AgentCore JWT authorizer validates the access token's client_id claim).
+  // Requires an authenticated session; the short-lived token is held in browser memory only.
+  //
+  // userId is sourced from the authenticated backend session here (NOT from client input): the
+  // runtime's authorizer validates the token at the gateway but does NOT forward it to the
+  // container, so the runtime can't re-derive identity — the server-trusted userId rides the WS
+  // payload. requireAuth throws 401 if there's no session, so an unauthenticated caller can't
+  // obtain an endpoint at all.
+  async wsAgentGetStreamEndpoint(conversationId?: string) {
+    const user = await authC.requireAuth(context);
+    const endpoint = await wsAgent.getStreamEndpoint({ conversationId });
+    const token = await authC.getAgentCoreToken(context);
+    return { ...endpoint.toJSON(), token, userId: user.userId };
+  },
+
+  // Test-support: admin-provision + confirm a Cognito user server-side, then return credentials
+  // the client can sign in with. Done in the Lambda because (a) the e2e runner uses
+  // --conditions=browser, under which the AWS SDK can't be constructed client-side, and (b)
+  // Cognito self-signup delivers the confirmation code via a channel the API handler can't read.
+  // Returns the username/password; the client calls authCSignIn to establish the cookie session.
+  async wsAgentTestCreateUser() {
+    const { userPoolId } = getSdkIdentifiers(authC);
+    const { CognitoIdentityProviderClient, AdminCreateUserCommand, AdminSetUserPasswordCommand, MessageActionType } =
+      await import('@aws-sdk/client-cognito-identity-provider');
+    const cognito = new CognitoIdentityProviderClient({});
+    const username = `ws-long-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const password = 'Password1!';
+    await cognito.send(new AdminCreateUserCommand({
+      UserPoolId: userPoolId,
+      Username: username,
+      MessageAction: MessageActionType.SUPPRESS,
+      UserAttributes: [{ Name: 'email', Value: `${username}@example.com` }, { Name: 'email_verified', Value: 'true' }],
+    }));
+    await cognito.send(new AdminSetUserPasswordCommand({ UserPoolId: userPoolId, Username: username, Password: password, Permanent: true }));
+    return { username, password };
+  },
+
+  async wsAgentTestDeleteUser(username: string) {
+    const { userPoolId } = getSdkIdentifiers(authC);
+    const { CognitoIdentityProviderClient, AdminDeleteUserCommand } =
+      await import('@aws-sdk/client-cognito-identity-provider');
+    const cognito = new CognitoIdentityProviderClient({});
+    await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: username })).catch(() => {});
+    return { deleted: true };
+  },
+
   async agentDeleteConversation(conversationId: string) {
     const user = await auth.getCurrentUser(context);
     await agent.deleteConversation(conversationId, user?.userId ?? 'anonymous');
@@ -1640,8 +1713,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentInferenceOnly(message: string) {
-    const result = await inferenceAgent.stream(message);
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of inferenceAgent.streamSSE(message)) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
@@ -1653,22 +1727,22 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { deleted: true };
   },
 
-  // Deterministic canned agent methods (for reliable e2e testing without LLM)
-  async cannedStream(message: string, conversationId?: string, channelId?: string) {
+  // Deterministic canned agent methods (for reliable e2e testing without LLM).
+  // Like the live agent above, these drain the SSE generator and return the collected chunks.
+  async cannedStream(message: string, conversationId?: string) {
     // cannedAgent declares a toolContextSchema, so context is required and type-checked.
-    const result = await cannedAgent.stream(message, { conversationId, channelId, userId: 'test-user', context: { userId: 'test-user' } });
-    return { channelId: result.channelId };
+    const chunks = [];
+    for await (const chunk of cannedAgent.streamSSE(message, { conversationId, userId: 'test-user', context: { userId: 'test-user' } })) chunks.push(chunk);
+    return { chunks };
   },
   async cannedCreateConversationId() {
     const conversationId = await cannedAgent.createConversationId('test-user');
     return { conversationId };
   },
-  async cannedGetChannel(channelId: string) {
-    return { channel: await cannedAgent.getChannel(channelId) };
-  },
-  async cannedResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean }>, conversationId?: string) {
-    await cannedAgent.resume(channelId, responses, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
-    return { ok: true };
+  async cannedResume(responses: Array<{ interruptId: string; response: string }>, conversationId?: string) {
+    const chunks = [];
+    for await (const chunk of cannedAgent.streamSSE('', { conversationId, userId: 'test-user', interruptResponses: responses, context: { userId: 'test-user' } })) chunks.push(chunk);
+    return { chunks };
   },
   async cannedGetPendingInterrupts(conversationId: string) {
     return { interrupts: await cannedAgent.getPendingInterrupts(conversationId) };
@@ -1678,9 +1752,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async fallbackStream(message: string) {
-    const channelId = crypto.randomUUID();
-    const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
-    return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+    const chunks = [];
+    for await (const chunk of fallbackAgent.streamSSE(message, { userId: 'test-user' })) chunks.push(chunk);
+    return { chunks };
   },
 
   async agentPresetStream(presetName: string, message: string) {
