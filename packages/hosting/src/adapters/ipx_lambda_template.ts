@@ -30,7 +30,7 @@
  *   work. Upstream tracks broader format support in
  *   https://github.com/unjs/ipx/issues/261.
  */
-export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer } from 'ipx';
+export const IPX_LAMBDA_HANDLER_SOURCE = `import { createIPX, createIPXWebServer, ipxHttpStorage } from 'ipx';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { Buffer } from 'node:buffer';
 
@@ -193,8 +193,25 @@ const s3IpxStorage = {
   },
 };
 
+// Remote (http/https) sources need IPX's HTTP storage — without it IPX
+// routes a remote id to the S3 \`storage\` above, which has no such key, so
+// every allowlisted remote image 404s with IPX_RESOURCE_NOT_FOUND (issue #2).
+// Configure \`httpStorage\` scoped to the SAME allowlist the handler enforces
+// (hostnames from IMAGE_ALLOWED_HOSTNAMES + IMAGE_REMOTE_PATTERNS). IPX picks
+// \`httpStorage\` for \`http(s)://\` ids and \`storage\` (S3) for local keys.
+// \`isRemoteSourceAllowed\` still gates every request BEFORE IPX runs, so the
+// domains list here is defense-in-depth, not the sole guard. Omit httpStorage
+// entirely when no remote host is allowlisted (default-deny: local only).
+const httpDomains = [
+  ...allowedHostnames,
+  ...parsedRemotePatterns.map((p) => p.hostname),
+].filter(Boolean);
+
 const ipx = createIPX({
   storage: s3IpxStorage,
+  ...(httpDomains.length > 0
+    ? { httpStorage: ipxHttpStorage({ domains: httpDomains }) }
+    : {}),
 });
 
 const ipxServer = createIPXWebServer(ipx);

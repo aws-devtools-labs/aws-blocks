@@ -11,6 +11,7 @@ import {
   resolveNitroBundlePath,
   warnIfNitroOutOfRange,
 } from './nitro.js';
+import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
 
 /**
  * Regression tests for the Nitro adapter internals that have caused
@@ -397,5 +398,28 @@ describe('parseNuxtImageDomains (image.domains allowlist scan)', () => {
   it('is not fooled by a brace inside a string value before domains', () => {
     const src = `export default { image: { note: 'a } b', domains: ['x.com'] } }`;
     assert.deepStrictEqual(parseNuxtImageDomains(src), ['x.com']);
+  });
+});
+
+void describe('IPX_LAMBDA_HANDLER_SOURCE — remote source support (issue #2)', () => {
+  // The handler template is inline code shipped as a string; assert the
+  // wiring that makes remote images work end-to-end.
+  it('imports and configures IPX httpStorage for remote (http/https) sources', () => {
+    // Without httpStorage, IPX routes a remote id to the S3 storage → 404
+    // IPX_RESOURCE_NOT_FOUND. It must be imported and wired, gated on the
+    // allowlist domains.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /ipxHttpStorage/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: ipxHttpStorage\(\{ domains: httpDomains \}\)/);
+    // Domains come from the same allowlist the handler enforces.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /const httpDomains = \[/);
+  });
+
+  it('accepts BOTH API Gateway REST (v1) and Function URL (v2) events', () => {
+    // Shared SSR API GW delivers v1 (path/httpMethod); the fallback Function
+    // URL delivers v2 (rawPath/rawQueryString). eventToRequest must branch.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.rawPath/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.path/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.httpMethod/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /multiValueQueryStringParameters/);
   });
 });
