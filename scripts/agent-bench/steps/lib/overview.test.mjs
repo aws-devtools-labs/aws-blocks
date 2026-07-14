@@ -1,5 +1,5 @@
 // Unit tests for the PR-vs-baseline report helpers (overview.mjs): the diff math, the delta color
-// engine, formatters, and the single results table (renderDetailed). Run under bare `node --test`.
+// engine, formatters, and the single results table (renderDetailed) + preword. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -17,6 +17,7 @@ import {
 	humanTokens,
 	meanComposite,
 	renderDetailed,
+	renderPreword,
 } from './overview.mjs';
 
 const DIMS = { functional_completeness: 8, selector_contract: 8, persistence: 8, code_quality: 8, blocks_fidelity: 8 };
@@ -59,6 +60,13 @@ describe('DELTA_THRESHOLDS — the one place the bands live', () => {
 		assert.equal(DELTA_THRESHOLDS.tests, 1);
 		assert.equal(DELTA_THRESHOLDS.costPct, 0.1);
 		assert.equal(DELTA_THRESHOLDS.tokensPct, 0.1);
+		assert.equal(DELTA_THRESHOLDS.turns, 3);
+		assert.equal(DELTA_THRESHOLDS.cacheReadPct, 0.2);
+		assert.equal(DELTA_THRESHOLDS.cacheWritePct, 0.2);
+	});
+	it('LOC & Files have NO threshold (rendered neutral, never colored)', () => {
+		assert.equal('loc' in DELTA_THRESHOLDS, false);
+		assert.equal('files' in DELTA_THRESHOLDS, false);
 	});
 });
 
@@ -90,6 +98,8 @@ describe('formatters', () => {
 		assert.equal(humanTokens(3456), '3.5K');
 		assert.equal(humanTokens(3000), '3K');
 		assert.equal(humanTokens(800), '800');
+		assert.equal(humanTokens(2396400), '2.4M');
+		assert.equal(humanTokens(13835800), '13.8M');
 		assert.equal(humanTokens(null), '—');
 	});
 	it('fmtCost trims trailing zeros', () => {
@@ -139,6 +149,24 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 		assert.equal(p.score, 52.6); // 92 / 1.75
 		assert.equal(p.stop_reason, 'end_turn');
 		assert.deepEqual(p.judge_dimensions, DIMS);
+	});
+	it('persists the newer per-cell signals (cycle_count, cache, loc, files) for future baselines', () => {
+		const full = buildAggregate([{ ...PASS, cycle_count: 22, cache_read_tokens: 150000, cache_write_tokens: 12000, loc_created: 300, loc_edited: 40, files_created: 8, files_edited: 3 }], {});
+		const c = full.cells[0];
+		assert.equal(c.cycle_count, 22);
+		assert.equal(c.cache_read_tokens, 150000);
+		assert.equal(c.cache_write_tokens, 12000);
+		assert.equal(c.loc_created, 300);
+		assert.equal(c.loc_edited, 40);
+		assert.equal(c.files_created, 8);
+		assert.equal(c.files_edited, 3);
+	});
+	it('newer signals are null when the cell lacks them (older artifacts)', () => {
+		const c = byKey['auth-notes/demo'];
+		assert.equal(c.cycle_count, null);
+		assert.equal(c.cache_read_tokens, null);
+		assert.equal(c.loc_created, null);
+		assert.equal(c.files_created, null);
 	});
 	it('a cell with no tokens has cost + score null (never a fake $0)', () => {
 		assert.equal(byKey['sql-kb/nextjs'].composite, 0);
@@ -218,75 +246,146 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 	});
 });
 
-describe('renderDetailed(diff) — the single results table', () => {
-	const current = buildAggregate([PASS], {});
-	const baseline = {
-		schema: 2,
-		mean_composite: 92,
-		cells: [{ task: 'auth-notes', template: 'demo', composite: 92, judge_score: 8, tests_passed: 4, tests_denom: 4, cost: 2.0, score: 46, tokens_in: 190000, tokens_out: 28000 }],
-	};
-	const md = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n');
-	const row = md.split('\n').find((l) => l.includes('auth-notes'));
+// A full-feature cell exercising every column: per-dim judge, cache tokens, turns, LOC, files.
+const FULL = {
+	task: 'auth-notes',
+	template: 'demo',
+	tests_passed: 4,
+	tests_failed: 0,
+	judge_score: 8,
+	judge_dimensions: { functional_completeness: 9, selector_contract: 8, persistence: 7, code_quality: 8, blocks_fidelity: 8 },
+	tokens_in: 200000,
+	tokens_out: 30000,
+	cache_read_tokens: 150000,
+	cache_write_tokens: 12000,
+	cycle_count: 22,
+	loc_created: 300,
+	loc_edited: 40,
+	files_created: 8,
+	files_edited: 3,
+	stop_reason: 'end_turn',
+}; // comp 92 · cost 1.75 · score 52.6
 
-	it('has the single-table header — no separate Overview, no Δ vs base column', () => {
-		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \(in\/out\) \| Score \| Stop reason \|/);
+// A baseline that carries ALL of FULL's metrics, so each column has a real delta to color.
+const BASE_FULL = {
+	schema: 2,
+	mean_composite: 90,
+	cells: [
+		{
+			task: 'auth-notes',
+			template: 'demo',
+			composite: 90,
+			judge_score: 7,
+			judge_dimensions: { functional_completeness: 7, selector_contract: 8, persistence: 9, code_quality: 8, blocks_fidelity: 8 },
+			tests_passed: 4,
+			tests_denom: 4,
+			cost: 2.0,
+			score: 40,
+			tokens_in: 190000,
+			tokens_out: 28000,
+			cache_read_tokens: 100000,
+			cache_write_tokens: 10000,
+			cycle_count: 18,
+			loc_created: 250,
+			loc_edited: 30,
+			files_created: 6,
+			files_edited: 2,
+		},
+	],
+};
+
+describe('renderDetailed(diff) — the expanded single results table', () => {
+	const rowFor = (diff) => renderDetailed(diff, {}).join('\n').split('\n').find((l) => l.includes('auth-notes'));
+
+	it('has the expanded 11-column header — Tests|Judge|Cost|Tokens|Turns|LOC|Files|Score|Stop reason', () => {
+		const md = renderDetailed(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL), {}).join('\n');
+		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \| Turns \| LOC \| Files \| Score \| Stop reason \|/);
 		assert.doesNotMatch(md, /Δ vs base/);
 		assert.doesNotMatch(md, /->/); // no arrows anywhere
 	});
-	it('each metric cell is two lines: `<ball> <current value><br>(<signed delta>)`', () => {
-		assert.match(row, /🟡 4\/4<br>\(0\)/); // tests 4→4, within ±1 → 🟡, delta 0
-		assert.match(row, /🟡 8<br>\(0\)/); // judge 8→8, within ±0.3 → 🟡
-		assert.match(row, /🟢 \$1\.75<br>\(-\$0\.25\)/); // cost $2→$1.75 (−12.5% beyond ±10%) → 🟢 improved
-		assert.match(row, /🟡 200K\/30K<br>\(\+12K\)/); // tokens 218K→230K total (+5.5% within ±10%) → 🟡
-		assert.match(row, /🟢 52\.6<br>\(\+6\.6\)/); // score 46→52.6 (+6.6 beyond ±5) → 🟢 improved
-		assert.match(row, /\| end_turn \|$/); // stop reason retained
+
+	it('scalar cells are INLINE `<ball> <value> (<Δ>)` (tests/cost/turns/score)', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.match(row, /🟡 4\/4 \(0\)/); // tests 4→4, ±1 → 🟡
+		assert.match(row, /🟢 \$1\.75 \(-\$0\.25\)/); // cost $2→$1.75 (−12.5% beyond ±10%) → 🟢
+		assert.match(row, /🔴 22 \(\+4\)/); // turns 18→22 (+4 beyond ±3, lower-better) → 🔴
+		assert.match(row, /🟢 52\.6 \(\+12\.6\)/); // score 40→52.6 (+12.6 beyond ±5) → 🟢
+		assert.match(row, /\| end_turn \|$/); // stop reason retained, last column
 	});
-	it('uses the literal `<br>` HTML break (NOT a newline) so GFM keeps the two lines inside one table cell', () => {
-		// A raw \n would break the markdown table row; code fences would show a literal "<br>". Guard both.
-		assert.ok(row.includes('<br>'), 'cell must contain the literal <br> separator');
+
+	it('JUDGE stacks one <br>-joined line per rubric dimension with per-dim deltas', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.match(row, /functional 🟢 9 \(\+2\)/); // 7→9 beyond ±0.3 → 🟢
+		assert.match(row, /selectors 🟡 8 \(0\)/); // flat → 🟡
+		assert.match(row, /persistence 🔴 7 \(-2\)/); // 9→7 → 🔴
+		assert.match(row, /code 🟡 8 \(0\)/);
+		assert.match(row, /blocks 🟡 8 \(0\)/);
+		assert.match(row, /functional[^|]*<br>[^|]*selectors/); // dims are <br>-stacked in one cell
+	});
+
+	it('TOKENS stacks in / out / cached in / cached out', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.match(row, /in 🟡 200K \(\+10K\)/); // +10K within ±10% of 190K → 🟡
+		assert.match(row, /out 🟡 30K \(\+2K\)/); // +2K within ±10% of 28K → 🟡
+		assert.match(row, /cached in 🔴 150K \(\+50K\)/); // +50K beyond ±20% of 100K, lower-better → 🔴
+		assert.match(row, /cached out 🟡 12K \(\+2K\)/); // +2K exactly ±20% of 10K (inclusive) → 🟡
+	});
+
+	it('LOC & Files are NEUTRAL — always ⚪, value + signed delta, NEVER 🟢/🔴', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.match(row, /created ⚪ 300 \(\+50\)<br>edited ⚪ 40 \(\+10\)/); // LOC neutral despite +50 lines
+		assert.match(row, /created ⚪ 8 \(\+2\)<br>edited ⚪ 3 \(\+1\)/); // Files neutral
+	});
+
+	it('uses the literal `<br>` HTML break (NOT a newline) so GFM keeps stacked lines in one cell', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.ok(row.includes('<br>'), 'multi-line cells must use the literal <br> separator');
 		assert.doesNotMatch(row, /\n/); // the row is a single physical line
-		assert.doesNotMatch(row, /`[^`]*<br>[^`]*`/); // <br> is never inside backticks/code span
+		assert.doesNotMatch(row, /`[^`]*<br>[^`]*`/); // <br> never inside backticks/code span
 	});
+
 	it('no baseline at all → ⚪ + the CURRENT value + (new) for every metric (value never hidden)', () => {
-		const noBase = renderDetailed(diffAgainstBaseline(current, null), {}).join('\n');
-		const r = noBase.split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(r, /⚪ 4\/4<br>\(new\)/);
-		assert.match(r, /⚪ 8<br>\(new\)/);
-		assert.match(r, /⚪ \$1\.75<br>\(new\)/);
-		assert.match(r, /⚪ 200K\/30K<br>\(new\)/);
-		assert.match(r, /⚪ 52\.6<br>\(new\)/);
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), null));
+		assert.match(row, /⚪ 4\/4 \(new\)/); // tests
+		assert.match(row, /functional ⚪ 9 \(new\)/); // per-dim judge
+		assert.match(row, /⚪ \$1\.75 \(new\)/); // cost
+		assert.match(row, /in ⚪ 200K \(new\)/); // tokens in
+		assert.match(row, /cached in ⚪ 150K \(new\)/); // cache read
+		assert.match(row, /⚪ 22 \(new\)/); // turns
+		assert.match(row, /created ⚪ 300 \(new\)/); // loc created
+		assert.match(row, /created ⚪ 8 \(new\)/); // files created
+		assert.match(row, /⚪ 52\.6 \(new\)/); // score
 	});
-	it('PER-FIELD fallback: an older baseline colors the fields it has, ⚪ "(new)" for those it lacks', () => {
-		const partialBase = {
-			mean_composite: 80,
-			cells: [{ task: 'auth-notes', template: 'demo', composite: 80, judge_score: 7, test_rate: 1 }], // judge only
-		};
-		const r = renderDetailed(diffAgainstBaseline(current, partialBase), {}).join('\n').split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(r, /🟢 8<br>\(\+1\)/); // judge 7→8 beyond ±0.3 → colored 🟢
-		assert.match(r, /⚪ 4\/4<br>\(new\)/); // tests: baseline lacks the field → ⚪ (new)
-		assert.match(r, /⚪ \$1\.75<br>\(new\)/); // cost: ⚪ (new)
-		assert.match(r, /⚪ 200K\/30K<br>\(new\)/); // tokens: ⚪ (new)
-		assert.match(r, /⚪ 52\.6<br>\(new\)/); // score: ⚪ (new)
+
+	it('a run that predates cache/turns/LOC/files: those read ⚪ "(new)" or — while in/out still color', () => {
+		// PASS has tokens_in/out + judge_dimensions but NO cache/turns/loc/files.
+		const row = rowFor(diffAgainstBaseline(buildAggregate([PASS], {}), BASE_FULL));
+		assert.match(row, /in 🟡 200K/); // in/out present → colored
+		assert.match(row, /cached in ⚪ — \(new\)/); // cache absent this run → ⚪ — (new)
+		// turns/loc/files entirely absent this run → their cells collapse to the NONE placeholder.
+		const inner = row.split('|').slice(1, -1).map((c) => c.trim());
+		assert.equal(inner.length, 11);
+		assert.equal(inner[6], '—'); // Turns column (index: Task,Template,Tests,Judge,Cost,Tokens,Turns)
+		assert.equal(inner[7], '—'); // LOC
+		assert.equal(inner[8], '—'); // Files
 	});
-	it('EVERY row emits exactly 8 columns — even a crashed cell with null tokens/score/composite/judge', () => {
-		// A crashed cell (agent_fail/PGlite crash): 0 tests, no tokens → cost/score null, no judge. Its
-		// metric cells fall back to placeholders, but the row must NEVER drop a column and misalign.
-		const CRASH = { task: 'crash', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 }; // no tokens/judge → cost/score null
-		const withCrash = buildAggregate([PASS, CRASH], {});
-		const cmd = renderDetailed(diffAgainstBaseline(withCrash, null), {}).join('\n');
-		const dataRows = cmd.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Task') && !l.startsWith('|--'));
+
+	it('EVERY row emits exactly 11 columns — even a crashed cell with null everything', () => {
+		const CRASH = { task: 'crash', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 };
+		const cmd = renderDetailed(diffAgainstBaseline(buildAggregate([FULL, CRASH], {}), null), {}).join('\n');
+		const dataRows = cmd.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Task') && !l.startsWith('|--') && !l.startsWith('|---'));
 		assert.equal(dataRows.length, 2);
 		for (const line of dataRows) {
-			// Inner cells between the outer pipes must be exactly 8 (Task|Template|Tests|Judge|Cost|Tokens|Score|Stop).
 			const inner = line.split('|').slice(1, -1);
-			assert.equal(inner.length, 8, `row must have 8 columns, got ${inner.length}: ${line}`);
+			assert.equal(inner.length, 11, `row must have 11 columns, got ${inner.length}: ${line}`);
 			assert.ok(inner.every((c) => c.trim().length > 0), `no column may be empty: ${line}`);
 		}
 		const crashRow = dataRows.find((l) => l.includes('| crash |'));
-		assert.match(crashRow, /\| crash \| nextjs \| — \| — \| — \| — \| — \| — \|/); // every crashed metric → placeholder, 8 cols
+		assert.match(crashRow, /\| crash \| nextjs \| — \| — \| — \| — \| — \| — \| — \| — \| — \|/); // 9 placeholder metric cols
 	});
-	it('a removed cell shows a 🗑️ marker with the last-known test count', () => {
-		const withRemoved = diffAgainstBaseline(current, {
+
+	it('a removed cell shows a 🗑️ marker with the last-known test count, still 11 columns', () => {
+		const withRemoved = diffAgainstBaseline(buildAggregate([FULL], {}), {
 			schema: 2,
 			mean_composite: 80,
 			cells: [
@@ -295,25 +394,49 @@ describe('renderDetailed(diff) — the single results table', () => {
 			],
 		});
 		const dmd = renderDetailed(withRemoved, {}).join('\n');
-		assert.match(dmd, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+		const goneRow = dmd.split('\n').find((l) => l.includes('| gone |'));
+		assert.match(goneRow, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+		assert.equal(goneRow.split('|').slice(1, -1).length, 11);
 	});
 });
 
-describe('renderDetailed — per-metric DIRECTION (improve vs regress colors correctly)', () => {
-	// Current: cheaper cost + fewer tokens (both improvements for lower-is-better), fewer tests passed
-	// (a regression for higher-is-better), same judge. Verifies each metric's direction independently.
-	const current = buildAggregate([{ task: 't', template: 'demo', tests_passed: 2, tests_failed: 2, judge_score: 8, tokens_in: 100000, tokens_out: 10000, stop_reason: 'end_turn' }], {});
-	const baseline = {
-		schema: 2,
-		mean_composite: 90,
-		cells: [{ task: 't', template: 'demo', composite: 90, judge_score: 8, tests_passed: 4, tests_denom: 4, cost: 2.0, score: 20, tokens_in: 300000, tokens_out: 40000 }],
-	};
-	const row = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n').split('\n').find((l) => l.includes('| t |'));
+describe('renderPreword(diff, aggregate, opts) — bulleted run summary', () => {
+	const current = buildAggregate([FULL, PARTIAL, AGENT_FAIL, HARNESS], { sha: 'deadbeef' });
+	const diff = diffAgainstBaseline(current, BASE_FULL);
+	const bullets = renderPreword(diff, current, { builderModel: 'claude-opus-4-8', judgeModel: 'claude-opus-4-8', baselineSha: '6853382abc' });
+	const md = bullets.join('\n');
 
-	it('tests regressed (4→2 passes) → 🔴; cost/tokens dropped → 🟢; judge flat → 🟡', () => {
-		assert.match(row, /🔴 2\/4<br>\(-2\)/); // fewer passes, beyond ±1
-		assert.match(row, /🟢 .*<br>\(-\$/); // cost fell beyond 10% → 🟢
-		assert.match(row, /🟢 100K\/10K<br>\(-/); // tokens fell (340K→110K) → 🟢
-		assert.match(row, /🟡 8<br>\(0\)/); // judge unchanged → 🟡
+	it('every line is a markdown bullet', () => {
+		assert.ok(bullets.length > 0);
+		assert.ok(bullets.every((b) => b.startsWith('- ')));
+	});
+	it('leads with mean composite + Δ vs main + judge mean', () => {
+		assert.match(md, /Mean composite [\d.]+\/100/);
+		assert.match(md, /vs `main`/);
+		assert.match(md, /judge mean [\d.]+\/10/);
+	});
+	it('tallies verdicts (pass/partial/fail/harness_error)', () => {
+		assert.match(md, /\*\*Verdicts:\*\* \d+ pass · \d+ partial · \d+ fail · \d+ harness_error/);
+	});
+	it('reports totals (cost, tokens in/out, turns)', () => {
+		assert.match(md, /\*\*Totals:\*\*/);
+		assert.match(md, /tokens .*in .*out/);
+		assert.match(md, /turns/);
+	});
+	it('lists biggest gains / drops by composite Δ when a baseline exists', () => {
+		assert.match(md, /\*\*Biggest gains:\*\*/);
+		assert.match(md, /\*\*Biggest drops:\*\*/);
+	});
+	it('carries the run config (builder + judge model, baseline sha)', () => {
+		assert.match(md, /\*\*Config:\*\*/);
+		assert.match(md, /builder `claude-opus-4-8`/);
+		assert.match(md, /judge `claude-opus-4-8`/);
+		assert.match(md, /baseline `6853382`/); // truncated to 7 chars
+	});
+	it('with no baseline: no gains/drops bullets, says "no `main` baseline yet"', () => {
+		const noBase = renderPreword(diffAgainstBaseline(current, null), current, {});
+		const nmd = noBase.join('\n');
+		assert.match(nmd, /no `main` baseline yet/);
+		assert.doesNotMatch(nmd, /Biggest gains/);
 	});
 });

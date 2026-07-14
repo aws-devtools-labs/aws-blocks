@@ -21,6 +21,7 @@ import {
 	sleep,
 } from './lib/bedrock-retry.ts';
 import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './lib/partial-envelope.mjs';
+import { beginWorkspaceDiff, finishWorkspaceDiff } from './lib/workspace-diff.mjs';
 import {
 	BENCH_AGENT_USER,
 	WorkspaceSandbox,
@@ -76,6 +77,8 @@ process.stderr.write(
 // envelope from the signal handler. Counters at module scope so they survive invoke retries and the handler.
 let partialTokensIn = 0;
 let partialTokensOut = 0;
+let partialCacheRead = 0;
+let partialCacheWrite = 0;
 let partialCycles = 0;
 
 // Fresh agent per invoke attempt (mirrors the judge): a mid-stream failure can leave a half-built
@@ -99,6 +102,10 @@ function makeBuilderAgent(): Agent {
 		if (inner.type === 'modelMetadataEvent' && inner.usage) {
 			partialTokensIn += inner.usage.inputTokens ?? 0;
 			partialTokensOut += inner.usage.outputTokens ?? 0;
+			// Cache-read/write tokens are DISPLAYED only (never fed into cost/SCORE); accumulated with
+			// the same per-cycle += as tokens_in/out so a mid-run kill still leaves the spend on disk.
+			partialCacheRead += inner.usage.cacheReadInputTokens ?? 0;
+			partialCacheWrite += inner.usage.cacheWriteInputTokens ?? 0;
 			partialCycles += 1;
 			// Checkpoint the moment usage advances, so an UNGRACEFUL kill (a pkill storm tearing down
 			// this harness before the SIGTERM flush) still leaves nonzero tokens + partial cycles on OUTPUT.
@@ -124,6 +131,8 @@ function writeCheckpoint(): void {
 				startedMs: started,
 				tokensIn: partialTokensIn,
 				tokensOut: partialTokensOut,
+				cacheRead: partialCacheRead,
+				cacheWrite: partialCacheWrite,
 				cycles: partialCycles,
 				isolationActive: ISOLATE,
 			}),
@@ -153,6 +162,8 @@ function writePartialEnvelopeAndExit(signal: string): void {
 					duration_sec: Math.round((Date.now() - started) / 1000),
 					tokens_in: partialTokensIn,
 					tokens_out: partialTokensOut,
+					cache_read_tokens: partialCacheRead,
+					cache_write_tokens: partialCacheWrite,
 					stop_reason: stopReason,
 					cycle_count: partialCycles,
 					final_message: '',
@@ -188,6 +199,12 @@ process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 // it such an early death would leave the step-0 baseline with no isolation flag, and scoring.mjs would
 // have to assume isolation was off. A later model cycle (or a terminal exit) overwrites this.
 writeCheckpoint();
+
+// Snapshot the scaffolded workspace NOW (before the agent touches it) so a post-run diff can report
+// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders ⚪ "(new)").
+// Uses a throwaway external git dir, so it never disturbs the workspace/app or the agent's own git.
+const snapshot = beginWorkspaceDiff(WORKSPACE);
+process.stderr.write(`[bench] workspace churn snapshot: ${snapshot ? 'captured' : 'unavailable (loc/files → null)'}\n`);
 
 // Startup stagger: spread each wave's FIRST Bedrock call so N cells don't all hit invoke at once and
 // trip the account TPM ceiling (the burst that failed 6/10 cells in run 28967475174). Keyed to the
@@ -242,6 +259,8 @@ if (!result) {
 				duration_sec: Math.round((Date.now() - started) / 1000),
 				tokens_in: partialTokensIn,
 				tokens_out: partialTokensOut,
+				cache_read_tokens: partialCacheRead,
+				cache_write_tokens: partialCacheWrite,
 				stop_reason: 'error',
 				cycle_count: partialCycles,
 				final_message: '',
@@ -266,6 +285,15 @@ const duration_sec = Math.round((Date.now() - started) / 1000);
 const winnerUsage = result.metrics?.accumulatedUsage;
 const tokensIn = Math.max(partialTokensIn, winnerUsage?.inputTokens ?? 0);
 const tokensOut = Math.max(partialTokensOut, winnerUsage?.outputTokens ?? 0);
+// Cache tokens follow the SAME max(hook, winner) rule as tokens_in/out. Displayed only — NOT part of
+// cost/SCORE (see scoring.mjs cellCost); a future net-of-cache cost model could subtract these.
+const cacheRead = Math.max(partialCacheRead, winnerUsage?.cacheReadInputTokens ?? 0);
+const cacheWrite = Math.max(partialCacheWrite, winnerUsage?.cacheWriteInputTokens ?? 0);
+
+// LOC/files churn from the pre-run scaffold snapshot (best-effort; null on any failure — see
+// workspace-diff.mjs). Computed only on the success path: a timed-out/errored cell left the workspace
+// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ ⚪ "(new)").
+const churn = finishWorkspaceDiff(snapshot, WORKSPACE);
 
 writeFileSync(
 	OUTPUT,
@@ -275,8 +303,14 @@ writeFileSync(
 			duration_sec,
 			tokens_in: tokensIn,
 			tokens_out: tokensOut,
+			cache_read_tokens: cacheRead,
+			cache_write_tokens: cacheWrite,
 			stop_reason: result.stopReason,
 			cycle_count: result.metrics?.cycleCount ?? 0,
+			loc_created: churn.loc_created,
+			loc_edited: churn.loc_edited,
+			files_created: churn.files_created,
+			files_edited: churn.files_edited,
 			final_message: messageText(result.lastMessage),
 			isolation_active: ISOLATE,
 		},

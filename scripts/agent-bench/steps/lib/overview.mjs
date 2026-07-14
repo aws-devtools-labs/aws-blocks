@@ -14,6 +14,7 @@ import {
 	testStats,
 	verdictOf,
 } from './scoring.mjs';
+import { COMMON_DIMENSIONS } from './scoring.mjs';
 
 // Stable cross-run identity for a cell (task + template, since a task may run on multiple templates).
 export const cellKey = (c) => `${c?.task ?? ''}/${c?.template ?? ''}`;
@@ -39,10 +40,16 @@ const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
 export const DELTA_THRESHOLDS = {
 	composite: 5, // composite points — also the headline mean-delta band (deltaBall)
 	score: 5, // composite-per-$ points
-	judge: 0.3, // judge score (0-10)
+	judge: 0.3, // judge score (0-10) — applied per-dimension too
 	tests: 1, // test pass count (a ±1 nudge is noise)
 	costPct: 0.1, // cost: ±10% of the baseline cost
-	tokensPct: 0.1, // tokens (in+out combined): ±10% of the baseline total
+	tokensPct: 0.1, // tokens (in / out): ±10% of the baseline, per stream
+	turns: 3, // cycle_count (lower-better): ±3 turns is within run-to-run noise at N=1
+	cacheReadPct: 0.2, // cache-read tokens: ±20% relative (no strong prior; cache hits swing more than raw tokens)
+	cacheWritePct: 0.2, // cache-write tokens: ±20% relative
+	// LOC & Files are INTENTIONALLY absent: more/fewer lines or files is neither good nor bad on its
+	// own (a bigger app can be the right call), so those cells are rendered NEUTRAL (⚪, value + signed
+	// delta, never 🟢/🔴) — see locCell/filesCell. Add a band here only if a direction is ever agreed.
 };
 
 /**
@@ -129,6 +136,15 @@ export function buildAggregate(cells, meta = {}) {
 						c.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
 					tokens_in: numOrNull(c.tokens_in),
 					tokens_out: numOrNull(c.tokens_out),
+					// Newer per-cell signals — persisted so the NEXT main bench writes them into the baseline
+					// (older baselines lack them → the table renders those metrics ⚪ "(new)" until then).
+					cycle_count: numOrNull(c.cycle_count),
+					cache_read_tokens: numOrNull(c.cache_read_tokens),
+					cache_write_tokens: numOrNull(c.cache_write_tokens),
+					loc_created: numOrNull(c.loc_created),
+					loc_edited: numOrNull(c.loc_edited),
+					files_created: numOrNull(c.files_created),
+					files_edited: numOrNull(c.files_edited),
 					cost,
 					score: scorePerDollar(comp, cost),
 					stop_reason: typeof c.stop_reason === 'string' && c.stop_reason ? c.stop_reason : null,
@@ -160,11 +176,18 @@ function cellMetrics(c) {
 		tests_passed: numOrNull(c?.tests_passed),
 		tests_denom: numOrNull(c?.tests_denom),
 		judge_score: numOrNull(c?.judge_score),
-		// Carried for the persisted S3 aggregate / re-derivability only — the single results table renders
-		// the overall judge_score, NOT the per-dimension breakdown. Kept so downstream readers can re-weight.
+		// Per-dimension judge scores (capped), rendered as the JUDGE column's per-dim rows. Baselines
+		// that carry them color per-dim; older ones lacking them fall back to the overall judge score.
 		judge_dimensions: c?.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
 		tokens_in: numOrNull(c?.tokens_in),
 		tokens_out: numOrNull(c?.tokens_out),
+		cycle_count: numOrNull(c?.cycle_count),
+		cache_read_tokens: numOrNull(c?.cache_read_tokens),
+		cache_write_tokens: numOrNull(c?.cache_write_tokens),
+		loc_created: numOrNull(c?.loc_created),
+		loc_edited: numOrNull(c?.loc_edited),
+		files_created: numOrNull(c?.files_created),
+		files_edited: numOrNull(c?.files_edited),
 		cost: numOrNull(c?.cost),
 		score: numOrNull(c?.score),
 		stop_reason: typeof c?.stop_reason === 'string' && c.stop_reason ? c.stop_reason : null,
@@ -231,7 +254,8 @@ export function diffAgainstBaseline(current, baseline) {
 export function humanTokens(n) {
 	if (n === null || n === undefined || Number.isNaN(n)) return NONE;
 	if (n < 1000) return String(Math.round(n));
-	return `${+(n / 1000).toFixed(1)}K`;
+	if (n < 1_000_000) return `${+(n / 1000).toFixed(1)}K`;
+	return `${+(n / 1_000_000).toFixed(1)}M`;
 }
 
 /** USD, trailing zeros trimmed: 3.5 → "$3.5", 2 → "$2", 1.05 → "$1.05", null → "—". */
@@ -252,7 +276,7 @@ export function fmtJudge(j) {
 	return Number.isInteger(j) ? String(j) : String(+j.toFixed(1));
 }
 
-// Signed-delta formatters for the second line of each cell (no arrows — sign only).
+// Signed-delta formatters for the delta suffix of each cell (no arrows — sign only).
 const signOf = (n) => (n > 0 ? '+' : n < 0 ? '-' : '');
 const signedInt = (d) => `${d > 0 ? '+' : ''}${Math.round(d)}`;
 const signed1 = (d) => {
@@ -261,11 +285,48 @@ const signed1 = (d) => {
 };
 const signedCost = (d) => `${signOf(d)}$${+Math.abs(d).toFixed(2)}`;
 const signedTokens = (d) => `${signOf(d)}${humanTokens(Math.abs(d))}`;
+const wholeNum = (v) => String(Math.round(v));
 
 // ── Metric cells ──────────────────────────────────────────────────────────────
-// Every cell is two lines joined by <br>: line 1 `<ball> <current value>`, line 2 `(<signed delta>)`.
-// No baseline value for the field → `⚪ <current value><br>(new)` (the current value is ALWAYS shown).
-// A missing CURRENT value → NONE (nothing this run to show).
+// Scalar cells are ONE inline line: `<ball> <value> (<Δ>)`. Multi-value cells (judge / tokens / loc /
+// files) stack one `<label> <ball> <value> (<Δ>)` sub-line per metric, joined by <br>. The current
+// value is ALWAYS shown; a metric the baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
+
+// Compact, GFM-safe labels for the per-dimension judge rows (raw keys have only intraword underscores,
+// which GFM does NOT treat as emphasis, but these read cleaner in a narrow cell).
+const DIM_LABELS = {
+	functional_completeness: 'functional',
+	selector_contract: 'selectors',
+	persistence: 'persistence',
+	code_quality: 'code',
+	blocks_fidelity: 'blocks',
+};
+
+// One INLINE scalar cell: `<ball> <value> (<Δ>)`; `⚪ <value> (new)` with no baseline; NONE with no
+// current value. `threshold` may be a number or fn(baseline); `dir` sets the improving direction.
+function scalarCell(base, pr, { threshold, dir, fmtVal, fmtDelta }) {
+	const pv = numOrNull(pr);
+	if (pv === null) return NONE;
+	const value = fmtVal(pv);
+	const bv = numOrNull(base);
+	if (bv === null) return `${WHITE} ${value} (new)`;
+	const t = typeof threshold === 'function' ? threshold(bv) : threshold;
+	return `${deltaColor(bv, pv, t, dir)} ${value} (${fmtDelta(pv - bv)})`;
+}
+
+// One stacked sub-line for a multi-line cell: `<label> <ball> <value> (<Δ>)`. `neutral:true` forces ⚪
+// (no good/bad direction — LOC/files). A null current value still renders (`<label> ⚪ — (new)`) so the
+// stacked lines stay aligned across rows.
+function metricLine(label, base, pr, { threshold, dir, fmtVal, fmtDelta, neutral = false } = {}) {
+	const pv = numOrNull(pr);
+	if (pv === null) return `${label} ${WHITE} ${NONE} (new)`;
+	const value = fmtVal(pv);
+	const bv = numOrNull(base);
+	if (bv === null) return `${label} ${WHITE} ${value} (new)`;
+	if (neutral) return `${label} ${WHITE} ${value} (${fmtDelta(pv - bv)})`;
+	const t = typeof threshold === 'function' ? threshold(bv) : threshold;
+	return `${label} ${deltaColor(bv, pv, t, dir)} ${value} (${fmtDelta(pv - bv)})`;
+}
 
 // TESTS: "passed/denom", colored by the pass COUNT (higher better, ±1 noise). denom 0 → NONE.
 function testsCell(base, pr) {
@@ -274,61 +335,110 @@ function testsCell(base, pr) {
 	if (pp === null || pd === null || pd === 0) return NONE;
 	const value = `${pp}/${pd}`;
 	const bp = numOrNull(base?.tests_passed);
-	if (bp === null) return `${WHITE} ${value}<br>(new)`;
-	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value}<br>(${signedInt(pp - bp)})`;
+	if (bp === null) return `${WHITE} ${value} (new)`;
+	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value} (${signedInt(pp - bp)})`;
 }
 
-// JUDGE: overall judge score (0-10, higher better, ±0.3 noise).
+// JUDGE: one stacked line per rubric dimension — `<dim> <ball> <score> (<Δ>)` (higher better, ±0.3
+// noise) from the CAPPED judge_dimensions with per-dim baseline deltas. Falls back to the overall judge
+// score (inline) when this run or the baseline carries no per-dimension breakdown. Overall judge mean
+// also appears in the preword.
 function judgeCell(base, pr) {
-	const pv = numOrNull(pr?.judge_score);
-	if (pv === null) return NONE;
-	const value = fmtJudge(pv);
-	const bv = numOrNull(base?.judge_score);
-	if (bv === null) return `${WHITE} ${value}<br>(new)`;
-	return `${deltaColor(bv, pv, DELTA_THRESHOLDS.judge, 'up')} ${value}<br>(${signed1(pv - bv)})`;
+	const pd = pr?.judge_dimensions;
+	if (pd && typeof pd === 'object') {
+		const bd = base?.judge_dimensions && typeof base.judge_dimensions === 'object' ? base.judge_dimensions : null;
+		const lines = [];
+		for (const dim of COMMON_DIMENSIONS) {
+			const pv = numOrNull(pd[dim]);
+			if (pv === null) continue;
+			lines.push(
+				metricLine(DIM_LABELS[dim] ?? dim, bd ? bd[dim] : null, pv, {
+					threshold: DELTA_THRESHOLDS.judge,
+					dir: 'up',
+					fmtVal: fmtJudge,
+					fmtDelta: signed1,
+				}),
+			);
+		}
+		if (lines.length > 0) return lines.join('<br>');
+	}
+	return scalarCell(base?.judge_score, pr?.judge_score, {
+		threshold: DELTA_THRESHOLDS.judge,
+		dir: 'up',
+		fmtVal: fmtJudge,
+		fmtDelta: signed1,
+	});
 }
 
 // COST: $ builder spend (lower better, ±10% of baseline noise).
 function costCell(base, pr) {
-	const pv = numOrNull(pr?.cost);
-	if (pv === null) return NONE;
-	const value = fmtCost(pv);
-	const bv = numOrNull(base?.cost);
-	if (bv === null) return `${WHITE} ${value}<br>(new)`;
-	const threshold = DELTA_THRESHOLDS.costPct * Math.abs(bv);
-	return `${deltaColor(bv, pv, threshold, 'down')} ${value}<br>(${signedCost(pv - bv)})`;
+	return scalarCell(base?.cost, pr?.cost, {
+		threshold: (bv) => DELTA_THRESHOLDS.costPct * Math.abs(bv),
+		dir: 'down',
+		fmtVal: fmtCost,
+		fmtDelta: signedCost,
+	});
 }
 
-// TOKENS (in/out): value shows both; colored by the COMBINED total (lower better, ±10% noise).
+// TOKENS: four stacked lines — in / out / cached in / cached out (all lower better). in/out color vs
+// the baseline (±10%); cached in/out read ⚪ "(new)" until a baseline records them, then color at ±20%.
+// Cache tokens are DISPLAYED only — never folded into cost/SCORE (see scoring.mjs cellCost).
 function tokensCell(base, pr) {
-	const pin = numOrNull(pr?.tokens_in);
-	const pout = numOrNull(pr?.tokens_out);
-	if (pin === null && pout === null) return NONE;
-	const value = `${humanTokens(pr?.tokens_in)}/${humanTokens(pr?.tokens_out)}`;
-	const prTotal = (pin ?? 0) + (pout ?? 0);
-	const bin = numOrNull(base?.tokens_in);
-	const bout = numOrNull(base?.tokens_out);
-	if (bin === null && bout === null) return `${WHITE} ${value}<br>(new)`;
-	const baseTotal = (bin ?? 0) + (bout ?? 0);
-	const threshold = DELTA_THRESHOLDS.tokensPct * Math.abs(baseTotal);
-	return `${deltaColor(baseTotal, prTotal, threshold, 'down')} ${value}<br>(${signedTokens(prTotal - baseTotal)})`;
+	const keys = ['tokens_in', 'tokens_out', 'cache_read_tokens', 'cache_write_tokens'];
+	if (keys.every((k) => numOrNull(pr?.[k]) === null)) return NONE;
+	const tokPct = (bv) => DELTA_THRESHOLDS.tokensPct * Math.abs(bv);
+	const tokenOpts = (threshold) => ({ threshold, dir: 'down', fmtVal: humanTokens, fmtDelta: signedTokens });
+	return [
+		metricLine('in', base?.tokens_in, pr?.tokens_in, tokenOpts(tokPct)),
+		metricLine('out', base?.tokens_out, pr?.tokens_out, tokenOpts(tokPct)),
+		metricLine('cached in', base?.cache_read_tokens, pr?.cache_read_tokens, tokenOpts((bv) => DELTA_THRESHOLDS.cacheReadPct * Math.abs(bv))),
+		metricLine('cached out', base?.cache_write_tokens, pr?.cache_write_tokens, tokenOpts((bv) => DELTA_THRESHOLDS.cacheWritePct * Math.abs(bv))),
+	].join('<br>');
 }
+
+// TURNS: agent cycle_count (lower better, ±3 noise).
+function turnsCell(base, pr) {
+	return scalarCell(base?.cycle_count, pr?.cycle_count, {
+		threshold: DELTA_THRESHOLDS.turns,
+		dir: 'down',
+		fmtVal: wholeNum,
+		fmtDelta: signedInt,
+	});
+}
+
+// LOC / FILES: two NEUTRAL stacked lines (created / edited). More or fewer lines/files is neither good
+// nor bad on its own, so these are NEVER 🟢/🔴 — always ⚪ with the value + signed delta (see DELTA_THRESHOLDS).
+function neutralPairCell(base, pr, createdKey, editedKey) {
+	if (numOrNull(pr?.[createdKey]) === null && numOrNull(pr?.[editedKey]) === null) return NONE;
+	const opts = { fmtVal: wholeNum, fmtDelta: signedInt, neutral: true };
+	return [
+		metricLine('created', base?.[createdKey], pr?.[createdKey], opts),
+		metricLine('edited', base?.[editedKey], pr?.[editedKey], opts),
+	].join('<br>');
+}
+const locCell = (base, pr) => neutralPairCell(base, pr, 'loc_created', 'loc_edited');
+const filesCell = (base, pr) => neutralPairCell(base, pr, 'files_created', 'files_edited');
 
 // SCORE: composite-per-$ (direction from SCORE_HIGHER_BETTER, ±5 noise).
 function scoreCell(base, pr) {
-	const pv = numOrNull(pr?.score);
-	if (pv === null) return NONE;
-	const value = fmtScore(pv);
-	const bv = numOrNull(base?.score);
-	if (bv === null) return `${WHITE} ${value}<br>(new)`;
-	return `${deltaColor(bv, pv, DELTA_THRESHOLDS.score, SCORE_DIR)} ${value}<br>(${signed1(pv - bv)})`;
+	return scalarCell(base?.score, pr?.score, {
+		threshold: DELTA_THRESHOLDS.score,
+		dir: SCORE_DIR,
+		fmtVal: fmtScore,
+		fmtDelta: signed1,
+	});
 }
+
+// The metric columns after Task|Template, in render order. Kept as one list so the header, the
+// separator, the per-row cells, and the removed-row padding can't drift out of sync.
+const METRIC_COLUMNS = ['Tests', 'Judge', 'Cost', 'Tokens', 'Turns', 'LOC', 'Files', 'Score', 'Stop reason'];
 
 // ── Render: single results table ──────────────────────────────────────────────
 /**
- * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS (in/out) | SCORE | STOP REASON.
- * Every metric cell is a two-line `<ball> <current value><br>(<signed delta vs main>)` (⚪ "(new)" when
- * the baseline has no value for it). Color = significance + direction of the change (see {@link deltaColor}).
+ * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS | TURNS | LOC | FILES | SCORE |
+ * STOP REASON. Scalar cells (tests/cost/turns/score) are inline `<ball> <value> (<Δ>)`; JUDGE stacks a
+ * line per rubric dimension; TOKENS stacks in/out/cached-in/cached-out; LOC/FILES stack created/edited
+ * (NEUTRAL ⚪, no direction). ⚪ "(new)" where the baseline lacks a metric. Every row emits ALL columns.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -338,29 +448,109 @@ export function renderDetailed(diff, opts = {}) {
 	if (opts.heading) lines.push(opts.heading, '');
 	if (opts.note) lines.push(opts.note, '');
 	lines.push(
-		'| Task | Template | Tests | Judge | Cost | Tokens (in/out) | Score | Stop reason |',
-		'|------|----------|-------|-------|------|-----------------|-------|-------------|',
+		`| Task | Template | ${METRIC_COLUMNS.join(' | ')} |`,
+		`|${Array(2 + METRIC_COLUMNS.length).fill('---').join('|')}|`,
 	);
+	const cell = (v) => (typeof v === 'string' && v.trim() ? v : NONE);
 	for (const r of diff.rows) {
 		if (r.removed) {
 			const was =
 				r.base && r.base.tests_passed !== null && r.base.tests_passed !== undefined
 					? ` (was ${r.base.tests_passed}/${r.base.tests_denom})`
 					: '';
-			lines.push(
-				`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${NONE} | ${NONE} | ${NONE} | ${NONE} | ${NONE} |`,
-			);
+			// Tests column carries the 🗑️ marker; the remaining metric columns pad with NONE so the
+			// removed row keeps the full column count.
+			const pad = Array(METRIC_COLUMNS.length - 1).fill(NONE).join(' | ');
+			lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${GONE} removed${was} | ${pad} |`);
 			continue;
 		}
 		const b = r.base;
 		const p = r.pr ?? {};
-		const stop = p.stop_reason || NONE;
-		// Guarantee the 8-column invariant: coerce any empty metric cell to NONE so a crashed/null-metric
-		// cell (no tokens/score/composite) can never drop a column and misalign the row.
-		const cell = (v) => (typeof v === 'string' && v.trim() ? v : NONE);
-		const cells = [testsCell(b, p), judgeCell(b, p), costCell(b, p), tokensCell(b, p), scoreCell(b, p)].map(cell);
-		lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${cells.join(' | ')} | ${cell(stop)} |`);
+		// Coerce any empty metric cell to NONE so a crashed/null-metric cell can never drop a column and
+		// misalign the row (the all-columns invariant, guarded in the tests).
+		const cells = [
+			testsCell(b, p),
+			judgeCell(b, p),
+			costCell(b, p),
+			tokensCell(b, p),
+			turnsCell(b, p),
+			locCell(b, p),
+			filesCell(b, p),
+			scoreCell(b, p),
+			p.stop_reason || NONE,
+		].map(cell);
+		lines.push(`| ${r.task ?? NONE} | ${r.template ?? NONE} | ${cells.join(' | ')} |`);
 	}
 	lines.push('');
 	return lines;
+}
+
+// ── Preword: aggregated run summary (bullets above the table) ───────────────────
+/**
+ * Bulleted headline summary rendered ABOVE the table: mean composite + Δ vs main (with the judge mean),
+ * the verdict tally, run totals (cost / tokens / turns), the biggest composite movers vs the baseline,
+ * and the run config. Pure — derives everything from the diff + aggregate + a small opts bag.
+ * @param {ReturnType<typeof diffAgainstBaseline>} diff
+ * @param {ReturnType<typeof buildAggregate>} aggregate
+ * @param {{builderModel?: string, judgeModel?: string, baselineSha?: string}} [opts]
+ * @returns {string[]} markdown bullet lines (each prefixed with "- ")
+ */
+export function renderPreword(diff, aggregate, opts = {}) {
+	const cells = aggregate?.cells ?? [];
+	const bullets = [];
+
+	// Mean composite + Δ vs main, with the overall judge mean folded in.
+	const mean = numOrNull(aggregate?.mean_composite);
+	const meanStr = mean === null ? NONE : mean.toFixed(1);
+	const deltaStr =
+		diff?.hasBaseline && diff.meanDelta !== null
+			? ` — ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
+			: ' — no `main` baseline yet';
+	const judged = cells.filter((c) => c.klass !== 'harness_error' && numOrNull(c.judge_score) !== null);
+	const judgeMean = judged.length ? judged.reduce((a, c) => a + c.judge_score, 0) / judged.length : null;
+	const judgeStr = judgeMean !== null ? ` · judge mean ${judgeMean.toFixed(2)}/10` : '';
+	bullets.push(
+		`**Mean composite ${meanStr}/100** across ${aggregate?.scored_cells ?? 0} scored cell(s)${deltaStr}${judgeStr}.`,
+	);
+
+	// Verdict tally (harness_error read off klass; the rest off the stored verdict).
+	const v = { pass: 0, partial: 0, fail: 0, harness_error: 0, unknown: 0 };
+	for (const c of cells) {
+		const verd = c.klass === 'harness_error' ? 'harness_error' : (c.verdict ?? 'unknown');
+		v[verd in v ? verd : 'unknown'] += 1;
+	}
+	bullets.push(
+		`**Verdicts:** ${v.pass} pass · ${v.partial} partial · ${v.fail} fail · ${v.harness_error} harness_error${v.unknown ? ` · ${v.unknown} unknown` : ''}.`,
+	);
+
+	// Run totals.
+	const anyOf = (k) => cells.some((c) => numOrNull(c[k]) !== null);
+	const sumOf = (k) => cells.reduce((a, c) => a + (numOrNull(c[k]) ?? 0), 0);
+	const totalsParts = [
+		`cost ${anyOf('cost') ? fmtCost(sumOf('cost')) : NONE}`,
+		`tokens ${humanTokens(sumOf('tokens_in'))} in / ${humanTokens(sumOf('tokens_out'))} out`,
+	];
+	if (anyOf('cycle_count')) totalsParts.push(`${Math.round(sumOf('cycle_count'))} turns`);
+	bullets.push(`**Totals:** ${totalsParts.join(' · ')}.`);
+
+	// Biggest composite movers vs the baseline (only when a baseline exists AND there are deltas).
+	if (diff?.hasBaseline) {
+		const moved = diff.rows.filter((r) => !r.removed && numOrNull(r.delta) !== null && r.delta !== 0);
+		if (moved.length > 0) {
+			const fmtMove = (r) => `\`${r.task}/${r.template}\` (${r.delta > 0 ? '+' : ''}${r.delta})`;
+			const gains = moved.filter((r) => r.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 3);
+			const drops = moved.filter((r) => r.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 3);
+			bullets.push(`**Biggest gains:** ${gains.length ? gains.map(fmtMove).join(', ') : 'none'}.`);
+			bullets.push(`**Biggest drops:** ${drops.length ? drops.map(fmtMove).join(', ') : 'none'}.`);
+		}
+	}
+
+	// Run config.
+	const cfgParts = [];
+	if (opts.builderModel) cfgParts.push(`builder \`${opts.builderModel}\``);
+	if (opts.judgeModel) cfgParts.push(`judge \`${opts.judgeModel}\``);
+	if (opts.baselineSha) cfgParts.push(`baseline \`${String(opts.baselineSha).slice(0, 7)}\``);
+	if (cfgParts.length) bullets.push(`**Config:** ${cfgParts.join(' · ')}.`);
+
+	return bullets.map((b) => `- ${b}`);
 }
