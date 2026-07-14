@@ -1202,7 +1202,20 @@ ${entries}
 // Exported so the X.1 cross-adapter version-pin test can reach it
 // without dynamic imports / scraping. Bump together with the actual
 // verification work.
-export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0';
+//
+// Verified against 3.10.x AND 4.0.x: an OpenNext 4.0.3 integration deploy
+// (next-app-router) confirmed all four bundle patches still apply cleanly —
+// the streaming-wrapper (`setContentType` + br/gzip/deflate identity
+// branch), the edge-bundle process banner, the `fetchInternalImage` arity
+// insertion, and the SVG-status catch rewrite all matched the 4.0.x
+// minified shape, and the live app served optimized rasters (200 image/webp),
+// a fail-closed SVG (400), edge routes, and redirects with no regressions.
+// The two windows are called out
+// explicitly (rather than a single `>=3.10.0 <4.1.0`) because the
+// intervening 3.11–3.x minors were never exercised; each upper bound stays
+// exclusive of the next unverified minor so a future release re-triggers
+// the out-of-range warning until it's verified too.
+export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
 
 /**
  * Read the installed `@opennextjs/aws` version from the project's
