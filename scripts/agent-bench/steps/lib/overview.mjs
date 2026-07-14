@@ -160,6 +160,8 @@ function cellMetrics(c) {
 		tests_passed: numOrNull(c?.tests_passed),
 		tests_denom: numOrNull(c?.tests_denom),
 		judge_score: numOrNull(c?.judge_score),
+		// Carried for the persisted S3 aggregate / re-derivability only — the single results table renders
+		// the overall judge_score, NOT the per-dimension breakdown. Kept so downstream readers can re-weight.
 		judge_dimensions: c?.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
 		tokens_in: numOrNull(c?.tokens_in),
 		tokens_out: numOrNull(c?.tokens_out),
