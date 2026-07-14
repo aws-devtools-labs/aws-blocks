@@ -28,6 +28,9 @@ const PARTIAL = { task: 'file-gallery', template: 'bare', tests_passed: 3, tests
 const AGENT_FAIL = { task: 'sql-kb', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 }; // comp 0 · no tokens → cost/score null
 const HARNESS = { task: 'oidc-dsql', template: 'react', klass: 'harness_error' }; // excluded → null
 const UNKNOWN = { task: 'email-digest', template: 'demo', tests_passed: 0, tests_failed: 0 }; // gradeable, no tests → null
+// A dead/crashed dev-server (empty APP_BASE_URL): dev_server_status='dead' → klass dead_server. A REAL
+// fail — composite 0, INCLUDED in the mean (contrast UNKNOWN, gradeable-but-no-tests → excluded).
+const DEAD = { task: 'sql-notes', template: 'nextjs', klass: 'dead_server', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 }; // comp 0 · INCLUDED
 
 describe('cellComposite(r)', () => {
 	it('returns the shared composite for a scored cell', () => {
@@ -39,12 +42,20 @@ describe('cellComposite(r)', () => {
 		assert.equal(cellComposite(HARNESS), null);
 		assert.equal(cellComposite(UNKNOWN), null);
 	});
+	it('a dead_server (crashed dev-server) is scored 0 and INCLUDED — NOT null/excluded like unknown', () => {
+		assert.equal(cellComposite(DEAD), 0);
+	});
 });
 
 describe('meanComposite(cells)', () => {
 	it('averages only the scored cells (agent_fail 0; harness/unknown excluded)', () => {
 		assert.equal(meanComposite([PASS, PARTIAL, AGENT_FAIL, HARNESS, UNKNOWN]), 52.3); // (92+65+0)/3
 		assert.equal(meanComposite([PASS, PARTIAL]), 78.5);
+	});
+	it('a dead_server counts toward the mean as composite 0 (the crash HURTS the score, not excluded)', () => {
+		assert.equal(meanComposite([PASS, PARTIAL, DEAD]), 52.3); // (92+65+0)/3 — DEAD INCLUDED as 0
+		// Contrast: swapping DEAD for an UNKNOWN (gradeable, no dev_server_status) EXCLUDES it → 78.5.
+		assert.equal(meanComposite([PASS, PARTIAL, UNKNOWN]), 78.5);
 	});
 	it('is null when no cell was scored', () => {
 		assert.equal(meanComposite([HARNESS, UNKNOWN]), null);
@@ -181,6 +192,15 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 		assert.equal(byKey['sql-kb/nextjs'].composite, 0);
 		assert.equal(byKey['sql-kb/nextjs'].cost, null);
 		assert.equal(byKey['sql-kb/nextjs'].score, null);
+	});
+	it('a dead_server cell is INCLUDED: verdict fail, composite 0, counted in scored_cells', () => {
+		const deadAgg = buildAggregate([PASS, DEAD], { sha: 'dead01' });
+		assert.equal(deadAgg.scored_cells, 2); // PASS + DEAD both counted
+		assert.equal(deadAgg.mean_composite, 46); // (92 + 0)/2 — DEAD drags the mean down
+		const d = deadAgg.cells.find((c) => c.task === 'sql-notes');
+		assert.equal(d.klass, 'dead_server');
+		assert.equal(d.verdict, 'fail'); // NOT 'unknown'
+		assert.equal(d.composite, 0);
 	});
 	it('cells are sorted by task/template', () => {
 		const keys = agg.cells.map(cellKey);
@@ -485,5 +505,12 @@ describe('renderPreword(diff, aggregate, opts) — bulleted run summary', () => 
 		const fmd = renderPreword(diffAgainstBaseline(failedOnly, null), failedOnly, {}).join('\n');
 		assert.match(fmd, /tokens —/);
 		assert.doesNotMatch(fmd, /0 in \/ 0 out/);
+	});
+	it('a dead_server cell is tallied under `fail` and counted among the scored cells', () => {
+		const withDead = buildAggregate([FULL, DEAD], { sha: 'deadd00d' });
+		const dmd = renderPreword(diffAgainstBaseline(withDead, null), withDead, {}).join('\n');
+		// FULL passes, DEAD (crashed dev-server) fails → tallied under fail, both counted as scored.
+		assert.match(dmd, /\*\*Verdicts:\*\* 1 pass · 0 partial · 1 fail · 0 harness_error/);
+		assert.match(dmd, /across 2 scored cell\(s\)/);
 	});
 });

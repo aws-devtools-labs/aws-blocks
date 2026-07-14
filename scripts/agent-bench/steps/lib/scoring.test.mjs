@@ -9,6 +9,9 @@ import {
 	AGENT_HARNESS_TEARDOWN_REASON,
 	BUILDER_PRICING,
 	CHECKPOINT_STOP_REASON,
+	DEAD_SERVER_KLASS,
+	DEAD_SERVER_REASON,
+	DEAD_SERVER_STATUS,
 	PRICING,
 	buildCapDecision,
 	cellCost,
@@ -18,6 +21,7 @@ import {
 	compositeBand,
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
+	isCountedFailKlass,
 	isScoredCell,
 	isUngracefulStepTwoDeath,
 	scorePerDollar,
@@ -380,6 +384,74 @@ describe('agent_fail end-to-end invariant: verdict fail, composite 0, INCLUDED',
 		assert.equal(composite(tr, 10), 0); // even a generous judge cannot lift it off 0
 		assert.equal(verdictOf(cell), 'fail');
 		assert.equal(isScoredCell(cell), true);
+	});
+});
+
+describe('dead_server: a crashed/never-served dev-server is a REAL fail (composite 0, INCLUDED — issue #188)', () => {
+	// The over-correction being reversed: an empty APP_BASE_URL / crashed backend makes step 3 skip
+	// Playwright, leaving tests 0/0/0. As a plain 'scored' cell that read verdict 'unknown' and was
+	// EXCLUDED, masking the PGlite backend crash from the mean. dev_server_status='dead' now classifies
+	// it as dead_server — verdict 'fail', composite 0, INCLUDED — so the crash HURTS the score, while a
+	// DISTINCT klass keeps the failure root-cause free to attribute owner=framework (not the agent).
+	const deadCell = { task: 'sql-notes', template: 'nextjs', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 };
+
+	it("classifyCell → { klass: 'dead_server', reason: 'dev_server_dead' }", () => {
+		assert.deepEqual(classifyCell(deadCell), { klass: DEAD_SERVER_KLASS, reason: DEAD_SERVER_REASON });
+		assert.equal(DEAD_SERVER_STATUS, 'dead');
+		assert.equal(DEAD_SERVER_KLASS, 'dead_server');
+		assert.equal(DEAD_SERVER_REASON, 'dev_server_dead');
+	});
+
+	it("verdicts 'fail' (NOT 'unknown'), is INCLUDED in the mean, and scores composite 0", () => {
+		assert.equal(verdictOf(deadCell), 'fail');
+		assert.equal(isScoredCell(deadCell), true); // INCLUDED — the crash must move the mean
+		assert.equal(composite(testRate(testStats(deadCell)), 10), 0); // even a generous judge can't lift it off 0
+	});
+
+	it('a stamped klass:dead_server is honoured (no tests) — fail + INCLUDED', () => {
+		assert.equal(verdictOf({ klass: DEAD_SERVER_KLASS }), 'fail');
+		assert.equal(isScoredCell({ klass: DEAD_SERVER_KLASS }), true);
+	});
+
+	// PRECEDENCE — a genuine harness_error still WINS over the dead-server signal and stays EXCLUDED.
+	// A cancellation / pre-grade failure / ungraceful agent teardown never produced a runnable app, so a
+	// stray dev_server_status='dead' on such a cell must NOT flip it into the scored set.
+	it('a CANCELLATION with dev_server_status=dead is still harness_error, EXCLUDED (cancel wins)', () => {
+		const cell = { ...deadCell, status: 'cancelled', failed_at: AGENT_FAIL_AT };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('a pre-grade (pre-oidc) failure with dev_server_status=dead is still harness_error, EXCLUDED', () => {
+		const cell = { ...deadCell, failed_at: 'pre-oidc' };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+	});
+
+	it('an ungraceful 2-agent teardown (isolation on) with dev_server_status=dead stays harness_error, EXCLUDED', () => {
+		// The agent step already died as an infra teardown (issue #183) before any dev server existed —
+		// that reclassification must still win over a stray dead signal.
+		const cell = { ...deadCell, failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false);
+	});
+});
+
+describe('isCountedFailKlass(klass) — the shared "counted failure" set (agent_fail + dead_server)', () => {
+	it('agent_fail and dead_server are counted failures (verdict fail, composite 0, INCLUDED)', () => {
+		assert.equal(isCountedFailKlass('agent_fail'), true);
+		assert.equal(isCountedFailKlass(DEAD_SERVER_KLASS), true);
+	});
+
+	it('scored and harness_error are NOT counted failures', () => {
+		assert.equal(isCountedFailKlass('scored'), false);
+		assert.equal(isCountedFailKlass('harness_error'), false);
+	});
+
+	it('a missing / undefined / null klass is not a counted failure', () => {
+		assert.equal(isCountedFailKlass(undefined), false);
+		assert.equal(isCountedFailKlass(null), false);
 	});
 });
 

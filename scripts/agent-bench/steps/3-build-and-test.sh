@@ -186,10 +186,13 @@ export APP_BASE_URL
 
 # Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
 # dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
-# BLOCKS_URL would surface as bogus "invalid URL" test failures and MASK the crash as a composite-0
-# fail. Skip Playwright entirely; the pessimistic defaults (tests 0/0/0, dev_server_started=false,
-# dev_server_status=dead) carry the honest signal, the cell reads verdict 'unknown' (excluded from the
-# mean, not a scored fail), and control still falls through to the stable-evidence copy below.
+# BLOCKS_URL would surface as bogus "invalid URL" test failures, so skip Playwright entirely and let
+# the recorded dev_server_status=dead signal drive the score instead. That signal classifies the cell
+# as a real FAIL — verdict 'fail', composite 0, and INCLUDED in the mean (DEAD_SERVER_KLASS in
+# lib/scoring.mjs) — so a backend crash HURTS the score rather than hiding as an excluded 'unknown',
+# while the failure root-cause still attributes owner=framework. The pessimistic defaults (tests 0/0/0,
+# dev_server_started=false) carry the honest signal and control still falls through to the
+# stable-evidence copy below.
 if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
