@@ -127,7 +127,41 @@ test('CDK: non-sandbox default omits DESTROY (Aspect-overridable RETAIN) and no 
   new FileBucket(parent, 'uploads');
   const template = Template.fromStack(stack);
   // No explicit removalPolicy → CDK default RETAIN, driven by Aspects.
-  const buckets = template.findResources('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
-  assert.strictEqual(Object.keys(buckets).length, 0);
+  // Assert the positive default (RETAIN) so the intent is load-bearing rather
+  // than relying on the absence of a 'Delete' policy.
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
+});
+
+// ── autoDeleteObjects explicit opt-in / opt-out (escape hatch) ───────────────
+//
+// The sandbox-only default can be overridden per-bucket. Opting in lets a
+// genuinely-ephemeral prod bucket auto-empty on destroy; opting out disables
+// auto-empty even in sandbox. The DESTROY invariant still holds — auto-delete
+// never appears without the bucket being destroyed.
+
+test('CDK: non-sandbox destroy with autoDeleteObjects:true opts into the auto-delete Lambda', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { removalPolicy: 'destroy', autoDeleteObjects: true });
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+});
+
+test('CDK: sandbox default with autoDeleteObjects:false opts out of the auto-delete Lambda', () => {
+  const { stack, parent } = setup({ sandbox: true });
+  new FileBucket(parent, 'uploads', { autoDeleteObjects: false });
+  const template = Template.fromStack(stack);
+  // Sandbox still drops the bucket, but the caller disabled auto-empty.
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
+});
+
+test('CDK: autoDeleteObjects:true without destroy does NOT provision the auto-delete Lambda', () => {
+  const { stack, parent } = setup();
+  // No destroy → auto-delete cannot apply (invariant: auto-delete requires DESTROY).
+  new FileBucket(parent, 'uploads', { autoDeleteObjects: true });
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
 });

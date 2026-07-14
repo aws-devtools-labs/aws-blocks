@@ -24,15 +24,18 @@ export interface FileBucketOptions {
 	 * preserved on `cdk destroy`).
 	 *
 	 * Pass `'destroy'` to drop the bucket on teardown (`RemovalPolicy.DESTROY`).
-	 * `autoDeleteObjects` (which empties the bucket before deletion) is enabled
-	 * **only in sandbox mode**. In a prod stack, `'destroy'` sets DESTROY but
-	 * does NOT auto-empty — S3 rejects deleting a non-empty bucket, so a
-	 * populated prod bucket is preserved rather than silently wiped.
+	 * By default `autoDeleteObjects` (which empties the bucket before deletion)
+	 * is enabled **only in sandbox mode**. In a prod stack, `'destroy'` sets
+	 * DESTROY but does NOT auto-empty — S3 rejects deleting a non-empty bucket,
+	 * so a populated prod bucket is preserved rather than silently wiped. To
+	 * opt a genuinely-ephemeral prod bucket into auto-empty behavior, set
+	 * {@link autoDeleteObjects} explicitly.
 	 *
-	 * Why sandbox-only: CDK implements `autoDeleteObjects` via a hidden
-	 * `Custom::S3AutoDeleteObjects` Lambda whose delete behavior stack-level
-	 * retention Aspects (`RemovalPolicies.of(stack).retain()`) cannot override.
-	 * Keeping it out of prod stacks ensures those Aspects remain effective.
+	 * Why sandbox-only by default: CDK implements `autoDeleteObjects` via a
+	 * hidden `Custom::S3AutoDeleteObjects` Lambda whose delete behavior
+	 * stack-level retention Aspects (`RemovalPolicies.of(stack).retain()`)
+	 * cannot override. Keeping it out of prod stacks by default ensures those
+	 * Aspects remain effective unless a caller deliberately opts out.
 	 *
 	 * Pass `'retain'` to set the policy explicitly (identical to omitting
 	 * it today, but robust against stack-layer policy overrides).
@@ -43,6 +46,25 @@ export interface FileBucketOptions {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Explicitly control whether the bucket is emptied before deletion via
+	 * CDK's `autoDeleteObjects`. Only takes effect when the bucket is being
+	 * destroyed (`removalPolicy: 'destroy'`, or sandbox default).
+	 *
+	 * When omitted, defaults to sandbox-only: auto-empty is enabled in sandbox
+	 * mode and disabled in prod. Set `true` to force auto-empty for a
+	 * deliberately-ephemeral prod bucket, or `false` to disable it even in
+	 * sandbox.
+	 *
+	 * ⚠️ Enabling this provisions a hidden `Custom::S3AutoDeleteObjects` Lambda
+	 * whose delete behavior stack-level retention Aspects
+	 * (`RemovalPolicies.of(stack).retain()`) cannot override. Only opt in for a
+	 * bucket you genuinely intend to be throwaway — this is a deliberate,
+	 * visible footgun rather than the default.
+	 *
+	 * Ignored by the mock and browser runtimes.
+	 */
+	autoDeleteObjects?: boolean;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
