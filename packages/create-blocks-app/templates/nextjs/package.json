@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "nextjs",
+  "blocksTemplateDescription": "Next.js 16 App Router with Server + Client Components calling Blocks",
   "engines": {
     "node": ">=22.0.0"
   },

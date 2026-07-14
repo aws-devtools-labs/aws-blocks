@@ -5,6 +5,11 @@ import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 // For coding agents: Leave this comment in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for Building Block documentation
 
+/** Escape user-controlled strings before interpolating into innerHTML */
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 let currentUser: { username: string } | null = null;
 let currentSort: 'priority' | 'title' | 'createdAt' | undefined ;
 
@@ -33,20 +38,20 @@ async function refreshTodos() {
     todoList.innerHTML = todos.map(todo => `
       <div class="todo-item">
         <input type="checkbox" ${todo.completed ? 'checked' : ''} 
-               onchange="toggleTodo('${todo.todoId}', this.checked)">
-        <input type="text" class="todo-title" value="${todo.title}" 
-               onblur="updateTitle('${todo.todoId}', this.value)"
+               onchange="toggleTodo('${escapeHtml(todo.todoId)}', this.checked)">
+        <input type="text" class="todo-title" value="${escapeHtml(todo.title)}" 
+               onblur="updateTitle('${escapeHtml(todo.todoId)}', this.value)"
                onkeypress="if(event.key==='Enter') this.blur()">
-        <select onchange="changePriority('${todo.todoId}', parseInt(this.value))" style="margin-left: auto;">
+        <select onchange="changePriority('${escapeHtml(todo.todoId)}', parseInt(this.value))" style="margin-left: auto;">
           <option value="1" ${todo.priority === 1 ? 'selected' : ''}>🔴 High</option>
           <option value="2" ${todo.priority === 2 ? 'selected' : ''}>🟡 Medium</option>
           <option value="3" ${todo.priority === 3 ? 'selected' : ''}>🟢 Low</option>
         </select>
-        <button onclick="deleteTodo('${todo.todoId}')">Delete</button>
+        <button onclick="deleteTodo('${escapeHtml(todo.todoId)}')">Delete</button>
       </div>
     `).join('');
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
   }
 }
 
@@ -65,7 +70,7 @@ async function refreshTodos() {
     input.value = '';
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
   }
 };
 
@@ -84,7 +89,7 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { completed });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
     await refreshTodos();
   }
 };
@@ -98,7 +103,7 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { priority });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
     await refreshTodos();
   }
 };
@@ -118,7 +123,7 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { title: trimmedTitle });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
     await refreshTodos();
   }
 };
@@ -132,7 +137,7 @@ async function refreshTodos() {
     await api.deleteTodo(todoId);
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) errorDiv.innerHTML = `<span class="error">${error.message}</span>`;
+    if (errorDiv) errorDiv.innerHTML = `<span class="error">${escapeHtml(error.message)}</span>`;
   }
 };
 
@@ -161,7 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   await api.setCookie(name, value);
   document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Set cookie ${name} = ${value}</span>`;
+    `<span class="success">✓ Set cookie ${escapeHtml(name)} = ${escapeHtml(value)}</span>`;
 };
 
 (window as any).testGetCookie = async () => {
@@ -169,7 +174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   const value = await api.getCookie(name);
   document.getElementById('cookie-result')!.innerHTML = 
-    value ? `<span class="success">✓ Got cookie: ${value}</span>` 
+    value ? `<span class="success">✓ Got cookie: ${escapeHtml(value)}</span>` 
           : `<span class="error">✗ Cookie not found</span>`;
 };
 
@@ -178,7 +183,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   await api.deleteCookie(name);
   document.getElementById('cookie-result')!.innerHTML = 
-    `<span class="success">✓ Deleted cookie ${name}</span>`;
+    `<span class="success">✓ Deleted cookie ${escapeHtml(name)}</span>`;
 };
 
 // KV Store test functions
@@ -189,7 +194,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const result = await api.setValue(key, value);
   
   document.getElementById('kv-result')!.innerHTML = 
-    `<span class="success">✓ Set ${key} = ${value}</span>`;
+    `<span class="success">✓ Set ${escapeHtml(key)} = ${escapeHtml(value)}</span>`;
 };
 
 (window as any).testGetValue = async () => {
@@ -198,7 +203,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const value = await api.getValue(key);
   
   document.getElementById('kv-result')!.innerHTML = 
-    value ? `<span class="success">✓ Got value: ${value}</span>` 
+    value ? `<span class="success">✓ Got value: ${escapeHtml(value)}</span>` 
           : `<span class="error">✗ Key not found</span>`;
 };
 
@@ -221,7 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('test-results')!.innerHTML = results.join('<br>');
   } catch (error: any) {
     document.getElementById('test-results')!.innerHTML = 
-      `<span class="error">✗ Tests failed: ${error.message}</span>`;
+      `<span class="error">✗ Tests failed: ${escapeHtml(error.message)}</span>`;
   }
 };
 

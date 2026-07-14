@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "bare",
+  "blocksTemplateDescription": "Vite + lit-html frontend with a single greet() API (smallest starter)",
   "engines": {
     "node": ">=22.0.0"
   },

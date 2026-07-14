@@ -53,7 +53,8 @@
     "test-apps/auth-cognito-passkeys",
     "test-apps/auth-cognito-passkeys/aws-blocks",
     "test-apps/pipeline",
-    "test-apps/db-pull-typecheck"
+    "test-apps/db-pull-typecheck",
+    "scripts/agent-bench"
   ],
   "scripts": {
     "prepare": "husky && bash scripts/setup-git-secrets.sh",
