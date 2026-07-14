@@ -75,6 +75,13 @@ const BRIDGE_CONFIG_FILE = 'config-bridge.mjs';
 const ASTROJS_NODE_PIN = '@astrojs/node@^9';
 
 /**
+ * `sharp` version installed into the SSR bundle for Astro's default image
+ * service (`/_image`). Matches the range the IPX image-opt bundle uses so
+ * both image paths ship the same native libvips. See installSharpForAstroSsr.
+ */
+const ASTRO_SHARP_VERSION = '^0.34.0';
+
+/**
  * Verified Astro version range. Exported for the X.1 cross-adapter
  * version-pin test that asserts CI doesn't ship with the adapters
  * outside their verified ranges.
@@ -196,6 +203,20 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
           output,
         });
 
+  // Astro's `/_image` endpoint runs INSIDE the SSR Lambda (no separate image
+  // Lambda — see buildSsrManifest note). Astro's default image service is
+  // `sharp`, which does `await import('sharp')` at runtime and needs the
+  // native linux-x64 binary. The Vite SSR build (`noExternal`) can't bundle a
+  // native `.node` module, so unless we ship sharp the app is forced onto the
+  // `noop` passthrough service — which emits `content-type: image/null` and
+  // never resizes (issue #3). Install a linux-x64 sharp into the server
+  // bundle's node_modules AFTER the build so the runtime import resolves.
+  // Skipped for static output (no SSR Lambda) and when the app explicitly
+  // opted out of the sharp service (noop/passthrough/custom).
+  if (output !== 'static' && !skipBuild && astroUsesSharpService(config)) {
+    installSharpForAstroSsr(serverDir);
+  }
+
   // Lift the user's astro.config `redirects:` table out of the SSR
   // Lambda and onto the CloudFront viewer-request Function.
   //
@@ -296,6 +317,13 @@ type AstroConfigShape = {
     remotePatterns?: unknown;
     dangerouslyAllowSVG?: boolean;
     minimumCacheTTL?: number;
+    /**
+     * The image service. Astro's DEFAULT (unset) is the `sharp` service,
+     * which needs the native `sharp` binary at runtime. We read the
+     * `entrypoint` to decide whether the SSR Lambda must ship sharp — see
+     * {@link astroUsesSharpService}.
+     */
+    service?: { entrypoint?: string; config?: unknown };
   };
 };
 
@@ -697,6 +725,119 @@ const buildStaticManifest = (distDir: string): DeployManifest => {
     routes: [{ pattern: '/*', target: 'static' }],
     ...(Object.keys(errorPages).length > 0 ? { errorPages } : {}),
   };
+};
+
+/**
+ * Decide whether the SSR Lambda must ship the native `sharp` binary.
+ *
+ * Astro's DEFAULT image service is `sharp` (config `image.service` unset).
+ * The app opts OUT by pointing `image.service.entrypoint` at a non-sharp
+ * service — `astro/assets/services/noop` (passthrough) or a custom service.
+ * We ship sharp UNLESS the app explicitly chose such a service, so a default
+ * Astro SSR app gets working `/_image` optimization automatically, while an
+ * app that deliberately picked noop/custom is respected (and not bloated with
+ * ~19 MB of libvips it won't call).
+ * @internal
+ */
+export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
+  const entry = config.image?.service?.entrypoint;
+  // Unset → Astro default → sharp. Explicit sharp entrypoint → sharp.
+  if (entry === undefined || entry === null) return true;
+  if (typeof entry !== 'string') return true;
+  return /(^|\/)sharp$/.test(entry) || entry === 'astro/assets/services/sharp';
+};
+
+/**
+ * Install a **linux-x64 glibc** `sharp` into the Astro SSR server bundle's
+ * `node_modules/` so the runtime `await import('sharp')` in Astro's sharp
+ * image service resolves against the Lambda's platform (Node 20, linux-x64).
+ *
+ * Why post-build + into the server dir: the Astro Vite build (`noExternal`)
+ * can't bundle a native `.node` module, so sharp stays an external runtime
+ * import. `entry.mjs` lives in `dist/server/`, so Node resolves `import('sharp')`
+ * from `dist/server/node_modules/sharp` — that's the install target. The whole
+ * `dist/` tree (server/ + client/) is what the L3 zips for the Lambda, so a
+ * binary installed here ships with the function.
+ *
+ * Forces `--os=linux --cpu=x64 --libc=glibc --include=optional` (a plain
+ * `npm install` on a macOS build host fetches darwin-arm64 and crashes the
+ * Lambda with MissingSharp — the exact trap that pushed this app onto `noop`),
+ * then prunes the `@img/sharp-wasm32` fallback (~8.7 MB, never used on
+ * linux-x64) and other dead weight. Net add ≈ 19.5 MB unzipped — ~8% of
+ * Lambda's 250 MB unzipped limit. Mirrors the Nitro adapter's IPX bundle.
+ * @internal
+ */
+export const installSharpForAstroSsr = (serverDir: string): void => {
+  // Idempotent: skip if a linux-x64 sharp is already present.
+  const existing = path.join(
+    serverDir,
+    'node_modules',
+    '@img',
+    'sharp-linux-x64',
+  );
+  if (fs.existsSync(existing)) return;
+
+  fs.mkdirSync(serverDir, { recursive: true });
+  // A minimal package.json so `npm install <pkg>` writes into THIS dir's
+  // node_modules and doesn't walk up to the project root.
+  const pkgJsonPath = path.join(serverDir, 'package.json');
+  const hadPkgJson = fs.existsSync(pkgJsonPath);
+  if (!hadPkgJson) {
+    fs.writeFileSync(
+      pkgJsonPath,
+      JSON.stringify(
+        { name: 'astro-ssr-server-bundle', private: true, type: 'module' },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+  }
+
+  process.stderr.write(
+    '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
+  );
+  try {
+    spawn.sync(
+      'npm',
+      [
+        'install',
+        `sharp@${ASTRO_SHARP_VERSION}`,
+        '--no-audit',
+        '--no-fund',
+        '--silent',
+        '--include=optional',
+        '--omit=dev',
+        '--os=linux',
+        '--cpu=x64',
+        '--libc=glibc',
+      ],
+      { cwd: serverDir, stdio: 'inherit' },
+    );
+  } catch (error) {
+    throw new HostingError(
+      'AstroSharpInstallError',
+      {
+        message:
+          'Failed to install a linux-x64 `sharp` into the Astro SSR bundle for `/_image` optimization.',
+        resolution:
+          'Ensure `npm` is on PATH and the build host can reach the npm registry. ' +
+          'To ship without native image optimization, set `image.service` to ' +
+          '`astro/assets/services/noop` in astro.config (the SSR endpoint then ' +
+          'passes images through without resizing).',
+      },
+      error as Error,
+    );
+  }
+
+  // Drop the wasm fallback (never used on linux-x64) — it's ~8.7 MB of dead
+  // weight in the Lambda zip.
+  const wasm = path.join(serverDir, 'node_modules', '@img', 'sharp-wasm32');
+  try {
+    fs.rmSync(wasm, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
 };
 
 const buildSsrManifest = (input: {
