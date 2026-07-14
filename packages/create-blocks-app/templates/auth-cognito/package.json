@@ -3,10 +3,13 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "auth-cognito",
+  "blocksTemplateDescription": "Vite + vanilla-DOM frontend with Cognito passwordless email-OTP auth end-to-end",
   "engines": {
     "node": ">=22.0.0"
   },
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
