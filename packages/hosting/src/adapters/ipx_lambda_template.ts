@@ -214,21 +214,60 @@ const ipxStripPattern = new RegExp(
 );
 
 /**
- * Convert a Lambda Function URL event into a standard fetch Request.
+ * Rebuild a query string from API Gateway REST (v1) query params. Prefers
+ * multiValue (preserves repeats + original encoding) and re-encodes each
+ * key/value so a remote source carrying reserved chars round-trips.
+ */
+const v1QueryString = (event) => {
+  const mv = event.multiValueQueryStringParameters;
+  if (mv && Object.keys(mv).length > 0) {
+    const parts = [];
+    for (const k of Object.keys(mv)) {
+      for (const v of mv[k]) {
+        parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+      }
+    }
+    return parts.length ? '?' + parts.join('&') : '';
+  }
+  const sv = event.queryStringParameters;
+  if (sv && Object.keys(sv).length > 0) {
+    return (
+      '?' +
+      Object.keys(sv)
+        .map((k) => encodeURIComponent(k) + '=' + encodeURIComponent(sv[k]))
+        .join('&')
+    );
+  }
+  return '';
+};
+
+/**
+ * Convert a Lambda event into a standard fetch Request. Accepts BOTH:
+ *   - API Gateway REST (v1): \`event.path\`, \`event.httpMethod\`,
+ *     \`event.(multiValue)?queryStringParameters\` — used when the IPX
+ *     Lambda is fronted by the SHARED SSR API Gateway (issue #2 fix, so
+ *     a remote source's unencoded \`://\` in the path survives OAC/SigV4).
+ *   - Lambda Function URL (v2): \`event.rawPath\`, \`event.rawQueryString\`,
+ *     \`event.requestContext.http.method\` — the standalone fallback origin.
  *
- * Strips the configured base URL prefix because IPX's web server
- * expects paths in the shape /<modifiers>/<sourcePath> (without the
- * prefix).
+ * Strips the configured base URL prefix because IPX's web server expects
+ * paths in the shape /<modifiers>/<sourcePath> (without the prefix).
  */
 const eventToRequest = (event) => {
-  const rawPath = event.rawPath || '/';
+  const isV1 = typeof event.rawPath !== 'string' && typeof event.path === 'string';
+  const rawPath = (isV1 ? event.path : event.rawPath) || '/';
   const stripped = rawPath.replace(ipxStripPattern, '') || '/';
-  const query = event.rawQueryString ? \`?\${event.rawQueryString}\` : '';
+  const query = isV1
+    ? v1QueryString(event)
+    : event.rawQueryString
+      ? \`?\${event.rawQueryString}\`
+      : '';
   // The IPX server doesn't actually use the host part — it pulls path
   // and query from the URL. Use a placeholder.
   const url = new URL(stripped + query, 'http://image-opt.local');
 
-  const method = event.requestContext?.http?.method || 'GET';
+  const method =
+    (isV1 ? event.httpMethod : event.requestContext?.http?.method) || 'GET';
   const headers = new Headers();
   for (const [k, v] of Object.entries(event.headers || {})) {
     if (typeof v === 'string') headers.set(k, v);

@@ -1641,6 +1641,139 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    // ── IPX image Lambda on the shared SSR API Gateway (issue #2) ──────────
+    // Helper: a compute manifest + SSR default fn + an image-optimization fn.
+    const withImageOpt = (
+      stack: Stack,
+      imageOptimization?: DeployManifest['imageOptimization'],
+    ) => {
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const imageUrl = imageFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-ipx',
+        ...(imageOptimization ? { imageOptimization } : {}),
+      };
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([
+          ['default', defaultUrl],
+          ['image-optimization', imageUrl],
+        ]),
+        computeFunctions: new Map([
+          ['default', defaultFn],
+          ['image-optimization', imageFn],
+        ]),
+      });
+      return Template.fromStack(stack);
+    };
+
+    void it('IPX image Lambda (baseURL set) is attached to the shared SSR API Gateway', () => {
+      const stack = createStack();
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+        baseURL: '/_ipx',
+      });
+      // Exactly ONE RestApi (shared) — the IPX Lambda did NOT get its own.
+      template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      // A dedicated `_ipx` resource exists on the API for IPX routing.
+      template.hasResourceProperties('AWS::ApiGateway::Resource', {
+        PathPart: '_ipx',
+      });
+      // …with a `{proxy+}` catch-all under it.
+      template.hasResourceProperties('AWS::ApiGateway::Resource', {
+        PathPart: '{proxy+}',
+      });
+    });
+
+    void it('IPX image origin points at the API Gateway host (custom origin), NOT a Function URL', () => {
+      const stack = createStack();
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+        baseURL: '/_ipx',
+      });
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: {
+            Origins: {
+              Id: string;
+              CustomOriginConfig?: unknown;
+              OriginCustomHeaders?: { HeaderName: string }[];
+            }[];
+          };
+        };
+      };
+      const img = dist.Properties.DistributionConfig.Origins.find(
+        (o) => o.Id === ORIGIN_ID.image,
+      );
+      assert.ok(img, 'image origin present');
+      // An API-GW HttpOrigin is a custom origin carrying the origin-verify
+      // Referer header — NOT an OAC S3/Function-URL origin.
+      assert.ok(
+        img!.CustomOriginConfig,
+        'image origin must be a custom (HTTP) origin → the shared API GW',
+      );
+      assert.ok(
+        (img!.OriginCustomHeaders ?? []).some((h) => h.HeaderName === 'Referer'),
+        'image origin must carry the origin-verify Referer header',
+      );
+    });
+
+    void it('Next image Lambda (no baseURL) stays on its Function URL, NOT the API GW', () => {
+      const stack = createStack();
+      // No `baseURL` → this is the OpenNext (Next.js) image bundle, which
+      // speaks Function URL v2 events and must NOT be rerouted to API GW.
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+      });
+      // No `_ipx` API-GW resource was created for it.
+      const resources = template.findResources('AWS::ApiGateway::Resource');
+      const hasIpx = Object.values(resources).some(
+        (r) => (r.Properties as { PathPart?: string }).PathPart === '_ipx',
+      );
+      assert.equal(hasIpx, false, 'Next image path must not add an _ipx API-GW resource');
+    });
+
     void it('default S3-origin behavior uses a CUSTOM origin request policy, not the restricted managed one', () => {
       // CloudFront rejects the managed ALL_VIEWER_EXCEPT_HOST_HEADER on an S3
       // origin ("S3 Origins can only use ... CORS-CustomOrigin, CORS-S3Origin,

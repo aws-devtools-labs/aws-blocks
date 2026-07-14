@@ -377,6 +377,23 @@ export class CdnConstruct extends Construct {
           ? 'server'
           : undefined;
 
+    // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
+    // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
+    // are set only when an SSR compute exists; `originVerifySecret` is the
+    // deterministic CloudFront→APIGW auth token both integrations reuse.
+    let restApi: RestApi | undefined;
+    let apiHostname: string | undefined;
+    // Origin verification secret — prevents direct APIGW access bypassing
+    // CloudFront's security headers (CSP/HSTS). Requests without this
+    // header are rejected by the APIGW resource policy.
+    // Deterministic: derived from stack + construct path to avoid
+    // CloudFormation churn on every deploy. Bump the version suffix to rotate.
+    const originVerifySecret = createHash('sha256')
+      .update(Stack.of(this).stackName)
+      .update(this.node.path)
+      .update('origin-verify-v1')
+      .digest('hex');
+
     if (ssrComputeName && props.computeFunctions) {
       // Target the warm `live` alias when provisioned concurrency is set;
       // otherwise the unqualified function ($LATEST). Without this, the
@@ -386,20 +403,9 @@ export class CdnConstruct extends Construct {
         props.computeAliases?.get(ssrComputeName) ??
         props.computeFunctions.get(ssrComputeName)!;
 
-      // Origin verification secret — prevents direct APIGW access bypassing
-      // CloudFront's security headers (CSP/HSTS). Requests without this
-      // header are rejected by the APIGW resource policy.
-      // Deterministic: derived from stack + construct path to avoid
-      // CloudFormation churn on every deploy. Bump the version suffix to rotate.
-      const originVerifySecret = createHash('sha256')
-        .update(Stack.of(this).stackName)
-        .update(this.node.path)
-        .update('origin-verify-v1')
-        .digest('hex');
-
       // REGIONAL: CloudFront is already in front; edge-optimized would
       // double-proxy and cap streaming idle timeout at 30s.
-      const restApi = new RestApi(this, 'SsrRestApi', {
+      restApi = new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
@@ -445,7 +451,7 @@ export class CdnConstruct extends Construct {
 
       // restApi.url is "https://{id}.execute-api.{region}.amazonaws.com/{stage}/";
       // HttpOrigin needs the bare host.
-      const apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
       computeOrigins.set(
         ssrComputeName,
         new HttpOrigin(apiHostname, {
@@ -470,6 +476,48 @@ export class CdnConstruct extends Construct {
           FunctionUrlOrigin.withOriginAccessControl(fnUrl),
         );
       }
+    }
+
+    // ---- IPX image Lambda on the SHARED SSR API Gateway (issue #2) ----
+    // The Nuxt IPX optimizer embeds a REMOTE source as an unencoded path
+    // segment (`/_ipx/s_256x256/https://host/…`). An OAC Function URL signs
+    // SigV4 over the canonical path; the literal `://` canonicalizes
+    // differently on CloudFront vs the Function URL, so the signatures diverge
+    // and the Lambda is never invoked (403 InvalidSignatureException). API
+    // Gateway authorizes with the origin-verify Referer header instead of a
+    // path signature, so a `://` in the path is inert. Attach the IPX Lambda
+    // as a dedicated `<baseURL>/{proxy+}` resource on the SAME RestApi the SSR
+    // Lambda already uses (no new API GW), and point the image origin at that
+    // shared host. Scoped to IPX only: detected by `imageOptimization.baseURL`
+    // (Nuxt sets it; Next's OpenNext image bundle does not and speaks Function
+    // URL v2 events, so it stays on its Function URL). Requires an SSR compute
+    // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
+    const ipxBaseUrl = manifest.imageOptimization?.baseURL;
+    const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && restApi && apiHostname) {
+      const ipxIntegration = new LambdaIntegration(ipxFn, { proxy: true });
+      // e.g. baseURL '/_ipx' → resource path segments ['_ipx'] + '{proxy+}'.
+      // API Gateway matches this more-specific resource ahead of the SSR
+      // root `{proxy+}`, so `/_ipx/...` hits the IPX Lambda and everything
+      // else falls through to the SSR Lambda.
+      const segments = ipxBaseUrl.split('/').filter(Boolean);
+      let node = restApi.root;
+      for (const seg of segments) {
+        node = node.getResource(seg) ?? node.addResource(seg);
+      }
+      // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
+      // ANY on both the prefix root and its `{proxy+}` catch-all.
+      node.addMethod('ANY', ipxIntegration);
+      node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+
+      // Override the image origin (was the Function URL) to the shared API GW.
+      computeOrigins.set(
+        'image-optimization',
+        new HttpOrigin(apiHostname, {
+          originPath: `/${restApi.deploymentStage.stageName}`,
+          customHeaders: { Referer: originVerifySecret },
+        }),
+      );
     }
 
     // Primary origin: prefer 'default' > 'server' > first available
