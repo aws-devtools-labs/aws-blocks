@@ -76,6 +76,7 @@ export const FileBucketErrors: {
 
 // @public (undocumented)
 export interface FileBucketOptions {
+    autoDeleteObjects?: boolean;
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
     lifecycleRules?: LifecycleRule[];
