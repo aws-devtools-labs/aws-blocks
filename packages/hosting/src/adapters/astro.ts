@@ -215,6 +215,13 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
   // opted out of the sharp service (noop/passthrough/custom).
   if (output !== 'static' && !skipBuild && astroUsesSharpService(config)) {
     installSharpForAstroSsr(serverDir);
+    // Astro core fetches a remote image source with `redirect: "manual"` and
+    // throws on any 3xx, so an allowlisted host that 302-redirects to its CDN
+    // (e.g. picsum.photos → fastly) makes `/_image` 500. Patch the built
+    // server bundle to FOLLOW redirects — but re-validate every hop's host
+    // against the same `image.domains`/`remotePatterns` allowlist, so a
+    // redirect can't bounce past the allowlist (SSRF-safe).
+    patchAstroRemoteImageRedirects(serverDir);
   }
 
   // Lift the user's astro.config `redirects:` table out of the SSR
@@ -838,6 +845,104 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
   } catch {
     // best-effort
   }
+};
+
+/**
+ * Marker injected into a patched Astro assets chunk (idempotency + tests).
+ * @internal
+ */
+export const ASTRO_REDIRECT_PATCH_MARKER = '__blocksFetchAllowedRedirects';
+
+/**
+ * Injected helper source. Follows up to `MAX` redirects, re-validating EACH
+ * hop's URL against Astro's own `isRemoteAllowed(url, allowlistConfig)` before
+ * requesting it — so a redirect can never escape the `image.domains` /
+ * `remotePatterns` allowlist (SSRF-safe). On a disallowed hop it returns the
+ * 3xx response unchanged, letting Astro's existing 3xx-throw reject it. Uses
+ * `redirect: "manual"` per hop so we see each Location.
+ * @internal
+ */
+const ASTRO_REDIRECT_HELPER = `async function ${ASTRO_REDIRECT_PATCH_MARKER}(startUrl, allowlistConfig, isAllowed) {
+  let current = startUrl;
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(current, { redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const loc = res.headers.get("location");
+    if (!loc) return res;
+    const next = new URL(loc, current).toString();
+    // Re-check the redirect TARGET against the allowlist — never follow past it.
+    if (allowlistConfig && isAllowed && !isAllowed(next, allowlistConfig)) return res;
+    current = next;
+  }
+  return await fetch(current, { redirect: "manual" });
+}
+`;
+
+/**
+ * Patch Astro's built server bundle so the remote-image endpoint FOLLOWS
+ * redirects (re-validated per hop — see {@link ASTRO_REDIRECT_HELPER}) instead
+ * of throwing on the first 3xx.
+ *
+ * Astro core does `const response = await fetch(url, { redirect: "manual" })`
+ * then throws on `status >= 300 && < 400`. An allowlisted host that 302s to
+ * its CDN (picsum.photos → fastly) therefore 500s `/_image`. We replace ONLY
+ * the `fetch(url, { redirect: "manual" })` call sites with the injected helper,
+ * which resolves allowed redirects to a 2xx (so the existing 3xx-throw no
+ * longer fires) while a disallowed redirect still returns a 3xx that Astro
+ * rejects. Best-effort + idempotent: silent no-op if the shape isn't found (a
+ * future Astro refactor) or the patch already ran.
+ * @internal
+ */
+export const patchAstroRemoteImageRedirects = (serverDir: string): void => {
+  if (!fs.existsSync(serverDir)) return;
+  const chunks = fg.sync('**/*.mjs', {
+    cwd: serverDir,
+    absolute: true,
+    ignore: ['**/node_modules/**'],
+  });
+  // Match `fetch(<urlVar>, { redirect: "manual" })` where <urlVar> is a bare
+  // identifier (Astro passes the source URL variable). Whitespace-tolerant.
+  const callRe =
+    /await\s+fetch\(\s*([A-Za-z_$][\w$]*)\s*,\s*\{\s*redirect:\s*["']manual["']\s*\}\s*\)/g;
+
+  let filesPatched = 0;
+  for (const chunk of chunks) {
+    let src: string;
+    try {
+      src = fs.readFileSync(chunk, 'utf-8');
+    } catch {
+      continue;
+    }
+    // Only touch the chunk that actually fetches remote images (has the
+    // allowlist symbol + the manual-redirect fetch).
+    if (!/isRemoteAllowed/.test(src)) continue;
+    if (src.includes(ASTRO_REDIRECT_PATCH_MARKER)) continue; // idempotent
+    if (!callRe.test(src)) continue;
+    callRe.lastIndex = 0;
+    // Replace each `fetch(u,{redirect:"manual"})` with the helper, threading
+    // the local `allowlistConfig` + imported `isRemoteAllowed`.
+    let next = src.replace(
+      callRe,
+      `await ${ASTRO_REDIRECT_PATCH_MARKER}($1, typeof allowlistConfig !== "undefined" ? allowlistConfig : void 0, isRemoteAllowed)`,
+    );
+    // Inject the helper once, after the import lines at the top of the chunk.
+    next = `${ASTRO_REDIRECT_HELPER}\n${next}`;
+    fs.writeFileSync(chunk, next, 'utf-8');
+    filesPatched++;
+  }
+
+  if (filesPatched === 0) {
+    process.stderr.write(
+      '⚠️  Astro remote-image redirect patch found no matching fetch(…{redirect:"manual"}); ' +
+        'a redirecting allowlisted remote source may 500 on /_image ' +
+        '(see patchAstroRemoteImageRedirects).\n',
+    );
+    return;
+  }
+  process.stderr.write(
+    `\u{1F527} Patched Astro remote-image fetch to follow allowlisted redirects ` +
+      `(${filesPatched} chunk${filesPatched > 1 ? 's' : ''}).\n`,
+  );
 };
 
 const buildSsrManifest = (input: {
