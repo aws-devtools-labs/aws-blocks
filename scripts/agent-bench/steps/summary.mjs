@@ -5,8 +5,8 @@
 // scored cells; observational unless BENCH_MIN_SCORE gates.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cellCost, compositeBand, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
-import { buildAggregate, cellComposite, deltaBall, diffAgainstBaseline, renderDetailed } from './lib/overview.mjs';
+import { cellCost, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
+import { buildAggregate, cellComposite, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
 
@@ -34,7 +34,6 @@ const dataCells = cells.filter((c) => !c.error);
 const errorCells = cells.filter((c) => c.error);
 // A cell enters the composite mean iff gradeable AND it produced test results (via isScoredCell).
 const compositeCells = dataCells.filter((c) => isScoredCell(c));
-const judgeScoredCells = dataCells.filter((c) => c.klass !== 'harness_error' && typeof c.judge_score === 'number');
 const harnessErrors = dataCells.filter((c) => c.klass === 'harness_error');
 
 // Judge/test harness errors tracked SEPARATELY so they can't flip a verdict or zero a test_rate.
@@ -88,31 +87,27 @@ const min = Number(minScoreRaw);
 const gateEnabled = minScoreRaw !== '' && Number.isFinite(min);
 let gateFailed = false;
 
-const judgeMean = judgeScoredCells.length
-	? judgeScoredCells.reduce((acc, r) => acc + r.judge_score, 0) / judgeScoredCells.length
-	: null;
+// Builder + judge model ids for the preword's config line (same env the run steps read).
+const builderModel = (process.env.BENCH_MODEL ?? '').trim() || null;
+const judgeModel = (process.env.BENCH_JUDGE_MODEL ?? '').trim() || null;
 
-// Deterministic headline under the Overview heading (the LLM exec summary is separate, from analyze.mjs).
-function headlineLine() {
-	if (compositeCells.length === 0) {
-		if (cells.length > 0 && harnessErrors.length === cells.length) {
-			return `⚠️ All ${cells.length} cell(s) were harness_error — nothing was scored, no composite headline.`;
-		}
-		const g = gateEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the gate is skipped — conservative.)` : '';
-		return `_No cells produced test results — no composite headline to report._${g}`;
+// Message shown in place of the preword when NO cell produced test results (nothing to average).
+function noScoreMessage() {
+	if (cells.length > 0 && harnessErrors.length === cells.length) {
+		return `- ⚠️ All ${cells.length} cell(s) were harness_error — nothing was scored, no composite headline.`;
 	}
+	const g = gateEnabled ? ` (\`BENCH_MIN_SCORE=${min}\` set, but with no scored cells the gate is skipped — conservative.)` : '';
+	return `- _No cells produced test results — no composite headline to report._${g}`;
+}
+
+// The merge gate over the composite mean (scored cells only). Sets gateFailed; returns a bullet when
+// BENCH_MIN_SCORE is set, else an observational note. Called only when there ARE scored cells.
+function gateLine() {
 	const mean = aggregate.mean_composite;
-	const judgeNote = judgeMean !== null ? ` · judge mean **${judgeMean.toFixed(2)}**/10` : '';
-	// Composite mean delta vs the baseline (🟢/🔴/🟡 over the ±5 band), when present.
-	const deltaNote =
-		diff.hasBaseline && diff.meanDelta !== null
-			? ` · ${deltaBall(diff.meanDelta)} ${diff.meanDelta > 0 ? '+' : ''}${diff.meanDelta.toFixed(1)} vs \`main\``
-			: '';
-	const head = `Mean composite **${mean.toFixed(1)}**/100 ${compositeBand(mean)} across ${compositeCells.length} scored cell(s)${judgeNote}${deltaNote}.`;
-	if (!gateEnabled) return `${head} _Observational — \`BENCH_MIN_SCORE\` unset, so it does not gate the merge._`;
+	if (!gateEnabled) return `_Observational — \`BENCH_MIN_SCORE\` unset, so the mean does not gate the merge._`;
 	const pass = mean >= min;
 	gateFailed = !pass;
-	return `${pass ? '✅' : '❌'} ${head} Threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
+	return `${pass ? '✅' : '❌'} **Gate:** mean composite **${mean.toFixed(1)}** vs threshold **${min}** — ${pass ? 'pass' : 'FAIL'}.`;
 }
 
 // ── Assemble the report ───────────────────────────────────────────────────────
@@ -125,12 +120,17 @@ md.push('<summary>📖 Glossary &amp; notes — scoring, colors, per-metric thre
 md.push('');
 md.push('- **N = 1** — one rep per cell, so a small delta may be model variance, not a real change; re-run for certainty.');
 md.push(
-	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows the current value on top and the signed delta vs `main` below it.',
+	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<color> <value> (<Δ vs main>)` inline (multi-value cells stack one line per sub-metric).',
 );
 md.push(
-	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge ±0.3 · tests ±1 pass · cost ±10% · tokens ±10% (in+out combined). A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
+	'- **Columns:** Tests (pass/denom) · Judge (one line per rubric dimension) · Cost · Tokens (in / out / cached in / cached out) · Turns (agent cycles) · LOC (created / edited) · Files (created / edited) · Score. Cache tokens, Turns, LOC and Files are new — they read ⚪ `(new)` until a `main` bench records a baseline for them.',
 );
-md.push('- **Directions:** higher is better for tests, judge, and score; lower is better for cost and tokens.');
+md.push(
+	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge (& each dimension) ±0.3 · tests ±1 pass · cost ±10% · tokens ±10% per stream · turns ±3 · cached in/out ±20%. A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
+);
+md.push(
+	'- **Directions:** higher is better for tests, judge (+ dimensions), and score; lower is better for cost, tokens (+ cache), and turns. **LOC & Files have NO good/bad direction** — they are shown NEUTRAL (⚪, value + signed delta, never 🟢/🔴). Cache tokens are DISPLAYED only — they are NOT part of the cost/SCORE formula.',
+);
 md.push(
 	'- **Composite (0-100)** = `round(60·test_rate + 4·judge·min(1, 4·test_rate), 1)` — 60% objective pass-rate + 40% judge, the judge term gated below a 25% pass-rate.',
 );
@@ -169,8 +169,14 @@ if (cells.length > 0) {
 	}
 	md.push(heading, '');
 	md.push(note, '');
-	// Deterministic headline directly under the heading, above the table.
-	md.push(headlineLine(), '');
+	// Bulleted aggregated summary (preword) directly under the heading, above the table.
+	if (compositeCells.length === 0) {
+		md.push(noScoreMessage(), '');
+	} else {
+		md.push(...renderPreword(diff, aggregate, { builderModel, judgeModel, baselineSha: baseline?.sha }));
+		md.push(`- ${gateLine()}`);
+		md.push('');
+	}
 	md.push(...renderDetailed(diff, {}));
 }
 
