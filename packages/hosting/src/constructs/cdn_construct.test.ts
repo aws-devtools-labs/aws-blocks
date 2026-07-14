@@ -1262,6 +1262,99 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('NO S3-origin behavior (default OR edge) uses a managed origin request policy (regression-proofs the S3+managed 400 class)', () => {
+      // CloudFront rejects the AWS-managed ALL_VIEWER_EXCEPT_HOST_HEADER (and
+      // any managed policy other than CORS-CustomOrigin / CORS-S3Origin /
+      // UserAgentRefererHeaders) on an S3 origin — 400 InvalidRequest at
+      // distribution create. The default behavior AND the edge-route behavior
+      // both target the S3 origin, so BOTH must use the synthesized custom
+      // policy (rendered as { Ref }), never a managed policy id (a literal
+      // UUID string). This guards the whole bug class, not just one case.
+      // Deploy WITH an edge route so the previously-unexercised edge behavior
+      // is included.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const edgeFn = new LambdaFunction(stack, 'EdgeOrpFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'edge-orp-1',
+      };
+      new CdnConstruct(stack, 'CdnEdgeOrp', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        routeEdgeFunctions: new Map([['edge1', edgeFn.currentVersion]]),
+      });
+      const template = Template.fromStack(stack);
+
+      // Managed origin-request-policy ids CloudFront disallows on S3 origins.
+      // (CORS-S3Origin / CORS-CustomOrigin / UserAgentRefererHeaders ARE
+      // allowed, but the construct never uses those on the S3 origin, so any
+      // literal-string policy id on an S3-origin behavior is a red flag.)
+      const MANAGED_IDS = new Set([
+        'b689b0a8-53d0-40ab-baf2-68738e2966ac', // ALL_VIEWER_EXCEPT_HOST_HEADER
+        '216adef6-5c7f-47e4-b989-5492eafa07d3', // ALL_VIEWER
+        '33f36d7e-f396-46d9-90e0-52428a34d9dc', // ALL_VIEWER_AND_CLOUDFRONT_2022
+      ]);
+
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: {
+            DefaultCacheBehavior: Record<string, unknown>;
+            CacheBehaviors?: Array<Record<string, unknown>>;
+          };
+        };
+      };
+      const cfg = dist.Properties.DistributionConfig;
+      const allBehaviors = [
+        cfg.DefaultCacheBehavior,
+        ...(cfg.CacheBehaviors ?? []),
+      ];
+
+      for (const b of allBehaviors) {
+        if (b.TargetOriginId !== ORIGIN_ID.s3) continue; // only S3-origin behaviors
+        const orp = b.OriginRequestPolicyId;
+        // A synthesized custom policy is a { Ref }; a managed policy is a
+        // literal UUID string. Only the former is legal on an S3 origin.
+        if (typeof orp === 'string') {
+          assert.ok(
+            !MANAGED_IDS.has(orp),
+            `S3-origin behavior (pattern ${String(b.PathPattern ?? 'default')}) uses a managed origin request policy ${orp} — CloudFront rejects this on S3 origins`,
+          );
+        }
+      }
+
+      // Positive assertion: the edge behavior specifically references a custom
+      // policy Ref (proves the fix, not just the absence of a managed id).
+      const edgeBehavior = (cfg.CacheBehaviors ?? []).find(
+        (b) => b.PathPattern === '/api/edge',
+      );
+      assert.ok(edgeBehavior, '/api/edge behavior present');
+      const edgeOrp = edgeBehavior!.OriginRequestPolicyId;
+      assert.ok(
+        typeof edgeOrp === 'object' && edgeOrp !== null && 'Ref' in (edgeOrp as Record<string, unknown>),
+        'edge S3-origin behavior must reference the synthesized custom policy via Ref',
+      );
+    });
+
     void it('attaches includeBody on the edge origin-request association (POST/PUT body)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');

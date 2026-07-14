@@ -909,7 +909,15 @@ export class CdnConstruct extends Construct {
           // function computes the response per request, so edge routes opt OUT
           // of the SSR s-maxage caching. Keep this — don't restore ssrCachePolicy.
           cachePolicy: CachePolicy.CACHING_DISABLED,
-          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          // This behavior's origin is S3 (line above), so it CANNOT use the
+          // managed ALL_VIEWER_EXCEPT_HOST_HEADER — CloudFront rejects that
+          // managed policy on any S3 origin (400 InvalidRequest at create).
+          // Reuse the synthesized custom policy (same forwarding, allowed on S3
+          // origins). An edge route implies a compute route, so hasCompute is
+          // true and forwardAllOriginRequestPolicy is defined; the `?? undefined`
+          // is a belt-and-suspenders guard (the Lambda@Edge function generates
+          // the response, so forwarded origin data is immaterial here anyway).
+          originRequestPolicy: forwardAllOriginRequestPolicy ?? undefined,
           responseHeadersPolicy: props.securityHeadersPolicy,
           edgeLambdas: [
             {
