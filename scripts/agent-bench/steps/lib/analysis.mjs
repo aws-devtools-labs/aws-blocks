@@ -245,6 +245,227 @@ export function buildRollupUserText(input) {
 	].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// DEEP FAILURE ANALYSIS — a second, richer pass that runs ONLY on failing cells
+// (see isFailureCell). Motivated by the shallow per-cell pass misdiagnosing an
+// auth-notes 0/11 as a "scoring/harness mismatch" because it never saw the
+// actual failing-test output. This pass ingests the quoted test failures + dev/
+// build logs and emits a STRUCTURED root cause. Best-effort: never gates a cell.
+// ---------------------------------------------------------------------------
+
+// Output budget for the deeper pass (a touch larger than CELL_MAX_TOKENS — it emits a small JSON object).
+export const FAILURE_MAX_TOKENS = 600;
+// Bound the failure evidence fed to the model so a log storm can't blow up the prompt.
+export const MAX_FAILING_TESTS = 8; // distinct error groups (after dedup)
+export const MAX_FAILURE_ERR_LEN = 300; // per grouped error line
+export const MAX_FAILURE_TITLES = 4; // example spec titles listed per error group
+export const MAX_LOG_TAIL_CHARS = 1500; // dev.log / build.log tail
+export const MAX_FAILURE_JUDGE_CHARS = 1500; // full-ish judge explanation (vs the 500 the cheap pass uses)
+
+// Closed vocabularies the model must pick from; parseFailureAnalysis coerces to these (unknowns → null).
+export const FAILURE_CATEGORIES = ['build', 'dev-server', 'api-shape', 'auth', 'persistence', 'timeout', 'flake', 'agent-logic'];
+export const FAILURE_OWNERS = ['agent', 'framework', 'harness'];
+
+/**
+ * Should this cell get the deep failure pass? True for any cell that actually failed at some layer:
+ * a fail verdict, an agent_fail, any failed test, or a build / dev-server that never came up. A clean
+ * pass / partial with all-green tests is left on the cheap path (no extra model call).
+ * @param {unknown} result parsed result.json
+ * @returns {boolean}
+ */
+export function isFailureCell(result) {
+	if (!result || typeof result !== 'object') return false;
+	const r = /** @type {Record<string, unknown>} */ (result);
+	if (r.verdict === 'fail') return true;
+	if (r.klass === 'agent_fail') return true;
+	if (typeof r.tests_failed === 'number' && r.tests_failed > 0) return true;
+	if (r.dev_server_started === false) return true;
+	if (r.build_succeeded === false) return true;
+	return false;
+}
+
+// Strip ANSI color codes Playwright embeds in error messages (they wreck dedup + waste chars).
+function stripAnsi(s) {
+	// eslint-disable-next-line no-control-regex
+	return typeof s === 'string' ? s.replace(/\u001b\[[0-9;]*m/g, '') : '';
+}
+
+// Collapse an error message to a single trimmed line, capped — the dedup key.
+function normalizeError(msg) {
+	return oneLine(stripAnsi(msg)).slice(0, MAX_FAILURE_ERR_LEN);
+}
+
+/**
+ * Pure parser for the Playwright JSON reporter output. Walks the (recursively nested) suites, finds
+ * FAILING specs, lifts each one's first error message, and DEDUPES by identical normalized error so a
+ * single root cause hitting all N specs collapses to one group (e.g. auth-notes' 11 identical
+ * `getByTestId('auth-username')` failures → one group, count 11). Never throws.
+ * @param {unknown} pwResults parsed pw-results.json (any shape) or null
+ * @returns {{totalFailing: number, groups: Array<{error: string, count: number, titles: string[]}>}}
+ */
+export function extractFailingTests(pwResults) {
+	const empty = { totalFailing: 0, groups: [] };
+	if (!pwResults || typeof pwResults !== 'object') return empty;
+	/** @type {Array<{title: string, error: string}>} */
+	const failing = [];
+
+	const firstError = (spec) => {
+		for (const t of spec?.tests ?? []) {
+			for (const res of t?.results ?? []) {
+				const status = res?.status;
+				if (status && status !== 'passed' && status !== 'skipped') {
+					const msg = res?.error?.message ?? (Array.isArray(res?.errors) ? res.errors[0]?.message : '') ?? '';
+					if (msg) return normalizeError(msg);
+				}
+			}
+		}
+		return '';
+	};
+
+	const walk = (suite, prefix) => {
+		if (!suite || typeof suite !== 'object') return;
+		const title = suite.title ? `${prefix}${prefix ? ' › ' : ''}${suite.title}` : prefix;
+		for (const spec of suite.specs ?? []) {
+			// A spec is failing when ok===false OR any of its tests has a non-passed result.
+			const anyBad = spec?.ok === false || (spec?.tests ?? []).some((t) => (t?.results ?? []).some((r) => r?.status && r.status !== 'passed' && r.status !== 'skipped'));
+			if (anyBad) {
+				failing.push({ title: oneLine(spec?.title) || '(untitled spec)', error: firstError(spec) || '(no error message captured)' });
+			}
+		}
+		for (const child of suite.suites ?? []) walk(child, title);
+	};
+
+	try {
+		for (const s of pwResults.suites ?? []) walk(s, '');
+	} catch {
+		return empty;
+	}
+
+	// Dedup by identical normalized error, preserving first-seen order.
+	/** @type {Map<string, {error: string, count: number, titles: string[]}>} */
+	const byError = new Map();
+	for (const f of failing) {
+		const g = byError.get(f.error);
+		if (g) {
+			g.count += 1;
+			if (g.titles.length < MAX_FAILURE_TITLES) g.titles.push(f.title);
+		} else {
+			byError.set(f.error, { error: f.error, count: 1, titles: [f.title] });
+		}
+	}
+	return { totalFailing: failing.length, groups: [...byError.values()].slice(0, MAX_FAILING_TESTS) };
+}
+
+// Deep-failure system prompt: force a single, evidence-grounded root cause as STRICT JSON.
+export const FAILURE_SYSTEM = `You are the failure triager for ONE benchmark cell where an AI coding agent built an app that then FAILED (tests failed, or the build / dev-server never came up). You are given the failing test names + their error messages, the dev-server log tail, the build log tail (if the build failed), the judge's notes on what was built, and the tool-call trace tail.
+
+Diagnose the SINGLE most likely root cause from the QUOTED evidence. Prefer one shared cause when many tests fail identically. Output ONLY a JSON object (no prose, no markdown fence) with EXACTLY these keys:
+{
+  "category": one of ["build","dev-server","api-shape","auth","persistence","timeout","flake","agent-logic"],
+  "single_root_cause": boolean (true if one cause explains all/most failures),
+  "root_cause": string (<=2 sentences; cite the decisive evidence),
+  "evidence": string (a quoted failing test name + its error line, or the decisive log line),
+  "likely_fix": string (<=1 sentence, concrete and actionable),
+  "owner": one of ["agent","framework","harness"] (who must fix it)
+}
+Base every field on the provided evidence — do not invent file names or errors you were not shown.`;
+
+/**
+ * Build the deep-failure prompt user text from a failing cell's data + logs. Pure.
+ * @param {{task?: string, template?: string, verdict?: string, klass?: string|null,
+ *   testsFailed?: number|null, testsTotal?: number|null, buildSucceeded?: boolean|null,
+ *   devServerStarted?: boolean|null, judgeExplanation?: string,
+ *   failingTests?: {totalFailing: number, groups: Array<{error: string, count: number, titles: string[]}>},
+ *   devLogTail?: string, buildLogTail?: string, traceTail?: string}} input
+ * @returns {string}
+ */
+export function buildFailureUserText(input) {
+	const ft = input.failingTests ?? { totalFailing: 0, groups: [] };
+	const testLines = ft.groups.length
+		? ft.groups.map((g) => {
+				const titles = g.titles.join(' | ');
+				return `- [${g.count}× ] ${titles}${g.count > g.titles.length ? ' (+more)' : ''}\n    ↳ ${g.error}`;
+			})
+		: ['(no failing-test detail captured)'];
+	const signals = [
+		input.verdict ? `verdict ${input.verdict}` : null,
+		input.klass ? `klass ${input.klass}` : null,
+		typeof input.testsFailed === 'number' ? `tests_failed ${input.testsFailed}${typeof input.testsTotal === 'number' ? `/${input.testsTotal}` : ''}` : null,
+		input.buildSucceeded === false ? 'build FAILED' : input.buildSucceeded === true ? 'build ok' : null,
+		input.devServerStarted === false ? 'dev-server DID NOT START' : input.devServerStarted === true ? 'dev-server ok' : null,
+	]
+		.filter(Boolean)
+		.join(', ');
+	const judge = oneLine(input.judgeExplanation).slice(0, MAX_FAILURE_JUDGE_CHARS);
+	const devTail = (input.devLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
+	const buildTail = (input.buildLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
+	return [
+		`Cell: ${input.task ?? '—'}/${input.template ?? '—'}`,
+		`Signals: ${signals || '(none)'}`,
+		`Failing tests (${ft.totalFailing} total, deduped by error):`,
+		...testLines,
+		'',
+		'Dev-server log tail:',
+		devTail || '(none)',
+		...(input.buildSucceeded === false ? ['', 'Build log tail:', buildTail || '(none)'] : []),
+		'',
+		judge ? `Judge notes (what was built): ${judge}` : 'Judge notes: (none)',
+		'',
+		'Trace tail:',
+		(input.traceTail ?? '').slice(-MAX_TAIL_CHARS) || '(no trace tail)',
+	].join('\n');
+}
+
+/**
+ * Tolerantly parse the deep-failure model output into a normalized object. Accepts a bare JSON object,
+ * a ```json fenced block, or JSON embedded in surrounding prose (first `{` … last `}`). Coerces
+ * category/owner to their closed vocabularies (unknown → null) and caps string lengths. Returns null
+ * on anything unusable. NEVER throws.
+ * @param {unknown} text raw model completion
+ * @returns {{category: string|null, single_root_cause: boolean|null, root_cause: string, evidence: string, likely_fix: string, owner: string|null}|null}
+ */
+export function parseFailureAnalysis(text) {
+	if (typeof text !== 'string' || !text.trim()) return null;
+	let raw = text.trim();
+	// Strip a ```json … ``` fence if present.
+	const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	if (fence) raw = fence[1].trim();
+	let obj = null;
+	try {
+		obj = JSON.parse(raw);
+	} catch {
+		// Fall back to the first {...} span embedded in prose.
+		const start = raw.indexOf('{');
+		const end = raw.lastIndexOf('}');
+		if (start !== -1 && end > start) {
+			try {
+				obj = JSON.parse(raw.slice(start, end + 1));
+			} catch {
+				return null;
+			}
+		} else {
+			return null;
+		}
+	}
+	if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+	const str = (v, cap) => (typeof v === 'string' ? oneLine(v).slice(0, cap) : '');
+	const category = FAILURE_CATEGORIES.includes(obj.category) ? obj.category : null;
+	const owner = FAILURE_OWNERS.includes(obj.owner) ? obj.owner : null;
+	const root_cause = str(obj.root_cause, 600);
+	const evidence = str(obj.evidence, 600);
+	const likely_fix = str(obj.likely_fix, 400);
+	// Require at least a category or a root_cause — otherwise the object carried nothing usable.
+	if (!category && !root_cause) return null;
+	return {
+		category,
+		single_root_cause: typeof obj.single_root_cause === 'boolean' ? obj.single_root_cause : null,
+		root_cause,
+		evidence,
+		likely_fix,
+		owner,
+	};
+}
+
 // Block synchronously between retries (bare-node, no async loop to yield to).
 function sleepSync(ms) {
 	try {

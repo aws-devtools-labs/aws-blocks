@@ -7,14 +7,21 @@ import {
 	LOW_THRESHOLD,
 	MAX_CELL_ISSUES,
 	MAX_ERROR_LINES,
+	MAX_FAILING_TESTS,
+	MAX_FAILURE_ERR_LEN,
+	MAX_FAILURE_TITLES,
 	MAX_ISSUE_LEN,
 	MAX_TAIL_CHARS,
 	MAX_TOOL_NAMES,
 	REGRESSION_DELTA,
 	buildCellUserText,
+	buildFailureUserText,
 	buildRollupUserText,
+	extractFailingTests,
+	isFailureCell,
 	oneLine,
 	parseCellAnalysis,
+	parseFailureAnalysis,
 	summarizeMetrics,
 	trimTrace,
 } from './analysis.mjs';
@@ -214,5 +221,203 @@ describe('buildRollupUserText(input)', () => {
 		assert.match(text, /mean composite —\/100 over 0 scored cell/);
 		assert.match(text, /\(no per-cell analyses available\)/);
 		assert.match(text, /\(none\)/);
+	});
+});
+
+describe('isFailureCell(result)', () => {
+	it('triggers on a fail verdict', () => {
+		assert.equal(isFailureCell({ verdict: 'fail' }), true);
+	});
+	it('triggers on an agent_fail klass', () => {
+		assert.equal(isFailureCell({ verdict: 'partial', klass: 'agent_fail' }), true);
+	});
+	it('triggers on any failed test', () => {
+		assert.equal(isFailureCell({ verdict: 'partial', tests_failed: 1 }), true);
+	});
+	it('triggers when the dev-server did not start', () => {
+		assert.equal(isFailureCell({ verdict: 'pass', dev_server_started: false }), true);
+	});
+	it('triggers when the build failed', () => {
+		assert.equal(isFailureCell({ verdict: 'pass', build_succeeded: false }), true);
+	});
+	it('does NOT trigger on a clean pass', () => {
+		assert.equal(isFailureCell({ verdict: 'pass', klass: null, tests_failed: 0, dev_server_started: true, build_succeeded: true }), false);
+	});
+	it('does NOT trigger on a partial with all-green tests', () => {
+		assert.equal(isFailureCell({ verdict: 'partial', tests_failed: 0, dev_server_started: true, build_succeeded: true }), false);
+	});
+	it('is null-safe', () => {
+		assert.equal(isFailureCell(null), false);
+		assert.equal(isFailureCell(undefined), false);
+		assert.equal(isFailureCell('nope'), false);
+		assert.equal(isFailureCell(42), false);
+	});
+});
+
+describe('extractFailingTests(pwResults)', () => {
+	// Build a Playwright JSON report with `n` specs that all fail with the SAME error, plus optional extras.
+	function pwReport(specs) {
+		return { suites: [{ title: 'auth', specs }] };
+	}
+	function failSpec(title, message) {
+		return { title, ok: false, tests: [{ results: [{ status: 'unexpected', error: { message } }] }] };
+	}
+	function passSpec(title) {
+		return { title, ok: true, tests: [{ results: [{ status: 'passed' }] }] };
+	}
+
+	it('dedupes N identical errors into ONE group with the right count', () => {
+		const specs = [];
+		for (let i = 0; i < 11; i++) specs.push(failSpec(`shows username ${i}`, "getByTestId('auth-username') not visible"));
+		const out = extractFailingTests(pwReport(specs));
+		assert.equal(out.totalFailing, 11);
+		assert.equal(out.groups.length, 1);
+		assert.equal(out.groups[0].count, 11);
+		assert.match(out.groups[0].error, /auth-username/);
+		// only a bounded number of example titles are retained
+		assert.ok(out.groups[0].titles.length <= MAX_FAILURE_TITLES);
+	});
+
+	it('separates distinct errors and caps distinct groups', () => {
+		const specs = [];
+		for (let i = 0; i < MAX_FAILING_TESTS + 5; i++) specs.push(failSpec(`spec ${i}`, `distinct error number ${i}`));
+		const out = extractFailingTests(pwReport(specs));
+		assert.equal(out.totalFailing, MAX_FAILING_TESTS + 5);
+		assert.equal(out.groups.length, MAX_FAILING_TESTS); // capped
+	});
+
+	it('ignores passed and skipped specs', () => {
+		const specs = [passSpec('ok one'), failSpec('bad one', 'boom'), { title: 'skipped one', ok: true, tests: [{ results: [{ status: 'skipped' }] }] }];
+		const out = extractFailingTests(pwReport(specs));
+		assert.equal(out.totalFailing, 1);
+		assert.equal(out.groups[0].titles[0], 'bad one');
+	});
+
+	it('caps each error line length', () => {
+		const long = 'x'.repeat(MAX_FAILURE_ERR_LEN + 200);
+		const out = extractFailingTests(pwReport([failSpec('long err', long)]));
+		assert.ok(out.groups[0].error.length <= MAX_FAILURE_ERR_LEN);
+	});
+
+	it('walks nested suites', () => {
+		const nested = { suites: [{ title: 'outer', suites: [{ title: 'inner', specs: [failSpec('deep fail', 'nested boom')] }] }] };
+		const out = extractFailingTests(nested);
+		assert.equal(out.totalFailing, 1);
+		assert.match(out.groups[0].error, /nested boom/);
+	});
+
+	it('is null/shape-safe', () => {
+		assert.deepEqual(extractFailingTests(null), { totalFailing: 0, groups: [] });
+		assert.deepEqual(extractFailingTests(undefined), { totalFailing: 0, groups: [] });
+		assert.deepEqual(extractFailingTests('nope'), { totalFailing: 0, groups: [] });
+		assert.deepEqual(extractFailingTests({}), { totalFailing: 0, groups: [] });
+		assert.deepEqual(extractFailingTests({ suites: 'bad' }), { totalFailing: 0, groups: [] });
+	});
+});
+
+describe('buildFailureUserText(input)', () => {
+	it('includes signals, deduped failing tests, and log tails', () => {
+		const text = buildFailureUserText({
+			task: 'auth-notes',
+			template: 'demo',
+			verdict: 'fail',
+			klass: null,
+			testsFailed: 11,
+			testsTotal: 11,
+			buildSucceeded: true,
+			devServerStarted: true,
+			judgeExplanation: 'App built but never rendered the sign-in form.',
+			failingTests: { totalFailing: 11, groups: [{ error: "getByTestId('auth-username') not visible", count: 11, titles: ['a', 'b'] }] },
+			devLogTail: 'listening on 3000\nhydrating…',
+			buildLogTail: '',
+			traceTail: '{"tool":"str_replace"}',
+		});
+		assert.match(text, /Cell: auth-notes\/demo/);
+		assert.match(text, /verdict fail/);
+		assert.match(text, /tests_failed 11\/11/);
+		assert.match(text, /\[11× \]/);
+		assert.match(text, /auth-username/);
+		assert.match(text, /Dev-server log tail:/);
+		assert.match(text, /Judge notes \(what was built\): App built/);
+	});
+
+	it('includes the build log tail ONLY when the build failed', () => {
+		const withBuild = buildFailureUserText({ task: 't', template: 'x', buildSucceeded: false, buildLogTail: 'tsc error TS2304', failingTests: { totalFailing: 0, groups: [] } });
+		assert.match(withBuild, /Build log tail:/);
+		assert.match(withBuild, /tsc error TS2304/);
+		const noBuild = buildFailureUserText({ task: 't', template: 'x', buildSucceeded: true, buildLogTail: 'should not appear', failingTests: { totalFailing: 0, groups: [] } });
+		assert.doesNotMatch(noBuild, /Build log tail:/);
+		assert.doesNotMatch(noBuild, /should not appear/);
+	});
+
+	it('caps the log tails and judge explanation', () => {
+		const big = 'y'.repeat(5000);
+		const text = buildFailureUserText({ task: 't', template: 'x', buildSucceeded: false, judgeExplanation: big, devLogTail: big, buildLogTail: big, failingTests: { totalFailing: 0, groups: [] } });
+		// Prompt must stay bounded — nowhere near the 5000-char raw inputs ×3.
+		assert.ok(text.length < 6000, `expected bounded prompt, got ${text.length}`);
+	});
+
+	it('degrades gracefully with no failing-test detail', () => {
+		const text = buildFailureUserText({ task: 't', template: 'x' });
+		assert.match(text, /\(no failing-test detail captured\)/);
+		assert.match(text, /Signals: \(none\)/);
+	});
+});
+
+describe('parseFailureAnalysis(text)', () => {
+	const valid = JSON.stringify({
+		category: 'agent-logic',
+		single_root_cause: true,
+		root_cause: 'No initial render; UI only paints on onAuthChange which never fires synchronously.',
+		evidence: "getByTestId('auth-username') not visible (×11)",
+		likely_fix: 'Call renderSignedOut() at module scope on load.',
+		owner: 'agent',
+	});
+
+	it('parses a bare JSON object', () => {
+		const out = parseFailureAnalysis(valid);
+		assert.equal(out.category, 'agent-logic');
+		assert.equal(out.owner, 'agent');
+		assert.equal(out.single_root_cause, true);
+		assert.match(out.root_cause, /No initial render/);
+		assert.match(out.evidence, /auth-username/);
+		assert.match(out.likely_fix, /renderSignedOut/);
+	});
+
+	it('parses JSON wrapped in prose', () => {
+		const out = parseFailureAnalysis(`Here is my diagnosis:\n${valid}\nHope that helps.`);
+		assert.equal(out.category, 'agent-logic');
+		assert.equal(out.owner, 'agent');
+	});
+
+	it('parses a ```json fenced block', () => {
+		const out = parseFailureAnalysis('```json\n' + valid + '\n```');
+		assert.equal(out.category, 'agent-logic');
+	});
+
+	it('coerces unknown category/owner to null', () => {
+		const out = parseFailureAnalysis(JSON.stringify({ category: 'quantum', owner: 'aliens', root_cause: 'x' }));
+		assert.equal(out.category, null);
+		assert.equal(out.owner, null);
+		assert.equal(out.root_cause, 'x');
+	});
+
+	it('returns null on malformed JSON', () => {
+		assert.equal(parseFailureAnalysis('{not valid json at all'), null);
+		assert.equal(parseFailureAnalysis('just some prose, no braces'), null);
+	});
+
+	it('returns null when the object carries nothing usable', () => {
+		assert.equal(parseFailureAnalysis(JSON.stringify({ single_root_cause: true })), null);
+		assert.equal(parseFailureAnalysis(JSON.stringify({ category: 'nonsense' })), null);
+	});
+
+	it('is null-safe and never throws on junk input', () => {
+		assert.equal(parseFailureAnalysis(null), null);
+		assert.equal(parseFailureAnalysis(undefined), null);
+		assert.equal(parseFailureAnalysis(''), null);
+		assert.equal(parseFailureAnalysis('   '), null);
+		assert.equal(parseFailureAnalysis(42), null);
+		assert.equal(parseFailureAnalysis(JSON.stringify(['array', 'not', 'object'])), null);
 	});
 });

@@ -253,6 +253,14 @@ else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
 
+# Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
+# keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
+# trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
+# the green-regardless exit (analyze-cell degrades to null when a file is absent).
+cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
+cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
+cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
+
 # Always exit 0: real failures are already captured as $GITHUB_OUTPUT signals for the judge, and a
 # non-zero exit would break green-regardless.
 exit 0
