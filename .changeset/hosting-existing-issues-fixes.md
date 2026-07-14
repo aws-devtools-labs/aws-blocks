@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/hosting": patch
+"@aws-blocks/core": patch
 ---
 
 Fix eleven reproducible hosting issues:
