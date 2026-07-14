@@ -5,7 +5,7 @@
 // scored cells; observational unless BENCH_MIN_SCORE gates.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cellCost, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
+import { cellCost, isCountedFailKlass, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, cellComposite, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -37,11 +37,11 @@ const compositeCells = dataCells.filter((c) => isScoredCell(c));
 const harnessErrors = dataCells.filter((c) => c.klass === 'harness_error');
 
 // Judge/test harness errors tracked SEPARATELY so they can't flip a verdict or zero a test_rate.
-// An agent_fail ran neither, so it's excluded from both.
-const testErr = (r) => r.klass !== 'harness_error' && r.klass !== 'agent_fail' && testStats(r).denom === 0;
+// A counted failure (agent_fail / dead_server) ran neither, so it's excluded from both.
+const testErr = (r) => r.klass !== 'harness_error' && !isCountedFailKlass(r.klass) && testStats(r).denom === 0;
 const judgeErr = (r) =>
 	r.klass !== 'harness_error' &&
-	r.klass !== 'agent_fail' &&
+	!isCountedFailKlass(r.klass) &&
 	!testErr(r) &&
 	r.failed_at !== '3-build-test' &&
 	typeof r.judge_score !== 'number';
@@ -142,7 +142,7 @@ md.push(
 	'- **Baseline** = the most recent `main`-branch bench (`bench/runs/latest-main.json`), NOT the PR base commit — the PR always diffs against the current state of `main`.',
 );
 md.push(
-	'- **Excluded from the mean:** `harness_error` cells (infra failures) and gradeable cells that ran no tests. `agent_fail` (agent produced no app in budget) IS included, as composite 0.',
+	'- **Excluded from the mean:** `harness_error` cells (infra failures) and gradeable cells that ran no tests. `agent_fail` (agent produced no app in budget) and `dead_server` (built app never served / crashed) are BOTH included, as composite 0.',
 );
 if (logsUrl) md.push(`- [Run artifacts — per-cell source + full agent traces](${logsUrl}) · 🕒 Last run: ${lastRun} · run #${runId}`);
 md.push('');
