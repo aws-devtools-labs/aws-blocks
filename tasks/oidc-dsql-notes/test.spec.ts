@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const SIGNIN = 10_000;
 const T = 8_000;
 

@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 10_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
@@ -40,7 +40,7 @@ async function fetchOtp(request: APIRequestContext, user: string): Promise<strin
 				}
 				return '';
 			},
-			{ timeout: T },
+			{ timeout: T, message: 'OTP not delivered — check api.getLastCode returns { code, username } in mock mode' },
 		)
 		.not.toBe('');
 	return code;

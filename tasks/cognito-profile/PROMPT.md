@@ -60,3 +60,4 @@ The mount point for your page is the existing root element. You can replace what
 - All Playwright assertions pass against the running dev server.
 - No errors in the browser console under normal use.
 - Your changes stay inside the workspace root. Don't modify anything under `node_modules/`.
+- **Source inspection (grader; behaviorally unverifiable at runtime):** confirm in the source that `api.getLastCode` returns `null` unless `process.env.BLOCKS_MOCK === 'true'` — i.e. the production OTP-reader gate actually exists. The bench always runs with `BLOCKS_MOCK=true`, so this prod-gate branch is never exercised by the Playwright grader and must be verified by reading the code.

@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 10_000;
 // Agent round-trip (KB retrieval + model turn). Generous ceiling for first-load
 // + KB ingestion, under Playwright's 60s per-test cap.
@@ -79,7 +79,7 @@ test.describe('kb-chat-agent', () => {
 	});
 
 	test('small talk retrieves nothing and does not fabricate the seeded facts', async ({ request }) => {
-		const a = await ask(request, uniq('please just say a short friendly hello and nothing else'));
+		const a = await ask(request, 'Please say a short friendly hello, nothing else.');
 		expect(a.body?.error, `error: ${JSON.stringify(a.body?.error)}`).toBeFalsy();
 		// Nothing to retrieve/look up → the KB/tool-only payloads must not appear.
 		expect(a.reply).not.toContain('QUOKKA-9F42');
@@ -158,7 +158,7 @@ test.describe('kb-chat-agent', () => {
 		// Scope to the user role: an assistant bubble that quotes q1 must not
 		// satisfy this — only the user's own echoed bubble.
 		await expect(page.locator('[data-testid=message][data-role=user]').filter({ hasText: q1 })).toHaveCount(1);
-		await expect(orderReply()).toHaveCount(1);
+		await expect(page.locator('[data-testid=message][data-role=assistant]').nth(0)).toContainText('TRK-9F42-OK');
 		await expect.poll(() => messages(page).count(), { timeout: T }).toBeGreaterThan(3);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);

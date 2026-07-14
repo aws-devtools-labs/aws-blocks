@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const APPEAR = 8_000;
 const DONE = 20_000; // background job + poll interval
 
