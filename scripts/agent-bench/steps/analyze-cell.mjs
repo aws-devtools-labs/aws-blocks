@@ -21,7 +21,9 @@ import {
 	isFailureCell,
 	parseCellAnalysis,
 	parseFailureAnalysis,
+	redactSecrets,
 	trimTrace,
+	truthy,
 } from './lib/analysis.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
@@ -96,10 +98,11 @@ function analyze(result, trace, metrics) {
 // diagnosis / model error / no evidence). Never throws — the caller also guards it.
 function analyzeFailure(result, trace) {
 	const failingTests = extractFailingTests(readJson(PW_RESULTS_PATH));
-	const buildFailed = result?.build_succeeded === false;
+	const buildFailed = result?.build_succeeded != null && !truthy(result.build_succeeded);
 	// If there's genuinely nothing to look at (no failing tests, no logs), skip the model call.
-	const devLogTail = readText(DEV_LOG_PATH);
-	const buildLogTail = buildFailed ? readText(BUILD_LOG_PATH) : '';
+	// Scrub any credential material the dev/build logs may have echoed before it reaches the model.
+	const devLogTail = redactSecrets(readText(DEV_LOG_PATH));
+	const buildLogTail = buildFailed ? redactSecrets(readText(BUILD_LOG_PATH)) : '';
 	if (failingTests.totalFailing === 0 && !devLogTail && !buildLogTail) return null;
 
 	const userText = buildFailureUserText({
@@ -109,8 +112,8 @@ function analyzeFailure(result, trace) {
 		klass: result?.klass ?? null,
 		testsFailed: typeof result?.tests_failed === 'number' ? result.tests_failed : null,
 		testsTotal: typeof result?.tests_total === 'number' ? result.tests_total : null,
-		buildSucceeded: typeof result?.build_succeeded === 'boolean' ? result.build_succeeded : null,
-		devServerStarted: typeof result?.dev_server_started === 'boolean' ? result.dev_server_started : null,
+		buildSucceeded: result?.build_succeeded == null ? null : truthy(result.build_succeeded),
+		devServerStarted: result?.dev_server_started == null ? null : truthy(result.dev_server_started),
 		judgeExplanation: result?.judge_explanation,
 		failingTests,
 		devLogTail,

@@ -259,12 +259,20 @@ export const FAILURE_MAX_TOKENS = 600;
 export const MAX_FAILING_TESTS = 8; // distinct error groups (after dedup)
 export const MAX_FAILURE_ERR_LEN = 300; // per grouped error line
 export const MAX_FAILURE_TITLES = 4; // example spec titles listed per error group
+export const MAX_FAILURE_TITLE_LEN = 120; // cap per spec title (mirrors the error-line cap so a pathological title can't bloat the prompt)
 export const MAX_LOG_TAIL_CHARS = 1500; // dev.log / build.log tail
 export const MAX_FAILURE_JUDGE_CHARS = 1500; // full-ish judge explanation (vs the 500 the cheap pass uses)
 
 // Closed vocabularies the model must pick from; parseFailureAnalysis coerces to these (unknowns → null).
 export const FAILURE_CATEGORIES = ['build', 'dev-server', 'api-shape', 'auth', 'persistence', 'timeout', 'flake', 'agent-logic'];
 export const FAILURE_OWNERS = ['agent', 'framework', 'harness'];
+
+// GITHUB_OUTPUT booleans arrive as the strings "true"/"false" (not real bools) when result.json is
+// assembled from step outputs; mirror scoring.mjs so string flags are interpreted correctly.
+// truthy('false') === false, so a genuine build/dev-server failure is still caught below.
+export function truthy(v) {
+	return v === true || v === 'true';
+}
 
 /**
  * Should this cell get the deep failure pass? True for any cell that actually failed at some layer:
@@ -279,9 +287,25 @@ export function isFailureCell(result) {
 	if (r.verdict === 'fail') return true;
 	if (r.klass === 'agent_fail') return true;
 	if (typeof r.tests_failed === 'number' && r.tests_failed > 0) return true;
-	if (r.dev_server_started === false) return true;
-	if (r.build_succeeded === false) return true;
+	if (r.dev_server_started != null && !truthy(r.dev_server_started)) return true;
+	if (r.build_succeeded != null && !truthy(r.build_succeeded)) return true;
 	return false;
+}
+
+/**
+ * Scrub AWS / GitHub credential material from free-form log text before it is placed into a model
+ * prompt. Defense-in-depth: dev/build log tails can accidentally echo exported env vars or printed
+ * tokens. Non-string input → ''. Pure, best-effort — pattern-based, not a completeness guarantee.
+ * @param {unknown} text
+ * @returns {string}
+ */
+export function redactSecrets(text) {
+	if (typeof text !== 'string') return '';
+	return text
+		.replace(/\b(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|GITHUB_TOKEN)\s*[:=]\s*\S+/gi, '$1=***REDACTED***')
+		.replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '***REDACTED-AWS-KEY-ID***')
+		.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,}\b/g, '***REDACTED-GH-TOKEN***')
+		.replace(/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, '***REDACTED-GH-TOKEN***');
 }
 
 // Strip ANSI color codes Playwright embeds in error messages (they wreck dedup + waste chars).
@@ -329,7 +353,7 @@ export function extractFailingTests(pwResults) {
 			// A spec is failing when ok===false OR any of its tests has a non-passed result.
 			const anyBad = spec?.ok === false || (spec?.tests ?? []).some((t) => (t?.results ?? []).some((r) => r?.status && r.status !== 'passed' && r.status !== 'skipped'));
 			if (anyBad) {
-				failing.push({ title: oneLine(spec?.title) || '(untitled spec)', error: firstError(spec) || '(no error message captured)' });
+				failing.push({ title: (oneLine(spec?.title) || '(untitled spec)').slice(0, MAX_FAILURE_TITLE_LEN), error: firstError(spec) || '(no error message captured)' });
 			}
 		}
 		for (const child of suite.suites ?? []) walk(child, title);

@@ -47,6 +47,8 @@ export const DELTA_THRESHOLDS = {
 	turns: 3, // cycle_count (lower-better): ±3 turns is within run-to-run noise at N=1
 	cacheReadPct: 0.2, // cache-read tokens: ±20% relative (no strong prior; cache hits swing more than raw tokens)
 	cacheWritePct: 0.2, // cache-write tokens: ±20% relative
+	costAbs: 0.02, // absolute $ floor for the cost band — a near-zero baseline mustn't make pct·|bv|≈0 over-color
+	tokensAbs: 1000, // absolute token floor for the token/cache bands (same near-zero-baseline guard)
 	// LOC & Files are INTENTIONALLY absent: more/fewer lines or files is neither good nor bad on its
 	// own (a bigger app can be the right call), so those cells are rendered NEUTRAL (⚪, value + signed
 	// delta, never 🟢/🔴) — see locCell/filesCell. Add a band here only if a direction is ever agreed.
@@ -253,6 +255,7 @@ export function diffAgainstBaseline(current, baseline) {
 /** Compact token count: 3456 → "3.5K", 3000 → "3K", 800 → "800", null → "—". */
 export function humanTokens(n) {
 	if (n === null || n === undefined || Number.isNaN(n)) return NONE;
+	if (!Number.isFinite(n)) return NONE;
 	if (n < 1000) return String(Math.round(n));
 	if (n < 1_000_000) return `${+(n / 1000).toFixed(1)}K`;
 	return `${+(n / 1_000_000).toFixed(1)}M`;
@@ -261,12 +264,14 @@ export function humanTokens(n) {
 /** USD, trailing zeros trimmed: 3.5 → "$3.5", 2 → "$2", 1.05 → "$1.05", null → "—". */
 export function fmtCost(c) {
 	if (c === null || c === undefined || Number.isNaN(c)) return NONE;
+	if (!Number.isFinite(c)) return NONE;
 	return `$${+c.toFixed(2)}`;
 }
 
 /** Score-per-$ to 1 decimal: 66.7 → "66.7", null → "—". */
 export function fmtScore(s) {
 	if (s === null || s === undefined || Number.isNaN(s)) return NONE;
+	if (!Number.isFinite(s)) return NONE;
 	return String(+s.toFixed(1));
 }
 
@@ -349,10 +354,10 @@ function judgeCell(base, pr) {
 		const bd = base?.judge_dimensions && typeof base.judge_dimensions === 'object' ? base.judge_dimensions : null;
 		const lines = [];
 		for (const dim of COMMON_DIMENSIONS) {
-			const pv = numOrNull(pd[dim]);
-			if (pv === null) continue;
+			// Unconditional: a null/absent per-dimension score renders `<dim> ⚪ — (new)` via metricLine,
+			// so the stacked judge lines stay row-aligned across cells even when a dimension is missing.
 			lines.push(
-				metricLine(DIM_LABELS[dim] ?? dim, bd ? bd[dim] : null, pv, {
+				metricLine(DIM_LABELS[dim] ?? dim, bd ? bd[dim] : null, pd[dim], {
 					threshold: DELTA_THRESHOLDS.judge,
 					dir: 'up',
 					fmtVal: fmtJudge,
@@ -373,7 +378,7 @@ function judgeCell(base, pr) {
 // COST: $ builder spend (lower better, ±10% of baseline noise).
 function costCell(base, pr) {
 	return scalarCell(base?.cost, pr?.cost, {
-		threshold: (bv) => DELTA_THRESHOLDS.costPct * Math.abs(bv),
+		threshold: (bv) => Math.max(DELTA_THRESHOLDS.costAbs, DELTA_THRESHOLDS.costPct * Math.abs(bv)),
 		dir: 'down',
 		fmtVal: fmtCost,
 		fmtDelta: signedCost,
@@ -386,13 +391,13 @@ function costCell(base, pr) {
 function tokensCell(base, pr) {
 	const keys = ['tokens_in', 'tokens_out', 'cache_read_tokens', 'cache_write_tokens'];
 	if (keys.every((k) => numOrNull(pr?.[k]) === null)) return NONE;
-	const tokPct = (bv) => DELTA_THRESHOLDS.tokensPct * Math.abs(bv);
+	const tokPct = (bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.tokensPct * Math.abs(bv));
 	const tokenOpts = (threshold) => ({ threshold, dir: 'down', fmtVal: humanTokens, fmtDelta: signedTokens });
 	return [
 		metricLine('in', base?.tokens_in, pr?.tokens_in, tokenOpts(tokPct)),
 		metricLine('out', base?.tokens_out, pr?.tokens_out, tokenOpts(tokPct)),
-		metricLine('cached in', base?.cache_read_tokens, pr?.cache_read_tokens, tokenOpts((bv) => DELTA_THRESHOLDS.cacheReadPct * Math.abs(bv))),
-		metricLine('cached out', base?.cache_write_tokens, pr?.cache_write_tokens, tokenOpts((bv) => DELTA_THRESHOLDS.cacheWritePct * Math.abs(bv))),
+		metricLine('cached in', base?.cache_read_tokens, pr?.cache_read_tokens, tokenOpts((bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.cacheReadPct * Math.abs(bv)))),
+		metricLine('cached out', base?.cache_write_tokens, pr?.cache_write_tokens, tokenOpts((bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.cacheWritePct * Math.abs(bv)))),
 	].join('<br>');
 }
 
@@ -455,7 +460,7 @@ export function renderDetailed(diff, opts = {}) {
 	for (const r of diff.rows) {
 		if (r.removed) {
 			const was =
-				r.base && r.base.tests_passed !== null && r.base.tests_passed !== undefined
+				r.base && r.base.tests_passed != null && r.base.tests_denom != null
 					? ` (was ${r.base.tests_passed}/${r.base.tests_denom})`
 					: '';
 			// Tests column carries the 🗑️ marker; the remaining metric columns pad with NONE so the
@@ -528,7 +533,11 @@ export function renderPreword(diff, aggregate, opts = {}) {
 	const sumOf = (k) => cells.reduce((a, c) => a + (numOrNull(c[k]) ?? 0), 0);
 	const totalsParts = [
 		`cost ${anyOf('cost') ? fmtCost(sumOf('cost')) : NONE}`,
-		`tokens ${humanTokens(sumOf('tokens_in'))} in / ${humanTokens(sumOf('tokens_out'))} out`,
+		`tokens ${
+			anyOf('tokens_in') || anyOf('tokens_out')
+				? `${humanTokens(sumOf('tokens_in'))} in / ${humanTokens(sumOf('tokens_out'))} out`
+				: NONE
+		}`,
 	];
 	if (anyOf('cycle_count')) totalsParts.push(`${Math.round(sumOf('cycle_count'))} turns`);
 	bullets.push(`**Totals:** ${totalsParts.join(' · ')}.`);

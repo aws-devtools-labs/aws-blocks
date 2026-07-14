@@ -10,6 +10,7 @@ import {
 	MAX_FAILING_TESTS,
 	MAX_FAILURE_ERR_LEN,
 	MAX_FAILURE_TITLES,
+	MAX_FAILURE_TITLE_LEN,
 	MAX_ISSUE_LEN,
 	MAX_TAIL_CHARS,
 	MAX_TOOL_NAMES,
@@ -22,8 +23,10 @@ import {
 	oneLine,
 	parseCellAnalysis,
 	parseFailureAnalysis,
+	redactSecrets,
 	summarizeMetrics,
 	trimTrace,
+	truthy,
 } from './analysis.mjs';
 
 describe('constants', () => {
@@ -240,6 +243,13 @@ describe('isFailureCell(result)', () => {
 	it('triggers when the build failed', () => {
 		assert.equal(isFailureCell({ verdict: 'pass', build_succeeded: false }), true);
 	});
+	it('triggers on STRING "false" flags (GITHUB_OUTPUT bools arrive as strings)', () => {
+		assert.equal(isFailureCell({ verdict: 'pass', dev_server_started: 'false' }), true);
+		assert.equal(isFailureCell({ verdict: 'pass', build_succeeded: 'false' }), true);
+	});
+	it('does NOT trigger on STRING "true" flags', () => {
+		assert.equal(isFailureCell({ verdict: 'pass', klass: null, tests_failed: 0, dev_server_started: 'true', build_succeeded: 'true' }), false);
+	});
 	it('does NOT trigger on a clean pass', () => {
 		assert.equal(isFailureCell({ verdict: 'pass', klass: null, tests_failed: 0, dev_server_started: true, build_succeeded: true }), false);
 	});
@@ -251,6 +261,60 @@ describe('isFailureCell(result)', () => {
 		assert.equal(isFailureCell(undefined), false);
 		assert.equal(isFailureCell('nope'), false);
 		assert.equal(isFailureCell(42), false);
+	});
+});
+
+describe('truthy(v)', () => {
+	it('is true only for boolean true or the string "true"', () => {
+		assert.equal(truthy(true), true);
+		assert.equal(truthy('true'), true);
+	});
+	it('is false for false, "false", and every other value', () => {
+		assert.equal(truthy(false), false);
+		assert.equal(truthy('false'), false);
+		assert.equal(truthy(undefined), false);
+		assert.equal(truthy(null), false);
+		assert.equal(truthy(0), false);
+		assert.equal(truthy(1), false);
+		assert.equal(truthy('TRUE'), false);
+	});
+});
+
+describe('redactSecrets(text)', () => {
+	it('scrubs KEY=value credential pairs, keeping the key name', () => {
+		const t = [
+			'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+			'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+			'AWS_SESSION_TOKEN=FwoGZXIvYXdzEabcDEF1234567890',
+			'GITHUB_TOKEN=ghp_0123456789abcdefABCDEF0123456789',
+		].join('\n');
+		const out = redactSecrets(t);
+		assert.match(out, /AWS_ACCESS_KEY_ID=\*\*\*REDACTED\*\*\*/);
+		assert.match(out, /AWS_SECRET_ACCESS_KEY=\*\*\*REDACTED\*\*\*/);
+		assert.match(out, /AWS_SESSION_TOKEN=\*\*\*REDACTED\*\*\*/);
+		assert.match(out, /GITHUB_TOKEN=\*\*\*REDACTED\*\*\*/);
+		assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
+		assert.doesNotMatch(out, /wJalrXUtnFEMI/);
+		assert.doesNotMatch(out, /ghp_0123456789/);
+	});
+	it('scrubs a bare AWS access-key id', () => {
+		const out = redactSecrets('token is AKIAIOSFODNN7EXAMPLE here');
+		assert.match(out, /\*\*\*REDACTED-AWS-KEY-ID\*\*\*/);
+		assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
+	});
+	it('scrubs a bare GitHub token', () => {
+		const out = redactSecrets('using ghp_0123456789abcdefABCDEF0123456789 now');
+		assert.match(out, /\*\*\*REDACTED-GH-TOKEN\*\*\*/);
+		assert.doesNotMatch(out, /ghp_0123456789/);
+	});
+	it('leaves ordinary text untouched', () => {
+		const clean = 'build failed: cannot find module ./foo at line 42';
+		assert.equal(redactSecrets(clean), clean);
+	});
+	it('is non-string-safe (returns empty string)', () => {
+		assert.equal(redactSecrets(null), '');
+		assert.equal(redactSecrets(undefined), '');
+		assert.equal(redactSecrets(42), '');
 	});
 });
 
@@ -297,6 +361,12 @@ describe('extractFailingTests(pwResults)', () => {
 		const long = 'x'.repeat(MAX_FAILURE_ERR_LEN + 200);
 		const out = extractFailingTests(pwReport([failSpec('long err', long)]));
 		assert.ok(out.groups[0].error.length <= MAX_FAILURE_ERR_LEN);
+	});
+
+	it('caps each spec title length', () => {
+		const longTitle = 't'.repeat(MAX_FAILURE_TITLE_LEN + 180);
+		const out = extractFailingTests(pwReport([failSpec(longTitle, 'boom')]));
+		assert.ok(out.groups[0].titles[0].length <= MAX_FAILURE_TITLE_LEN);
 	});
 
 	it('walks nested suites', () => {
