@@ -26,11 +26,12 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
 	DEFAULT_SECRET_PARAMETER_PREFIX,
+	DEFAULT_SECRET_STORE,
 	isSecret,
 	type SecretStore,
 	type SecretValue,
 	secretEnvVarName,
-	secretParameterName,
+	secretStoreLocator,
 } from './secret.js';
 
 export type { SecretStore };
@@ -104,12 +105,12 @@ export async function resolveSecretsAtSynth(
 	options: SecretResolveOptions & { fetcher?: SecretFetcher } = {},
 ): Promise<Map<string, string>> {
 	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = options.store ?? 'ssm';
+	const store = options.store ?? DEFAULT_SECRET_STORE;
 	const fetcher = options.fetcher ?? synthFetcherOverride ?? defaultSynthFetcher(store);
 	const resolved = new Map<string, string>();
 	await Promise.all(
 		keys.map(async (key) => {
-			const locator = secretParameterName(key, prefix);
+			const locator = secretStoreLocator(key, { prefix, store });
 			try {
 				resolved.set(key, await fetcher(locator));
 			} catch (error: unknown) {
@@ -149,8 +150,8 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  */
 export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, options: SecretResolveOptions = {}): void {
 	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = options.store ?? 'ssm';
-	const locator = secretParameterName(key, prefix);
+	const store = options.store ?? DEFAULT_SECRET_STORE;
+	const locator = secretStoreLocator(key, { prefix, store });
 	const region = cdk.Stack.of(fn).region;
 
 	// Runtime resolver reads the locator here; the store hint tells it which API.
@@ -158,10 +159,13 @@ export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, opti
 	if (store !== 'ssm') fn.addEnvironment(`${secretEnvVarName(key)}_STORE`, store);
 
 	if (store === 'secrets-manager') {
+		// SM appends a random 6-char suffix to the ARN; match with `-??????`
+		// (Secrets Manager's own recommended wildcard) so the grant scopes to
+		// exactly this secret, not a prefix-collision sibling.
 		const secretArn = cdk.Stack.of(fn).formatArn({
 			service: 'secretsmanager',
 			resource: 'secret',
-			resourceName: `${locator.replace(/^\//, '')}*`,
+			resourceName: `${locator}-??????`,
 			arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
 		});
 		fn.addToRolePolicy(
@@ -182,7 +186,7 @@ export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, opti
 		return;
 	}
 
-	// Default: SSM SecureString.
+	// SSM SecureString (opt-in via store: 'ssm').
 	const parameterArn = cdk.Stack.of(fn).formatArn({
 		service: 'ssm',
 		resource: 'parameter',

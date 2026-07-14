@@ -22,6 +22,7 @@ export {
 } from './manifest/types.js';
 export {
 	DEFAULT_SECRET_PARAMETER_PREFIX,
+	DEFAULT_SECRET_STORE,
 	isSecret,
 	SECRET_BRAND,
 	type SecretOptions,
@@ -30,6 +31,7 @@ export {
 	secret,
 	secretEnvVarName,
 	secretParameterName,
+	secretStoreLocator,
 } from './secret.js';
 // Shared secret CLI core (set/list/remove) — consumers wrap with their own label/prefix/store.
 export {

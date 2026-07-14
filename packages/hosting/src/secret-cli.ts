@@ -15,15 +15,20 @@
  * @module
  */
 
-import { DEFAULT_SECRET_PARAMETER_PREFIX, type SecretStore, secretParameterName } from './secret.js';
+import {
+	DEFAULT_SECRET_PARAMETER_PREFIX,
+	DEFAULT_SECRET_STORE,
+	type SecretStore,
+	secretStoreLocator,
+} from './secret.js';
 
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Consumer-supplied configuration for the CLI (namespace + store + label). */
 export interface SecretCliOptions {
-	/** SSM path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
+	/** Path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
 	prefix?: string;
-	/** Backing store. Default `'ssm'`. */
+	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'secrets-manager'`). */
 	store?: SecretStore;
 	/** Command label shown in usage text (e.g. `'blocks secret'`, `'ampx hosting secret'`). */
 	label?: string;
@@ -46,9 +51,10 @@ export async function setSecret(key: string, value: string, opts: SecretCliOptio
 		throw new Error(`No value provided for secret '${key}'.`);
 	}
 	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const name = secretParameterName(key, prefix);
+	const store = opts.store ?? DEFAULT_SECRET_STORE;
+	const name = secretStoreLocator(key, { prefix, store });
 
-	if (opts.store === 'secrets-manager') {
+	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand } = await import(
 			'@aws-sdk/client-secrets-manager'
 		);
@@ -73,8 +79,11 @@ export async function setSecret(key: string, value: string, opts: SecretCliOptio
 /** List secret keys under the prefix. Values are never returned. */
 export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]> {
 	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
+	const store = opts.store ?? DEFAULT_SECRET_STORE;
 
-	if (opts.store === 'secrets-manager') {
+	if (store === 'secrets-manager') {
+		// SM names are the slash-free locator form (`hosting/secrets/<KEY>`).
+		const smPrefix = prefix.replace(/^\//, '');
 		const { SecretsManagerClient, ListSecretsCommand } = await import('@aws-sdk/client-secrets-manager');
 		const client = new SecretsManagerClient({});
 		const keys: string[] = [];
@@ -82,12 +91,12 @@ export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]
 		do {
 			const result = await client.send(
 				new ListSecretsCommand({
-					Filters: [{ Key: 'name', Values: [`${prefix}/`] }],
+					Filters: [{ Key: 'name', Values: [`${smPrefix}/`] }],
 					NextToken: nextToken,
 				}),
 			);
 			for (const s of result.SecretList ?? []) {
-				if (s.Name?.startsWith(`${prefix}/`)) keys.push(s.Name.slice(prefix.length + 1));
+				if (s.Name?.startsWith(`${smPrefix}/`)) keys.push(s.Name.slice(smPrefix.length + 1));
 			}
 			nextToken = result.NextToken;
 		} while (nextToken);
@@ -119,9 +128,10 @@ export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]
 export async function removeSecret(key: string, opts: SecretCliOptions = {}): Promise<boolean> {
 	assertValidKey(key);
 	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const name = secretParameterName(key, prefix);
+	const store = opts.store ?? DEFAULT_SECRET_STORE;
+	const name = secretStoreLocator(key, { prefix, store });
 
-	if (opts.store === 'secrets-manager') {
+	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
 		const client = new SecretsManagerClient({});
 		try {

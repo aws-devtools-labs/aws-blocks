@@ -58,10 +58,26 @@ export const SECRET_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.Secre
 
 /**
  * Which backing store holds a secret value.
- * - `'ssm'` — SSM Parameter Store SecureString (default; free, no rotation).
- * - `'secrets-manager'` — AWS Secrets Manager (auto-rotation, ~$0.40/secret/mo).
+ * - `'secrets-manager'` — AWS Secrets Manager (**default**): encrypted at rest,
+ *   and the only one of the two with **built-in automatic rotation** — so a
+ *   rotating credential can be rotated without a redeploy or custom tooling.
+ * - `'ssm'` — SSM Parameter Store SecureString: free and scales to zero, the
+ *   opt-in choice for non-rotating secrets where cost-to-zero matters.
  */
 export type SecretStore = 'ssm' | 'secrets-manager';
+
+/**
+ * Default backing store for hosting/pipeline secrets: **Secrets Manager**,
+ * chosen because it provides **built-in automatic rotation** (Parameter Store
+ * has none), which is the safer default for application credentials. Opt into
+ * SSM SecureString (`store: 'ssm'`) when free scale-to-zero storage matters
+ * more than rotation.
+ *
+ * NOTE: this is the leaf's neutral default for DIRECT consumers (standalone,
+ * Amplify, pipeline). `@aws-blocks/core` (Blocks) pins its own SSM `/blocks/secrets`
+ * namespace independently and is unaffected by this constant.
+ */
+export const DEFAULT_SECRET_STORE: SecretStore = 'secrets-manager';
 
 /** Options for {@link secret}. */
 export interface SecretOptions {
@@ -161,6 +177,31 @@ export const DEFAULT_SECRET_PARAMETER_PREFIX = '/hosting/secrets';
  */
 export function secretParameterName(key: string, prefix: string = DEFAULT_SECRET_PARAMETER_PREFIX): string {
 	return `${prefix}/${key}`;
+}
+
+/**
+ * The store-appropriate locator for a secret — the string used identically by
+ * the CLI (create/delete), the CDK IAM grant, the synth-time fetch, and the
+ * runtime read, so a value written under one store is always found under the
+ * same name.
+ *
+ * - **SSM** uses the leading-slash *path* form (`/hosting/secrets/KEY`).
+ * - **Secrets Manager** secret *names* are conventionally slash-free at the
+ *   root; the leading slash is stripped (`hosting/secrets/KEY`) so the created
+ *   name and the IAM ARN resource (`…:secret:hosting/secrets/KEY-*`) agree.
+ *   (A leading slash silently mismatched the ARN the grant scoped to.)
+ *
+ * @param key - The logical secret name.
+ * @param opts.prefix - Path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}.
+ * @param opts.store - Backing store. Default {@link DEFAULT_SECRET_STORE}.
+ */
+export function secretStoreLocator(
+	key: string,
+	opts: { prefix?: string; store?: SecretStore } = {},
+): string {
+	const path = secretParameterName(key, opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX);
+	const store = opts.store ?? DEFAULT_SECRET_STORE;
+	return store === 'secrets-manager' ? path.replace(/^\//, '') : path;
 }
 
 /**

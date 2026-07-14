@@ -42,7 +42,7 @@ void describe('partitionEnvironment()', () => {
 });
 
 void describe('resolveSecretsAtSynth()', () => {
-	void it('fetches each key via the injected fetcher + prefix', async () => {
+	void it('fetches each key via the injected fetcher + prefix (default store: SM → slash-free locator)', async () => {
 		const seen: string[] = [];
 		const resolved = await resolveSecretsAtSynth(['DOMAIN_PROD'], {
 			prefix: '/blocks/secrets',
@@ -51,8 +51,21 @@ void describe('resolveSecretsAtSynth()', () => {
 				return 'prod.example.com';
 			},
 		});
-		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
+		assert.deepStrictEqual(seen, ['blocks/secrets/DOMAIN_PROD']);
 		assert.strictEqual(resolved.get('DOMAIN_PROD'), 'prod.example.com');
+	});
+
+	void it('uses the leading-slash path form when store: ssm is opted into', async () => {
+		const seen: string[] = [];
+		await resolveSecretsAtSynth(['DOMAIN_PROD'], {
+			prefix: '/blocks/secrets',
+			store: 'ssm',
+			fetcher: async (locator) => {
+				seen.push(locator);
+				return 'prod.example.com';
+			},
+		});
+		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
 	});
 
 	void it('maps a not-found error (either store) to an actionable message', async () => {
@@ -99,9 +112,9 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		return { stack, fn };
 	}
 
-	void it('SSM (default): injects param NAME + grants ssm:GetParameter + kms:Decrypt', () => {
+	void it('SSM (opt-in): injects param NAME + grants ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
 		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
@@ -116,26 +129,35 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 				]),
 			},
 		});
-		// No plaintext value in the template.
-		assert.ok(!JSON.stringify(t.toJSON()).includes('sk_live'));
+		// No plaintext value in the template, and no store hint for SSM.
+		const json = JSON.stringify(t.toJSON());
+		assert.ok(!json.includes('sk_live'));
+		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
 	});
 
-	void it('secrets-manager: adds _STORE hint + grants secretsmanager:GetSecretValue', () => {
+	void it('secrets-manager (DEFAULT): slash-free locator + _STORE hint + secretsmanager:GetSecretValue', () => {
 		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'secrets-manager' });
+		// No `store` passed → the default (Secrets Manager) must apply.
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
 				Variables: Match.objectLike({
-					HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
+					// SM names are slash-free at the root (see secretStoreLocator).
+					HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
 					HOSTING_SECRET_PARAM_STRIPE_KEY_STORE: 'secrets-manager',
 				}),
 			},
 		});
 		t.hasResourceProperties('AWS::IAM::Policy', {
 			PolicyDocument: {
-				Statement: Match.arrayWith([Match.objectLike({ Action: 'secretsmanager:GetSecretValue' })]),
+				Statement: Match.arrayWith([
+					Match.objectLike({ Action: 'secretsmanager:GetSecretValue' }),
+					Match.objectLike({ Action: 'kms:Decrypt' }),
+				]),
 			},
 		});
+		// IAM ARN scopes to this secret via SM's -?????? suffix wildcard.
+		assert.ok(JSON.stringify(t.toJSON()).includes('blocks/secrets/STRIPE_KEY-??????'));
 	});
 });

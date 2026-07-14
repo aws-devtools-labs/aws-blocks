@@ -16,6 +16,7 @@
 
 export {
 	DEFAULT_SECRET_PARAMETER_PREFIX,
+	DEFAULT_SECRET_STORE,
 	isSecret,
 	SECRET_BRAND,
 	type SecretOptions,
@@ -24,6 +25,7 @@ export {
 	secret,
 	secretEnvVarName,
 	secretParameterName,
+	secretStoreLocator,
 } from './secret.js';
 export {
 	listSecrets,
