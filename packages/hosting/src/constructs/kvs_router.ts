@@ -66,6 +66,14 @@ type BuildKvsInput = {
    * Lambda, which does NOT contain the split edge routes → 500.
    */
   edgeTargets?: Set<string>;
+  /**
+   * Override the max chunks allowed per KVS table (routes/redirects/headers).
+   * Defaults to {@link KVS_BUDGET.maxChunksPerTable} (64). Sourced from the
+   * `quotas.maxRouteChunks` hosting prop so a very large (e.g.
+   * `trailingSlash: true`) site can raise the build-time guard after verifying
+   * edge-function headroom. See issue #8.
+   */
+  maxChunksPerTable?: number;
 };
 
 /**
@@ -374,7 +382,12 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     redirectChunks.length,
     headerChunks.length,
   );
-  if (tooManyChunks > KVS_BUDGET.maxChunksPerTable) {
+  // Tunable via `quotas.maxRouteChunks` (see issue #8); defaults to 64.
+  const maxChunksPerTable =
+    input.maxChunksPerTable && input.maxChunksPerTable > 0
+      ? input.maxChunksPerTable
+      : KVS_BUDGET.maxChunksPerTable;
+  if (tooManyChunks > maxChunksPerTable) {
     // Identify which table hit the cap for a targeted error message.
     const culprit =
       redirectChunks.length === tooManyChunks
@@ -385,21 +398,21 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     throw new HostingError('TooManyRoutesError', {
       message:
         `Edge route table needs ${tooManyChunks} chunks for the ${culprit} table, ` +
-        `exceeding the safe per-request read budget of ${KVS_BUDGET.maxChunksPerTable}. ` +
-        `(Each chunk holds ~25 entries, so the cap is roughly ${KVS_BUDGET.maxChunksPerTable * 25} entries.)`,
+        `exceeding the safe per-request read budget of ${maxChunksPerTable}. ` +
+        `(Each chunk holds ~25 entries, so the cap is roughly ${maxChunksPerTable * 25} entries.)`,
       resolution:
-        culprit === 'redirects'
+        (culprit === 'redirects'
           ? 'The most common cause is a `trailingSlash: true` Next.js config ' +
             '— it emits one canonical-form redirect per route, which doubles ' +
             'the redirect count. Consider switching to `trailingSlash: false` ' +
             '(the default), reducing the number of routes, or consolidating ' +
-            'redirects into wildcard patterns. The KVS edge router reads ' +
-            'chunks sequentially per request, so an unbounded table risks the ' +
-            'CloudFront Function compute-utilization limit at the edge.'
+            'redirects into wildcard patterns. '
           : 'Reduce the number of routes/redirects/headers, or consolidate ' +
-            'them into wildcard patterns. The KVS edge router reads chunks ' +
-            'sequentially per request, so an unbounded table risks the ' +
-            'CloudFront Function compute-utilization limit at the edge.',
+            'them into wildcard patterns. ') +
+        'The KVS edge router reads chunks sequentially per request, so an ' +
+        'unbounded table risks the CloudFront Function compute-utilization ' +
+        'limit at the edge. If you have measured headroom, raise the ' +
+        '`quotas.maxRouteChunks` hosting prop.',
     });
   }
 

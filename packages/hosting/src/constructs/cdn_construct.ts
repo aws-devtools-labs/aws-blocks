@@ -716,6 +716,9 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+      // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
+      // for a very large site after verifying edge-function compute headroom.
+      maxChunksPerTable: props.quotas?.maxRouteChunks,
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----

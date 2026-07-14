@@ -159,6 +159,71 @@ void describe('buildKvsEntries — atomicity & guards', () => {
       /TooManyRoutesError/,
     );
   });
+
+  // ── Tunable route-chunk budget via quotas.maxRouteChunks (issue #8) ──────
+  void it('a RAISED maxChunksPerTable lets a larger table synth (issue #8)', () => {
+    const routes = Array.from({ length: 3000 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    // The same table that throws at the default 64 succeeds when the cap is
+    // raised well above the chunk count.
+    assert.doesNotThrow(() =>
+      buildKvsEntries({
+        manifest: baseManifest({ routes }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+        maxChunksPerTable: 100000,
+      }),
+    );
+  });
+
+  void it('a LOWERED maxChunksPerTable fails synth sooner', () => {
+    // A modest table that fits in the default 64 chunks throws when the cap is
+    // set to 1.
+    const routes = Array.from({ length: 200 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    assert.throws(
+      () =>
+        buildKvsEntries({
+          manifest: baseManifest({ routes }),
+          buildId: 'b1',
+          hasServer: false,
+          hasImage: false,
+          maxChunksPerTable: 1,
+        }),
+      /TooManyRoutesError/,
+    );
+  });
+
+  void it('the redirect-table error names trailingSlash + the tunable quota', () => {
+    // A large redirect fan-out (distinct parents → no coalescing) trips the
+    // guard; the message must name the redirects table + suggest the knobs.
+    const redirects = Array.from({ length: 3000 }, (_, i) => ({
+      source: `/old-${i}/page-${i}/x`,
+      destination: `/new-${i}/page-${i}/x`,
+      statusCode: 308 as const,
+    }));
+    try {
+      buildKvsEntries({
+        manifest: baseManifest({ redirects }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+      });
+      assert.fail('expected TooManyRoutesError');
+    } catch (e) {
+      const err = e as { name: string; message: string; resolution?: string };
+      assert.equal(err.name, 'TooManyRoutesError');
+      assert.match(err.message, /redirects table/);
+      const res = err.resolution ?? '';
+      assert.match(res, /trailingSlash/);
+      assert.match(res, /quotas\.maxRouteChunks/);
+    }
+  });
 });
 
 void describe('generated request fn — glob matching (regression: mid-segment wildcards)', () => {
