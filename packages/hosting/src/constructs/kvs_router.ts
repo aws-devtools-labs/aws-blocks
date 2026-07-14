@@ -174,14 +174,19 @@ export const coalesceRoutes = (
   // non-prebuilt child of a coalesced STATIC group must render on-demand at the
   // SSR Lambda — not 404 from S3 (issue #7). Nitro/Nuxt DOES support on-demand
   // ISR (`routeRules` `isr`/`swr` → `manifest.cache = nitro-s3`), so the
-  // "frozen prerender only" assumption above does NOT hold for that subtree.
-  // Coalescing the prerendered siblings into one `/blog/*` STATIC row makes a
-  // non-prebuilt `/blog/post-99` match it → S3 → hard 404, instead of falling
-  // through to compute. Fix: with ISR active, do NOT coalesce STATIC groups —
-  // keep them as individual static rows so prebuilt pages still serve from S3
-  // AND a non-matched child falls through to the compute default for on-demand
-  // render. Compute/image groups still coalesce (a compute wildcard equals the
-  // default, so there's no shadowing risk and the table stays bounded).
+  // "frozen prerender only" assumption does NOT hold for that subtree.
+  //
+  // A naive fix (don't coalesce static groups under ISR) keeps them as N
+  // individual rows — which EXPLODES the route table for a large SSG+ISR site
+  // (hundreds of rows → many KVS chunks → the per-request edge scan, DOUBLED
+  // for a trailing-slash URI, trips the CloudFront Function compute limit →
+  // FunctionExecutionError 503). So instead we STILL coalesce the fan-out into
+  // ONE `parent/*` row (table stays bounded), but under ISR we flip that
+  // wildcard's kind from static→COMPUTE. The SSR Lambda then serves the whole
+  // subtree: prebuilt children from its ISR cache, non-prebuilt children
+  // on-demand — never a hard S3 404. (Deploy-wide `isrActive` is the only
+  // signal available here; sending genuinely-frozen prerendered pages through
+  // the Lambda's cache is a minor efficiency tradeoff, not a correctness one.)
   const isrActive = options.isrActive === true;
   // Group by parent directory: strip a trailing '/*', then take everything up
   // to the last '/'. Both `/blog/p` and `/blog/p/*` → parent `/blog`.
@@ -205,15 +210,14 @@ export const coalesceRoutes = (
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
-    // With ISR active, skip coalescing a STATIC group (see note above): its
-    // non-prebuilt children must reach compute, not the coalesced S3 wildcard.
-    const coalesceThis =
-      members.length >= 2 &&
-      uniformKind &&
-      parent.length > 0 &&
-      !(isrActive && members[0][1] === 's');
+    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0;
     if (coalesceThis) {
-      out.push([`${parent}/*`, members[0][1]]);
+      // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
+      // note above) so non-prebuilt children render on-demand instead of
+      // 404ing from S3. Compute/image groups keep their kind.
+      const kind: RouteKind =
+        isrActive && members[0][1] === 's' ? 'c' : members[0][1];
+      out.push([`${parent}/*`, kind]);
     } else {
       out.push(...members);
     }

@@ -1229,17 +1229,28 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
   // group must render on-demand at compute, not 404 from the coalesced S3
   // wildcard. So static groups stay as individual rows when isrActive.
 
-  void it('does NOT coalesce a STATIC group when ISR is active', () => {
+  void it('coalesces a STATIC group into a COMPUTE wildcard when ISR is active (bounded + on-demand)', () => {
     const rows: [string, 's'][] = [
       ['/blog/post-1', 's'],
       ['/blog/post-2', 's'],
       ['/blog/post-3', 's'],
     ];
     const out = coalesceRoutes(rows, { isrActive: true });
-    // No /blog/* wildcard — individual rows kept so a non-prebuilt child
-    // (/blog/post-99) misses them and falls through to the compute default.
-    assert.ok(!out.some(([p]) => p === '/blog/*'));
-    assert.equal(out.length, 3);
+    // ONE wildcard row (table stays bounded — no explosion/503), but kind is
+    // COMPUTE so the SSR Lambda serves the whole subtree: prebuilt from ISR
+    // cache, non-prebuilt (/blog/post-99) on-demand — never an S3 404.
+    assert.deepEqual(out, [['/blog/*', 'c']]);
+  });
+
+  void it('does NOT explode the table for a large ISR SSG fan-out (coalesces to one compute row)', () => {
+    // Regression: the naive "skip coalescing under ISR" fix produced N rows →
+    // route-table explosion → CloudFront Function 503. Must stay 1 row.
+    const rows: [string, 's'][] = Array.from({ length: 500 }, (_, i) => [
+      `/blog/post-${i}`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/blog/*', 'c']], '500 ISR pages coalesce to ONE compute wildcard');
   });
 
   void it('STILL coalesces the same STATIC group when ISR is NOT active (frozen prerender)', () => {
@@ -1264,7 +1275,7 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     assert.deepEqual(out, [['/api/*', 'c']]);
   });
 
-  void it('end-to-end: ISR manifest routes a non-prebuilt child to compute, prebuilt to S3 (#7)', async () => {
+  void it('end-to-end: ISR manifest routes the whole subtree to compute (prebuilt + non-prebuilt), bounded table (#7)', async () => {
     // Nuxt prerender + ISR: /blog/post-1..3 prerendered (static) + a server
     // origin + manifest.cache (nitro-s3) → routeRules { '/blog/**': isr }.
     const entries = buildKvsEntries({
@@ -1284,17 +1295,23 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     });
     const code = generateKvsRouterRequestCode();
 
-    // Prebuilt page → S3 (served from the frozen prerender).
+    // Prebuilt page → COMPUTE (served from the Lambda's ISR cache under the
+    // coalesced /blog/* compute wildcard — not S3-direct, but correct).
     const prebuilt = await runRequestFn(code, entries, req('/blog/post-1'));
-    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.s3, '/blog/post-1 (prebuilt) → S3');
+    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.server, '/blog/post-1 (prebuilt) → compute');
 
-    // Non-prebuilt ISR child → compute (renders on demand), NOT an S3 404.
+    // Non-prebuilt ISR child → compute (renders on demand), NOT a hard S3 404.
     const onDemand = await runRequestFn(code, entries, req('/blog/post-99'));
     assert.equal(
       onDemand.selectedOrigin,
       ORIGIN_ID.server,
-      '/blog/post-99 (non-prebuilt ISR child) must route to compute, not S3',
+      '/blog/post-99 (non-prebuilt ISR child) → compute, not S3 404',
     );
+
+    // Table stays bounded: the 3 /blog/post-N rows collapsed to ONE /blog/*
+    // row (meta.rc small) — no explosion that would 503 the edge function.
+    const meta = JSON.parse(entries.meta);
+    assert.equal(meta.rc, 1, 'route table fits in a single chunk (bounded)');
   });
 
   void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
