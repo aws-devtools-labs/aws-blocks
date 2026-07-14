@@ -63,6 +63,8 @@ describe('DELTA_THRESHOLDS — the one place the bands live', () => {
 		assert.equal(DELTA_THRESHOLDS.turns, 3);
 		assert.equal(DELTA_THRESHOLDS.cacheReadPct, 0.2);
 		assert.equal(DELTA_THRESHOLDS.cacheWritePct, 0.2);
+		assert.equal(DELTA_THRESHOLDS.costAbs, 0.02);
+		assert.equal(DELTA_THRESHOLDS.tokensAbs, 1000);
 	});
 	it('LOC & Files have NO threshold (rendered neutral, never colored)', () => {
 		assert.equal('loc' in DELTA_THRESHOLDS, false);
@@ -117,6 +119,13 @@ describe('formatters', () => {
 		assert.equal(fmtJudge(8), '8');
 		assert.equal(fmtJudge(7.5), '7.5');
 		assert.equal(fmtJudge(null), '—');
+	});
+	it('non-finite numbers render as the em-dash (never Infinity / NaN leaking into the table)', () => {
+		assert.equal(humanTokens(Infinity), '—');
+		assert.equal(humanTokens(-Infinity), '—');
+		assert.equal(humanTokens(NaN), '—');
+		assert.equal(fmtCost(Infinity), '—');
+		assert.equal(fmtScore(Infinity), '—');
 	});
 });
 
@@ -398,6 +407,38 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		assert.match(goneRow, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
 		assert.equal(goneRow.split('|').slice(1, -1).length, 11);
 	});
+
+	it('judge column renders ALL common dimensions (missing ones as ⚪ —) so stacked rows stay aligned', () => {
+		const partialDims = { ...FULL, judge_dimensions: { functional_completeness: 9, selector_contract: 8, code_quality: 7 } };
+		const row = rowFor(diffAgainstBaseline(buildAggregate([partialDims], {}), null));
+		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge.split('<br>').length, 5); // all 5 dims stacked, none skipped
+		assert.match(judge, /functional ⚪ 9 \(new\)/); // present dim renders its score
+		assert.match(judge, /persistence ⚪ — \(new\)/); // missing dim renders — (not dropped)
+		assert.match(judge, /blocks ⚪ — \(new\)/);
+	});
+
+	it('cache delta floors the noise band at an absolute threshold when the baseline is ~0', () => {
+		const cur = buildAggregate([{ ...FULL, cache_read_tokens: 800 }], {});
+		const base = { schema: 2, mean_composite: 90, cells: [{ ...BASE_FULL.cells[0], cache_read_tokens: 0 }] };
+		const row = rowFor(diffAgainstBaseline(cur, base));
+		assert.match(row, /cached in 🟡 800/); // +800 within the 1000 floor → 🟡, NOT 🔴
+	});
+
+	it('a removed cell whose baseline lacks a test denom omits the "(was …)" suffix (never prints /null)', () => {
+		const withRemoved = diffAgainstBaseline(buildAggregate([FULL], {}), {
+			schema: 2,
+			mean_composite: 80,
+			cells: [
+				{ task: 'auth-notes', template: 'demo', composite: 92, tests_passed: 4, tests_denom: 4 },
+				{ task: 'gone', template: 'demo', composite: 40, tests_passed: 2, tests_denom: null },
+			],
+		});
+		const goneRow = renderDetailed(withRemoved, {}).join('\n').split('\n').find((l) => l.includes('| gone |'));
+		assert.match(goneRow, /🗑️ removed/);
+		assert.doesNotMatch(goneRow, /\(was/);
+		assert.doesNotMatch(goneRow, /null/);
+	});
 });
 
 describe('renderPreword(diff, aggregate, opts) — bulleted run summary', () => {
@@ -438,5 +479,11 @@ describe('renderPreword(diff, aggregate, opts) — bulleted run summary', () => 
 		const nmd = noBase.join('\n');
 		assert.match(nmd, /no `main` baseline yet/);
 		assert.doesNotMatch(nmd, /Biggest gains/);
+	});
+	it('an all-failed run (no token data) shows "tokens —" in totals, not "0 in / 0 out"', () => {
+		const failedOnly = buildAggregate([AGENT_FAIL, HARNESS], { sha: 'deadfeed' });
+		const fmd = renderPreword(diffAgainstBaseline(failedOnly, null), failedOnly, {}).join('\n');
+		assert.match(fmd, /tokens —/);
+		assert.doesNotMatch(fmd, /0 in \/ 0 out/);
 	});
 });

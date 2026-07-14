@@ -256,7 +256,7 @@ jobs:
       - name: 4b. Analyze cell (best-effort)
         if: always()
         continue-on-error: true
-        timeout-minutes: 6
+        timeout-minutes: 20
         run: node scripts/agent-bench/steps/analyze-cell.mjs
         env:
           RESULT_PATH: /tmp/result.json

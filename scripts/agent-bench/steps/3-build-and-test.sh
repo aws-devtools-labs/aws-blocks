@@ -157,6 +157,9 @@ else
   # Banner never appeared / port never became ready within the window. Record the signal + a brief
   # diagnostic (pid liveness + log tail) onto result.json, then proceed with APP_BASE_URL empty.
   echo "::warning::dev server banner never appeared / port never became ready within ~60s"
+  # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
+  # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
+  echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
   dev_pid=""; [ -f "${CELL_TMP}/dev.pid" ] && dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
   elif kill -0 "$dev_pid" 2>/dev/null; then dev_pid_status="alive (pid=${dev_pid}) but not serving"
@@ -175,11 +178,19 @@ else
     try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
     r.dev_log_tail = process.env.DEV_LOG_TAIL || "";
     r.dev_pid_status = process.env.DEV_PID_STATUS || "";
+    r.dev_server_status = "dead";
     fs.writeFileSync(p, JSON.stringify(r, null, 2));
   ' || echo "::warning::failed to record dev_log_tail on result.json"
 fi
 export APP_BASE_URL
 
+# Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
+# dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
+# BLOCKS_URL would surface as bogus "invalid URL" test failures and MASK the crash as a composite-0
+# fail. Skip Playwright entirely; the pessimistic defaults (tests 0/0/0, dev_server_started=false,
+# dev_server_status=dead) carry the honest signal, the cell reads verdict 'unknown' (excluded from the
+# mean, not a scored fail), and control still falls through to the stable-evidence copy below.
+if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
 if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
@@ -252,11 +263,17 @@ if [ -f "$PW_RESULTS_JSON" ]; then
 else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
+else
+  echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
+fi
 
 # Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
 # keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
 # trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
-# the green-regardless exit (analyze-cell degrades to null when a file is absent).
+# the green-regardless exit (analyze-cell degrades to null when a file is absent). Clear any stale
+# copies from a PRIOR cell first (runner-agnostic) so a skipped / again-missing source can't leave the
+# previous cell's evidence in place for analyze-cell to misread.
+rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log
 cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
 cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
 cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
