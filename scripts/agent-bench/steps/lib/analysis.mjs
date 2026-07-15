@@ -36,6 +36,34 @@ export const REGRESSION_DELTA = -5;
 // Benign fallback stored when the per-cell analysis can't be produced.
 export const FALLBACK_ANALYSIS = 'analysis unavailable';
 
+// Deterministic per-cell analysis for a cell with NO agent trace (the wall-clock-timeout / ungraceful-
+// teardown path emits none). Without a trace the model has nothing to ground "what the agent built /
+// where it struggled" on, so it would CONFABULATE a root cause/owner from stray metrics — record an
+// explicit "undetermined" note and skip the model call instead. Exported + pure so analyze-cell.mjs and
+// the unit test share one source.
+export const NO_TRACE_ANALYSIS =
+	'No agent trace was emitted (e.g. a wall-clock timeout or ungraceful teardown) — the failure root cause is undetermined; nothing to analyze.';
+
+/**
+ * Decide the deterministic (no Bedrock call) per-cell analysis when one applies, else null (→ ask the
+ * model). Fires for a harness_error cell (it failed before producing a gradeable app) and for ANY cell
+ * with no trace — an ungrounded model would confabulate an owner/category, so we record the
+ * {@link NO_TRACE_ANALYSIS} "undetermined" note instead. Pure.
+ * @param {{klass?: string|null}} result finalized cell result
+ * @param {unknown} trace parsed trace.json (any shape) or null
+ * @returns {{analysis: string, issues: string[]}|null} deterministic result, or null to call the model
+ */
+export function deterministicCellAnalysis(result, trace) {
+	const klass = result?.klass ?? null;
+	if (klass === 'harness_error') {
+		return { analysis: 'Cell failed before producing a gradeable app (harness error) — no agent trace to analyze.', issues: [] };
+	}
+	if (!trace) {
+		return { analysis: NO_TRACE_ANALYSIS, issues: [] };
+	}
+	return null;
+}
+
 // App-level throttle/transient retry (initial + up to 4 backoffs) for the post-run ANALYSIS
 // model calls. TRANSIENT_RE is a deliberately BROAD text heuristic matched against stringified
 // error output (bare `timeout`, `500`, `503`, etc.) — it is NOT the same classifier as
