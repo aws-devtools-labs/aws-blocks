@@ -27,9 +27,12 @@ export const HARNESS_FAIL_REASONS = {
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
-// An ungraceful 2-agent death that tore down the harness itself (isUngracefulStepTwoDeath) is infra,
-// not a gradeable failure → reclassified harness_error, EXCLUDED under this (distinct) reason.
-export const AGENT_HARNESS_TEARDOWN_REASON = 'agent_harness_teardown';
+// A checkpoint-survived ungraceful 2-agent death UNDER ACTIVE ISOLATION cannot be an agent pkill-storm
+// (cross-uid EPERM stops the agent from signalling the harness) — it is an infra WALL-CLOCK TIMEOUT
+// that killed the process group before a terminal stop_reason could flush. Reclassified harness_error
+// and EXCLUDED under this (distinct) timeout reason. (The old `agent_harness_teardown` label wrongly
+// implied an agent-inflicted teardown, which active isolation makes impossible.)
+export const AGENT_HARNESS_TIMEOUT_REASON = 'wall_clock_timeout';
 
 // A dev-server that never came up (empty APP_BASE_URL) or crashed AFTER the agent's build: step 3
 // detects this, SKIPS Playwright (no bogus invalid-URL failures) and stamps dev_server_status='dead'
@@ -124,7 +127,7 @@ export function classifyCell(result) {
 	// quietly excluded and inflating the headline mean.
 	if (failedAt === AGENT_FAIL_AT) {
 		if (isUngracefulStepTwoDeath(result) && result?.isolation_active === true) {
-			return { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON };
+			return { klass: 'harness_error', reason: AGENT_HARNESS_TIMEOUT_REASON };
 		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
 	}
