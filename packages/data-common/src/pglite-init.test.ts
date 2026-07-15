@@ -162,7 +162,11 @@ test('rethrows a non-retryable error immediately without recreating', async () =
 
 test('invokes onRetry with the failed attempt number before each recreate', async () => {
   const attempts: number[] = [];
-  await initializePgliteWithRetry(new FakePglite(2), () => new FakePglite(0), {
+  // initial traps, first recreate also traps, second recreate succeeds — so
+  // onRetry fires once per failed attempt: [1, 2].
+  const replacements = [new FakePglite(1), new FakePglite(0)];
+  let idx = 0;
+  await initializePgliteWithRetry(new FakePglite(1), () => replacements[idx++], {
     backoffMs: 0,
     onRetry: (attempt) => attempts.push(attempt),
   });
