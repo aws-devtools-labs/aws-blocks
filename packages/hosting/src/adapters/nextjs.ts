@@ -808,7 +808,10 @@ const applyLiftedRoutesManifest = (
       const bareDest = destination.endsWith('/*')
         ? destination.slice(0, -1) // '/r/modern/*' → '/r/modern/'
         : destination;
-      if (!seenRedirectSources.has(bareSource)) {
+      // Guard the root catch-all: a root-level `/:path*` normalizes to `/*`, so
+      // `bareSource` is `''` — an empty source is malformed and there's no bare
+      // prefix to redirect. Skip it (the `/*` wildcard already covers root).
+      if (bareSource.length > 0 && !seenRedirectSources.has(bareSource)) {
         seenRedirectSources.set(bareSource, r.source + ' (bare companion)');
         liftedRedirects.push({
           source: bareSource,

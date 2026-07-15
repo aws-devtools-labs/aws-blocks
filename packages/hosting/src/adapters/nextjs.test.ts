@@ -1140,6 +1140,13 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
   });
 });
 
+// NOTE: these tests validate the patch's SHAPE LOGIC against hand-written,
+// friendly-named fixtures (e.g. `Pc.fetchInternalImage`, `Pl`/`VX`). Real
+// OpenNext minified output may rename these to single identifiers, in which
+// case the structural regexes match nothing and the patch no-ops — yet these
+// units still pass. Green here proves the rewrite is correct GIVEN the shape;
+// it does NOT prove the patch fires on a production bundle. That coverage
+// comes from the integration deploy (the /_next/image e2e image tests).
 void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () => {
   let tmp: string;
 

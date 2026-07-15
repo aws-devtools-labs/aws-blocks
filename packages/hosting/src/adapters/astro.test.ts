@@ -76,8 +76,44 @@ void describe('installSharpForAstroSsr — idempotency + guard', () => {
       'short-circuit must happen before any package.json is written',
     );
   });
+
+  it('throws AstroSharpInstallError when npm install exits non-zero (fails loudly, not silently)', () => {
+    // Shadow `npm` with a fake that always exits 1, mimicking a registry
+    // timeout / resolution conflict WITHOUT touching the network. The local
+    // spawn.sync wrapper turns that non-zero exit into a throw, which the
+    // installer wraps in HostingError('AstroSharpInstallError'). Regression
+    // guard for the "silently swallowed failed install" concern (PR #177).
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-npm-'));
+    const npmShim = path.join(binDir, 'npm');
+    fs.writeFileSync(npmShim, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const prevPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${prevPath}`;
+    try {
+      assert.throws(
+        () => installSharpForAstroSsr(tmp),
+        /AstroSharpInstallError|exit(ed)? code 1/,
+        'a failed npm install must throw, not proceed silently',
+      );
+      // The package.json created for the install is cleaned up on failure, so a
+      // retry isn't fooled by a stale `hadPkgJson === true`.
+      assert.equal(
+        fs.existsSync(path.join(tmp, 'package.json')),
+        false,
+        'the just-written package.json must be removed on install failure',
+      );
+    } finally {
+      process.env.PATH = prevPath;
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
 });
 
+// NOTE: these tests validate the patch's SHAPE LOGIC against a hand-written,
+// friendly-named fixture chunk (readable identifiers like `isRemoteAllowed`).
+// Real Vite/Rollup output may minify those to single letters, in which case
+// the guard `if (!/isRemoteAllowed/.test(src)) continue` skips silently. Green
+// here therefore does NOT prove the patch fires on a production bundle — that
+// coverage comes from the integration deploy (the astro-ssr e2e image tests).
 void describe('patchAstroRemoteImageRedirects — follow allowlisted redirects safely', () => {
   let tmp: string;
   beforeEach(() => {

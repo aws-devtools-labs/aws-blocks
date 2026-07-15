@@ -202,6 +202,15 @@ const s3IpxStorage = {
 // \`isRemoteSourceAllowed\` still gates every request BEFORE IPX runs, so the
 // domains list here is defense-in-depth, not the sole guard. Omit httpStorage
 // entirely when no remote host is allowlisted (default-deny: local only).
+//
+// LIMITATION: a remotePattern that constrains ONLY by pathname/protocol (no
+// hostname) contributes no entry here (its hostname is undefined and dropped
+// by .filter(Boolean)), so httpStorage isn't scoped to allow it and such an
+// image can 404 even though isRemoteSourceAllowed would permit it. This is a
+// deliberate trade-off: broadening httpStorage to all hosts on a hostname-less
+// pattern would defeat the scoping. Author remotePatterns with an explicit
+// hostname for httpStorage to cover them (the handler's SSRF check still gates
+// every request regardless).
 const httpDomains = [
   ...allowedHostnames,
   ...parsedRemotePatterns.map((p) => p.hostname),

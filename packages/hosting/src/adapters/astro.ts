@@ -751,7 +751,9 @@ export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
   // Unset → Astro default → sharp. Explicit sharp entrypoint → sharp.
   if (entry === undefined || entry === null) return true;
   if (typeof entry !== 'string') return true;
-  return /(^|\/)sharp$/.test(entry) || entry === 'astro/assets/services/sharp';
+  // Matches the built-in `astro/assets/services/sharp` and any custom entry
+  // ending in `/sharp` (or bare `sharp`).
+  return /(^|\/)sharp$/.test(entry);
 };
 
 /**
@@ -940,7 +942,9 @@ export const patchAstroRemoteImageRedirects = (serverDir: string): void => {
       callRe,
       `await ${ASTRO_REDIRECT_PATCH_MARKER}($1, typeof allowlistConfig !== "undefined" ? allowlistConfig : void 0, isRemoteAllowed)`,
     );
-    // Inject the helper once, after the import lines at the top of the chunk.
+    // Prepend the helper once at the top of the chunk. It lands BEFORE the
+    // chunk's import statements, which is fine: ESM `import`s hoist regardless
+    // of textual position, and the helper has no import dependency of its own.
     next = `${ASTRO_REDIRECT_HELPER}\n${next}`;
     fs.writeFileSync(chunk, next, 'utf-8');
     filesPatched++;
