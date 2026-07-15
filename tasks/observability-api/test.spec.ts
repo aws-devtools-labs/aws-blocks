@@ -11,9 +11,18 @@ const RUN = process.env.RUN_ID || String(Date.now());
 let seq = 0;
 const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
 
-// Per-test no-error gate: ONLY uncaught page errors.
+// Per-test no-error gate: uncaught page errors and genuine console errors.
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
+	page.on('console', (msg) => {
+		if (msg.type() !== 'error') return;
+		const text = msg.text();
+		// Exclude benign browser-generated noise (not an app JS fault): failed resource loads / HTTP
+		// status errors (favicon, pre-auth 4xx, JSON-RPC-over-HTTP), WebSocket lifecycle, and dev-mode
+		// "Warning:" logs. A genuine console error still fails the gate, asserted empty end-of-test.
+		if (/Failed to load resource|net::ERR|favicon|WebSocket|^\s*Warning:/i.test(text)) return;
+		sink.push(`console.error: ${text}`);
+	});
 	return sink;
 }
 
