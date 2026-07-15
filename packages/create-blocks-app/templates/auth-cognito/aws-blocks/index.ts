@@ -1,7 +1,6 @@
 import { ApiNamespace, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { isLocalDev, localDevOnly } from './is-local-dev.js';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -18,8 +17,9 @@ const store = new KVStore(scope, 'app-store', {});
 // method below so the UI can display it without a real mailbox.
 //
 // In Sandbox/Production this capture is disabled and `getLastCode` returns
-// `null` — enforced by an env gate (see `isLocalDev`), not just convention —
-// and Cognito delivers codes over email/SMS as configured on the User Pool.
+// `null` — enforced by an env gate (the `BLOCKS_STACK_NAME` check below), not
+// just convention — and Cognito delivers codes over email/SMS as configured
+// on the User Pool.
 let lastCode: { username: string; code: string; purpose: string } | null = null;
 
 // `as const` on the options unlocks literal narrowing across the API:
@@ -61,9 +61,9 @@ const auth = new AuthCognito(scope, 'auth', {
   mfa: 'off' as const,
   selfSignUp: true,
   codeDelivery: async (username, code, purpose) => {
-    // Mock-only: capture + surface the OTP for the local UI. Gated so a real
-    // code is never held or logged from a deployed environment.
-    if (isLocalDev()) {
+    // BLOCKS_STACK_NAME is set in every deployed Lambda; unset locally/mock —
+    // gate the OTP so it never leaks in prod/sandbox.
+    if (!process.env.BLOCKS_STACK_NAME) {
       lastCode = { username, code, purpose };
       console.log(`[auth] ${purpose} code for "${username}": ${code}`);
     }
@@ -269,7 +269,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // ── Mock-only helper ─────────────────────────────────────────────────
   /**
    * Returns the most recently issued verification code (signUp / sign-in / reset).
-   * Only available in local/mock dev: the `localDevOnly` env gate forces this
+   * Only available in local/mock dev: the `BLOCKS_STACK_NAME` env gate forces this
    * to `null` in any deployed environment (Sandbox/Production), so a live OTP
    * can never leak through this method — real Cognito delivers codes via
    * email/SMS and the UI should instruct the user to check their mailbox.
@@ -282,6 +282,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * @blocksSkipCodegen
    */
   async getLastCode() {
-    return localDevOnly(lastCode);
+    // BLOCKS_STACK_NAME is set in every deployed Lambda; unset locally/mock —
+    // gate the OTP so it never leaks in prod/sandbox.
+    return !process.env.BLOCKS_STACK_NAME ? lastCode : null;
   },
 }));
