@@ -805,6 +805,11 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
     '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
   );
   try {
+    // `spawn.sync` here is the local ./spawn.js wrapper, which THROWS on a
+    // non-zero exit (spawn.ts: `if (result.status !== 0) throw`) as well as on
+    // a spawn error (ENOENT/EACCES). So a failed `npm install` (network,
+    // registry timeout, resolution conflict) does NOT return silently — it
+    // lands in the catch below and fails the build loudly.
     spawn.sync(
       'npm',
       [
@@ -822,6 +827,16 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
       { cwd: serverDir, stdio: 'inherit' },
     );
   } catch (error) {
+    // Best-effort: if we created the package.json for this install and the
+    // install failed, remove it so a subsequent build isn't fooled by a stale
+    // `hadPkgJson === true` on retry.
+    if (!hadPkgJson) {
+      try {
+        fs.unlinkSync(pkgJsonPath);
+      } catch {
+        // best-effort
+      }
+    }
     throw new HostingError(
       'AstroSharpInstallError',
       {

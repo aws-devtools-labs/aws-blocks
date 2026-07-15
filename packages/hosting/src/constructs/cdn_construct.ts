@@ -494,6 +494,19 @@ export class CdnConstruct extends Construct {
     // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
     const ipxBaseUrl = manifest.imageOptimization?.baseURL;
     const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
+      // IPX is configured but there's no SSR compute (hence no shared RestApi)
+      // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
+      // Function URL, where an unencoded `://` in a remote source path can
+      // recur as a SigV4 403 (issue #2). Nudge at build time so the operator
+      // isn't left debugging a non-obvious runtime 403.
+      process.stderr.write(
+        `⚠️  imageOptimization.baseURL (${ipxBaseUrl}) is set but no SSR compute ` +
+          `exists — the IPX image Lambda will use a Function URL origin, where ` +
+          `remote sources with reserved chars can hit a SigV4 403 (issue #2). ` +
+          `Deploy with SSR compute to route IPX through the shared API Gateway.\n`,
+      );
+    }
     if (ipxBaseUrl && ipxFn && restApi && apiHostname) {
       const ipxIntegration = new LambdaIntegration(ipxFn, { proxy: true });
       // e.g. baseURL '/_ipx' → resource path segments ['_ipx'] + '{proxy+}'.
@@ -917,10 +930,10 @@ export class CdnConstruct extends Construct {
           // managed policy on any S3 origin (400 InvalidRequest at create).
           // Reuse the synthesized custom policy (same forwarding, allowed on S3
           // origins). An edge route implies a compute route, so hasCompute is
-          // true and forwardAllOriginRequestPolicy is defined; the `?? undefined`
-          // is a belt-and-suspenders guard (the Lambda@Edge function generates
-          // the response, so forwarded origin data is immaterial here anyway).
-          originRequestPolicy: forwardAllOriginRequestPolicy ?? undefined,
+          // true and forwardAllOriginRequestPolicy is defined (and even if it
+          // were undefined, the Lambda@Edge function generates the response, so
+          // forwarded origin data is immaterial here anyway).
+          originRequestPolicy: forwardAllOriginRequestPolicy,
           responseHeadersPolicy: props.securityHeadersPolicy,
           edgeLambdas: [
             {

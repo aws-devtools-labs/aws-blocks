@@ -382,10 +382,13 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     redirectChunks.length,
     headerChunks.length,
   );
-  // Tunable via `quotas.maxRouteChunks` (see issue #8); defaults to 64.
+  // Tunable via `quotas.maxRouteChunks` (see issue #8); defaults to 64. Must be
+  // a positive integer — a fractional value (e.g. 0.5) is a caller mistake and
+  // falls back to the default rather than silently capping between chunk counts.
   const maxChunksPerTable =
-    input.maxChunksPerTable && input.maxChunksPerTable > 0
-      ? input.maxChunksPerTable
+    Number.isInteger(input.maxChunksPerTable) &&
+    (input.maxChunksPerTable ?? 0) > 0
+      ? input.maxChunksPerTable!
       : KVS_BUDGET.maxChunksPerTable;
   if (tooManyChunks > maxChunksPerTable) {
     // Identify which table hit the cap for a targeted error message.

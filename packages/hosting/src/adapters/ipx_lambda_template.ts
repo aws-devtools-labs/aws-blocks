@@ -232,8 +232,15 @@ const ipxStripPattern = new RegExp(
 
 /**
  * Rebuild a query string from API Gateway REST (v1) query params. Prefers
- * multiValue (preserves repeats + original encoding) and re-encodes each
- * key/value so a remote source carrying reserved chars round-trips.
+ * multiValue (preserves repeats).
+ *
+ * Why re-encode: API Gateway REST v1 delivers query values ALREADY
+ * URL-DECODED in the (multiValue)queryStringParameters object (there is no
+ * rawQueryString on a v1 event -- that field is v2-only). Re-applying
+ * encodeURIComponent to each key/value rebuilds a valid, correctly-escaped
+ * query string from those decoded values, so a remote source carrying
+ * reserved chars (?, &, =, :// ) round-trips intact. This is NOT
+ * double-encoding: we encode once, against values APIGW handed us decoded.
  */
 const v1QueryString = (event) => {
   const mv = event.multiValueQueryStringParameters;

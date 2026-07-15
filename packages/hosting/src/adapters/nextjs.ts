@@ -1210,11 +1210,10 @@ ${entries}
 // insertion, and the SVG-status catch rewrite all matched the 4.0.x
 // minified shape, and the live app served optimized rasters (200 image/webp),
 // a fail-closed SVG (400), edge routes, and redirects with no regressions.
-// The two windows are called out
-// explicitly (rather than a single `>=3.10.0 <4.1.0`) because the
-// intervening 3.11–3.x minors were never exercised; each upper bound stays
-// exclusive of the next unverified minor so a future release re-triggers
-// the out-of-range warning until it's verified too.
+// The two windows are called out explicitly (rather than a single
+// `>=3.10.0 <4.1.0`) because the intervening 3.11–3.x minors were never
+// exercised; each upper bound stays exclusive of the next unverified minor so
+// a future release re-triggers the out-of-range warning until it's verified too.
 export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
 
 /**
@@ -1464,6 +1463,15 @@ export const patchImageOptimizerForNext16 = (
         `(the maximumResponseBody parameter was added in Next 16).\n`,
     );
     return;
+  }
+  if (!nextVersion) {
+    // Version unknown (e.g. a pre-built `.open-next/` with no resolvable
+    // `next` in scope). Default to patching, since Next 16 (5-arg) is the
+    // common case — log it so the build output explains the choice.
+    process.stderr.write(
+      `ℹ️  Could not detect the installed Next.js version; applying the ` +
+        `fetchInternalImage arity patch (correct for Next ≥ 16, the common case).\n`,
+    );
   }
   const candidates = fg.sync('**/index.mjs', {
     cwd: root,

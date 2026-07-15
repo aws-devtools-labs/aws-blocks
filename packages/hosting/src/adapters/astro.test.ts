@@ -161,6 +161,10 @@ export { loadRemoteImage };
       })();
     `;
     // Map<...>.get(k) mirrors Headers.get(k); the helper uses .headers.get('location').
+    // ASTRO_REDIRECT_HELPER is a source STRING injected into the Astro SSR
+    // bundle at build time — it's never exported from astro.ts, so there's no
+    // symbol to import. Evaluating its body via `new Function` is the only way
+    // to exercise the actual injected code path without a full Astro build.
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const fn = new Function(harness.replace('.headers.get("location")', '.headers.get("location")'));
     const { okStatus, badStatus } = (await fn()) as { okStatus: number; badStatus: number };
