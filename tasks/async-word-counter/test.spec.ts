@@ -46,8 +46,11 @@ test.describe('async-word-counter', () => {
 		await expect(page.getByTestId('wc-input')).toBeVisible();
 		await expect(page.getByTestId('wc-submit')).toBeVisible();
 		// Enforce the wc-list container contract (in the PROMPT selector table)
-		// so an impl can't omit the list wrapper and still pass.
-		await expect(page.getByTestId('wc-list')).toBeVisible();
+		// so an impl can't omit the list wrapper and still pass. Use toBeAttached
+		// (not toBeVisible): an empty list container legitimately has zero layout
+		// height, so toBeVisible() would fail a correct app, while toBeAttached
+		// still enforces that the wrapper exists.
+		await expect(page.getByTestId('wc-list')).toBeAttached();
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
