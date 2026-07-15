@@ -271,4 +271,25 @@ test.describe('oidc-dsql-notes', () => {
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
+
+	test('unauthenticated JSON-RPC note access is refused (no session → no note data)', async ({ request }) => {
+		// No session cookie. Notes are OIDC-gated and per-user, so an unauthenticated list/add must
+		// NOT return note data. Method names aren't fixed by the contract (they're the agent's choice),
+		// so an unknown method also yields a JSON-RPC error envelope — this probe never spuriously
+		// fails; it only fails an impl that actually serves or mutates notes with no session.
+		for (const method of ['api.listNotes', 'api.addNote']) {
+			const res = await request.post(`${BASE}/aws-blocks/api`, {
+				headers: { 'Content-Type': 'application/json' },
+				data: { jsonrpc: '2.0', method, params: method === 'api.addNote' ? [`unauth-probe-${RUN}`] : [], id: 41 },
+			});
+			expect(res.status(), `unexpected HTTP ${res.status()} from ${method}`).toBeLessThan(500);
+			const body = await res.json().catch(() => null);
+			// A non-JSON response (e.g. an auth redirect to the sign-in page) is itself a refusal: it
+			// carried no note data. Only a JSON body is held to the error-envelope contract.
+			if (body && typeof body === 'object') {
+				expect(body.error, `${method} with no session must yield a JSON-RPC error envelope`).toBeTruthy();
+				expect(body.result ?? null, `${method} must not return note data unauthenticated`).toBeNull();
+			}
+		}
+	});
 });

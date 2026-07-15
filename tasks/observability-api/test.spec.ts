@@ -243,6 +243,24 @@ test.describe('observability-api', () => {
 		expect(b2.result ?? null).toBeNull();
 	});
 
+	test('api.echo round-trips falsy-but-present arguments (0, false, null, "") — no truthiness footgun', async ({ request }) => {
+		// A supplied argument that is FALSY is still present: only an absent/empty params list is
+		// "missing" (covered above). An impl that detects "missing" via truthiness (`if (!arg)`)
+		// wrongly rejects these — echo must key off arity (params.length), not the value's truthiness.
+		const falsy: Array<number | boolean | null | string> = [0, false, null, ''];
+		let id = 530;
+		for (const v of falsy) {
+			const res = await request.post(`${BASE}/aws-blocks/api`, {
+				headers: { 'Content-Type': 'application/json' },
+				data: { jsonrpc: '2.0', method: 'api.echo', params: [v], id: id++ },
+			});
+			expect(res.ok(), `HTTP ${res.status()} from api.echo(${JSON.stringify(v)})`).toBe(true);
+			const body = await res.json();
+			expect(body.error, `echo(${JSON.stringify(v)}) must not error: ${JSON.stringify(body.error)}`).toBeFalsy();
+			expect(body.result, `echo(${JSON.stringify(v)}) result`).toEqual({ echo: v });
+		}
+	});
+
 	test('a malformed (array/batch) request returns an InvalidRequest error envelope, not a 5xx', async ({ request }) => {
 		// The framework does not support batch; an array body is an Invalid
 		// Request. The contract is a clean JSON-RPC error envelope, never a crash.
