@@ -159,6 +159,71 @@ void describe('buildKvsEntries — atomicity & guards', () => {
       /TooManyRoutesError/,
     );
   });
+
+  // ── Tunable route-chunk budget via quotas.maxRouteChunks (issue #8) ──────
+  void it('a RAISED maxChunksPerTable lets a larger table synth (issue #8)', () => {
+    const routes = Array.from({ length: 3000 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    // The same table that throws at the default 64 succeeds when the cap is
+    // raised well above the chunk count.
+    assert.doesNotThrow(() =>
+      buildKvsEntries({
+        manifest: baseManifest({ routes }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+        maxChunksPerTable: 100000,
+      }),
+    );
+  });
+
+  void it('a LOWERED maxChunksPerTable fails synth sooner', () => {
+    // A modest table that fits in the default 64 chunks throws when the cap is
+    // set to 1.
+    const routes = Array.from({ length: 200 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    assert.throws(
+      () =>
+        buildKvsEntries({
+          manifest: baseManifest({ routes }),
+          buildId: 'b1',
+          hasServer: false,
+          hasImage: false,
+          maxChunksPerTable: 1,
+        }),
+      /TooManyRoutesError/,
+    );
+  });
+
+  void it('the redirect-table error names trailingSlash + the tunable quota', () => {
+    // A large redirect fan-out (distinct parents → no coalescing) trips the
+    // guard; the message must name the redirects table + suggest the knobs.
+    const redirects = Array.from({ length: 3000 }, (_, i) => ({
+      source: `/old-${i}/page-${i}/x`,
+      destination: `/new-${i}/page-${i}/x`,
+      statusCode: 308 as const,
+    }));
+    try {
+      buildKvsEntries({
+        manifest: baseManifest({ redirects }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+      });
+      assert.fail('expected TooManyRoutesError');
+    } catch (e) {
+      const err = e as { name: string; message: string; resolution?: string };
+      assert.equal(err.name, 'TooManyRoutesError');
+      assert.match(err.message, /redirects table/);
+      const res = err.resolution ?? '';
+      assert.match(res, /trailingSlash/);
+      assert.match(res, /quotas\.maxRouteChunks/);
+    }
+  });
 });
 
 void describe('generated request fn — glob matching (regression: mid-segment wildcards)', () => {
@@ -1222,6 +1287,96 @@ void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
     ];
     const out = coalesceRoutes(rows);
     assert.deepEqual(out, [['/stress/*', 's']]);
+  });
+
+  // ── ISR/SWR active: static groups must NOT coalesce (issue #7) ──────────
+  // With Nitro ISR/SWR (manifest.cache), a non-prebuilt child of a prerendered
+  // group must render on-demand at compute, not 404 from the coalesced S3
+  // wildcard. So static groups stay as individual rows when isrActive.
+
+  void it('coalesces a STATIC group into a COMPUTE wildcard when ISR is active (bounded + on-demand)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    // ONE wildcard row (table stays bounded — no explosion/503), but kind is
+    // COMPUTE so the SSR Lambda serves the whole subtree: prebuilt from ISR
+    // cache, non-prebuilt (/blog/post-99) on-demand — never an S3 404.
+    assert.deepEqual(out, [['/blog/*', 'c']]);
+  });
+
+  void it('does NOT explode the table for a large ISR SSG fan-out (coalesces to one compute row)', () => {
+    // Regression: the naive "skip coalescing under ISR" fix produced N rows →
+    // route-table explosion → CloudFront Function 503. Must stay 1 row.
+    const rows: [string, 's'][] = Array.from({ length: 500 }, (_, i) => [
+      `/blog/post-${i}`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/blog/*', 'c']], '500 ISR pages coalesce to ONE compute wildcard');
+  });
+
+  void it('STILL coalesces the same STATIC group when ISR is NOT active (frozen prerender)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: false });
+    assert.deepEqual(out, [['/blog/*', 's']]);
+  });
+
+  void it('STILL coalesces a COMPUTE group even when ISR is active (no shadowing risk)', () => {
+    // A compute wildcard equals the default origin, so coalescing it never
+    // shadows an on-demand child — safe to bound the table.
+    const rows: [string, 'c'][] = [
+      ['/api/a', 'c'],
+      ['/api/b', 'c'],
+      ['/api/c', 'c'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/api/*', 'c']]);
+  });
+
+  void it('end-to-end: ISR manifest routes the whole subtree to compute (prebuilt + non-prebuilt), bounded table (#7)', async () => {
+    // Nuxt prerender + ISR: /blog/post-1..3 prerendered (static) + a server
+    // origin + manifest.cache (nitro-s3) → routeRules { '/blog/**': isr }.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/blog/post-1', target: 'static' },
+          { pattern: '/blog/post-2', target: 'static' },
+          { pattern: '/blog/post-3', target: 'static' },
+          { pattern: '/*', target: 'compute' },
+        ],
+        // ISR/SWR active → shared S3 cache provisioned.
+        cache: { computeResource: 'default', driver: 'nitro-s3' },
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const code = generateKvsRouterRequestCode();
+
+    // Prebuilt page → COMPUTE (served from the Lambda's ISR cache under the
+    // coalesced /blog/* compute wildcard — not S3-direct, but correct).
+    const prebuilt = await runRequestFn(code, entries, req('/blog/post-1'));
+    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.server, '/blog/post-1 (prebuilt) → compute');
+
+    // Non-prebuilt ISR child → compute (renders on demand), NOT a hard S3 404.
+    const onDemand = await runRequestFn(code, entries, req('/blog/post-99'));
+    assert.equal(
+      onDemand.selectedOrigin,
+      ORIGIN_ID.server,
+      '/blog/post-99 (non-prebuilt ISR child) → compute, not S3 404',
+    );
+
+    // Table stays bounded: the 3 /blog/post-N rows collapsed to ONE /blog/*
+    // row (meta.rc small) — no explosion that would 503 the edge function.
+    const meta = JSON.parse(entries.meta);
+    assert.equal(meta.rc, 1, 'route table fits in a single chunk (bounded)');
   });
 
   void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
