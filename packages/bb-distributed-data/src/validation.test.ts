@@ -50,6 +50,10 @@ describe('validateStatement', () => {
     ['ISOLATION LEVEL', 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'],
     // DSQL only supports C collation — locale-aware sorting is not available
     ['COLLATE', 'SELECT * FROM t ORDER BY name COLLATE "en_US"'],
+    // DROP COLUMN is not in DSQL's supported ALTER TABLE subset — rebuild the table instead
+    ['DROP COLUMN', 'ALTER TABLE t DROP COLUMN x'],
+    // DROP CONSTRAINT is not in DSQL's supported ALTER TABLE subset
+    ['DROP CONSTRAINT', 'ALTER TABLE t DROP CONSTRAINT c'],
   ] as const;
 
   for (const [label, sql] of rejects) {
@@ -57,6 +61,14 @@ describe('validateStatement', () => {
       assert.throws(() => validateStatement(sql), { name: 'DsqlValidationError' });
     });
   }
+
+  it('allows supported ALTER TABLE forms that contain DROP', () => {
+    // DROP IDENTITY / DROP DEFAULT are supported ALTER COLUMN actions — must not
+    // be confused with the unsupported DROP COLUMN / DROP CONSTRAINT.
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t RENAME TO t2'));
+    assert.doesNotThrow(() => validateStatement('DROP TABLE t'));
+  });
 });
 
 describe('classifyStatement', () => {

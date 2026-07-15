@@ -78,6 +78,8 @@ const RULES: ValidationRule[] = [
   { pattern: /\b(LISTEN|NOTIFY)\b/i, message: 'DSQL does not support LISTEN/NOTIFY.', severity: 'error' },
   { pattern: /\bCREATE\s+EXTENSION\b/i, message: 'DSQL does not support extensions.', severity: 'error' },
   { pattern: /\bALTER\s+TABLE\b[\s\S]*\bADD\s+COLUMN\b[\s\S]*\bDEFAULT\b/i, message: 'DSQL does not support ADD COLUMN with DEFAULT.', severity: 'error' },
+  { pattern: /\bALTER\s+TABLE\b[^;]*\bDROP\s+COLUMN\b/i, message: 'DSQL does not support ALTER TABLE DROP COLUMN. Leave the column in place and stop referencing it, or rebuild the table (create a new table → INSERT INTO ... SELECT → DROP → RENAME TO). (DSQL: "unsupported ALTER TABLE DROP COLUMN statement")', severity: 'error' },
+  { pattern: /\bALTER\s+TABLE\b[^;]*\bDROP\s+CONSTRAINT\b/i, message: 'DSQL does not support ALTER TABLE DROP CONSTRAINT. (DSQL: "unsupported ALTER TABLE DROP CONSTRAINT statement")', severity: 'error' },
   { pattern: /\bALTER\s+DEFAULT\s+PRIVILEGES\b/i, message: 'DSQL does not support ALTER DEFAULT PRIVILEGES.', severity: 'error' },
   { pattern: /\b(CREATE\s+POLICY|ENABLE\s+ROW\s+LEVEL\s+SECURITY)\b/i, message: 'DSQL does not support Row Level Security.', severity: 'error' },
   { pattern: /\bCREATE\s+(TEMP|TEMPORARY)\s+TABLE\b/i, message: 'DSQL does not support temporary tables.', severity: 'error' },
