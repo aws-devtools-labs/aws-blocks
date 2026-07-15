@@ -88,6 +88,7 @@ test.describe('sql-kb-catalog', () => {
 		await expect(page.getByTestId('kb-result')).toHaveCount(0);
 		await searchFaq(page, 'return refund policy');
 		await expect(page.getByTestId('kb-result').first()).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('kb-result').first()).toContainText(/refund/i, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
@@ -99,6 +100,7 @@ test.describe('sql-kb-catalog', () => {
 		await expect(page.getByTestId('kb-result')).toHaveCount(0);
 		await searchFaq(page, 'refund');
 		await expect(page.getByTestId('kb-result').first()).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('kb-result').first()).toContainText(/refund/i, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
