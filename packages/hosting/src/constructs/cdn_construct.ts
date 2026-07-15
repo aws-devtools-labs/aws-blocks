@@ -21,7 +21,10 @@ import {
   IResponseHeadersPolicy,
   KeyValueStore,
   LambdaEdgeEventType,
+  OriginRequestCookieBehavior,
+  OriginRequestHeaderBehavior,
   OriginRequestPolicy,
+  OriginRequestQueryStringBehavior,
   PriceClass,
   SecurityPolicyProtocol,
   ViewerProtocolPolicy,
@@ -374,6 +377,23 @@ export class CdnConstruct extends Construct {
           ? 'server'
           : undefined;
 
+    // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
+    // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
+    // are set only when an SSR compute exists; `originVerifySecret` is the
+    // deterministic CloudFront→APIGW auth token both integrations reuse.
+    let restApi: RestApi | undefined;
+    let apiHostname: string | undefined;
+    // Origin verification secret — prevents direct APIGW access bypassing
+    // CloudFront's security headers (CSP/HSTS). Requests without this
+    // header are rejected by the APIGW resource policy.
+    // Deterministic: derived from stack + construct path to avoid
+    // CloudFormation churn on every deploy. Bump the version suffix to rotate.
+    const originVerifySecret = createHash('sha256')
+      .update(Stack.of(this).stackName)
+      .update(this.node.path)
+      .update('origin-verify-v1')
+      .digest('hex');
+
     if (ssrComputeName && props.computeFunctions) {
       // Target the warm `live` alias when provisioned concurrency is set;
       // otherwise the unqualified function ($LATEST). Without this, the
@@ -383,20 +403,9 @@ export class CdnConstruct extends Construct {
         props.computeAliases?.get(ssrComputeName) ??
         props.computeFunctions.get(ssrComputeName)!;
 
-      // Origin verification secret — prevents direct APIGW access bypassing
-      // CloudFront's security headers (CSP/HSTS). Requests without this
-      // header are rejected by the APIGW resource policy.
-      // Deterministic: derived from stack + construct path to avoid
-      // CloudFormation churn on every deploy. Bump the version suffix to rotate.
-      const originVerifySecret = createHash('sha256')
-        .update(Stack.of(this).stackName)
-        .update(this.node.path)
-        .update('origin-verify-v1')
-        .digest('hex');
-
       // REGIONAL: CloudFront is already in front; edge-optimized would
       // double-proxy and cap streaming idle timeout at 30s.
-      const restApi = new RestApi(this, 'SsrRestApi', {
+      restApi = new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
@@ -442,7 +451,7 @@ export class CdnConstruct extends Construct {
 
       // restApi.url is "https://{id}.execute-api.{region}.amazonaws.com/{stage}/";
       // HttpOrigin needs the bare host.
-      const apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
       computeOrigins.set(
         ssrComputeName,
         new HttpOrigin(apiHostname, {
@@ -467,6 +476,61 @@ export class CdnConstruct extends Construct {
           FunctionUrlOrigin.withOriginAccessControl(fnUrl),
         );
       }
+    }
+
+    // ---- IPX image Lambda on the SHARED SSR API Gateway (issue #2) ----
+    // The Nuxt IPX optimizer embeds a REMOTE source as an unencoded path
+    // segment (`/_ipx/s_256x256/https://host/…`). An OAC Function URL signs
+    // SigV4 over the canonical path; the literal `://` canonicalizes
+    // differently on CloudFront vs the Function URL, so the signatures diverge
+    // and the Lambda is never invoked (403 InvalidSignatureException). API
+    // Gateway authorizes with the origin-verify Referer header instead of a
+    // path signature, so a `://` in the path is inert. Attach the IPX Lambda
+    // as a dedicated `<baseURL>/{proxy+}` resource on the SAME RestApi the SSR
+    // Lambda already uses (no new API GW), and point the image origin at that
+    // shared host. Scoped to IPX only: detected by `imageOptimization.baseURL`
+    // (Nuxt sets it; Next's OpenNext image bundle does not and speaks Function
+    // URL v2 events, so it stays on its Function URL). Requires an SSR compute
+    // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
+    const ipxBaseUrl = manifest.imageOptimization?.baseURL;
+    const ipxFn = props.computeFunctions?.get('image-optimization');
+    if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
+      // IPX is configured but there's no SSR compute (hence no shared RestApi)
+      // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
+      // Function URL, where an unencoded `://` in a remote source path can
+      // recur as a SigV4 403 (issue #2). Nudge at build time so the operator
+      // isn't left debugging a non-obvious runtime 403.
+      process.stderr.write(
+        `⚠️  imageOptimization.baseURL (${ipxBaseUrl}) is set but no SSR compute ` +
+          `exists — the IPX image Lambda will use a Function URL origin, where ` +
+          `remote sources with reserved chars can hit a SigV4 403 (issue #2). ` +
+          `Deploy with SSR compute to route IPX through the shared API Gateway.\n`,
+      );
+    }
+    if (ipxBaseUrl && ipxFn && restApi && apiHostname) {
+      const ipxIntegration = new LambdaIntegration(ipxFn, { proxy: true });
+      // e.g. baseURL '/_ipx' → resource path segments ['_ipx'] + '{proxy+}'.
+      // API Gateway matches this more-specific resource ahead of the SSR
+      // root `{proxy+}`, so `/_ipx/...` hits the IPX Lambda and everything
+      // else falls through to the SSR Lambda.
+      const segments = ipxBaseUrl.split('/').filter(Boolean);
+      let node = restApi.root;
+      for (const seg of segments) {
+        node = node.getResource(seg) ?? node.addResource(seg);
+      }
+      // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
+      // ANY on both the prefix root and its `{proxy+}` catch-all.
+      node.addMethod('ANY', ipxIntegration);
+      node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+
+      // Override the image origin (was the Function URL) to the shared API GW.
+      computeOrigins.set(
+        'image-optimization',
+        new HttpOrigin(apiHostname, {
+          originPath: `/${restApi.deploymentStage.stageName}`,
+          customHeaders: { Referer: originVerifySecret },
+        }),
+      );
     }
 
     // Primary origin: prefer 'default' > 'server' > first available
@@ -571,7 +635,16 @@ export class CdnConstruct extends Construct {
             '__prerender_bypass',
             '__next_preview_data',
           ),
-          queryStringBehavior: CacheQueryStringBehavior.all(),
+          // Cache on all query strings EXCEPT Next's prefetch cache-buster
+          // `_rsc`. The App Router appends a fresh random `_rsc=<hash>` to
+          // every RSC prefetch; with `.all()` each distinct value is its own
+          // cache entry, so every prefetch MISSes to the origin and the edge
+          // cache is useless for RSC payloads (issue #11). `_rsc` only tags a
+          // request as RSC — the actual RSC-vs-HTML distinction is already in
+          // the cache key via the `rsc` header (allowlisted above) — so it's
+          // safe to drop from the key. denyList only affects the CACHE KEY;
+          // `_rsc` is still forwarded to the origin.
+          queryStringBehavior: CacheQueryStringBehavior.denyList('_rsc'),
           enableAcceptEncodingBrotli: true,
           enableAcceptEncodingGzip: true,
         })
@@ -656,6 +729,9 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+      // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
+      // for a very large site after verifying edge-function compute headroom.
+      maxChunksPerTable: props.quotas?.maxRouteChunks,
     });
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----
@@ -710,15 +786,40 @@ export class CdnConstruct extends Construct {
     // ---- Origin-request / cache policies for the single behavior ----
     // The default behavior must accept ALL methods (the router may send a
     // request to the SSR origin) and forward viewer data to the origin.
+    //
+    // Origin request policy: forward all viewer headers (except Host), cookies,
+    // and query strings to whichever origin the KVS router selects. We can NOT
+    // use the AWS-managed `ALL_VIEWER_EXCEPT_HOST_HEADER` here: the default
+    // behavior's STATICALLY-attached origin is S3, and CloudFront rejects that
+    // managed policy on an S3 origin — "S3 Origins can only use the following
+    // managed request policies: CORS-CustomOrigin, CORS-S3Origin,
+    // UserAgentRefererHeaders" (a 400 InvalidRequest at distribution create,
+    // observed intermittently across regions). A CUSTOM policy with the same
+    // forwarding is allowed on S3 origins. One custom policy is created per
+    // distribution and shared by the default + sentinel behaviors, so it costs
+    // a single origin-request-policy against the account quota (default 20).
+    // Forward all viewer headers EXCEPT Host — matching the managed
+    // ALL_VIEWER_EXCEPT_HOST_HEADER semantics. CDK has no "all except host"
+    // constructor, so use denyList('host'): CloudFront still sends the correct
+    // origin Host, and the KVS router injects `x-forwarded-host` for the
+    // compute origin so the real viewer host is not lost.
+    const forwardAllOriginRequestPolicy = hasCompute
+      ? new OriginRequestPolicy(this, 'ForwardAllOriginRequestPolicy', {
+          comment:
+            'KVS router: forward all viewer data (except Host) to the selected origin',
+          headerBehavior: OriginRequestHeaderBehavior.denyList('host'),
+          cookieBehavior: OriginRequestCookieBehavior.all(),
+          queryStringBehavior: OriginRequestQueryStringBehavior.all(),
+        })
+      : undefined;
+
     const defaultBehavior: BehaviorOptions = {
       origin: s3Origin,
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
       allowedMethods: AllowedMethods.ALLOW_ALL,
       cachePolicy: defaultCachePolicy,
       compress: true,
-      originRequestPolicy: hasCompute
-        ? OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER
-        : undefined,
+      originRequestPolicy: forwardAllOriginRequestPolicy,
       responseHeadersPolicy: props.securityHeadersPolicy,
       ...(edgeLambdas ? { edgeLambdas } : {}),
       functionAssociations: [
@@ -824,7 +925,15 @@ export class CdnConstruct extends Construct {
           // function computes the response per request, so edge routes opt OUT
           // of the SSR s-maxage caching. Keep this — don't restore ssrCachePolicy.
           cachePolicy: CachePolicy.CACHING_DISABLED,
-          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          // This behavior's origin is S3 (line above), so it CANNOT use the
+          // managed ALL_VIEWER_EXCEPT_HOST_HEADER — CloudFront rejects that
+          // managed policy on any S3 origin (400 InvalidRequest at create).
+          // Reuse the synthesized custom policy (same forwarding, allowed on S3
+          // origins). An edge route implies a compute route, so hasCompute is
+          // true and forwardAllOriginRequestPolicy is defined (and even if it
+          // were undefined, the Lambda@Edge function generates the response, so
+          // forwarded origin data is immaterial here anyway).
+          originRequestPolicy: forwardAllOriginRequestPolicy,
           responseHeadersPolicy: props.securityHeadersPolicy,
           edgeLambdas: [
             {
@@ -1040,10 +1149,38 @@ export class CdnConstruct extends Construct {
     });
 
     // ---- OAC: S3 bucket policy ----
+    // GetObject for serving assets, plus ListBucket so S3 returns a real
+    // 404 (NoSuchKey) — not a 403 (AccessDenied) — for a missing key.
+    //
+    // Without s3:ListBucket, S3 hides key existence: a GET for an object the
+    // caller can't confirm exists returns 403 AccessDenied. Under OAC that
+    // 403 + S3's raw `<Error><Code>AccessDenied</Code></Error>` XML is
+    // forwarded straight to the viewer (issue #9): wrong semantics (a missing
+    // asset should be 404, not 403) and an info leak (it advertises an S3
+    // origin and its error schema). Granting ListBucket flips a missing-key
+    // GET to a clean 404 NoSuchKey. This is safe: the bucket is private and
+    // reachable only through this distribution's OAC (same SourceArn
+    // condition), so no key names are exposed to the public. We keep the fix
+    // at the bucket-policy layer rather than a distribution-wide
+    // `customErrorResponses` 403→404 map because the single-behavior KVS
+    // model shares one error-response set across the S3 AND compute origins —
+    // remapping there would clobber a framework/SSR route's own 404/403.
     bucket.addToResourcePolicy(
       new iam.PolicyStatement({
         actions: ['s3:GetObject'],
         resources: [bucket.arnForObjects('*')],
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        conditions: {
+          StringEquals: {
+            'AWS:SourceArn': `arn:aws:cloudfront::${account}:distribution/${this.distribution.distributionId}`,
+          },
+        },
+      }),
+    );
+    bucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [bucket.bucketArn],
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
         conditions: {
           StringEquals: {
