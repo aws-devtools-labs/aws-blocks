@@ -254,6 +254,16 @@ export interface HostingProps {
     cacheBehaviors?: number;
     edgeFunctions?: number;
     headerPolicies?: number;
+    /**
+     * Max chunks per KVS edge route table (routes / redirects / headers);
+     * ~25 entries per chunk, default 64 (≈1600 entries). Not an AWS quota —
+     * a self-imposed guard (KVS ≤5 MB + the edge function reads chunks
+     * sequentially per request). Raise only after measuring edge-function
+     * compute headroom (e.g. a very large `trailingSlash: true` site with
+     * many canonical-form redirects); lowering it fails synth sooner.
+     * @default 64
+     */
+    maxRouteChunks?: number;
   };
 
   /**
