@@ -1,0 +1,42 @@
+{
+  "name": "bb-test-hosting-ssr-sveltekit",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "E2E test app for Blocks Hosting — SvelteKit SSR (adapter-node + Lambda Web Adapter) deployment",
+  "workspaces": [
+    "aws-blocks"
+  ],
+  "scripts": {
+    "dev:api": "tsx watch aws-blocks/scripts/server.ts",
+    "dev:svelte": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api vite dev",
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:svelte\"",
+    "build": "vite build",
+    "preview": "node build/index.js",
+    "test": "echo 'E2e tests run via root test:e2e:local and test:e2e:sandbox'",
+    "test:local": "BLOCKS_TEST_ENV=local npx playwright test",
+    "test:sandbox": "BLOCKS_TEST_ENV=sandbox npx playwright test",
+    "test:e2e:local": "npm run test:local",
+    "test:e2e:sandbox": "npm run test:sandbox",
+    "vendorize": "node ../../packages/blocks/dist/vendorize.js"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.2.0",
+    "@sveltejs/kit": "^2.15.0",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "svelte": "^5.0.0",
+    "vite": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0",
+    "concurrently": "^8.2.0",
+    "aws-cdk-lib": "2.257.0",
+    "constructs": "^10.6.0",
+    "@playwright/test": "^1.49.0"
+  }
+}

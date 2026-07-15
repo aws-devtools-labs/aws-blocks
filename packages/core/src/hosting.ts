@@ -341,6 +341,7 @@ export interface HostingProps {
 
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
+  sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
 };
