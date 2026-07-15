@@ -69,6 +69,19 @@ export type QuotaOverrides = {
    * @default 20
    */
   headerPolicies?: number;
+  /**
+   * Max chunks per KVS edge route table (routes / redirects / headers). Each
+   * chunk holds ~25 entries, so the default 64 ≈ 1600 entries per table. This
+   * is NOT an AWS service quota — it's a self-imposed guard: the KVS store is
+   * capped at 5 MB and the CloudFront Function reads chunks sequentially per
+   * request (compute-utilization limit), so an unbounded table would 5xx at
+   * the edge. Raise this only if you've measured headroom (e.g. a very large
+   * `trailingSlash: true` site with many canonical-form redirects) and
+   * verified the edge function stays under its compute cap. Lowering it makes
+   * synth fail sooner.
+   * @default 64
+   */
+  maxRouteChunks?: number;
 };
 
 /** AWS default values for each tracked quota. */
