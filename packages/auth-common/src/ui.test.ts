@@ -4,7 +4,7 @@
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { Window } from 'happy-dom';
-import type { AuthState, AuthAction } from './index.js';
+import type { AuthState, AuthAction, AuthUser } from './index.js';
 import type { AuthStateApi } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, onAuthChange, broadcastAuthChange } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, onAuthChange, broadcastAuthChange, submitAuthAction } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -704,4 +704,136 @@ describe('onAuthChange', () => {
 
 		assert.strictEqual(callCount, countAfterInit, 'Should not receive events after unsubscribe');
 	});
+});
+
+// ---------------------------------------------------------------------------
+// submitAuthAction — the single client-side notifier that closes the
+// setAuthState → onAuthChange gap (issue #185).
+// ---------------------------------------------------------------------------
+
+describe('submitAuthAction (issue #185)', () => {
+
+	test('sign-in fires onAuthChange exactly once with the new user', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = signedInState();
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedIn');
+		assert.strictEqual(users.length - before, 1, 'onAuthChange should fire exactly once');
+		assert.strictEqual(users[users.length - 1]?.username, 'alice', 'should carry the new user');
+	});
+
+	test('sign-out notifies onAuthChange with null', async () => {
+		const api = mockApi(signedInState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'signedOut', actions: [] };
+		const result = await submitAuthAction(api, { action: 'signOut' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedOut');
+		assert.strictEqual(users.length - before, 1, 'sign-out should notify once');
+		assert.strictEqual(users[users.length - 1], null, 'should carry a null user on sign-out');
+	});
+
+	test('retriable failure does not broadcast and returns the state for inline errors', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'confirmingSignIn', retriable: true, error: 'Wrong code', actions: [] };
+		const result = await submitAuthAction(api, { action: 'confirmSignIn', challenge: 'code', session: 's', code: '000000' });
+		await flush();
+
+		assert.strictEqual(result.retriable, true, 'should return the retriable state');
+		assert.strictEqual(result.error, 'Wrong code', 'should preserve the error for inline feedback');
+		assert.strictEqual(users.length - before, 0, 'a retriable failure must not broadcast');
+	});
+
+	test('mid-flow challenge state does not broadcast', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'confirmingSignIn', actions: [{ name: 'confirmSignIn', label: 'Confirm', fields: [] }] };
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'confirmingSignIn');
+		assert.strictEqual(users.length - before, 0, 'a mid-flow challenge state must not broadcast');
+	});
+
+	test('Authenticator advances to the challenge form (updateState) without broadcasting', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = {
+			state: 'confirmingSignIn',
+			actions: [{
+				name: 'confirmSignIn',
+				label: 'Confirm Code',
+				fields: [
+					{ name: 'code', label: 'Code', type: 'text', required: true },
+					{ name: 'session', label: '', type: 'hidden', required: true, defaultValue: 'sess-123' },
+				],
+			}],
+		};
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		// updateState drove the Authenticator's own subscriber, so the form advanced.
+		const confirmBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Code');
+		assert.ok(confirmBtn, 'Authenticator should advance to the confirm-code form');
+		// ...but a mid-flow challenge is not a sign-in/out transition — no broadcast.
+		assert.strictEqual(users.length - before, 0, 'the challenge advance must not broadcast');
+	});
+
+	test('Authenticator sign-in fires exactly one broadcast (no double-fire)', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		let broadcasts = 0;
+		onAuthChange(api, () => { broadcasts++; });
+		await flush();
+
+		const before = broadcasts;
+		api.nextState = signedInState();
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		assert.strictEqual(api.calls.length, 1, 'exactly one setAuthState call');
+		assert.strictEqual(broadcasts - before, 1, 'exactly one broadcast — no double-fire');
+		assert.ok(el.textContent?.includes('alice'), 'Authenticator advanced to the signed-in view');
+	});
+
 });
