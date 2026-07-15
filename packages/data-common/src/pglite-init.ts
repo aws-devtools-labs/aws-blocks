@@ -87,7 +87,11 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
  * are exhausted. Non-retryable errors are rethrown immediately.
  *
  * @param initial - the already-constructed instance to initialize first
- * @param recreate - factory returning a fresh, fully-prepared instance
+ * @param recreate - factory returning a fresh, fully-prepared instance. Because
+ *   an `initdb` trap aborts BEFORE PGlite persists its data-dir markers, this
+ *   factory may safely re-run data-directory recovery (e.g. quarantining a
+ *   partially-written dir) on each recreate; that recovery composes with this
+ *   retry without conflict.
  * @param options - retry tuning; see {@link PgliteInitRetryOptions}
  * @returns the initialized instance (differs from `initial` if it was recreated)
  * @throws the last error once attempts are exhausted, or immediately for a

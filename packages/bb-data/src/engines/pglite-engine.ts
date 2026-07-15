@@ -140,6 +140,13 @@ export class PGliteEngine implements DatabaseEngine {
    * Prepare the data directory and construct a fresh PGlite instance. PGlite
    * defers WASM `initdb` until the first query, so this is cheap and safe to
    * call again when recovering from an init trap.
+   *
+   * Composes safely with init-trap retry: a mid-`initdb` `unreachable` trap
+   * aborts BEFORE PGlite writes the data-dir markers `recoverIncompletePgliteDataDir`
+   * keys on (`PG_VERSION` + `base`/`global`/`global/pg_control`). So when
+   * `initializePgliteWithRetry` re-runs this factory to recreate the instance,
+   * `recoverIncompletePgliteDataDir` sees either an empty dir (left as-is) or a
+   * partially-written one (quarantined) — the two recovery mechanisms never conflict.
    */
   private createDb(): PGlite {
     // PGlite's initdb only creates the leaf directory, not intermediate

@@ -63,3 +63,25 @@ test('surfaces a QueryFailed error when init keeps trapping', async () => {
     },
   );
 });
+
+// beginTransaction() forces the same lazy WASM init as query()/execute(); an
+// exhausted init-retry at transaction start must also normalize to QueryFailed
+// rather than leaking a raw `RuntimeError: unreachable`.
+test('surfaces a QueryFailed error when init keeps trapping during beginTransaction', async () => {
+  const dir = join(TEST_DIR, 'init-trap-begin-transaction');
+  const factory = (): PGlite =>
+    ({
+      query: async () => {
+        throw new Error('RuntimeError: unreachable');
+      },
+      close: async () => {},
+    }) as unknown as PGlite;
+  engine = new DsqlMockEngine(dir, factory);
+  await assert.rejects(
+    () => engine.beginTransaction(),
+    (err: Error) => {
+      assert.strictEqual(err.name, DistributedDatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});

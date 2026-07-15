@@ -118,9 +118,11 @@ export class DsqlMockEngine implements DatabaseEngine {
   }
 
   async beginTransaction(): Promise<TransactionHandle> {
-    await this.ensureReady();
-    await this.db.query('BEGIN');
-    return { active: true, tracker: new TransactionTracker() } as MockTxHandle;
+    try {
+      await this.ensureReady();
+      await this.db.query('BEGIN');
+      return { active: true, tracker: new TransactionTracker() } as MockTxHandle;
+    } catch (e) { translateDsqlError(e as Error); }
   }
 
   async commitTransaction(handle: TransactionHandle): Promise<void> {
