@@ -12,6 +12,7 @@ import { DatabaseBase, type SqlQuery, type Transaction } from '@aws-blocks/data-
 import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { DsqlEngine } from './engines/dsql-engine.js';
 import { transactionWithRetry } from './transaction.js';
+import { Counter } from './counter.js';
 import type { DistributedDatabaseOptions, TransactionOptions } from './types.js';
 import { ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -64,6 +65,18 @@ export class DistributedDatabase extends Scope {
     return transactionWithRetry(this.base, fn, options);
   }
 
+  /**
+   * Get a named atomic counter backed by this database.
+   *
+   * Use this instead of a racy `SELECT MAX(seq) + 1` read-modify-write when you
+   * need a monotonic sequence number — DSQL has no sequences (SERIAL / BIGSERIAL).
+   *
+   * @param name - Stable identifier for the counter (e.g. `notes:${userId}`).
+   */
+  counter(name: string): Counter {
+    return new Counter(async () => this.base, name);
+  }
+
   /** @internal */
   getEngine() { return this.base.getEngine(); }
 }
@@ -71,4 +84,5 @@ export class DistributedDatabase extends Scope {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
+export { Counter } from './counter.js';
 export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';

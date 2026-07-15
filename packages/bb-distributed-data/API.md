@@ -6,6 +6,7 @@
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter } from '@aws-blocks/data-common';
+import type { DatabaseBase } from '@aws-blocks/data-common';
 import { DatabaseEngine } from '@aws-blocks/data-common';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -13,11 +14,21 @@ import { sql } from '@aws-blocks/data-common';
 import { SqlQuery } from '@aws-blocks/data-common';
 import { Transaction } from '@aws-blocks/data-common';
 
+// @public
+export class Counter {
+    // @internal
+    constructor(resolveBase: () => Promise<DatabaseBase>, name: string);
+    current(): Promise<number>;
+    next(delta?: number): Promise<number>;
+    reset(value?: number): Promise<void>;
+}
+
 export { createKyselyAdapter }
 
 // @public (undocumented)
 export class DistributedDatabase extends Scope {
     constructor(scope: ScopeParent, id: string, _options?: DistributedDatabaseOptions);
+    counter(name: string): Counter;
     // (undocumented)
     execute(query: SqlQuery): Promise<{
         rowCount: number;

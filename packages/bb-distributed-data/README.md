@@ -61,6 +61,25 @@ interface TransactionOptions {
 }
 ```
 
+## Atomic Counters
+
+DSQL has no sequences (`SERIAL` / `BIGSERIAL`), so a monotonic sequence number would otherwise force a racy `SELECT MAX(seq) + 1` read-modify-write — two concurrent callers read the same maximum and both write the same next value, producing duplicate or skipped numbers. `db.counter(name)` gives you a race-free named counter instead: each operation is a single atomic upsert wrapped in OCC retry.
+
+```typescript
+// Per-user monotonic sequence, safe under concurrency:
+const seq = await db.counter(`notes:${userId}`).next();
+await db.execute(
+  sql`INSERT INTO notes (id, user_id, seq, body) VALUES (${id}, ${userId}, ${seq}, ${body})`
+);
+
+await db.counter('signups').next();      // increment by 1, returns the new value
+await db.counter('score').next(10);      // increment by a custom (integer) delta
+await db.counter('signups').current();   // read without incrementing (0 if never seen)
+await db.counter('signups').reset();     // set back to 0
+```
+
+Counters are stored in a framework-managed `_blocks_counters` table that is created automatically on deploy — no migration required. Values are stored as `BIGINT` and returned as `number` (exact up to `Number.MAX_SAFE_INTEGER`).
+
 ## Migrations
 
 One DDL statement per file. DML in separate files. This matches DSQL's transaction constraints.
@@ -102,7 +121,7 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 | Triggers | Event-driven logic (EventBridge, Lambda) |
 | Views | CTEs or application-layer query composition |
 | PL/pgSQL functions | `LANGUAGE SQL` functions or app logic |
-| SERIAL / BIGSERIAL | UUIDs (`gen_random_uuid()`) |
+| SERIAL / BIGSERIAL | UUIDs (`gen_random_uuid()`) for IDs; `db.counter()` for monotonic sequences |
 | TRUNCATE | `DELETE FROM` |
 | Temporary tables | CTEs or subqueries |
 | LISTEN / NOTIFY | AppSync Events, EventBridge, or polling |

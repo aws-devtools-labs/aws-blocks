@@ -12,6 +12,7 @@ import { DatabaseBase, type SqlQuery, type Transaction } from '@aws-blocks/data-
 import { DsqlMockEngine } from './engines/dsql-mock-engine.js';
 import { runMigrations, loadMigrationsFromDir } from './migrations.js';
 import { transactionWithRetry } from './transaction.js';
+import { Counter, ensureCounterTable } from './counter.js';
 import type { DistributedDatabaseOptions, TransactionOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -19,7 +20,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 export class DistributedDatabase extends Scope {
   private base: DatabaseBase;
   private mockEngine: DsqlMockEngine;
-  private migrationsRun: Promise<void> | null = null;
+  private initPromise: Promise<void>;
 
   /** @internal Logger for internal operations. Defaults to error-level when not provided. */
   protected log: ChildLogger;
@@ -31,15 +32,19 @@ export class DistributedDatabase extends Scope {
     this.base = new DatabaseBase(this.mockEngine);
     registerSdkIdentifiers(this.fullId, { clusterEndpoint: `mock-endpoint-${this.fullId}` });
 
-    if (options?.migrationsPath) {
-      const path = options.migrationsPath;
-      this.migrationsRun = loadMigrationsFromDir(path)
-        .then(m => this.mockEngine.withDdl(() => runMigrations(this.mockEngine, m)))
-        .then(() => {});
-    }
+    // Create the framework-managed counter table (and run migrations, if any)
+    // in a single DDL window — the mock engine rejects DDL outside withDdl,
+    // mirroring the app runtime's DML-only access.
+    const migrationsPath = options?.migrationsPath;
+    this.initPromise = this.mockEngine.withDdl(async () => {
+      await ensureCounterTable(this.mockEngine);
+      if (migrationsPath) {
+        await runMigrations(this.mockEngine, await loadMigrationsFromDir(migrationsPath));
+      }
+    });
   }
 
-  private async ready(): Promise<void> { if (this.migrationsRun) await this.migrationsRun; }
+  private async ready(): Promise<void> { await this.initPromise; }
 
   query<T>(query: SqlQuery): Promise<T[]> { return this.ready().then(() => this.base.query<T>(query)); }
   queryOne<T>(query: SqlQuery): Promise<T | null> { return this.ready().then(() => this.base.queryOne<T>(query)); }
@@ -56,6 +61,18 @@ export class DistributedDatabase extends Scope {
     return transactionWithRetry(this.base, fn, options);
   }
 
+  /**
+   * Get a named atomic counter backed by this database.
+   *
+   * Use this instead of a racy `SELECT MAX(seq) + 1` read-modify-write when you
+   * need a monotonic sequence number — DSQL has no sequences (SERIAL / BIGSERIAL).
+   *
+   * @param name - Stable identifier for the counter (e.g. `notes:${userId}`).
+   */
+  counter(name: string): Counter {
+    return new Counter(async () => { await this.ready(); return this.base; }, name);
+  }
+
   /** Test helper: simulate OCC conflict on next commit. */
   simulateConflict(): void { this.mockEngine.simulateConflict(); }
 
@@ -66,4 +83,5 @@ export class DistributedDatabase extends Scope {
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
+export { Counter } from './counter.js';
 export type { DistributedDatabaseOptions, TransactionOptions } from './types.js';

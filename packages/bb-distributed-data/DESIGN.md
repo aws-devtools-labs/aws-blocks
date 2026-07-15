@@ -120,6 +120,28 @@ async transaction<T>(fn, options?) {
 
 Default: no retry (honest, predictable). `retryOnConflict: true` is explicit opt-in with JSDoc warning about side effects.
 
+## Atomic Counters
+
+DSQL has no sequences (`SERIAL` / `BIGSERIAL` are rejected by the validator), so code that needs a monotonic sequence number is otherwise pushed into a racy `SELECT MAX(seq) + 1` read-modify-write: two concurrent callers read the same maximum and both write the same next value, producing duplicate or skipped numbers.
+
+`db.counter(name)` replaces that pattern with a single atomic upsert against a framework-managed table:
+
+```sql
+CREATE TABLE IF NOT EXISTS _blocks_counters (name TEXT PRIMARY KEY, value BIGINT NOT NULL DEFAULT 0);
+
+-- Counter.next(delta) — atomic read-and-increment in one statement:
+INSERT INTO _blocks_counters (name, value) VALUES ($name, $delta)
+  ON CONFLICT (name) DO UPDATE SET value = _blocks_counters.value + $delta
+  RETURNING value;
+```
+
+- **Atomicity** — the increment is one `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` statement, so there is no read-then-write window for a competing writer. It runs inside `transaction({ retryOnConflict: true })` so a DSQL OCC conflict on the row retries transparently.
+- **Managed table** — `_blocks_counters` is created by the migration Lambda (admin) on every deploy, like `_migrations`. The app runtime is DML-only and never issues the DDL. Because the table is admin-owned and not named `_migrations`, `provisionAppRole` automatically grants the app role `SELECT/INSERT/UPDATE/DELETE` on it.
+- **Mock parity** — `DsqlMockEngine` creates the same table inside its `withDdl` init window, so `db.counter()` behaves identically against PGlite locally.
+- **Range** — values are stored as `BIGINT` and returned as `number` (exact up to 2^53 − 1).
+
+API: `Counter.next(delta = 1)`, `Counter.current()`, `Counter.reset(value = 0)`.
+
 ## Error Translation
 
 Happens in the engine layer (same pattern as bb-data engines):
@@ -155,6 +177,7 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 - Retries with exponential backoff on transient connection errors (cluster may take a moment after creation)
 - `.sql` files bundled into the Lambda package via CDK `commandHooks`
 - `migrationsHash` property triggers re-invocation when files change
+- **Ensures the `_blocks_counters` table** exists (see [Atomic Counters](#atomic-counters)) — created here as admin so the DML grants below cover it
 - **Provisions custom DB role** on every deploy (idempotent):
   1. `CREATE ROLE "app_role" WITH LOGIN` (if not exists)
   2. `AWS IAM GRANT "app_role" TO 'arn:aws:iam::...:role/...'` (maps IAM to DB role)

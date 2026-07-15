@@ -19,6 +19,7 @@ import { existsSync } from 'node:fs';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import { DsqlEngine } from './engines/dsql-engine.js';
 import { runMigrations, loadMigrationsFromDir } from './migrations.js';
+import { ensureCounterTable } from './counter.js';
 import { LAMBDA_MIGRATIONS_DIR } from './constants.js';
 
 // Set by the CDK construct's environment config. Default is the Lambda deployment root
@@ -146,6 +147,10 @@ export const handler = async (event: CloudFormationCustomResourceEvent): Promise
     } else {
       console.log('[bb-distributed-data] No migrations directory bundled, skipping migrations');
     }
+
+    // 1.5 Ensure the framework-managed atomic counter table exists (admin-owned).
+    //     provisionAppRole below grants the app role DML on it (it is != _migrations).
+    await withRetry(() => ensureCounterTable(engine));
 
     // 2. Provision the app Lambda's custom DB role (least-privilege DML access)
     await withRetry(() => provisionAppRole(engine, dbRoleName, appRoleArn));
