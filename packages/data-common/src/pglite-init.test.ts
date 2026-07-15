@@ -108,20 +108,27 @@ test('recreates twice before recovering within the attempt budget', async () => 
 });
 
 test('throws after exhausting the default attempt budget on a persistent trap', async () => {
-  let created = 1; // the initial instance is the first
+  const initial = new FakePglite(99);
+  const created: FakePglite[] = [initial];
   await assert.rejects(
     () =>
       initializePgliteWithRetry(
-        new FakePglite(99),
+        initial,
         () => {
-          created++;
-          return new FakePglite(99);
+          const next = new FakePglite(99);
+          created.push(next);
+          return next;
         },
         NO_BACKOFF,
       ),
     /unreachable/,
   );
-  assert.strictEqual(created, 3, 'default maxAttempts=3 → initial + 2 recreates');
+  assert.strictEqual(created.length, 3, 'default maxAttempts=3 → initial + 2 recreates');
+  // Every instance — including the last trapped one — must be closed once retries
+  // are exhausted, so no dead WASM instance leaks (regression for the exhausted path).
+  for (const instance of created) {
+    assert.strictEqual(instance.closed, true);
+  }
 });
 
 test('respects a custom maxAttempts', async () => {

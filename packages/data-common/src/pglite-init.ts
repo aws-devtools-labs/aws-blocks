@@ -52,6 +52,13 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * `RuntimeError: unreachable` or an `Aborted()` error), sometimes only visible
  * in the stack or a nested `cause`. This walks the message, stack, and cause
  * chain, guarding against cyclic causes.
+ *
+ * Scope: the `/unreachable/i` substring match is intentionally broad and is
+ * ONLY valid for the init-probe path — the fixed `SELECT 1` probe inside
+ * {@link initializePgliteWithRetry}, where the sole plausible source of
+ * "unreachable" is a WASM `_pg_initdb` trap. It must NOT be reused to classify
+ * arbitrary user-query errors, whose text could contain "unreachable"
+ * incidentally (e.g. a message about an unreachable host).
  */
 export function isPgliteUnreachableTrap(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -101,7 +108,18 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
       await instance.query('SELECT 1');
       return instance;
     } catch (error) {
-      if (attempt >= maxAttempts || !isRetryable(error)) throw error;
+      if (attempt >= maxAttempts) {
+        // Retries exhausted: a recreated instance is unreachable to the caller,
+        // so close the last trapped instance here to free its WASM memory before
+        // giving up. Best effort, mirroring the between-attempts close below.
+        try {
+          await instance.close();
+        } catch {
+          // A trapped WASM instance may itself fail to close cleanly; ignore.
+        }
+        throw error;
+      }
+      if (!isRetryable(error)) throw error;
       options.onRetry?.(attempt, error);
       try {
         await instance.close();

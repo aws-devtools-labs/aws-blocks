@@ -163,10 +163,13 @@ export class PGliteEngine implements DatabaseEngine {
       this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
         onRetry: (attempt, error) =>
           console.warn(`[PGliteEngine] PGlite init trap on attempt ${attempt}; recreating instance`, error),
-      }).catch((error) => {
-        this.ready = undefined;
-        throw error;
-      });
+      })
+        // Pin this.db to the settled instance explicitly (not just via the recreate closure).
+        .then((db) => (this.db = db))
+        .catch((error) => {
+          this.ready = undefined;
+          throw error;
+        });
     }
     return this.ready;
   }
