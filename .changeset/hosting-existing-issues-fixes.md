@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/hosting": minor
-"@aws-blocks/core": minor
+"@aws-blocks/hosting": patch
+"@aws-blocks/core": patch
 ---
 
 Fix eleven reproducible hosting issues:
