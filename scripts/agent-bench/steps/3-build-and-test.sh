@@ -276,7 +276,12 @@ fi
 # the green-regardless exit (analyze-cell degrades to null when a file is absent). Clear any stale
 # copies from a PRIOR cell first (runner-agnostic) so a skipped / again-missing source can't leave the
 # previous cell's evidence in place for analyze-cell to misread.
-rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log
+# /tmp is sticky (+t): a stale copy from a PRIOR cell may be benchagent-owned (the agent's isolated
+# phase wrote it), so a plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the
+# step BEFORE the green-regardless `exit 0` below, mis-recording a cell that actually built + passed.
+# Mirror the reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is
+# the fallback, and the trailing `|| true` guarantees this cleanup never aborts the step.
+sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
 cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
 cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
 cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
