@@ -10,9 +10,11 @@ import {
 	MAX_ISSUE_LEN,
 	MAX_TAIL_CHARS,
 	MAX_TOOL_NAMES,
+	NO_TRACE_ANALYSIS,
 	REGRESSION_DELTA,
 	buildCellUserText,
 	buildRollupUserText,
+	deterministicCellAnalysis,
 	oneLine,
 	parseCellAnalysis,
 	summarizeMetrics,
@@ -214,5 +216,31 @@ describe('buildRollupUserText(input)', () => {
 		assert.match(text, /mean composite —\/100 over 0 scored cell/);
 		assert.match(text, /\(no per-cell analyses available\)/);
 		assert.match(text, /\(none\)/);
+	});
+});
+
+describe('deterministicCellAnalysis(result, trace)', () => {
+	it('suppresses the model call for a harness_error cell (no gradeable app was produced)', () => {
+		const out = deterministicCellAnalysis({ klass: 'harness_error' }, null);
+		assert.ok(out, 'a harness_error cell must be deterministic (no model call)');
+		assert.match(out.analysis, /harness error/i);
+		assert.deepEqual(out.issues, []);
+	});
+
+	it('suppresses the model for ANY klass with no trace — records "undetermined", never a confabulated owner', () => {
+		// The wall-clock-timeout / teardown path emits no trace; an ungrounded model would guess a root
+		// cause/owner. Every non-harness klass must fall back to the deterministic undetermined note.
+		for (const klass of ['agent_fail', 'scored', null, undefined]) {
+			const out = deterministicCellAnalysis({ klass }, null);
+			assert.ok(out, `klass=${klass} with no trace must be deterministic`);
+			assert.equal(out.analysis, NO_TRACE_ANALYSIS);
+			assert.match(out.analysis, /undetermined/i);
+			assert.deepEqual(out.issues, []);
+		}
+	});
+
+	it('returns null (→ ask the model) only when a trace is present', () => {
+		assert.equal(deterministicCellAnalysis({ klass: 'scored' }, [{ name: 'bash' }]), null);
+		assert.equal(deterministicCellAnalysis({ klass: 'agent_fail' }, { spans: [] }), null);
 	});
 });

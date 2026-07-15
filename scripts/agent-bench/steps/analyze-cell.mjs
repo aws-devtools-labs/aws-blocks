@@ -5,7 +5,7 @@
 // 0), only ADDS those two fields, and falls back to a benign string on any error. Runs under bare
 // `node`: Node built-ins + AWS CLI via lib/analysis.mjs, no SDK.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { CELL_MAX_TOKENS, CELL_SYSTEM, DEFAULT_MODEL_ID, FALLBACK_ANALYSIS, bedrockConverse, buildCellUserText, parseCellAnalysis } from './lib/analysis.mjs';
+import { CELL_MAX_TOKENS, CELL_SYSTEM, DEFAULT_MODEL_ID, FALLBACK_ANALYSIS, bedrockConverse, buildCellUserText, deterministicCellAnalysis, parseCellAnalysis } from './lib/analysis.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
 const TRACE_PATH = process.env.TRACE ?? '/tmp/trace.json';
@@ -21,22 +21,14 @@ function readJson(path) {
 	}
 }
 
-// Decide the per-cell analysis — never throws. Only calls Bedrock when there's data; a failure with
-// no trace gets a benign note and no model call.
+// Decide the per-cell analysis — never throws. A harness_error, or ANY cell with no agent trace, gets a
+// deterministic note and NO model call (without a trace an ungrounded model would confabulate a root
+// cause/owner from stray metrics — see deterministicCellAnalysis); only a traced cell is sent to Bedrock.
 function analyze(result, trace, metrics) {
+	const deterministic = deterministicCellAnalysis(result, trace);
+	if (deterministic) return deterministic;
+
 	const klass = result?.klass ?? null;
-	if (klass === 'harness_error') {
-		return { analysis: 'Cell failed before producing a gradeable app (harness error) — no agent trace to analyze.', issues: [] };
-	}
-	if (!trace && !metrics) {
-		return {
-			analysis:
-				klass === 'agent_fail'
-					? 'Agent timed out / produced no app within budget — no trace was emitted, so there is nothing to analyze.'
-					: 'No trace/metrics artifact available for this cell — nothing to analyze.',
-			issues: [],
-		};
-	}
 
 	const userText = buildCellUserText({
 		task: result?.task,
