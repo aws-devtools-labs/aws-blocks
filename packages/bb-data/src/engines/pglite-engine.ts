@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
 import { DatabaseErrors, wrapError } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
@@ -120,20 +120,60 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
 export class PGliteEngine implements DatabaseEngine {
   private db: PGlite;
   private closed = false;
+  private readonly dataDir: string;
+  private readonly createClient: (dataDir: string) => PGlite;
+  private ready?: Promise<PGlite>;
 
-  constructor(dataDir: string = '.bb-data') {
+  /**
+   * @param dataDir - directory PGlite persists to (nested paths are created).
+   * @param createClient - factory for the underlying PGlite instance; defaults
+   *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
+   *   that simulates a WASM init trap.
+   */
+  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
+    this.dataDir = dataDir;
+    this.createClient = createClient;
+    this.db = this.createDb();
+  }
+
+  /**
+   * Prepare the data directory and construct a fresh PGlite instance. PGlite
+   * defers WASM `initdb` until the first query, so this is cheap and safe to
+   * call again when recovering from an init trap.
+   */
+  private createDb(): PGlite {
     // PGlite's initdb only creates the leaf directory, not intermediate
     // parents. Because index.mock.ts uses nested paths (e.g. `.bb-data/main`),
     // a fresh checkout or `rm -rf .bb-data` would otherwise ENOENT on first
     // boot. Create the full path up front (matches DsqlMockEngine).
-    mkdirSync(dataDir, { recursive: true });
-    recoverIncompletePgliteDataDir(dataDir);
-    cleanStaleLock(dataDir);
-    this.db = new PGlite(dataDir);
+    mkdirSync(this.dataDir, { recursive: true });
+    recoverIncompletePgliteDataDir(this.dataDir);
+    cleanStaleLock(this.dataDir);
+    return this.createClient(this.dataDir);
+  }
+
+  /**
+   * Force PGlite's lazy WASM initialization, retrying past intermittent
+   * `_pg_initdb` `unreachable` traps by recreating the instance. Runs once per
+   * engine; a permanent failure is not cached, so a later query can retry once
+   * transient memory pressure eases.
+   */
+  private ensureReady(): Promise<PGlite> {
+    if (!this.ready) {
+      this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
+        onRetry: (attempt, error) =>
+          console.warn(`[PGliteEngine] PGlite init trap on attempt ${attempt}; recreating instance`, error),
+      }).catch((error) => {
+        this.ready = undefined;
+        throw error;
+      });
+    }
+    return this.ready;
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
     try {
+      await this.ensureReady();
       const result = await this.db.query<T>(sql, params);
       return result.rows;
     } catch (e) {
@@ -143,6 +183,7 @@ export class PGliteEngine implements DatabaseEngine {
 
   async execute(sql: string, params?: unknown[]): Promise<{ rowCount: number }> {
     try {
+      await this.ensureReady();
       const result = await this.db.query(sql, params);
       return { rowCount: result.affectedRows ?? 0 };
     } catch (e) {
@@ -152,6 +193,7 @@ export class PGliteEngine implements DatabaseEngine {
 
   async beginTransaction(): Promise<TransactionHandle> {
     try {
+      await this.ensureReady();
       await this.db.query('BEGIN');
       return { active: true };
     } catch (e) {
