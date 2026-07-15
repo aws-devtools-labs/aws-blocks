@@ -93,7 +93,11 @@ jobs:
       # Fix: pin the scaffold's constructs/aws-cdk-lib to the repo's EXACT
       # installed versions (read from node_modules, not the package.json semver
       # range, so the ids match precisely — a range could resolve to a newer
-      # patch and re-drift), then reinstall so the overrides apply. Matching
+      # patch and re-drift). The scaffold lists both as DIRECT devDependencies,
+      # and npm refuses an `overrides` entry for a directly-depended package
+      # unless the direct spec matches the override exactly (EOVERRIDE) — so pin
+      # the direct dep specs to those same exact versions AND set the overrides
+      # (the latter also dedupes any transitive copies), then reinstall. Matching
       # versions => matching package ids => tsc dedups to one declaration.
       - name: Pin constructs/aws-cdk-lib to the repo's versions
         run: |
@@ -108,9 +112,15 @@ jobs:
             const constructsV = ver("constructs"), cdkV = ver("aws-cdk-lib");
             if (!constructsV || !cdkV) throw new Error("could not determine constructs/aws-cdk-lib version from repo");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
-            pkg.overrides = { ...pkg.overrides, constructs: constructsV, "aws-cdk-lib": cdkV };
+            const pins = { constructs: constructsV, "aws-cdk-lib": cdkV };
+            for (const [name, v] of Object.entries(pins)) {
+              for (const bucket of ["dependencies", "devDependencies"]) {
+                if (pkg[bucket] && pkg[bucket][name]) pkg[bucket][name] = v;
+              }
+            }
+            pkg.overrides = { ...pkg.overrides, ...pins };
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
-            console.log("pinned overrides: constructs=" + constructsV + " aws-cdk-lib=" + cdkV);
+            console.log("pinned constructs=" + constructsV + " aws-cdk-lib=" + cdkV + " (direct deps + overrides)");
           '
           rm -rf node_modules package-lock.json
           npm install
