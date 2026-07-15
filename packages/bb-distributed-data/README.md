@@ -109,7 +109,7 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 | Extensions | Not available |
 | ADD COLUMN with DEFAULT | Add column without default, handle nulls in app |
 | Index key sort direction (`ASC`/`DESC`) | Omit it; enforce ordering with `ORDER BY` in queries (`NULLS FIRST/LAST` is supported) |
-| `ALTER TABLE DROP COLUMN` / `DROP CONSTRAINT` | Leave the column/constraint in place and stop referencing it; or rebuild the table (create new → `INSERT INTO ... SELECT` → `DROP` → `RENAME TO`) |
+| `ALTER TABLE DROP [COLUMN]` | Leave the column in place and stop referencing it; or rebuild the table (create new → `INSERT INTO ... SELECT` → `DROP` → `RENAME TO`, one migration file per step) |
 
 ### Transaction Constraints
 
