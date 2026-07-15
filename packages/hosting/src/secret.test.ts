@@ -66,27 +66,27 @@ void describe('secret path + env naming', () => {
 });
 
 void describe('store default + store-aware locator', () => {
-	void it('defaults to Secrets Manager (per AWS guidance for app credentials)', () => {
-		assert.strictEqual(DEFAULT_SECRET_STORE, 'secrets-manager');
+	void it('defaults to SSM (parity with Blocks; Secrets Manager kept as opt-in until guidance lands)', () => {
+		assert.strictEqual(DEFAULT_SECRET_STORE, 'ssm');
+	});
+
+	void it('SSM locator (the default) keeps the leading-slash path form', () => {
+		assert.strictEqual(secretStoreLocator('STRIPE_KEY'), '/hosting/secrets/STRIPE_KEY');
+		assert.strictEqual(
+			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets' }),
+			'/blocks/secrets/STRIPE_KEY',
+		);
+		assert.strictEqual(secretStoreLocator('STRIPE_KEY', { store: 'ssm' }), '/hosting/secrets/STRIPE_KEY');
 	});
 
 	void it('SM locator is the slash-free name (matches created secret + IAM ARN resource)', () => {
-		assert.strictEqual(secretStoreLocator('STRIPE_KEY'), 'hosting/secrets/STRIPE_KEY');
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets' }),
-			'blocks/secrets/STRIPE_KEY',
-		);
 		assert.strictEqual(
 			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager' }),
 			'hosting/secrets/STRIPE_KEY',
 		);
-	});
-
-	void it('SSM locator keeps the leading-slash path form', () => {
-		assert.strictEqual(secretStoreLocator('STRIPE_KEY', { store: 'ssm' }), '/hosting/secrets/STRIPE_KEY');
 		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' }),
-			'/blocks/secrets/STRIPE_KEY',
+			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'secrets-manager' }),
+			'blocks/secrets/STRIPE_KEY',
 		);
 	});
 });

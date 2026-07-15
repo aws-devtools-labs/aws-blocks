@@ -58,26 +58,35 @@ export const SECRET_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.Secre
 
 /**
  * Which backing store holds a secret value.
- * - `'secrets-manager'` — AWS Secrets Manager (**default**): encrypted at rest,
- *   and the only one of the two with **built-in automatic rotation** — so a
- *   rotating credential can be rotated without a redeploy or custom tooling.
- * - `'ssm'` — SSM Parameter Store SecureString: free and scales to zero, the
- *   opt-in choice for non-rotating secrets where cost-to-zero matters.
+ * - `'ssm'` — SSM Parameter Store SecureString (**current default**): encrypted
+ *   at rest (KMS), free, and scales to zero. Matches the store Blocks already
+ *   uses (`/blocks/secrets`), so the whole solution is on one store today.
+ * - `'secrets-manager'` — AWS Secrets Manager: adds **built-in automatic
+ *   rotation** (Parameter Store has none). Fully implemented and tested; kept
+ *   as a first-class opt-in so the default can flip back to it once the
+ *   rotation/pricing guidance from the Secrets Manager team is finalized.
  */
 export type SecretStore = 'ssm' | 'secrets-manager';
 
 /**
- * Default backing store for hosting/pipeline secrets: **Secrets Manager**,
- * chosen because it provides **built-in automatic rotation** (Parameter Store
- * has none), which is the safer default for application credentials. Opt into
- * SSM SecureString (`store: 'ssm'`) when free scale-to-zero storage matters
- * more than rotation.
+ * Default backing store for hosting/pipeline secrets. **Currently `'ssm'`**
+ * (SSM Parameter Store SecureString): free, scale-to-zero, and on parity with
+ * Blocks' existing secret storage — the safe interim choice while the Secrets
+ * Manager team's rotation/pricing guidance is pending.
+ *
+ * MIGRATION SEAM: flipping this single constant to `'secrets-manager'` moves
+ * every default consumer (CLI write, wireRuntimeSecret, resolveSecretsAtSynth,
+ * runtime getSecret) to Secrets Manager — the SM code path is already
+ * implemented, tested, and live-verified. Callers that pin an explicit `store`
+ * are unaffected by the default. See the migration note in the package docs:
+ * an existing SSM secret is NOT auto-copied to SM, so a store change requires
+ * re-running `secret set <KEY>` once per key after upgrading.
  *
  * NOTE: this is the leaf's neutral default for DIRECT consumers (standalone,
  * Amplify, pipeline). `@aws-blocks/core` (Blocks) pins its own SSM `/blocks/secrets`
  * namespace independently and is unaffected by this constant.
  */
-export const DEFAULT_SECRET_STORE: SecretStore = 'secrets-manager';
+export const DEFAULT_SECRET_STORE: SecretStore = 'ssm';
 
 /** Options for {@link secret}. */
 export interface SecretOptions {
