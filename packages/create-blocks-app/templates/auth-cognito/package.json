@@ -23,6 +23,7 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "test": "tsx --test aws-blocks/*.test.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts"
   },
   "dependencies": {
