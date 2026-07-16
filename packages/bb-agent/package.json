@@ -41,6 +41,7 @@
     "@aws-blocks/bb-realtime": "^0.1.2",
     "@aws-blocks/core": "^0.1.10",
     "@aws-sdk/client-bedrock": "^3.700.0",
+    "@opentelemetry/api": "^1.9.0",
     "@strands-agents/sdk": "~1.3.0",
     "openai": "^6.7.0",
     "ulid": "^2.3.0",
@@ -49,7 +50,6 @@
   "devDependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.700.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@opentelemetry/api": "^1.9.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   },
