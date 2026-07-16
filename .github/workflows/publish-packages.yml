@@ -21,11 +21,10 @@ permissions:
 jobs:
   publish:
     name: Version & Publish (npm)
-    # Pause switch: set repo variable PUBLISH_ENABLED=false to skip scheduled
-    # releases without editing this file. Unset/any other value = enabled.
-    # Manual workflow_dispatch runs ignore the switch (deliberate, so urgent
-    # releases still work while the schedule is paused).
-    if: ${{ github.event_name != 'schedule' || vars.PUBLISH_ENABLED != 'false' }}
+    # Scheduled releases run only when repo variable PUBLISH_ENABLED == 'true'
+    # (opt-in; unset/any other value skips the scheduled run). Manual
+    # workflow_dispatch runs always run, so urgent releases work regardless.
+    if: ${{ github.event_name != 'schedule' || vars.PUBLISH_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     environment: publish
     env:
