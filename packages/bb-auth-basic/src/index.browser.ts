@@ -6,7 +6,7 @@ import { ApiNamespace } from '@aws-blocks/core';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aws-blocks/auth-common';
 export type { AuthBasicUser, PasswordPolicy, AuthBasicOptions } from './index.js';
-export { AuthBasicErrors } from './index.js';
+export { AuthBasicErrors } from './errors.js';
 
 export class AuthBasic {
 	constructor(...args: any[]) {}
