@@ -388,6 +388,10 @@ function adminIamActions(actions?: readonly ('groups' | 'lifecycle')[]): string[
 		'cognito-idp:AdminResetUserPassword',
 		'cognito-idp:AdminSetUserPassword',
 		'cognito-idp:AdminGetUser',
+		// getUser also reports the user's group memberships (AdminGetUser does
+		// not return them), so the lifecycle slice must be self-sufficient for
+		// that read. Shared with the `groups` slice, which also grants it.
+		'cognito-idp:AdminListGroupsForUser',
 		'cognito-idp:ListUsers',
 		'cognito-idp:AdminUserGlobalSignOut',
 	];

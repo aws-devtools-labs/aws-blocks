@@ -842,22 +842,31 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					}
 					// AdminGetUser does not return group memberships, so fetch them
 					// separately to populate AdminUser.groups (matches the mock,
-					// which reads groups from its in-memory state).
-					const groups: string[] = [];
-					let nextToken: string | undefined;
-					do {
-						const g = await this.client.send(new AdminListGroupsForUserCommand({
-							UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
-						}));
-						for (const grp of g.Groups ?? []) if (grp.GroupName) groups.push(grp.GroupName);
-						nextToken = g.NextToken;
-					} while (nextToken);
+					// which reads groups from its in-memory state). The lifecycle
+					// IAM slice grants AdminListGroupsForUser for exactly this; if a
+					// hand-narrowed policy omits it, degrade to `groups: undefined`
+					// rather than failing the whole read.
+					let groups: string[] | undefined = [];
+					try {
+						let nextToken: string | undefined;
+						do {
+							const g = await this.client.send(new AdminListGroupsForUserCommand({
+								UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+							}));
+							for (const grp of g.Groups ?? []) if (grp.GroupName) groups!.push(grp.GroupName);
+							nextToken = g.NextToken;
+						} while (nextToken);
+					} catch (e) {
+						// Missing AdminListGroupsForUser grant → report groups as unknown.
+						if (e instanceof Error && /AccessDenied|NotAuthorized/.test(e.name)) groups = undefined;
+						else throw e;
+					}
 					return {
 						username: resp.Username ?? username,
 						userSub: attributes['sub'] ?? '',
 						enabled: resp.Enabled ?? true,
 						attributes,
-						groups: groups as GroupOf<AuthCognitoOptions>[],
+						groups: groups as GroupOf<AuthCognitoOptions>[] | undefined,
 					};
 				} catch (e) {
 					if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) return null;

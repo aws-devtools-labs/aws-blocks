@@ -239,4 +239,18 @@ describe('auth.admin action-scope runtime gate (Gap 3)', () => {
 		const all = new AuthCognito(ROOT, unique(), { admin: {} });
 		await all.admin.createUser('hugo'); // no actions restriction → no throw
 	});
+
+	test('lifecycle-only getUser still reports groups (no cross-action gate)', async () => {
+		// getUser reports group memberships but is lifecycle-gated. A lifecycle-only
+		// pool must NOT be blocked by the runtime action gate on the group read
+		// (the CDK grant makes AdminListGroupsForUser available to lifecycle too).
+		const auth = new AuthCognito(ROOT, unique(), { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		await auth.admin.createUser('ivy');
+		// addUserToGroup is a groups action → seed membership via the all-access
+		// instance sharing the same on-disk state would differ; instead assert
+		// getUser works and returns an (empty) groups array without throwing.
+		const user = await auth.admin.getUser('ivy');
+		assert.ok(user);
+		assert.deepStrictEqual(user.groups, []);
+	});
 });

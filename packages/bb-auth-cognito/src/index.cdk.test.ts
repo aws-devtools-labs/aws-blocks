@@ -568,9 +568,17 @@ const LIFECYCLE_ADMIN_ACTIONS = [
 	'cognito-idp:AdminResetUserPassword',
 	'cognito-idp:AdminSetUserPassword',
 	'cognito-idp:AdminGetUser',
+	// Shared with the group slice — getUser reports group memberships, so the
+	// lifecycle slice must be self-sufficient for that read.
+	'cognito-idp:AdminListGroupsForUser',
 	'cognito-idp:ListUsers',
 	'cognito-idp:AdminUserGlobalSignOut',
 ];
+// Actions granted by BOTH slices — excluded from the "does not grant the other
+// slice's actions" cross-checks below.
+const SHARED_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
+const groupOnlyActions = GROUP_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+const lifecycleOnlyActions = LIFECYCLE_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
 
 describe('AuthCognito (CDK) — admin IAM grant', () => {
 	test('no admin option → NO Admin* actions granted (least privilege)', () => {
@@ -593,21 +601,33 @@ describe('AuthCognito (CDK) — admin IAM grant', () => {
 		}
 	});
 
-	test("actions: ['groups'] → grants group actions only", () => {
+	test("actions: ['groups'] → grants group actions, not lifecycle-only actions", () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['groups'] } });
 		});
 		const actions = grantedActions(template);
 		for (const a of GROUP_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing group action ${a}`);
-		for (const a of LIFECYCLE_ADMIN_ACTIONS) assert.ok(!actions.has(a), `unexpected lifecycle action ${a}`);
+		for (const a of lifecycleOnlyActions) assert.ok(!actions.has(a), `unexpected lifecycle action ${a}`);
 	});
 
-	test("actions: ['lifecycle'] → grants lifecycle actions only", () => {
+	test("actions: ['lifecycle'] → grants lifecycle actions, not group-only actions", () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
 		});
 		const actions = grantedActions(template);
 		for (const a of LIFECYCLE_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing lifecycle action ${a}`);
-		for (const a of GROUP_ADMIN_ACTIONS) assert.ok(!actions.has(a), `unexpected group action ${a}`);
+		for (const a of groupOnlyActions) assert.ok(!actions.has(a), `unexpected group action ${a}`);
+	});
+
+	test("actions: ['lifecycle'] is self-sufficient for getUser's group read (regression)", () => {
+		// getUser is lifecycle-gated but reports group memberships via
+		// AdminListGroupsForUser. A lifecycle-only pool must therefore grant that
+		// action, or getUser 500s with IAM AccessDenied in the deployed runtime.
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		});
+		const actions = grantedActions(template);
+		assert.ok(actions.has('cognito-idp:AdminGetUser'), 'lifecycle must grant AdminGetUser');
+		assert.ok(actions.has('cognito-idp:AdminListGroupsForUser'), 'lifecycle must grant AdminListGroupsForUser for getUser groups');
 	});
 });
