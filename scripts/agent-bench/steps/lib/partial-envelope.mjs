@@ -51,3 +51,21 @@ export function writeEnvelopeAtomic(path, envelope) {
 	writeFileSync(tmp, JSON.stringify(envelope, null, 2));
 	renameSync(tmp, path);
 }
+
+/**
+ * Assemble the trace artifact written to TRACE. Combines the SDK span traces (present ONLY when
+ * invoke() returned) with the per-turn accumulated messages — captured incrementally via a
+ * MessageAddedEvent hook in 2-agent-run.ts. Those messages carry the `toolResult` blocks that
+ * AgentResult.toJSON() strips AND survive a NON-returning invoke() (MaxTokensError, wall-clock /
+ * internal-deadline kill), so the artifact is analyzable on EVERY exit path, not just success.
+ * Pure + defensive (coerces non-arrays to []) so the caller can write a trace unconditionally.
+ * @param {unknown} spanTraces result.traces mapped through toJSON() (or [] when invoke never returned)
+ * @param {unknown} messages the accumulated event.message.toJSON() objects
+ * @returns {{traces: unknown[], messages: unknown[]}}
+ */
+export function buildTraceArtifact(spanTraces, messages) {
+	return {
+		traces: Array.isArray(spanTraces) ? spanTraces : [],
+		messages: Array.isArray(messages) ? messages : [],
+	};
+}

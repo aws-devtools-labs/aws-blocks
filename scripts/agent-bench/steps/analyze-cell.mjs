@@ -16,8 +16,10 @@ import {
 	FAILURE_SYSTEM,
 	bedrockConverse,
 	buildCellUserText,
+	buildEvidenceObserved,
 	buildFailureUserText,
 	deterministicCellAnalysis,
+	deterministicFailureAnalysis,
 	extractFailingTests,
 	isFailureCell,
 	parseCellAnalysis,
@@ -90,8 +92,20 @@ function analyze(result, trace, metrics) {
 // build log tails and asks the model for strict JSON. Returns a normalized object or null (no usable
 // diagnosis / model error / no evidence). Never throws — the caller also guards it.
 function analyzeFailure(result, trace) {
+	// Deterministic short-circuit — the same honesty guard analyze() applies. A harness_error, an agent
+	// step failure (failed_at 2-agent), or a cell with no trace gets a deterministic, honest answer and
+	// NO model call: an ungrounded model would confabulate a root cause/owner from stray metrics/logs
+	// (the fabricated "build FAILED / owner=agent" on a wall-clock-timeout cell). Only a genuinely
+	// gradeable failing cell that has a trace reaches the model below.
+	const guard = deterministicFailureAnalysis(result, trace);
+	if (guard) return guard.failure_analysis;
+
 	const failingTests = extractFailingTests(readJson(PW_RESULTS_PATH));
-	const buildFailed = result?.build_succeeded != null && !truthy(result.build_succeeded);
+	// Gate the build signal on whether build evidence was actually OBSERVED (step 3 ran); otherwise the
+	// seeded pessimistic defaults (build_succeeded=false) from 0-init-result.mjs would feed the model a
+	// false "build failed". Defense-in-depth: the guard above already excludes those cells from this path.
+	const buildObserved = buildEvidenceObserved(result);
+	const buildFailed = buildObserved && result?.build_succeeded != null && !truthy(result.build_succeeded);
 	// If there's genuinely nothing to look at (no failing tests, no logs), skip the model call.
 	// Scrub any credential material the dev/build logs may have echoed before it reaches the model.
 	const devLogTail = redactSecrets(readText(DEV_LOG_PATH));
@@ -105,7 +119,7 @@ function analyzeFailure(result, trace) {
 		klass: result?.klass ?? null,
 		testsFailed: typeof result?.tests_failed === 'number' ? result.tests_failed : null,
 		testsTotal: typeof result?.tests_total === 'number' ? result.tests_total : null,
-		buildSucceeded: result?.build_succeeded == null ? null : truthy(result.build_succeeded),
+		buildSucceeded: !buildObserved ? null : result?.build_succeeded == null ? null : truthy(result.build_succeeded),
 		devServerStarted: result?.dev_server_started == null ? null : truthy(result.dev_server_started),
 		judgeExplanation: result?.judge_explanation,
 		failingTests,

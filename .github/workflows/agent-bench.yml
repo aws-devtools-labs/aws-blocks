@@ -185,12 +185,16 @@ jobs:
         continue-on-error: true
         if: steps.init.outcome == 'success'
         timeout-minutes: 35
-        run: npx tsx scripts/agent-bench/steps/2-agent-run.ts
+        # `exec` so bash replaces itself with the node process — GitHub's SIGTERM/SIGINT on the
+        # timeout/cancel path then reaches our handler directly instead of a wrapper shell. The
+        # in-process internal deadline (BENCH_AGENT_DEADLINE_SEC, < 35min) is the real guarantee.
+        run: exec npx tsx scripts/agent-bench/steps/2-agent-run.ts
         env:
           TASK_PROMPT: ${{ github.workspace }}/tasks/${{ env.TASK }}/PROMPT.md
           OUTPUT: /tmp/builder-result.json
-          # Trace tree + run metrics, uploaded as bench-trace-*. Written only on normal completion
-          # (no mid-run trace accessor), so a wall-clock timeout emits no trace.
+          # Trace tree + run metrics, uploaded as bench-trace-*. TRACE is now written on EVERY exit
+          # path (success, invoke-exhausted error, wall-clock / internal-deadline flush) via a per-turn
+          # message accumulator; METRICS is written only on normal completion.
           TRACE: /tmp/trace.json
           METRICS: /tmp/metrics.json
 
