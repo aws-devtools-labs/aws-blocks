@@ -166,9 +166,14 @@ export const nextjsAdapter = (
     // nodejs20.x compatibility. See patchEdgeBundleForLambdaEdge.
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
-    // Patch the image-optimization bundle for the Next.js 15.5 image-optimizer
-    // signature change. See patchImageOptimizerForNext155.
-    patchImageOptimizerForNext155(openNextDir);
+    // Patch the image-optimization bundle for the Next.js 16 image-optimizer
+    // signature change. See patchImageOptimizerForNext16.
+    patchImageOptimizerForNext16(openNextDir, projectDir);
+
+    // Patch the image-optimization bundle so a disallowed image type (e.g. an
+    // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
+    // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
+    patchImageOptimizerSvgStatus(openNextDir);
 
     // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
     // See installLinuxSharpForImageOptimizer.
@@ -670,6 +675,30 @@ const isSimpleNextSource = (source: string): boolean => {
 };
 
 /**
+ * Normalize a Next.js redirect pattern's **trailing named catch-all** into the
+ * plain `/*` suffix wildcard the edge router understands.
+ *
+ * Next expresses a "match the rest of the path" redirect as `/:name*` (a named
+ * catch-all) on BOTH the source and destination, e.g.
+ * `{ source: '/r/legacy/:path*', destination: '/r/modern/:path*' }`. The edge
+ * router (`matchPattern` + the redirect splice in kvs_router.ts) speaks a
+ * single trailing `*`: it captures the tail and splices it into a destination
+ * ending in `*`. A trailing `/:name*` is exactly that — so we can lift it by
+ * rewriting the trailing `/:name*` → `/*` on both sides. The captured tail then
+ * round-trips correctly, INCLUDING the empty-tail case (`/r/legacy` /
+ * `/r/legacy/` → `/r/modern/`), which the b4d626b destination-shape guard
+ * already handles — instead of the literal `:path*` leaking into `Location`
+ * because the rule fell through to the Lambda un-lifted.
+ *
+ * Only the trailing catch-all (`*` quantifier at the very end) is converted;
+ * mid-pattern params, `:name+`, or bare `:name` are left intact so
+ * {@link isSimpleNextSource} still rejects them and they stay in the Lambda.
+ * @internal
+ */
+export const normalizeTrailingNamedWildcard = (pattern: string): string =>
+  pattern.replace(/\/:[a-zA-Z_][a-zA-Z0-9_]*\*$/, '/*');
+
+/**
  * Read `.next/routes-manifest.json` and lift simple redirects/headers
  * into the deploy manifest so the L3 wires them as CloudFront Functions
  * and per-pattern ResponseHeadersPolicies. Anything we don't lift stays
@@ -742,8 +771,14 @@ const applyLiftedRoutesManifest = (
       skippedRedirects++;
       continue;
     }
-    const source = normalizeSource(r.source);
-    const destination = normalizeSource(r.destination);
+    // Convert a trailing named catch-all (`/:path*`) to the plain `/*`
+    // suffix wildcard the edge router splices. Without this, `:path*`
+    // redirects fall through to the Lambda and leak the literal `:path*`
+    // token into Location on an empty/short tail (issue #5).
+    const source = normalizeTrailingNamedWildcard(normalizeSource(r.source));
+    const destination = normalizeTrailingNamedWildcard(
+      normalizeSource(r.destination),
+    );
     if (!isSimpleNextSource(source) || !isSimpleNextSource(destination)) {
       skippedRedirects++;
       continue;
@@ -761,6 +796,30 @@ const applyLiftedRoutesManifest = (
       destination,
       statusCode: r.statusCode as 301 | 302 | 307 | 308,
     });
+
+    // For a wildcard source (e.g. `/r/legacy/*`), also emit an exact-match
+    // companion for the bare prefix WITHOUT a trailing slash (`/r/legacy`).
+    // The edge router's matchPattern requires at least the `/` after the
+    // prefix to match `/*`, so a request to the bare prefix falls through to
+    // Lambda and leaks the raw `:path*`. The companion catches it and
+    // redirects to the destination prefix (strip the trailing `*`).
+    if (source.endsWith('/*')) {
+      const bareSource = source.slice(0, -2); // '/r/legacy/*' → '/r/legacy'
+      const bareDest = destination.endsWith('/*')
+        ? destination.slice(0, -1) // '/r/modern/*' → '/r/modern/'
+        : destination;
+      // Guard the root catch-all: a root-level `/:path*` normalizes to `/*`, so
+      // `bareSource` is `''` — an empty source is malformed and there's no bare
+      // prefix to redirect. Skip it (the `/*` wildcard already covers root).
+      if (bareSource.length > 0 && !seenRedirectSources.has(bareSource)) {
+        seenRedirectSources.set(bareSource, r.source + ' (bare companion)');
+        liftedRedirects.push({
+          source: bareSource,
+          destination: bareDest,
+          statusCode: r.statusCode as 301 | 302 | 307 | 308,
+        });
+      }
+    }
   }
 
   for (const h of routesManifest.headers ?? []) {
@@ -1146,7 +1205,19 @@ ${entries}
 // Exported so the X.1 cross-adapter version-pin test can reach it
 // without dynamic imports / scraping. Bump together with the actual
 // verification work.
-export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0';
+//
+// Verified against 3.10.x AND 4.0.x: an OpenNext 4.0.3 integration deploy
+// (next-app-router) confirmed all four bundle patches still apply cleanly —
+// the streaming-wrapper (`setContentType` + br/gzip/deflate identity
+// branch), the edge-bundle process banner, the `fetchInternalImage` arity
+// insertion, and the SVG-status catch rewrite all matched the 4.0.x
+// minified shape, and the live app served optimized rasters (200 image/webp),
+// a fail-closed SVG (400), edge routes, and redirects with no regressions.
+// The two windows are called out explicitly (rather than a single
+// `>=3.10.0 <4.1.0`) because the intervening 3.11–3.x minors were never
+// exercised; each upper bound stays exclusive of the next unverified minor so
+// a future release re-triggers the out-of-range warning until it's verified too.
+export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
 
 /**
  * Read the installed `@opennextjs/aws` version from the project's
@@ -1331,30 +1402,80 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
 };
 
 /**
- * Patch the OpenNext image-optimization bundle for the Next.js 15.5 image
- * optimizer signature change.
- *
- * Next 15.5 inserted a `maximumResponseBody` parameter into
- * `fetchInternalImage`:
- *   - was: `fetchInternalImage(href, _req, _res, handleRequest)`
- *   - now: `fetchInternalImage(href, _req, _res, maximumResponseBody, handleRequest)`
- *
- * `@opennextjs/aws` (≤3.10.x) still calls it with FOUR args
- * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`), so on Next 15.5
- * the `handleRequest` callback lands in the `maximumResponseBody` slot and the
- * real 5th arg is `undefined`. At runtime the optimizer throws
- * `TypeError: <handler> is not a function` for every LOCAL image → 500.
- *
- * Fix: insert an explicit `void 0` for `maximumResponseBody` so the handler
- * shifts into the 5th position. Match the structural minified shape
- * `fetchInternalImage)(<a>,{headers:<b>},{},<c>)` (variable names are unstable
- * across builds) and rewrite the trailing `,<c>)` → `,void 0,<c>)`. Idempotent:
- * a call that already has `,{},void 0,` is left alone.
+ * Read the installed Next.js version from the project's node_modules.
+ * Best-effort: returns `undefined` when the package isn't resolvable or the
+ * version can't be parsed (e.g. an L3 path running against a pre-built
+ * `.open-next/` with no `next` in scope).
  * @internal
  */
-export const patchImageOptimizerForNext155 = (openNextDir: string): void => {
+export const detectNextVersion = (projectDir: string): string | undefined => {
+  const info = getPackageInfoSync('next', { paths: [projectDir] });
+  const version = info?.version;
+  return version && semver.valid(version) ? version : undefined;
+};
+
+/**
+ * Patch the OpenNext image-optimization bundle for the Next.js 16
+ * image-optimizer signature change.
+ *
+ * **Next 16** inserted a `maximumResponseBody` parameter into
+ * `fetchInternalImage` — NOT 15.5 (the earlier assumption here was inverted):
+ *   | Next   | `fetchInternalImage` signature                                    |
+ *   |--------|-------------------------------------------------------------------|
+ *   | 15.5.x | `(href, _req, _res, handleRequest)` — 4 args                       |
+ *   | 16.x   | `(href, _req, _res, maximumResponseBody, handleRequest)` — 5 args  |
+ *
+ * `@opennextjs/aws` (≤3.10.x) calls it with FOUR positional args
+ * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`). That call is:
+ *   - **correct as-is on Next 15.x** (the handler is the real 4th arg), and
+ *   - **one arg short on Next 16** — the handler lands in the
+ *     `maximumResponseBody` slot and the real 5th arg (`handleRequest`) is
+ *     `undefined`, so the optimizer throws `TypeError: <handler> is not a
+ *     function` for every LOCAL image → 500.
+ *
+ * Fix: **only on Next ≥ 16**, insert an explicit `void 0` for
+ * `maximumResponseBody` so the handler shifts into the 5th position. On Next
+ * 15.x we must NOT patch — the 4-arg call is already right and inserting
+ * `void 0` would break it (the previous bug: every Next-15 local image 500'd).
+ *
+ * The match is the structural minified shape
+ * `fetchInternalImage)(<a>,{headers:<b>},{},<c>)` (variable names are unstable
+ * across builds) rewritten `,<c>)` → `,void 0,<c>)`. Idempotent: a call that
+ * already has `,{},void 0,` is left alone. When the installed Next version
+ * can't be determined (e.g. a pre-built `.open-next/` with no resolvable
+ * `next`) we default to patching, since Next 16 is the common case and that
+ * matches the historical behavior.
+ * @internal
+ */
+export const patchImageOptimizerForNext16 = (
+  openNextDir: string,
+  projectDir?: string,
+): void => {
   const root = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(root)) return; // image optimization disabled for this app
+
+  // Version gate: the `void 0` insertion is ONLY correct for Next ≥ 16 (the
+  // 5-arg `fetchInternalImage`). On Next 15.x the OpenNext 4-arg call is
+  // already correct, so patching would corrupt it. When the version is
+  // knowable and < 16, skip entirely.
+  const nextVersion = projectDir ? detectNextVersion(projectDir) : undefined;
+  if (nextVersion && semver.major(nextVersion) < 16) {
+    process.stderr.write(
+      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion} uses the ` +
+        `4-arg fetchInternalImage signature that OpenNext already calls correctly ` +
+        `(the maximumResponseBody parameter was added in Next 16).\n`,
+    );
+    return;
+  }
+  if (!nextVersion) {
+    // Version unknown (e.g. a pre-built `.open-next/` with no resolvable
+    // `next` in scope). Default to patching, since Next 16 (5-arg) is the
+    // common case — log it so the build output explains the choice.
+    process.stderr.write(
+      `ℹ️  Could not detect the installed Next.js version; applying the ` +
+        `fetchInternalImage arity patch (correct for Next ≥ 16, the common case).\n`,
+    );
+  }
   const candidates = fg.sync('**/index.mjs', {
     cwd: root,
     absolute: true,
@@ -1391,17 +1512,95 @@ export const patchImageOptimizerForNext155 = (openNextDir: string): void => {
     // OpenNext's call, or OpenNext may have already adapted. Warn so a future
     // signature drift is visible, but don't block the build.
     process.stderr.write(
-      `⚠️  image-optimizer patch (Next 15.5 fetchInternalImage arity) found ` +
+      `⚠️  image-optimizer patch (Next 16 fetchInternalImage arity) found ` +
         `nothing to change under ${root}. If local-image optimization 500s with ` +
         `"is not a function", the OpenNext/Next signatures changed again ` +
-        `(see patchImageOptimizerForNext155).\n`,
+        `(see patchImageOptimizerForNext16).\n`,
     );
     return;
   }
 
   process.stderr.write(
-    `\u{1F527} Patched image-optimization bundle for Next.js 15.5 fetchInternalImage ` +
+    `\u{1F527} Patched image-optimization bundle for Next.js 16 fetchInternalImage ` +
       `signature (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
+  );
+};
+
+/**
+ * Patch the OpenNext image-optimization bundle so a client-error rejection
+ * from Next's optimizer surfaces its real 4xx status instead of a blanket 500.
+ *
+ * When `dangerouslyAllowSVG` is disabled and the source is an SVG (or another
+ * disallowed type), Next throws a proper `new ImageError(400, '"url" parameter
+ * is valid but image type is not allowed')`. OpenNext's handler catches every
+ * optimizer throw in a single generic block:
+ *
+ *   catch (s) { return Pl("Failed to optimize image", s),
+ *               VX("Internal server error", t?.streamCreator) }
+ *
+ * — discarding the caught error's `statusCode` and always emitting 500. So an
+ * untrusted SVG (which must fail closed with a 400) instead crashes the
+ * optimizer with a 5xx (issue #4).
+ *
+ * `VX(message, streamCreator, status = 500)` already accepts a status arg. Fix:
+ * rewrite the catch to forward the caught error's status when it's a client
+ * error (4xx), using the error's own message; otherwise keep the 500
+ * "Internal server error". Structural match on the minified shape (the helper
+ * names `Pl`/`VX` are unstable across builds, so capture them). Idempotent: a
+ * catch already carrying our `__blocksStatus` marker is left alone.
+ * @internal
+ */
+export const patchImageOptimizerSvgStatus = (openNextDir: string): void => {
+  const root = path.join(openNextDir, 'image-optimization-function');
+  if (!fs.existsSync(root)) return; // image optimization disabled for this app
+  const candidates = fg.sync('**/index.mjs', {
+    cwd: root,
+    absolute: true,
+    ignore: ['**/node_modules/**'],
+  });
+
+  // catch(<e>){return <log>("Failed to optimize image",<e>),<resp>("Internal server error",<stream>)}
+  const catchRe =
+    /catch\((\w+)\)\{return (\w+)\("Failed to optimize image",\1\),(\w+)\("Internal server error",([^)]*)\)\}/g;
+
+  let filesPatched = 0;
+  for (const bundle of candidates) {
+    let src: string;
+    try {
+      src = fs.readFileSync(bundle, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    // Idempotency: skip if already patched.
+    if (src.includes('__blocksStatus')) continue;
+    if (!catchRe.test(src)) continue;
+    catchRe.lastIndex = 0;
+    // For a caught client-error (4xx), forward its status + message; else 500.
+    const next = src.replace(
+      catchRe,
+      'catch($1){var __blocksStatus=($1&&$1.statusCode>=400&&$1.statusCode<500)?$1.statusCode:500;' +
+        'return $2("Failed to optimize image",$1),' +
+        '$3(__blocksStatus!==500?($1.message||"Bad Request"):"Internal server error",$4,__blocksStatus)}',
+    );
+    if (next !== src) {
+      fs.writeFileSync(bundle, next, 'utf-8');
+      filesPatched++;
+    }
+  }
+
+  if (filesPatched === 0) {
+    process.stderr.write(
+      `⚠️  image-optimizer SVG-status patch found nothing to change under ${root}. ` +
+        `If an SVG source (dangerouslyAllowSVG disabled) 500s instead of 400, ` +
+        `the OpenNext catch-block shape changed (see patchImageOptimizerSvgStatus).\n`,
+    );
+    return;
+  }
+
+  process.stderr.write(
+    `\u{1F527} Patched image-optimization bundle so disallowed image types (e.g. SVG) ` +
+      `return their real 4xx status, not 500 (${filesPatched} file${filesPatched > 1 ? 's' : ''}).\n`,
   );
 };
 
