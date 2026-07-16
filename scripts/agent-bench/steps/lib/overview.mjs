@@ -1,7 +1,7 @@
 // PR-vs-baseline results helpers, kept as PURE functions (no fs/env/process) so the diff math +
 // coloring are unit-testable under `node --test`. summary.mjs does the I/O and calls these to render
 // ONE results table: renderDetailed. Each metric cell shows the CURRENT value plus a color for the
-// SIGNIFICANCE + DIRECTION of its change vs the baseline, with the signed delta on a second line.
+// SIGNIFICANCE + DIRECTION of its change vs the baseline, with the signed delta shown inline.
 // Baseline = most recent main bench (bench/runs/latest-main.json); a missing baseline VALUE for a
 // field renders ⚪ + the current value + "(new)". Composite/cost/score all come from lib/scoring.mjs.
 import {
@@ -43,15 +43,8 @@ export const DELTA_THRESHOLDS = {
 	judge: 0.3, // judge score (0-10) — applied per-dimension too
 	tests: 1, // test pass count (a ±1 nudge is noise)
 	costPct: 0.1, // cost: ±10% of the baseline cost
-	tokensPct: 0.1, // tokens (in / out): ±10% of the baseline, per stream
 	turns: 3, // cycle_count (lower-better): ±3 turns is within run-to-run noise at N=1
-	cacheReadPct: 0.2, // cache-read tokens: ±20% relative (no strong prior; cache hits swing more than raw tokens)
-	cacheWritePct: 0.2, // cache-write tokens: ±20% relative
 	costAbs: 0.02, // absolute $ floor for the cost band — a near-zero baseline mustn't make pct·|bv|≈0 over-color
-	tokensAbs: 1000, // absolute token floor for the token/cache bands (same near-zero-baseline guard)
-	// LOC & Files are INTENTIONALLY absent: more/fewer lines or files is neither good nor bad on its
-	// own (a bigger app can be the right call), so those cells are rendered NEUTRAL (⚪, value + signed
-	// delta, never 🟢/🔴) — see locCell/filesCell. Add a band here only if a direction is ever agreed.
 };
 
 /**
@@ -138,8 +131,9 @@ export function buildAggregate(cells, meta = {}) {
 						c.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
 					tokens_in: numOrNull(c.tokens_in),
 					tokens_out: numOrNull(c.tokens_out),
-					// Newer per-cell signals — persisted so the NEXT main bench writes them into the baseline
-					// (older baselines lack them → the table renders those metrics ⚪ "(new)" until then).
+					// Newer per-cell signals persisted into the baseline: cycle_count feeds the Turns column;
+					// the token/cache/LOC/file counts are retained for historical baselines and offline
+					// analysis (the results table no longer renders them, but dropping them loses the series).
 					cycle_count: numOrNull(c.cycle_count),
 					cache_read_tokens: numOrNull(c.cache_read_tokens),
 					cache_write_tokens: numOrNull(c.cache_write_tokens),
@@ -178,18 +172,10 @@ function cellMetrics(c) {
 		tests_passed: numOrNull(c?.tests_passed),
 		tests_denom: numOrNull(c?.tests_denom),
 		judge_score: numOrNull(c?.judge_score),
-		// Per-dimension judge scores (capped), rendered as the JUDGE column's per-dim rows. Baselines
+		// Per-dimension judge scores (capped), rendered as the JUDGE cell's per-dim shorthand. Baselines
 		// that carry them color per-dim; older ones lacking them fall back to the overall judge score.
 		judge_dimensions: c?.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
-		tokens_in: numOrNull(c?.tokens_in),
-		tokens_out: numOrNull(c?.tokens_out),
 		cycle_count: numOrNull(c?.cycle_count),
-		cache_read_tokens: numOrNull(c?.cache_read_tokens),
-		cache_write_tokens: numOrNull(c?.cache_write_tokens),
-		loc_created: numOrNull(c?.loc_created),
-		loc_edited: numOrNull(c?.loc_edited),
-		files_created: numOrNull(c?.files_created),
-		files_edited: numOrNull(c?.files_edited),
 		cost: numOrNull(c?.cost),
 		score: numOrNull(c?.score),
 		stop_reason: typeof c?.stop_reason === 'string' && c.stop_reason ? c.stop_reason : null,
@@ -288,23 +274,23 @@ const signed1 = (d) => {
 	const v = Math.round(d * 10) / 10;
 	return `${v > 0 ? '+' : ''}${v}`;
 };
-const signedCost = (d) => `${signOf(d)}$${+Math.abs(d).toFixed(2)}`;
-const signedTokens = (d) => `${signOf(d)}${humanTokens(Math.abs(d))}`;
+const signedCost = (d) => `${signOf(d)}${fmtCost(Math.abs(d))}`;
 const wholeNum = (v) => String(Math.round(v));
 
 // ── Metric cells ──────────────────────────────────────────────────────────────
-// Scalar cells are ONE inline line: `<ball> <value> (<Δ>)`. Multi-value cells (judge / tokens / loc /
-// files) stack one `<label> <ball> <value> (<Δ>)` sub-line per metric, joined by <br>. The current
-// value is ALWAYS shown; a metric the baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
+// Scalar cells are ONE inline line: `<ball> <value> (<Δ>)`. The JUDGE cell is also one line — the overall
+// score followed by ` · ` and a per-dimension shorthand. The current value is ALWAYS shown; a metric the
+// baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
 
-// Compact, GFM-safe labels for the per-dimension judge rows (raw keys have only intraword underscores,
-// which GFM does NOT treat as emphasis, but these read cleaner in a narrow cell).
-const DIM_LABELS = {
-	functional_completeness: 'functional',
-	selector_contract: 'selectors',
-	persistence: 'persistence',
-	code_quality: 'code',
-	blocks_fidelity: 'blocks',
+// Single-letter shorthand for the per-dimension judge scores, packed onto ONE line after the overall
+// judge score (e.g. `🟢 8 (+1) · F9(+2) S8 P7(-1) C8 B9`). Keeps the Judge column compact for a GFM
+// job-summary table where per-cell <details> collapse is unavailable.
+const DIM_SHORT = {
+	functional_completeness: 'F',
+	selector_contract: 'S',
+	persistence: 'P',
+	code_quality: 'C',
+	blocks_fidelity: 'B',
 };
 
 // One INLINE scalar cell: `<ball> <value> (<Δ>)`; `⚪ <value> (new)` with no baseline; NONE with no
@@ -319,20 +305,6 @@ function scalarCell(base, pr, { threshold, dir, fmtVal, fmtDelta }) {
 	return `${deltaColor(bv, pv, t, dir)} ${value} (${fmtDelta(pv - bv)})`;
 }
 
-// One stacked sub-line for a multi-line cell: `<label> <ball> <value> (<Δ>)`. `neutral:true` forces ⚪
-// (no good/bad direction — LOC/files). A null current value still renders (`<label> ⚪ — (new)`) so the
-// stacked lines stay aligned across rows.
-function metricLine(label, base, pr, { threshold, dir, fmtVal, fmtDelta, neutral = false } = {}) {
-	const pv = numOrNull(pr);
-	if (pv === null) return `${label} ${WHITE} ${NONE} (new)`;
-	const value = fmtVal(pv);
-	const bv = numOrNull(base);
-	if (bv === null) return `${label} ${WHITE} ${value} (new)`;
-	if (neutral) return `${label} ${WHITE} ${value} (${fmtDelta(pv - bv)})`;
-	const t = typeof threshold === 'function' ? threshold(bv) : threshold;
-	return `${label} ${deltaColor(bv, pv, t, dir)} ${value} (${fmtDelta(pv - bv)})`;
-}
-
 // TESTS: "passed/denom", colored by the pass COUNT (higher better, ±1 noise). denom 0 → NONE.
 function testsCell(base, pr) {
 	const pp = numOrNull(pr?.tests_passed);
@@ -344,35 +316,31 @@ function testsCell(base, pr) {
 	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value} (${signedInt(pp - bp)})`;
 }
 
-// JUDGE: one stacked line per rubric dimension — `<dim> <ball> <score> (<Δ>)` (higher better, ±0.3
-// noise) from the CAPPED judge_dimensions with per-dim baseline deltas. Falls back to the overall judge
-// score (inline) when this run or the baseline carries no per-dimension breakdown. Overall judge mean
-// also appears in the preword.
+// JUDGE: ONE compact line — the overall judge score `<ball> <score> (<Δ>)` then ` · ` and a
+// single-letter-per-dimension shorthand (F/S/P/C/B) from the CAPPED judge_dimensions, each with its
+// signed per-dim delta when the baseline carries that dimension (e.g. `🟢 8 (+1) · F9(+2) S8 P7(-1) C8 B9`).
+// A dimension the run lacks reads `<Letter>—`. Falls back to the overall score alone with no per-dimension
+// breakdown, or to the shorthand alone when the overall score is missing. Overall judge mean also
+// appears in the preword.
 function judgeCell(base, pr) {
-	const pd = pr?.judge_dimensions;
-	if (pd && typeof pd === 'object') {
-		const bd = base?.judge_dimensions && typeof base.judge_dimensions === 'object' ? base.judge_dimensions : null;
-		const lines = [];
-		for (const dim of COMMON_DIMENSIONS) {
-			// Unconditional: a null/absent per-dimension score renders `<dim> ⚪ — (new)` via metricLine,
-			// so the stacked judge lines stay row-aligned across cells even when a dimension is missing.
-			lines.push(
-				metricLine(DIM_LABELS[dim] ?? dim, bd ? bd[dim] : null, pd[dim], {
-					threshold: DELTA_THRESHOLDS.judge,
-					dir: 'up',
-					fmtVal: fmtJudge,
-					fmtDelta: signed1,
-				}),
-			);
-		}
-		if (lines.length > 0) return lines.join('<br>');
-	}
-	return scalarCell(base?.judge_score, pr?.judge_score, {
+	const overall = scalarCell(base?.judge_score, pr?.judge_score, {
 		threshold: DELTA_THRESHOLDS.judge,
 		dir: 'up',
 		fmtVal: fmtJudge,
 		fmtDelta: signed1,
 	});
+	const pd = pr?.judge_dimensions;
+	if (!pd || typeof pd !== 'object') return overall;
+	const bd = base?.judge_dimensions && typeof base.judge_dimensions === 'object' ? base.judge_dimensions : null;
+	const shorthand = COMMON_DIMENSIONS.map((dim) => {
+		const letter = DIM_SHORT[dim] ?? dim;
+		const pv = numOrNull(pd[dim]);
+		if (pv === null) return `${letter}${NONE}`;
+		const bv = bd ? numOrNull(bd[dim]) : null;
+		return bv === null ? `${letter}${fmtJudge(pv)}` : `${letter}${fmtJudge(pv)}(${signed1(pv - bv)})`;
+	}).join(' ');
+	if (overall === NONE) return shorthand;
+	return `${overall} · ${shorthand}`;
 }
 
 // COST: $ builder spend (lower better, ±10% of baseline noise).
@@ -385,22 +353,6 @@ function costCell(base, pr) {
 	});
 }
 
-// TOKENS: four stacked lines — in / out / cached in / cached out (all lower better). in/out color vs
-// the baseline (±10%); cached in/out read ⚪ "(new)" until a baseline records them, then color at ±20%.
-// Cache tokens are DISPLAYED only — never folded into cost/SCORE (see scoring.mjs cellCost).
-function tokensCell(base, pr) {
-	const keys = ['tokens_in', 'tokens_out', 'cache_read_tokens', 'cache_write_tokens'];
-	if (keys.every((k) => numOrNull(pr?.[k]) === null)) return NONE;
-	const tokPct = (bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.tokensPct * Math.abs(bv));
-	const tokenOpts = (threshold) => ({ threshold, dir: 'down', fmtVal: humanTokens, fmtDelta: signedTokens });
-	return [
-		metricLine('in', base?.tokens_in, pr?.tokens_in, tokenOpts(tokPct)),
-		metricLine('out', base?.tokens_out, pr?.tokens_out, tokenOpts(tokPct)),
-		metricLine('cached in', base?.cache_read_tokens, pr?.cache_read_tokens, tokenOpts((bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.cacheReadPct * Math.abs(bv)))),
-		metricLine('cached out', base?.cache_write_tokens, pr?.cache_write_tokens, tokenOpts((bv) => Math.max(DELTA_THRESHOLDS.tokensAbs, DELTA_THRESHOLDS.cacheWritePct * Math.abs(bv)))),
-	].join('<br>');
-}
-
 // TURNS: agent cycle_count (lower better, ±3 noise).
 function turnsCell(base, pr) {
 	return scalarCell(base?.cycle_count, pr?.cycle_count, {
@@ -410,19 +362,6 @@ function turnsCell(base, pr) {
 		fmtDelta: signedInt,
 	});
 }
-
-// LOC / FILES: two NEUTRAL stacked lines (created / edited). More or fewer lines/files is neither good
-// nor bad on its own, so these are NEVER 🟢/🔴 — always ⚪ with the value + signed delta (see DELTA_THRESHOLDS).
-function neutralPairCell(base, pr, createdKey, editedKey) {
-	if (numOrNull(pr?.[createdKey]) === null && numOrNull(pr?.[editedKey]) === null) return NONE;
-	const opts = { fmtVal: wholeNum, fmtDelta: signedInt, neutral: true };
-	return [
-		metricLine('created', base?.[createdKey], pr?.[createdKey], opts),
-		metricLine('edited', base?.[editedKey], pr?.[editedKey], opts),
-	].join('<br>');
-}
-const locCell = (base, pr) => neutralPairCell(base, pr, 'loc_created', 'loc_edited');
-const filesCell = (base, pr) => neutralPairCell(base, pr, 'files_created', 'files_edited');
 
 // SCORE: composite-per-$ (direction from SCORE_HIGHER_BETTER, ±5 noise).
 function scoreCell(base, pr) {
@@ -436,14 +375,14 @@ function scoreCell(base, pr) {
 
 // The metric columns after Task|Template, in render order. Kept as one list so the header, the
 // separator, the per-row cells, and the removed-row padding can't drift out of sync.
-const METRIC_COLUMNS = ['Tests', 'Judge', 'Cost', 'Tokens', 'Turns', 'LOC', 'Files', 'Score', 'Stop reason'];
+const METRIC_COLUMNS = ['Tests', 'Judge', 'Cost', 'Turns', 'Score', 'Stop reason'];
 
 // ── Render: single results table ──────────────────────────────────────────────
 /**
- * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TOKENS | TURNS | LOC | FILES | SCORE |
- * STOP REASON. Scalar cells (tests/cost/turns/score) are inline `<ball> <value> (<Δ>)`; JUDGE stacks a
- * line per rubric dimension; TOKENS stacks in/out/cached-in/cached-out; LOC/FILES stack created/edited
- * (NEUTRAL ⚪, no direction). ⚪ "(new)" where the baseline lacks a metric. Every row emits ALL columns.
+ * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TURNS | SCORE | STOP REASON. Scalar
+ * cells (tests/cost/turns/score) are inline `<ball> <value> (<Δ>)`; JUDGE is one line — the overall
+ * score plus a per-dimension shorthand (F/S/P/C/B). ⚪ "(new)" where the baseline lacks a metric. Every
+ * row emits ALL columns.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
@@ -477,10 +416,7 @@ export function renderDetailed(diff, opts = {}) {
 			testsCell(b, p),
 			judgeCell(b, p),
 			costCell(b, p),
-			tokensCell(b, p),
 			turnsCell(b, p),
-			locCell(b, p),
-			filesCell(b, p),
 			scoreCell(b, p),
 			p.stop_reason || NONE,
 		].map(cell);
