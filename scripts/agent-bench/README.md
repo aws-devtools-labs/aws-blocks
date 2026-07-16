@@ -242,12 +242,14 @@ judge scores, builder tokens, cost, and score-per-$, plus the mean) to S3 at
 `bench/runs/<sha>/results.json`; a push-to-`main` run also updates the stable
 pointer `bench/runs/latest-main.json`. The summary job fetches a baseline and
 renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
-`TASK · TEMPLATE · TESTS · JUDGE · COST · TOKENS (in/out) · SCORE · STOP REASON`.
-Each metric cell is two lines (joined by `<br>`): the current value on top and
-the signed delta vs the baseline underneath (`⚪ (new)` when the baseline has no
-value for that field — the value is still shown), colored by `deltaColor` per the
-`DELTA_THRESHOLDS` bands. There is no separate colors-only Overview and no
-standalone `Δ vs base` column — the delta is baked into every cell.
+`TASK · TEMPLATE · TESTS · JUDGE · COST · TURNS · SCORE · STOP REASON`.
+Each metric cell is a single inline line — `<color> <value> (<Δ vs main>)`: the
+current value with its signed delta vs the baseline (`⚪ (new)` when the baseline
+has no value for that field — the value is still shown), colored by `deltaColor`
+per the `DELTA_THRESHOLDS` bands. The JUDGE cell packs the overall score plus a
+per-dimension shorthand (`F`/`S`/`P`/`C`/`B` = functional / selectors /
+persistence / code / blocks) onto that one line. There is no separate colors-only
+Overview and no standalone `Δ vs base` column — the delta is baked into every cell.
 
 A collapsible **Glossary** (scoring, colors, the per-metric thresholds) sits at
 the very top; the deterministic **headline** (mean composite + delta) prints just

@@ -120,16 +120,16 @@ md.push('<summary>📖 Glossary &amp; notes — scoring, colors, per-metric thre
 md.push('');
 md.push('- **N = 1** — one rep per cell, so a small delta may be model variance, not a real change; re-run for certainty.');
 md.push(
-	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<color> <value> (<Δ vs main>)` inline (multi-value cells stack one line per sub-metric).',
+	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<color> <value> (<Δ vs main>)` inline.',
 );
 md.push(
-	'- **Columns:** Tests (pass/denom) · Judge (one line per rubric dimension) · Cost · Tokens (in / out / cached in / cached out) · Turns (agent cycles) · LOC (created / edited) · Files (created / edited) · Score. Cache tokens, Turns, LOC and Files are new — they read ⚪ `(new)` until a `main` bench records a baseline for them.',
+	'- **Columns:** Tests (pass/denom) · Judge (overall score + per-dimension shorthand `F`/`S`/`P`/`C`/`B` = functional / selectors / persistence / code / blocks) · Cost · Turns (agent cycles) · Score · Stop reason. Turns is new — it reads ⚪ `(new)` until a `main` bench records a baseline for it.',
 );
 md.push(
-	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge (& each dimension) ±0.3 · tests ±1 pass · cost ±10% · tokens ±10% per stream · turns ±3 · cached in/out ±20%. A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
+	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge (& each dimension) ±0.3 · tests ±1 pass · cost ±10% · turns ±3. A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
 );
 md.push(
-	'- **Directions:** higher is better for tests, judge (+ dimensions), and score; lower is better for cost, tokens (+ cache), and turns. **LOC & Files have NO good/bad direction** — they are shown NEUTRAL (⚪, value + signed delta, never 🟢/🔴). Cache tokens are DISPLAYED only — they are NOT part of the cost/SCORE formula.',
+	'- **Directions:** higher is better for tests, judge (+ dimensions), and score; lower is better for cost and turns.',
 );
 md.push(
 	'- **Composite (0-100)** = `round(60·test_rate + 4·judge·min(1, 4·test_rate), 1)` — 60% objective pass-rate + 40% judge, the judge term gated below a 25% pass-rate.',
