@@ -6,7 +6,7 @@ import { describe, it } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { secret } from './secret.js';
+import { DEFAULT_SECRET_STORE, secret, secretStoreLocator } from './secret.js';
 import {
 	collectSynthSecretKeys,
 	partitionEnvironment,
@@ -42,7 +42,7 @@ void describe('partitionEnvironment()', () => {
 });
 
 void describe('resolveSecretsAtSynth()', () => {
-	void it('fetches each key via the injected fetcher + prefix (default store: SSM → leading-slash path)', async () => {
+	void it('fetches each key via the injected fetcher + prefix, using the DEFAULT store locator form', async () => {
 		const seen: string[] = [];
 		const resolved = await resolveSecretsAtSynth(['DOMAIN_PROD'], {
 			prefix: '/blocks/secrets',
@@ -51,7 +51,8 @@ void describe('resolveSecretsAtSynth()', () => {
 				return 'prod.example.com';
 			},
 		});
-		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
+		// Locator form follows DEFAULT_SECRET_STORE — flip-proof.
+		assert.deepStrictEqual(seen, [secretStoreLocator('DOMAIN_PROD', { prefix: '/blocks/secrets' })]);
 		assert.strictEqual(resolved.get('DOMAIN_PROD'), 'prod.example.com');
 	});
 
@@ -66,6 +67,19 @@ void describe('resolveSecretsAtSynth()', () => {
 			},
 		});
 		assert.deepStrictEqual(seen, ['blocks/secrets/DOMAIN_PROD']);
+	});
+
+	void it('uses the leading-slash path when store: ssm is opted into', async () => {
+		const seen: string[] = [];
+		await resolveSecretsAtSynth(['DOMAIN_PROD'], {
+			prefix: '/blocks/secrets',
+			store: 'ssm',
+			fetcher: async (locator) => {
+				seen.push(locator);
+				return 'prod.example.com';
+			},
+		});
+		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
 	});
 
 	void it('maps a not-found error (either store) to an actionable message', async () => {
@@ -112,10 +126,9 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		return { stack, fn };
 	}
 
-	void it('SSM (DEFAULT): injects param NAME + grants ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
+	void it('SSM (opt-in): injects param NAME + grants ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
 		const { stack, fn } = fnStack();
-		// No `store` passed → the default (SSM) must apply.
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
@@ -130,15 +143,16 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 				]),
 			},
 		});
-		// No plaintext value in the template, and no store hint for the SSM default.
+		// No plaintext value in the template, and no store hint for SSM.
 		const json = JSON.stringify(t.toJSON());
 		assert.ok(!json.includes('sk_live'));
 		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
 	});
 
-	void it('secrets-manager (opt-in): slash-free locator + _STORE hint + secretsmanager:GetSecretValue', () => {
+	void it('secrets-manager (DEFAULT): slash-free locator + _STORE hint + secretsmanager:GetSecretValue', () => {
 		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'secrets-manager' });
+		// No `store` passed → the default (Secrets Manager) must apply.
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
@@ -159,5 +173,7 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		});
 		// IAM ARN scopes to this secret via SM's -?????? suffix wildcard.
 		assert.ok(JSON.stringify(t.toJSON()).includes('blocks/secrets/STRIPE_KEY-??????'));
+		// The default-store wiring equals an explicit secrets-manager wiring.
+		assert.strictEqual(DEFAULT_SECRET_STORE, 'secrets-manager');
 	});
 });
