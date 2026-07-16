@@ -7,7 +7,7 @@ import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 
 /** Escape user-controlled strings before interpolating into innerHTML */
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 let currentUser: { username: string } | null = null;
