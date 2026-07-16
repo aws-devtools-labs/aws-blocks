@@ -1,5 +1,22 @@
 # @aws-blocks/bb-agent
 
+## 0.3.2
+
+### Patch Changes
+
+- c4313cd: Fix `ERR_MODULE_NOT_FOUND` on a fresh `create-blocks-app` scaffold by making required runtime packages real dependencies of the block that actually loads them. npm does not install peer dependencies of transitive dependencies, so these never landed in `node_modules`.
+
+  - `kysely` → dependency of `@aws-blocks/data-common`. `data-common` is the only package that imports and instantiates `kysely` (in its Kysely adapter); `bb-data` and `bb-distributed-data` merely re-export `createKyselyAdapter` and keep `kysely` as a peer, which is now satisfied transitively via `data-common`. Promoting it on `data-common` alone guarantees a single hoisted instance and installs it for any app that pulls a data block.
+  - `@opentelemetry/api` → dependency of `@aws-blocks/bb-agent`. It is a non-optional peer of `@strands-agents/sdk`, which the Agent block loads at runtime, so it must be installed whenever `bb-agent` is present.
+
+  Both packages have zero runtime dependencies and no install scripts, so this adds no transitive tree.
+
+- 997c736: Lazy-load the Strands SDK in the Agent block so that importing `@aws-blocks/blocks` no longer eagerly loads `@strands-agents/sdk` and its non-optional `@modelcontextprotocol/sdk` / `@opentelemetry/api` peers.
+
+  The `@aws-blocks/blocks` umbrella re-exports `Agent` statically, so a fresh scaffold that never instantiates an agent previously failed on the first `npm run dev` with `ERR_MODULE_NOT_FOUND` for those packages. The Strands runtime is now imported on first agent execution (via a cached dynamic `import()`), so it stays off the module **load path** of apps that don't use an agent — those apps run without the packages installed.
+
+  Scope / follow-up: this removes the packages from the _load path_, not from the _install set_. Apps that actually use an Agent block still need `@strands-agents/sdk`'s non-optional peers (`@modelcontextprotocol/sdk`, `@opentelemetry/api`) installed, because Strands imports them when it loads on first agent execution and npm does not auto-install peers of transitive dependencies. Those are supplied to agent-using apps by the Agent scaffold template (and documented for manual installs) rather than promoted to `dependencies` here, which would pull Strands' ~10 MB transitive tree into every app. No public API change.
+
 ## 0.3.1
 
 ### Patch Changes
