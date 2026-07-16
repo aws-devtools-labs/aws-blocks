@@ -1,5 +1,14 @@
 # @aws-blocks/blocks
 
+## 0.2.3
+
+### Patch Changes
+
+- fc8cfad: Republish the umbrella `@aws-blocks/blocks` package so its tarball matches the updated re-exported APIs (`@aws-blocks/core`, `@aws-blocks/bb-agent`) and synced block docs. The sibling patch releases stayed within `blocks`' caret dependency ranges, so `changeset version` did not auto-bump the umbrella package, and the publish integrity guard requires a version bump when packed content changes.
+- Updated dependencies [c4313cd]
+- Updated dependencies [997c736]
+  - @aws-blocks/bb-agent@0.3.2
+
 ## 0.2.2
 
 ### Patch Changes
