@@ -74,44 +74,62 @@ jobs:
       - name: Sync block docs (prebuild step)
         run: node scripts/sync-block-docs.mjs
 
-      - name: Check blocks package integrity
+      - name: Check blocks docs-sync integrity
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          cd packages/blocks
+          set -euo pipefail
 
-          # Pack the local package to get its shasum
-          LOCAL_TARBALL=$(npm pack --pack-destination /tmp 2>/dev/null)
-          LOCAL_INTEGRITY=$(shasum -a 512 "/tmp/$LOCAL_TARBALL" | awk '{print $1}')
+          # sync-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
+          # (docs/ is gitignored, built at publish time). We compare the packed
+          # @aws-blocks/blocks tarball at THIS PR's head against the PR base branch —
+          # like-for-like (same algo, same build state), so only a change introduced by
+          # THIS PR trips the check. A PR that doesn't alter what ships needs no bump.
+          pack_blocks() {
+            local dest="$1"
+            node scripts/sync-block-docs.mjs >/dev/null
+            # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null )
+            set -- "$dest"/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in $dest, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
+          }
 
-          # Get the current published version
-          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p /tmp/head-pack
+          HEAD_INTEGRITY=$(pack_blocks /tmp/head-pack)
 
-          # Fetch the published integrity hash — if the version isn't published yet, skip
-          PUBLISHED_INTEGRITY=$(npm view "@aws-blocks/blocks@$VERSION" dist.shasum 2>/dev/null || echo "")
+          # BASE_SHA is present locally (checkout uses fetch-depth: 0).
+          git worktree add --detach /tmp/blocks-base "$BASE_SHA" >/dev/null
+          mkdir -p /tmp/base-pack
+          BASE_INTEGRITY=$(
+            cd /tmp/blocks-base
+            node scripts/sync-block-docs.mjs >/dev/null
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null )
+            set -- /tmp/base-pack/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
+          )
+          git worktree remove --force /tmp/blocks-base
 
-          if [ -z "$PUBLISHED_INTEGRITY" ]; then
-            echo "✅ Version $VERSION is not yet published on npm — nothing to compare."
+          echo "Head packed shasum: $HEAD_INTEGRITY"
+          echo "Base packed shasum: $BASE_INTEGRITY"
+
+          # Relies on npm's reproducible packing (fixed mtimes); head & base pack on the same runner, so identical content ⇒ identical tarball hash.
+          if [ "$HEAD_INTEGRITY" = "$BASE_INTEGRITY" ]; then
+            echo "✅ @aws-blocks/blocks packaged content is unchanged vs the base branch — no version bump required."
             exit 0
           fi
 
-          echo "Local shasum:     $LOCAL_INTEGRITY"
-          echo "Published shasum: $PUBLISHED_INTEGRITY"
-
-          if [ "$LOCAL_INTEGRITY" = "$PUBLISHED_INTEGRITY" ]; then
-            echo "✅ Package content matches the published version."
-            exit 0
-          fi
-
-          # Content differs — check if a changeset already bumps @aws-blocks/blocks
-          cd "$GITHUB_WORKSPACE"
-          CHANGESET_BUMPS=$(find .changeset -name '*.md' ! -name 'README.md' -exec grep -l '"@aws-blocks/blocks"' {} \;)
+          # Content changed vs base — require a changeset that bumps @aws-blocks/blocks.
+          CHANGESET_BUMPS=$(find .changeset -name '*.md' ! -name 'README.md' -exec grep -l '"@aws-blocks/blocks"' {} \; || true)
 
           if [ -n "$CHANGESET_BUMPS" ]; then
-            echo "✅ Package content changed but a changeset already bumps @aws-blocks/blocks:"
+            echo "✅ Packaged content changed and a changeset already bumps @aws-blocks/blocks:"
             echo "$CHANGESET_BUMPS"
             exit 0
           fi
 
-          echo "❌ The @aws-blocks/blocks package content has changed (synced docs from sibling packages), but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to your changeset file."
+          echo "❌ This PR changes @aws-blocks/blocks packaged content (e.g. synced docs from sibling READMEs) vs the base branch, but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to a changeset."
           exit 1
 
   build-and-test-local:

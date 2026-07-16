@@ -66,6 +66,14 @@ type BuildKvsInput = {
    * Lambda, which does NOT contain the split edge routes → 500.
    */
   edgeTargets?: Set<string>;
+  /**
+   * Override the max chunks allowed per KVS table (routes/redirects/headers).
+   * Defaults to {@link KVS_BUDGET.maxChunksPerTable} (64). Sourced from the
+   * `quotas.maxRouteChunks` hosting prop so a very large (e.g.
+   * `trailingSlash: true`) site can raise the build-time guard after verifying
+   * edge-function headroom. See issue #8.
+   */
+  maxChunksPerTable?: number;
 };
 
 /**
@@ -168,7 +176,26 @@ const normalizePattern = (pattern: string, basePath?: string): string => {
  */
 export const coalesceRoutes = (
   rows: [string, RouteKind][],
+  options: { isrActive?: boolean } = {},
 ): [string, RouteKind][] => {
+  // When ISR/SWR is active on a compute deploy (`manifest.cache` set), a
+  // non-prebuilt child of a coalesced STATIC group must render on-demand at the
+  // SSR Lambda — not 404 from S3 (issue #7). Nitro/Nuxt DOES support on-demand
+  // ISR (`routeRules` `isr`/`swr` → `manifest.cache = nitro-s3`), so the
+  // "frozen prerender only" assumption does NOT hold for that subtree.
+  //
+  // A naive fix (don't coalesce static groups under ISR) keeps them as N
+  // individual rows — which EXPLODES the route table for a large SSG+ISR site
+  // (hundreds of rows → many KVS chunks → the per-request edge scan, DOUBLED
+  // for a trailing-slash URI, trips the CloudFront Function compute limit →
+  // FunctionExecutionError 503). So instead we STILL coalesce the fan-out into
+  // ONE `parent/*` row (table stays bounded), but under ISR we flip that
+  // wildcard's kind from static→COMPUTE. The SSR Lambda then serves the whole
+  // subtree: prebuilt children from its ISR cache, non-prebuilt children
+  // on-demand — never a hard S3 404. (Deploy-wide `isrActive` is the only
+  // signal available here; sending genuinely-frozen prerendered pages through
+  // the Lambda's cache is a minor efficiency tradeoff, not a correctness one.)
+  const isrActive = options.isrActive === true;
   // Group by parent directory: strip a trailing '/*', then take everything up
   // to the last '/'. Both `/blog/p` and `/blog/p/*` → parent `/blog`.
   const groups = new Map<string, [string, RouteKind][]>();
@@ -191,8 +218,14 @@ export const coalesceRoutes = (
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
-    if (members.length >= 2 && uniformKind && parent.length > 0) {
-      out.push([`${parent}/*`, members[0][1]]);
+    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0;
+    if (coalesceThis) {
+      // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
+      // note above) so non-prebuilt children render on-demand instead of
+      // 404ing from S3. Compute/image groups keep their kind.
+      const kind: RouteKind =
+        isrActive && members[0][1] === 's' ? 'c' : members[0][1];
+      out.push([`${parent}/*`, kind]);
     } else {
       out.push(...members);
     }
@@ -269,7 +302,12 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // single `parent/*` wildcard so the per-request edge scan stays bounded and
   // never trips the CloudFront Function instruction limit. See coalesceRoutes.
   // Runs on RELATIVE patterns (see note above); basePath is prepended next.
-  const coalescedRel = coalesceRoutes(rows);
+  //
+  // When ISR/SWR is active (manifest.cache set) on a compute deploy, static
+  // groups are NOT coalesced so a non-prebuilt on-demand child falls through to
+  // the SSR Lambda instead of hitting the coalesced S3 wildcard → 404 (#7).
+  const isrActive = hasServer && manifest.cache !== undefined;
+  const coalescedRel = coalesceRoutes(rows, { isrActive });
 
   // Prepend basePath ONCE, after coalescing. prependBasePath is idempotent, so
   // a pattern that somehow already carries the prefix is left intact.
@@ -344,14 +382,40 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
     redirectChunks.length,
     headerChunks.length,
   );
-  if (tooManyChunks > KVS_BUDGET.maxChunksPerTable) {
+  // Tunable via `quotas.maxRouteChunks` (see issue #8); defaults to 64. Must be
+  // a positive integer — a fractional value (e.g. 0.5) is a caller mistake and
+  // falls back to the default rather than silently capping between chunk counts.
+  const maxChunksPerTable =
+    Number.isInteger(input.maxChunksPerTable) &&
+    (input.maxChunksPerTable ?? 0) > 0
+      ? input.maxChunksPerTable!
+      : KVS_BUDGET.maxChunksPerTable;
+  if (tooManyChunks > maxChunksPerTable) {
+    // Identify which table hit the cap for a targeted error message.
+    const culprit =
+      redirectChunks.length === tooManyChunks
+        ? 'redirects'
+        : routeChunks.length === tooManyChunks
+          ? 'routes'
+          : 'headers';
     throw new HostingError('TooManyRoutesError', {
-      message: `Edge route table needs ${tooManyChunks} chunks for one table, exceeding the safe per-request read budget of ${KVS_BUDGET.maxChunksPerTable}.`,
+      message:
+        `Edge route table needs ${tooManyChunks} chunks for the ${culprit} table, ` +
+        `exceeding the safe per-request read budget of ${maxChunksPerTable}. ` +
+        `(Each chunk holds ~25 entries, so the cap is roughly ${maxChunksPerTable * 25} entries.)`,
       resolution:
-        'Reduce the number of routes/redirects/headers, or consolidate them ' +
-        'into wildcard patterns. The KVS edge router reads chunks sequentially ' +
-        'per request, so an unbounded table risks the CloudFront Function ' +
-        'compute-utilization limit at the edge.',
+        (culprit === 'redirects'
+          ? 'The most common cause is a `trailingSlash: true` Next.js config ' +
+            '— it emits one canonical-form redirect per route, which doubles ' +
+            'the redirect count. Consider switching to `trailingSlash: false` ' +
+            '(the default), reducing the number of routes, or consolidating ' +
+            'redirects into wildcard patterns. '
+          : 'Reduce the number of routes/redirects/headers, or consolidate ' +
+            'them into wildcard patterns. ') +
+        'The KVS edge router reads chunks sequentially per request, so an ' +
+        'unbounded table risks the CloudFront Function compute-utilization ' +
+        'limit at the edge. If you have measured headroom, raise the ' +
+        '`quotas.maxRouteChunks` hosting prop.',
     });
   }
 

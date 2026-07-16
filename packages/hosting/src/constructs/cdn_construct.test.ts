@@ -1262,6 +1262,99 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('NO S3-origin behavior (default OR edge) uses a managed origin request policy (regression-proofs the S3+managed 400 class)', () => {
+      // CloudFront rejects the AWS-managed ALL_VIEWER_EXCEPT_HOST_HEADER (and
+      // any managed policy other than CORS-CustomOrigin / CORS-S3Origin /
+      // UserAgentRefererHeaders) on an S3 origin — 400 InvalidRequest at
+      // distribution create. The default behavior AND the edge-route behavior
+      // both target the S3 origin, so BOTH must use the synthesized custom
+      // policy (rendered as { Ref }), never a managed policy id (a literal
+      // UUID string). This guards the whole bug class, not just one case.
+      // Deploy WITH an edge route so the previously-unexercised edge behavior
+      // is included.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const edgeFn = new LambdaFunction(stack, 'EdgeOrpFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: { type: 'handler', bundle: '/tmp/bundle', handler: 'index.handler', placement: 'regional' },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/*', target: 'default' },
+        ],
+        buildId: 'edge-orp-1',
+      };
+      new CdnConstruct(stack, 'CdnEdgeOrp', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        routeEdgeFunctions: new Map([['edge1', edgeFn.currentVersion]]),
+      });
+      const template = Template.fromStack(stack);
+
+      // Managed origin-request-policy ids CloudFront disallows on S3 origins.
+      // (CORS-S3Origin / CORS-CustomOrigin / UserAgentRefererHeaders ARE
+      // allowed, but the construct never uses those on the S3 origin, so any
+      // literal-string policy id on an S3-origin behavior is a red flag.)
+      const MANAGED_IDS = new Set([
+        'b689b0a8-53d0-40ab-baf2-68738e2966ac', // ALL_VIEWER_EXCEPT_HOST_HEADER
+        '216adef6-5c7f-47e4-b989-5492eafa07d3', // ALL_VIEWER
+        '33f36d7e-f396-46d9-90e0-52428a34d9dc', // ALL_VIEWER_AND_CLOUDFRONT_2022
+      ]);
+
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: {
+            DefaultCacheBehavior: Record<string, unknown>;
+            CacheBehaviors?: Array<Record<string, unknown>>;
+          };
+        };
+      };
+      const cfg = dist.Properties.DistributionConfig;
+      const allBehaviors = [
+        cfg.DefaultCacheBehavior,
+        ...(cfg.CacheBehaviors ?? []),
+      ];
+
+      for (const b of allBehaviors) {
+        if (b.TargetOriginId !== ORIGIN_ID.s3) continue; // only S3-origin behaviors
+        const orp = b.OriginRequestPolicyId;
+        // A synthesized custom policy is a { Ref }; a managed policy is a
+        // literal UUID string. Only the former is legal on an S3 origin.
+        if (typeof orp === 'string') {
+          assert.ok(
+            !MANAGED_IDS.has(orp),
+            `S3-origin behavior (pattern ${String(b.PathPattern ?? 'default')}) uses a managed origin request policy ${orp} — CloudFront rejects this on S3 origins`,
+          );
+        }
+      }
+
+      // Positive assertion: the edge behavior specifically references a custom
+      // policy Ref (proves the fix, not just the absence of a managed id).
+      const edgeBehavior = (cfg.CacheBehaviors ?? []).find(
+        (b) => b.PathPattern === '/api/edge',
+      );
+      assert.ok(edgeBehavior, '/api/edge behavior present');
+      const edgeOrp = edgeBehavior!.OriginRequestPolicyId;
+      assert.ok(
+        typeof edgeOrp === 'object' && edgeOrp !== null && 'Ref' in (edgeOrp as Record<string, unknown>),
+        'edge S3-origin behavior must reference the synthesized custom policy via Ref',
+      );
+    });
+
     void it('attaches includeBody on the edge origin-request association (POST/PUT body)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
@@ -1586,6 +1679,268 @@ void describe('CdnConstruct', () => {
       );
     });
 
+    void it('SSR cache policy excludes _rsc from the cache key (issue #11)', () => {
+      // Next appends a random `_rsc=<hash>` to every RSC prefetch. With
+      // queryStringBehavior=all() each value is a distinct cache entry and
+      // every prefetch MISSes. The policy must cache on all query strings
+      // EXCEPT `_rsc` so prefetches of the same page coalesce at the edge.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-rsc-cache',
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', defaultUrl]]),
+        computeFunctions: new Map([['default', defaultFn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
+        CachePolicyConfig: Match.objectLike({
+          ParametersInCacheKeyAndForwardedToOrigin: Match.objectLike({
+            QueryStringsConfig: {
+              QueryStringBehavior: 'allExcept',
+              QueryStrings: ['_rsc'],
+            },
+          }),
+        }),
+      });
+    });
+
+    // ── IPX image Lambda on the shared SSR API Gateway (issue #2) ──────────
+    // Helper: a compute manifest + SSR default fn + an image-optimization fn.
+    const withImageOpt = (
+      stack: Stack,
+      imageOptimization?: DeployManifest['imageOptimization'],
+    ) => {
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const imageUrl = imageFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+      });
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-ipx',
+        ...(imageOptimization ? { imageOptimization } : {}),
+      };
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([
+          ['default', defaultUrl],
+          ['image-optimization', imageUrl],
+        ]),
+        computeFunctions: new Map([
+          ['default', defaultFn],
+          ['image-optimization', imageFn],
+        ]),
+      });
+      return Template.fromStack(stack);
+    };
+
+    void it('IPX image Lambda (baseURL set) is attached to the shared SSR API Gateway', () => {
+      const stack = createStack();
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+        baseURL: '/_ipx',
+      });
+      // Exactly ONE RestApi (shared) — the IPX Lambda did NOT get its own.
+      template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      // A dedicated `_ipx` resource exists on the API for IPX routing.
+      template.hasResourceProperties('AWS::ApiGateway::Resource', {
+        PathPart: '_ipx',
+      });
+      // …with a `{proxy+}` catch-all under it.
+      template.hasResourceProperties('AWS::ApiGateway::Resource', {
+        PathPart: '{proxy+}',
+      });
+    });
+
+    void it('IPX image origin points at the API Gateway host (custom origin), NOT a Function URL', () => {
+      const stack = createStack();
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+        baseURL: '/_ipx',
+      });
+      const dist = Object.values(
+        template.findResources('AWS::CloudFront::Distribution'),
+      )[0] as {
+        Properties: {
+          DistributionConfig: {
+            Origins: {
+              Id: string;
+              CustomOriginConfig?: unknown;
+              OriginCustomHeaders?: { HeaderName: string }[];
+            }[];
+          };
+        };
+      };
+      const img = dist.Properties.DistributionConfig.Origins.find(
+        (o) => o.Id === ORIGIN_ID.image,
+      );
+      assert.ok(img, 'image origin present');
+      // An API-GW HttpOrigin is a custom origin carrying the origin-verify
+      // Referer header — NOT an OAC S3/Function-URL origin.
+      assert.ok(
+        img!.CustomOriginConfig,
+        'image origin must be a custom (HTTP) origin → the shared API GW',
+      );
+      assert.ok(
+        (img!.OriginCustomHeaders ?? []).some((h) => h.HeaderName === 'Referer'),
+        'image origin must carry the origin-verify Referer header',
+      );
+    });
+
+    void it('Next image Lambda (no baseURL) stays on its Function URL, NOT the API GW', () => {
+      const stack = createStack();
+      // No `baseURL` → this is the OpenNext (Next.js) image bundle, which
+      // speaks Function URL v2 events and must NOT be rerouted to API GW.
+      const template = withImageOpt(stack, {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+      });
+      // No `_ipx` API-GW resource was created for it.
+      const resources = template.findResources('AWS::ApiGateway::Resource');
+      const hasIpx = Object.values(resources).some(
+        (r) => (r.Properties as { PathPart?: string }).PathPart === '_ipx',
+      );
+      assert.equal(hasIpx, false, 'Next image path must not add an _ipx API-GW resource');
+    });
+
+    void it('default S3-origin behavior uses a CUSTOM origin request policy, not the restricted managed one', () => {
+      // CloudFront rejects the managed ALL_VIEWER_EXCEPT_HOST_HEADER on an S3
+      // origin ("S3 Origins can only use ... CORS-CustomOrigin, CORS-S3Origin,
+      // UserAgentRefererHeaders"). The default behavior's static origin is S3,
+      // so it must reference a synthesized custom policy (a Ref), not a managed
+      // policy id string.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      const defaultFn = new LambdaFunction(stack, 'DefaultFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      const defaultUrl = defaultFn.addFunctionUrl({
+        authType: FunctionUrlAuthType.AWS_IAM,
+        invokeMode: InvokeMode.RESPONSE_STREAM,
+      });
+
+      const manifest: DeployManifest = {
+        version: 1,
+        compute: {
+          default: {
+            type: 'handler',
+            bundle: '/tmp/default-bundle',
+            handler: 'index.handler',
+            placement: 'regional',
+          },
+        },
+        staticAssets: { directory: '/tmp/assets' },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'test-orp',
+      };
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', defaultUrl]]),
+        computeFunctions: new Map([['default', defaultFn]]),
+      });
+
+      const template = Template.fromStack(stack);
+      // A custom OriginRequestPolicy is synthesized, forwarding all viewer data
+      // except the Host header.
+      template.hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
+        OriginRequestPolicyConfig: Match.objectLike({
+          HeadersConfig: Match.objectLike({
+            HeaderBehavior: 'allExcept',
+            Headers: ['host'],
+          }),
+          CookiesConfig: { CookieBehavior: 'all' },
+          QueryStringsConfig: { QueryStringBehavior: 'all' },
+        }),
+      });
+
+      // The default behavior references it via Ref (not a managed policy id).
+      const json = template.toJSON() as Record<string, unknown>;
+      const resources = json['Resources'] as Record<string, Record<string, unknown>>;
+      const dist = Object.values(resources).find(
+        (r) => r['Type'] === 'AWS::CloudFront::Distribution',
+      );
+      const distProps = dist!['Properties'] as Record<string, unknown>;
+      const distConfig = distProps['DistributionConfig'] as Record<string, unknown>;
+      const defaultBehavior = distConfig['DefaultCacheBehavior'] as Record<string, unknown>;
+      const orp = defaultBehavior['OriginRequestPolicyId'];
+      assert.equal(
+        typeof orp === 'object' && orp !== null && 'Ref' in (orp as Record<string, unknown>),
+        true,
+        'default behavior must reference a synthesized custom OriginRequestPolicy via Ref',
+      );
+    });
+
     void it('orders multi-wildcard patterns above /_next/* by literal-segment count in the KVS route table', () => {
       // Route ordering is now done by buildKvsEntries (the router scans the
       // table first-match-wins). A pattern like /api/*/data/* (2 literal
@@ -1756,6 +2111,32 @@ void describe('CdnConstruct', () => {
           Statement: Match.arrayWith([
             Match.objectLike({
               Action: 's3:GetObject',
+              Principal: { Service: 'cloudfront.amazonaws.com' },
+            }),
+          ]),
+        }),
+      });
+    });
+
+    void it('grants s3:ListBucket so missing keys 404 (not 403 AccessDenied)', () => {
+      // Issue #9: without ListBucket, S3-OAC returns 403 AccessDenied + raw
+      // XML for a missing object; granting it makes S3 return a clean 404.
+      const stack = createEnvStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: spaManifest,
+        securityHeadersPolicy: policy,
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::S3::BucketPolicy', {
+        PolicyDocument: Match.objectLike({
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: 's3:ListBucket',
               Principal: { Service: 'cloudfront.amazonaws.com' },
             }),
           ]),

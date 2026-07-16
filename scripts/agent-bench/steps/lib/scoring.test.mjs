@@ -1,17 +1,17 @@
-// Unit tests for the bench scoring single-source-of-truth (scoring.mjs).
-//
-// These pin the integrity-critical invariants — the composite formula, the
-// verdict tiers, cell classification, and the headline-mean inclusion rule — so
-// finalize-result.mjs and summary.mjs can never silently drift from the
-// pre-registered scoring methodology documented in the README. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test.
+// Unit tests for the bench scoring single-source-of-truth (scoring.mjs): the composite formula,
+// verdict tiers, cell classification, and the headline-mean inclusion rule. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	AGENT_FAIL_AT,
 	AGENT_FAIL_REASON,
+	AGENT_HARNESS_TEARDOWN_REASON,
+	BUILDER_PRICING,
+	CHECKPOINT_STOP_REASON,
+	PRICING,
 	buildCapDecision,
+	cellCost,
 	classifyCell,
 	COMMON_DIMENSIONS,
 	composite,
@@ -19,6 +19,8 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isScoredCell,
+	isUngracefulStepTwoDeath,
+	scorePerDollar,
 	testRate,
 	testStats,
 	verdict,
@@ -125,7 +127,10 @@ describe('classifyCell(result)', () => {
 	});
 
 	it("an agent (2-agent) failure that is NOT a cancellation → agent_fail (INCLUDED), reason 'agent_timeout'", () => {
-		assert.deepEqual(classifyCell({ failed_at: AGENT_FAIL_AT, status: 'error' }), {
+		// A GENUINE timeout reaches the SIGTERM flush and stamps a terminal
+		// stop_reason — that graceful marker is what keeps it an agent_fail (vs an
+		// ungraceful harness teardown, covered in its own describe block below).
+		assert.deepEqual(classifyCell({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), {
 			klass: 'agent_fail',
 			reason: AGENT_FAIL_REASON,
 		});
@@ -159,9 +164,114 @@ describe('classifyCell(result)', () => {
 	});
 });
 
+describe('harness-integrity: ungraceful 2-agent teardown is reclassified harness_error (issue #183)', () => {
+	// The bug: the agent's bash pkill storm tears down the harness (npx tsx) with an ungraceful exit
+	// (143/137) that BYPASSES the SIGTERM flush, leaving step-0 zeros. That self-inflicted kill must be
+	// EXCLUDED (harness_error), not scored as a composite-0 agent_fail — BUT only when agent-shell
+	// isolation was ACTIVE (isolation_active === true). With isolation on, cross-uid EPERM means the
+	// only ungraceful deaths left are genuine infra; with it OFF the pkill-storm is the agent's own
+	// doing and must stay agent_fail (see the isolation-gate tests below).
+	it('exit-143 / no-flush death UNDER ISOLATION (baseline zeros, no stop_reason) → harness_error, EXCLUDED', () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: '',
+			tokens_in: 0,
+			tokens_out: 0,
+			isolation_active: true,
+		};
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: AGENT_HARNESS_TEARDOWN_REASON });
+		assert.equal(isScoredCell(cell), false); // EXCLUDED — a flaky teardown can't move the score
+		assert.equal(verdictOf(cell), 'harness_error');
+	});
+
+	it('the SAME ungraceful death with isolation OFF → agent_fail, INCLUDED (the #184 pkill-storm is the agent)', () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: false };
+		assert.equal(isUngracefulStepTwoDeath(cell), true); // same signature…
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON }); // …but NOT excluded
+		assert.equal(isScoredCell(cell), true); // INCLUDED (composite 0) — isolation was not protecting the harness
+		assert.equal(verdictOf(cell), 'fail');
+	});
+
+	it('an ungraceful death with UNPROVEN isolation (flag absent) → agent_fail, INCLUDED (never exclude unproven)', () => {
+		// The honest default: excluding requires PROOF isolation was active. An absent flag (e.g. the
+		// envelope was never written) is treated as not-isolated so a self-inflicted kill can't hide.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error' };
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('a SURVIVING running checkpoint (nonzero tokens, in_progress) → harness_error EXCLUDED, but cost preserved', () => {
+		// fix (2): the checkpoint leaves nonzero tokens + the non-terminal CHECKPOINT_STOP_REASON +
+		// checkpoint:true on an abrupt death. No terminal path overwrote it → EXCLUDED, but cost preserved.
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: CHECKPOINT_STOP_REASON,
+			checkpoint: true,
+			tokens_in: 240_000,
+			tokens_out: 40_000,
+			isolation_active: true,
+		};
+		assert.equal(isUngracefulStepTwoDeath(cell), true);
+		assert.equal(classifyCell(cell).klass, 'harness_error');
+		assert.equal(isScoredCell(cell), false); // still excluded from the mean
+		assert.ok(cellCost(cell) > 0, 'spend must be preserved (not masked) even though excluded');
+	});
+
+	it('a GENUINE agent timeout that reached the SIGTERM flush stays agent_fail, INCLUDED', () => {
+		// The graceful path stamps a TERMINAL stop_reason and no checkpoint flag —
+		// that is exactly the marker that keeps a real timeout counted as a fail.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout', tokens_in: 500_000 };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+		assert.equal(isScoredCell(cell), true); // INCLUDED — the agent is what's under test
+		assert.equal(verdictOf(cell), 'fail');
+	});
+
+	it('an invoke-exhausted sentinel (terminal stop_reason "error") stays agent_fail, INCLUDED', () => {
+		// The retry-loop sentinel is also a graceful terminal write, so it counts.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'error', tokens_in: 12_000 };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.equal(classifyCell(cell).klass, 'agent_fail');
+		assert.equal(isScoredCell(cell), true);
+	});
+
+	it('a cancellation at 2-agent is harness_error via the upstream cancel rule, NOT the teardown rule', () => {
+		// isUngracefulStepTwoDeath deliberately excludes cancellations (classifyCell
+		// handles them first) so the two harness_error paths stay distinct.
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'cancelled' };
+		assert.equal(isUngracefulStepTwoDeath(cell), false);
+		assert.deepEqual(classifyCell(cell), { klass: 'harness_error', reason: 'cancelled' });
+	});
+
+	it('the teardown rule only fires at 2-agent — a graceful-looking non-agent step is untouched', () => {
+		assert.equal(isUngracefulStepTwoDeath({ failed_at: '3-build-test', status: 'error' }), false);
+		assert.equal(isUngracefulStepTwoDeath({ failed_at: null, status: 'scored' }), false);
+	});
+
+	it('headline-mean impact: an ungraceful teardown is dropped from the mean, a real timeout is not', () => {
+		// Mirrors the run-29085298913 signature: a self-inflicted teardown must not
+		// sit in the denominator as a composite 0. Two otherwise-identical cells,
+		// one graceful (INCLUDED as 0) and one ungraceful (EXCLUDED), prove the split.
+		const graceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
+		const ungraceful = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: '', isolation_active: true };
+		const good = { tests_passed: 8, tests_failed: 2 }; // scored
+		const cells = [graceful, ungraceful, good];
+		const included = cells.filter((c) => isScoredCell(c));
+		assert.deepEqual(
+			included.map((c) => (c === graceful ? 'graceful' : c === good ? 'good' : 'ungraceful?')),
+			['graceful', 'good'],
+			'the ungraceful teardown must be excluded from the scored set',
+		);
+	});
+});
+
 describe('isScoredCell(result) — the single inclusion rule for the headline mean', () => {
 	it('an agent_fail IS included (the agent is exactly what is under test)', () => {
-		assert.equal(isScoredCell({ failed_at: AGENT_FAIL_AT, status: 'error' }), true);
+		assert.equal(isScoredCell({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), true);
 		assert.equal(isScoredCell({ klass: 'agent_fail' }), true);
 	});
 
@@ -242,7 +352,7 @@ describe('testStats / testRate', () => {
 
 describe('verdictOf(result) — derives the hint from the cell then defers to verdict()', () => {
 	it("an agent_fail is a real 'fail' (must NOT read as 'unknown' and get excluded)", () => {
-		assert.equal(verdictOf({ failed_at: AGENT_FAIL_AT, status: 'error' }), 'fail');
+		assert.equal(verdictOf({ failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' }), 'fail');
 		assert.equal(verdictOf({ klass: 'agent_fail' }), 'fail');
 	});
 
@@ -264,7 +374,7 @@ describe('verdictOf(result) — derives the hint from the cell then defers to ve
 
 describe('agent_fail end-to-end invariant: verdict fail, composite 0, INCLUDED', () => {
 	it('an agent timeout scores composite 0, verdicts fail, and counts toward the mean', () => {
-		const cell = { failed_at: AGENT_FAIL_AT, status: 'error' };
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
 		const tr = testRate(testStats(cell)); // no tests ran → 0
 		assert.equal(tr, 0);
 		assert.equal(composite(tr, 10), 0); // even a generous judge cannot lift it off 0
@@ -374,11 +484,8 @@ describe('hardCapPlan(ev) — deterministic, non-stacking hard caps (fairness)',
 	});
 
 	it('FAIRNESS: build failed + dev NOT started (same root failure) → fc capped ONCE to 3, NOT stacked to 2', () => {
-		// A broken build can't serve a dev server, so the not-started dev server is
-		// a downstream symptom of the SAME root failure. The build cap owns
-		// functional_completeness (ceiling 3); the dev-server rule must NOT add a
-		// second, lower fc ceiling (2) on top — that would double-penalize one
-		// cause. selector_contract, a distinct dimension, is still capped to 2.
+		// A broken build can't serve a dev server (same root failure). The build cap owns fc (ceiling 3);
+		// the dev-server rule must NOT stack a second fc cap. selector_contract is still capped to 2.
 		const plan = hardCapPlan({ build_status: 'failed', dev_server_started: 'false' });
 		const fcCaps = plan.caps.filter((c) => c.dimension === 'functional_completeness');
 		assert.equal(fcCaps.length, 1, 'functional_completeness must be capped exactly once');
@@ -441,5 +548,41 @@ describe('scored-cell integrity across the judge/build-test failure modes', () =
 		assert.equal(verdictOf(cell), 'partial');
 		// Judge skipped ⇒ judge term gated to 0 ⇒ composite is the test portion: 60*(2/3) = 40.
 		assert.equal(composite(testRate(testStats(cell)), 0), 40);
+	});
+});
+
+describe('cellCost(r) — builder token spend priced at BUILDER_PRICING', () => {
+	it('BUILDER_PRICING is Opus 4.8 ($5/$25 per 1M) — the one place to edit for pricing', () => {
+		assert.deepEqual(PRICING['claude-sonnet'], { input: 3.0, output: 15.0 });
+		assert.deepEqual(PRICING['claude-opus'], { input: 5.0, output: 25.0 });
+		assert.equal(BUILDER_PRICING, PRICING['claude-opus']);
+	});
+	it('prices in + out tokens at $/1M', () => {
+		// (200000*5 + 30000*25)/1e6 = (1000000 + 750000)/1e6 = 1.75
+		assert.equal(cellCost({ tokens_in: 200000, tokens_out: 30000 }), 1.75);
+		// (100000*5 + 20000*25)/1e6 = 1.0
+		assert.equal(cellCost({ tokens_in: 100000, tokens_out: 20000 }), 1.0);
+	});
+	it('returns null (never a fake $0) when there are no usable token counts', () => {
+		assert.equal(cellCost({}), null);
+		assert.equal(cellCost({ tokens_in: 0, tokens_out: 0 }), null);
+		assert.equal(cellCost({ tokens_in: undefined, tokens_out: null }), null);
+	});
+	it('accepts a custom pricing table', () => {
+		// A custom table overrides the Opus 4.8 default — Sonnet: (1e6*3 + 1e6*15)/1e6 = 18
+		assert.equal(cellCost({ tokens_in: 1_000_000, tokens_out: 1_000_000 }, PRICING['claude-sonnet']), 18);
+	});
+});
+
+describe('scorePerDollar(composite, cost) — the headline SCORE (points per $)', () => {
+	it('is composite / cost, rounded to 1 decimal', () => {
+		assert.equal(scorePerDollar(92, 1.05), 87.6); // 92/1.05 = 87.619…
+		assert.equal(scorePerDollar(65, 0.6), 108.3); // 65/0.6 = 108.33…
+		assert.equal(scorePerDollar(0, 1.05), 0); // a broken cell scores 0 no matter how cheap
+	});
+	it('is null when composite or cost is missing / non-positive', () => {
+		assert.equal(scorePerDollar(null, 1.05), null);
+		assert.equal(scorePerDollar(92, null), null);
+		assert.equal(scorePerDollar(92, 0), null);
 	});
 });
