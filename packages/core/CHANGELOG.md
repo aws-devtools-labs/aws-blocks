@@ -1,5 +1,11 @@
 # @aws-blocks/core
 
+## 0.1.13
+
+### Patch Changes
+
+- a7427d4: Prevent verbose local RPC logging from turning successful void handlers into error responses.
+
 ## 0.1.12
 
 ### Patch Changes
