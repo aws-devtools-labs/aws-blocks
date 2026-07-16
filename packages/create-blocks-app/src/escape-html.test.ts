@@ -6,7 +6,7 @@ import assert from 'node:assert';
  * We test it here so the unit test runs without needing a browser or dev server.
  */
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 test('escapeHtml - escapes script tags', () => {
@@ -41,5 +41,17 @@ test('escapeHtml - handles empty string', () => {
 });
 
 test('escapeHtml - handles string with all special chars', () => {
-  assert.strictEqual(escapeHtml('&<>"'), '&amp;&lt;&gt;&quot;');
+  assert.strictEqual(escapeHtml(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
+});
+
+test('escapeHtml - escapes single quotes', () => {
+  assert.strictEqual(escapeHtml("it's a 'test'"), 'it&#39;s a &#39;test&#39;');
+});
+
+test('escapeHtml - prevents single-quote attribute breakout', () => {
+  // Mirrors demo usage: onchange="toggleTodo('${escapeHtml(id)}', ...)" — a raw
+  // single quote would break out of the JS string literal and enable XSS.
+  const result = escapeHtml("');alert(1)//");
+  assert.ok(!result.includes("'"), 'raw single quote must not survive escaping');
+  assert.strictEqual(result, '&#39;);alert(1)//');
 });
