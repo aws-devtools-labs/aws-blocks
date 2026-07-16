@@ -27,6 +27,11 @@ export const HARNESS_FAIL_REASONS = {
 export const AGENT_FAIL_AT = '2-agent';
 export const AGENT_FAIL_REASON = 'agent_timeout';
 
+// A MaxTokensError (a single model response hit the per-call OUTPUT-token cap) is NOT a wall-clock
+// timeout: the agent exhausted its token budget on its own merits, so it stays agent_fail (composite
+// 0, INCLUDED in the mean) but under its own reason so it isn't mislabeled 'agent_timeout'.
+export const AGENT_MAX_TOKENS_REASON = 'max_tokens';
+
 // A checkpoint-survived ungraceful 2-agent death UNDER ACTIVE ISOLATION cannot be an agent pkill-storm
 // (cross-uid EPERM stops the agent from signalling the harness) — it is an infra WALL-CLOCK TIMEOUT
 // that killed the process group before a terminal stop_reason could flush. Reclassified harness_error
@@ -98,6 +103,20 @@ export function isUngracefulStepTwoDeath(result) {
 }
 
 /**
+ * Detect a MaxTokensError 2-agent failure from the folded envelope: the model hit its per-call
+ * OUTPUT-token cap (a graceful `error` stop_reason carrying a MaxTokensError builder_error), which is
+ * the agent exhausting its own token budget — NOT a wall-clock timeout. Reads stop_reason +
+ * builder_error (finalize-result folds both onto the result before classifyCell runs).
+ * @param {{stop_reason?: unknown, builder_error?: unknown}} result
+ * @returns {boolean}
+ */
+export function isMaxTokensFailure(result) {
+	const sr = typeof result?.stop_reason === 'string' ? result.stop_reason : '';
+	const be = typeof result?.builder_error === 'string' ? result.builder_error : '';
+	return /max[_\s]?tokens/i.test(sr) || /maxtokenserror|max[_\s]?tokens/i.test(be);
+}
+
+/**
  * Classify a finalized cell:
  *   - `harness_error` — a pre-grade step failed or the run was CANCELLED (EXCLUDED from the mean).
  *   - `agent_fail` — the agent step failed on its own merits AND exited gracefully (verdict 'fail',
@@ -128,6 +147,12 @@ export function classifyCell(result) {
 	if (failedAt === AGENT_FAIL_AT) {
 		if (isUngracefulStepTwoDeath(result) && result?.isolation_active === true) {
 			return { klass: 'harness_error', reason: AGENT_HARNESS_TIMEOUT_REASON };
+		}
+		// A MaxTokensError (the model hit its per-call output cap) is the agent exhausting its own budget,
+		// not a wall-clock timeout — keep it agent_fail (composite 0, INCLUDED) but label it distinctly so
+		// the summary/analysis don't misreport it as 'agent_timeout'.
+		if (isMaxTokensFailure(result)) {
+			return { klass: 'agent_fail', reason: AGENT_MAX_TOKENS_REASON };
 		}
 		return { klass: 'agent_fail', reason: AGENT_FAIL_REASON };
 	}

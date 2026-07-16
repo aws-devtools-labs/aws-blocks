@@ -7,6 +7,7 @@ import {
 	AGENT_FAIL_AT,
 	AGENT_FAIL_REASON,
 	AGENT_HARNESS_TIMEOUT_REASON,
+	AGENT_MAX_TOKENS_REASON,
 	BUILDER_PRICING,
 	CHECKPOINT_STOP_REASON,
 	DEAD_SERVER_KLASS,
@@ -22,6 +23,7 @@ import {
 	HARNESS_FAIL_REASONS,
 	hardCapPlan,
 	isCountedFailKlass,
+	isMaxTokensFailure,
 	isScoredCell,
 	isUngracefulStepTwoDeath,
 	scorePerDollar,
@@ -668,5 +670,46 @@ describe('scorePerDollar(composite, cost) — the headline SCORE (points per $)'
 		assert.equal(scorePerDollar(null, 1.05), null);
 		assert.equal(scorePerDollar(92, null), null);
 		assert.equal(scorePerDollar(92, 0), null);
+	});
+});
+
+describe('classifyCell — MaxTokensError is agent_fail with its OWN reason, not a wall-clock timeout (fix #3)', () => {
+	// A MaxTokensError means a single model response hit the per-call OUTPUT-token cap: the agent spent
+	// its budget on its own merits. That is a GENUINE agent failure (composite 0, INCLUDED) — but it is
+	// NOT a wall-clock timeout, so it must carry the distinct 'max_tokens' reason, never 'agent_timeout'.
+	// Mirrors the cognito-profile cell (composite 0, tokens_in 1,082,766, duration 203s — NOT a timeout).
+	it("a MaxTokensError builder_error → agent_fail, reason 'max_tokens' (INCLUDED, not excluded)", () => {
+		const cell = {
+			failed_at: AGENT_FAIL_AT,
+			status: 'error',
+			stop_reason: 'error',
+			builder_error: 'MaxTokensError: output exceeded the maximum allowed tokens',
+			tokens_in: 1_082_766,
+			tokens_out: 64_000,
+		};
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_MAX_TOKENS_REASON });
+		assert.equal(AGENT_MAX_TOKENS_REASON, 'max_tokens');
+		assert.notEqual(classifyCell(cell).reason, AGENT_FAIL_REASON); // NOT mislabeled 'agent_timeout'
+		assert.equal(isScoredCell({ ...cell, klass: 'agent_fail' }), true); // INCLUDED (composite 0)
+	});
+
+	it("a 'maxTokens' stop_reason (the SDK StopReason string) is also detected", () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'maxTokens' };
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_MAX_TOKENS_REASON });
+	});
+
+	it("a genuine wall-clock timeout keeps reason 'agent_timeout' (only real max-tokens is relabeled)", () => {
+		const cell = { failed_at: AGENT_FAIL_AT, status: 'error', stop_reason: 'wall_clock_timeout' };
+		assert.deepEqual(classifyCell(cell), { klass: 'agent_fail', reason: AGENT_FAIL_REASON });
+	});
+
+	it('isMaxTokensFailure detects the signature in stop_reason OR builder_error, and nowhere else', () => {
+		assert.equal(isMaxTokensFailure({ builder_error: 'MaxTokensError: ...' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'maxTokens' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'max_tokens' }), true);
+		assert.equal(isMaxTokensFailure({ stop_reason: 'wall_clock_timeout' }), false);
+		assert.equal(isMaxTokensFailure({ builder_error: 'ThrottlingException: rate exceeded' }), false);
+		assert.equal(isMaxTokensFailure({}), false);
+		assert.equal(isMaxTokensFailure(null), false);
 	});
 });

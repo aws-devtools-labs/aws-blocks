@@ -19,7 +19,9 @@ import {
 	buildCellUserText,
 	buildFailureUserText,
 	buildRollupUserText,
+	buildEvidenceObserved,
 	deterministicCellAnalysis,
+	deterministicFailureAnalysis,
 	extractFailingTests,
 	isFailureCell,
 	oneLine,
@@ -517,5 +519,73 @@ describe('deterministicCellAnalysis(result, trace)', () => {
 	it('returns null (→ ask the model) only when a trace is present', () => {
 		assert.equal(deterministicCellAnalysis({ klass: 'scored' }, [{ name: 'bash' }]), null);
 		assert.equal(deterministicCellAnalysis({ klass: 'agent_fail' }, { spans: [] }), null);
+	});
+});
+
+describe('deterministicFailureAnalysis(result, trace) — the honesty guard for the DEEP failure pass (fix #5)', () => {
+	// The bug (kb-chat-agent): analyzeFailure() ran the model on a harness wall-clock-timeout cell that
+	// had a stray dev-log tail, and the ungrounded model FABRICATED category='build'/owner='agent'
+	// "build FAILED" — contradicting the deterministic klass_reason. This guard mirrors
+	// deterministicCellAnalysis: skip the model for harness_error / no-trace / failed_at 2-agent and emit
+	// an honest, deterministic answer instead.
+	it('harness_error → { failure_analysis: null } (an excluded cell emits no root-cause block)', () => {
+		assert.deepEqual(deterministicFailureAnalysis({ klass: 'harness_error' }, null), { failure_analysis: null });
+		// even with a non-empty trace present, a harness_error still emits nothing (it is excluded)
+		assert.deepEqual(deterministicFailureAnalysis({ klass: 'harness_error' }, { some: 'trace' }), {
+			failure_analysis: null,
+		});
+	});
+
+	it("failed_at 2-agent (generic timeout) → honest agent-owned 'timeout', NEVER a fabricated build failure", () => {
+		const { failure_analysis: fa } = deterministicFailureAnalysis(
+			{ failed_at: '2-agent', klass: 'agent_fail', klass_reason: 'agent_timeout', tokens_in: 500_000, duration_sec: 2010 },
+			null,
+		);
+		assert.equal(fa.owner, 'agent'); // owned by the agent under test, not fabricated onto the framework
+		assert.equal(fa.category, 'timeout'); // NOT 'build'
+		assert.notEqual(fa.category, 'build');
+		assert.match(fa.root_cause, /never ran/); // build/test never ran — honest, matches the classification
+		assert.match(fa.evidence, /tokens_in=500000/);
+		assert.equal(fa.single_root_cause, true);
+	});
+
+	it("failed_at 2-agent with klass_reason 'max_tokens' → category null + a token-budget root cause", () => {
+		const { failure_analysis: fa } = deterministicFailureAnalysis(
+			{ failed_at: '2-agent', klass: 'agent_fail', klass_reason: 'max_tokens', tokens_in: 1_082_766, duration_sec: 203 },
+			null,
+		);
+		assert.equal(fa.owner, 'agent');
+		assert.equal(fa.category, null); // max-tokens is not a 'timeout' category
+		assert.match(fa.root_cause, /token budget|MaxTokensError/i);
+		assert.match(fa.evidence, /reason=max_tokens/);
+	});
+
+	it('no trace (non-harness, non-2agent) → undetermined root cause, owner null (no confabulation)', () => {
+		const { failure_analysis: fa } = deterministicFailureAnalysis({ klass: 'scored', failed_at: '4-judge' }, null);
+		assert.equal(fa.owner, null);
+		assert.equal(fa.category, null);
+		assert.match(fa.root_cause, /undetermined/);
+	});
+
+	it('a scored cell WITH a trace → returns null (defer to the model — the guard does not fire)', () => {
+		assert.equal(deterministicFailureAnalysis({ klass: 'scored', failed_at: '4-judge' }, { some: 'trace' }), null);
+	});
+});
+
+describe('buildEvidenceObserved(result) — seeded pessimistic build defaults are NOT observations (fix #5)', () => {
+	// 0-init-result.mjs seeds build_succeeded=false / build_status='failed' / dev_server_started=false.
+	// When step 3 (build-and-test) is SKIPPED because the agent step didn't succeed, those seeds are
+	// never overwritten — so they are DEFAULTS, not observed failures, and must not be reported as a real
+	// "build FAILED / owner=agent".
+	it('false when the cell never reached grading (agent_fail / harness_error / a pre-grade failed_at)', () => {
+		assert.equal(buildEvidenceObserved({ failed_at: '2-agent' }), false);
+		assert.equal(buildEvidenceObserved({ klass: 'agent_fail' }), false);
+		assert.equal(buildEvidenceObserved({ klass: 'harness_error' }), false);
+		assert.equal(buildEvidenceObserved({ failed_at: '1-init' }), false); // a pre-grade harness step
+	});
+
+	it('true only when the cell actually reached grading (build evidence is real)', () => {
+		assert.equal(buildEvidenceObserved({ klass: 'scored', failed_at: '4-judge' }), true);
+		assert.equal(buildEvidenceObserved({ klass: 'scored' }), true);
 	});
 });
