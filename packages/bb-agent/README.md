@@ -640,8 +640,40 @@ The CannedProvider is a custom Strands model provider that requires no network o
 
 - Returns simple mock responses
 - Triggers tool calls when the prompt mentions a tool name (e.g., "get order" triggers `getOrderStatus`)
-- Generates valid tool inputs from Zod schemas using type-based placeholders
+- Generates valid tool inputs from Zod schemas, respecting schema `default` values (from `.default()`) before falling back to type-based placeholders (`'sample'`, `1`, `true`, `[]`)
 - Streams responses word by word, matching the same protocol as real providers
+
+#### Canned Hints — `cannedExamples` and `cannedTriggers`
+
+Two optional tool fields make the canned provider more useful for local prototyping. Both are **ignored by the real bedrock/openai providers**, so they're safe to leave on production tools:
+
+| Field | Type | Effect (canned provider only) |
+| --- | --- | --- |
+| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. The merge is one level deep: a nested-object example replaces that whole generated sub-object rather than deep-merging into it. |
+| `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
+
+Building on the [KnowledgeBase tool](#using-knowledgebase-with-the-agent) above: without hints the mock calls `searchDocs` with `{ query: 'sample' }`, which matches nothing in your documents, so local testing returns empty results. A `cannedExamples` query that actually appears in *your* docs makes the mock return real hits, and `cannedTriggers` lets natural phrasings fire the tool:
+
+```typescript
+tools: (tool) => ({
+  searchDocs: tool({
+    description: 'Search product documentation for relevant information',
+    parameters: z.object({
+      query: z.string().describe('The search query'),
+      maxResults: z.number().optional().describe('Max results to return (default: 5)'),
+    }),
+    handler: async ({ input }) => kb.retrieve(input.query, { maxResults: input.maxResults ?? 5 }),
+
+    // Canned provider hints (ignored by real models):
+    // Without this the mock would search for the literal 'sample' and match nothing —
+    // use a query that hits YOUR documents so local runs return meaningful results.
+    cannedExamples: { query: 'how do I reset my password' },
+    // The name already matches "search"/"docs"/"searchDocs"; these add phrasings that don't
+    // contain the name, so "help me find the manual" or "look up the guide" also fire the tool.
+    cannedTriggers: ['find', 'look up'],
+  }),
+}),
+```
 
 
 ## Client Hook — `useChat`

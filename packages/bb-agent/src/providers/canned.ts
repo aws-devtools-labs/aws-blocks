@@ -17,9 +17,16 @@
 import { Model } from '@strands-agents/sdk';
 import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
 import { ToolResultBlock } from '@strands-agents/sdk';
+import type { CannedToolHints } from '../types.js';
 
 interface CannedConfig {
 	modelId: string;
+}
+
+interface CannedProviderOptions {
+	modelId?: string;
+	/** Per-tool hints (examples, triggers) keyed by tool name. */
+	hints?: Map<string, CannedToolHints>;
 }
 
 const CANNED_RESPONSES: Record<string, string> = {
@@ -51,7 +58,7 @@ function promptMentionsWord(lowerPrompt: string, word: string): boolean {
 }
 
 /** Find ALL tools mentioned in the prompt (for parallel tool calls). */
-function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[]): string[] {
+function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[], hints?: Map<string, CannedToolHints>): string[] {
 	if (!toolSpecs?.length) return [];
 	const lower = prompt.toLowerCase();
 	return toolSpecs.filter(t => {
@@ -60,7 +67,17 @@ function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[]): str
 		// Split camelCase into words (getWeather -> "get weather") and match each
 		// on word boundaries. Skip short words (<=2 chars) to avoid noise.
 		const words = t.name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(' ');
-		return words.some(w => w.length > 2 && promptMentionsWord(lower, w));
+		if (words.some(w => w.length > 2 && promptMentionsWord(lower, w))) return true;
+		// Extra trigger keywords declared via `cannedTriggers`. Single and multi-word triggers
+		// both match on word boundaries (consistent with tool-name matching), so "log in" is not
+		// triggered by "backlog in" and internal whitespace is flexible (matches one-or-more spaces).
+		const triggers = hints?.get(t.name)?.triggers;
+		return triggers?.some(tr => {
+			const low = tr.trim().toLowerCase();
+			if (!low) return false;
+			const escaped = low.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+			return new RegExp(`\\b${escaped}\\b`).test(lower);
+		}) ?? false;
 	}).map(t => t.name);
 }
 
@@ -93,7 +110,11 @@ function generatePlaceholderInput(schema: any): any {
 	if (schema.type === 'object' && schema.properties) {
 		const result: Record<string, any> = {};
 		for (const [key, prop] of Object.entries(schema.properties) as [string, any][]) {
-			if (prop.type === 'string') {
+			// Schema default (from Zod `.default()`) is the most realistic value — prefer it,
+			// and populate fields whose only signal is a default with no recognized `type`.
+			if (prop.default !== undefined) {
+				result[key] = prop.default;
+			} else if (prop.type === 'string') {
 				if (prop.enum?.length) result[key] = prop.enum[0];
 				else result[key] = 'sample';
 			} else if (prop.type === 'number' || prop.type === 'integer') {
@@ -111,21 +132,27 @@ function generatePlaceholderInput(schema: any): any {
 	return {};
 }
 
-/** Look up a tool's inputSchema from toolSpecs and generate placeholder input. */
-function getToolInput(toolName: string, toolSpecs?: { name: string; inputSchema?: any }[]): string {
+/**
+ * Look up a tool's inputSchema from toolSpecs and generate placeholder input, shallow-merging
+ * any `cannedExamples` (from hints) on top so realistic values win over generated placeholders.
+ */
+function getToolInput(toolName: string, toolSpecs?: { name: string; inputSchema?: any }[], hints?: Map<string, CannedToolHints>): string {
 	const spec = toolSpecs?.find(t => t.name === toolName);
-	if (!spec?.inputSchema) return '{}';
-	return JSON.stringify(generatePlaceholderInput(spec.inputSchema));
+	const base = spec?.inputSchema ? generatePlaceholderInput(spec.inputSchema) : {};
+	const examples = hints?.get(toolName)?.examples;
+	return JSON.stringify(examples ? { ...base, ...examples } : base);
 }
 
 let toolCallCounter = 0;
 
 export class CannedProvider extends Model<CannedConfig> {
 	private config: CannedConfig;
+	private hints: Map<string, CannedToolHints>;
 
-	constructor(config?: Partial<CannedConfig>) {
+	constructor(options?: CannedProviderOptions) {
 		super();
-		this.config = { modelId: config?.modelId ?? 'canned-mock' };
+		this.config = { modelId: options?.modelId ?? 'canned-mock' };
+		this.hints = options?.hints ?? new Map();
 	}
 
 	updateConfig(config: Partial<CannedConfig>): void {
@@ -150,7 +177,7 @@ export class CannedProvider extends Model<CannedConfig> {
 		}
 
 		// Check if prompt mentions tool names — trigger tool call(s)
-		const toolMatches = findAllToolMatches(prompt, options?.toolSpecs);
+		const toolMatches = findAllToolMatches(prompt, options?.toolSpecs, this.hints);
 		if (toolMatches.length > 1) {
 			yield* this.emitParallelToolCalls(toolMatches, options?.toolSpecs);
 			return;
@@ -160,8 +187,6 @@ export class CannedProvider extends Model<CannedConfig> {
 			yield* this.emitToolCall(toolName, options?.toolSpecs);
 			return;
 		}
-
-		// Default: keyword-based text response
 
 		// Default: keyword-based text response
 		yield* this.emitText(matchResponse(prompt));
@@ -185,7 +210,7 @@ export class CannedProvider extends Model<CannedConfig> {
 		for (const toolName of toolNames) {
 			const toolUseId = `canned-tool-${++toolCallCounter}`;
 			yield { type: 'modelContentBlockStartEvent', start: { type: 'toolUseStart', name: toolName, toolUseId } };
-			yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'toolUseInputDelta', input: getToolInput(toolName, toolSpecs) } };
+			yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'toolUseInputDelta', input: getToolInput(toolName, toolSpecs, this.hints) } };
 			yield { type: 'modelContentBlockStopEvent' };
 		}
 		yield { type: 'modelMessageStopEvent', stopReason: 'toolUse' };
@@ -197,7 +222,7 @@ export class CannedProvider extends Model<CannedConfig> {
 		const toolUseId = `canned-tool-${++toolCallCounter}`;
 		yield { type: 'modelMessageStartEvent', role: 'assistant' };
 		yield { type: 'modelContentBlockStartEvent', start: { type: 'toolUseStart', name: toolName, toolUseId } };
-		yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'toolUseInputDelta', input: getToolInput(toolName, toolSpecs) } };
+		yield { type: 'modelContentBlockDeltaEvent', delta: { type: 'toolUseInputDelta', input: getToolInput(toolName, toolSpecs, this.hints) } };
 		yield { type: 'modelContentBlockStopEvent' };
 		yield { type: 'modelMessageStopEvent', stopReason: 'toolUse' };
 		yield { type: 'modelMetadataEvent', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, metrics: { latencyMs: 0 } };
