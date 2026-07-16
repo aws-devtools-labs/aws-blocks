@@ -78,6 +78,15 @@ describe('validateStatement', () => {
     assert.doesNotThrow(() => validateStatement('ALTER TABLE t RENAME TO t2'));
     assert.doesNotThrow(() => validateStatement('DROP TABLE t'));
   });
+
+  it('allows a supported ALTER TABLE followed by an unrelated statement in one batch', () => {
+    // The DROP COLUMN rule must not match across a statement boundary: the
+    // ALTER TABLE here is a supported DROP DEFAULT, and the DROP TABLE that
+    // follows the semicolon belongs to a different statement.
+    assert.doesNotThrow(() =>
+      validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT; DROP TABLE archived'),
+    );
+  });
 });
 
 describe('classifyStatement', () => {
