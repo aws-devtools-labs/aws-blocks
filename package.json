@@ -84,6 +84,7 @@
     "publish:dry-run": "tsx scripts/publish/publish.ts",
     "publish:npm": "tsx scripts/publish/publish-npm.ts",
     "publish:s3": "tsx scripts/publish/publish.ts",
+    "release": "npm run build && changeset publish",
     "monte-carlo": "tsx scripts/monte-carlo.ts",
     "monte-carlo:cached": "tsx scripts/monte-carlo.ts --cached",
     "canary": "tsx scripts/canary/run-canary.ts",
