@@ -3,6 +3,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Require changeset
@@ -14,8 +17,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      - run: npx @changesets/cli status --since=origin/main
+
+      # Guards import only Node built-ins, so Node type-strips and runs the TS
+      # directly.
       - name: Verify changeset covers all changed packages
-        run: npx tsx scripts/verify-changeset-coverage.ts
+        run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
+      - name: Block major version bumps (pre-release)
+        run: node --experimental-strip-types scripts/changeset-guard.ts block-major

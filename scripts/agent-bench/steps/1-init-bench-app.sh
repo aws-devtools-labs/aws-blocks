@@ -32,7 +32,7 @@ if [ -d dist-registry ] && [ -n "$(find dist-registry -name '*.tgz' -type f 2>/d
 else
   echo "1. Init: no prebuilt dist-registry/ — building + packing the monorepo locally"
   npm run build
-  npm run publish:dry-run
+  npm run publish:local
 fi
 
 npx tsx scripts/publish/serve-local-registry.ts &
