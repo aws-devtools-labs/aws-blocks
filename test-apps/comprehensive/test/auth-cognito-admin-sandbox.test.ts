@@ -110,5 +110,44 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 
 			await assert.rejects(() => api.authCSignIn(u, PW));
 		});
+
+		// ── Gap 1: typed reads round-trip real Cognito data ──────────────────
+		test('admin.getUser round-trips custom attribute + group membership', async () => {
+			const api = getApi();
+			const u = uniqueUser();
+			await api.authCAdminCreateUserWithDept(u, PW, 'engineering');
+			await api.authCAdminAddToGroup(u, 'admins');
+
+			const got = await api.authCAdminGetUser(u);
+			assert.ok(got, 'expected a user');
+			assert.strictEqual(got.username, u);
+			assert.strictEqual(got.department, 'engineering');
+			assert.ok(got.groups.includes('admins'), `expected admins in ${JSON.stringify(got.groups)}`);
+			assert.strictEqual(await api.authCAdminGetUser(`${u}-missing`), null);
+
+			await api.authCAdminDeleteUser(u);
+		});
+
+		// ── Gap 4: scan filter is executed by Cognito (ListUsers Filter) ─────
+		test('admin.scan with a startsWith filter narrows to matching users', async () => {
+			const api = getApi();
+			const prefix = `scanflt-${uniqueUser()}`;
+			const a = `${prefix}-alpha`;
+			const b = `${prefix}-beta`;
+			await api.authCAdminCreateUser(a, PW);
+			await api.authCAdminCreateUser(b, PW);
+
+			// Cognito validates this Filter expression server-side — the whole point
+			// of exercising it live rather than in the in-memory mock.
+			const matched = await api.authCAdminScan({ attribute: 'username', match: 'startsWith', value: prefix });
+			assert.ok(matched.includes(a) && matched.includes(b), `expected both seeded users, got ${JSON.stringify(matched)}`);
+
+			// A prefix that matches neither returns an empty (or non-matching) set.
+			const none = await api.authCAdminScan({ attribute: 'username', match: 'startsWith', value: `${prefix}-zzz` });
+			assert.ok(!none.includes(a) && !none.includes(b), 'non-matching filter should exclude seeded users');
+
+			await api.authCAdminDeleteUser(a);
+			await api.authCAdminDeleteUser(b);
+		});
 	});
 }

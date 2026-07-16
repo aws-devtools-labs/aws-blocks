@@ -774,7 +774,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			createUser: async (username, init) => {
 				this.assertAdminAction('lifecycle');
 				try {
-					const attrs: AttributeType[] = Object.entries(init?.attributes ?? {}).map(
+					// Prefix declared custom attributes with `custom:` (matching signUp
+					// and the mock) — Cognito rejects an unprefixed custom attr name as
+					// "not defined in schema".
+					const attrs: AttributeType[] = Object.entries(this.prefixCustomAttrs(init?.attributes ?? {})).map(
 						([Name, Value]) => ({ Name, Value }),
 					);
 					const resp = await this.client.send(new AdminCreateUserCommand({
@@ -837,11 +840,24 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					for (const a of (resp.UserAttributes ?? []) as AttributeType[]) {
 						if (a.Name) attributes[a.Name] = a.Value ?? '';
 					}
+					// AdminGetUser does not return group memberships, so fetch them
+					// separately to populate AdminUser.groups (matches the mock,
+					// which reads groups from its in-memory state).
+					const groups: string[] = [];
+					let nextToken: string | undefined;
+					do {
+						const g = await this.client.send(new AdminListGroupsForUserCommand({
+							UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+						}));
+						for (const grp of g.Groups ?? []) if (grp.GroupName) groups.push(grp.GroupName);
+						nextToken = g.NextToken;
+					} while (nextToken);
 					return {
 						username: resp.Username ?? username,
 						userSub: attributes['sub'] ?? '',
 						enabled: resp.Enabled ?? true,
 						attributes,
+						groups: groups as GroupOf<AuthCognitoOptions>[],
 					};
 				} catch (e) {
 					if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) return null;

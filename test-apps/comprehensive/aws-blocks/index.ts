@@ -969,6 +969,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const u = await authC.admin.createUser(username, { temporaryPassword });
     return { username: u.username, enabled: u.enabled };
   },
+  async authCAdminCreateUserWithDept(username: string, temporaryPassword: string, department: string) {
+    // Seeds a declared custom attribute so authCAdminGetUser can round-trip it.
+    const u = await authC.admin.createUser(username, {
+      temporaryPassword,
+      attributes: { department, email: `${username}@example.com` },
+    });
+    return { username: u.username, enabled: u.enabled };
+  },
+  async authCAdminGetUser(username: string) {
+    const u = await authC.admin.getUser(username);
+    if (!u) return null;
+    // Return the typed reads so the e2e can assert the attribute/group round-trip.
+    return {
+      username: u.username,
+      userSub: u.userSub,
+      enabled: u.enabled,
+      department: u.attributes['custom:department'] ?? null,
+      groups: u.groups ?? [],
+    };
+  },
+  async authCAdminScan(filter?: { attribute: string; match: 'startsWith' | 'equals'; value: string }) {
+    const usernames: string[] = [];
+    for await (const u of authC.admin.scan(filter)) usernames.push(u.username);
+    return usernames;
+  },
   async authCAdminSetPassword(username: string, password: string) {
     await authC.admin.setUserPassword(username, password, { permanent: true });
     return { success: true };
