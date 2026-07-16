@@ -1,13 +1,13 @@
 name: Publish Packages
 
-# Real npm release, run daily on a schedule or manually. Canary publishes live
-# in publish-canary.yml.
+# Real npm release, run on a weekday schedule (Mon–Thu) or manually. Canary
+# publishes live in publish-canary.yml.
 
 on:
   schedule:
-    # 09:00 EST, Mon–Fri. GitHub cron is UTC and does not observe DST, so this is
-    # 10:00 local during EDT.
-    - cron: '0 14 * * 1-5'
+    # 09:00 PST, Mon–Thu. GitHub cron is UTC and does not observe DST, so this is
+    # 10:00 local during PDT. Cannot be a variable — on.schedule.cron must be a literal.
+    - cron: '0 17 * * 1-4'
   workflow_dispatch:
 
 concurrency:
@@ -21,6 +21,11 @@ permissions:
 jobs:
   publish:
     name: Version & Publish (npm)
+    # Pause switch: set repo variable PUBLISH_ENABLED=false to skip scheduled
+    # releases without editing this file. Unset/any other value = enabled.
+    # Manual workflow_dispatch runs ignore the switch (deliberate, so urgent
+    # releases still work while the schedule is paused).
+    if: ${{ github.event_name != 'schedule' || vars.PUBLISH_ENABLED != 'false' }}
     runs-on: ubuntu-latest
     environment: publish
     env:
