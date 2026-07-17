@@ -158,7 +158,7 @@ operate.
 // my-existing-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, registerConfig } from '@aws-blocks/blocks/cdk';
 import { join } from 'node:path';
 
 export class MyApiStack extends cdk.Stack {
