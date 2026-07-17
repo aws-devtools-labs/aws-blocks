@@ -52,6 +52,20 @@ const BASH_MIN_TIMEOUT_SEC = 600;
 // kills ungracefully leaves only a checkpoint (→ misclassified harness_error, no trace); the timer
 // guarantees a graceful envelope + trace on our own terms. 2010s = 33.5min, comfortably under 35min.
 const AGENT_DEADLINE_SEC = Number(process.env.BENCH_AGENT_DEADLINE_SEC ?? '2010');
+// Startup sanity guard: the internal deadline MUST stay comfortably below the agent step's hard
+// `timeout-minutes: 35` (see .github/workflows/agent-bench.yml) — keep WORKFLOW_HARD_TIMEOUT_SEC in sync
+// if that changes. If BENCH_AGENT_DEADLINE_SEC is overridden too high (< AGENT_DEADLINE_MARGIN_SEC of
+// head-room), GitHub SIGKILLs the step before our graceful partial-envelope + trace flush runs, silently
+// reintroducing the trace-less cells this timer exists to prevent — so warn loudly rather than invert quietly.
+const WORKFLOW_HARD_TIMEOUT_SEC = 35 * 60;
+const AGENT_DEADLINE_MARGIN_SEC = 60;
+if (AGENT_DEADLINE_SEC > WORKFLOW_HARD_TIMEOUT_SEC - AGENT_DEADLINE_MARGIN_SEC) {
+	process.stderr.write(
+		`[bench] WARNING: BENCH_AGENT_DEADLINE_SEC=${AGENT_DEADLINE_SEC}s leaves <${AGENT_DEADLINE_MARGIN_SEC}s below the agent ` +
+			`step's hard timeout (${WORKFLOW_HARD_TIMEOUT_SEC}s); GitHub may SIGKILL before the graceful flush runs. ` +
+			`Lower BENCH_AGENT_DEADLINE_SEC or raise timeout-minutes in agent-bench.yml.\n`,
+	);
+}
 
 const taskPrompt = readFileSync(TASK_PROMPT_PATH, 'utf-8');
 
