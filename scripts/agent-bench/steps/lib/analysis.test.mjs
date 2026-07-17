@@ -387,6 +387,20 @@ describe('extractFailingTests(pwResults)', () => {
 		assert.deepEqual(extractFailingTests({}), { totalFailing: 0, groups: [] });
 		assert.deepEqual(extractFailingTests({ suites: 'bad' }), { totalFailing: 0, groups: [] });
 	});
+
+	it('falls through an empty error.message to errors[0].message', () => {
+		// A Playwright result can carry an empty top-level error.message while errors[0] holds the real
+		// text; firstError's `||` chain (not `??`) must fall through so the failure isn't reported as
+		// "(no error message captured)".
+		const spec = {
+			title: 'empty top-level error',
+			ok: false,
+			tests: [{ results: [{ status: 'unexpected', error: { message: '' }, errors: [{ message: 'real failure captured from errors array' }] }] }],
+		};
+		const out = extractFailingTests(pwReport([spec]));
+		assert.equal(out.totalFailing, 1);
+		assert.match(out.groups[0].error, /real failure captured from errors array/);
+	});
 });
 
 describe('buildFailureUserText(input)', () => {

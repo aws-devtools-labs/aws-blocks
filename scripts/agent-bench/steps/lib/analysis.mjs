@@ -444,7 +444,7 @@ export function extractFailingTests(pwResults) {
 			for (const res of t?.results ?? []) {
 				const status = res?.status;
 				if (status && status !== 'passed' && status !== 'skipped') {
-					const msg = res?.error?.message ?? (Array.isArray(res?.errors) ? res.errors[0]?.message : '') ?? '';
+					const msg = res?.error?.message || (Array.isArray(res?.errors) ? res.errors[0]?.message : '') || '';
 					if (msg) return normalizeError(msg);
 				}
 			}
