@@ -35,6 +35,8 @@ export interface AuroraInfraConfig {
   migrationsPath?: string;
   /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
   removalPolicy?: cdk.RemovalPolicy;
+  /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
+  postgresVersion?: string;
 }
 
 /**
@@ -111,9 +113,22 @@ export function materialize(
 
   // Aurora Serverless v2 cluster with Data API enabled
   const removalPolicy = options.removalPolicy ?? cdk.RemovalPolicy.RETAIN;
+
+  // Aurora PostgreSQL engine version. Kept configurable because AWS periodically
+  // retires older minor versions — 16.4 was retired in us-east-1, after which
+  // CreateDBCluster failed with "Cannot find version 16.4 for aurora-postgresql".
+  // Default to the latest available 16.x (16.13) for the longest deprecation
+  // runway; callers can override via `postgresVersion` when AWS retires it too.
+  const engineVersion = options.postgresVersion
+    ? rds.AuroraPostgresEngineVersion.of(
+        options.postgresVersion,
+        options.postgresVersion.split('.')[0] ?? options.postgresVersion,
+      )
+    : rds.AuroraPostgresEngineVersion.VER_16_13;
+
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
-      version: rds.AuroraPostgresEngineVersion.VER_16_4,
+      version: engineVersion,
     }),
     serverlessV2MinCapacity: minCapacity,
     serverlessV2MaxCapacity: maxCapacity,
