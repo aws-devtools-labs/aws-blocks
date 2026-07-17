@@ -69,13 +69,21 @@ and 0 red → stop here and ship** (on bench grounds). Most PRs end at Step 0.
 **Step 1 — If red, read each red's structured line.** For every 🔴 cell, pull its one line: composite Δ,
 worst Judge dimension, `stop_reason`, and trace path. Do not open anything yet.
 
-**Step 2 — Triage `stop_reason` FIRST (before believing the score).** The score is only meaningful if the
-run actually finished.
+**Step 2 — Triage the cell's CLASS FIRST (before acting on the score).** A 0 means different things
+depending on the cell's class, and only *one* class is excluded noise. Match the red cell to one of three
+buckets — this mirrors the mean-inclusion rule and the `pass · partial · fail · harness_error` tally in the
+[Reference](#reference-what-the-current-v1-report-contains):
 
-| stop_reason class | Values | Verdict |
-|---|---|---|
-| Infra / harness noise | `dead_server` (`dev_server_dead`), harness errors (`preflight_failed`, `oidc_failed`, `init_abort`, `cancelled`, `wall_clock_timeout`), `max_tokens`, `agent_timeout` | **NOT a PR signal → RE-RUN the cell.** A 0 here means the harness/agent died, not that the PR broke anything. |
-| Real completion | `end_turn` **with a dropped composite** | **Real agent-quality regression → dig** (go to Step 3). The agent finished and the result genuinely got worse. |
+| Class | Signal (`stop_reason` / status) | In the headline mean? | What its 0 means → action |
+|---|---|---|---|
+| **`harness_error`** | `cancelled` (CI abort); a pre-grade failure (`preflight_failed`, `oidc_failed`, `init_abort`); an **ungraceful** step-2 death under active isolation (surfaces as `in_progress` / no terminal stop_reason) | **EXCLUDED** from the mean | The harness or CI died before the agent's work could be judged. **NOT a PR signal → RE-RUN the cell.** |
+| **`agent_fail` / `dead_server`** | `agent_fail`: graceful `wall_clock_timeout` (ran out of its time budget), `max_tokens` / `error` (hit its output-token budget), `agent_timeout`. `dead_server`: `dev_server_dead` (app built but its dev-server never served / crashed) | **INCLUDED as composite 0 — this 0 moved the mean** | A **genuine, counted failure** — *not* excluded noise. The `stop_reason` tells you whether a **re-run** might recover it (a transient budget / throttle blip) or whether it's a persistent agent budget / quality regression. Re-run to disambiguate, but it counts as a real data point until it does. |
+| **`scored`** | `end_turn` / `tool_use` / `stop_sequence` **with a dropped composite** | INCLUDED — graded on its tests | The agent finished and the result genuinely got worse → **real agent-quality regression → dig** (Step 3). |
+
+**The trap to avoid:** only **`harness_error`** is excluded / "not a PR signal." `agent_fail` (incl. `max_tokens`,
+`agent_timeout`, graceful `wall_clock_timeout`) and `dead_server` are **counted composite-0 failures** that
+already dragged the headline mean — a re-run tells you *transient vs. real*, but never wave them off as
+"infra noise."
 
 **Step 3 — Worst dimension → failure class → where to look.** The Judge's lowest dimension points you
 straight at the code:
@@ -109,16 +117,19 @@ band — investigate it proactively.
 
 This run shows why Step 2 (`stop_reason` first) and the noise band exist:
 
-- **`cognito` scored 0** — but via a **harness / `max_tokens` stop**, not a real failure. Per Step 2 this
-  is **infra → re-run**. A later re-run of that cell scored **92**. A reader who trusted the 0 without
-  triaging the stop reason would have chased a phantom regression.
+- **`cognito` scored 0** via a **`max_tokens` stop** — a **counted `agent_fail`** (composite 0, INCLUDED in
+  the mean), *not* excluded harness noise: this 0 genuinely dragged the headline down. Its `stop_reason`
+  flags it as budget-exhaustion a **re-run** might recover — and the re-run scored **92**, confirming it was
+  **transient, not a real regression**. A reader who took the 0 as a settled quality verdict instead of
+  re-running to disambiguate transient-vs-real would have chased a phantom regression.
 - **`auth-notes` posted a −78.8 composite delta** — alarming at first glance, and **v1's fixed ±5
   threshold colors it 🔴**. But that cell's **historical band is 11.6–94.4**: its composite naturally
   swings across nearly the whole range, so −78.8 lands **within band → 🟡 amber / watch, NOT a red
   ship-blocker.** This is the exact case the band is designed to reclassify.
 
 Takeaway: **`stop_reason`-triage + the noise band together prevent phantom-regression chases.** Without
-them, this run reads as two regressions; with them, it reads as "one infra re-run, one watch-list amber."
+them, this run reads as two hard regressions; with them, it reads as "one counted-but-transient `agent_fail`
+a re-run cleared, one watch-list amber."
 
 ## Finding the trace and per-cell artifacts
 
