@@ -133,8 +133,13 @@ Each scenario cell writes three GitHub Actions artifacts, named `<kind>-<task>-<
 Aggregate results also land in S3 at `s3://<bucket>/bench/runs/<SHA>/results.json` (with a
 `bench/runs/latest-main.json` pointer to the most recent **main** run — the baseline).
 
-> **Caveat:** a **`wall_clock_timeout`** cell writes **no `trace.json`** (the step was killed
-> ungracefully). If there's no trace, the stop reason *is* your answer: infra → re-run.
+> **Caveat:** only an **ungraceful GitHub `SIGKILL`** — the runner hard-killing the step at
+> `timeout-minutes: 35` before the graceful flush runs — writes **no `trace.json`** at all. The
+> internal-deadline path (`BENCH_AGENT_DEADLINE_SEC`, default 2010s — the common budget-exhaustion
+> case, `stop_reason: wall_clock_timeout`) now flushes a **message-only `trace.json`** before exit
+> (span traces absent, but the per-turn toolUse/toolResult messages are there), so a timed-out cell is
+> usually still analyzable. When there's genuinely no trace, the stop reason *is* your answer:
+> infra → re-run.
 >
 > **Today (v1)** the report links **one run-level Artifacts page** (in the collapsed glossary); you find
 > the per-cell trace by opening that run's Artifacts and grabbing `bench-trace-<task>-<template>`.
@@ -160,7 +165,7 @@ Aggregate results also land in S3 at `s3://<bucket>/bench/runs/<SHA>/results.jso
 
 Until v2 lands, apply the runbook by deriving these from the v1 signals as noted in each section above.
 
-## Reference — what the current (v1) report contains
+## Reference: what the current (v1) report contains
 
 - **Judge:** 5 dimensions, each 0–10, averaged equally → overall Judge score. F=functional_completeness,
   S=selector_contract, P=persistence, C=code_quality, B=blocks_fidelity.
