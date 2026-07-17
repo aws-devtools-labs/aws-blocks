@@ -14,6 +14,13 @@
  *                   A `major` (0.x → 1.0.0) means leaving pre-release, which
  *                   requires explicit sign-off, so CI hard-blocks it.
  *
+ *   validate-structure  Exit non-zero if any changeset on disk is malformed:
+ *                   broken frontmatter, an unparseable entry line, an invalid
+ *                   bump type, or a package name that does not exist in the
+ *                   workspace. The other guards' regex silently ignores lines
+ *                   it can't parse, so a typo'd package or bad bump would slip
+ *                   through and only fail post-merge at `changeset version`.
+ *
  * Pre-1.0 semver convention:
  *   - `patch` (0.1.1 → 0.1.2): non-breaking change
  *   - `minor` (0.1.x → 0.2.0): BREAKING change (the pre-release breaking channel)
@@ -22,6 +29,7 @@
  * Usage:
  *   node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
  *   node --experimental-strip-types scripts/changeset-guard.ts block-major
+ *   node --experimental-strip-types scripts/changeset-guard.ts validate-structure
  */
 
 import { execSync } from "node:child_process";
@@ -33,7 +41,12 @@ const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
 const SCOPE = "@aws-blocks/";
 
+// changesets/action opens its "Version Packages" PR with this title.
+const RELEASE_PR_TITLE_PREFIX = "chore: version packages";
+
 type BumpType = "major" | "minor" | "patch";
+
+const VALID_BUMPS = new Set<BumpType>(["major", "minor", "patch"]);
 
 interface Entry {
 	file: string;
@@ -106,6 +119,16 @@ function getChangedPackages(): Set<string> {
 }
 
 function verifyCoverage(): number {
+	// The "Version Packages" PR from changesets/action has bumped package.json
+	// files but no .changeset/*.md left on disk (`changeset version` consumed
+	// them). Coverage would see changed packages with no changesets and fail,
+	// blocking the release PR. Skip the check for it.
+	const prTitle = process.env.PR_TITLE ?? "";
+	if (prTitle.startsWith(RELEASE_PR_TITLE_PREFIX)) {
+		console.log(`✓ Skipping coverage check for the release PR ("${prTitle}").`);
+		return 0;
+	}
+
 	const changedPackages = getChangedPackages();
 	const coveredPackages = getCoveredPackages();
 	const missing = [...changedPackages].filter((pkg) => !coveredPackages.has(pkg));
@@ -152,6 +175,95 @@ function blockMajor(): number {
 	return 1;
 }
 
+/** Every package name declared across the npm workspaces (the set a changeset
+ *  may legitimately reference). Workspace entries here are explicit paths. */
+function getWorkspacePackageNames(): Set<string> {
+	const names = new Set<string>();
+	let workspaces: unknown;
+	try {
+		workspaces = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")).workspaces;
+	} catch {
+		return names;
+	}
+	if (!Array.isArray(workspaces)) return names;
+
+	for (const ws of workspaces) {
+		if (typeof ws !== "string" || ws.includes("*")) continue;
+		const pkgJsonPath = join(ROOT, ws, "package.json");
+		if (!existsSync(pkgJsonPath)) continue;
+		try {
+			const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+			if (typeof pkg.name === "string") names.add(pkg.name);
+		} catch {
+			// skip unreadable package.json
+		}
+	}
+	return names;
+}
+
+function validateStructure(): number {
+	if (!existsSync(CHANGESET_DIR)) {
+		console.log("✓ No .changeset directory; nothing to validate.");
+		return 0;
+	}
+
+	const files = readdirSync(CHANGESET_DIR).filter(
+		(f) => f.endsWith(".md") && f !== "README.md",
+	);
+	if (files.length === 0) {
+		console.log("✓ No changesets to validate.");
+		return 0;
+	}
+
+	const validNames = getWorkspacePackageNames();
+	const errors: string[] = [];
+
+	for (const file of files) {
+		const content = readFileSync(join(CHANGESET_DIR, file), "utf-8");
+		const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+		if (!frontmatterMatch) {
+			errors.push(`${file}: missing or malformed frontmatter (expected a leading '---' … '---' block).`);
+			continue;
+		}
+
+		for (const raw of frontmatterMatch[1].split("\n")) {
+			const line = raw.trim();
+			if (line === "") continue; // blank lines / empty (--empty) changesets are fine
+
+			const entryMatch = line.match(/^['"]?([^'":]+?)['"]?\s*:\s*['"]?([^'"\s]+)['"]?$/);
+			if (!entryMatch) {
+				errors.push(`${file}: cannot parse entry line: "${line}"`);
+				continue;
+			}
+
+			const pkg = entryMatch[1].trim();
+			const bump = entryMatch[2].trim();
+			if (!VALID_BUMPS.has(bump as BumpType)) {
+				errors.push(`${file}: invalid bump "${bump}" for ${pkg} (expected major, minor, or patch).`);
+			}
+			if (!validNames.has(pkg)) {
+				errors.push(`${file}: unknown package "${pkg}" (not found in the workspace).`);
+			}
+		}
+	}
+
+	if (errors.length > 0) {
+		console.error("\n❌ Changeset structural validation failed:\n");
+		for (const e of errors) {
+			console.error(`   • ${e}`);
+		}
+		console.error(
+			"\nThese slip past the regex guards but would fail post-merge at `changeset version`.\n" +
+			'Each frontmatter line must read `"<package>": <major|minor|patch>` with a package\n' +
+			"name that exists in the workspace.\n",
+		);
+		return 1;
+	}
+
+	console.log(`✓ ${files.length} changeset(s) are structurally valid.`);
+	return 0;
+}
+
 const command = process.argv[2];
 
 switch (command) {
@@ -161,10 +273,14 @@ switch (command) {
 	case "block-major":
 		process.exit(blockMajor());
 		break;
+	case "validate-structure":
+		process.exit(validateStructure());
+		break;
 	default:
 		console.error(
 			`Unknown command: ${command ?? "(none)"}\n` +
-			"Usage: node --experimental-strip-types scripts/changeset-guard.ts <verify-coverage|block-major>",
+			"Usage: node --experimental-strip-types scripts/changeset-guard.ts " +
+			"<verify-coverage|block-major|validate-structure>",
 		);
 		process.exit(2);
 }
