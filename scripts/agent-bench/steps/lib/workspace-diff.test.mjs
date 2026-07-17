@@ -41,6 +41,28 @@ describe('parseChurn(numstat, namestat) — pure parser', () => {
 			files_edited: 1,
 		});
 	});
+	it('an inline `old => new` rename numstat row is normalized to the new path', () => {
+		// git --numstat WITHOUT -z renders a rename as a single ` => ` field, not the bare new path;
+		// without normalization status.get() misses and the renamed file's churn is silently dropped.
+		const numstat = '4\t1\tsrc/old.ts => src/new.ts';
+		const namestat = 'R100\tsrc/old.ts\tsrc/new.ts';
+		assert.deepEqual(parseChurn(numstat, namestat), {
+			loc_created: 0,
+			loc_edited: 5, // 4 added + 1 deleted on the renamed (modified) file
+			files_created: 0,
+			files_edited: 1,
+		});
+	});
+	it('a `{old => new}` brace rename numstat row is normalized to the new path', () => {
+		const numstat = '2\t0\tsrc/{old.ts => new.ts}';
+		const namestat = 'R090\tsrc/old.ts\tsrc/new.ts';
+		assert.deepEqual(parseChurn(numstat, namestat), {
+			loc_created: 0,
+			loc_edited: 2,
+			files_created: 0,
+			files_edited: 1,
+		});
+	});
 	it('binary files (— added/deleted) count as a file but 0 lines', () => {
 		assert.deepEqual(parseChurn('-\t-\tlogo.png', 'A\tlogo.png'), {
 			loc_created: 0,

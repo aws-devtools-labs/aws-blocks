@@ -144,10 +144,10 @@ absolute quality): 🟢 meaningful improvement · 🟡 change within the noise b
 🔴 meaningful regression · ⚪ no baseline value for that field (a new cell, or a
 metric the baseline predates) — the current value is still shown, tagged `(new)`
 · `—` nothing to show this run · 🗑️ cell gone since the baseline. Directions:
-tests, judge, score are higher-better; cost, tokens are lower-better. The
+tests, judge, score are higher-better; cost, turns are lower-better. The
 per-metric noise bands are a SINGLE tunable, `DELTA_THRESHOLDS` in
 `lib/overview.mjs`, consumed by `deltaColor`: composite/score ±5 points, judge
-±0.3, tests ±1 pass, cost ±10% (relative), tokens ±10% (in+out combined). A
+±0.3, tests ±1 pass, cost ±10% (relative), turns ±3. A
 change within its band reads 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction.
 
 **Verdict tiers** are pure pass-rate — the judge plays no part, so an LLM
@@ -214,7 +214,7 @@ data so identifiers stay collision-free across a spec's internal navigation.
 `test_rate`, the raw per-dimension judge scores (pre-cap `judge_dimensions_raw`
 and post-cap `judge_dimensions`), `judge_overall`, `composite`, `verdict`,
 `klass`, the builder `tokens_in`/`tokens_out`, and `stop_reason`. The results
-table renders the overall judge score, tests, cost, tokens and score per cell,
+table renders the overall judge score, tests, cost, turns and score per cell,
 and the cost + score are derived from the published tokens via `lib/scoring.mjs`.
 A reader can re-derive — or re-weight — every composite, cost and score from the
 published data without re-running anything.
