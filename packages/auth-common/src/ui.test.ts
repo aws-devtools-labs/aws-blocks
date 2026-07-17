@@ -567,6 +567,48 @@ describe('AuthenticatedContent', () => {
 
 		assert.strictEqual(el.children.length, 0);
 	});
+
+	test('renders fallback when signed out and fallback is provided', async () => {
+		const api = mockApi(signedOutState());
+		const fallback = document.createElement('div');
+		fallback.textContent = 'Please sign in';
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		}, fallback);
+		await flush();
+
+		assert.ok(el.textContent?.includes('Please sign in'));
+	});
+
+	test('renders content (not fallback) when signed in and fallback is provided', async () => {
+		const api = mockApi(signedInState());
+		const fallback = document.createElement('div');
+		fallback.textContent = 'Please sign in';
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		}, fallback);
+		await flush();
+
+		assert.ok(el.textContent?.includes('Hello alice'));
+		assert.ok(!el.textContent?.includes('Please sign in'));
+	});
+
+	test('renders nothing when signed out and no fallback is provided (backward compat)', async () => {
+		const api = mockApi(signedOutState());
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		});
+		await flush();
+
+		assert.strictEqual(el.children.length, 0);
+		assert.strictEqual(el.textContent, '');
+	});
 });
 
 describe('onAuthChange', () => {
