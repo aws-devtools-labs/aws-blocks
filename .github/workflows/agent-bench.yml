@@ -6,6 +6,16 @@ name: Agent Bench
 # + Converse on the bench model, and s3 Put/Get on bench/* in the registry bucket) and S3_BUCKET var.
 # Invoked by pr-agent-bench.yml, which owns the triggers + same-repo gate; the OIDC steps and
 # `environment: publish` live on the jobs here because a `uses:` caller job cannot set environment.
+#
+# NOTE — "temporarily deployed to publish" PR-timeline entries: because every bench matrix cell
+# (~10) plus the summary job set `environment: publish`, GitHub records a Deployment to that
+# environment for each on every run — so one bench run adds ~11 "temporarily deployed to publish"
+# entries to the PR timeline (they auto-flip to Inactive on the next run but persist). The publish
+# environment is LOAD-BEARING (it scopes the AWS_ROLE_ARN secret + S3_BUCKET var; jobs cannot assume
+# the OIDC role without it), so it MUST stay and the entries are an unavoidable cosmetic side-effect.
+# pr-agent-bench.yml's concurrency (cancel-in-progress on PR events) curbs how many accumulate by
+# killing superseded runs. Retroactively deleting already-created deployments is a separate, opt-in
+# cleanup that is intentionally out of scope here.
 
 on:
   workflow_call:

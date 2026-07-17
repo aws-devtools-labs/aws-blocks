@@ -58,7 +58,16 @@ concurrency:
   # NOT run_id — is what makes cancel-in-progress actually cancel: run_id is
   # unique per run, so the old group never collided and nothing was cancelled.
   group: agent-bench-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs for PR events ONLY. Each bench run's matrix sets
+  # `environment: publish` per cell (~10 cells + the summary job), and GitHub
+  # records a Deployment to that environment for every cell on every run/re-run
+  # — these are the "temporarily deployed to publish … (Inactive)" entries that
+  # pile up on the PR timeline (old ones auto-flip Inactive but persist).
+  # Cancelling superseded PR runs trims BOTH the redundant (paid) bench compute
+  # AND those duplicate deployment entries. Push-to-main runs are NEVER
+  # cancelled: each merged commit must record its own complete S3 baseline for
+  # later PRs to diff against, so a second main run must not kill the first.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
