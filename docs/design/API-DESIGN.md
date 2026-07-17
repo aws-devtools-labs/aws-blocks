@@ -67,6 +67,8 @@ async getStore() {
 }
 ```
 
+> **Note:** `ClientSafe` and `BlocksTransferable` are conceptual types shown here for illustration. The actual enforcement is structural — `ApiNamespace` constrains return types at the type level, and the `__blocks` serialization protocol is convention-based rather than interface-enforced.
+
 The error is immediate, in the editor, before any code runs. Customers don't need to memorize which types are returnable &mdash; the compiler tells them.
 
 **Building Block authors:**
@@ -590,13 +592,13 @@ async function validateOrThrow<T>(schema: StandardSchemaV1<T>, value: unknown): 
 Some Building Blocks produce a pre-wired `ApiNamespace` that the customer exports for client consumption. For example, auth BBs expose a state machine (sign-in, sign-up, sign-out) as an `ApiNamespace` so the frontend Authenticator component can interact with it. The convention for this pattern:
 
 1. **Method name:** `createApi()` &mdash; short, clear, and the return type (`ApiNamespace`) already communicates what it is.
-2. **Parameters:** `(scope: ScopeParent, id: string)` &mdash; the customer controls where the namespace lives in the scope tree and what it's called.
+2. **Parameters:** None &mdash; the BB internally scopes the namespace (using `this` as the parent and a fixed id), so the customer doesn't need to supply scope or id.
 3. **Customer usage:** The customer exports the result so the frontend can import it.
 
 ```typescript
 // Backend — customer exports the BB-produced namespace
 const auth = new AuthBasic(scope, 'auth');
-export const authApi = auth.createApi(scope, 'auth-api');
+export const authApi = auth.createApi();
 
 // Frontend — imports and uses it like any other ApiNamespace
 import { authApi } from 'aws-blocks';

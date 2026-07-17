@@ -16,18 +16,18 @@ You're an engineer working **on AWS Blocks itself** — the framework and its Bu
 ## 🚦 Core rules (these gate a PR)
 
 1. CDK synth must run with **`--conditions=cdk`**. Without it, BBs load their mocks and synth produces no infrastructure.
-2. Persist application state **only through Building Blocks** — no local files, in-memory arrays, or ad-hoc databases.
+2. Persist application state **only through Building Blocks** — no local files, in-memory arrays, or ad-hoc databases. Without this → state vanishes on deploy (Lambda is stateless) or diverges between local dev and AWS.
 3. Inject BB config with **`registerConfig()`**, never `handler.addEnvironment()` (Lambda env has a ~4 KB cap).
 4. Call BB data methods **only inside request/job handlers** — never at module top level or during synth (the CDK class stubs them with `synthGuard` to throw).
 5. **Never attach `Error.cause` enumerably** — it leaks SDK metadata (`$metadata`, ARNs) when an error is serialized to the client.
 6. Errors cross the wire by **`name`, not `code`** — match with `isBlocksError(e, SomeErrors.Foo)` (works the same server- and client-side).
-7. **`get()`-style reads return `null`** for not-found — throw only for violated preconditions (e.g. a failed conditional write).
+7. **`get()`-style reads return `null`** for not-found — throw only for violated preconditions (e.g. a failed conditional write). Without this → callers need try/catch for normal control flow, and missing-item checks become invisible.
 8. Keep customer-facing code cast-free: **no `as any` / `: any` / `@ts-ignore`** (a cast usually means a public type is wrong — fix the type).
 9. Every API method is a public, internet-reachable RPC endpoint with no auth by default — **gate inside each method** with `await auth.requireAuth(context)`.
 10. Every change to a published package **ships a changeset** covering all changed packages (its text becomes the public changelog).
-11. Keep docs **runnable** — every README/JSDoc snippet, command, package name, and relative link is correct at HEAD; a dead link in a published `packages/*/README.md` is a defect.
-12. **No root `/` route**, and a route wildcard must be the last path segment.
-13. Refer to the project as **"AWS Blocks"** (no article — "built with AWS Blocks").
+11. Keep docs **runnable** — every README/JSDoc snippet, command, package name, and relative link is correct at HEAD; a dead link in a published `packages/*/README.md` is a defect. Without this → users copy-paste broken code and lose trust in the framework.
+12. **No root `/` route**, and a route wildcard must be the last path segment. Violating this → API Gateway rejects the route or swallows all traffic into one handler.
+13. Refer to the project as **"AWS Blocks"** (no article — "built with AWS Blocks"). Inconsistent naming → confuses search, docs, and brand recognition.
 
 ---
 
@@ -268,7 +268,7 @@ tmux kill-session -t dev
 
 Sandbox deploys take 2–3 minutes (CDK CloudFormation). Use the same tmux + polling pattern.
 
-**If you deployed a sandbox and are done with it, always run `npm run sandbox:destroy` before finishing.**
+**If you deployed a sandbox and are done with it, always run `npm run destroy` (from the test app directory) before finishing.**
 Leaving sandboxes running wastes AWS resources.
 
 ---
