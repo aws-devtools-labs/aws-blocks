@@ -94,6 +94,23 @@ export function finishWorkspaceDiff(snapshot, workspace) {
 }
 
 /**
+ * Extract the NEW path from a `git --numstat` rename entry emitted WITHOUT `-z`, which renders a
+ * rename inline rather than as the bare new path: the brace form `pre/{old => new}/post` or the
+ * simple form `old => new`. Non-rename paths pass through unchanged. Without this, `status.get(path)`
+ * misses the name-status key (the clean new path) and the renamed file's churn is silently dropped.
+ * @param {string} p
+ * @returns {string}
+ */
+function renameNewPath(p) {
+	if (/\{.*? => .*?\}/.test(p)) {
+		// `pre/{old => new}/post` -> `pre/new/post`; collapse the `//` left when either side is empty.
+		return p.replace(/\{.*? => (.*?)\}/, '$1').replace(/\/{2,}/g, '/');
+	}
+	const idx = p.indexOf(' => ');
+	return idx === -1 ? p : p.slice(idx + 4);
+}
+
+/**
  * Pure parser for `git diff-index --numstat` + `--name-status` output (tab-separated). Exported for
  * unit testing without spawning git.
  *   numstat line:      `<added>\t<deleted>\t<path>`  (added/deleted are `-` for binary files)
@@ -127,9 +144,11 @@ export function parseChurn(numstat, namestat) {
 		if (!line.trim()) continue;
 		const [addRaw, delRaw, ...pathParts] = line.split('\t');
 		// A rename numstat row is `<add>\t<del>\told => new` OR `<add>\t<del>\told\tnew` (with -M and
-		// path rewriting); the last field is the new path, which is how `status` is keyed.
-		const path = pathParts[pathParts.length - 1];
-		if (!path) continue;
+		// path rewriting); the last field is normalized to the new path via `renameNewPath` (handling the
+		// inline `old => new` and `{old => new}` brace forms), which is how `status` is keyed.
+		const rawPath = pathParts[pathParts.length - 1];
+		if (!rawPath) continue;
+		const path = renameNewPath(rawPath);
 		const added = addRaw === '-' ? 0 : Number.parseInt(addRaw, 10) || 0; // '-' = binary → 0 lines
 		const deleted = delRaw === '-' ? 0 : Number.parseInt(delRaw, 10) || 0;
 		const code = status.get(path);
