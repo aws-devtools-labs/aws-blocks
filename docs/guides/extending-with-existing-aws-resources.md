@@ -71,7 +71,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 ## Pattern 1: CDK in Blocks
 
 Blocks gives you two CDK shapes for embedding it in your infrastructure. Both
-expose the same `.handler` Lambda you reach into for IAM and env vars — pick
+expose the same `.handler` Lambda you reach into for IAM — pick
 based on whether Blocks gets its own stack or shares one with your existing
 infra.
 
@@ -83,11 +83,14 @@ infra.
 Once instantiated, you can:
 
 - attach IAM policies (`blocksStack.handler.addToRolePolicy(...)`)
-- inject env vars (`blocksStack.handler.addEnvironment(...)`)
+- register runtime configuration (`registerConfig(blocksStack, key, value)`)
 - grant access to any CDK resource you create alongside Blocks
   (`myQueue.grantSendMessages(blocksStack.handler)`)
 
-Then read those env vars from inside your runtime code with the AWS SDK directly.
+`registerConfig` makes configuration available through `process.env` before
+your backend module loads, so runtime code can use it with the AWS SDK directly.
+It also avoids storing resource configuration in Lambda environment variables,
+which have a capacity limit.
 
 > **Note on naming:** these names use the `blocks` prefix.
 
@@ -102,7 +105,7 @@ onto it.
 ```ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, registerConfig } from '@aws-blocks/blocks/cdk';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -117,9 +120,9 @@ export const blocksStack = await BlocksStack.create(app, 'my-app', {
 // Pretend this queue was created by another stack you don't own.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');
 
-// Grant Blocks' Lambda permission to send to it, and inject the URL.
+// Grant Blocks' Lambda permission to send to it and register the URL.
 externalQueue.grantSendMessages(blocksStack.handler);
-blocksStack.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+registerConfig(blocksStack, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 ```
 
 **`aws-blocks/index.ts`** (your runtime layer)
@@ -153,7 +156,7 @@ operate.
 // my-existing-stack.ts
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, registerConfig } from '@aws-blocks/blocks/cdk';
 import { join } from 'node:path';
 
 export class MyApiStack extends cdk.Stack {
@@ -171,7 +174,7 @@ export class MyApiStack extends cdk.Stack {
 
     // Same .handler / .apiUrl / .gateway as BlocksStack — wire normally.
     externalQueue.grantSendMessages(blocks.handler);
-    blocks.handler.addEnvironment('EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
+    registerConfig(blocks, 'EXTERNAL_QUEUE_URL', externalQueue.queueUrl);
 
     new cdk.CfnOutput(this, 'BlocksApiUrl', { value: blocks.apiUrl });
   }
@@ -248,7 +251,7 @@ front and surface it both ways:
 const LEGACY_TABLE = 'my-existing-sessions-table';
 process.env.LEGACY_SESSIONS_TABLE = LEGACY_TABLE; // synth-time
 // ... BlocksStack.create(...) — this loads index.ts, which reads the env above ...
-blocksStack.handler.addEnvironment('LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
+registerConfig(blocksStack, 'LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
 ```
 
 ```ts
@@ -321,12 +324,12 @@ conditions:
 ### Skeleton
 
 **`src/index.cdk.ts`** — provisions the queue, grants Blocks' Lambda access,
-and surfaces config via env vars:
+and registers runtime configuration:
 
 ```ts
 import { Duration } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 export interface QueueOptions {
@@ -344,7 +347,7 @@ export class Queue extends Scope {
     });
 
     queue.grantSendMessages(this.handler);
-    this.handler.addEnvironment(`${envSafe(this.fullId)}_URL`, queue.queueUrl);
+    registerConfig(this, `${envSafe(this.fullId)}_URL`, queue.queueUrl);
   }
 }
 
