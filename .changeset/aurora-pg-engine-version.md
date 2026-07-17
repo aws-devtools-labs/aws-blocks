@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-data": minor
+"@aws-blocks/bb-data": patch
 "@aws-blocks/blocks": patch
 ---
 
