@@ -119,12 +119,20 @@ export function materialize(
   // CreateDBCluster failed with "Cannot find version 16.4 for aurora-postgresql".
   // Default to the latest available 16.x (16.13) for the longest deprecation
   // runway; callers can override via `postgresVersion` when AWS retires it too.
-  const engineVersion = options.postgresVersion
-    ? rds.AuroraPostgresEngineVersion.of(
-        options.postgresVersion,
-        options.postgresVersion.split('.')[0] ?? options.postgresVersion,
-      )
-    : rds.AuroraPostgresEngineVersion.VER_16_13;
+  // Validate the override up front so a malformed value fails fast at synth
+  // time with a clear message, instead of as an opaque CreateDBCluster error.
+  let engineVersion: rds.AuroraPostgresEngineVersion;
+  if (options.postgresVersion === undefined) {
+    engineVersion = rds.AuroraPostgresEngineVersion.VER_16_13;
+  } else {
+    if (!/^\d+\.\d+$/.test(options.postgresVersion)) {
+      throw new Error(
+        `Invalid postgresVersion "${options.postgresVersion}"; expected "MAJOR.MINOR" like "16.13".`,
+      );
+    }
+    const majorVersion = options.postgresVersion.split('.')[0];
+    engineVersion = rds.AuroraPostgresEngineVersion.of(options.postgresVersion, majorVersion);
+  }
 
   const cluster = new rds.DatabaseCluster(scope, `${name}Cluster`, {
     engine: rds.DatabaseClusterEngine.auroraPostgres({
