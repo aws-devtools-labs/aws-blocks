@@ -14,7 +14,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, finalizeConfigRegistry } from '@aws-blocks/core/cdk';
 import { DistributedDatabase } from './index.cdk.js';
 
 const MIGRATIONS_DIR = '.bb-data/__test_cdk_migrations__';
@@ -31,6 +31,7 @@ function synth(build: (stack: cdk.Stack) => void): Template {
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     build(stack);
+    finalizeConfigRegistry(stack, handler);
     return Template.fromStack(stack);
   } finally {
     delete (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -110,19 +111,27 @@ test('CDK: handler gets dsql:DbConnect policy (least privilege)', () => {
   });
 });
 
-// --- Environment variables ---
+// --- Runtime configuration ---
 
-test('CDK: handler gets ENDPOINT and REGION env vars', () => {
+test('CDK: runtime endpoint and region use the config registry', () => {
   const template = synth((stack) => {
     new DistributedDatabase(scope(stack), 'mydsql');
   });
   const fns = template.findResources('AWS::Lambda::Function');
   const handlerFn = Object.entries(fns).find(([id]) => id.startsWith('Handler'));
   assert.ok(handlerFn, 'Handler Lambda should exist');
-  const env = (handlerFn![1] as any).Properties?.Environment?.Variables ?? {};
+  const env = (handlerFn?.[1] as any).Properties?.Environment?.Variables ?? {};
   const envKeys = Object.keys(env);
-  assert.ok(envKeys.some(k => k.includes('ENDPOINT')), `Expected ENDPOINT env var, got: ${envKeys}`);
-  assert.ok(envKeys.some(k => k.includes('REGION')), `Expected REGION env var, got: ${envKeys}`);
+  assert.ok(!envKeys.some(k => k.endsWith('_ENDPOINT')), `Unexpected direct ENDPOINT env var: ${envKeys}`);
+  assert.ok(!envKeys.some(k => k.endsWith('_REGION')), `Unexpected direct REGION env var: ${envKeys}`);
+  assert.ok(env.BLOCKS_CONFIG_BUCKET, 'Handler Lambda should receive the config bucket');
+  assert.strictEqual(env.BLOCKS_CONFIG_KEY, 'blocks-config.json');
+
+  const configBlob = JSON.stringify(
+    Object.values(template.findResources('Custom::CDKBucketDeployment')),
+  );
+  assert.match(configBlob, /BLOCKS_[A-Za-z0-9_]+_ENDPOINT/);
+  assert.match(configBlob, /BLOCKS_[A-Za-z0-9_]+_REGION/);
 });
 
 // --- CfnOutput ---
