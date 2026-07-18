@@ -252,6 +252,8 @@ interface DatabaseOptions {
   connection?: ExternalDatabaseRef;
   /** Schema metadata for crud() support. */
   schema?: TableSchema;
+  /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
+  postgresVersion?: string;
 }
 ```
 
