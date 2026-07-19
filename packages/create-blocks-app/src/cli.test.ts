@@ -147,6 +147,23 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('pins template CDK CLI versions to the repository toolchain', () => {
+    const lockfile = JSON.parse(readFileSync(join(__dirname, '../../..', 'package-lock.json'), 'utf-8'));
+    const expectedVersion = lockfile.packages?.['node_modules/aws-cdk']?.version;
+    assert.ok(expectedVersion, 'repository lockfile should resolve aws-cdk');
+
+    for (const template of ['auth-cognito', 'backend', 'bare', 'default', 'demo', 'nextjs', 'react']) {
+      const packageJson = JSON.parse(
+        readFileSync(join(__dirname, '..', 'templates', template, 'package.json'), 'utf-8'),
+      );
+      assert.strictEqual(
+        packageJson.devDependencies?.['aws-cdk'],
+        expectedVersion,
+        `${template} should pin the repository aws-cdk version`,
+      );
+    }
+  });
+
   it('detects existing project with package.json when "." is given', () => {
     const tmpDir = join(__dirname, '../.test-autodetect-dot');
     mkdirSync(tmpDir, { recursive: true });
