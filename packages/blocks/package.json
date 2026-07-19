@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/blocks",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -61,7 +61,7 @@
     "@aws-blocks/bb-kv-store": "^0.1.4",
     "@aws-blocks/bb-distributed-table": "^0.1.3",
     "@aws-blocks/bb-realtime": "^0.1.3",
-    "@aws-blocks/bb-data": "^0.2.1",
+    "@aws-blocks/bb-data": "^0.2.3",
     "@aws-blocks/bb-distributed-data": "^0.1.3",
     "@aws-blocks/bb-async-job": "^0.1.2",
     "@aws-blocks/bb-cron-job": "^0.1.3",
