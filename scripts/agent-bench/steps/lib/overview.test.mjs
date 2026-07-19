@@ -275,7 +275,7 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 	});
 });
 
-// A full-feature cell exercising every RENDERED column (tests, per-dim judge, cost, turns, score) plus
+// A full-feature cell exercising every RENDERED column (tests, judge, cost, turns, score) plus
 // the token/cache/LOC/file counts buildAggregate still persists (no longer shown as their own columns).
 const FULL = {
 	task: 'auth-notes',
@@ -344,14 +344,12 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		assert.match(row, /\| end_turn \|$/); // stop reason retained, last column
 	});
 
-	it('JUDGE is ONE line: overall score + per-dimension shorthand (F/S/P/C/B) with per-dim deltas', () => {
+	it('JUDGE is ONE inline cell — overall score + delta ONLY, no per-dimension shorthand', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
-		assert.match(judge, /^🟢 8 \(\+1\)/); // overall 7→8 beyond ±0.3 → 🟢, leads the cell
-		assert.match(judge, /· F9\(\+2\)/); // functional 7→9 → +2
-		assert.match(judge, /S8\(0\)/); // selector flat
-		assert.match(judge, /P7\(-2\)/); // persistence 9→7 → -2
-		assert.match(judge, /C8\(0\) B8\(0\)/);
+		assert.equal(judge, '🟢 8 (+1)'); // overall 7→8 beyond ±0.3 → 🟢; ball + score + delta, nothing else
+		assert.doesNotMatch(judge, /·/); // no ` · ` separator
+		assert.doesNotMatch(judge, /F\d|S\d|P\d|C\d|B\d/); // no per-dimension shorthand (F/S/P/C/B)
 		assert.equal(judge.split('<br>').length, 1); // single line — no <br> stacking
 	});
 
@@ -363,7 +361,8 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 	it('no baseline at all → ⚪ + the CURRENT value + (new) for every metric (value never hidden)', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), null));
 		assert.match(row, /⚪ 4\/4 \(new\)/); // tests
-		assert.match(row, /⚪ 8 \(new\) · F9 S8 P7 C8 B8/); // judge: overall + per-dim shorthand, no deltas
+		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge, '⚪ 8 (new)'); // judge: overall score only — no per-dim shorthand
 		assert.match(row, /⚪ \$1\.75 \(new\)/); // cost
 		assert.match(row, /⚪ 22 \(new\)/); // turns
 		assert.match(row, /⚪ 52\.6 \(new\)/); // score
@@ -407,12 +406,13 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		assert.equal(goneRow.split('|').slice(1, -1).length, 8);
 	});
 
-	it('judge renders ALL common dimensions on ONE line (missing ones as <Letter>—) so the shorthand stays stable', () => {
+	it('judge cell NEVER renders per-dimension shorthand, even when judge_dimensions are present', () => {
 		const partialDims = { ...FULL, judge_dimensions: { functional_completeness: 9, selector_contract: 8, code_quality: 7 } };
 		const row = rowFor(diffAgainstBaseline(buildAggregate([partialDims], {}), null));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge, '⚪ 8 (new)'); // overall score only — the per-dim data exists but is NOT rendered
+		assert.doesNotMatch(judge, /·|F\d|S\d|P\d|C\d|B\d/); // no shorthand tail
 		assert.equal(judge.split('<br>').length, 1); // single line, never <br>-stacked
-		assert.match(judge, /⚪ 8 \(new\) · F9 S8 P— C7 B—/); // present dims show scores; missing dims show <Letter>—
 	});
 
 	it('a removed cell whose baseline lacks a test denom omits the "(was …)" suffix (never prints /null)', () => {
