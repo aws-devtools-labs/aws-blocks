@@ -94,6 +94,7 @@ export interface DatabaseOptions {
     maxCapacity?: number;
     migrationsPath?: string;
     minCapacity?: number;
+    postgresVersion?: string;
     removalPolicy?: 'destroy' | 'retain' | 'snapshot';
     rlsPolicy?: 'enforce';
     schema?: TableSchema;
