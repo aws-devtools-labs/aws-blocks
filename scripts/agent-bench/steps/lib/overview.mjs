@@ -14,7 +14,6 @@ import {
 	testStats,
 	verdictOf,
 } from './scoring.mjs';
-import { COMMON_DIMENSIONS } from './scoring.mjs';
 
 // Stable cross-run identity for a cell (task + template, since a task may run on multiple templates).
 export const cellKey = (c) => `${c?.task ?? ''}/${c?.template ?? ''}`;
@@ -172,8 +171,9 @@ function cellMetrics(c) {
 		tests_passed: numOrNull(c?.tests_passed),
 		tests_denom: numOrNull(c?.tests_denom),
 		judge_score: numOrNull(c?.judge_score),
-		// Per-dimension judge scores (capped), rendered as the JUDGE cell's per-dim shorthand. Baselines
-		// that carry them color per-dim; older ones lacking them fall back to the overall judge score.
+		// Per-dimension judge scores (capped), retained on the metric object for parity with the persisted
+		// aggregate + offline analysis. NOT rendered in the table — the Judge cell shows only the overall
+		// score; the per-dim breakdown lives in the judge artifact JSON (progressive disclosure).
 		judge_dimensions: c?.judge_dimensions && typeof c.judge_dimensions === 'object' ? c.judge_dimensions : null,
 		cycle_count: numOrNull(c?.cycle_count),
 		cost: numOrNull(c?.cost),
@@ -278,20 +278,8 @@ const signedCost = (d) => `${signOf(d)}${fmtCost(Math.abs(d))}`;
 const wholeNum = (v) => String(Math.round(v));
 
 // ── Metric cells ──────────────────────────────────────────────────────────────
-// Scalar cells are ONE inline line: `<ball> <value> (<Δ>)`. The JUDGE cell is also one line — the overall
-// score followed by ` · ` and a per-dimension shorthand. The current value is ALWAYS shown; a metric the
-// baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
-
-// Single-letter shorthand for the per-dimension judge scores, packed onto ONE line after the overall
-// judge score (e.g. `🟢 8 (+1) · F9(+2) S8 P7(-1) C8 B9`). Keeps the Judge column compact for a GFM
-// job-summary table where per-cell <details> collapse is unavailable.
-const DIM_SHORT = {
-	functional_completeness: 'F',
-	selector_contract: 'S',
-	persistence: 'P',
-	code_quality: 'C',
-	blocks_fidelity: 'B',
-};
+// Every metric cell — scalars AND judge — is ONE inline line: `<ball> <value> (<Δ>)`. The current value
+// is ALWAYS shown; a metric the baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
 
 // One INLINE scalar cell: `<ball> <value> (<Δ>)`; `⚪ <value> (new)` with no baseline; NONE with no
 // current value. `threshold` may be a number or fn(baseline); `dir` sets the improving direction.
@@ -316,31 +304,17 @@ function testsCell(base, pr) {
 	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value} (${signedInt(pp - bp)})`;
 }
 
-// JUDGE: ONE compact line — the overall judge score `<ball> <score> (<Δ>)` then ` · ` and a
-// single-letter-per-dimension shorthand (F/S/P/C/B) from the CAPPED judge_dimensions, each with its
-// signed per-dim delta when the baseline carries that dimension (e.g. `🟢 8 (+1) · F9(+2) S8 P7(-1) C8 B9`).
-// A dimension the run lacks reads `<Letter>—`. Falls back to the overall score alone with no per-dimension
-// breakdown, or to the shorthand alone when the overall score is missing. Overall judge mean also
-// appears in the preword.
+// JUDGE: ONE inline cell — the overall judge score `<ball> <score> (<Δ>)`, colored by the overall judge
+// delta over ±{@link DELTA_THRESHOLDS}.judge. `⚪ <score> (new)` with no baseline; NONE with no judge
+// score. Per-dimension scores are NOT rendered here — the breakdown lives in the judge artifact JSON
+// (progressive disclosure). Overall judge mean also appears in the preword.
 function judgeCell(base, pr) {
-	const overall = scalarCell(base?.judge_score, pr?.judge_score, {
+	return scalarCell(base?.judge_score, pr?.judge_score, {
 		threshold: DELTA_THRESHOLDS.judge,
 		dir: 'up',
 		fmtVal: fmtJudge,
 		fmtDelta: signed1,
 	});
-	const pd = pr?.judge_dimensions;
-	if (!pd || typeof pd !== 'object') return overall;
-	const bd = base?.judge_dimensions && typeof base.judge_dimensions === 'object' ? base.judge_dimensions : null;
-	const shorthand = COMMON_DIMENSIONS.map((dim) => {
-		const letter = DIM_SHORT[dim] ?? dim;
-		const pv = numOrNull(pd[dim]);
-		if (pv === null) return `${letter}${NONE}`;
-		const bv = bd ? numOrNull(bd[dim]) : null;
-		return bv === null ? `${letter}${fmtJudge(pv)}` : `${letter}${fmtJudge(pv)}(${signed1(pv - bv)})`;
-	}).join(' ');
-	if (overall === NONE) return shorthand;
-	return `${overall} · ${shorthand}`;
 }
 
 // COST: $ builder spend (lower better, ±10% of baseline noise).
@@ -379,10 +353,10 @@ const METRIC_COLUMNS = ['Tests', 'Judge', 'Cost', 'Turns', 'Score', 'Stop reason
 
 // ── Render: single results table ──────────────────────────────────────────────
 /**
- * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TURNS | SCORE | STOP REASON. Scalar
- * cells (tests/cost/turns/score) are inline `<ball> <value> (<Δ>)`; JUDGE is one line — the overall
- * score plus a per-dimension shorthand (F/S/P/C/B). ⚪ "(new)" where the baseline lacks a metric. Every
- * row emits ALL columns.
+ * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TURNS | SCORE | STOP REASON. Every
+ * metric cell — tests/judge/cost/turns/score — is inline `<ball> <value> (<Δ>)`; the JUDGE cell shows
+ * only the overall judge score (per-dimension breakdown lives in the judge artifact JSON). ⚪ "(new)"
+ * where the baseline lacks a metric. Every row emits ALL columns.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
