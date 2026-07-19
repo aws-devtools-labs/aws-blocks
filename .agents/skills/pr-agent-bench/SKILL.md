@@ -42,7 +42,7 @@ while still catching a small-but-real drop on an otherwise rock-steady cell.
 > **Today (v1)** the table does *not* yet use per-cell bands. It colors each metric by its delta vs the
 > baseline using **fixed thresholds**: 🟢 beyond +threshold, 🔴 beyond −threshold, 🟡 within ±threshold
 > (either direction = noise), ⚪ no baseline (tagged `(new)`), 🗑️ a cell that existed in the baseline but
-> is gone now. Thresholds: composite ±5, Score ±5, Judge ±0.3 (also per-dimension), Tests ±1 pass,
+> is gone now. Thresholds: composite ±5, Score ±5, Judge ±0.3, Tests ±1 pass,
 > Cost ±max($0.02, 10% of baseline), Turns ±3. Consequence: a big drop on a naturally-swingy cell colors
 > 🔴 under v1 even when the band would call it amber (see the worked example).
 
@@ -86,7 +86,10 @@ already dragged the headline mean — a re-run tells you *transient vs. real*, b
 "infra noise."
 
 **Step 3 — Worst dimension → failure class → where to look.** The Judge's lowest dimension points you
-straight at the code:
+straight at the code. The table's Judge column shows only the **averaged** score — the per-dimension
+scores (F/S/P/C/B) are **not** in the at-a-glance row; read them from the cell's judge artifact JSON
+(`bench-result-<task>-<template>` → `result.json` → `judge_dimensions`) to find the lowest one, then map
+it here:
 
 | Dimension ↓ (letter) | Failure class | Where to look |
 |---|---|---|
@@ -162,7 +165,7 @@ Aggregate results also land in S3 at `s3://<bucket>/bench/runs/<SHA>/results.jso
 
 - **One results table**, columns in order: **`Task | Template | Tests | Judge | Cost | Turns | Score | Stop reason`** (no Composite column in the table).
 - **Fixed-threshold** per-metric delta coloring (🟢 / 🔴 beyond ±threshold, 🟡 within, ⚪ `(new)` no baseline, 🗑️ removed) — **not** per-cell noise bands.
-- Cell format `<ball> <value> (<Δ>)`; Tests = `<ball> passed/denom (±n)`; Judge = `<ball> <overall> (<Δ>) · F9(+2) S8 P7(-1) C8 B9`; **Stop reason is the raw string with no ball.**
+- Cell format `<ball> <value> (<Δ>)`; Tests = `<ball> passed/denom (±n)`; Judge = `<ball> <overall> (<Δ>)` — the **averaged** judge score + color + Δ **only** (the per-dimension F/S/P/C/B scores are **not** in the row; they live in the judge artifact JSON — see [reference](#reference-what-the-current-v1-report-contains)); **Stop reason is the raw string with no ball.**
 - Headline is the **preword bullets**, not a one-word banner: *Mean composite X/100 — 🟢/🟡/🔴 Δ vs `main`*, a `pass · partial · fail · harness_error` verdict tally, totals, biggest gains/drops, config (+ an optional `BENCH_MIN_SCORE` gate line).
 - Deep-dive analysis (`## Executive summary`, `## 🔴 Failure root-cause`, `## ⚠️ Potential issues`, `## Per-cell analysis`) is appended **inline / always-present collapsed `<details>`** — the failure section renders inline only when failing cells carry analysis.
 - Trace access = **one run-level Artifacts link** in the glossary.
@@ -178,8 +181,11 @@ Until v2 lands, apply the runbook by deriving these from the v1 signals as noted
 
 ## Reference: what the current (v1) report contains
 
-- **Judge:** 5 dimensions, each 0–10, averaged equally → overall Judge score. F=functional_completeness,
-  S=selector_contract, P=persistence, C=code_quality, B=blocks_fidelity.
+- **Judge:** 5 dimensions, each 0–10, averaged equally → overall Judge score (F=functional_completeness,
+  S=selector_contract, P=persistence, C=code_quality, B=blocks_fidelity). The **table's Judge column shows
+  only the averaged score** + color + Δ; the per-dimension F/S/P/C/B scores are recorded in the judge
+  artifact JSON (`result.json` → `judge_dimensions`) — progressive disclosure — **not** rendered in the
+  at-a-glance row.
 - **Composite (0–100):** `60·pass_rate + 4·judge·min(1, 4·pass_rate)` — 60% objective test pass-rate + 40%
   Judge, with the Judge term ramped in only above a 25% pass-rate (too little objective evidence below that).
 - **Score:** composite ÷ builder $-cost (higher is better). Builder is Opus 4.8; pricing $5 in / $25 out per 1M tokens.
