@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AGENT_FAIL_AT, AGENT_MAX_TOKENS_REASON, HARNESS_FAIL_REASONS } from './scoring.mjs';
 
 // Judge model, reused for analysis (Opus 4.8 for both per-cell + synthesis). Same id as 4-judge.ts.
 export const DEFAULT_MODEL_ID = 'us.anthropic.claude-opus-4-8';
@@ -60,6 +61,83 @@ export function deterministicCellAnalysis(result, trace) {
 	}
 	if (!trace) {
 		return { analysis: NO_TRACE_ANALYSIS, issues: [] };
+	}
+	return null;
+}
+
+/**
+ * Was the cell's build / dev-server signal actually OBSERVED, or is it a seeded pessimistic default?
+ * 0-init-result.mjs seeds build_succeeded=false / build_status='failed' / dev_server_started=false;
+ * when step 3 (build-and-test) is SKIPPED — because the agent step didn't succeed — those seeds are
+ * never overwritten, so they are DEFAULTS, not observations. Treat build evidence as observed only
+ * when the cell actually reached grading: not an agent_fail / harness_error, and not failed_at a
+ * pre-grade step. Mirrors the "build evidence absent" intent of scoring.mjs buildCapDecision. Pure.
+ * @param {{failed_at?: unknown, klass?: unknown}} result finalized cell result
+ * @returns {boolean}
+ */
+export function buildEvidenceObserved(result) {
+	const failedAt = result?.failed_at ?? null;
+	if (failedAt === AGENT_FAIL_AT) return false;
+	if (typeof failedAt === 'string' && Object.prototype.hasOwnProperty.call(HARNESS_FAIL_REASONS, failedAt)) {
+		return false;
+	}
+	const klass = result?.klass ?? null;
+	if (klass === 'agent_fail' || klass === 'harness_error') return false;
+	return true;
+}
+
+/**
+ * Deterministic short-circuit for the DEEP failure pass — the analog of {@link deterministicCellAnalysis}
+ * for analyzeFailure(). Without it an ungrounded model confabulates a root cause/owner (the kb-chat
+ * cell's fabricated category='build' / owner='agent' "build FAILED", contradicting its own
+ * wall_clock_timeout reason). Returns `{ failure_analysis: obj|null }` when a deterministic answer
+ * applies (caller returns it, skipping the model), or null to fall through to the model.
+ *   - harness_error     → { failure_analysis: null } (excluded cell — emit no root-cause block)
+ *   - failed_at 2-agent → honest agent-owned analysis (max_tokens vs generic budget); build/test never ran
+ *   - no trace          → undetermined; owner null
+ * Ordered harness_error → 2-agent → no-trace so the most specific honest answer wins. Pure.
+ * @param {{klass?: string|null, klass_reason?: string|null, failed_at?: unknown, tokens_in?: unknown, duration_sec?: unknown}} result
+ * @param {unknown} trace parsed trace.json (any shape) or null
+ * @returns {{failure_analysis: object|null}|null} deterministic result, or null to call the model
+ */
+export function deterministicFailureAnalysis(result, trace) {
+	const klass = result?.klass ?? null;
+	if (klass === 'harness_error') {
+		return { failure_analysis: null };
+	}
+	if ((result?.failed_at ?? null) === AGENT_FAIL_AT) {
+		const maxTokens = result?.klass_reason === AGENT_MAX_TOKENS_REASON;
+		const tokensIn = typeof result?.tokens_in === 'number' ? result.tokens_in : null;
+		const durationSec = typeof result?.duration_sec === 'number' ? result.duration_sec : null;
+		const evidenceBits = [
+			result?.klass_reason ? `reason=${result.klass_reason}` : null,
+			tokensIn != null ? `tokens_in=${tokensIn}` : null,
+			durationSec != null ? `duration=${durationSec}s` : null,
+		].filter(Boolean);
+		return {
+			failure_analysis: {
+				category: maxTokens ? null : 'timeout',
+				single_root_cause: true,
+				root_cause: maxTokens
+					? 'Agent exhausted the model token budget (MaxTokensError) before completing; build and test steps never ran.'
+					: 'Agent step did not finish within its budget; build and test steps never ran.',
+				evidence: evidenceBits.join(' '),
+				likely_fix: '',
+				owner: 'agent',
+			},
+		};
+	}
+	if (!trace) {
+		return {
+			failure_analysis: {
+				category: null,
+				single_root_cause: null,
+				root_cause: 'No agent trace was emitted (e.g. an ungraceful teardown); the failure root cause is undetermined.',
+				evidence: '',
+				likely_fix: '',
+				owner: null,
+			},
+		};
 	}
 	return null;
 }
@@ -366,7 +444,7 @@ export function extractFailingTests(pwResults) {
 			for (const res of t?.results ?? []) {
 				const status = res?.status;
 				if (status && status !== 'passed' && status !== 'skipped') {
-					const msg = res?.error?.message ?? (Array.isArray(res?.errors) ? res.errors[0]?.message : '') ?? '';
+					const msg = res?.error?.message || (Array.isArray(res?.errors) ? res.errors[0]?.message : '') || '';
 					if (msg) return normalizeError(msg);
 				}
 			}
