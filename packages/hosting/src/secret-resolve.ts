@@ -5,8 +5,8 @@
  * CDK-aware resolution glue for the `secret()` marker. This is the shared
  * engine that turns an inert {@link SecretValue} into wired infrastructure —
  * relocated here (from `@aws-blocks/core`) so ALL consumers reuse it: the
- * Blocks `Hosting` block, a standalone hosting app, Amplify's `defineHosting`,
- * and (the synth-time helpers) `@aws-blocks/pipeline`.
+ * Blocks `Hosting` block, a standalone hosting app, and (the synth-time helpers)
+ * `@aws-blocks/pipeline`.
  *
  * Two resolution strategies, chosen by where the marker appears:
  *   • `environment` runtime secret (secure default) — inject the store LOCATOR

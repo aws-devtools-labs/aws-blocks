@@ -281,8 +281,8 @@ export type HostingConstructProps = {
    * plain strings or {@link secret} markers. A `secret('K')` marker is wired at
    * RUNTIME (secure default): the store locator is injected and the compute
    * role granted read+decrypt; the app reads it via `getSecret('K')`. This
-   * makes runtime secrets work for ANY consumer of the construct (Blocks,
-   * standalone, Amplify) with no extra plumbing.
+   * makes runtime secrets work for ANY consumer of the construct (Blocks, a
+   * standalone hosting app, or any other caller) with no extra plumbing.
    *
    * Synth-time markers (`secret(..., { exposeAsEnv: true })`, domain secrets)
    * require async resolution and must be pre-resolved by the async wrapper

@@ -43,7 +43,7 @@ export {
 	setSecret,
 } from './secret-cli.js';
 // CDK-aware resolution engine — marker → infra wiring. Used by core.Hosting,
-// a standalone app, Amplify's defineHosting, and (synth helpers) pipeline.
+// a standalone hosting app, and (synth helpers) pipeline.
 export {
 	_setSynthSecretFetcher,
 	collectSynthSecretKeys,

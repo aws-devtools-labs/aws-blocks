@@ -7,9 +7,9 @@
  * The package's main `index.ts` re-exports CDK constructs, so importing from it
  * in a runtime/CLI context would pull all of CDK. This subpath exposes only the
  * dependency-free marker, the runtime resolver, and the set/list/remove CLI
- * core — so consumers (core's runtime index, a standalone `npm run secret`
- * wrapper, Amplify's `ampx hosting secret`) can use them without dragging CDK
- * into the Lambda bundle or a CLI process.
+ * core — so consumers (core's runtime index, or a standalone `npm run secret`
+ * wrapper) can use them without dragging CDK into the Lambda bundle or a CLI
+ * process.
  *
  * @module
  */

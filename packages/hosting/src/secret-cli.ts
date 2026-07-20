@@ -4,9 +4,9 @@
 /**
  * Shared secret CLI core — `set` / `list` / `remove` for hosting/pipeline
  * secrets. Relocated into the framework-neutral leaf so every consumer reuses
- * it: Blocks (`npm run secret`), a standalone app (`npm run secret`), and
- * Amplify (`ampx hosting secret`). Each consumer supplies its own SSM prefix
- * and store via {@link SecretCliOptions}; the command surface is glue on top.
+ * it: Blocks (`npm run secret`) and a standalone app (`npm run secret`). Each
+ * consumer supplies its own SSM prefix and store via {@link SecretCliOptions};
+ * the command surface is glue on top.
  *
  * The value is set OUT OF BAND (never in source). This module writes to the
  * store; deploy/runtime only READ. Store is pluggable: SSM SecureString
@@ -176,8 +176,7 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
 
 /**
  * CLI dispatcher for `<label> <subcommand> [...args]`. Thin argv parsing so a
- * template script (Blocks/standalone) or an Amplify command can wire it in one
- * line.
+ * template script (Blocks/standalone) can wire it in one line.
  */
 export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}): Promise<void> {
 	const label = opts.label ?? 'secret';

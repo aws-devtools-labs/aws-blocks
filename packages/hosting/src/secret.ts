@@ -85,9 +85,10 @@ export type SecretStore = 'ssm' | 'secrets-manager';
  * services — an SSM value is NOT auto-copied to SM, so re-run
  * `secret set <KEY>` once per key after upgrading (or pin `store: 'ssm'`).
  *
- * NOTE: this is the leaf's neutral default for DIRECT consumers (standalone,
- * Amplify, pipeline). `@aws-blocks/core` (Blocks) pins its own SSM `/blocks/secrets`
- * namespace independently and is unaffected by this constant.
+ * NOTE: this is the leaf's neutral default for DIRECT consumers (a standalone
+ * hosting app, pipeline, or any other framework-neutral caller of the L3).
+ * `@aws-blocks/core` (Blocks) pins its own SSM `/blocks/secrets` namespace
+ * independently and is unaffected by this constant.
  */
 export const DEFAULT_SECRET_STORE: SecretStore = 'secrets-manager';
 

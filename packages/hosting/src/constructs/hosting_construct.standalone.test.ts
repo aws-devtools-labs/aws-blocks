@@ -481,7 +481,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
     });
   });
 
-  // ---- secret() markers in environment (serves standalone + Amplify) ----
+  // ---- secret() markers in environment (any framework-neutral consumer) ----
   void describe('environment secret() markers', () => {
     void it('wires a runtime secret marker on the DEFAULT store (Secrets Manager): slash-free locator + grants, no value leak', () => {
       const stack = createEnvStack();
