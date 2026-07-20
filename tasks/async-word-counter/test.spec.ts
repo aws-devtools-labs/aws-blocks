@@ -138,12 +138,13 @@ test.describe('async-word-counter', () => {
 	});
 
 	test('a job is persisted at enqueue time as "processing" — not only when it finishes', async ({ request }) => {
-		// PROMPT (lines 3, 19, 22, 32): enqueue must persist the job IMMEDIATELY with status
-		// "processing" (keyed by id in the KV block), not only on completion. The background job
-		// runs asynchronously, so reading right after enqueue returns must surface a persisted
-		// "processing" job — whereas a persist-on-done impl 404s here (unknown id) or omits it
-		// from listJobs. (DONE=20s / "background job + poll interval" confirms jobs are not
-		// instant, so this window is real and the read is not racy.)
+		// PROMPT (lines 3, 19, 22, 32): enqueue must persist the job IMMEDIATELY (keyed by id in
+		// the KV block), not only on completion. The background job runs asynchronously, so reading
+		// right after enqueue returns must surface a persisted job — whereas a persist-on-done impl
+		// 404s here (unknown id) or omits it from listJobs. We assert the job is READABLE and, while
+		// still running, reports "processing" with a null count. DONE=20s is a poll CEILING (the most
+		// we ever wait), NOT a floor: a legitimately-fast reference impl can finish its background job
+		// before this immediate read, so we tolerate a fast "done" here rather than flaking.
 		const text = `${uniq('proc')} alpha beta gamma delta`; // 5 tokens
 		const id = await enqueue(request, text);
 
@@ -152,8 +153,13 @@ test.describe('async-word-counter', () => {
 		const job = body?.result;
 		expect(job?.id, 'the job must be readable the instant it is enqueued').toBe(id);
 		expect(job?.text).toBe(text);
-		expect(job?.status, 'a just-enqueued job must be persisted as "processing"').toBe('processing');
-		expect(job?.count ?? null, 'count is null/absent while still processing').toBeNull();
+		expect(
+			['processing', 'done'],
+			'a just-enqueued job must be readable — "processing", or "done" if a fast impl already finished',
+		).toContain(job?.status);
+		if (job?.status === 'processing') {
+			expect(job?.count ?? null, 'count is null/absent while still processing').toBeNull();
+		}
 
 		// listJobs must ALSO surface the still-processing job (restored from the store, PROMPT line 22).
 		const listed = (await rpc(request, 'api.listJobs', [])).body?.result ?? [];
