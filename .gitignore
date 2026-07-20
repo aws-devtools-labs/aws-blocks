@@ -45,7 +45,6 @@ docs/tech-design-output
 .bb-data-*/
 
 # Local dev artifacts
-CLAUDE.md
 conversation.md
 **/error_e2e_*.txt
 **/error_hosting.txt
