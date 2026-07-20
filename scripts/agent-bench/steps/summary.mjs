@@ -123,7 +123,7 @@ md.push(
 	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<color> <value> (<Δ vs main>)` inline.',
 );
 md.push(
-	'- **Columns:** Tests (pass/denom) · Judge (overall score + per-dimension shorthand `F`/`S`/`P`/`C`/`B` = functional / selectors / persistence / code / blocks) · Cost · Turns (agent cycles) · Score · Stop reason. Turns is new — it reads ⚪ `(new)` until a `main` bench records a baseline for it.',
+	'- **Columns:** Tests (pass/denom) · Judge (overall 0-10 score with signed delta; per-dimension breakdown lives in the judge artifact JSON) · Cost · Turns (agent cycles) · Score · Stop reason. Turns is new — it reads ⚪ `(new)` until a `main` bench records a baseline for it.',
 );
 md.push(
 	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge (& each dimension) ±0.3 · tests ±1 pass · cost ±10% · turns ±3. A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
