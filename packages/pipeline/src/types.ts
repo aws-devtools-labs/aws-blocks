@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { SecretValue } from '@aws-blocks/hosting/secret';
+import type { SecretStore, SecretValue } from '@aws-blocks/hosting/secret';
 import type * as cdk from 'aws-cdk-lib';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import type { IFileSetProducer } from 'aws-cdk-lib/pipelines';
@@ -356,6 +356,43 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
 
 	/** Synth step configuration. */
 	readonly synth?: PipelineSynthConfig;
+
+	/**
+	 * Secrets made available to the build/deploy commands that run in the synth
+	 * CodeBuild project (`npm ci`, a frontend build, `npx cdk synth`, publish
+	 * steps, etc.) as environment variables.
+	 *
+	 * Unlike {@link PipelineSourceConfig.connectionArn} — which the CodePipeline
+	 * *service* consumes and is therefore resolved at synth time — these are
+	 * consumed by your *build commands* and are fetched by CodeBuild **at build
+	 * time** on every run. That means:
+	 * - The value is never inlined into the CloudFormation template; only the
+	 *   store locator is referenced. CodeBuild also masks the value in build logs.
+	 * - Rotating the value takes effect on the next build with **no redeploy**.
+	 * - The CodeBuild role is automatically granted read on that one secret.
+	 *
+	 * Each entry maps an environment variable name to a {@link secret} marker.
+	 * The variable is then readable in your synth `commands` as `$NAME`.
+	 *
+	 * @example
+	 * ```ts
+	 * buildSecrets: {
+	 *   NPM_TOKEN: secret('NPM_TOKEN'),
+	 *   DOCKERHUB_PASSWORD: secret('DOCKERHUB_PASSWORD'),
+	 * },
+	 * synth: { commands: ['npm ci', 'docker login -u me -p $DOCKERHUB_PASSWORD', 'npx cdk synth'] },
+	 * ```
+	 */
+	readonly buildSecrets?: Record<string, SecretValue>;
+
+	/**
+	 * Namespace + backing store for the {@link buildSecrets} (and a secret
+	 * `connectionArn`) markers. Defaults to the neutral `/hosting/secrets` prefix
+	 * and the default store (Secrets Manager). Set `store: 'ssm'` to use SSM
+	 * Parameter Store, or `prefix` to pin your own namespace — the CLI that sets
+	 * the values and this deploy must agree on both.
+	 */
+	readonly secrets?: { readonly prefix?: string; readonly store?: SecretStore };
 
 	/**
 	 * Branch configurations. Each entry creates a separate CodePipeline.

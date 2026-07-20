@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import { isSecret, resolveSecretsAtSynth } from '@aws-blocks/hosting';
+import { isSecret, resolveSecretsAtSynth, secretStoreLocator } from '@aws-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
@@ -290,6 +290,42 @@ async function resolveSourceSecrets<TConfig>(props: PipelineProps<TConfig>): Pro
 	return { ...props, source: { ...props.source, connectionArn: value } };
 }
 
+/**
+ * Map `buildSecrets` markers to CodeBuild environment variables that CodeBuild
+ * fetches from the store **at build time** (type `SECRETS_MANAGER` or
+ * `PARAMETER_STORE`). CodeBuild grants the build role read on each referenced
+ * secret and masks the value in build logs; the value never enters the template.
+ * Returns `undefined` when there are no build secrets, so the buildEnvironment
+ * is left untouched in that case.
+ */
+function buildSecretEnvVars<TConfig>(
+	props: PipelineProps<TConfig>,
+): Record<string, codebuild.BuildEnvironmentVariable> | undefined {
+	const buildSecrets = props.buildSecrets;
+	if (!buildSecrets || Object.keys(buildSecrets).length === 0) return undefined;
+
+	const prefix = props.secrets?.prefix;
+	const store = props.secrets?.store;
+	const type =
+		(store ?? 'secrets-manager') === 'secrets-manager'
+			? codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER
+			: codebuild.BuildEnvironmentVariableType.PARAMETER_STORE;
+
+	const envVars: Record<string, codebuild.BuildEnvironmentVariable> = {};
+	for (const [name, marker] of Object.entries(buildSecrets)) {
+		if (!isSecret(marker)) {
+			throw new Error(
+				`Pipeline: buildSecrets['${name}'] must be a secret('...') marker. ` +
+					'Pass a marker so the value is read from the store at build time, never inlined.',
+			);
+		}
+		// CodeBuild resolves this locator at build time: the SM secret name or the
+		// SSM parameter name (secretStoreLocator produces the store-appropriate form).
+		envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store }) };
+	}
+	return envVars;
+}
+
 function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConfig>): void {
 	if (props.stageFactory && props.appFile) {
 		throw new Error('Pipeline: `stageFactory` and `appFile` are mutually exclusive. Provide one or the other.');
@@ -470,6 +506,10 @@ function buildCodePipeline<TConfig>(
 			? undefined
 			: (props.synth?.partialBuildSpec ?? DEFAULT_SYNTH_PARTIAL_BUILD_SPEC);
 
+	// buildSecrets → CodeBuild env vars fetched from the store at build time
+	// (SECRETS_MANAGER / PARAMETER_STORE). CodeBuild grants read + masks logs.
+	const secretEnvVars = buildSecretEnvVars(props);
+
 	return new CodePipeline(construct, branchId, {
 		synth: synthStep,
 		selfMutation: props.selfMutation ?? true,
@@ -483,6 +523,9 @@ function buildCodePipeline<TConfig>(
 			buildEnvironment: {
 				buildImage: props.synth?.buildImage ?? codebuild.LinuxBuildImage.AMAZON_LINUX_2023_5,
 				computeType: props.synth?.computeType ?? codebuild.ComputeType.MEDIUM,
+				// Only set environmentVariables when there are build secrets, so the
+				// field is omitted (not set to undefined) in the common no-secrets case.
+				...(secretEnvVars ? { environmentVariables: secretEnvVars } : {}),
 			},
 		},
 	});

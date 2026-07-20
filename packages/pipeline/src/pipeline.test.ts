@@ -2151,4 +2151,76 @@ describe('_sourceOverride (internal test hook)', () => {
 			}
 		});
 	});
+
+	describe('buildSecrets', () => {
+		// The synth CodeBuild project carries the build-time secret env vars.
+		function synthProjectEnvVars(stack: Stack): Array<{ Name: string; Type: string; Value: unknown }> {
+			const t = Template.fromStack(stack);
+			const projects = t.findResources('AWS::CodeBuild::Project');
+			for (const project of Object.values(projects)) {
+				const vars = (project as any).Properties?.Environment?.EnvironmentVariables;
+				if (Array.isArray(vars) && vars.some((v) => v.Name === 'NPM_TOKEN')) return vars;
+			}
+			return [];
+		}
+
+		it('wires a buildSecret as a SECRETS_MANAGER build env var (default store)', () => {
+			const stack = new Stack(new App(), 'BuildSecretsSM');
+			new Pipeline(
+				stack,
+				'P',
+				defaultPipelineProps({
+					buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+				}),
+			);
+			const vars = synthProjectEnvVars(stack);
+			const npm = vars.find((v) => v.Name === 'NPM_TOKEN');
+			assert.ok(npm, 'NPM_TOKEN env var present on the synth CodeBuild project');
+			assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+			// Secrets Manager locator is the slash-free name.
+			assert.strictEqual(npm?.Value, 'hosting/secrets/NPM_TOKEN');
+			// The value itself never appears as a plaintext env var.
+			const json = JSON.stringify(Template.fromStack(stack).toJSON());
+			assert.ok(!json.includes('"PLAINTEXT","Value":"hosting/secrets/NPM_TOKEN"'.replace(/"/g, '')));
+		});
+
+		it('honors the ssm store + custom prefix (PARAMETER_STORE build env var)', () => {
+			const stack = new Stack(new App(), 'BuildSecretsSSM');
+			new Pipeline(
+				stack,
+				'P',
+				defaultPipelineProps({
+					buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+					secrets: { prefix: '/myapp/secrets', store: 'ssm' },
+				}),
+			);
+			const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+			assert.strictEqual(npm?.Type, 'PARAMETER_STORE');
+			// SSM keeps the leading-slash path form.
+			assert.strictEqual(npm?.Value, '/myapp/secrets/NPM_TOKEN');
+		});
+
+		it('rejects a non-marker buildSecrets value', () => {
+			const stack = new Stack(new App(), 'BuildSecretsBad');
+			assert.throws(
+				() =>
+					new Pipeline(
+						stack,
+						'P',
+						defaultPipelineProps({
+							// @ts-expect-error — buildSecrets values must be secret() markers
+							buildSecrets: { NPM_TOKEN: 'npm_plaintext' },
+						}),
+					),
+				/must be a secret\('\.\.\.'\) marker/,
+			);
+		});
+
+		it('omits environment variables entirely when no buildSecrets are given', () => {
+			const stack = new Stack(new App(), 'NoBuildSecrets');
+			new Pipeline(stack, 'P', defaultPipelineProps());
+			// No synth project should carry an NPM_TOKEN (nothing wired).
+			assert.deepStrictEqual(synthProjectEnvVars(stack), []);
+		});
+	});
 });
