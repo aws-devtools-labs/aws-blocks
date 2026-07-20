@@ -74,7 +74,7 @@ depending on the cell's class, and only *one* class is excluded noise. Match the
 buckets — this mirrors the mean-inclusion rule and the `pass · partial · fail · harness_error` tally in the
 [Reference](#reference-what-the-current-v1-report-contains):
 
-| Class | Signal (`stop_reason` / status) | In the headline mean? | What its 0 means → action |
+| Class | Signal (`stop_reason` / `klass_reason` / status) | In the headline mean? | What its 0 means → action |
 |---|---|---|---|
 | **`harness_error`** | `cancelled` (CI abort); a pre-grade failure (`preflight_failed`, `oidc_failed`, `init_abort`); an **ungraceful** step-2 death under active isolation (surfaces as `in_progress` / no terminal stop_reason) | **EXCLUDED** from the mean | The harness or CI died before the agent's work could be judged. **NOT a PR signal → RE-RUN the cell.** |
 | **`agent_fail` / `dead_server`** | `agent_fail`: graceful `wall_clock_timeout` (ran out of its time budget), `max_tokens` / `error` (hit its output-token budget), `agent_timeout`. `dead_server`: `dev_server_dead` (app built but its dev-server never served / crashed) | **INCLUDED as composite 0 — this 0 moved the mean** | A **genuine, counted failure** — *not* excluded noise. The `stop_reason` tells you whether a **re-run** might recover it (a transient budget / throttle blip) or whether it's a persistent agent budget / quality regression. Re-run to disambiguate, but it counts as a real data point until it does. |
