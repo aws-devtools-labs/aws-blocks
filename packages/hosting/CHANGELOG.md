@@ -1,5 +1,11 @@
 # @aws-blocks/hosting
 
+## 0.1.6
+
+### Patch Changes
+
+- 9586841: docs(hosting): document custom domain configuration (Route 53 and bring-your-own DNS)
+
 ## 0.1.5
 
 ### Patch Changes

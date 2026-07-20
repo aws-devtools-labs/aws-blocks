@@ -96,7 +96,7 @@
     "test:e2e:hosting-ssr-astro": "cd test-apps/hosting-ssr-astro && npm run test:e2e:sandbox",
     "test:e2e:hosting-ssr-astro-default404": "cd test-apps/hosting-ssr-astro-default404 && npm run test:e2e:sandbox",
     "check:exports-consistency": "npx tsx scripts/check-aws-blocks-exports-consistency.ts",
-    "lint": "biome lint --skip=correctness/noUndeclaredDependencies --reporter=github --changed --since=origin/main packages/",
+    "lint": "biome lint --skip=correctness/noUndeclaredDependencies --reporter=github --changed --since=origin/main --no-errors-on-unmatched packages/",
     "lint:deps": "npx tsx scripts/lint-deps.ts",
     "update:api": "bash scripts/update-api-reports.sh",
     "check:api": "bash scripts/update-api-reports.sh && npx tsx scripts/check-api-reports.ts"
