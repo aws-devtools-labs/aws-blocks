@@ -30,6 +30,12 @@ export interface SecretCliOptions {
 	prefix?: string;
 	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'secrets-manager'`). */
 	store?: SecretStore;
+	/**
+	 * Optional environment segment. When set, the value is written under
+	 * `<prefix>/<stage>/<key>`; omit it to write the shared/fallback value at
+	 * `<prefix>/<key>`. The CLI passes this from `--stage <name>`.
+	 */
+	stage?: string;
 	/** Command label shown in usage text (e.g. `'blocks secret'`, `'ampx hosting secret'`). */
 	label?: string;
 }
@@ -52,7 +58,7 @@ export async function setSecret(key: string, value: string, opts: SecretCliOptio
 	}
 	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
 	const store = opts.store ?? DEFAULT_SECRET_STORE;
-	const name = secretStoreLocator(key, { prefix, store });
+	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
 
 	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand } = await import(
@@ -76,9 +82,15 @@ export async function setSecret(key: string, value: string, opts: SecretCliOptio
 	console.log(`🔐 Secret '${key}' set (${name}).`);
 }
 
-/** List secret keys under the prefix. Values are never returned. */
+/**
+ * List secret keys under the prefix. Values are never returned. With a `stage`,
+ * lists the stage's own secrets (`<prefix>/<stage>/…`); without one, lists the
+ * shared secrets at `<prefix>/…` (stage-scoped ones live one level deeper and
+ * are intentionally excluded from the shared view).
+ */
 export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]> {
-	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
+	const basePrefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
+	const prefix = opts.stage ? `${basePrefix}/${opts.stage}` : basePrefix;
 	const store = opts.store ?? DEFAULT_SECRET_STORE;
 
 	if (store === 'secrets-manager') {
@@ -129,7 +141,7 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
 	assertValidKey(key);
 	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
 	const store = opts.store ?? DEFAULT_SECRET_STORE;
-	const name = secretStoreLocator(key, { prefix, store });
+	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
 
 	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
@@ -169,23 +181,29 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
  */
 export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}): Promise<void> {
 	const label = opts.label ?? 'secret';
-	const [subcommand, ...rest] = argv;
+	// Pull an optional `--stage <name>` (or `--stage=<name>`) out of argv; a
+	// CLI-supplied stage overrides any preset on `opts`. Everything else is
+	// positional, so set/list/remove parsing below stays unchanged.
+	const { stage, positional } = extractStageFlag(argv);
+	const effectiveOpts: SecretCliOptions = stage !== undefined ? { ...opts, stage } : opts;
+	const [subcommand, ...rest] = positional;
 	switch (subcommand) {
 		case 'set': {
 			const [key, ...valueParts] = rest;
 			const value = valueParts.join(' ');
 			if (!key || valueParts.length === 0) {
-				throw new Error(`Usage: ${label} set <KEY> <value>`);
+				throw new Error(`Usage: ${label} set <KEY> <value> [--stage <name>]`);
 			}
-			await setSecret(key, value, opts);
+			await setSecret(key, value, effectiveOpts);
 			break;
 		}
 		case 'list': {
-			const keys = await listSecrets(opts);
+			const keys = await listSecrets(effectiveOpts);
+			const scope = effectiveOpts.stage ? ` (stage '${effectiveOpts.stage}')` : '';
 			if (keys.length === 0) {
-				console.log(`No secrets set. Add one with: ${label} set <KEY> <value>`);
+				console.log(`No secrets set${scope}. Add one with: ${label} set <KEY> <value>`);
 			} else {
-				console.log('Secrets:');
+				console.log(`Secrets${scope}:`);
 				for (const key of keys) console.log(`  ${key}`);
 			}
 			break;
@@ -193,8 +211,8 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 		case 'remove':
 		case 'rm': {
 			const [key] = rest;
-			if (!key) throw new Error(`Usage: ${label} remove <KEY>`);
-			await removeSecret(key, opts);
+			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--stage <name>]`);
+			await removeSecret(key, effectiveOpts);
 			break;
 		}
 		default:
@@ -202,4 +220,22 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 				`Unknown secret subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
 			);
 	}
+}
+
+/** Extract `--stage <name>` / `--stage=<name>` from argv, returning the rest. */
+function extractStageFlag(argv: string[]): { stage?: string; positional: string[] } {
+	const positional: string[] = [];
+	let stage: string | undefined;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === '--stage') {
+			stage = argv[++i];
+			if (stage === undefined) throw new Error('`--stage` requires a value, e.g. --stage prod');
+		} else if (arg.startsWith('--stage=')) {
+			stage = arg.slice('--stage='.length);
+		} else {
+			positional.push(arg);
+		}
+	}
+	return { stage, positional };
 }

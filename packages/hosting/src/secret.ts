@@ -203,15 +203,26 @@ export function secretParameterName(key: string, prefix: string = DEFAULT_SECRET
  *   name and the IAM ARN resource (`…:secret:hosting/secrets/KEY-*`) agree.
  *   (A leading slash silently mismatched the ARN the grant scoped to.)
  *
+ * When `stage` is given, it becomes a path segment between the prefix and the
+ * key (`<prefix>/<stage>/<key>`), so the same logical key can hold a distinct
+ * value per environment. Omitting `stage` yields the shared/flat locator
+ * (`<prefix>/<key>`) — the fallback that stage-specific lookups fall back to,
+ * and the only form used when a consumer opts out of per-stage secrets.
+ *
  * @param key - The logical secret name.
  * @param opts.prefix - Path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}.
  * @param opts.store - Backing store. Default {@link DEFAULT_SECRET_STORE}.
+ * @param opts.stage - Optional environment segment (e.g. `'prod'`). Omit for the shared value.
+ * @example secretStoreLocator('K', { store: 'ssm' })                 // '/hosting/secrets/K'   (shared)
+ * @example secretStoreLocator('K', { store: 'ssm', stage: 'prod' })  // '/hosting/secrets/prod/K'
  */
 export function secretStoreLocator(
 	key: string,
-	opts: { prefix?: string; store?: SecretStore } = {},
+	opts: { prefix?: string; store?: SecretStore; stage?: string } = {},
 ): string {
-	const path = secretParameterName(key, opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX);
+	const basePrefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
+	const prefix = opts.stage ? `${basePrefix}/${opts.stage}` : basePrefix;
+	const path = secretParameterName(key, prefix);
 	const store = opts.store ?? DEFAULT_SECRET_STORE;
 	return store === 'secrets-manager' ? path.replace(/^\//, '') : path;
 }
@@ -230,4 +241,17 @@ export function secretStoreLocator(
  */
 export function secretEnvVarName(key: string): string {
 	return `HOSTING_SECRET_PARAM_${key}`;
+}
+
+/**
+ * Env var name under which the wiring publishes the *fallback* (shared) locator
+ * for a stage-scoped secret. Injected only when a `stage` is in play: the
+ * runtime resolver tries {@link secretEnvVarName} (the stage-specific locator)
+ * first and falls back to this shared locator on a not-found. Absent when the
+ * consumer uses no stage, so the single-locator path is unchanged.
+ *
+ * @example secretFallbackEnvVarName('STRIPE_KEY') // 'HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK'
+ */
+export function secretFallbackEnvVarName(key: string): string {
+	return `${secretEnvVarName(key)}_FALLBACK`;
 }

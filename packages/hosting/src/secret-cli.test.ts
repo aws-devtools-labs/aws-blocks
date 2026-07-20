@@ -25,4 +25,23 @@ void describe('runSecretCli() argv parsing', () => {
 	void it('validates the key before any store call', async () => {
 		await assert.rejects(runSecretCli(['set', '1bad', 'value']), /Invalid secret key/);
 	});
+
+	// ── --stage flag parsing (no live store; assert via validation paths) ──
+	void it('rejects --stage without a value', async () => {
+		await assert.rejects(runSecretCli(['set', 'K', 'v', '--stage']), /--stage.*requires a value/);
+	});
+
+	void it('strips --stage <name> from positionals (set still needs KEY + value)', async () => {
+		// With the stage flag removed, only a key remains → usage error (proves
+		// the flag+value were extracted, not treated as the value).
+		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage', 'prod']), /Usage:.*set <KEY> <value>/);
+	});
+
+	void it('still validates the key when a stage is present', async () => {
+		await assert.rejects(runSecretCli(['set', '1bad', 'value', '--stage', 'prod']), /Invalid secret key/);
+	});
+
+	void it('accepts --stage=<name> form (key-only still errors on usage)', async () => {
+		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage=prod']), /Usage:.*set <KEY> <value>/);
+	});
 });

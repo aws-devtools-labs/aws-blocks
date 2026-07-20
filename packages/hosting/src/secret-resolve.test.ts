@@ -176,4 +176,85 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		// The default-store wiring equals an explicit secrets-manager wiring.
 		assert.strictEqual(DEFAULT_SECRET_STORE, 'secrets-manager');
 	});
+
+	void it('with a stage: injects stage locator + _FALLBACK shared locator, grants BOTH ARNs', () => {
+		const { stack, fn } = fnStack();
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' });
+		const t = Template.fromStack(stack);
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: {
+				Variables: Match.objectLike({
+					// primary = stage-specific; fallback = shared.
+					HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/prod/STRIPE_KEY',
+					HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK: '/blocks/secrets/STRIPE_KEY',
+				}),
+			},
+		});
+		// The role is granted read on BOTH the stage and the shared parameter ARNs.
+		const json = JSON.stringify(t.toJSON());
+		assert.ok(json.includes('parameter/blocks/secrets/prod/STRIPE_KEY'), 'stage ARN granted');
+		assert.ok(json.includes('parameter/blocks/secrets/STRIPE_KEY'), 'shared ARN granted');
+	});
+
+	void it('without a stage: no _FALLBACK var, single ARN grant (unchanged)', () => {
+		const { stack, fn } = fnStack();
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
+		const json = JSON.stringify(Template.fromStack(stack).toJSON());
+		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK'), 'no fallback var when stageless');
+	});
+});
+
+void describe('resolveSecretsAtSynth() — per-stage fallback', () => {
+	void it('prefers the stage value, else falls back to the shared value', async () => {
+		const seen: string[] = [];
+		// Fetcher: stage-specific path is "not set", shared path resolves.
+		const resolved = await resolveSecretsAtSynth(['DOMAIN'], {
+			prefix: '/blocks/secrets',
+			store: 'ssm',
+			stage: 'pr-123',
+			fetcher: async (locator) => {
+				seen.push(locator);
+				if (locator === '/blocks/secrets/pr-123/DOMAIN') {
+					const e = new Error('missing');
+					e.name = 'ParameterNotFound';
+					throw e;
+				}
+				return 'shared.example.com';
+			},
+		});
+		// Tried stage first, then shared.
+		assert.deepStrictEqual(seen, ['/blocks/secrets/pr-123/DOMAIN', '/blocks/secrets/DOMAIN']);
+		assert.strictEqual(resolved.get('DOMAIN'), 'shared.example.com');
+	});
+
+	void it('uses the stage value directly when it exists (no fallback call)', async () => {
+		const seen: string[] = [];
+		const resolved = await resolveSecretsAtSynth(['DOMAIN'], {
+			prefix: '/blocks/secrets',
+			store: 'ssm',
+			stage: 'prod',
+			fetcher: async (locator) => {
+				seen.push(locator);
+				return 'prod.example.com';
+			},
+		});
+		assert.deepStrictEqual(seen, ['/blocks/secrets/prod/DOMAIN']);
+		assert.strictEqual(resolved.get('DOMAIN'), 'prod.example.com');
+	});
+
+	void it('errors naming both stage and shared when neither is set', async () => {
+		await assert.rejects(
+			resolveSecretsAtSynth(['DOMAIN'], {
+				prefix: '/blocks/secrets',
+				store: 'ssm',
+				stage: 'prod',
+				fetcher: async () => {
+					const e = new Error('missing');
+					e.name = 'ParameterNotFound';
+					throw e;
+				},
+			}),
+			/stage 'prod'.*shared|--stage prod/s,
+		);
+	});
 });

@@ -99,4 +99,54 @@ void describe('getSecret() runtime resolver', () => {
 		assert.strictEqual(seenStore, 'secrets-manager');
 		delete process.env[`${secretEnvVarName('STRIPE_KEY')}_STORE`];
 	});
+
+	// ── per-stage two-try fallback ──────────────────────────────────────────
+	void it('falls back to the shared locator when the stage value is not found', async () => {
+		delete process.env.STRIPE_KEY;
+		const env = secretEnvVarName('STRIPE_KEY');
+		process.env[env] = '/blocks/secrets/prod/STRIPE_KEY'; // primary (stage)
+		process.env[`${env}_FALLBACK`] = '/blocks/secrets/STRIPE_KEY'; // shared
+		const seen: string[] = [];
+		_setSecretFetcher(async (locator) => {
+			seen.push(locator);
+			if (locator === '/blocks/secrets/prod/STRIPE_KEY') {
+				const e = new Error('missing');
+				e.name = 'ParameterNotFound';
+				throw e;
+			}
+			return 'shared_value';
+		});
+		assert.strictEqual(await getSecret('STRIPE_KEY'), 'shared_value');
+		assert.deepStrictEqual(seen, ['/blocks/secrets/prod/STRIPE_KEY', '/blocks/secrets/STRIPE_KEY']);
+		delete process.env[`${env}_FALLBACK`];
+	});
+
+	void it('uses the stage value directly when present (no fallback fetch)', async () => {
+		delete process.env.STRIPE_KEY;
+		const env = secretEnvVarName('STRIPE_KEY');
+		process.env[env] = '/blocks/secrets/prod/STRIPE_KEY';
+		process.env[`${env}_FALLBACK`] = '/blocks/secrets/STRIPE_KEY';
+		const seen: string[] = [];
+		_setSecretFetcher(async (locator) => {
+			seen.push(locator);
+			return 'stage_value';
+		});
+		assert.strictEqual(await getSecret('STRIPE_KEY'), 'stage_value');
+		assert.deepStrictEqual(seen, ['/blocks/secrets/prod/STRIPE_KEY']); // fallback never called
+		delete process.env[`${env}_FALLBACK`];
+	});
+
+	void it('does NOT fall back on a non-not-found error (surfaces the real error)', async () => {
+		delete process.env.STRIPE_KEY;
+		const env = secretEnvVarName('STRIPE_KEY');
+		process.env[env] = '/blocks/secrets/prod/STRIPE_KEY';
+		process.env[`${env}_FALLBACK`] = '/blocks/secrets/STRIPE_KEY';
+		_setSecretFetcher(async () => {
+			const e = new Error('access denied');
+			e.name = 'AccessDeniedException';
+			throw e;
+		});
+		await assert.rejects(getSecret('STRIPE_KEY'), /access denied/);
+		delete process.env[`${env}_FALLBACK`];
+	});
 });

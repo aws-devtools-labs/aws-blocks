@@ -10,6 +10,7 @@ import {
 	SECRET_BRAND,
 	secret,
 	secretEnvVarName,
+	secretFallbackEnvVarName,
 	secretParameterName,
 	secretStoreLocator,
 } from './secret.js';
@@ -96,5 +97,37 @@ void describe('store default + store-aware locator', () => {
 			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' }),
 			'/blocks/secrets/STRIPE_KEY',
 		);
+	});
+});
+
+void describe('per-stage locator', () => {
+	void it('inserts the stage as a path segment between prefix and key', () => {
+		// SM (slash-free)
+		assert.strictEqual(
+			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager', stage: 'prod' }),
+			'hosting/secrets/prod/STRIPE_KEY',
+		);
+		// SSM (leading-slash path)
+		assert.strictEqual(
+			secretStoreLocator('STRIPE_KEY', { store: 'ssm', stage: 'beta' }),
+			'/hosting/secrets/beta/STRIPE_KEY',
+		);
+		// custom prefix + stage
+		assert.strictEqual(
+			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' }),
+			'/blocks/secrets/prod/STRIPE_KEY',
+		);
+	});
+
+	void it('omitting stage yields the shared/flat locator (the fallback target)', () => {
+		assert.strictEqual(
+			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager' }),
+			'hosting/secrets/STRIPE_KEY',
+		);
+	});
+
+	void it('fallback env var name derives from the primary env var name', () => {
+		assert.strictEqual(secretFallbackEnvVarName('STRIPE_KEY'), 'HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK');
+		assert.strictEqual(`${secretEnvVarName('X')}_FALLBACK`, secretFallbackEnvVarName('X'));
 	});
 });

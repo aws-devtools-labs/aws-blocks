@@ -31,6 +31,7 @@ import {
 	type SecretStore,
 	type SecretValue,
 	secretEnvVarName,
+	secretFallbackEnvVarName,
 	secretStoreLocator,
 } from './secret.js';
 
@@ -48,6 +49,14 @@ export interface SecretResolveOptions {
 	prefix?: string;
 	/** Backing store. Default `'ssm'`. */
 	store?: SecretStore;
+	/**
+	 * Optional environment segment (e.g. `'prod'`, `'beta'`, a PR id). When set,
+	 * a secret resolves to `<prefix>/<stage>/<key>` and **falls back** to the
+	 * shared `<prefix>/<key>` if the stage-specific value is unset — so a value
+	 * can differ per environment while ephemeral/preview stages inherit a shared
+	 * default. Omit for a single flat namespace (no fallback, unchanged behavior).
+	 */
+	stage?: string;
 }
 
 /**
@@ -106,19 +115,41 @@ export async function resolveSecretsAtSynth(
 ): Promise<Map<string, string>> {
 	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
 	const store = options.store ?? DEFAULT_SECRET_STORE;
+	const stage = options.stage;
 	const fetcher = options.fetcher ?? synthFetcherOverride ?? defaultSynthFetcher(store);
+
+	const isNotFound = (error: unknown): boolean => {
+		const name = (error as { name?: string })?.name;
+		return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
+	};
+
 	const resolved = new Map<string, string>();
 	await Promise.all(
 		keys.map(async (key) => {
-			const locator = secretStoreLocator(key, { prefix, store });
+			// Stage-specific first; fall back to the shared value if unset.
+			const primary = secretStoreLocator(key, { prefix, store, stage });
+			const fallback = stage ? secretStoreLocator(key, { prefix, store }) : undefined;
 			try {
-				resolved.set(key, await fetcher(locator));
+				resolved.set(key, await fetcher(primary));
+				return;
 			} catch (error: unknown) {
-				const e = error as { name?: string };
-				if (e?.name === 'ParameterNotFound' || e?.name === 'ResourceNotFoundException') {
+				if (!isNotFound(error)) throw error;
+				if (!fallback) {
 					throw new Error(
 						`Hosting: secret '${key}' is referenced (domain or exposeAsEnv) but ` +
 							`not set. Set it before deploying:\n  secret set ${key} <value>`,
+					);
+				}
+			}
+			// Fallback attempt (only reached when stage-specific was not found).
+			try {
+				resolved.set(key, await fetcher(fallback));
+			} catch (error: unknown) {
+				if (isNotFound(error)) {
+					throw new Error(
+						`Hosting: secret '${key}' is referenced (domain or exposeAsEnv) but ` +
+							`set for neither stage '${stage}' nor the shared default. Set it before deploying:\n` +
+							`  secret set ${key} <value> --stage ${stage}   # or the shared:  secret set ${key} <value>`,
 					);
 				}
 				throw error;
@@ -147,16 +178,40 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
 /**
  * Inject the store LOCATOR (not the value) for a runtime secret and grant the
  * compute role read+decrypt access scoped to that one parameter/secret.
+ *
+ * With a `stage`, the primary locator is stage-specific (`<prefix>/<stage>/<key>`)
+ * and a *fallback* (shared `<prefix>/<key>`) locator is also injected + granted,
+ * so the runtime resolver can fall back to the shared value when the stage has
+ * none set. Without a `stage`, only the single shared locator is wired
+ * (unchanged behavior).
  */
 export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, options: SecretResolveOptions = {}): void {
 	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
 	const store = options.store ?? DEFAULT_SECRET_STORE;
-	const locator = secretStoreLocator(key, { prefix, store });
-	const region = cdk.Stack.of(fn).region;
+	const stage = options.stage;
 
-	// Runtime resolver reads the locator here; the store hint tells it which API.
-	fn.addEnvironment(secretEnvVarName(key), locator);
+	const primary = secretStoreLocator(key, { prefix, store, stage });
+	// Fallback (shared) locator only when a stage is in play and differs.
+	const fallback = stage ? secretStoreLocator(key, { prefix, store }) : undefined;
+
+	// Runtime resolver reads the primary locator; the _STORE hint tells it which
+	// API, and the _FALLBACK hint (when present) is the shared locator to try
+	// if the stage-specific value is not found.
+	fn.addEnvironment(secretEnvVarName(key), primary);
 	if (store !== 'ssm') fn.addEnvironment(`${secretEnvVarName(key)}_STORE`, store);
+	if (fallback) fn.addEnvironment(secretFallbackEnvVarName(key), fallback);
+
+	// Grant read+decrypt on every locator the runtime might read (primary +
+	// fallback), deduped.
+	const locators = [...new Set([primary, ...(fallback ? [fallback] : [])])];
+	for (const locator of locators) {
+		grantSecretRead(fn, locator, store);
+	}
+}
+
+/** Grant a Lambda role least-priv read+decrypt on one secret locator. */
+function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: SecretStore): void {
+	const region = cdk.Stack.of(fn).region;
 
 	if (store === 'secrets-manager') {
 		// SM appends a random 6-char suffix to the ARN; match with `-??????`
@@ -169,18 +224,13 @@ export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, opti
 			arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
 		});
 		fn.addToRolePolicy(
-			new iam.PolicyStatement({
-				actions: ['secretsmanager:GetSecretValue'],
-				resources: [secretArn],
-			}),
+			new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [secretArn] }),
 		);
 		fn.addToRolePolicy(
 			new iam.PolicyStatement({
 				actions: ['kms:Decrypt'],
 				resources: ['*'],
-				conditions: {
-					StringEquals: { 'kms:ViaService': `secretsmanager.${region}.amazonaws.com` },
-				},
+				conditions: { StringEquals: { 'kms:ViaService': `secretsmanager.${region}.amazonaws.com` } },
 			}),
 		);
 		return;

@@ -19,7 +19,13 @@
  * @module
  */
 
-import { secretEnvVarName } from './secret.js';
+import { secretEnvVarName, secretFallbackEnvVarName } from './secret.js';
+
+/** True if a store error means "the secret/parameter does not exist". */
+function isNotFoundError(error: unknown): boolean {
+	const name = (error as { name?: string })?.name;
+	return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
+}
 
 /** Cache of resolved secret values, keyed by logical secret name. */
 const cache = new Map<string, string>();
@@ -94,12 +100,22 @@ export async function getSecret(key: string): Promise<string> {
 		);
 	}
 	const store = process.env[`${envName}_STORE`] ?? 'ssm';
+	// Optional shared/fallback locator, injected only for stage-scoped secrets.
+	const fallbackLocator = process.env[secretFallbackEnvVarName(key)];
 
 	const existing = inFlight.get(key);
 	if (existing) return existing;
 
 	const fetcher = fetcherOverride ?? defaultFetcher;
+	// Try the primary (stage-specific) locator; on not-found, fall back to the
+	// shared locator when one was wired. Cache whichever wins.
 	const promise = fetcher(locator, store)
+		.catch((error: unknown) => {
+			if (fallbackLocator && isNotFoundError(error)) {
+				return fetcher(fallbackLocator, store);
+			}
+			throw error;
+		})
 		.then((value) => {
 			cache.set(key, value);
 			return value;

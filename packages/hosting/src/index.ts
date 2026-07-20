@@ -30,6 +30,7 @@ export {
 	type SecretValue,
 	secret,
 	secretEnvVarName,
+	secretFallbackEnvVarName,
 	secretParameterName,
 	secretStoreLocator,
 } from './secret.js';
