@@ -109,11 +109,13 @@ const SVELTE_CONFIG_FILES = [
 ];
 
 /**
- * Filename the transparent bridge parks the user's original config under while
- * the bridged config takes the `svelte.config.js` slot. Kept a real `.js` so
- * the bridge can `import` it as an ESM module.
+ * Basename (without extension) the transparent bridge parks the user's original
+ * config under while the bridged config takes the original's slot. The original
+ * file's extension is preserved (`svelte.config.blocks-original.mjs` for an
+ * `.mjs` source) so strict ESM/TS loaders resolve the parked module the same
+ * way they would the original.
  */
-const BRIDGE_BACKUP_FILE = 'svelte.config.blocks-original.js';
+const BRIDGE_BACKUP_BASENAME = 'svelte.config.blocks-original';
 
 /**
  * Run the SvelteKit adapter pipeline.
@@ -129,6 +131,12 @@ export const sveltekitAdapter = (
   assertSvelteKitVersion(projectDir);
 
   if (!skipBuild) {
+    // Refuse to run when the user has wired an adapter that ISN'T
+    // adapter-node (e.g. adapter-cloudflare, adapter-static, adapter-auto).
+    // Silently swapping it for adapter-node would discard a deliberate
+    // deployment-target choice — fail loudly instead so the user decides.
+    assertNoIncompatibleAdapter(projectDir);
+
     // Bridge-decision: only skip the bridge when the user has WIRED
     // adapter-node in their svelte.config (a text scan for the import). A bare
     // node_modules presence is unreliable — adapter-node can land there
@@ -137,7 +145,7 @@ export const sveltekitAdapter = (
     const useBridge = !svelteConfigUsesAdapterNode(projectDir);
     let cleanupBridge: (() => void) | undefined;
     if (useBridge) {
-      cleanupBridge = installSvelteKitBridge(projectDir, bodySizeLimit);
+      cleanupBridge = installSvelteKitBridge(projectDir);
     } else {
       process.stderr.write(
         '✨ Detected @sveltejs/adapter-node in svelte.config; building as-is.\n',
@@ -219,17 +227,22 @@ export const sveltekitAdapter = (
 const assertSvelteKitVersion = (projectDir: string): void => {
   const info = getPackageInfoSync('@sveltejs/kit', { paths: [projectDir] });
   const version = info?.version;
-  if (!version || !semver.gte(version, '2.0.0')) {
+  // Enforce the FULL verified range — both the floor (< 2.0 rejected) and the
+  // upper bound. A new major (e.g. 3.x) can silently change the adapter-node
+  // `build/` layout the manifest builder depends on, so we refuse it until the
+  // range is deliberately bumped after re-verification. `satisfies` honors the
+  // `<` bound the version_pins.test.ts asserts on.
+  if (!version || !semver.satisfies(version, VERIFIED_SVELTEKIT_RANGE)) {
     throw new HostingError('UnsupportedSvelteKitVersionError', {
-      message: `SvelteKit 2.0+ is required; ${
-        version
-          ? `installed version is ${version}`
-          : '@sveltejs/kit is not installed'
-      }.`,
+      message: `SvelteKit version ${
+        version ?? '(not installed)'
+      } is outside the verified range ${VERIFIED_SVELTEKIT_RANGE}.`,
       resolution:
-        'Run `npm install @sveltejs/kit@latest` (or your package manager ' +
-        'equivalent). If you are on SvelteKit 1.x, follow the SvelteKit 2 ' +
-        'migration guide at https://svelte.dev/docs/kit/migrating-to-sveltekit-2.',
+        'Install a SvelteKit version within the verified range (e.g. ' +
+        '`npm install @sveltejs/kit@2`, or your package manager equivalent). ' +
+        'If you are on SvelteKit 1.x, follow the SvelteKit 2 migration guide at ' +
+        'https://svelte.dev/docs/kit/migrating-to-sveltekit-2. If you are on a ' +
+        'newer major, the adapter has not yet been verified against it.',
     });
   }
 };
@@ -258,6 +271,40 @@ const svelteConfigUsesAdapterNode = (projectDir: string): boolean => {
 };
 
 /**
+ * Throw when the `svelte.config.*` wires an official SvelteKit adapter that is
+ * NOT `@sveltejs/adapter-node`. The bridge only knows how to force adapter-node;
+ * running it against, say, `@sveltejs/adapter-cloudflare` or
+ * `@sveltejs/adapter-static` would silently overwrite a deliberate
+ * deployment-target choice (the only signal being a stderr line emitted inside
+ * the build subprocess, after the swap has already happened). A text scan (not
+ * a module load) so it works before deps are installed and without evaluating
+ * the config's adapter imports. adapter-node itself, or no adapter at all,
+ * passes through to the normal bridge decision.
+ */
+const assertNoIncompatibleAdapter = (projectDir: string): void => {
+  const configPath = findSvelteConfigPath(projectDir);
+  if (!configPath) return;
+  let src = '';
+  try {
+    src = fs.readFileSync(configPath, 'utf-8');
+  } catch {
+    return;
+  }
+  const referencesAnyAdapter = /@sveltejs\/adapter-/.test(src);
+  if (referencesAnyAdapter && !svelteConfigUsesAdapterNode(projectDir)) {
+    throw new HostingError('SvelteKitIncompatibleAdapterError', {
+      message: `Your ${path.basename(
+        configPath,
+      )} wires a SvelteKit adapter that is incompatible with Lambda-backed hosting (only @sveltejs/adapter-node is supported).`,
+      resolution:
+        'Switch to @sveltejs/adapter-node in your svelte.config, or remove the ' +
+        'adapter entirely and let the hosting adapter install and wire ' +
+        '@sveltejs/adapter-node for you.',
+    });
+  }
+};
+
+/**
  * Swap the user's `svelte.config.js` for a bridged config that force-selects
  * `@sveltejs/adapter-node` while preserving every other user setting (spreads
  * the original config + its `kit` block). Returns a cleanup function that
@@ -266,10 +313,7 @@ const svelteConfigUsesAdapterNode = (projectDir: string): boolean => {
  * Installs `@sveltejs/adapter-node` (pinned) via the detected package manager
  * when it isn't present, saving it to package.json so CI rebuilds reproduce.
  */
-const installSvelteKitBridge = (
-  projectDir: string,
-  bodySizeLimit: number,
-): (() => void) => {
+const installSvelteKitBridge = (projectDir: string): (() => void) => {
   const userConfigPath = findSvelteConfigPath(projectDir);
   if (!userConfigPath) {
     throw new HostingError('SvelteKitConfigNotFoundError', {
@@ -280,25 +324,32 @@ const installSvelteKitBridge = (
     });
   }
 
-  installAdapterNode(projectDir);
-
   const configName = path.basename(userConfigPath);
-  const backupPath = path.join(projectDir, BRIDGE_BACKUP_FILE);
+  // Preserve the original config's extension so the parked module resolves the
+  // same way the original did (an `.mjs`/`.ts` source keeps its loader
+  // semantics rather than being renamed to `.js`).
+  const backupExt = path.extname(userConfigPath) || '.js';
+  const backupFile = `${BRIDGE_BACKUP_BASENAME}${backupExt}`;
+  const backupPath = path.join(projectDir, backupFile);
   // Guard against a stale backup from a previous crashed run clobbering the
-  // real config.
+  // real config. Checked BEFORE any mutation (the install below writes to
+  // package.json / node_modules) so a collision aborts cleanly, touching
+  // nothing.
   if (fs.existsSync(backupPath)) {
     throw new HostingError('SvelteKitBridgeCollisionError', {
       message: `A leftover bridge backup already exists at ${backupPath}.`,
-      resolution: `Restore your original svelte config: rename ${BRIDGE_BACKUP_FILE} back to ${configName} and delete the generated ${configName}, then re-run the deploy.`,
+      resolution: `Restore your original svelte config: rename ${backupFile} back to ${configName} and delete the generated ${configName}, then re-run the deploy.`,
     });
   }
 
-  // Park the original config under a real `.js` name (so the bridge can import
+  installAdapterNode(projectDir);
+
+  // Park the original config under its preserved name (so the bridge can import
   // it), then write the bridge into the original config's slot.
   fs.renameSync(userConfigPath, backupPath);
   fs.writeFileSync(
     userConfigPath,
-    buildBridgeConfigSource(BRIDGE_BACKUP_FILE, bodySizeLimit),
+    buildBridgeConfigSource(backupFile),
     'utf-8',
   );
   process.stderr.write('✨ Installed SvelteKit bridge (transparent build)\n');
@@ -317,7 +368,6 @@ const installSvelteKitBridge = (
 
 const buildBridgeConfigSource = (
   originalConfigFile: string,
-  bodySizeLimit: number,
 ): string => `import userConfig from './${originalConfigFile}';
 import node from '@sveltejs/adapter-node';
 
@@ -349,14 +399,17 @@ const detectPackageManagerInstall = (
 ): { command: string; args: string[] } => {
   const has = (file: string): boolean =>
     fs.existsSync(path.join(projectDir, file));
+  // @sveltejs/adapter-node is a dev dependency in every SvelteKit project, so
+  // each manager's dev flag is passed (npm below uses --save-dev). Without it
+  // pnpm/yarn/bun would add it to `dependencies`.
   if (has('pnpm-lock.yaml')) {
-    return { command: 'pnpm', args: ['add', '--silent', packageSpec] };
+    return { command: 'pnpm', args: ['add', '-D', '--silent', packageSpec] };
   }
   if (has('yarn.lock')) {
-    return { command: 'yarn', args: ['add', '--silent', packageSpec] };
+    return { command: 'yarn', args: ['add', '--dev', '--silent', packageSpec] };
   }
   if (has('bun.lockb') || has('bun.lock')) {
-    return { command: 'bun', args: ['add', packageSpec] };
+    return { command: 'bun', args: ['add', '-d', packageSpec] };
   }
   return {
     command: 'npm',
@@ -625,19 +678,18 @@ const buildManifest = (input: {
       port: SVELTEKIT_SERVER_PORT,
       placement: 'regional',
       runtime: 'nodejs20.x',
+      /* eslint-disable @typescript-eslint/naming-convention */
       environment: {
         // Behind CloudFront the SSR server must reconstruct the public origin
         // from proxy headers so redirects / form-action URLs / cookies point
         // at the viewer domain, not the raw Lambda host. The KVS router copies
         // Host → x-forwarded-host on compute-bound requests.
-        // eslint-disable-next-line @typescript-eslint/naming-convention
         HOST_HEADER: 'x-forwarded-host',
-        // eslint-disable-next-line @typescript-eslint/naming-convention
         PROTOCOL_HEADER: 'x-forwarded-proto',
         // adapter-node's default is 512 KB, which silently 413s file uploads.
-        // eslint-disable-next-line @typescript-eslint/naming-convention
         BODY_SIZE_LIMIT: String(bodySizeLimit),
       },
+      /* eslint-enable @typescript-eslint/naming-convention */
     },
   };
 
@@ -702,7 +754,14 @@ const buildRoutes = (
   for (const htmlFile of walkHtmlFiles(prerenderedDir)) {
     const rel = path.relative(prerenderedDir, htmlFile).replace(/\\/g, '/');
     const urlPath = htmlFileToUrlPath(rel);
-    if (urlPath === '/') continue; // root is served by the catch-all / SSR
+    if (urlPath === '/') {
+      // A prerendered root is copied into client/ as index.html, so serve it
+      // from S3 rather than letting every homepage request fall through to the
+      // catch-all SSR Lambda. The bare `/` static route precedes the `/*`
+      // catch-all added below; deeper paths still reach SSR via `/*`.
+      add({ pattern: '/', target: 'static' });
+      continue;
+    }
     add({ pattern: urlPath, target: 'static' });
     add({ pattern: `${urlPath}/*`, target: 'static' });
   }

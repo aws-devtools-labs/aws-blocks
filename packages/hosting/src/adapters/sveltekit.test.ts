@@ -223,6 +223,113 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
       /UnsupportedSvelteKitVersionError/,
     );
   });
+
+  void it('throws UnsupportedSvelteKitVersionError for a SvelteKit major above the verified range', () => {
+    // A new major (3.x) must be refused, not silently accepted — the verified
+    // range caps below 3.0 until the adapter is re-verified against it.
+    scaffoldBuild(tmp, { kitVersion: '3.0.0' });
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp, skipBuild: true }),
+      /UnsupportedSvelteKitVersionError/,
+    );
+  });
+
+  void it('serves a prerendered root (/) from S3 instead of the SSR catch-all', () => {
+    scaffoldBuild(tmp, { prerendered: { 'index.html': '<h1>home</h1>' } });
+    const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+    const root = m.routes.find((r) => r.pattern === '/');
+    assert.equal(root?.target, 'static', 'prerendered / routed to S3');
+    // Catch-all is still last and still targets compute for deeper paths.
+    const last = m.routes[m.routes.length - 1];
+    assert.equal(last.pattern, '/*');
+    assert.equal(last.target, 'default');
+  });
+
+  void it('does NOT emit a static / route when root is not prerendered', () => {
+    scaffoldBuild(tmp);
+    const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+    assert.equal(
+      m.routes.find((r) => r.pattern === '/'),
+      undefined,
+      'no bare / static route without a prerendered index.html',
+    );
+  });
+});
+
+void describe('sveltekitAdapter — bridge guards (build path)', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-bridge-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /**
+   * Minimal project (package.json + fake @sveltejs/kit + a svelte.config.js)
+   * for exercising the pre-build bridge guards. `adapterImport` controls the
+   * adapter the config references; omit it for a config with no adapter wired.
+   */
+  const scaffoldProject = (adapterImport?: string): void => {
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({
+        name: 'sk-bridge-fixture',
+        devDependencies: { '@sveltejs/kit': '^2.15.0' },
+        scripts: { build: 'vite build' },
+      }),
+    );
+    const kitDir = path.join(tmp, 'node_modules', '@sveltejs', 'kit');
+    fs.mkdirSync(kitDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(kitDir, 'package.json'),
+      JSON.stringify({ name: '@sveltejs/kit', version: '2.15.0' }),
+    );
+    const importLine = adapterImport
+      ? `import adapter from '${adapterImport}';\n`
+      : '';
+    const adapterField = adapterImport ? 'adapter: adapter()' : '';
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      `${importLine}export default { kit: { ${adapterField} } };\n`,
+    );
+  };
+
+  void it('throws SvelteKitBridgeCollisionError before mutating anything when a stale backup exists', () => {
+    // No adapter wired → the bridge path is taken. A leftover backup from a
+    // crashed run must abort the deploy, NOT overwrite the user's real config.
+    scaffoldProject();
+    const backup = path.join(tmp, 'svelte.config.blocks-original.js');
+    fs.writeFileSync(backup, '// user real config parked by a prior crash\n');
+    const configBefore = fs.readFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      'utf-8',
+    );
+    const backupBefore = fs.readFileSync(backup, 'utf-8');
+
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitBridgeCollisionError/,
+    );
+
+    // Nothing was touched: the active config and the backup are byte-identical.
+    assert.equal(
+      fs.readFileSync(path.join(tmp, 'svelte.config.js'), 'utf-8'),
+      configBefore,
+      'svelte.config.js untouched',
+    );
+    assert.equal(fs.readFileSync(backup, 'utf-8'), backupBefore, 'backup untouched');
+  });
+
+  void it('throws SvelteKitIncompatibleAdapterError for a non-adapter-node adapter', () => {
+    // A deliberately-wired incompatible adapter must fail loudly rather than be
+    // silently swapped for adapter-node.
+    scaffoldProject('@sveltejs/adapter-cloudflare');
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitIncompatibleAdapterError/,
+    );
+  });
 });
 
 void describe('prerenderedDestRelPath — flat → directory-index normalization', () => {
