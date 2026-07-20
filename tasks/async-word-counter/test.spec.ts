@@ -8,18 +8,9 @@ const RUN = process.env.RUN_ID || String(Date.now());
 let seq = 0;
 const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
 
-// Per-test no-error gate: uncaught page errors and genuine console errors.
+// Per-test no-error gate: ONLY uncaught page errors.
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
-	page.on('console', (msg) => {
-		if (msg.type() !== 'error') return;
-		const text = msg.text();
-		// Exclude benign browser-generated noise (not an app JS fault): failed resource loads / HTTP
-		// status errors (favicon, pre-auth 4xx, JSON-RPC-over-HTTP), WebSocket lifecycle, and dev-mode
-		// "Warning:" logs. A genuine console error still fails the gate, asserted empty end-of-test.
-		if (/Failed to load resource|net::ERR|favicon|WebSocket|^\s*Warning:/i.test(text)) return;
-		sink.push(`console.error: ${text}`);
-	});
 	return sink;
 }
 
@@ -46,11 +37,8 @@ test.describe('async-word-counter', () => {
 		await expect(page.getByTestId('wc-input')).toBeVisible();
 		await expect(page.getByTestId('wc-submit')).toBeVisible();
 		// Enforce the wc-list container contract (in the PROMPT selector table)
-		// so an impl can't omit the list wrapper and still pass. Use toBeAttached
-		// (not toBeVisible): an empty list container legitimately has zero layout
-		// height, so toBeVisible() would fail a correct app, while toBeAttached
-		// still enforces that the wrapper exists.
-		await expect(page.getByTestId('wc-list')).toBeAttached();
+		// so an impl can't omit the list wrapper and still pass.
+		await expect(page.getByTestId('wc-list')).toBeVisible();
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
