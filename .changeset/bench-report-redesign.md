@@ -20,8 +20,7 @@ Internal CI tooling — no published-package changes.
   (composite/score ±5, judge ±0.3, tests ±1, cost ±10%, turns ±3;
   tests/judge/score higher-better, cost/turns lower-better; within band → 🟡,
   beyond → 🟢/🔴). The JUDGE cell is compacted onto that one line — the overall
-  score plus a per-dimension shorthand (`F`/`S`/`P`/`C`/`B`), each with its own
-  signed delta. When the baseline has no value
+  judge score with its signed delta. When the baseline has no value
   for a field, the cell still shows the current value tagged `⚪ (new)` — decided
   per field, so a partial baseline no longer forces the whole row to be treated
   as new.

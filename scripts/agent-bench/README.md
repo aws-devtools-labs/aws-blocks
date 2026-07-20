@@ -246,10 +246,10 @@ renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
 Each metric cell is a single inline line — `<color> <value> (<Δ vs main>)`: the
 current value with its signed delta vs the baseline (`⚪ (new)` when the baseline
 has no value for that field — the value is still shown), colored by `deltaColor`
-per the `DELTA_THRESHOLDS` bands. The JUDGE cell packs the overall score plus a
-per-dimension shorthand (`F`/`S`/`P`/`C`/`B` = functional / selectors /
-persistence / code / blocks) onto that one line. There is no separate colors-only
-Overview and no standalone `Δ vs base` column — the delta is baked into every cell.
+per the `DELTA_THRESHOLDS` bands. The JUDGE cell shows the overall judge score
+with its signed delta; the per-dimension breakdown lives in the judge artifact
+JSON. There is no separate colors-only Overview and no standalone `Δ vs base`
+column — the delta is baked into every cell.
 
 A collapsible **Glossary** (scoring, colors, the per-metric thresholds) sits at
 the very top; the deterministic **headline** (mean composite + delta) prints just
