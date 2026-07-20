@@ -33,9 +33,10 @@ random ID, and asserts it was created correctly.
   (official BB names + version, custom BB count, total blocks count).
 - **Identifier creation**: `installationId` and `projectId` are written when
   they do not already exist, and emitted events carry them.
-- **Per-command success + failure**: `deploy`, `destroy`, `sandbox`,
-  `sandbox:destroy`, `console`, `create-blocks-app`, `vendorize`, and `dev`
-  emit correct SUCCESS and FAIL events (with error code/phase).
+- **Per-command success + failure**: SUCCESS + FAIL events for `deploy`,
+  `destroy`, `sandbox`, `sandbox:destroy`, and `dev`; `console` SUCCESS only;
+  `create-blocks-app` and `vendorize` document the no-telemetry limitation for
+  their failure paths.
 - **Network resilience**: broken endpoint is invisible to users, visible with
   NODE_DEBUG, and does not crash or delay the command.
 - **Disable mechanisms**: env var, global config, project config.

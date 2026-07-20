@@ -187,11 +187,11 @@ function sendEvent(event: Record<string, unknown>): void {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
 
-    child.stdin!.on('error', (err) => { debug('stdin write failed: %s', err.message); });
+    child.stdin?.on('error', (err) => { debug('stdin write failed: %s', err.message); });
     // Payload is small (<1KB JSON) so it fits in the kernel pipe buffer (~64KB)
     // and survives the parent closing its fd on exit.
-    child.stdin!.write(payload);
-    child.stdin!.end();
+    child.stdin?.write(payload);
+    child.stdin?.end();
     child.on('error', (err) => { debug('spawn failed: %s', err.message); });
     child.unref();
     debug('spawned telemetry subprocess (pid=%d)', child.pid);

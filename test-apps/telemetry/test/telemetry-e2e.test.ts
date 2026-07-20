@@ -200,13 +200,25 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<boolean
   return existsSync(filePath);
 }
 
-function readTelemetryFile(filePath: string): Record<string, any> {
+interface TelemetryPayload {
+  event: { command: string; state: string; duration?: number; error?: unknown };
+  identifiers: { installationId: string; projectId: string; eventId: string; timestamp?: unknown };
+  environment: { os: string; nodeVersion: string; ci: boolean };
+  product: {
+    blocksVersion: string;
+    template: { name: string; version: string };
+    buildingBlocks?: Array<{ name: string; [key: string]: unknown }>;
+  };
+  counters: { customBuildingBlocks: number; blocksCount: number };
+  [key: string]: unknown;
+}
+
+function readTelemetryFile(filePath: string): TelemetryPayload {
   const content = readFileSync(filePath, 'utf-8');
   const parsed = JSON.parse(content);
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
-/** Assert that the event was delivered to the real endpoint. */
 /** Assert that the event was delivered to the real endpoint. */
 function assertDelivered(stderr: string, description = ''): void {
   assert.match(stderr, SENT_REGEX, `Telemetry should be delivered to endpoint. ${description}\nstderr: ${stderr.slice(-500)}`);

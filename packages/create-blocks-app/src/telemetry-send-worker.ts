@@ -1,6 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: This worker is an intentional near-duplicate of
+// packages/core/src/telemetry/telemetry-send-worker.ts. It is kept separate
+// because the worker must run with zero project/package imports. Any change
+// here should be mirrored in both files.
+
 /**
  * Telemetry send worker — spawned as a detached subprocess.
  * Reads JSON payload from stdin, POSTs it to the endpoint (argv[2]).
@@ -12,6 +17,7 @@
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
+// Matches the timeout in packages/core/src/telemetry/telemetry-send-worker.ts — keep in sync.
 const TIMEOUT_MS = 500;
 const debug = (process.env.NODE_DEBUG || '').includes('blocks-telemetry');
 
