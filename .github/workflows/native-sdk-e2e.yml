@@ -24,7 +24,12 @@ jobs:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
-      source-changed: ${{ steps.check.outputs.source-changed }}
+      # Per-platform flags so a change to one language's SDK doesn't fan out to
+      # the others. `any-changed` gates the shared setup/gate jobs.
+      dart-changed: ${{ steps.check.outputs.dart-changed }}
+      swift-changed: ${{ steps.check.outputs.swift-changed }}
+      kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
+      any-changed: ${{ steps.check.outputs.any-changed }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -33,18 +38,39 @@ jobs:
       - id: check
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only origin/main...HEAD | grep -qE '^(native/(dart|kotlin|swift)|test-apps/native-bindings)/|^\.github/workflows/native-sdk-e2e\.yml$'; then
-            echo "source-changed=true" >> "$GITHUB_OUTPUT"
+            dart=true; swift=true; kotlin=true
           else
-            echo "source-changed=false" >> "$GITHUB_OUTPUT"
+            CHANGED="$(git diff --name-only origin/main...HEAD)"
+            # Shared inputs affect EVERY platform: the test backend that
+            # generates the OpenRPC spec all SDKs are code-genned from, and this
+            # workflow file itself. A change here forces all platforms to run.
+            shared=false
+            if echo "$CHANGED" | grep -qE '^test-apps/native-bindings/|^\.github/workflows/native-sdk-e2e\.yml$'; then
+              shared=true
+            fi
+            # Each platform runs when a shared input changed OR its own SDK dir
+            # changed — so a Dart-only change no longer triggers Kotlin/Swift.
+            dart=$shared; swift=$shared; kotlin=$shared
+            if echo "$CHANGED" | grep -qE '^native/dart/';   then dart=true;   fi
+            if echo "$CHANGED" | grep -qE '^native/swift/';  then swift=true;  fi
+            if echo "$CHANGED" | grep -qE '^native/kotlin/'; then kotlin=true; fi
           fi
+          any=false
+          if [ "$dart" = true ] || [ "$swift" = true ] || [ "$kotlin" = true ]; then
+            any=true
+          fi
+          {
+            echo "dart-changed=$dart"
+            echo "swift-changed=$swift"
+            echo "kotlin-changed=$kotlin"
+            echo "any-changed=$any"
+          } >> "$GITHUB_OUTPUT"
 
   # Shared setup: build monorepo, generate spec, upload artifact
   setup:
     name: Build & Generate Spec
     needs: [detect-changes]
-    if: needs.detect-changes.outputs.source-changed == 'true'
+    if: needs.detect-changes.outputs.any-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -81,7 +107,7 @@ jobs:
   dart-e2e:
     name: Dart E2E
     needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.source-changed == 'true'
+    if: needs.detect-changes.outputs.dart-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -167,7 +193,7 @@ jobs:
   kotlin-e2e:
     name: Kotlin E2E (${{ matrix.label }})
     needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.source-changed == 'true'
+    if: needs.detect-changes.outputs.kotlin-changed == 'true'
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -231,7 +257,7 @@ jobs:
   swift-e2e:
     name: Swift E2E
     needs: [detect-changes, setup]
-    if: needs.detect-changes.outputs.source-changed == 'true'
+    if: needs.detect-changes.outputs.swift-changed == 'true'
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -322,7 +348,7 @@ jobs:
     name: Dart E2E (sandbox)
     needs: [detect-changes, dart-e2e]
     if: >-
-      needs.detect-changes.outputs.source-changed == 'true' &&
+      needs.detect-changes.outputs.dart-changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -460,7 +486,7 @@ jobs:
     name: Swift E2E (sandbox)
     needs: [detect-changes, swift-e2e]
     if: >-
-      needs.detect-changes.outputs.source-changed == 'true' &&
+      needs.detect-changes.outputs.swift-changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15
@@ -558,7 +584,7 @@ jobs:
     name: Kotlin E2E (${{ matrix.label }}, sandbox)
     needs: [detect-changes, kotlin-e2e]
     if: >-
-      needs.detect-changes.outputs.source-changed == 'true' &&
+      needs.detect-changes.outputs.kotlin-changed == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
