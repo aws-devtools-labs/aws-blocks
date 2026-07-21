@@ -2,13 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks secret` — manage hosting/pipeline secrets in SSM Parameter Store.
+ * `blocks secret` — manage a **Blocks** app's secrets in SSM Parameter Store.
  *
  * Secrets are stored as SecureString parameters under `/blocks/secrets/<KEY>`
  * (see {@link blocksSecretParameterName} — the single source of truth for the
  * Blocks path; the neutral engine lives in `@aws-blocks/hosting/secret`).
  * This is the out-of-band counterpart to `secret('KEY')` in `hosting.ts`:
  * the customer sets values here once; the deploy only ever READS them.
+ *
+ * **Why SSM here, not Secrets Manager?** This is the Blocks-namespaced CLI, and
+ * it is intentionally distinct from the framework-neutral `@aws-blocks/hosting`
+ * CLI that standalone-hosting and pipeline apps use. The neutral leaf defaults
+ * to Secrets Manager (per AWS guidance for application credentials) with SSM as
+ * an opt-in for non-sensitive config; this Blocks path stays pinned to SSM
+ * SecureString on the pre-existing `/blocks/secrets` namespace (alongside the
+ * `/blocks/{stage}/db-connection-string` convention), so a Blocks app's secret
+ * store never silently changes shape. A Blocks app that wants Secrets Manager
+ * or per-stage/store control uses the leaf CLI directly.
  *
  * Commands:
  *   blocks secret set <KEY> <value>   create/update a SecureString
