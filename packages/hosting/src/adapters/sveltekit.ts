@@ -74,6 +74,9 @@ const SVELTEKIT_SERVER_PORT = 3000;
 /** Pinned to match SvelteKit 2's peer-dep. Bump in lockstep on adapter majors. */
 const ADAPTER_NODE_PIN = '@sveltejs/adapter-node@^5';
 
+/** Version range the pinned adapter-node satisfies; drives the install skip. */
+const ADAPTER_NODE_RANGE = '^5';
+
 /**
  * Verified SvelteKit version range. Exported for the X.1 cross-adapter
  * version-pin test that asserts CI doesn't ship with the adapters outside their
@@ -254,20 +257,50 @@ const findSvelteConfigPath = (projectDir: string): string | undefined =>
     fs.existsSync(p),
   );
 
+/** Extensions a parked bridge backup can carry (mirrors SVELTE_CONFIG_FILES). */
+const BRIDGE_BACKUP_EXTENSIONS = ['.js', '.mjs', '.ts'];
+
+/**
+ * Return the path of any existing bridge backup, across every extension a prior
+ * run could have parked it under — not just the current config's. Catches a
+ * stale `.js` backup left by a crash before the user migrated to `.mjs`/`.ts`.
+ */
+const findStaleBridgeBackup = (projectDir: string): string | undefined =>
+  BRIDGE_BACKUP_EXTENSIONS.map((ext) =>
+    path.join(projectDir, `${BRIDGE_BACKUP_BASENAME}${ext}`),
+  ).find((p) => fs.existsSync(p));
+
+/**
+ * Strip `//` line comments and `/* *​/` block comments so a text scan never
+ * matches a commented-out import. Approximate (it also blanks comment-like
+ * sequences inside string literals), but the callers only look for adapter
+ * imports and `appDir`/`base` values, none of which legitimately live inside a
+ * string that also contains `//` — so the approximation is safe for our use and
+ * strictly better than scanning raw source. Not a full JS parser by design: the
+ * scan must work on configs jiti can't even evaluate.
+ */
+const stripComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+/** Read a svelte config's source with comments stripped; '' if unreadable. */
+const readSvelteConfigSource = (configPath: string): string => {
+  try {
+    return stripComments(fs.readFileSync(configPath, 'utf-8'));
+  } catch {
+    return '';
+  }
+};
+
 /**
  * True when a `svelte.config.*` text references `@sveltejs/adapter-node`. A
  * text scan (not module load) so it works before the dep is installed and
- * without evaluating the config's adapter imports.
+ * without evaluating the config's adapter imports. Comments are stripped first
+ * so a commented-out import never counts.
  */
 const svelteConfigUsesAdapterNode = (projectDir: string): boolean => {
   const configPath = findSvelteConfigPath(projectDir);
   if (!configPath) return false;
-  try {
-    const src = fs.readFileSync(configPath, 'utf-8');
-    return /@sveltejs\/adapter-node/.test(src);
-  } catch {
-    return false;
-  }
+  return /@sveltejs\/adapter-node/.test(readSvelteConfigSource(configPath));
 };
 
 /**
@@ -284,12 +317,9 @@ const svelteConfigUsesAdapterNode = (projectDir: string): boolean => {
 const assertNoIncompatibleAdapter = (projectDir: string): void => {
   const configPath = findSvelteConfigPath(projectDir);
   if (!configPath) return;
-  let src = '';
-  try {
-    src = fs.readFileSync(configPath, 'utf-8');
-  } catch {
-    return;
-  }
+  // Comments stripped so a commented-out adapter import is neither counted as
+  // an incompatible adapter nor as an adapter-node "escape hatch".
+  const src = readSvelteConfigSource(configPath);
   const referencesAnyAdapter = /@sveltejs\/adapter-/.test(src);
   if (referencesAnyAdapter && !svelteConfigUsesAdapterNode(projectDir)) {
     throw new HostingError('SvelteKitIncompatibleAdapterError', {
@@ -334,24 +364,38 @@ const installSvelteKitBridge = (projectDir: string): (() => void) => {
   // Guard against a stale backup from a previous crashed run clobbering the
   // real config. Checked BEFORE any mutation (the install below writes to
   // package.json / node_modules) so a collision aborts cleanly, touching
-  // nothing.
-  if (fs.existsSync(backupPath)) {
+  // nothing. Check EVERY backup-extension variant, not just the current
+  // config's: a crash under `.js` leaves `svelte.config.blocks-original.js`
+  // that stays invisible once the user migrates the source to `.mjs`/`.ts`.
+  const staleBackup = findStaleBridgeBackup(projectDir);
+  if (staleBackup) {
+    const staleName = path.basename(staleBackup);
     throw new HostingError('SvelteKitBridgeCollisionError', {
-      message: `A leftover bridge backup already exists at ${backupPath}.`,
-      resolution: `Restore your original svelte config: rename ${backupFile} back to ${configName} and delete the generated ${configName}, then re-run the deploy.`,
+      message: `A leftover bridge backup already exists at ${staleBackup}.`,
+      resolution: `Restore your original svelte config: rename ${staleName} back to ${configName} and delete the generated ${configName}, then re-run the deploy.`,
     });
   }
 
   installAdapterNode(projectDir);
 
   // Park the original config under its preserved name (so the bridge can import
-  // it), then write the bridge into the original config's slot.
+  // it), then write the bridge into the original config's slot. If the write
+  // fails (disk full, EROFS, permissions), restore the original before
+  // rethrowing — the cleanup closure isn't returned yet, so the caller's
+  // `finally` can't recover it and the user's config would be stranded at the
+  // backup path.
   fs.renameSync(userConfigPath, backupPath);
-  fs.writeFileSync(
-    userConfigPath,
-    buildBridgeConfigSource(backupFile),
-    'utf-8',
-  );
+  try {
+    fs.writeFileSync(userConfigPath, buildBridgeConfigSource(backupFile), 'utf-8');
+  } catch (writeErr) {
+    try {
+      fs.renameSync(backupPath, userConfigPath);
+    } catch {
+      // Best-effort restore; the collision guard surfaces a leftover backup
+      // loudly on the next run rather than silently overwriting the config.
+    }
+    throw writeErr;
+  }
   process.stderr.write('✨ Installed SvelteKit bridge (transparent build)\n');
 
   return (): void => {
@@ -388,45 +432,84 @@ export default {
 };
 `;
 
+type PackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm';
+
 /**
- * Detect the package manager from a lockfile and return the install command for
- * a package spec. Mirrors the Astro adapter's detection: pnpm/yarn/bun
- * lockfiles can't be touched by `npm install` without corruption.
+ * Detect the project's package manager from its lockfile. pnpm/yarn/bun
+ * lockfiles can't be touched by `npm` without corruption, and a project on a
+ * strict manager (Yarn PnP, isolated pnpm, Bun-only CI) may not even have `npm`
+ * on PATH — so both the install and the build must use the same detected
+ * manager. Mirrors the Astro adapter's detection.
+ */
+const detectPackageManager = (projectDir: string): PackageManager => {
+  const has = (file: string): boolean =>
+    fs.existsSync(path.join(projectDir, file));
+  if (has('pnpm-lock.yaml')) return 'pnpm';
+  if (has('yarn.lock')) return 'yarn';
+  if (has('bun.lockb') || has('bun.lock')) return 'bun';
+  return 'npm';
+};
+
+/**
+ * The install command for a dev-dependency spec. @sveltejs/adapter-node is a
+ * dev dependency in every SvelteKit project, so each manager's dev flag is
+ * passed — without it pnpm/yarn/bun would add it to `dependencies`.
  */
 const detectPackageManagerInstall = (
   projectDir: string,
   packageSpec: string,
 ): { command: string; args: string[] } => {
-  const has = (file: string): boolean =>
-    fs.existsSync(path.join(projectDir, file));
-  // @sveltejs/adapter-node is a dev dependency in every SvelteKit project, so
-  // each manager's dev flag is passed (npm below uses --save-dev). Without it
-  // pnpm/yarn/bun would add it to `dependencies`.
-  if (has('pnpm-lock.yaml')) {
-    return { command: 'pnpm', args: ['add', '-D', '--silent', packageSpec] };
+  switch (detectPackageManager(projectDir)) {
+    case 'pnpm':
+      return { command: 'pnpm', args: ['add', '-D', '--silent', packageSpec] };
+    case 'yarn':
+      return { command: 'yarn', args: ['add', '--dev', '--silent', packageSpec] };
+    case 'bun':
+      return { command: 'bun', args: ['add', '-d', packageSpec] };
+    default:
+      return {
+        command: 'npm',
+        args: [
+          'install',
+          '--save-dev',
+          '--no-audit',
+          '--no-fund',
+          '--silent',
+          packageSpec,
+        ],
+      };
   }
-  if (has('yarn.lock')) {
-    return { command: 'yarn', args: ['add', '--dev', '--silent', packageSpec] };
+};
+
+/**
+ * The command to run a package.json `scripts` entry via the detected manager.
+ * `npm run <s>` / `pnpm run <s>` / `yarn <s>` / `bun run <s>`.
+ */
+const detectPackageManagerRun = (
+  projectDir: string,
+  script: string,
+): string[] => {
+  switch (detectPackageManager(projectDir)) {
+    case 'pnpm':
+      return ['pnpm', 'run', script];
+    case 'yarn':
+      return ['yarn', script];
+    case 'bun':
+      return ['bun', 'run', script];
+    default:
+      return ['npm', 'run', script];
   }
-  if (has('bun.lockb') || has('bun.lock')) {
-    return { command: 'bun', args: ['add', '-d', packageSpec] };
-  }
-  return {
-    command: 'npm',
-    args: [
-      'install',
-      '--save-dev',
-      '--no-audit',
-      '--no-fund',
-      '--silent',
-      packageSpec,
-    ],
-  };
 };
 
 const installAdapterNode = (projectDir: string): void => {
-  // Idempotent: skip if adapter-node is already resolvable from the project.
-  if (getPackageInfoSync('@sveltejs/adapter-node', { paths: [projectDir] })) {
+  // Idempotent: skip only when a resolvable adapter-node satisfies the pinned
+  // major. A transitive/older major (e.g. ^4) can emit a different `build/`
+  // layout than the manifest builder assumes, so treat it as "not installed"
+  // and install the pin — mirrors the `semver.satisfies` gate on @sveltejs/kit.
+  const existing = getPackageInfoSync('@sveltejs/adapter-node', {
+    paths: [projectDir],
+  });
+  if (existing?.version && semver.satisfies(existing.version, ADAPTER_NODE_RANGE)) {
     return;
   }
   const install = detectPackageManagerInstall(projectDir, ADAPTER_NODE_PIN);
@@ -477,7 +560,7 @@ const runSvelteKitBuild = (
     buildCommand && buildCommand.length > 0
       ? buildCommand
       : projectHasBuildScript(projectDir)
-        ? ['npm', 'run', 'build']
+        ? detectPackageManagerRun(projectDir, 'build')
         : ['npx', 'vite', 'build'];
 
   process.stderr.write(`\u{1F528} Running SvelteKit build: ${cmd.join(' ')}\n`);
@@ -540,12 +623,10 @@ const loadSvelteConfig = (projectDir: string): SvelteConfigShape => {
  * evaluate the config (e.g. it imports an adapter that throws at load).
  */
 const textScanSvelteConfig = (configPath: string): SvelteConfigShape => {
-  let src = '';
-  try {
-    src = fs.readFileSync(configPath, 'utf-8');
-  } catch {
-    return {};
-  }
+  // Comments stripped so a commented-out `base: '/old'` doesn't leak into the
+  // resolved basePath (wrong CloudFront prefix → broken routing).
+  const src = readSvelteConfigSource(configPath);
+  if (!src) return {};
   const out: SvelteConfigShape = { kit: {} };
   const appDir = src.match(/\bappDir\s*:\s*['"`]([^'"`]+)['"`]/);
   if (appDir) out.kit!.appDir = appDir[1];
@@ -574,6 +655,13 @@ const directoryHasFiles = (dir: string): boolean => {
 
 /** Error-page basenames kept flat (CloudFront errorResponses reference `/404.html`). */
 const FLAT_HTML_NAMES = new Set(['404.html', '500.html']);
+
+/**
+ * Top-level HTML the route builder must NOT emit a bare `/<name>` static route
+ * for: the root index (served by the catch-all, or the dedicated `/` static
+ * route when prerendered) and the error pages (wired via `errorPages`).
+ */
+const ROOT_AND_ERROR_HTML = new Set(['index.html', '404.html', '500.html']);
 
 /**
  * Copy prerendered pages/assets into the S3-served client dir so they upload as
@@ -638,9 +726,14 @@ export const prerenderedDestRelPath = (rel: string): string => {
 };
 
 /**
- * Remove pre-compressed sibling files (`*.gz`, `*.br`, `*.zst`) so they aren't
- * uploaded to S3. CloudFront's `compress: true` re-compresses on the edge based
- * on `Accept-Encoding`.
+ * Remove adapter-node's pre-compressed sibling files (`*.gz`, `*.br`, `*.zst`)
+ * so they aren't uploaded to S3. CloudFront's `compress: true` re-compresses on
+ * the edge based on `Accept-Encoding`.
+ *
+ * Only delete a compressed file when its UNCOMPRESSED sibling exists — that is
+ * the signature of adapter-node's precompress output (`app.js` + `app.js.gz`).
+ * A user's own `static/dataset.tar.gz` or `custom.woff2.br` has no such sibling
+ * and must survive to S3, so we leave standalone archives untouched.
  */
 const prunePreCompressedAssets = (dir: string): void => {
   if (!fs.existsSync(dir)) return;
@@ -649,7 +742,10 @@ const prunePreCompressedAssets = (dir: string): void => {
     absolute: true,
     caseSensitiveMatch: false,
   });
-  for (const f of compressed) fs.rmSync(f);
+  for (const f of compressed) {
+    const uncompressedSibling = f.replace(/\.(gz|br|zst)$/i, '');
+    if (fs.existsSync(uncompressedSibling)) fs.rmSync(f);
+  }
 };
 
 const writeRunShWrapper = (buildDir: string): void => {
@@ -738,8 +834,15 @@ const buildRoutes = (
   if (fs.existsSync(clientDir)) {
     for (const entry of fs.readdirSync(clientDir, { withFileTypes: true })) {
       if (entry.name === appDir) continue; // handled above
-      // Skip prerendered HTML index files — handled as page routes below.
-      if (entry.isFile() && entry.name.endsWith('.html')) continue;
+      // Root index + error pages are handled elsewhere (catch-all / errorPages),
+      // but any OTHER top-level flat `.html` (a user's `static/terms.html`, or a
+      // prerendered top-level page) should serve from S3 rather than falling
+      // through to the SSR Lambda on every hit.
+      if (entry.isFile() && entry.name.endsWith('.html')) {
+        if (ROOT_AND_ERROR_HTML.has(entry.name)) continue;
+        add({ pattern: `/${entry.name}`, target: 'static' });
+        continue;
+      }
       const pattern = entry.isDirectory()
         ? `/${entry.name}/*`
         : `/${entry.name}`;

@@ -254,6 +254,56 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
       'no bare / static route without a prerendered index.html',
     );
   });
+
+  void it('routes a top-level static .html (terms.html) to S3, not the SSR Lambda', () => {
+    scaffoldBuild(tmp, { staticFiles: ['favicon.png', 'terms.html'] });
+    const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+    assert.equal(
+      m.routes.find((r) => r.pattern === '/terms.html')?.target,
+      'static',
+      'user static terms.html served from S3',
+    );
+  });
+
+  void it('does NOT emit bare /index.html, /404.html, /500.html static routes', () => {
+    scaffoldBuild(tmp, {
+      staticFiles: ['favicon.png', 'index.html', '404.html', '500.html'],
+    });
+    const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+    for (const p of ['/index.html', '/404.html', '/500.html']) {
+      assert.equal(
+        m.routes.find((r) => r.pattern === p),
+        undefined,
+        `${p} must not get a bare static route (handled by catch-all / errorPages)`,
+      );
+    }
+  });
+
+  void it('prunes adapter-node precompress siblings but keeps standalone user archives', () => {
+    scaffoldBuild(tmp);
+    const clientDir = path.join(tmp, 'build', 'client');
+    // adapter-node precompress output: app.js + app.js.gz (has a sibling).
+    fs.writeFileSync(path.join(clientDir, 'app.js'), 'x');
+    fs.writeFileSync(path.join(clientDir, 'app.js.gz'), 'x');
+    // A user's standalone archive under static/ (NO uncompressed sibling).
+    fs.writeFileSync(path.join(clientDir, 'dataset.tar.gz'), 'x');
+    fs.writeFileSync(path.join(clientDir, 'font.woff2.br'), 'x');
+
+    sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+
+    assert.ok(
+      !fs.existsSync(path.join(clientDir, 'app.js.gz')),
+      'precompress sibling app.js.gz pruned',
+    );
+    assert.ok(
+      fs.existsSync(path.join(clientDir, 'dataset.tar.gz')),
+      'standalone dataset.tar.gz survives',
+    );
+    assert.ok(
+      fs.existsSync(path.join(clientDir, 'font.woff2.br')),
+      'standalone font.woff2.br survives',
+    );
+  });
 });
 
 void describe('sveltekitAdapter — bridge guards (build path)', () => {
@@ -328,6 +378,87 @@ void describe('sveltekitAdapter — bridge guards (build path)', () => {
     assert.throws(
       () => sveltekitAdapter({ projectDir: tmp }),
       /SvelteKitIncompatibleAdapterError/,
+    );
+  });
+
+  void it('is not fooled by a commented-out adapter-node import with an active incompatible adapter', () => {
+    // A stale adapter-node comment must NOT make the guard think adapter-node is
+    // wired; the active adapter-cloudflare import must still be rejected.
+    scaffoldProject();
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      `// import node from '@sveltejs/adapter-node'; // old — switched to cloudflare\n` +
+        `import cloudflare from '@sveltejs/adapter-cloudflare';\n` +
+        `export default { kit: { adapter: cloudflare() } };\n`,
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitIncompatibleAdapterError/,
+    );
+  });
+
+  void it('does NOT throw when the only adapter reference is a commented-out incompatible adapter', () => {
+    // Inverse: a commented adapter with none active should not spuriously error.
+    // Config has no active adapter → bridge path installs adapter-node; stub the
+    // install by pre-providing a resolvable adapter-node so no network is hit.
+    scaffoldProject();
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      `// import cloudflare from '@sveltejs/adapter-cloudflare';\n` +
+        `export default { kit: {} };\n`,
+    );
+    // Pre-provide adapter-node so installAdapterNode's version-aware skip fires
+    // and no package manager is spawned; the build itself is what we avoid by
+    // asserting only that the incompatible-adapter guard does not throw.
+    const anDir = path.join(tmp, 'node_modules', '@sveltejs', 'adapter-node');
+    fs.mkdirSync(anDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(anDir, 'package.json'),
+      JSON.stringify({ name: '@sveltejs/adapter-node', version: '5.2.0' }),
+    );
+    // The build will still run (and fail, since there's no real toolchain), but
+    // it must NOT be the incompatible-adapter error.
+    try {
+      sveltekitAdapter({ projectDir: tmp });
+    } catch (err) {
+      assert.doesNotMatch(
+        (err as Error).name + (err as Error).message,
+        /SvelteKitIncompatibleAdapterError/,
+        'must not raise the incompatible-adapter error for a commented reference',
+      );
+    }
+  });
+
+  void it('detects a stale backup left under a different extension (.js backup, .mjs config)', () => {
+    // Crash under a `.js` config left svelte.config.blocks-original.js; user has
+    // since migrated to svelte.config.mjs. The guard must still catch the stale
+    // backup rather than proceeding and orphaning it.
+    fs.writeFileSync(
+      path.join(tmp, 'package.json'),
+      JSON.stringify({
+        name: 'sk-bridge-fixture',
+        devDependencies: { '@sveltejs/kit': '^2.15.0' },
+        scripts: { build: 'vite build' },
+      }),
+    );
+    const kitDir = path.join(tmp, 'node_modules', '@sveltejs', 'kit');
+    fs.mkdirSync(kitDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(kitDir, 'package.json'),
+      JSON.stringify({ name: '@sveltejs/kit', version: '2.15.0' }),
+    );
+    // Active config is .mjs (no adapter → bridge path); stale backup is .js.
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.mjs'),
+      `export default { kit: {} };\n`,
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.blocks-original.js'),
+      '// stale backup from a prior crash under .js\n',
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitBridgeCollisionError/,
     );
   });
 });
