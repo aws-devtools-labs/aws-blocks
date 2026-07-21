@@ -1,5 +1,104 @@
 # @aws-blocks/blocks
 
+## 0.2.5
+
+### Patch Changes
+
+- 0f3c73c: Reject `ALTER TABLE DROP COLUMN` at dev time, including the keyword-less Postgres shorthand (`ALTER TABLE t DROP col` / `DROP IF EXISTS col`). It is not in DSQL's supported `ALTER TABLE` subset ("unsupported ALTER TABLE DROP COLUMN statement", 0A000), but the PGlite-based local mock previously accepted it, so the error only surfaced on deploy. Migration and mock validation now fail locally instead. The supported forms — `ALTER COLUMN ... DROP DEFAULT` / `DROP NOT NULL` / `DROP EXPRESSION` / `DROP IDENTITY` and `DROP CONSTRAINT` — are not affected.
+
+  The `@aws-blocks/blocks` umbrella package receives a `patch` because its published `docs/` folder is assembled from sibling block READMEs at build time (`scripts/sync-block-docs.mjs`), so this `bb-distributed-data` README update changes `@aws-blocks/blocks` packaged content.
+
+- Updated dependencies [0f3c73c]
+  - @aws-blocks/bb-distributed-data@0.1.4
+
+## 0.2.4
+
+### Patch Changes
+
+- 09b94b8: Bump the Database block's Aurora PostgreSQL engine version from the retired `16.4` to `16.13`, and make the engine version configurable.
+
+  AWS retired Aurora PostgreSQL `16.4` in us-east-1, after which `CreateDBCluster` failed with `Cannot find version 16.4 for aurora-postgresql`, blocking every deployment of a `Database` block. The default now points at the latest available `16.x` minor (`16.13`) for the longest deprecation runway.
+
+  A new optional `postgresVersion` option on `DatabaseOptions` lets callers override the engine version (e.g. `postgresVersion: '16.13'`), so the next AWS retirement is a configuration change rather than a framework code fix. Overrides are validated at synth time (must be `MAJOR.MINOR`, e.g. `16.13`), so a malformed value fails fast with a clear error instead of an opaque `CreateDBCluster` failure.
+
+  The `@aws-blocks/blocks` umbrella package receives a `patch` because its published `docs/` folder is assembled from sibling block READMEs at build time (`scripts/sync-block-docs.mjs`), so this `bb-data` README update changes `@aws-blocks/blocks` packaged content.
+
+- Updated dependencies [09b94b8]
+  - @aws-blocks/bb-data@0.2.3
+
+## 0.2.3
+
+### Patch Changes
+
+- fc8cfad: Republish the umbrella `@aws-blocks/blocks` package so its tarball matches the updated re-exported APIs (`@aws-blocks/core`, `@aws-blocks/bb-agent`) and synced block docs. The sibling patch releases stayed within `blocks`' caret dependency ranges, so `changeset version` did not auto-bump the umbrella package, and the publish integrity guard requires a version bump when packed content changes.
+- Updated dependencies [c4313cd]
+- Updated dependencies [997c736]
+  - @aws-blocks/bb-agent@0.3.2
+
+## 0.2.2
+
+### Patch Changes
+
+- d898838: Include synced building block documentation updates.
+
+## 0.2.1
+
+### Patch Changes
+
+- 8de7091: Include synced building block documentation updates.
+- Updated dependencies [c7f1e7c]
+- Updated dependencies [5491cae]
+  - @aws-blocks/bb-distributed-data@0.1.3
+  - @aws-blocks/bb-realtime@0.1.3
+
+## 0.2.0
+
+### Minor Changes
+
+- b6fb281: Add `isSynced()` / `waitUntilSynced()` ingestion-sync API to KnowledgeBase.
+
+  Bedrock ingestion runs asynchronously after deploy, so during the initial pre-sync window `retrieve()` returns an empty array even for queries that would later match — making "empty" ambiguous between "not yet synced with your latest data" and "synced, no match". The new methods resolve that ambiguity (mirroring Bedrock's own "Sync" / "sync with your latest data" terminology):
+
+  - `isSynced(): Promise<boolean>` — `true` once the data source's most recent ingestion job is `COMPLETE`; `false` while it is not yet synced with your latest data. This reports data _freshness_, not availability — `retrieve()` is always callable and serves the prior synced snapshot during a re-ingestion. Both local-folder and imported `s3://` sources register a BB-managed data source, so both are tracked (the "no managed data source → synced" shortcut applies only to deployments predating this API, which have no data source id injected). Throws a typed `IngestionFailedException` (including `failureReasons`) if the latest job failed.
+  - `waitUntilSynced(options?: { timeoutMs?: number; pollIntervalMs?: number; maxConsecutiveTransientErrors?: number; signal?: AbortSignal }): Promise<void>` — polls until synced (defaults: `timeoutMs` 300000, `pollIntervalMs` 5000, `maxConsecutiveTransientErrors` 3), throwing a typed `KnowledgeBaseTimeoutException` on timeout or propagating `IngestionFailedException` on a failed job. Up to `maxConsecutiveTransientErrors` _consecutive_ transient control-plane errors are tolerated (the counter resets on a clean poll); terminal errors short-circuit immediately. Transient covers both throttling / transient network failures **and** a _not-yet-visible_ knowledge base — during the post-deploy window the control plane can briefly return `ResourceNotFoundException` (the freshly-created KB/data source hasn't propagated yet), which is ridden out rather than treated as terminal; a _missing-KB config_ error (`KB_ID` unset) stays terminal. The poll interval carries ±20% jitter (only the delay between polls varies, never the poll count or the deadline) so many KBs don't poll in lockstep. Pass an optional `signal` (`AbortSignal`) to cancel the wait — checked before each poll and during the inter-poll delay — which rejects with the signal's abort reason (default: a `DOMException` named `'AbortError'`).
+
+  Purely additive — `retrieve()` and all existing signatures are unchanged. The local mock reports synced immediately (no async ingestion window in local dev).
+
+  The umbrella `@aws-blocks/blocks` package now also re-exports the new `WaitUntilSyncedOptions` type (alongside the existing `KnowledgeBase` re-exports) from both its runtime and CDK entry points, so consumers importing from `@aws-blocks/blocks` can reference it directly.
+
+### Patch Changes
+
+- Updated dependencies [b6fb281]
+- Updated dependencies [b6fb281]
+  - @aws-blocks/bb-knowledge-base@0.2.0
+
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [e839301]
+- Updated dependencies [179817f]
+  - @aws-blocks/core@0.1.10
+  - @aws-blocks/bb-data@0.2.1
+  - @aws-blocks/bb-agent@0.3.0
+
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [42fcbdf]
+  - @aws-blocks/bb-data@0.2.0
+
+## 0.1.7
+
+### Patch Changes
+
+- Updated dependencies [f946736]
+- Updated dependencies [53adfb8]
+- Updated dependencies [ce61bb7]
+  - @aws-blocks/bb-agent@0.2.0
+  - @aws-blocks/bb-auth-oidc@0.1.6
+
 ## 0.1.6
 
 ### Patch Changes

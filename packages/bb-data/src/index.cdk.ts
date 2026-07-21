@@ -76,6 +76,7 @@ export class Database extends Scope {
       databaseName,
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
+      postgresVersion: options?.postgresVersion,
     });
 
     // Inject config so DataApiEngine can read them at runtime
@@ -99,4 +100,4 @@ export { fromExisting } from './from-existing.js';
 export { DatabaseErrors } from './errors.js';
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
-export type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';

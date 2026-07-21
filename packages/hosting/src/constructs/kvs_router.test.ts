@@ -1,0 +1,1492 @@
+// Tests for the KVS edge router (kvs_router.ts).
+//
+// The router functions ship as generated JS strings that run at the CloudFront
+// edge against a KeyValueStore. These tests cover the two halves:
+//   1. buildKvsEntries — the manifest → KVS map (meta-last ordering, the
+//      build-time budget guards, the skew flag).
+//   2. The generated request/response function CODE — evaluated in a Node
+//      sandbox with a fake `cloudfront` module + a KVS stub seeded from
+//      buildKvsEntries, so the actual edge logic (glob matching, trailing-slash
+//      normalization, skew-cookie gating) is exercised end-to-end.
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  buildKvsEntries,
+  coalesceRoutes,
+  generateKvsRouterRequestCode,
+  generateKvsRouterResponseCode,
+  generateSentinelGuardCode,
+  generateEdgeBasePathStripCode,
+  ORIGIN_ID,
+} from './kvs_router.js';
+import type { DeployManifest } from '../manifest/types.js';
+
+const baseManifest = (overrides: Partial<DeployManifest> = {}): DeployManifest =>
+  ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory: '/tmp/assets' },
+    routes: [{ pattern: '/*', target: 'static' }],
+    buildId: 'b1',
+    ...overrides,
+  }) as DeployManifest;
+
+/**
+ * Evaluate a generated CloudFront Function string against a KVS map. Strips the
+ * `import cf from 'cloudfront'` ESM line and injects fakes, then returns the
+ * `handler`'s output. `selectedOrigin` captures cf.selectRequestOriginById.
+ *
+ * Uses `new Function(...)` deliberately to execute the generated function
+ * source end-to-end — the source is fully repo-controlled (produced by
+ * generateKvsRouterRequestCode), not external input. NOTE: under a hardened
+ * runner with `--disallow-code-generation-from-strings` these helpers would
+ * throw rather than silently no-op; the default `node --test` runner allows it.
+ */
+async function runRequestFn(
+  code: string,
+  entries: Record<string, string>,
+  request: Record<string, unknown>,
+): Promise<{ output: any; selectedOrigin: string | null }> {
+  let selectedOrigin: string | null = null;
+  const cf = {
+    kvs: () => ({
+      get: async (key: string) => {
+        if (!(key in entries)) throw new Error('NoSuchKey');
+        return entries[key];
+      },
+    }),
+    selectRequestOriginById: (id: string) => {
+      selectedOrigin = id;
+    },
+  };
+  const body = code.replace(/^import cf from 'cloudfront';\n?/, '');
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const factory = new Function(
+    'cf',
+    `${body}\nreturn handler;`,
+  );
+  const handler = factory(cf);
+  const output = await handler({ request });
+  return { output, selectedOrigin };
+}
+
+/** Evaluate the generated viewer-RESPONSE function against a KVS map. */
+async function runResponseFn(
+  code: string,
+  entries: Record<string, string>,
+  request: Record<string, unknown>,
+  response: Record<string, unknown>,
+): Promise<any> {
+  const cf = {
+    kvs: () => ({
+      get: async (key: string) => {
+        if (!(key in entries)) throw new Error('NoSuchKey');
+        return entries[key];
+      },
+    }),
+  };
+  const body = code.replace(/^import cf from 'cloudfront';\n?/, '');
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const factory = new Function('cf', `${body}\nreturn handler;`);
+  const handler = factory(cf);
+  return handler({ request, response });
+}
+
+/** A request object with sensible defaults; override per test. */
+const req = (uri: string, extra: Record<string, unknown> = {}) => ({
+  uri,
+  method: 'GET',
+  headers: { host: { value: 'example.com' } },
+  cookies: {},
+  querystring: {},
+  ...extra,
+});
+
+void describe('buildKvsEntries — atomicity & guards', () => {
+  void it('writes `meta` as the LAST key (coherent mid-deploy view)', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/a', target: 'static' },
+          { pattern: '/b', target: 'static' },
+          { pattern: '/api/*', target: 'compute' },
+        ],
+        redirects: [{ source: '/old', destination: '/new', statusCode: 308 }],
+        headers: [{ source: '/secure', headers: { 'x-frame-options': 'DENY' } }],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const keys = Object.keys(entries);
+    assert.equal(keys[keys.length - 1], 'meta', 'meta must be the last inserted key');
+  });
+
+  void it('records the skew flag in meta (sk:1 enabled, sk:0 disabled)', () => {
+    const on = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const off = buildKvsEntries({
+      manifest: baseManifest(),
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: false,
+    });
+    assert.equal(JSON.parse(on.meta).sk, 1);
+    assert.equal(JSON.parse(off.meta).sk, 0);
+  });
+
+  void it('throws TooManyRoutesError when one table exceeds the chunk budget', () => {
+    // Each route pattern is unique + long enough that chunking produces many
+    // chunks. 3000 distinct routes guarantees >64 chunks.
+    const routes = Array.from({ length: 3000 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    assert.throws(
+      () =>
+        buildKvsEntries({
+          manifest: baseManifest({ routes }),
+          buildId: 'b1',
+          hasServer: false,
+          hasImage: false,
+        }),
+      /TooManyRoutesError/,
+    );
+  });
+
+  // ── Tunable route-chunk budget via quotas.maxRouteChunks (issue #8) ──────
+  void it('a RAISED maxChunksPerTable lets a larger table synth (issue #8)', () => {
+    const routes = Array.from({ length: 3000 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    // The same table that throws at the default 64 succeeds when the cap is
+    // raised well above the chunk count.
+    assert.doesNotThrow(() =>
+      buildKvsEntries({
+        manifest: baseManifest({ routes }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+        maxChunksPerTable: 100000,
+      }),
+    );
+  });
+
+  void it('a LOWERED maxChunksPerTable fails synth sooner', () => {
+    // A modest table that fits in the default 64 chunks throws when the cap is
+    // set to 1.
+    const routes = Array.from({ length: 200 }, (_, i) => ({
+      pattern: `/section-${i}/page-${i}/item`,
+      target: 'static' as const,
+    }));
+    assert.throws(
+      () =>
+        buildKvsEntries({
+          manifest: baseManifest({ routes }),
+          buildId: 'b1',
+          hasServer: false,
+          hasImage: false,
+          maxChunksPerTable: 1,
+        }),
+      /TooManyRoutesError/,
+    );
+  });
+
+  void it('the redirect-table error names trailingSlash + the tunable quota', () => {
+    // A large redirect fan-out (distinct parents → no coalescing) trips the
+    // guard; the message must name the redirects table + suggest the knobs.
+    const redirects = Array.from({ length: 3000 }, (_, i) => ({
+      source: `/old-${i}/page-${i}/x`,
+      destination: `/new-${i}/page-${i}/x`,
+      statusCode: 308 as const,
+    }));
+    try {
+      buildKvsEntries({
+        manifest: baseManifest({ redirects }),
+        buildId: 'b1',
+        hasServer: false,
+        hasImage: false,
+      });
+      assert.fail('expected TooManyRoutesError');
+    } catch (e) {
+      const err = e as { name: string; message: string; resolution?: string };
+      assert.equal(err.name, 'TooManyRoutesError');
+      assert.match(err.message, /redirects table/);
+      const res = err.resolution ?? '';
+      assert.match(res, /trailingSlash/);
+      assert.match(res, /quotas\.maxRouteChunks/);
+    }
+  });
+});
+
+void describe('generated request fn — glob matching (regression: mid-segment wildcards)', () => {
+  const manifest = baseManifest({
+    routes: [
+      // mid-segment wildcard → must route to compute
+      { pattern: '/api/*/admin', target: 'compute' },
+      { pattern: '/api/*/data/*', target: 'compute' },
+      // image-opt mid path is rare; keep a normal static + catch-all
+      { pattern: '/about', target: 'static' },
+      { pattern: '/*', target: 'compute' },
+    ],
+  });
+  const entries = buildKvsEntries({
+    manifest,
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+  const code = generateKvsRouterRequestCode();
+
+  void it('routes /api/123/admin (mid-wildcard) to the SERVER origin', async () => {
+    const { selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/api/123/admin',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.server);
+  });
+
+  void it('routes /api/abc/data/file (double mid-wildcard) to the SERVER origin', async () => {
+    const { selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/api/abc/data/file',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.server);
+  });
+
+  void it('routes /about (static) to the S3 origin with build-id rewrite', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/about',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.match(output.uri, /^\/builds\/b1\/about/);
+  });
+
+  void it('routes /about/ (trailing slash) to S3, matching the stored /about route', async () => {
+    // Regression for the bare-path drift: without trailing-slash normalization,
+    // /about/ misses the table → defaults to compute on an SSR deploy.
+    const { selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/about/',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+  });
+
+  void it('does NOT let a single-level * cross a segment: /api/*/data ⊄ /api/foo/bar/data', async () => {
+    // Locks in the single-segment guarantee. The matched route is STATIC (S3);
+    // an unmatched path on this compute deploy falls through to the implicit
+    // default (server). So a single-segment middle resolves to S3, and a
+    // two-segment middle — if the wildcard wrongly crossed '/' — would ALSO hit
+    // S3; it must instead miss and fall through to the server origin.
+    const m = baseManifest({
+      routes: [
+        { pattern: '/api/*/data', target: 'static' },
+        { pattern: '/*', target: 'compute' }, // implicit catch-all (server)
+      ],
+    });
+    const e = buildKvsEntries({
+      manifest: m,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    // One middle segment → matches the single-level wildcard → S3.
+    const hit = await runRequestFn(code, e, {
+      uri: '/api/foo/data',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(hit.selectedOrigin, ORIGIN_ID.s3);
+    // Two middle segments → must NOT match → falls through to the server origin.
+    const miss = await runRequestFn(code, e, {
+      uri: '/api/foo/bar/data',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(miss.selectedOrigin, ORIGIN_ID.server);
+  });
+});
+
+void describe('generated request fn — image origin basePath strip', () => {
+  // Regression: under a deployed basePath (Nuxt app.baseURL '/myapp/'), an
+  // image-opt request arrives as /myapp/_ipx/... The optimizer (IPX / Next
+  // image) parses the source relative to its OWN base, so the router must
+  // strip basePath before forwarding — otherwise the optimizer 404s.
+  const manifest = baseManifest({
+    basePath: '/myapp',
+    imageOptimization: { baseURL: '/_ipx' } as DeployManifest['imageOptimization'],
+    routes: [
+      { pattern: '/_ipx/*', target: 'image-optimization' },
+      { pattern: '/*', target: 'compute' },
+    ],
+  });
+  const entries = buildKvsEntries({
+    manifest,
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: true,
+  });
+  const code = generateKvsRouterRequestCode();
+
+  void it('routes /myapp/_ipx/* to the IMAGE origin with basePath stripped', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, {
+      uri: '/myapp/_ipx/w_256/blocks-photo.png',
+      headers: { host: { value: 'x.test' } },
+      cookies: {},
+    });
+    assert.equal(selectedOrigin, ORIGIN_ID.image);
+    assert.equal(output.uri, '/_ipx/w_256/blocks-photo.png');
+  });
+});
+
+void describe('request fn — F8 consolidated basePath strip (consistent boundary guard)', () => {
+  // Finding 8: the static (4c) / image (4a) basePath strips used a bare
+  // `indexOf(bp) === 0` guard while the canonical 308 used `=== bp ||
+  // startsWith(bp + '/')`. They now share one `stripBasePath` with the
+  // boundary guard. These cases pin the strip → build-id rewrite mapping.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      routes: [{ pattern: '/*', target: 'static' }],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+  const code = generateKvsRouterRequestCode();
+
+  void it('strips an exact basePath /myapp → directory-index of root', async () => {
+    const { output, selectedOrigin } = await runRequestFn(code, entries, req('/myapp'));
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/index.html');
+  });
+
+  void it('strips /myapp/ → root index', async () => {
+    const { output } = await runRequestFn(code, entries, req('/myapp/'));
+    assert.equal(output.uri, '/builds/b1/index.html');
+  });
+
+  void it('strips /myapp/x → /x', async () => {
+    const { output } = await runRequestFn(code, entries, req('/myapp/x'));
+    assert.equal(output.uri, '/builds/b1/x/index.html');
+  });
+
+  void it('does NOT treat /myapp-extra as under /myapp (false-prefix → 308, never mis-stripped)', async () => {
+    // The boundary guard means /myapp-extra is off-base: it hits the canonical
+    // 308 (consistent with the strip guard), never the bare-prefix mis-strip
+    // that would have produced an /extra/... S3 key.
+    const { output } = await runRequestFn(code, entries, req('/myapp-extra/x'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/myapp-extra/x');
+  });
+});
+
+void describe('generated request fn — skew cookie gating', () => {
+  const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'static' }] });
+  const reqWithCookie = {
+    uri: '/page.html',
+    headers: { host: { value: 'x.test' } },
+    cookies: { __dpl: { value: 'oldbuild-123' } },
+  };
+
+  void it('HONORS __dpl when skew enabled (pins to cookie build)', async () => {
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+    );
+    assert.match(output.uri, /^\/builds\/oldbuild-123\//);
+  });
+
+  void it('IGNORES __dpl when skew disabled (uses meta build, not the stale cookie)', async () => {
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: false,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+    );
+    assert.match(output.uri, /^\/builds\/newbuild\//);
+  });
+});
+
+void describe('generated response fn — per-pattern headers (mid-wildcard)', () => {
+  void it('applies a header rule whose source has a mid-segment wildcard', async () => {
+    const manifest = baseManifest({
+      routes: [{ pattern: '/*', target: 'static' }],
+      headers: [
+        { source: '/api/*/admin', headers: { 'x-guard': 'on' } },
+      ],
+    });
+    const entries = buildKvsEntries({
+      manifest,
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: false,
+    });
+    const code = generateKvsRouterResponseCode(0).replace(
+      /^import cf from 'cloudfront';\n?/,
+      '',
+    );
+    const cf = {
+      kvs: () => ({
+        get: async (key: string) => {
+          if (!(key in entries)) throw new Error('NoSuchKey');
+          return entries[key];
+        },
+      }),
+    };
+    const factory = new Function('cf', `${code}\nreturn handler;`);
+    const handler = factory(cf);
+    const response = { statusCode: 200, headers: {}, cookies: {} };
+    const out = await handler({
+      request: { uri: '/api/9/admin' },
+      response,
+    });
+    assert.equal(out.headers['x-guard'].value, 'on');
+  });
+
+  // Finding 7 (anti-divergence): getJson / matchPattern / globMatch / stripBasePath
+  // are now emitted from ONE shared source constant into BOTH functions. They
+  // used to be copied and had already diverged (request matchPattern returned
+  // {tail}, response returned a boolean). Assert byte-identical helper bodies so
+  // a future edit to one function can't silently desync the matcher.
+  void it('request and response functions share byte-identical helper definitions', () => {
+    const reqSrc = generateKvsRouterRequestCode();
+    const resSrc = generateKvsRouterResponseCode(0);
+    for (const fn of ['getJson', 'matchPattern', 'globMatch', 'stripBasePath']) {
+      const extract = (src: string): string => {
+        const start = src.indexOf(`function ${fn}(`);
+        assert.notEqual(start, -1, `${fn} must be present`);
+        // Grab a stable window of the definition for comparison.
+        return src.slice(start, start + 200);
+      };
+      assert.equal(
+        extract(reqSrc),
+        extract(resSrc),
+        `${fn} must be identical in request and response functions`,
+      );
+    }
+  });
+});
+
+void describe('generateSentinelGuardCode', () => {
+  void it('returns a 403 for any request', () => {
+    const code = generateSentinelGuardCode();
+    const factory = new Function(`${code}\nreturn handler;`);
+    const handler = factory();
+    const out = handler({ request: { uri: '/__blocks_origin_server/x' } });
+    assert.equal(out.statusCode, 403);
+  });
+});
+
+void describe('generateEdgeBasePathStripCode', () => {
+  // OpenNext edge bundles route on basePath-RELATIVE regexes (^/edge$,
+  // ^/api/edge$); the dedicated edge behavior forwards /app/edge → "No route
+  // found" → 503. This viewer-request fn strips basePath before the Lambda@Edge.
+  const run = (basePath: string, uri: string): string => {
+    const code = generateEdgeBasePathStripCode(basePath);
+    const handler = new Function(`${code}\nreturn handler;`)();
+    return handler({ request: { uri } }).uri;
+  };
+
+  void it('strips basePath from an edge route path', () => {
+    assert.equal(run('/app', '/app/edge'), '/edge');
+    assert.equal(run('/app', '/app/api/edge'), '/api/edge');
+  });
+
+  void it('maps the bare basePath to /', () => {
+    assert.equal(run('/app', '/app'), '/');
+  });
+
+  void it('leaves a path not under basePath unchanged', () => {
+    // Defensive: the behavior only matches edge patterns, but the fn must not
+    // mangle an unexpected path.
+    assert.equal(run('/app', '/edge'), '/edge');
+  });
+
+  void it('is boundary-safe (does not strip a shared-prefix substring)', () => {
+    assert.equal(run('/app', '/application/edge'), '/application/edge');
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Added routing/caching/headers coverage (G1–G18). These EXECUTE the generated
+// CloudFront Function against a KVS seeded from buildKvsEntries, covering the
+// runtime branches where live bugs have occurred (assetPrefix, basePath 308,
+// redirects, www↔apex, x-forwarded-host, SPA/directory-index, skew cookie) and
+// the data layer (chunking, classification).
+// ──────────────────────────────────────────────────────────────────────────
+
+const reqCode = generateKvsRouterRequestCode();
+
+void describe('request fn — G1 assetPrefix strip before classification', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      assetPrefix: '/cdn-static',
+      routes: [
+        { pattern: '/_next/static/*', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+
+  void it('routes /cdn-static/_next/static/* to S3 and rewrites without the prefix', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/cdn-static/_next/static/chunks/main.js'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    // prefix stripped, then build-id prefixed — NO /cdn-static in the key
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/main.js');
+    assert.ok(!output.uri.includes('/cdn-static'), 'assetPrefix must be stripped');
+  });
+
+  void it('a bare /_next/static request (no prefix) still resolves to S3', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/_next/static/chunks/main.js'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/main.js');
+  });
+});
+
+void describe('request fn — G2 basePath canonical 308', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      routes: [{ pattern: '/*', target: 'static' }],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+
+  void it('redirects bare / to /myapp/ with 308', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/');
+  });
+
+  void it('redirects an off-base path /about to /myapp/about with 308', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/about'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/about');
+  });
+
+  void it('does NOT redirect a request already under the base path', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/myapp/about'),
+    );
+    assert.notEqual(output.statusCode, 308);
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+  });
+
+  // Regression (image 400 / dropped query): the 308 MUST carry the query string.
+  // /_next/image?url=...&w=64 redirecting to /myapp/_next/image WITHOUT the query
+  // hits the optimizer with no `url` → 400 "url parameter is required".
+  void it('preserves the query string in the basePath 308', async () => {
+    const { output } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/_next/image', {
+        querystring: { url: { value: '%2Fphoto.png' }, w: { value: '64' } },
+      }),
+    );
+    assert.equal(output.statusCode, 308);
+    assert.equal(
+      output.headers.location.value,
+      '/myapp/_next/image?url=%2Fphoto.png&w=64',
+    );
+  });
+});
+
+void describe('request fn — G2b basePath + non-nested assetPrefix (PR review #2)', () => {
+  // Regression: Next.js does NOT prefix assetPrefix with basePath. With
+  // basePath '/myapp' + assetPrefix '/cdn-static' the browser fetches
+  // /cdn-static/_next/static/* (no /myapp). The basePath 308 used to fire on
+  // that (it isn't under /myapp) and redirect to /myapp/cdn-static/... → 404 →
+  // browser rejects the HTML 404 as a non-executable script. The assetPrefix
+  // strip must run FIRST and the stripped asset must SKIP the basePath 308.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      assetPrefix: '/cdn-static',
+      routes: [
+        { pattern: '/_next/static/*', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+
+  void it('serves a prefixed asset from S3 (NO 308) when basePath is also set', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/cdn-static/_next/static/chunks/main.js'),
+    );
+    // The bug: this used to be a 308 to /myapp/cdn-static/... (or /myapp/_next).
+    assert.notEqual(
+      output.statusCode,
+      308,
+      'prefixed asset must NOT be basePath-redirected',
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/main.js');
+    assert.ok(!output.uri.includes('/cdn-static'));
+    assert.ok(!output.uri.includes('/myapp'));
+  });
+
+  void it('still 308-redirects a normal off-base page to the basePath', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/about'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/about');
+  });
+
+  void it('still 308-redirects the bare root to /myapp/', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/myapp/');
+  });
+});
+
+void describe('request fn — G2c basePath route table is single-prefixed & not over-coalesced', () => {
+  // Regression (basePath double-prefix + coalesce-shadow): when the adapter
+  // already emits basePath-relative patterns, buildKvsEntries must (a) prepend
+  // basePath EXACTLY ONCE (never /app/app/...) and (b) coalesce on the RELATIVE
+  // patterns so root-level Next routes (/_next/*, /blocks-logo.png, /BUILD_ID —
+  // root parent '') are NOT collapsed into a single /app/* static wildcard that
+  // would shadow every dynamic SSR page under basePath. See kvs_router.ts.
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/app',
+      routes: [
+        { pattern: '/_next/image*', target: 'image-optimization' },
+        { pattern: '/_next/data/*', target: 'compute' },
+        { pattern: '/_next/*', target: 'static' },
+        { pattern: '/blocks-logo.png', target: 'static' },
+        { pattern: '/BUILD_ID', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: true,
+  });
+
+  void it('prepends basePath exactly once (no /app/app/ double prefix)', () => {
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    for (const [pattern] of rows) {
+      assert.ok(
+        pattern.startsWith('/app/'),
+        `row ${pattern} must be under /app`,
+      );
+      assert.ok(
+        !pattern.startsWith('/app/app/'),
+        `row ${pattern} must NOT be double-prefixed`,
+      );
+    }
+  });
+
+  void it('keeps individual root-level static rows (no /app/* over-coalesce)', () => {
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    const patterns = rows.map(([p]) => p);
+    // The bug would collapse all of these into one `/app/*` static row.
+    assert.ok(!patterns.includes('/app/*'), 'must not collapse to /app/*');
+    assert.ok(patterns.includes('/app/_next/*'));
+    assert.ok(patterns.includes('/app/blocks-logo.png'));
+  });
+
+  void it('serves a basePath asset from S3 (the reported 404 path)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/app/_next/static/chunks/webpack.js'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/_next/static/chunks/webpack.js');
+  });
+
+  void it('routes a dynamic SSR page under basePath to COMPUTE (not shadowed by static)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/app/api/echo'),
+    );
+    assert.equal(
+      selectedOrigin,
+      ORIGIN_ID.server,
+      'dynamic route must reach the SSR origin, not S3',
+    );
+    assert.equal(output.uri, '/app/api/echo');
+  });
+
+  void it('still coalesces a genuine SSG fan-out under basePath (instruction-limit guard)', () => {
+    const many = baseManifest({
+      basePath: '/app',
+      routes: [
+        ...Array.from({ length: 50 }, (_, i) => ({
+          pattern: `/blog/post-${i}`,
+          target: 'static' as const,
+        })),
+        { pattern: '/*', target: 'compute' as const },
+      ],
+    });
+    const e = buildKvsEntries({
+      manifest: many,
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const rows = JSON.parse(e.r0) as [string, string][];
+    const patterns = rows.map(([p]) => p);
+    assert.ok(
+      patterns.includes('/app/blog/*'),
+      'SSG fan-out must coalesce to /app/blog/*',
+    );
+    assert.ok(
+      !patterns.includes('/app/blog/post-5'),
+      'individual fan-out rows must be collapsed',
+    );
+  });
+});
+
+void describe('request fn — G3 redirects (exact + wildcard tail splice)', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      routes: [{ pattern: '/*', target: 'static' }],
+      redirects: [
+        { source: '/old-page', destination: '/new-page', statusCode: 308 },
+        { source: '/legacy/*', destination: '/modern/*', statusCode: 301 },
+        { source: '/temp', destination: '/home', statusCode: 302 },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+
+  void it('exact redirect returns the configured status + destination', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/old-page'));
+    assert.equal(output.statusCode, 308);
+    assert.equal(output.headers.location.value, '/new-page');
+  });
+
+  void it('wildcard redirect splices the captured tail into the destination', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/legacy/a/b'));
+    assert.equal(output.statusCode, 301);
+    assert.equal(output.headers.location.value, '/modern/a/b');
+  });
+
+  // Regression (Finding 3): a request hitting the wildcard prefix with an EMPTY
+  // tail (e.g. exactly '/legacy/') must NOT leak the literal '*' into Location.
+  // The old `if (m.tail && …)` guard skipped the splice on '' → '/modern/*'.
+  void it('does NOT leak a literal * when the captured tail is empty', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/legacy/'));
+    assert.equal(output.statusCode, 301);
+    assert.equal(output.headers.location.value, '/modern/');
+    assert.ok(
+      !output.headers.location.value.includes('*'),
+      'Location must not contain a literal asterisk',
+    );
+  });
+
+  void it('splices a single-segment tail after the wildcard prefix', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/legacy/x'));
+    assert.equal(output.headers.location.value, '/modern/x');
+  });
+
+  void it('preserves a 302 (temporary) status code', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/temp'));
+    assert.equal(output.statusCode, 302);
+    assert.equal(output.headers.location.value, '/home');
+  });
+});
+
+void describe('request fn — G4 www↔apex canonical 301', () => {
+  const toApex = buildKvsEntries({
+    manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+    wwwRedirect: 'toApex',
+  });
+  const toWww = buildKvsEntries({
+    manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+    wwwRedirect: 'toWww',
+  });
+
+  void it('toApex: www.example.com → example.com (301), preserves path + query', async () => {
+    const { output } = await runRequestFn(reqCode, toApex, {
+      ...req('/p'),
+      headers: { host: { value: 'www.example.com' } },
+      querystring: { a: { value: '1' } },
+    });
+    assert.equal(output.statusCode, 301);
+    assert.equal(output.headers.location.value, 'https://example.com/p?a=1');
+  });
+
+  void it('toWww: example.com → www.example.com (301)', async () => {
+    const { output } = await runRequestFn(reqCode, toWww, {
+      ...req('/p'),
+      headers: { host: { value: 'example.com' } },
+    });
+    assert.equal(output.statusCode, 301);
+    assert.equal(output.headers.location.value, 'https://www.example.com/p');
+  });
+
+  void it('toApex: an apex request is NOT redirected', async () => {
+    const { output } = await runRequestFn(reqCode, toApex, {
+      ...req('/p'),
+      headers: { host: { value: 'example.com' } },
+    });
+    assert.notEqual(output.statusCode, 301);
+  });
+});
+
+void describe('request fn — G5 already-prefixed /builds/ passthrough', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({ routes: [{ pattern: '/*', target: 'compute' }] }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+  void it('sends /builds/<id>/page straight to S3 unchanged (no re-prefix/redirect)', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/builds/b1/about/index.html'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/about/index.html');
+  });
+});
+
+void describe('request fn — G6 compute origin sets x-forwarded-host', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      routes: [
+        { pattern: '/api/*', target: 'compute' },
+        { pattern: '/*', target: 'static' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+  void it('selects server origin, keeps URI, injects Host → x-forwarded-host', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      { ...req('/api/users'), headers: { host: { value: 'example.com' } } },
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.server);
+    assert.equal(output.uri, '/api/users'); // unchanged, no build-id prefix
+    assert.equal(output.headers['x-forwarded-host'].value, 'example.com');
+  });
+});
+
+void describe('request fn — G7 SPA fallback (spa=1)', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      staticAssets: { directory: '/tmp', spaFallback: true },
+      routes: [{ pattern: '/*', target: 'static' }],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+  void it('rewrites an extensionless deep link to /index.html', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/dashboard/settings'));
+    assert.equal(output.uri, '/builds/b1/index.html');
+  });
+  void it('serves a real asset (has extension) directly, not the SPA shell', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/logo.svg'));
+    assert.equal(output.uri, '/builds/b1/logo.svg');
+  });
+  void it('does NOT SPA-fallback a /.well-known/ path', async () => {
+    const { output } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/.well-known/acme-challenge/tok'),
+    );
+    assert.equal(output.uri, '/builds/b1/.well-known/acme-challenge/tok');
+  });
+});
+
+void describe('request fn — G8 directory-index (spa=0)', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      staticAssets: { directory: '/tmp', spaFallback: false },
+      routes: [{ pattern: '/*', target: 'static' }],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+  void it('appends /index.html to a trailing-slash path', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/about/'));
+    assert.equal(output.uri, '/builds/b1/about/index.html');
+  });
+  void it('appends /index.html to an extensionless path', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/about'));
+    assert.equal(output.uri, '/builds/b1/about/index.html');
+  });
+  void it('serves a file with an extension directly', async () => {
+    const { output } = await runRequestFn(reqCode, entries, req('/style.css'));
+    assert.equal(output.uri, '/builds/b1/style.css');
+  });
+});
+
+void describe('request fn — bare prerendered route under basePath → S3 (Issue 1)', () => {
+  // Regression: a Nuxt `prerender: true` page (e.g. /about) under basePath
+  // /myapp must serve the FROZEN prerendered HTML from S3, not be re-rendered
+  // by the SSR Lambda. The adapter now emits a bare `/about` static route (+
+  // `/about/*`); the router strips basePath, classifies it static, and the
+  // directory-index branch resolves the extensionless bare path to
+  // /builds/<id>/about/index.html (how Nuxt prerenders it).
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      basePath: '/myapp',
+      staticAssets: { directory: '/tmp', spaFallback: false },
+      routes: [
+        { pattern: '/about', target: 'static' },
+        { pattern: '/about/*', target: 'static' },
+        { pattern: '/*', target: 'compute' },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: true,
+    hasImage: false,
+  });
+  void it('routes bare /myapp/about to S3 + rewrites to the frozen index.html', async () => {
+    const { output, selectedOrigin } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/myapp/about'),
+    );
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+    assert.equal(output.uri, '/builds/b1/about/index.html');
+  });
+});
+
+void describe('request fn — G10 fail-open when meta is missing', () => {
+  void it('returns the request unchanged (no origin selected) if KVS has no meta', async () => {
+    const { output, selectedOrigin } = await runRequestFn(reqCode, {}, req('/x'));
+    assert.equal(selectedOrigin, null);
+    assert.equal(output.uri, '/x'); // untouched — fail open, don't 5xx
+  });
+});
+
+void describe('request fn — G11 default kind when no route matches', () => {
+  void it('defaults to SERVER when a compute origin exists', async () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/known', target: 'static' }] }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const { selectedOrigin } = await runRequestFn(reqCode, entries, req('/unknown-path'));
+    assert.equal(selectedOrigin, ORIGIN_ID.server);
+  });
+  void it('defaults to S3 when there is no compute origin', async () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/known', target: 'static' }] }),
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: false,
+    });
+    const { selectedOrigin } = await runRequestFn(reqCode, entries, req('/unknown-path'));
+    assert.equal(selectedOrigin, ORIGIN_ID.s3);
+  });
+});
+
+void describe('response fn — G12/G13 skew cookie set semantics', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+    buildId: 'build-XYZ',
+    hasServer: false,
+    hasImage: false,
+  });
+
+  void it('sets __dpl=buildId on a 200 text/html response (enabled)', async () => {
+    const out = await runResponseFn(
+      generateKvsRouterResponseCode(86400),
+      entries,
+      { uri: '/' },
+      { statusCode: 200, headers: { 'content-type': { value: 'text/html; charset=utf-8' } }, cookies: {} },
+    );
+    assert.ok(out.cookies['__dpl'], '__dpl cookie should be set');
+    assert.equal(out.cookies['__dpl'].value, 'build-XYZ');
+    assert.match(out.cookies['__dpl'].attributes, /Max-Age=86400/);
+  });
+
+  void it('does NOT set __dpl on a non-HTML (e.g. image) response', async () => {
+    const out = await runResponseFn(
+      generateKvsRouterResponseCode(86400),
+      entries,
+      { uri: '/logo.png' },
+      { statusCode: 200, headers: { 'content-type': { value: 'image/png' } }, cookies: {} },
+    );
+    assert.ok(!out.cookies['__dpl'], 'no cookie on non-HTML');
+  });
+
+  void it('does NOT set __dpl on a 5xx HTML error response', async () => {
+    const out = await runResponseFn(
+      generateKvsRouterResponseCode(86400),
+      entries,
+      { uri: '/' },
+      { statusCode: 500, headers: { 'content-type': { value: 'text/html' } }, cookies: {} },
+    );
+    assert.ok(!out.cookies['__dpl'], 'no cookie on 5xx');
+  });
+
+  void it('NEVER sets __dpl when skew disabled (maxAge=0), even on 200 HTML', async () => {
+    const out = await runResponseFn(
+      generateKvsRouterResponseCode(0),
+      entries,
+      { uri: '/' },
+      { statusCode: 200, headers: { 'content-type': { value: 'text/html' } }, cookies: {} },
+    );
+    assert.ok(!out.cookies['__dpl'], 'cookie must not be set when disabled');
+  });
+});
+
+void describe('response fn — G14 per-pattern headers (exact + multi + lowercase)', () => {
+  const entries = buildKvsEntries({
+    manifest: baseManifest({
+      routes: [{ pattern: '/*', target: 'static' }],
+      headers: [
+        {
+          source: '/secure-headers',
+          headers: {
+            'X-Frame-Options': 'DENY',
+            'Strict-Transport-Security': 'max-age=63072000',
+          },
+        },
+        { source: '/api/*', headers: { 'x-api': 'yes' } },
+      ],
+    }),
+    buildId: 'b1',
+    hasServer: false,
+    hasImage: false,
+  });
+  const respCode = generateKvsRouterResponseCode(0);
+
+  void it('applies multiple headers (lowercased) on an exact match', async () => {
+    const out = await runResponseFn(respCode, entries, { uri: '/secure-headers' }, {
+      statusCode: 200,
+      headers: {},
+      cookies: {},
+    });
+    assert.equal(out.headers['x-frame-options'].value, 'DENY');
+    assert.equal(out.headers['strict-transport-security'].value, 'max-age=63072000');
+  });
+  void it('applies a wildcard header rule', async () => {
+    const out = await runResponseFn(respCode, entries, { uri: '/api/users' }, {
+      statusCode: 200,
+      headers: {},
+      cookies: {},
+    });
+    assert.equal(out.headers['x-api'].value, 'yes');
+  });
+  void it('does NOT apply header rules to a non-matching path', async () => {
+    const out = await runResponseFn(respCode, entries, { uri: '/other' }, {
+      statusCode: 200,
+      headers: {},
+      cookies: {},
+    });
+    assert.ok(!out.headers['x-frame-options'], 'no header on non-match');
+  });
+});
+
+void describe('buildKvsEntries — G15 chunking & round-trip', () => {
+  void it('chunks a large route table and the meta.rc count matches; reassembly is lossless', () => {
+    const routes = Array.from({ length: 300 }, (_, i) => ({
+      pattern: `/section-${i}/page`,
+      target: 'static' as const,
+    }));
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes }),
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: false,
+    });
+    const meta = JSON.parse(entries.meta);
+    // every advertised chunk exists
+    for (let i = 0; i < meta.rc; i++) {
+      assert.ok(entries[`r${i}`] !== undefined, `chunk r${i} present`);
+      assert.ok(
+        Buffer.byteLength(entries[`r${i}`], 'utf8') <= 1024,
+        `chunk r${i} under the 1KB KVS value limit`,
+      );
+    }
+    // reassemble all chunks → must contain every route pattern
+    const reassembled: [string, string][] = [];
+    for (let i = 0; i < meta.rc; i++) reassembled.push(...JSON.parse(entries[`r${i}`]));
+    assert.equal(reassembled.length, routes.length, 'no rows lost across chunks');
+    assert.ok(reassembled.some((r) => r[0] === '/section-299/page'), 'last route survived');
+  });
+});
+
+void describe('buildKvsEntries — edge route exclusion', () => {
+  // OpenNext `runtime:'edge'` routes are served by dedicated CloudFront
+  // behaviors with a Lambda@Edge attached; they must NOT appear in the KVS
+  // route table, or the router would send them to the default server Lambda
+  // (which lacks the split routes) → 500.
+  void it('omits edge-target routes from the KVS table', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/edge', target: 'edge2' },
+          { pattern: '/api/edge', target: 'edge1' },
+          { pattern: '/api/normal', target: 'default' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+      edgeTargets: new Set(['edge1', 'edge2']),
+    });
+    const meta = JSON.parse(entries.meta);
+    const rows: [string, string][] = [];
+    for (let i = 0; i < meta.rc; i++) rows.push(...JSON.parse(entries[`r${i}`]));
+    const patterns = rows.map((r) => r[0]);
+    assert.ok(!patterns.includes('/edge'), '/edge must be excluded');
+    assert.ok(!patterns.includes('/api/edge'), '/api/edge must be excluded');
+    assert.ok(patterns.includes('/api/normal'), 'non-edge routes remain');
+  });
+
+  void it('keeps all routes when no edgeTargets are given (default)', () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/edge', target: 'edge2' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const rows: [string, string][] = [];
+    const meta = JSON.parse(entries.meta);
+    for (let i = 0; i < meta.rc; i++) rows.push(...JSON.parse(entries[`r${i}`]));
+    assert.ok(rows.some((r) => r[0] === '/edge'), 'without edgeTargets, /edge is kept');
+  });
+});
+
+void describe('buildKvsEntries — G17 image classification', () => {
+  void it("classifies target:'image-optimization' as kind 'i' when hasImage", () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        imageOptimization: { baseURL: '/_ipx' } as DeployManifest['imageOptimization'],
+        routes: [
+          { pattern: '/_next/image*', target: 'image-optimization' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: false,
+      hasImage: true,
+    });
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    const img = rows.find((r) => r[0] === '/_next/image*');
+    assert.ok(img, 'image route present');
+    assert.equal(img![1], 'i');
+  });
+
+  void it("does NOT classify as image when hasImage=false (falls to compute/static)", () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/_next/image*', target: 'image-optimization' },
+          { pattern: '/*', target: 'static' },
+        ],
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const rows = JSON.parse(entries.r0) as [string, string][];
+    const img = rows.find((r) => r[0] === '/_next/image*');
+    assert.ok(img && img[1] !== 'i', "must not be kind 'i' when no image origin");
+  });
+});
+
+void describe('coalesceRoutes — bound SSG fan-out for the edge scan', () => {
+  void it('collapses many same-kind siblings under one parent into parent/*', () => {
+    const rows: [string, 's'][] = Array.from({ length: 100 }, (_, i) => [
+      `/stress/${i}/*`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0], ['/stress/*', 's']);
+  });
+
+  void it('also collapses the bare + subtree pair Nuxt emits per page', () => {
+    // Nuxt emits BOTH `/stress/N` and `/stress/N/*` per prerendered page.
+    const rows: [string, 's'][] = [];
+    for (let i = 0; i < 50; i++) {
+      rows.push([`/stress/${i}`, 's']);
+      rows.push([`/stress/${i}/*`, 's']);
+    }
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 1);
+    assert.deepEqual(out[0], ['/stress/*', 's']);
+  });
+
+  void it('dedupes the duplicate wildcard from coalescing bare + subtree forms', () => {
+    // Nuxt emits `/stress/N` AND `/stress/N/*`; both forms coalesce to
+    // `/stress/*`, so the result must contain it exactly ONCE.
+    const rows: [string, 's'][] = [
+      ['/stress/0', 's'],
+      ['/stress/0/*', 's'],
+      ['/stress/1', 's'],
+      ['/stress/1/*', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.deepEqual(out, [['/stress/*', 's']]);
+  });
+
+  // ── ISR/SWR active: static groups must NOT coalesce (issue #7) ──────────
+  // With Nitro ISR/SWR (manifest.cache), a non-prebuilt child of a prerendered
+  // group must render on-demand at compute, not 404 from the coalesced S3
+  // wildcard. So static groups stay as individual rows when isrActive.
+
+  void it('coalesces a STATIC group into a COMPUTE wildcard when ISR is active (bounded + on-demand)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    // ONE wildcard row (table stays bounded — no explosion/503), but kind is
+    // COMPUTE so the SSR Lambda serves the whole subtree: prebuilt from ISR
+    // cache, non-prebuilt (/blog/post-99) on-demand — never an S3 404.
+    assert.deepEqual(out, [['/blog/*', 'c']]);
+  });
+
+  void it('does NOT explode the table for a large ISR SSG fan-out (coalesces to one compute row)', () => {
+    // Regression: the naive "skip coalescing under ISR" fix produced N rows →
+    // route-table explosion → CloudFront Function 503. Must stay 1 row.
+    const rows: [string, 's'][] = Array.from({ length: 500 }, (_, i) => [
+      `/blog/post-${i}`,
+      's',
+    ]);
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/blog/*', 'c']], '500 ISR pages coalesce to ONE compute wildcard');
+  });
+
+  void it('STILL coalesces the same STATIC group when ISR is NOT active (frozen prerender)', () => {
+    const rows: [string, 's'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/post-3', 's'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: false });
+    assert.deepEqual(out, [['/blog/*', 's']]);
+  });
+
+  void it('STILL coalesces a COMPUTE group even when ISR is active (no shadowing risk)', () => {
+    // A compute wildcard equals the default origin, so coalescing it never
+    // shadows an on-demand child — safe to bound the table.
+    const rows: [string, 'c'][] = [
+      ['/api/a', 'c'],
+      ['/api/b', 'c'],
+      ['/api/c', 'c'],
+    ];
+    const out = coalesceRoutes(rows, { isrActive: true });
+    assert.deepEqual(out, [['/api/*', 'c']]);
+  });
+
+  void it('end-to-end: ISR manifest routes the whole subtree to compute (prebuilt + non-prebuilt), bounded table (#7)', async () => {
+    // Nuxt prerender + ISR: /blog/post-1..3 prerendered (static) + a server
+    // origin + manifest.cache (nitro-s3) → routeRules { '/blog/**': isr }.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [
+          { pattern: '/blog/post-1', target: 'static' },
+          { pattern: '/blog/post-2', target: 'static' },
+          { pattern: '/blog/post-3', target: 'static' },
+          { pattern: '/*', target: 'compute' },
+        ],
+        // ISR/SWR active → shared S3 cache provisioned.
+        cache: { computeResource: 'default', driver: 'nitro-s3' },
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const code = generateKvsRouterRequestCode();
+
+    // Prebuilt page → COMPUTE (served from the Lambda's ISR cache under the
+    // coalesced /blog/* compute wildcard — not S3-direct, but correct).
+    const prebuilt = await runRequestFn(code, entries, req('/blog/post-1'));
+    assert.equal(prebuilt.selectedOrigin, ORIGIN_ID.server, '/blog/post-1 (prebuilt) → compute');
+
+    // Non-prebuilt ISR child → compute (renders on demand), NOT a hard S3 404.
+    const onDemand = await runRequestFn(code, entries, req('/blog/post-99'));
+    assert.equal(
+      onDemand.selectedOrigin,
+      ORIGIN_ID.server,
+      '/blog/post-99 (non-prebuilt ISR child) → compute, not S3 404',
+    );
+
+    // Table stays bounded: the 3 /blog/post-N rows collapsed to ONE /blog/*
+    // row (meta.rc small) — no explosion that would 503 the edge function.
+    const meta = JSON.parse(entries.meta);
+    assert.equal(meta.rc, 1, 'route table fits in a single chunk (bounded)');
+  });
+
+  void it('does NOT coalesce when sibling kinds differ (mixed static/compute)', () => {
+    const rows: [string, 's' | 'c'][] = [
+      ['/mix/a', 's'],
+      ['/mix/b', 'c'],
+      ['/mix/c', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    // Mixed kind under /mix → left as individual rows (no lossy wildcard).
+    assert.equal(out.length, 3);
+    assert.ok(!out.some(([p]) => p === '/mix/*'));
+  });
+
+  void it('retains a deeper differently-kinded route alongside a coalesced group', () => {
+    // /blog/* (static pages) coalesces, but /blog/x/admin (compute) is under a
+    // DIFFERENT parent (/blog/x) so it is never folded in, and its extra
+    // literal segment sorts it ahead of /blog/* in buildKvsEntries.
+    const rows: [string, 's' | 'c'][] = [
+      ['/blog/p1', 's'],
+      ['/blog/p2', 's'],
+      ['/blog/p3', 's'],
+      ['/blog/x/admin', 'c'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.ok(out.some(([p, k]) => p === '/blog/*' && k === 's'));
+    assert.ok(out.some(([p, k]) => p === '/blog/x/admin' && k === 'c'));
+  });
+
+  void it('leaves a single route untouched (no spurious wildcard)', () => {
+    const rows: [string, 's'][] = [['/about', 's']];
+    const out = coalesceRoutes(rows);
+    assert.deepEqual(out, [['/about', 's']]);
+  });
+
+  void it('never coalesces top-level routes into a site-wide /*', () => {
+    // Root-level siblings (parent === '') must NOT become `/*` — that would
+    // swallow every path. They stay as individual rows.
+    const rows: [string, 's'][] = [
+      ['/about', 's'],
+      ['/contact', 's'],
+      ['/pricing', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    assert.equal(out.length, 3);
+    assert.ok(!out.some(([p]) => p === '/*'));
+  });
+
+  void it('bounds the route-chunk count for a large SSG deploy (regression)', () => {
+    // 200 prerendered pages under /stress used to need ~7 r-chunks → 7
+    // JSON.parse per request → instruction-limit 503 on the root path. After
+    // coalescing they are one row → one chunk.
+    const routes = [
+      ...Array.from({ length: 200 }, (_, i) => ({
+        pattern: `/stress/${i}/*`,
+        target: 'static',
+      })),
+      { pattern: '/*', target: 'compute' },
+    ];
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        compute: { default: { type: 'handler', bundle: '/tmp', handler: 'h', placement: 'regional' } },
+        staticAssets: { directory: '/tmp', spaFallback: false },
+        routes,
+      }),
+      buildId: 'b1',
+      hasServer: true,
+      hasImage: false,
+    });
+    const meta = JSON.parse(entries.meta) as { rc: number };
+    assert.equal(meta.rc, 1, 'coalesced SSG fan-out must fit in a single route chunk');
+  });
+
+  // Finding 4 (coalesce vs ISR fallback): the hazard is "a non-prerendered child
+  // of a coalesced STATIC group routes to S3-404 instead of the SSR fallback".
+  // It is only reachable if a framework emits per-page STATIC rows under a
+  // dynamic parent AND has on-demand fallback. Live-verified (2026-06-30) that
+  // OpenNext does NOT do this — it routes ISR routes through the catch-all to
+  // compute (zero per-page static rows). These tests pin that contract: a
+  // dynamic/compute route under a parent is NEVER folded into a static wildcard,
+  // so an ISR route always reaches the SSR origin.
+  void it('does NOT fold a compute (dynamic/ISR) route into a static wildcard', () => {
+    // Mirrors how OpenNext models an ISR route: the dynamic parent is a single
+    // compute row, NOT a fan-out of static per-page rows.
+    const rows: [string, 's' | 'c'][] = [
+      ['/products/*', 'c'], // ISR fallback:'blocking' → compute (renders on demand)
+      ['/assets/a', 's'],
+      ['/assets/b', 's'],
+    ];
+    const out = coalesceRoutes(rows);
+    // The compute route is preserved verbatim (a miss under it reaches the SSR
+    // Lambda, which renders the ISR-fallback page) — never coalesced to static.
+    assert.ok(out.some(([p, k]) => p === '/products/*' && k === 'c'));
+    // The genuinely-static siblings DO coalesce (the fan-out we bound).
+    assert.ok(out.some(([p, k]) => p === '/assets/*' && k === 's'));
+  });
+
+  void it('preserves a dynamic sibling under a coalesced static parent (mixed-kind → no fold)', () => {
+    // If a build ever DID emit per-page static rows alongside a dynamic row
+    // under the same parent, the mixed-kind guard prevents a lossy static
+    // wildcard from shadowing the dynamic (ISR) route.
+    const rows: [string, 's' | 'c'][] = [
+      ['/blog/post-1', 's'],
+      ['/blog/post-2', 's'],
+      ['/blog/[slug]', 'c'], // the on-demand ISR fallback row, same parent /blog
+    ];
+    const out = coalesceRoutes(rows);
+    // Mixed kind under /blog → NOT coalesced; the compute row survives so a
+    // non-prerendered slug still routes to the SSR origin, not S3-404.
+    assert.ok(out.some(([p, k]) => p === '/blog/[slug]' && k === 'c'));
+    assert.ok(!out.some(([p]) => p === '/blog/*'));
+  });
+});

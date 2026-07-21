@@ -53,6 +53,85 @@ jobs:
             echo "source-changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+  blocks-integrity:
+    name: Blocks Package Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync block docs (prebuild step)
+        run: node scripts/sync-block-docs.mjs
+
+      - name: Check blocks docs-sync integrity
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          # sync-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
+          # (docs/ is gitignored, built at publish time). We compare the packed
+          # @aws-blocks/blocks tarball at THIS PR's head against the PR base branch —
+          # like-for-like (same algo, same build state), so only a change introduced by
+          # THIS PR trips the check. A PR that doesn't alter what ships needs no bump.
+          pack_blocks() {
+            local dest="$1"
+            node scripts/sync-block-docs.mjs >/dev/null
+            # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null )
+            set -- "$dest"/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in $dest, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
+          }
+
+          mkdir -p /tmp/head-pack
+          HEAD_INTEGRITY=$(pack_blocks /tmp/head-pack)
+
+          # BASE_SHA is present locally (checkout uses fetch-depth: 0).
+          git worktree add --detach /tmp/blocks-base "$BASE_SHA" >/dev/null
+          mkdir -p /tmp/base-pack
+          BASE_INTEGRITY=$(
+            cd /tmp/blocks-base
+            node scripts/sync-block-docs.mjs >/dev/null
+            ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null )
+            set -- /tmp/base-pack/*.tgz
+            [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }
+            shasum -a 512 "$1" | awk '{print $1}'
+          )
+          git worktree remove --force /tmp/blocks-base
+
+          echo "Head packed shasum: $HEAD_INTEGRITY"
+          echo "Base packed shasum: $BASE_INTEGRITY"
+
+          # Relies on npm's reproducible packing (fixed mtimes); head & base pack on the same runner, so identical content ⇒ identical tarball hash.
+          if [ "$HEAD_INTEGRITY" = "$BASE_INTEGRITY" ]; then
+            echo "✅ @aws-blocks/blocks packaged content is unchanged vs the base branch — no version bump required."
+            exit 0
+          fi
+
+          # Content changed vs base — require a changeset that bumps @aws-blocks/blocks.
+          CHANGESET_BUMPS=$(find .changeset -name '*.md' ! -name 'README.md' -exec grep -l '"@aws-blocks/blocks"' {} \; || true)
+
+          if [ -n "$CHANGESET_BUMPS" ]; then
+            echo "✅ Packaged content changed and a changeset already bumps @aws-blocks/blocks:"
+            echo "$CHANGESET_BUMPS"
+            exit 0
+          fi
+
+          echo "❌ This PR changes @aws-blocks/blocks packaged content (e.g. synced docs from sibling READMEs) vs the base branch, but no changeset bumps it. Add \"@aws-blocks/blocks\": patch to a changeset."
+          exit 1
+
   build-and-test-local:
     name: Build, Unit Tests, E2E Local
     runs-on: ubuntu-latest
@@ -68,6 +147,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
 
@@ -120,6 +204,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
 
       - name: Download registry artifact
@@ -151,6 +240,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -185,6 +279,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -218,6 +317,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -237,6 +341,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: publish
+    env:
+      # Pin the Supabase Root 2021 CA (public cert, committed) so every external-DB
+      # connection in this suite runs verify-full — exercising the TLS verification
+      # feature end-to-end instead of connecting unverified. externalDbSsl() reads
+      # this; the explicit-engine tests read it too.
+      DATABASE_CA_CERT: ${{ github.workspace }}/packages/bb-data/test/fixtures/supabase-ca.crt
     concurrency:
       group: e2e-supabase
       cancel-in-progress: false
@@ -250,6 +360,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build
@@ -333,6 +448,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -360,12 +480,17 @@ jobs:
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
+    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check results
         run: |
+          if [[ "${{ needs.blocks-integrity.result }}" != "success" ]]; then
+            echo "blocks-integrity failed"
+            exit 1
+          fi
+
           if [[ "${{ needs.build-and-test-local.result }}" != "success" ]]; then
             echo "build-and-test-local failed"
             exit 1

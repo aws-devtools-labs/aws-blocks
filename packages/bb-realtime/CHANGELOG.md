@@ -1,5 +1,11 @@
 # @aws-blocks/bb-realtime
 
+## 0.1.3
+
+### Patch Changes
+
+- 5491cae: Harden subscription token validation. Connect tokens now use a `$connect` suffix that prevents them from being reused as channel subscription tokens via prefix matching. Channel tokens remain valid as connect tokens. Backward-compatible during rollout.
+
 ## 0.1.2
 
 ### Patch Changes

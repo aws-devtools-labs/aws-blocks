@@ -30,8 +30,8 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     inferenceOnly?: boolean;
     logger?: ChildLogger;
     // (undocumented)
-    model: {
-        deployed: ModelConfig | ModelConfig[];
+    model?: {
+        deployed?: ModelConfig | ModelConfig[];
         local?: ModelConfig | ModelConfig[];
     };
     // (undocumented)
@@ -93,6 +93,10 @@ export interface AgentStreamResult {
     channel: Promise<RealtimeChannel<AgentStreamChunk>>;
     channelId: string;
     complete: () => Promise<AgentStreamChunk>;
+    toJSON(): {
+        channelId: string;
+        channel: null;
+    };
 }
 
 // @public
@@ -102,25 +106,29 @@ export type AgentTool<TContext = DefaultToolContext> = ToolDefinition<TContext, 
 
 // @public
 export const BedrockModels: {
-    readonly DEFAULT: {
-        readonly provider: "bedrock";
-        readonly modelId: "us.anthropic.claude-opus-4-8-20250610-v1:0";
-    };
     readonly BALANCED: {
         readonly provider: "bedrock";
-        readonly modelId: "us.anthropic.claude-sonnet-4-20250514-v1:0";
+        readonly modelId: "global.anthropic.claude-sonnet-4-6";
+    };
+    readonly SMART: {
+        readonly provider: "bedrock";
+        readonly modelId: "global.anthropic.claude-opus-4-8";
     };
     readonly FAST: {
         readonly provider: "bedrock";
-        readonly modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+        readonly modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0";
+    };
+    readonly DEFAULT: {
+        readonly provider: "bedrock";
+        readonly modelId: "global.anthropic.claude-sonnet-4-6";
     };
     readonly BUDGET: {
         readonly provider: "bedrock";
-        readonly modelId: "us.amazon.nova-pro-v1:0";
+        readonly modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0";
     };
     readonly MICRO: {
         readonly provider: "bedrock";
-        readonly modelId: "us.amazon.nova-lite-v1:0";
+        readonly modelId: "global.anthropic.claude-haiku-4-5-20251001-v1:0";
     };
 };
 

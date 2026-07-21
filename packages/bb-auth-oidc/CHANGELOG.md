@@ -1,5 +1,46 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.1.6
+
+### Patch Changes
+
+- 53adfb8: fix(bb-auth-oidc): bridge a successful client callback into auth-common's onAuthChange
+
+  A successful client-PKCE `handleRedirectCallback()` only notified this OIDC
+  client's own `onAuthStateChange` listeners. Components subscribed via
+  `@aws-blocks/auth-common`'s `onAuthChange` — and `<AuthenticatedContent>` —
+  never heard about the sign-in, so a React SPA wouldn't re-render after
+  completing the redirect exchange (only server-initiated sign-in updated them).
+
+  `handleRedirectCallback()` now also calls `broadcastAuthChange(user)` on success,
+  and `signOut()` calls `broadcastAuthChange(null)`, firing the same-window
+  `blocks-auth-change` event and the cross-tab `BroadcastChannel`, so every
+  auth-common consumer (and other open tabs) re-render on both sign-in and sign-out.
+  The README documents the `onAuthChange`/`broadcastAuthChange` wiring and adds an
+  OIDC + React SPA example.
+
+## 0.1.5
+
+### Patch Changes
+
+- 607fe57: fix(bb-auth-oidc): make `handleRedirectCallback()` idempotent under double invocation
+
+  `handleRedirectCallback()` consumed the single-use PKCE pending entry from
+  `sessionStorage` and only removed it **after** the `/aws-blocks/auth/exchange`
+  round-trip. A second concurrent invocation — most commonly React StrictMode's
+  mount → unmount → mount, which fires the callback effect twice synchronously —
+  either replayed the already-consumed code (failing the second exchange) or
+  found the pending entry gone and resolved `null`, stranding the app on a
+  signed-out screen despite a successful sign-in.
+
+  The callback now guards on an in-flight promise keyed by the PKCE `code`:
+  concurrent/duplicate invocations for the same code share the first call's
+  promise instead of starting a second exchange, so both callers resolve to the
+  same user and subscribers are notified exactly once. The pending entry is also
+  consumed up front (before the network round-trip) so a late duplicate can't
+  replay it, and the guard is released once the exchange settles so a genuinely
+  new sign-in flow on the same page is never blocked.
+
 ## 0.1.4
 
 ### Patch Changes

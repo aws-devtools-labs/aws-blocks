@@ -56,6 +56,11 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
       - run: npm ci
       - run: npm run build
 
@@ -71,6 +76,54 @@ jobs:
           cd /tmp/amplify-interop-test
           npm create amplify@latest -- --yes
           node $GITHUB_WORKSPACE/packages/create-blocks-app/dist/index.js --yes .
+
+      # De-skew the sandbox typecheck against the drifting Amplify scaffold.
+      #
+      # `npm create amplify@latest` installs its OWN aws-cdk-lib/constructs at
+      # whatever versions it currently ships, which drift from the versions this
+      # repo builds against. The generated aws-blocks/index.cdk.ts resolves
+      # aws-cdk-lib (Stack/Mixins) from THIS scaffold's tree, while the Blocks
+      # packages — linked in as `file:` deps (symlinks) — resolve their own
+      # constructs/aws-cdk-lib from the REPO's tree via the symlink realpath.
+      # tsc dedups modules by package id (name@version), so when the two trees
+      # are DIFFERENT versions it treats them as distinct declarations and the
+      # nominally-private Construct#host member no longer matches — failing with
+      # TS2345 "separate declarations of a private property 'host'".
+      #
+      # Fix: pin the scaffold's constructs/aws-cdk-lib to the repo's EXACT
+      # installed versions (read from node_modules, not the package.json semver
+      # range, so the ids match precisely — a range could resolve to a newer
+      # patch and re-drift). The scaffold lists both as DIRECT devDependencies,
+      # and npm refuses an `overrides` entry for a directly-depended package
+      # unless the direct spec matches the override exactly (EOVERRIDE) — so pin
+      # the direct dep specs to those same exact versions AND set the overrides
+      # (the latter also dedupes any transitive copies), then reinstall. Matching
+      # versions => matching package ids => tsc dedups to one declaration.
+      - name: Pin constructs/aws-cdk-lib to the repo's versions
+        run: |
+          cd /tmp/amplify-interop-test
+          node -e '
+            const fs = require("fs");
+            const ws = process.env.GITHUB_WORKSPACE;
+            const ver = (n) => {
+              try { return require(ws + "/node_modules/" + n + "/package.json").version; }
+              catch { const p = require(ws + "/package.json"); return (p.devDependencies || {})[n] || (p.dependencies || {})[n]; }
+            };
+            const constructsV = ver("constructs"), cdkV = ver("aws-cdk-lib");
+            if (!constructsV || !cdkV) throw new Error("could not determine constructs/aws-cdk-lib version from repo");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const pins = { constructs: constructsV, "aws-cdk-lib": cdkV };
+            for (const [name, v] of Object.entries(pins)) {
+              for (const bucket of ["dependencies", "devDependencies"]) {
+                if (pkg[bucket] && pkg[bucket][name]) pkg[bucket][name] = v;
+              }
+            }
+            pkg.overrides = { ...pkg.overrides, ...pins };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            console.log("pinned constructs=" + constructsV + " aws-cdk-lib=" + cdkV + " (direct deps + overrides)");
+          '
+          rm -rf node_modules package-lock.json
+          npm install
 
       - name: Deploy sandbox
         run: |
@@ -107,6 +160,11 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
 
       - run: npm ci
       - run: npm run build

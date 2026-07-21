@@ -9,16 +9,14 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Agent as StrandsAgent, tool, SessionManager, ModelStreamUpdateEvent, AfterToolCallEvent, BeforeToolCallEvent, AgentResultEvent, InterruptEvent } from '@strands-agents/sdk';
-import type { AgentResult } from '@strands-agents/sdk';
-import { InterruptResponseContent } from '@strands-agents/sdk';
+// Runtime values from `@strands-agents/sdk` are deferred to loadStrands(); only types
+// are imported here (erased at compile time). See loadStrands() / issue #153.
+import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
 import { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
-import type { SnapshotStorage } from '@strands-agents/sdk';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition } from './types.js';
 import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
-import { SlidingWindowConversationManager, SummarizingConversationManager } from '@strands-agents/sdk';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
@@ -36,6 +34,26 @@ const jobPayloadSchema = z.object({
 
 /** Key under which the per-call tool context is threaded through Strands `invocationState`. */
 const TOOL_CONTEXT_KEY = '__bbAgentToolContext';
+
+/**
+ * Lazily import the Strands SDK runtime, caching the module after the first load.
+ *
+ * Importing the Agent BB must not eagerly evaluate `@strands-agents/sdk`: the
+ * `@aws-blocks/blocks` umbrella re-exports `Agent` statically, so a static top-level
+ * import here would load Strands — and its non-optional `@modelcontextprotocol/sdk`
+ * and `@opentelemetry/api` peers — for every app that touches the umbrella, even
+ * ones that never create an agent (see issue #153). Deferring the import to first
+ * agent execution keeps those packages off the load path for non-agent apps.
+ */
+let strandsModulePromise: Promise<typeof import('@strands-agents/sdk')> | undefined;
+function loadStrands(): Promise<typeof import('@strands-agents/sdk')> {
+	strandsModulePromise ??= import('@strands-agents/sdk').catch((err) => {
+		// Don't cache a rejected import — clear the slot so a later call can retry.
+		strandsModulePromise = undefined;
+		return Promise.reject(err);
+	});
+	return strandsModulePromise;
+}
 
 /**
  * The per-call tool factory handed to the `tools` callback. At runtime it's an identity
@@ -66,7 +84,8 @@ function resolveTools<TContext>(
  * Controls how message history is trimmed in-memory before sending to the model. Does not handle persistence.
  * @see https://strandsagents.com/docs/user-guide/concepts/agents/conversation-management/
  */
-function createConversationManager(config?: ConversationManagerConfig) {
+async function createConversationManager(config?: ConversationManagerConfig) {
+	const { SlidingWindowConversationManager, SummarizingConversationManager } = await loadStrands();
 	if (!config || !config.strategy || config.strategy === 'sliding-window') {
 		const windowSize = config && 'windowSize' in config ? config.windowSize : undefined;
 		return new SlidingWindowConversationManager({ windowSize });
@@ -192,6 +211,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * TODO add comments for args
 	 */
 	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext): Promise<void> {
+		const { InterruptResponseContent, ModelStreamUpdateEvent, BeforeToolCallEvent, AfterToolCallEvent, AgentResultEvent } = await loadStrands();
 		const strandsAgent = await this.createStrandsAgent(conversationId, context);
 		const startTime = Date.now();
 
@@ -298,6 +318,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	private async createStrandsAgent(conversationId?: string, fallbackContext?: TContext): Promise<StrandsAgent> {
+		const { Agent: StrandsAgent, tool, SessionManager, BeforeToolCallEvent } = await loadStrands();
 		const toolDefs = [...this.toolMap.values()];
 		// Validate mutual exclusivity of needsApproval/trustable and interrupt
 		for (const t of toolDefs) {
@@ -351,7 +372,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			...(this.config.description !== undefined && { description: this.config.description }),
 			systemPrompt: this.config.systemPrompt,
 			tools: strandsTools,
-			conversationManager: createConversationManager(this.config.conversation),
+			conversationManager: await createConversationManager(this.config.conversation),
 			sessionManager,
 			printer: false, //disable Strands automatic printing
 		});
@@ -403,7 +424,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
-		const channelId = options?.channelId ?? conversationId ?? crypto.randomUUID();
+		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
 		const context = this.resolveContext(options?.context);
@@ -428,6 +449,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 					}
 				});
 			}),
+			toJSON() { return { channelId, channel: null }; },
 		};
 	}
 

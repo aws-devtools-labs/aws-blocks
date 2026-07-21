@@ -34,6 +34,16 @@ export interface DatabaseOptions {
    * @default 'retain'
    */
   removalPolicy?: 'destroy' | 'retain' | 'snapshot';
+  /**
+   * Aurora PostgreSQL engine version, e.g. `'16.13'`.
+   *
+   * Configurable because AWS periodically retires older Aurora PostgreSQL minor
+   * versions: 16.4 was retired in us-east-1, after which `CreateDBCluster` began
+   * failing with `Cannot find version 16.4 for aurora-postgresql`. Surfacing this
+   * as an option means the next retirement is a config change, not a framework fix.
+   * @default '16.13'
+   */
+  postgresVersion?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -44,4 +54,38 @@ export interface DatabaseOptions {
  */
 export type ExternalDatabaseRef =
   | { host: string; port?: number; database: string; secretArn: string }
-  | { connectionString: string | { get(): Promise<string> } };
+  | {
+      connectionString: string | { get(): Promise<string> };
+      /**
+       * TLS settings for the connection. When omitted, the server certificate is
+       * **verified by default** (the engine uses `{ rejectUnauthorized: true }`).
+       *
+       * Managed Postgres providers (Supabase, Neon, RDS) present certificates
+       * signed by a provider-specific CA that is not in Node's built-in trust
+       * store, so verification requires pinning that CA via `ca`. For Supabase,
+       * download `prod-ca-2021.crt` from Database Settings → SSL Configuration.
+       *
+       * Set `rejectUnauthorized: false` only if you accept the man-in-the-middle
+       * risk (encrypted but unauthenticated); prefer pinning the CA instead.
+       */
+      ssl?: ExternalSslOptions;
+    };
+
+/**
+ * TLS policy for an external database connection.
+ *
+ * Modeled as a discriminated union on `rejectUnauthorized` so that a misleading
+ * combination is a **compile-time error**: a pinned `ca` is only meaningful when
+ * the certificate is actually verified, and node `pg` silently ignores `ca` when
+ * `rejectUnauthorized: false`. Expressing `{ ca, rejectUnauthorized: false }` —
+ * which looks secure but is not — therefore won't type-check.
+ *
+ * - `{ rejectUnauthorized?: true; ca?: string }` — verify the server certificate
+ *   (the default). Omit `ca` to verify against Node's built-in trust store
+ *   (publicly-trusted certs); supply `ca` to pin a provider's private CA.
+ * - `{ rejectUnauthorized: false }` — do NOT verify (encrypted but
+ *   man-in-the-middle-exposed). A `ca` is not accepted here because it would be ignored.
+ */
+export type ExternalSslOptions =
+  | { rejectUnauthorized?: true; ca?: string }
+  | { rejectUnauthorized: false };

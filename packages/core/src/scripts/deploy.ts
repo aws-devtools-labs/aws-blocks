@@ -25,8 +25,10 @@ export async function deploy(options: DeployOptions) {
 
     process.env.BLOCKS_STAGE = 'production';
 
-    // Provision secrets for production
-    const secrets = await ensureSecrets('production');
+    // Provision secrets for production. projectRoot must match the root cdk
+    // synth uses (passed as --context below) so the written parameter name
+    // equals the one the app resolves at synth.
+    const secrets = await ensureSecrets('production', options.projectRoot);
     if (secrets.created.length > 0 || secrets.updated.length > 0) {
       console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
     }

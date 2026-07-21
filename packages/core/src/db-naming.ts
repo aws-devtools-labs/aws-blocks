@@ -6,9 +6,15 @@
  * database connection string, and for the project ref derived from a Postgres
  * connection string.
  *
- * Both the deploy-time provisioner (`ensure-secrets`) and the `db pull`
- * generated code derive this name from the stage alone. Keep this the only
- * place the name is constructed.
+ * The connection-string parameter name is **stack-scoped** (embeds the
+ * deployment's stack name), so two Blocks apps in the same account + region +
+ * stage get distinct names and cannot overwrite each other's credentials.
+ *
+ * Two call sites compute the name: the pre-deploy writer (`ensure-secrets`) and
+ * the `db pull` generated wiring at synth. Both pass the result of
+ * `getStackName({ sandbox, projectRoot })` into this function, so they produce
+ * the same name by construction. The runtime Lambda does not call this function;
+ * it reads the name recorded at synth.
  */
 
 /**
@@ -35,7 +41,13 @@ export function extractDbRef(connectionString: string): string {
   throw new Error('Cannot extract database identifier from connection string.');
 }
 
-/** SSM parameter name storing the connection string for a given stage. */
-export function dbConnectionParameterName(stage: string): string {
-  return `/blocks/${stage}/db-connection-string`;
+/**
+ * SSM SecureString parameter name for a deployment's external database
+ * connection string.
+ *
+ * Pure string transform: `/<stackName>-db-url`. The caller is responsible for
+ * computing the stack name via `getStackName({ sandbox, projectRoot })`.
+ */
+export function dbConnectionParameterName(stackName: string): string {
+  return `/${stackName}-db-url`;
 }

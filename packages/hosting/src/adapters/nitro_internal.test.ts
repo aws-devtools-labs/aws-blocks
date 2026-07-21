@@ -6,10 +6,12 @@ import * as os from 'os';
 import {
   VERIFIED_NITRO_RANGE,
   extractJsonObjectAfter,
+  parseNuxtImageDomains,
   patchNitroHandlerForApiGateway,
   resolveNitroBundlePath,
   warnIfNitroOutOfRange,
 } from './nitro.js';
+import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
 
 /**
  * Regression tests for the Nitro adapter internals that have caused
@@ -357,5 +359,67 @@ void describe('extractJsonObjectAfter', () => {
       extractJsonObjectAfter(src, '"routeRules":'),
       '{"a": 1}',
     );
+  });
+});
+
+describe('parseNuxtImageDomains (image.domains allowlist scan)', () => {
+  it('reads a simple image.domains array', () => {
+    const src = `export default defineNuxtConfig({
+      image: { domains: ['a.com', "b.com"] },
+    })`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), ['a.com', 'b.com']);
+  });
+
+  it('reads domains even when a nested object precedes it (brace balancing)', () => {
+    // Regression: a non-greedy `image:{…}?` match truncated at the first `}`
+    // (the end of `provider`), missing domains entirely → [].
+    const src = `export default defineNuxtConfig({
+      image: {
+        provider: 'ipx',
+        providers: { ipx: { options: { maxAge: 60 } } },
+        domains: ['images.unsplash.com', 'picsum.photos'],
+      },
+    })`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), [
+      'images.unsplash.com',
+      'picsum.photos',
+    ]);
+  });
+
+  it('returns [] when there is no image block', () => {
+    assert.deepStrictEqual(parseNuxtImageDomains('export default {}'), []);
+  });
+
+  it('returns [] when image block has no domains', () => {
+    const src = `export default { image: { provider: { name: 'ipx' } } }`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), []);
+  });
+
+  it('is not fooled by a brace inside a string value before domains', () => {
+    const src = `export default { image: { note: 'a } b', domains: ['x.com'] } }`;
+    assert.deepStrictEqual(parseNuxtImageDomains(src), ['x.com']);
+  });
+});
+
+void describe('IPX_LAMBDA_HANDLER_SOURCE — remote source support (issue #2)', () => {
+  // The handler template is inline code shipped as a string; assert the
+  // wiring that makes remote images work end-to-end.
+  it('imports and configures IPX httpStorage for remote (http/https) sources', () => {
+    // Without httpStorage, IPX routes a remote id to the S3 storage → 404
+    // IPX_RESOURCE_NOT_FOUND. It must be imported and wired, gated on the
+    // allowlist domains.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /ipxHttpStorage/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /httpStorage: ipxHttpStorage\(\{ domains: httpDomains \}\)/);
+    // Domains come from the same allowlist the handler enforces.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /const httpDomains = \[/);
+  });
+
+  it('accepts BOTH API Gateway REST (v1) and Function URL (v2) events', () => {
+    // Shared SSR API GW delivers v1 (path/httpMethod); the fallback Function
+    // URL delivers v2 (rawPath/rawQueryString). eventToRequest must branch.
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.rawPath/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.path/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /event\.httpMethod/);
+    assert.match(IPX_LAMBDA_HANDLER_SOURCE, /multiValueQueryStringParameters/);
   });
 });

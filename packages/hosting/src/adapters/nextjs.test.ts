@@ -8,11 +8,18 @@ import {
   hasExistingMiddlewareManifest,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
+  patchImageOptimizerForNext16,
+  patchImageOptimizerSvgStatus,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
+  stripBasePathPrefix,
+  stripBakedBasePath,
+  nextPatternToCloudFront,
+  normalizeTrailingNamedWildcard,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
+import type { DeployManifest } from '../manifest/types.js';
 
 void describe('nextjsAdapter', () => {
   let tmpDir: string;
@@ -104,6 +111,12 @@ void describe('nextjsAdapter', () => {
 
     // Static assets directory
     assert.strictEqual(manifest.staticAssets.directory, assetsDir);
+
+    // The adapter does NOT hardcode invalidationPaths — deploy-time
+    // invalidation is scoped on `hasCompute` in the L3 (it is not
+    // Next-specific; Nuxt swr/isr and Astro SSR hit the same stale-HTML 403).
+    // The field is reserved for adapter overrides/opt-out only.
+    assert.strictEqual(manifest.invalidationPaths, undefined);
   });
 
   void it('detects ISR cache when not disabled', () => {
@@ -1127,6 +1140,207 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
   });
 });
 
+// NOTE: these tests validate the patch's SHAPE LOGIC against hand-written,
+// friendly-named fixtures (e.g. `Pc.fetchInternalImage`, `Pl`/`VX`). Real
+// OpenNext minified output may rename these to single identifiers, in which
+// case the structural regexes match nothing and the patch no-ops — yet these
+// units still pass. Green here proves the rewrite is correct GIVEN the shape;
+// it does NOT prove the patch fires on a production bundle. That coverage
+// comes from the integration deploy (the /_next/image e2e image tests).
+void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-img-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  // Write a fake project whose node_modules/next reports `version`, so the
+  // adapter's version gate (semver.major(next) < 16 ⇒ skip) can be exercised.
+  const writeProjectWithNext = (version: string): string => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-proj-'));
+    const nextPkgDir = path.join(projectDir, 'node_modules', 'next');
+    fs.mkdirSync(nextPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextPkgDir, 'package.json'),
+      JSON.stringify({ name: 'next', version }),
+    );
+    return projectDir;
+  };
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    // image optimization disabled for this app → nothing to patch
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
+  });
+
+  void it('inserts `void 0` so the request handler lands in the 5th slot', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i),o=await Pc.imageOptimizer(x);',
+    );
+    patchImageOptimizerForNext16(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+  });
+
+  void it('is idempotent — a second run does not double-insert', () => {
+    const bundle = writeBundle(
+      'await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    patchImageOptimizerForNext16(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerForNext16(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // exactly one `void 0` inserted into the call
+    assert.equal((twice.match(/\{\},void 0,/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when no matching call is present', () => {
+    writeBundle('export const handler = async () => ({}); // already adapted\n');
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
+  });
+
+  // ── Version gate (regression: Next 15.x must NOT be patched) ──────────
+  // The maximumResponseBody arg was added in Next 16, not 15.5. On Next 15.x
+  // OpenNext's 4-arg call is already correct; inserting `void 0` there broke
+  // every local image (500 TypeError). See patchImageOptimizerForNext16.
+
+  void it('does NOT patch on Next 15.x (4-arg signature is already correct)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.15');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // untouched — no `void 0` shoved into the call
+    assert.doesNotMatch(out, /\{\},void 0,/);
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('DOES patch on Next 16.x (5-arg signature needs the extra slot)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('16.2.9');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('patches when the Next version is unknown (default to Next 16 behavior)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    // projectDir points at an empty dir → no resolvable `next` → default patch
+    const emptyProject = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-empty-'));
+    patchImageOptimizerForNext16(tmp, emptyProject);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(emptyProject, { recursive: true, force: true });
+  });
+});
+
+void describe('patchImageOptimizerSvgStatus — disallowed type fails closed (issue #4)', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-svg-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  // The minified catch shape OpenNext emits around the optimizer call.
+  const CATCH =
+    'async function opt(t,n){try{return await run(t,n)}catch(s){return Pl("Failed to optimize image",s),VX("Internal server error",t?.streamCreator)}}';
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  void it('rewrites the catch to forward a client-error (4xx) status + message', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // A 4xx caught error now drives the status + message, not a blanket 500.
+    assert.match(out, /__blocksStatus/);
+    assert.match(out, /s\.statusCode>=400&&s\.statusCode<500/);
+    assert.match(out, /s\.message\|\|"Bad Request"/);
+    // The streamCreator arg is preserved.
+    assert.match(out, /t\?\.streamCreator,__blocksStatus/);
+  });
+
+  void it('is idempotent — a second run does not double-patch', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerSvgStatus(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // Exactly one catch was rewritten (the marker's `var` declaration appears once).
+    assert.equal((twice.match(/var __blocksStatus=/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when the catch shape is absent', () => {
+    writeBundle('export const handler = async () => ({}); // no optimizer catch\n');
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  // Behavioral check: evaluate the patched catch to prove a 400 error → 400,
+  // and a generic error → 500. We stub Pl/VX and run the patched function.
+  void it('patched catch yields 400 for a 4xx error and 500 for a generic error', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // Extract just the patched `opt` function body and wrap it with stubs.
+    const m = out.match(/async function opt\(t,n\)\{[\s\S]*?\}\}/);
+    assert.ok(m, 'patched opt function present');
+    const harness = `
+      let captured;
+      const Pl = () => {};
+      const VX = (msg, _stream, status) => { captured = { msg, status }; return captured; };
+      ${m![0]}
+      // run(): first call throws a 4xx (SVG), second throws a generic error.
+      let mode;
+      async function run() { if (mode === 'svg') { const e = new Error('"url" parameter is valid but image type is not allowed'); e.statusCode = 400; throw e; } throw new Error('boom'); }
+      return (async () => {
+        mode = 'svg'; await opt({}, null); const svg = captured;
+        mode = 'other'; await opt({}, null); const other = captured;
+        return { svg, other };
+      })();
+    `;
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const fn = new Function(harness);
+    return (fn() as Promise<{ svg: { status: number; msg: string }; other: { status: number } }>).then(
+      ({ svg, other }) => {
+        assert.equal(svg.status, 400, 'SVG (4xx) rejection → 400');
+        assert.match(svg.msg, /image type is not allowed/);
+        assert.equal(other.status, 500, 'generic error → 500');
+      },
+    );
+  });
+});
+
 void describe('patchEdgeBundlesForLambdaEdge — brittleness gating', () => {
   let tmp: string;
   let envBackup: string | undefined;
@@ -1756,5 +1970,188 @@ void describe('nextjsAdapter — OpenNext version-drift warning', () => {
       !stderrChunks.some((c) => c.includes('outside the version range')),
       `should not warn when @opennextjs/aws is absent; stderr was: ${stderrChunks.join('')}`,
     );
+  });
+});
+
+void describe('stripBasePathPrefix', () => {
+  void it('strips a leading basePath segment (no-leading-slash OpenNext form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', 'app/_next/*'), '/_next/*');
+  });
+
+  void it('strips a leading basePath segment (slash-prefixed form)', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/legacy'), '/legacy');
+  });
+
+  void it('maps the basePath root itself to "/"', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/app'), '/');
+  });
+
+  void it('leaves a pattern that is not under basePath unchanged', () => {
+    assert.strictEqual(stripBasePathPrefix('/app', '/about'), '/about');
+  });
+
+  void it('is boundary-safe: does not strip a shared-prefix substring', () => {
+    // `/application/*` is NOT under `/app` (no `/app/` boundary).
+    assert.strictEqual(
+      stripBasePathPrefix('/app', '/application/*'),
+      '/application/*',
+    );
+  });
+
+  void it('leaves an external/absolute destination unchanged', () => {
+    assert.strictEqual(
+      stripBasePathPrefix('/app', 'https://cdn.example.com/x'),
+      'https://cdn.example.com/x',
+    );
+  });
+
+  void it('round-trips: strip(prepend(x)) === x for a relative pattern', () => {
+    // /app + /foo/* -> /app/foo/*  then strip -> /foo/*
+    assert.strictEqual(stripBasePathPrefix('/app', '/app/foo/*'), '/foo/*');
+  });
+});
+
+void describe('stripBakedBasePath', () => {
+  const baseManifest = (): DeployManifest => ({
+    version: 1,
+    compute: {},
+    staticAssets: { directory: '/tmp/static' },
+    routes: [],
+  });
+
+  void it('is a no-op when basePath is unset', () => {
+    const m = baseManifest();
+    m.routes = [{ pattern: '/app/_next/*', target: 'static' }];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.routes[0].pattern, '/app/_next/*');
+  });
+
+  void it('strips baked basePath from route patterns so the L3 prepends exactly once', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.routes = [
+      { pattern: 'app/_next/image*', target: 'image-optimization' },
+      { pattern: 'app/_next/data/*', target: 'default' },
+      { pattern: 'app/_next/*', target: 's3' },
+      { pattern: '/*', target: 'default' }, // catch-all is not under basePath
+      // a blocks-injected relative route must be untouched
+      { pattern: '/.blocks-sandbox/*', target: 'static' },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(
+      m.routes.map((r) => r.pattern),
+      ['/_next/image*', '/_next/data/*', '/_next/*', '/*', '/.blocks-sandbox/*'],
+    );
+  });
+
+  void it('strips baked basePath from redirect source AND destination', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.redirects = [
+      { source: '/app/legacy-home', destination: '/app', statusCode: 308 },
+      { source: '/app/r/old-0', destination: '/app/r/new-0', statusCode: 308 },
+    ];
+    stripBakedBasePath(m);
+    assert.deepStrictEqual(m.redirects, [
+      { source: '/legacy-home', destination: '/', statusCode: 308 },
+      { source: '/r/old-0', destination: '/r/new-0', statusCode: 308 },
+    ]);
+  });
+
+  void it('strips baked basePath from header sources', () => {
+    const m = baseManifest();
+    m.basePath = '/app';
+    m.headers = [
+      { source: '/app/secure-headers', headers: { 'x-frame-options': 'DENY' } },
+    ];
+    stripBakedBasePath(m);
+    assert.strictEqual(m.headers[0].source, '/secure-headers');
+  });
+});
+
+void describe('normalizeTrailingNamedWildcard — issue #5 (:path* literal leak)', () => {
+  void it('converts a trailing /:name* to /*', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path*'),
+      '/r/legacy/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/modern/:path*'),
+      '/r/modern/*',
+    );
+  });
+
+  void it('handles multi-char param names', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/api/:rest*'),
+      '/api/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/proxy/:segments_123*'),
+      '/proxy/*',
+    );
+  });
+
+  void it('leaves exact paths unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/about'),
+      '/about',
+    );
+    assert.strictEqual(normalizeTrailingNamedWildcard('/'), '/');
+  });
+
+  void it('leaves a plain trailing /* unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/old/*'),
+      '/old/*',
+    );
+  });
+
+  void it('does NOT convert mid-pattern :name (not trailing)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/users/:id/posts'),
+      '/users/:id/posts',
+    );
+  });
+
+  void it('does NOT convert :name+ (one-or-more, not catch-all *)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path+'),
+      '/r/legacy/:path+',
+    );
+  });
+});
+
+void describe('nextPatternToCloudFront', () => {
+  void it('collapses [...catchall] and [dynamic] segments', () => {
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/[slug]'),
+      '/api/edge/*',
+    );
+    assert.strictEqual(
+      nextPatternToCloudFront('/api/edge/catch/[...path]'),
+      '/api/edge/catch/*',
+    );
+  });
+
+  // Regression (edge 500): OpenNext joins basePath without collapsing the
+  // separator → `app//edge`. A `//` pattern matches the literal `//` URL, never
+  // the browser's `/app/edge`, so the dedicated edge behavior misses → the
+  // request falls to the default KVS router → split edge bundle never runs → 500.
+  void it('collapses an OpenNext double-slash basePath join', () => {
+    assert.strictEqual(nextPatternToCloudFront('app//edge'), '/app/edge');
+    assert.strictEqual(
+      nextPatternToCloudFront('app//api/edge'),
+      '/app/api/edge',
+    );
+  });
+
+  void it('guarantees a single leading slash', () => {
+    assert.strictEqual(nextPatternToCloudFront('app/edge'), '/app/edge');
+  });
+
+  void it('leaves a clean pattern unchanged', () => {
+    assert.strictEqual(nextPatternToCloudFront('/api/edge'), '/api/edge');
+    assert.strictEqual(nextPatternToCloudFront('/*'), '/*');
   });
 });

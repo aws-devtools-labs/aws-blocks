@@ -12,12 +12,11 @@ AI agent with streaming, tool calling, and conversation persistence. Powered by 
 
 ```typescript
 import { Scope } from '@aws-blocks/core';
-import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { Agent } from '@aws-blocks/bb-agent';
 
 const scope = new Scope('my-app');
 
 const agent = new Agent(scope, 'support-agent', {
-  model: { deployed: BedrockModels.DEFAULT },
   systemPrompt: 'You are a helpful support agent.',
 });
 
@@ -30,7 +29,7 @@ const result = await agent.stream('Until when are you open tomorrow?', { convers
 const done = await result.complete();
 console.log(done.text); // "We're open until 6pm tomorrow."
 ```
-See [Tools](#tools) for adding capabilities, [Model Configuration](#model-configuration) for provider setup, and [Local Development](#local-development) for running without AWS Bedrock.
+Uses [`BedrockModels.BALANCED`](#bedrock-presets) (Claude Sonnet 4.6) by default. See [Model Configuration](#model-configuration) for other presets, [Tools](#tools) for adding capabilities, and [Local Development](#local-development) for running without AWS Bedrock.
 
 ## API
 
@@ -49,7 +48,7 @@ const agent = new Agent(scope, id, config)
 | `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
 | `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
 
-`stream()` submits the message to AsyncJob and returns immediately — no API Gateway timeout risk. The agent runs asynchronously and publishes chunks to Realtime.
+`stream()` submits the message to AsyncJob and returns immediately — no API Gateway timeout risk. The agent runs asynchronously and publishes chunks to Realtime. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
 **Important: Subscribe before sending.** The agent starts emitting chunks immediately after `stream()` is called. If you subscribe to the channel after calling `stream()`, early chunks may be dropped. Always subscribe first, await `established`, then send:
 
@@ -140,7 +139,7 @@ The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to
 
 ### Model Configuration
 
-Only `deployed` is required. Local development works out of the box — the canned provider (keyword-based mock) is used automatically when no local model is specified.
+Model configuration is optional. When omitted, the agent defaults to `BedrockModels.BALANCED` (Claude Sonnet 4.6) for deployment. Local development works out of the box — the canned provider (keyword-based mock) is used automatically when no local model is specified.
 
 | Option | Type | Description |
 |--------|------|-------------|
@@ -192,14 +191,14 @@ model: {
 
 #### Bedrock Presets
 
-Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use cross-region inference profiles — work across all AWS regions:
+Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
 
 ```typescript
 import { Agent, BedrockModels} from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
-    deployed: BedrockModels.DEFAULT,
+    deployed: BedrockModels.BALANCED,
   },
   systemPrompt: '...',
 });
@@ -207,15 +206,15 @@ const agent = new Agent(scope, 'agent', {
 
 | Preset | Current Model | Notes |
 |--------|---------------|-------|
-| `BedrockModels.DEFAULT` | `us.anthropic.claude-opus-4-8-20250610-v1:0` | Highest capability. Recommended default. |
-| `BedrockModels.BALANCED` | `us.anthropic.claude-sonnet-4-20250514-v1:0` | Strong quality/cost balance. |
-| `BedrockModels.FAST` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Fastest, lowest latency. |
-| `BedrockModels.BUDGET` | `us.amazon.nova-pro-v1:0` | Low cost per token with acceptable quality. |
-| `BedrockModels.MICRO` | `us.amazon.nova-lite-v1:0` | Ultra-cheap for simple tasks. |
+| `BedrockModels.BALANCED` | `global.anthropic.claude-sonnet-4-6` | Great tool use, balanced cost. Recommended default for most workloads. |
+| `BedrockModels.SMART` | `global.anthropic.claude-opus-4-8` | Highest capability for the hardest tasks. |
+| `BedrockModels.FAST` | `global.anthropic.claude-haiku-4-5-20251001-v1:0` | Lowest latency, still strong capabilities. |
+
+> **Migrating?** `DEFAULT` → `BALANCED` (or `SMART` for highest capability). `BUDGET`/`MICRO` → `FAST`. The old presets are still available but deprecated. Please consider upgrading!
 
 Override inference settings with spread:
 ```typescript
-model: { deployed: { ...BedrockModels.DEFAULT, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
+model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
 ```
 
 #### Ollama Presets
@@ -227,7 +226,7 @@ import { Agent, BedrockModels, OllamaModels} from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'agent', {
   model: {
-    deployed: BedrockModels.DEFAULT, 
+    deployed: BedrockModels.BALANCED, 
     local: OllamaModels.SMALL,
   },
   systemPrompt: '...',
@@ -264,7 +263,7 @@ To see detailed health check logs, pass a logger with `info` level:
 import { Logger } from '@aws-blocks/bb-logger';
 
 const agent = new Agent(scope, 'agent', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: '...',
   logger: new Logger(scope, 'agent-log', { level: 'info' }),
 });
@@ -543,7 +542,7 @@ The Agent BB works without a frontend — for scripts, background jobs, or serve
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
 const agent = new Agent(scope, 'summarizer', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'Summarize the input concisely.',
 });
 
@@ -562,7 +561,7 @@ import { Agent, BedrockModels, InterruptError } from '@aws-blocks/bb-agent';
 import { z } from 'zod';
 
 const refundBot = new Agent(scope, 'refunds', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You process customer refund requests.',
   tools: (tool) => ({
     issueRefund: tool({
@@ -689,7 +688,7 @@ import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 const scope = new Scope('my-app');
 
 const agent = new Agent(scope, 'chat', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a helpful assistant.',
 });
 
@@ -753,7 +752,7 @@ const scope = new Scope('my-app');
 const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 const agent = new Agent(scope, 'support', {
-  model: { deployed: BedrockModels.DEFAULT },
+  model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a customer support agent. Look up orders and search documentation to help the user.',
   toolContextSchema: z.object({ userId: z.string() }),
   tools: (tool) => ({

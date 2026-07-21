@@ -48,9 +48,9 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * The agent does inference + tools only — no conversation history.
 	 */
 	inferenceOnly?: boolean;
-	model: {
-		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. */
-		deployed: ModelConfig | ModelConfig[];
+	model?: {
+		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. Defaults to BedrockModels.BALANCED. */
+		deployed?: ModelConfig | ModelConfig[];
 		/** Model(s) for local development. Tries candidates in order; canned is implicit last fallback. */
 		local?: ModelConfig | ModelConfig[];
 	};
@@ -251,7 +251,7 @@ export interface ToolCallRecord {
 
 export interface StreamOptions<TContext = DefaultToolContext> {
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. */
+	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
 	channelId?: string;
 	/** User ID for conversation scoping. Defaults to 'anonymous'. */
 	userId?: string;
@@ -264,14 +264,30 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 	context?: TContext;
 }
 
-/** Returned by stream(). Provides the channelId and server-side convenience methods. */
+/**
+ * Returned by stream(). Provides the channelId and server-side convenience methods.
+ *
+ * Safe to return directly from API methods — `toJSON()` serializes to
+ * `{ channelId, channel: null }`. Only `channelId` is meaningful client-side;
+ * `channel` is explicitly `null` to signal the live handle is server-side only,
+ * and the `complete()` helper is dropped (functions don't serialize).
+ */
 export interface AgentStreamResult {
 	/** Realtime channel ID where chunks are published. */
 	channelId: string;
-	/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
+	/**
+	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
+	 *
+	 * @remarks
+	 * Unlike `RealtimeChannel.toJSON()` which produces a hydratable descriptor, this is nulled
+	 * because it's a `Promise` that can't round-trip. Clients reconstruct a subscribe-only
+	 * channel from `channelId` via the `useChat` `subscribe` callback.
+	 */
 	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
 	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
 	complete: () => Promise<AgentStreamChunk>;
+	/** Only `{ channelId, channel: null }` is serialized when this object crosses the RPC boundary. */
+	toJSON(): { channelId: string; channel: null };
 }
 
 export interface AgentStreamChunk {
