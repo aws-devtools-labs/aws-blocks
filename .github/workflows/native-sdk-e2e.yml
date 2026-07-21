@@ -640,6 +640,27 @@ jobs:
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
           echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
 
+      - name: Warm up sandbox API
+        env:
+          BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
+        run: |
+          attempts=24
+          delay=2
+          for i in $(seq 1 "$attempts"); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              -X POST -H 'content-type: application/json' -d '{}' \
+              "$BLOCKS_URL" 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "✅ Sandbox API warm after $i attempt(s) (http=200)."
+              exit 0
+            fi
+            echo "⏳ attempt $i/$attempts: API not ready (http=$code); retrying in ${delay}s..."
+            sleep "$delay"
+            if [ "$delay" -lt 10 ]; then delay=$((delay + 2)); fi
+          done
+          echo "❌ Sandbox API did not return HTTP 200 after $attempts attempts."
+          exit 1
+
       - name: Generate OpenRPC spec
         working-directory: test-apps/native-bindings
         run: npm run spec
