@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // E2E variant: connectionArn comes from a secret() marker, resolved at synth
-// time from SSM (/hosting/secrets/CONNECTION_ARN) via Pipeline.create().
+// time from the default store (Secrets Manager) under the name
+// hosting/secrets/CONNECTION_ARN via Pipeline.create().
 
 import * as cdk from 'aws-cdk-lib';
 import { Pipeline, secret } from '@aws-blocks/core/cdk';

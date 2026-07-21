@@ -9,7 +9,7 @@
  * Two resolution strategies, chosen by where the marker appears:
  *
  *   • `compute.environment` (runtime, the secure default) — we inject the SSM
- *     parameter NAME (never the value) as `BLOCKS_SECRET_PARAM_<KEY>` and grant
+ *     parameter NAME (never the value) as `HOSTING_SECRET_PARAM_<KEY>` and grant
  *     the compute role `ssm:GetParameter` + `kms:Decrypt`. The value is fetched
  *     and decrypted on first use at runtime via `getSecret()`. The secret stays
  *     encrypted at rest; it never enters the CloudFormation template.

@@ -2150,6 +2150,32 @@ describe('_sourceOverride (internal test hook)', () => {
 				_setSynthSecretFetcher(null);
 			}
 		});
+
+		it('resolves connectionArn from the configured store + prefix (not the defaults)', async () => {
+			const app = new App();
+			// Capture the locator the resolver looks up, instead of bypassing it.
+			const seen: string[] = [];
+			_setSynthSecretFetcher(async (locator) => {
+				seen.push(locator);
+				return MOCK_CONNECTION_ARN;
+			});
+			try {
+				await Pipeline.create(
+					app,
+					'ConfiguredStorePipeline',
+					defaultPipelineProps({
+						source: { repo: MOCK_REPO, connectionArn: secret('CONNECTION_ARN') },
+						// The secrets prop must govern the connectionArn lookup too.
+						secrets: { store: 'ssm', prefix: '/myapp/secrets' },
+					}),
+				);
+				// SSM store keeps the leading-slash path form at the configured prefix —
+				// NOT the default Secrets-Manager slash-free 'hosting/secrets/...' name.
+				assert.deepStrictEqual(seen, ['/myapp/secrets/CONNECTION_ARN']);
+			} finally {
+				_setSynthSecretFetcher(null);
+			}
+		});
 	});
 
 	describe('buildSecrets', () => {

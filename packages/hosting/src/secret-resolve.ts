@@ -47,7 +47,7 @@ export type DomainNameInput = string | SecretValue | Array<string | SecretValue>
 export interface SecretResolveOptions {
 	/** SSM path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
 	prefix?: string;
-	/** Backing store. Default `'ssm'`. */
+	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'secrets-manager'`). */
 	store?: SecretStore;
 	/**
 	 * Optional environment segment (e.g. `'prod'`, `'beta'`, a PR id). When set,

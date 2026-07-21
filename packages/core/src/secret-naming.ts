@@ -6,7 +6,7 @@
  *
  * The secret *mechanism* (marker, runtime resolver, path/env naming) lives in
  * the framework-neutral `@aws-blocks/hosting` package, which defaults to a
- * neutral `/aws-hosting/secrets` prefix so a non-Blocks consumer (a plain
+ * neutral `/hosting/secrets` prefix so a non-Blocks consumer (a plain
  * framework app, a future standalone hosting package) never inherits Blocks
  * branding.
  *

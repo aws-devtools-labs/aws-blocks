@@ -282,7 +282,13 @@ async function resolveSourceSecrets<TConfig>(props: PipelineProps<TConfig>): Pro
 	const arn = props.source.connectionArn;
 	if (!isSecret(arn)) return props;
 
-	const resolved = await resolveSecretsAtSynth([arn.key]);
+	// Resolve from the SAME namespace/store the caller configured for
+	// buildSecrets — otherwise a `secrets: { store, prefix }` config would apply
+	// to buildSecrets but silently NOT to a secret() connectionArn.
+	const resolved = await resolveSecretsAtSynth([arn.key], {
+		prefix: props.secrets?.prefix,
+		store: props.secrets?.store,
+	});
 	const value = resolved.get(arn.key);
 	if (value === undefined) {
 		throw new Error(`Pipeline: connectionArn secret('${arn.key}') did not resolve.`);
