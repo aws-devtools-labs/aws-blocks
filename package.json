@@ -54,7 +54,8 @@
     "test-apps/auth-cognito-passkeys/aws-blocks",
     "test-apps/pipeline",
     "test-apps/db-pull-typecheck",
-    "scripts/agent-bench"
+    "scripts/agent-bench",
+    "test-apps/telemetry"
   ],
   "scripts": {
     "prepare": "husky && bash scripts/setup-git-secrets.sh",
@@ -88,6 +89,7 @@
     "monte-carlo:cached": "tsx scripts/monte-carlo.ts --cached",
     "canary": "tsx scripts/canary/run-canary.ts",
     "test:e2e:supabase": "node --test packages/bb-data/dist/crud/crud-e2e.test.js packages/bb-data/dist/crud/migrations-e2e.test.js",
+    "test:telemetry": "tsx test-apps/telemetry/test/telemetry-e2e.test.ts",
     "test:e2e:hosting-spa": "cd test-apps/hosting-spa && npm run test:e2e:sandbox",
     "test:e2e:hosting-ssr": "cd test-apps/hosting-ssr && npm run test:e2e:sandbox",
     "test:e2e:hosting-ssr-nuxt": "cd test-apps/hosting-ssr-nuxt && npm run test:e2e:sandbox",

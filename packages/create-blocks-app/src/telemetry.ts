@@ -9,15 +9,16 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, openSync, writeSync, closeSync, constants } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { debuglog } from 'node:util';
+
+const debug = debuglog('blocks-telemetry');
 
 const DEFAULT_ENDPOINT = 'https://blocks-telemetry.us-east-1.api.aws/metrics';
-const TIMEOUT_MS = 500;
 const TELEMETRY_VERSION = '1.0.0';
 
 const blocksVersion: string = JSON.parse(
@@ -61,7 +62,6 @@ function isTelemetryEnabled(): boolean {
     if (config.telemetry?.enabled === true) return true;
   } catch { /* no config */ }
 
-  if (isCI()) return false;
   return true;
 }
 
@@ -175,29 +175,26 @@ function sendEvent(event: Record<string, unknown>): void {
   try {
     const endpoint = process.env.BLOCKS_TELEMETRY_ENDPOINT || DEFAULT_ENDPOINT;
     const payload = JSON.stringify(event);
-    const url = new URL(endpoint);
-    const isHttps = url.protocol === 'https:';
-    const requestFn = isHttps ? httpsRequest : httpRequest;
 
-    const req = requestFn(
-      {
-        hostname: url.hostname,
-        port: url.port || (isHttps ? '443' : '80'),
-        path: url.pathname + url.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload),
-        },
-        timeout: TIMEOUT_MS,
-      },
-      (res) => { res.resume(); },
-    );
+    debug('sending event to %s (%d bytes)', endpoint, Buffer.byteLength(payload));
 
-    req.on('error', () => { /* silently swallow */ });
-    req.on('timeout', () => { req.destroy(); });
-    req.write(payload);
-    req.end();
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const workerPath = join(dir, 'telemetry-send-worker.js');
+    const child = spawn(process.execPath, [workerPath, endpoint], {
+      detached: true,
+      stdio: ['pipe', 'ignore', process.env.NODE_DEBUG?.includes('blocks-telemetry') ? 'inherit' : 'ignore'],
+      // Clear NODE_OPTIONS so inherited flags don't interfere
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+
+    child.stdin?.on('error', (err) => { debug('stdin write failed: %s', err.message); });
+    // Payload is small (<1KB JSON) so it fits in the kernel pipe buffer (~64KB)
+    // and survives the parent closing its fd on exit.
+    child.stdin?.write(payload);
+    child.stdin?.end();
+    child.on('error', (err) => { debug('spawn failed: %s', err.message); });
+    child.unref();
+    debug('spawned telemetry subprocess (pid=%d)', child.pid);
   } catch { /* telemetry must never throw */ }
 }
 
