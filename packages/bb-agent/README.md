@@ -20,14 +20,13 @@ const agent = new Agent(scope, 'support-agent', {
   systemPrompt: 'You are a helpful support agent.',
 });
 
-// Create a conversation and stream a response
+// Create a conversation and stream a response — iterate the chunks as they arrive
 const conversationId = await agent.createConversationId('user-123');
-const channel = await agent.getChannel(conversationId);
-const sub = channel.subscribe((chunk) => { /* handle chunk */ });
-await sub.established;
-const result = await agent.stream('Until when are you open tomorrow?', { conversationId, userId: 'user-123' });
-const done = await result.complete();
-console.log(done.text); // "We're open until 6pm tomorrow."
+let answer = '';
+for await (const chunk of agent.streamSSE('Until when are you open tomorrow?', { conversationId, userId: 'user-123' })) {
+  if (chunk.type === 'text-delta') answer += chunk.text;   // stream tokens as they arrive
+  if (chunk.type === 'done') console.log(answer);          // "We're open until 6pm tomorrow."
+}
 ```
 Uses [`BedrockModels.BALANCED`](#bedrock-presets) (Claude Sonnet 4.6) by default. See [Model Configuration](#model-configuration) for other presets, [Tools](#tools) for adding capabilities, and [Local Development](#local-development) for running without AWS Bedrock.
 
@@ -39,32 +38,20 @@ const agent = new Agent(scope, id, config)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `stream(message, options?)` | `Promise<AgentStreamResult>` | Submit a message. Returns immediately with `{ channelId, channel, complete }`. |
-| `resume(channelId, responses, options?)` | `Promise<void>` | Resume an interrupted agent with user responses. Chunks publish to the same channel. |
+| `streamSSE(message, options?)` | `AsyncGenerator<AgentStreamChunk>` | **Primary API.** Run a turn and yield chunks as they arrive. Iterate with `for await`. |
 | `createConversationId(userId)` | `Promise<string>` | Generate a new conversation ID (UUID). |
 | `getConversation(id, options?)` | `Promise<Message[]>` | Get messages in a conversation. Pass `{ limit }` for most recent N. |
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
 | `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
-| `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
+| `stream(message, options?)` | `AgentStreamResult` | **@deprecated** — compatibility wrapper over `streamSSE()`. Returns an async-iterable with a `complete()` helper. |
+| `resume(responses, options?)` | `AgentStreamResult` | **@deprecated** — resume an interrupted agent. Prefer `streamSSE('', { interruptResponses })`. |
 
-`stream()` submits the message to AsyncJob and returns immediately — no API Gateway timeout risk. The agent runs asynchronously and publishes chunks to Realtime. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
+`streamSSE()` runs a turn and yields `AgentStreamChunk`s (text deltas, tool calls, interrupts, and a terminal `done`) as they are produced — iterate it with `for await`. To resume after a human-in-the-loop approval, pass `interruptResponses` instead of a `message`.
 
-**Important: Subscribe before sending.** The agent starts emitting chunks immediately after `stream()` is called. If you subscribe to the channel after calling `stream()`, early chunks may be dropped. Always subscribe first, await `established`, then send:
+**Where the loop runs matters on AWS.** Calling `streamSSE()` directly runs the agent loop *in the current process*. In a Lambda-backed RPC handler that means a long turn is still bounded by the API-Gateway ~29s cap — fine for **local dev, headless scripts, and short turns**, but not for long-running/streaming agents. For the **browser** on AWS, use the [`useChat` hook](#client-hook--usechat) with `createAgentCoreWsTransport`: the loop runs inside the AgentCore Runtime and streams over a WebSocket, escaping the Lambda/API-Gateway limits. (The runtime drives the same `streamSSE()` internally — you don't call it from the browser.)
 
-```typescript
-// Correct: subscribe first, await established, then send
-const channel = await agent.getChannel(conversationId);
-const sub = channel.subscribe((chunk) => { /* handle chunk */ });
-await sub.established;
-await agent.stream(message, { conversationId, userId });
-
-// Wrong: send first, subscribe after — early chunks lost
-await agent.stream(message, { conversationId, userId });
-const channel = await agent.getChannel(conversationId); // too late!
-```
-
-The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
+> **Migrating from the Realtime/AsyncJob API?** `getChannel()` and `channel.subscribe()` are **removed** — iterate `streamSSE()` directly, or on the browser use [`useChat`](#client-hook--usechat). `stream()` and `resume()` still work but are **deprecated** wrappers over `streamSSE()`; note `resume()` **dropped its leading `channelId` argument**: `resume(channelId, responses, …)` → `resume(responses, { conversationId })`.
 
 ### Authorization (caller responsibility)
 
@@ -89,23 +76,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ### AgentStreamResult
 
-Returned by `stream()`. Provides the Realtime channel and convenience methods:
+Returned by the deprecated `stream()` / `resume()` wrappers. It's an async-iterable of `AgentStreamChunk` (iterate with `for await`) with one convenience method:
 
 | Property/Method | Type | Description |
 |--------|------|-------------|
-| `channelId` | `string` | Realtime channel where chunks are published. |
-| `channel` | `Promise<RealtimeChannel>` | Realtime channel handle — `await` it, then call `.subscribe(handler)`. |
-| `complete()` | `Promise<AgentStreamChunk>` | Wait for the done chunk (full text + token usage). |
+| `complete()` | `Promise<AgentStreamChunk>` | Drain the stream and resolve with the terminal `done` chunk (full text + token usage). Rejects on `error`; throws `InterruptError` on `interrupt`. |
+
+New code should iterate `streamSSE()` directly instead.
 
 ### AgentStreamChunk
 
-Each chunk published to the Realtime channel has a `type` and type-specific fields:
+Each chunk yielded by `streamSSE()` has a `type` and type-specific fields:
 
 | Type | Fields | Description |
 |------|--------|-------------|
 | `text-delta` | `text: string` | Incremental text token (in `'token'` streaming mode) or full block (in `'block'` mode). |
 | `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. |
-| `tool-result` | `toolName: string`, `text: string` | Tool returned a result. |
+| `tool-result` | `toolName: string` | Tool returned a result. (No `text` on this chunk — read the tool output from conversation history if needed.) |
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
 | `error` | `error: string` | Agent encountered an error. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
@@ -400,7 +387,7 @@ The callback form lets TypeScript infer each tool's `input` from its `parameters
 
 ### Tool Context — Scoping Tools to the Caller
 
-Tools often need request-scoped information (e.g. the authenticated `userId`). Pass a `context` object on each `stream()`/`resume()` call; it's forwarded to every tool invocation:
+Tools often need request-scoped information (e.g. the authenticated `userId`). Pass a `context` object on each `streamSSE()` call; it's forwarded to every tool invocation:
 
 ```typescript
 const agent = new Agent(scope, 'support', {
@@ -418,7 +405,9 @@ const agent = new Agent(scope, 'support', {
 });
 
 const user = await auth.getCurrentUser(requestContext);
-await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
+for await (const _ of agent.streamSSE(message, { conversationId, userId: user.userId, context: { userId: user.userId } })) {
+  // consume chunks (or forward them to the client)
+}
 ```
 
 To make context required and type-safe, declare a `toolContextSchema`:
@@ -441,7 +430,9 @@ const agent = new Agent(scope, 'support', {
 });
 
 // context is now required and validated — omitting it throws InvalidModelConfig
-await agent.stream(message, { conversationId, userId, context: { userId, tenantId } });
+for await (const _ of agent.streamSSE(message, { conversationId, userId, context: { userId, tenantId } })) {
+  // consume chunks
+}
 ```
 
 ### Using KnowledgeBase with the Agent
@@ -503,12 +494,18 @@ tools: (tool) => ({
   }),
 })
 ```
-When a tool is interrupted, the client receives an `interrupt` chunk. Resume with `agent.resume()`:
+When a tool is interrupted, the stream yields an `interrupt` chunk. Resume by streaming a new turn with `interruptResponses` and an empty `message`:
 
 ```typescript
-// Client receives: { type: 'interrupt', interrupts: [{ id, name, reason }] }
-// User approves → resume the agent:
-await agent.resume(channelId, [{ interruptId: interrupt.id, approved: true }], { conversationId, userId });
+// Stream yielded: { type: 'interrupt', interrupts: [{ id, name, reason }] }
+// User approves → resume the agent on the same conversation:
+for await (const chunk of agent.streamSSE('', {
+  conversationId,
+  userId,
+  interruptResponses: [{ interruptId: interrupt.id, response: 'yes' }], // 'yes' | 'no' | 'trust'
+})) {
+  // handle resumed chunks
+}
 ```
 
 **Interrupt chunk format:** `name` is `approve:${toolName}:${toolUseId}` and `reason` contains `{ tool: string, input: any, trustable: boolean }`. Use `reason.tool` for display and `reason.trustable` to decide whether to show a Trust button.
@@ -534,7 +531,7 @@ tools: (tool) => ({
 
 ## Headless Usage (No UI)
 
-The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client Hook — useChat](#client-hook--usechat).
+The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Iterate `streamSSE()` and read the terminal `done` chunk for the full response. For UI-based flows, see [Client Hook — useChat](#client-hook--usechat).
 
 ### Without tool approval
 
@@ -547,17 +544,17 @@ const agent = new Agent(scope, 'summarizer', {
 });
 
 const conversationId = await agent.createConversationId('system');
-const result = await agent.stream('Summarize this quarter earnings report...', { conversationId, userId: 'system' });
-const done = await result.complete();
-console.log(done.text);
+for await (const chunk of agent.streamSSE('Summarize this quarter earnings report...', { conversationId, userId: 'system' })) {
+  if (chunk.type === 'done') console.log(chunk.text);
+}
 ```
 
 ### With tool approval
 
-When tools have `needsApproval: true`, `complete()` throws an `InterruptError`. Handle it programmatically:
+When a tool has `needsApproval: true`, the stream yields an `interrupt` chunk instead of finishing. Answer the interrupts, then resume by streaming again with `interruptResponses`:
 
 ```typescript
-import { Agent, BedrockModels, InterruptError } from '@aws-blocks/bb-agent';
+import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 import { z } from 'zod';
 
 const refundBot = new Agent(scope, 'refunds', {
@@ -577,22 +574,24 @@ const refundBot = new Agent(scope, 'refunds', {
 });
 
 const conversationId = await refundBot.createConversationId('system');
-const result = await refundBot.stream('Refund order #456, item was damaged. Total was $75.', { conversationId, userId: 'system' });
+
+let message = 'Refund order #456, item was damaged. Total was $75.';
+let interruptResponses: Array<{ interruptId: string; response: string }> | undefined;
 
 while (true) {
-  try {
-    const done = await result.complete();
-    console.log(done.text);
-    break;
-  } catch (err) {
-    if (!(err instanceof InterruptError)) throw err;
-    // Auto-approve refunds under $100, reject larger ones
-    const responses = err.interrupts.map(i => ({
-      interruptId: i.id,
-      approved: i.reason?.input?.amount < 100,
-    }));
-    await refundBot.resume(result.channelId, responses, { conversationId, userId: 'system' });
+  let pending: Array<{ id: string; reason?: any }> | undefined;
+  for await (const chunk of refundBot.streamSSE(message, { conversationId, userId: 'system', interruptResponses })) {
+    if (chunk.type === 'done') console.log(chunk.text);
+    if (chunk.type === 'interrupt') pending = chunk.interrupts;
   }
+  if (!pending) break; // finished with no interrupt
+
+  // Auto-approve refunds under $100, reject larger ones. Resume with an empty message.
+  message = '';
+  interruptResponses = pending.map((i) => ({
+    interruptId: i.id,
+    response: i.reason?.input?.amount < 100 ? 'yes' : 'no',
+  }));
 }
 ```
 
@@ -607,9 +606,9 @@ const classifier = new Agent(scope, 'classifier', {
   systemPrompt: 'Classify the sentiment of the input as positive, negative, or neutral.',
 });
 
-const result = await classifier.stream('I love this product!');
-const done = await result.complete();
-console.log(done.text); // "positive"
+for await (const chunk of classifier.streamSSE('I love this product!')) {
+  if (chunk.type === 'done') console.log(chunk.text); // "positive"
+}
 ```
 ## Local Development
 
@@ -646,22 +645,21 @@ The CannedProvider is a custom Strands model provider that requires no network o
 
 ## Client Hook — `useChat`
 
-Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
+Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming, and interrupt handling. You give it two things: an `api` object with a few conversation methods, and a **`streamChunks`** function that yields the chunks for a turn.
 
 ```typescript
-import { useChat } from '@aws-blocks/bb-agent/client';
+import { useChat, createAgentCoreWsTransport } from '@aws-blocks/bb-agent/client';
 
 const chat = useChat({
   api: {
-    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
-    createConversation: () => api.createConversation(userId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
-    resume: (chId, responses, convId) => api.resume(chId, responses, convId),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id), // optional — for reload support
   },
-  subscribe: async (channelId, handler) => {
-    const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
-  },
+  // Where the chunks come from. On AWS, stream directly from the AgentCore Runtime over a
+  // WebSocket — the transport fetches the endpoint + token from your backend, opens the socket,
+  // and yields chunks. See "Full Examples" below for the backend method it calls.
+  streamChunks: createAgentCoreWsTransport((args) => api.getStreamEndpoint(args.conversationId)),
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
   onInterrupt: (interrupts) => showApprovalUI(interrupts),
@@ -670,6 +668,8 @@ const chat = useChat({
 await chat.sendMessage('Hello!');
 await chat.respondToInterrupt([{ interruptId: 'x', approved: true }]);
 ```
+
+`streamChunks` is the single seam that decides *how* chunks are delivered. Use `createAgentCoreWsTransport` for the browser-direct WebSocket path on AWS, or supply your own async generator (e.g. wrapping a buffered RPC) for local/simple cases — `useChat` doesn't care which.
 
 **Note:** `useChat` is a factory function, not a React hook. Call it **once** (e.g., outside a component or in a ref) — not on every render. It returns a mutable singleton. Message history only includes `user`, `assistant`, and `approval` messages — tool-call/tool-result internals are filtered for UI clarity. Use `getConversation()` directly if you need the full history.
 
@@ -684,27 +684,45 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 
 const scope = new Scope('my-app');
 
+const auth = new AuthCognito(scope, 'auth', { /* pool config */ });
+
 const agent = new Agent(scope, 'chat', {
+  auth,                                     // gives the runtime a JWT authorizer
   model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a helpful assistant.',
 });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async createConversation(userId: string) {
-    return { conversationId: await agent.createConversationId(userId) };
+  async createConversation() {
+    const user = await auth.requireAuth(context);
+    return { conversationId: await agent.createConversationId(user.userId) };
   },
-  async sendMessage(conversationId: string, message: string, channelId: string, userId: string) {
-    await agent.stream(message, { conversationId, channelId, userId });
-  },
+  // Verify ownership before reading — getConversation/getPendingInterrupts take only an id
+  // and don't authorize the caller (see "Authorization (caller responsibility)" above).
   async getConversation(conversationId: string) {
-    const messages = await agent.getConversation(conversationId);
-    return { messages };
+    const user = await auth.requireAuth(context);
+    const owned = await agent.listConversations(user.userId);
+    if (!owned.some((c) => c.conversationId === conversationId)) throw new Error('Not found');
+    return { messages: await agent.getConversation(conversationId) };
   },
-  async getChannel(channelId: string) {
-    return agent.getChannel(channelId);
+  async getPendingInterrupts(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const owned = await agent.listConversations(user.userId);
+    if (!owned.some((c) => c.conversationId === conversationId)) throw new Error('Not found');
+    return { interrupts: await agent.getPendingInterrupts(conversationId) };
+  },
+  // The browser calls this to learn where to stream. It pairs the Agent's endpoint with a
+  // short-lived JWT from the auth BB. userId comes from the authenticated session, not the
+  // client, so a caller can't stream as someone else.
+  async getStreamEndpoint(conversationId?: string) {
+    const user = await auth.requireAuth(context);
+    const endpoint = await agent.getStreamEndpoint({ conversationId });
+    const token = await auth.getAgentCoreToken(context);
+    return { ...endpoint.toJSON(), token, userId: user.userId };
   },
 }));
 ```
@@ -712,28 +730,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 **Frontend** (`app.ts`):
 
 ```typescript
-import { useChat } from '@aws-blocks/bb-agent/client';
-
-const userId = getCurrentUserId();
+import { useChat, createAgentCoreWsTransport } from '@aws-blocks/bb-agent/client';
 
 const chat = useChat({
   api: {
-    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId, userId),
-    createConversation: () => api.createConversation(userId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id),
   },
-  subscribe: async (channelId, handler) => {
-    const channel = await api.getChannel(channelId);
-    return channel.subscribe(handler);
-  },
+  // Opens a WebSocket straight to the AgentCore Runtime and yields chunks as they arrive.
+  streamChunks: createAgentCoreWsTransport(({ conversationId }) => api.getStreamEndpoint(conversationId)),
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
 });
 
-// Send a message — useChat handles subscribe-before-send automatically
+// Send a message — chunks stream in via onMessagesChange
 await chat.sendMessage('Hello!');
 
-// Load an existing conversation (subscribes first, then backfills history)
+// Load an existing conversation (backfills history, surfaces any pending interrupt)
 await chat.loadConversation('conv-123');
 ```
 
@@ -770,18 +784,9 @@ const agent = new Agent(scope, 'support', {
     }),
   }),
 });
-
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async chat(message: string, conversationId: string) {
-    const user = await auth.getCurrentUser(context);
-    return await agent.stream(message, {
-      conversationId,
-      userId: user.userId,
-      context: { userId: user.userId },
-    });
-  },
-}));
 ```
+
+To wire this agent to a frontend, see [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the `useChat` hook streams responses and handles interrupts. Pass the authenticated `userId` as tool `context` so `getOrder` is scoped to the caller.
 
 
 ## Best Practices
@@ -797,21 +802,18 @@ The Agent BB composes several internal Building Blocks automatically:
 
 | BB | AWS Resource | Purpose |
 |----|-------------|---------|
-| `FileBucket` | S3 | Session snapshot storage (Strands agent state between turns) |
+| AgentCore `Runtime` | Bedrock AgentCore | Hosts and runs the agent; streams to the browser directly |
+| `FileBucket` | S3 | Session snapshot storage (agent state between turns) |
 | `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
-| `Realtime` | API Gateway WebSocket | Streaming chunks to connected clients |
-| `AsyncJob` | SQS + Lambda | Runs the agent asynchronously (no API Gateway timeout) |
 
 When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
 
 ## Scaling & Cost (AWS)
 
+- **Agent runtime:** Bedrock AgentCore — billed for active compute while a turn runs; sessions can stay warm and live up to 8 hours (no 15-minute Lambda ceiling). See [AgentCore pricing](https://aws.amazon.com/bedrock/pricing/).
 - **Model:** Bedrock pay-per-token pricing. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
 - **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
-- **Async execution:** SQS (AsyncJob) — $0.40 per million messages.
-- **Streaming:** AppSync Events (Realtime) — $1.00 per million connection minutes.
-- **No timeout limit:** Agent runs in AsyncJob consumer Lambda (up to 15 min), not behind API Gateway.
 
 ## Troubleshooting
 
