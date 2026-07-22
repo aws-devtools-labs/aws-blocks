@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { PageData } from './$types';
-  // Frozen at build time via the prerendered load (see +page.ts). A fresh
+  // Frozen at build time via the prerendered load (see +page.server.ts). A fresh
   // timestamp on reload would mean the SSR Lambda is re-rendering instead of S3
   // serving the frozen prerender — this value must never change between reloads.
   let { data }: { data: PageData } = $props();
