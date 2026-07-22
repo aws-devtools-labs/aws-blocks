@@ -14,6 +14,8 @@ import {
   sveltekitAdapter,
   prerenderedDestRelPath,
   VERIFIED_SVELTEKIT_RANGE,
+  detectPackageManagerInstall,
+  detectPackageManagerRun,
 } from './sveltekit.js';
 
 /**
@@ -381,6 +383,34 @@ void describe('sveltekitAdapter — bridge guards (build path)', () => {
     );
   });
 
+  void it('rejects a community adapter that does not match @sveltejs/adapter-* (svelte-adapter-bun)', () => {
+    // Community/local adapters miss the package-scoped regex; the kit.adapter
+    // wiring must still be caught rather than silently bridged.
+    scaffoldProject();
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      `import adapter from 'svelte-adapter-bun';\n` +
+        `export default { kit: { adapter: adapter() } };\n`,
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitIncompatibleAdapterError/,
+    );
+  });
+
+  void it('rejects a monorepo-local adapter wired via kit.adapter', () => {
+    scaffoldProject();
+    fs.writeFileSync(
+      path.join(tmp, 'svelte.config.js'),
+      `import adapter from '../../tools/my-adapter/index.js';\n` +
+        `export default { kit: { adapter: adapter() } };\n`,
+    );
+    assert.throws(
+      () => sveltekitAdapter({ projectDir: tmp }),
+      /SvelteKitIncompatibleAdapterError/,
+    );
+  });
+
   void it('is not fooled by a commented-out adapter-node import with an active incompatible adapter', () => {
     // A stale adapter-node comment must NOT make the guard think adapter-node is
     // wired; the active adapter-cloudflare import must still be rejected.
@@ -484,10 +514,85 @@ void describe('prerenderedDestRelPath — flat → directory-index normalization
       'data/feed.json',
     );
   });
+  void it('normalizes a NESTED page named 404/500 (only ROOT error pages stay flat)', () => {
+    // A nested `blog/404.html` is a regular prerendered page named "404", not
+    // the CloudFront error document, so it must normalize to directory-index
+    // form — otherwise the router's `/blog/404` → `blog/404/index.html` 404s.
+    assert.equal(
+      prerenderedDestRelPath('blog/404.html'),
+      'blog/404/index.html',
+    );
+    assert.equal(
+      prerenderedDestRelPath('docs/500.html'),
+      'docs/500/index.html',
+    );
+  });
 });
 
 void describe('sveltekitAdapter — version pin', () => {
   void it('exports a bounded verified range', () => {
     assert.match(VERIFIED_SVELTEKIT_RANGE, /</);
+  });
+});
+
+void describe('package-manager detection (install + run)', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sveltekit-pm-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeLock = (name: string): void => {
+    fs.writeFileSync(path.join(tmp, name), '');
+  };
+
+  void it('pnpm lockfile → dev install with -D and run via `pnpm run`', () => {
+    writeLock('pnpm-lock.yaml');
+    const install = detectPackageManagerInstall(tmp, 'pkg@1');
+    assert.equal(install.command, 'pnpm');
+    assert.ok(install.args.includes('-D'), 'pnpm install uses -D');
+    assert.deepEqual(detectPackageManagerRun(tmp, 'build'), [
+      'pnpm',
+      'run',
+      'build',
+    ]);
+  });
+
+  void it('yarn lockfile → dev install with --dev and run via `yarn <script>`', () => {
+    writeLock('yarn.lock');
+    const install = detectPackageManagerInstall(tmp, 'pkg@1');
+    assert.equal(install.command, 'yarn');
+    assert.ok(install.args.includes('--dev'), 'yarn install uses --dev');
+    assert.deepEqual(detectPackageManagerRun(tmp, 'build'), ['yarn', 'build']);
+  });
+
+  void it('bun lockfile → dev install with -d and run via `bun run`', () => {
+    writeLock('bun.lockb');
+    const install = detectPackageManagerInstall(tmp, 'pkg@1');
+    assert.equal(install.command, 'bun');
+    assert.ok(install.args.includes('-d'), 'bun install uses -d');
+    assert.deepEqual(detectPackageManagerRun(tmp, 'build'), [
+      'bun',
+      'run',
+      'build',
+    ]);
+  });
+
+  void it('bun.lock (text lockfile) is also detected as bun', () => {
+    writeLock('bun.lock');
+    assert.equal(detectPackageManagerInstall(tmp, 'pkg@1').command, 'bun');
+  });
+
+  void it('no lockfile → npm with --save-dev and run via `npm run`', () => {
+    const install = detectPackageManagerInstall(tmp, 'pkg@1');
+    assert.equal(install.command, 'npm');
+    assert.ok(install.args.includes('--save-dev'), 'npm install uses --save-dev');
+    assert.deepEqual(detectPackageManagerRun(tmp, 'build'), [
+      'npm',
+      'run',
+      'build',
+    ]);
   });
 });

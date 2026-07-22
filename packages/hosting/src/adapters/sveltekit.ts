@@ -304,24 +304,34 @@ const svelteConfigUsesAdapterNode = (projectDir: string): boolean => {
 };
 
 /**
- * Throw when the `svelte.config.*` wires an official SvelteKit adapter that is
- * NOT `@sveltejs/adapter-node`. The bridge only knows how to force adapter-node;
- * running it against, say, `@sveltejs/adapter-cloudflare` or
- * `@sveltejs/adapter-static` would silently overwrite a deliberate
- * deployment-target choice (the only signal being a stderr line emitted inside
- * the build subprocess, after the swap has already happened). A text scan (not
- * a module load) so it works before deps are installed and without evaluating
- * the config's adapter imports. adapter-node itself, or no adapter at all,
- * passes through to the normal bridge decision.
+ * Throw when the `svelte.config.*` wires ANY SvelteKit adapter that is NOT
+ * `@sveltejs/adapter-node`. The bridge only knows how to force adapter-node;
+ * running it against, say, `@sveltejs/adapter-cloudflare`, a community adapter
+ * (`svelte-adapter-bun`, `svelte-kit-sst`), or a monorepo-local adapter would
+ * silently overwrite a deliberate deployment-target choice (the only signal
+ * being a stderr line emitted inside the build subprocess, after the swap has
+ * already happened).
+ *
+ * Detection keys off BOTH an official `@sveltejs/adapter-*` import AND a
+ * `kit.adapter` field assignment — the latter is what catches community/local
+ * adapters that the package-scoped regex misses, which is exactly the
+ * silent-swap case this guard exists to prevent. A text scan (not a module
+ * load) so it works before deps are installed and without evaluating the
+ * config's adapter imports; comments are stripped first. adapter-node itself,
+ * or no adapter wired at all, passes through to the normal bridge decision.
  */
 const assertNoIncompatibleAdapter = (projectDir: string): void => {
   const configPath = findSvelteConfigPath(projectDir);
   if (!configPath) return;
-  // Comments stripped so a commented-out adapter import is neither counted as
-  // an incompatible adapter nor as an adapter-node "escape hatch".
+  // Comments stripped so a commented-out adapter import/wiring is neither
+  // counted as an incompatible adapter nor as an adapter-node "escape hatch".
   const src = readSvelteConfigSource(configPath);
-  const referencesAnyAdapter = /@sveltejs\/adapter-/.test(src);
-  if (referencesAnyAdapter && !svelteConfigUsesAdapterNode(projectDir)) {
+  // "An adapter is wired" = an official `@sveltejs/adapter-*` import OR a
+  // `kit.adapter: <value>` assignment (the `[^,}\s]` requires a real value, so
+  // a bare `adapter:` with nothing after it doesn't count).
+  const wiresAdapter =
+    /@sveltejs\/adapter-/.test(src) || /\badapter\s*:\s*[^,}\s]/.test(src);
+  if (wiresAdapter && !svelteConfigUsesAdapterNode(projectDir)) {
     throw new HostingError('SvelteKitIncompatibleAdapterError', {
       message: `Your ${path.basename(
         configPath,
@@ -454,8 +464,9 @@ const detectPackageManager = (projectDir: string): PackageManager => {
  * The install command for a dev-dependency spec. @sveltejs/adapter-node is a
  * dev dependency in every SvelteKit project, so each manager's dev flag is
  * passed — without it pnpm/yarn/bun would add it to `dependencies`.
+ * @internal exported for unit testing the per-manager dev-flag mapping.
  */
-const detectPackageManagerInstall = (
+export const detectPackageManagerInstall = (
   projectDir: string,
   packageSpec: string,
 ): { command: string; args: string[] } => {
@@ -484,8 +495,9 @@ const detectPackageManagerInstall = (
 /**
  * The command to run a package.json `scripts` entry via the detected manager.
  * `npm run <s>` / `pnpm run <s>` / `yarn <s>` / `bun run <s>`.
+ * @internal exported for unit testing the per-manager run mapping.
  */
-const detectPackageManagerRun = (
+export const detectPackageManagerRun = (
   projectDir: string,
   script: string,
 ): string[] => {
@@ -713,11 +725,16 @@ const mergePrerenderedIntoClient = (
 export const prerenderedDestRelPath = (rel: string): string => {
   const normalized = rel.replace(/\\/g, '/');
   const base = normalized.split('/').pop() ?? normalized;
-  // Non-HTML asset, root index, an already-index file, or an error page → as-is.
+  const isTopLevel = !normalized.includes('/');
+  // Non-HTML asset, root index, an already-index file, or a ROOT error page →
+  // as-is. The error-page exemption is root-only: a nested `blog/404.html` is a
+  // regular prerendered page named "404", not the CloudFront error document, so
+  // it must still normalize to `blog/404/index.html` — otherwise the router's
+  // `/blog/404` → `blog/404/index.html` lookup 404s.
   if (
     !base.endsWith('.html') ||
     base === 'index.html' ||
-    FLAT_HTML_NAMES.has(base)
+    (isTopLevel && FLAT_HTML_NAMES.has(base))
   ) {
     return normalized;
   }
