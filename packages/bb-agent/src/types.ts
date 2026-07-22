@@ -105,6 +105,18 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * Ignored by the mock and browser runtimes.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * CDK-only. An auth BB (AuthCognito / AuthOIDC) whose JWT the AgentCore Runtime should
+	 * validate on the streaming endpoint. When provided, the runtime uses a JWT authorizer
+	 * (Cognito user-pool / OIDC discovery); when omitted it defaults to IAM (SigV4).
+	 * Ignored by the mock, aws-runtime, and browser layers.
+	 */
+	auth?: unknown;
+	/**
+	 * CDK-only. Path to a pre-built AgentCore code-asset directory. When omitted, the CDK
+	 * layer co-bundles the app backend at synth time. Ignored by non-CDK layers.
+	 */
+	agentcoreAssetPath?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }

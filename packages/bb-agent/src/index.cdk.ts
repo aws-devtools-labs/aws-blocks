@@ -17,6 +17,7 @@ import {
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 import { conversationSchema, messageSchema } from './schemas.js';
+import type { AgentConfig } from './types.js';
 
 export { AgentErrors } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
@@ -30,7 +31,7 @@ export class Agent extends Scope {
 	 * TODO: scope Bedrock IAM grant to specific modelId from config
 	 * TODO: guardrails CDK provisioning
 	 */
-	constructor(scope: ScopeParent, id: string, config?: any) {
+	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
 		super(id, { parent: scope });
 
 		this.handler.addToRolePolicy(
