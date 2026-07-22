@@ -35,6 +35,12 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   backendCDKPath: join(__dirname, 'index.ts'),
 });
 
+// Tag for the scheduled stack janitor (cleanup-stacks.yml). It only deletes
+// stacks tagged blocks:purpose=e2e-*, so without this a leaked per-run sandbox
+// (failed `npm run destroy`) matches the bb-test- prefix but is skipped and
+// accumulates forever. Mirrors every other e2e test-app's index.cdk.ts.
+cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-native-bindings');
+
 // E2E stacks must be fully deletable so the CI teardown (`npm run destroy`)
 // can't leave a stuck DELETE_FAILED stack or deletion-protected resources behind.
 RemovalPolicies.of(blocksStack).destroy();
