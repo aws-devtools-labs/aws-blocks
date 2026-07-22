@@ -167,7 +167,7 @@ await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via Grou
 ```
 
 - **Compile-time gate.** Without an `admin` options object, `auth.admin` is typed `AdminDisabled` and any access is a compile error whose message names the fix (`construct AuthCognito with { admin: {} }`). The getter also throws at runtime for untyped JS callers.
-- **`actions` scopes the IAM grant, not the method set.** `actions: ['groups']` grants only the group `Admin*` actions; `['lifecycle']` only the user-lifecycle actions; omitted grants both. The **typed surface is always the full set** — narrowing the method types by `actions` is not possible without breaking `AuthCognito<O>` variance, so calling a method whose action wasn't granted fails at runtime with an IAM `AccessDenied`.
+- **`actions` scopes both the IAM grant and the typed method set.** `actions: ['groups']` grants only the group `Admin*` actions and makes only the group methods typecheck; `['lifecycle']` only the user-lifecycle actions/methods; omitted grants both. The method gate lives in a trailing parameter position (`AdminActionGate`), so calling a method whose action wasn't granted is a **compile error** while `AuthCognito<O>` stays covariant in `O`. Untyped JS callers that reach past the gate additionally fast-fail at runtime with a clear error rather than a cryptic AWS `AccessDenied`.
 - **Not an access boundary.** Like every block on the shared backend Lambda, client and admin run under one role. Separation is by API surface + lint, not IAM — gate every admin route with `requireRole`.
 
 **Group membership** (`actions: 'groups'`):
@@ -187,7 +187,7 @@ await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via Grou
 | `admin.deleteUser(username)` | `Promise<void>` | Delete a user (also strips them from every group). |
 | `admin.disableUser(username)` / `admin.enableUser(username)` | `Promise<void>` | Toggle sign-in. A disabled user's `signIn` is rejected with `NotAuthorizedException`. |
 | `admin.resetUserPassword(username)` | `Promise<void>` | Force the user to set a new password on next sign-in. |
-| `admin.setUserPassword(username, password, permanent)` | `Promise<void>` | Set a password. `permanent: true` clears the force-change flag. |
+| `admin.setUserPassword(username, password, { permanent })` | `Promise<void>` | Set a password. `permanent: true` clears the force-change flag. |
 | `admin.getUser(username)` | `Promise<AdminUser \| null>` | Look up a user, or `null` if absent. |
 | `admin.scan()` | `AsyncIterable<AdminUser>` | Enumerate all users (paginates internally). |
 | `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke the user's refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: delete session records). New tokens can no longer be minted; see the session-freshness note for when this takes effect. |
