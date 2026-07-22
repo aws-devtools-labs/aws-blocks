@@ -17,6 +17,7 @@ import { checkModelHealth, createStrandsModel } from './model-factory.js';
 import { conversationSchema, messageSchema } from './schemas.js';
 import type {
 	AgentConfig,
+	AgentCoreStreamResult,
 	AgentStreamChunk,
 	AgentStreamResult,
 	AgentTool,
@@ -774,5 +775,18 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (toDelete.length > 0) await this.messages.deleteBatch(toDelete);
 		// Delete agent session data
 		await this.snapshotStorage.deleteSession({ sessionId: id });
+	}
+
+	/**
+	 * Return the AgentCore Runtime endpoint the browser should open a WebSocket to for direct
+	 * streaming. AWS-only: only meaningful once the agent runs on a deployed AgentCore Runtime,
+	 * so the AWS runtime (`agent.aws.ts`) overrides this. The base/mock throws — locally there is
+	 * no runtime to connect to; use the dev-server SSE route (registerDevAttachment) instead.
+	 */
+	async getStreamEndpoint(_options?: { conversationId?: string }): Promise<AgentCoreStreamResult> {
+		throw blocksAgentError(
+			AgentErrors.StreamFailed,
+			'getStreamEndpoint() is only available on the deployed (AWS) Agent runtime. Locally, stream via the dev-server route instead.',
+		);
 	}
 }

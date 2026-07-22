@@ -38,12 +38,16 @@ Two storage backends, same FileBucket BB:
 
 The CDK class mirrors the runtime's BB creation:
 - **Bedrock IAM:** `InvokeModel` + `InvokeModelWithResponseStream` on all foundation models and inference profiles
-- **FileBucket:** `${id}-sessions` — session snapshot storage
-- **DistributedTable:** `${id}-messages` — conversation history (only when `inferenceOnly: false`)
-- **Realtime:** `${id}-rt` — streaming namespace `chunks`
-- **AsyncJob:** `${id}-job` — job payload: `{ message, conversationId?, channelId }`
+- **FileBucket:** `${id}-sn` — session snapshot storage
+- **DistributedTable ×2:** `${id}-convos` + `${id}-messages` — conversation + message history (only when `inferenceOnly: false`)
+- **AgentCore `Runtime`:** hosts the agent loop, co-bundled at synth time from the app backend (`agentcore-bundle.ts`). Replaces the former Lambda + SQS (AsyncJob) + AppSync/Realtime streaming side-channel, which are no longer provisioned.
 
 > **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
+
+## Streaming: layer / parity notes
+
+- **`getStreamEndpoint()` is AWS-only by design.** It returns the deployed AgentCore Runtime endpoint the browser streams to; the base/mock implementation throws a clear error. This is an intentional parity choice, not a silent gap: locally there is no runtime to connect to, so streaming goes through the dev-server SSE route registered via `registerDevAttachment('@aws-blocks/bb-agent/dev-stream')`. The method exists on every layer (defined on `AgentBase`) so it type-checks everywhere; only the deployed runtime returns a real endpoint.
+- **Body-supplied `userId` on the AgentCore invocation path is unauthenticated at this layer.** The `/invocations` handler reads `userId` from the request body, which scopes conversation persistence. Invocation itself is gated by the runtime's **authorizer** (IAM SigV4, or a JWT authorizer when an auth BB is wired). Server-verified identity — deriving `userId` from the validated JWT's `sub` claim so a caller cannot claim another user's history — is added with the browser-WebSocket / JWT-forwarding work. **Do not expose the runtime to untrusted callers without an authorizer.**
 
 ## Model Providers
 
