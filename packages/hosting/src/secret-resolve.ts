@@ -24,6 +24,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import { HostingError } from './hosting_error.js';
 import {
 	DEFAULT_SECRET_PARAMETER_PREFIX,
 	DEFAULT_SECRET_STORE,
@@ -74,10 +75,10 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 	for (const [key, value] of Object.entries(environment ?? {})) {
 		if (isSecret(value)) {
 			if (value.key !== key) {
-				throw new Error(
-					`Hosting environment '${key}': secret key '${value.key}' must match ` +
-						`the environment variable name. Use ${key}: secret('${key}').`,
-				);
+				throw new HostingError('SecretKeyMismatchError', {
+					message: `Hosting environment '${key}': secret key '${value.key}' must match the environment variable name.`,
+					resolution: `Use a matching key: ${key}: secret('${key}').`,
+				});
 			}
 			(value.exposeAsEnv ? exposeSecrets : runtimeSecrets).push(value);
 		} else {
@@ -135,10 +136,10 @@ export async function resolveSecretsAtSynth(
 			} catch (error: unknown) {
 				if (!isNotFound(error)) throw error;
 				if (!fallback) {
-					throw new Error(
-						`Hosting: secret '${key}' is referenced (domain or exposeAsEnv) but ` +
-							`not set. Set it before deploying:\n  secret set ${key} <value>`,
-					);
+					throw new HostingError('UnresolvedSecretError', {
+						message: `secret '${key}' is referenced (domain or exposeAsEnv) but not set.`,
+						resolution: `Set it before deploying:\n  secret set ${key} <value>`,
+					});
 				}
 			}
 			// Fallback attempt (only reached when stage-specific was not found).
@@ -146,11 +147,12 @@ export async function resolveSecretsAtSynth(
 				resolved.set(key, await fetcher(fallback));
 			} catch (error: unknown) {
 				if (isNotFound(error)) {
-					throw new Error(
-						`Hosting: secret '${key}' is referenced (domain or exposeAsEnv) but ` +
-							`set for neither stage '${stage}' nor the shared default. Set it before deploying:\n` +
+					throw new HostingError('UnresolvedSecretError', {
+						message: `secret '${key}' is referenced (domain or exposeAsEnv) but set for neither stage '${stage}' nor the shared default.`,
+						resolution:
+							`Set it before deploying:\n` +
 							`  secret set ${key} <value> --stage ${stage}   # or the shared:  secret set ${key} <value>`,
-					);
+					});
 				}
 				throw error;
 			}
@@ -165,10 +167,10 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
 		if (!isSecret(name)) return name;
 		const value = resolved.get(name.key);
 		if (value === undefined) {
-			throw new Error(
-				`Hosting: domain secret('${name.key}') requires async resolution. ` +
-					`Construct with the async create() path.`,
-			);
+			throw new HostingError('UnresolvedSecretError', {
+				message: `domain secret('${name.key}') requires async resolution.`,
+				resolution: 'Construct with the async create() path (e.g. Hosting.create).',
+			});
 		}
 		return value;
 	});
@@ -184,6 +186,15 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * so the runtime resolver can fall back to the shared value when the stage has
  * none set. Without a `stage`, only the single shared locator is wired
  * (unchanged behavior).
+ *
+ * ⚠️ **Shared-fallback trust model.** When a `stage` is set, the compute role is
+ * granted standing `GetSecretValue`/`GetParameter` on the shared fallback ARN —
+ * the two-try fallback is application logic, not an IAM boundary, so a handler
+ * in *any* stage (including an ephemeral PR/preview deploy) can read the shared
+ * value directly. Treat the shared slot as a **safe default for all stages**
+ * (e.g. a test/sandbox credential), never a production secret. Give production
+ * its own stage-scoped value (`secret set KEY <prod-value> --stage prod`) so it
+ * is never reachable from a preview stage's role.
  */
 export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, options: SecretResolveOptions = {}): void {
 	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
@@ -201,18 +212,19 @@ export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, opti
 	if (store !== 'ssm') fn.addEnvironment(`${secretEnvVarName(key)}_STORE`, store);
 	if (fallback) fn.addEnvironment(secretFallbackEnvVarName(key), fallback);
 
-	// Grant read+decrypt on every locator the runtime might read (primary +
-	// fallback), deduped.
+	// Read grant on every locator the runtime might read (primary + fallback),
+	// deduped. The KMS Decrypt grant is emitted separately, once, by
+	// grantKmsDecrypt — it's identical for every secret in the same store, so
+	// per-locator statements would just be duplicates bloating the inline policy.
 	const locators = [...new Set([primary, ...(fallback ? [fallback] : [])])];
 	for (const locator of locators) {
 		grantSecretRead(fn, locator, store);
 	}
+	grantKmsDecrypt(fn, store);
 }
 
-/** Grant a Lambda role least-priv read+decrypt on one secret locator. */
+/** Grant a Lambda role least-priv READ on one secret locator (no KMS — see {@link grantKmsDecrypt}). */
 function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: SecretStore): void {
-	const region = cdk.Stack.of(fn).region;
-
 	if (store === 'secrets-manager') {
 		// SM appends a random 6-char suffix to the ARN; match with `-??????`
 		// (Secrets Manager's own recommended wildcard) so the grant scopes to
@@ -226,13 +238,6 @@ function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: Se
 		fn.addToRolePolicy(
 			new iam.PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [secretArn] }),
 		);
-		fn.addToRolePolicy(
-			new iam.PolicyStatement({
-				actions: ['kms:Decrypt'],
-				resources: ['*'],
-				conditions: { StringEquals: { 'kms:ViaService': `secretsmanager.${region}.amazonaws.com` } },
-			}),
-		);
 		return;
 	}
 
@@ -243,14 +248,37 @@ function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: Se
 		resourceName: locator.replace(/^\//, ''),
 	});
 	fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [parameterArn] }));
+}
+
+/**
+ * Grant `kms:Decrypt` for a store's service-default key, once per (function,
+ * store). The statement is identical for every secret read through the same
+ * store — `Resource: '*'` scoped by `kms:ViaService` — so emitting it per
+ * locator would append 2N duplicate statements and push the inline policy
+ * toward the 10 KB limit. Idempotent: tracks what it has already granted on the
+ * function so repeat calls (multiple secrets, same store) are no-ops.
+ */
+function grantKmsDecrypt(fn: cdk.aws_lambda.Function, store: SecretStore): void {
+	const region = cdk.Stack.of(fn).region;
+	const viaService =
+		store === 'secrets-manager' ? `secretsmanager.${region}.amazonaws.com` : `ssm.${region}.amazonaws.com`;
+
+	const granted = (kmsDecryptGranted.get(fn) ?? new Set<string>());
+	if (granted.has(viaService)) return;
+	granted.add(viaService);
+	kmsDecryptGranted.set(fn, granted);
+
 	fn.addToRolePolicy(
 		new iam.PolicyStatement({
 			actions: ['kms:Decrypt'],
 			resources: ['*'],
-			conditions: { StringEquals: { 'kms:ViaService': `ssm.${region}.amazonaws.com` } },
+			conditions: { StringEquals: { 'kms:ViaService': viaService } },
 		}),
 	);
 }
+
+/** Per-function set of `kms:ViaService` values already granted (dedupe key). */
+const kmsDecryptGranted = new WeakMap<cdk.aws_lambda.Function, Set<string>>();
 
 // ── SDK seam (store-aware; overridable for tests) ───────────────────────────
 

@@ -196,6 +196,25 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		assert.ok(json.includes('parameter/blocks/secrets/STRIPE_KEY'), 'shared ARN granted');
 	});
 
+	void it('emits a single kms:Decrypt statement even with a stage fallback (no per-locator dupes)', () => {
+		const { stack, fn } = fnStack();
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' });
+		const policy = JSON.stringify(Template.fromStack(stack).toJSON());
+		// stage + shared = two read grants, but the identical kms:Decrypt is hoisted
+		// to exactly one statement (was 2N before the dedupe fix).
+		const decryptCount = (policy.match(/kms:Decrypt/g) ?? []).length;
+		assert.strictEqual(decryptCount, 1, `expected exactly one kms:Decrypt statement, got ${decryptCount}`);
+	});
+
+	void it('grants kms:Decrypt once per function across multiple secrets in the same store', () => {
+		const { stack, fn } = fnStack();
+		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
+		wireRuntimeSecret(fn, 'SENTRY_DSN', { prefix: '/blocks/secrets', store: 'ssm' });
+		const policy = JSON.stringify(Template.fromStack(stack).toJSON());
+		const decryptCount = (policy.match(/kms:Decrypt/g) ?? []).length;
+		assert.strictEqual(decryptCount, 1, `expected one shared kms:Decrypt for the store, got ${decryptCount}`);
+	});
+
 	void it('without a stage: no _FALLBACK var, single ARN grant (unchanged)', () => {
 		const { stack, fn } = fnStack();
 		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });

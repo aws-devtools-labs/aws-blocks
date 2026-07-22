@@ -25,7 +25,7 @@
     "dev": "tsc --build --watch"
   },
   "dependencies": {
-    "@aws-blocks/hosting": "*"
+    "@aws-blocks/hosting": "^0.1.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

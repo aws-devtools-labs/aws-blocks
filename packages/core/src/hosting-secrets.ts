@@ -25,6 +25,18 @@
  * Synth-time resolution is async, which is why callers that use domain secrets
  * or `exposeAsEnv` must construct via the async `Hosting.create()`.
  *
+ * ⚠️ **SSM-only by design.** This is a deliberately narrower engine than the
+ * pluggable one in `@aws-blocks/hosting` (`secret-resolve.ts`): it is hardcoded
+ * to SSM SecureString — no `store` option, no `_STORE` runtime hint, no
+ * stage/fallback, and SSM-only IAM (`ssm:GetParameter` + `kms:Decrypt` via
+ * `ssm.*.amazonaws.com`). That is correct *because* Blocks pins its own SSM
+ * `/blocks/secrets` namespace (see `secret-naming.ts`) and never emits a store
+ * hint. Do NOT thread a `store` option through here without also switching the
+ * grant + the runtime read: an SSM grant with a Secrets Manager runtime read
+ * (or vice-versa) resolves to `AccessDenied` at request time. If Blocks ever
+ * needs a second store, adopt the shared `@aws-blocks/hosting` engine rather
+ * than parameterizing this one.
+ *
  * @module
  */
 

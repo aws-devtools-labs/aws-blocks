@@ -108,7 +108,15 @@ export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]
 				}),
 			);
 			for (const s of result.SecretList ?? []) {
-				if (s.Name?.startsWith(`${smPrefix}/`)) keys.push(s.Name.slice(smPrefix.length + 1));
+				if (!s.Name?.startsWith(`${smPrefix}/`)) continue;
+				const rest = s.Name.slice(smPrefix.length + 1);
+				// The SM name filter is a plain prefix match with no depth control,
+				// so stage-scoped secrets (`<prefix>/<stage>/<key>`) also match. When
+				// listing the shared namespace, exclude anything one level deeper (a
+				// remaining `/` means it's stage-scoped) — mirrors the SSM path's
+				// `Recursive: false`. A stage listing has stage in smPrefix already.
+				if (!opts.stage && rest.includes('/')) continue;
+				keys.push(rest);
 			}
 			nextToken = result.NextToken;
 		} while (nextToken);
