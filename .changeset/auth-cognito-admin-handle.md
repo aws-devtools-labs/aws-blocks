@@ -21,4 +21,4 @@ The admin surface is fully typed by the pool config `O`:
 
 The `AuthCognito` class generic is now a `const` type parameter, so inline options literals narrow without `as const`.
 
-BREAKING CHANGE: `const O` narrows the params of `requireRole`, `updateUserAttribute`, and `updateMFAPreference` for inline-literal options. Callers passing widened `string` variables to these now need a cast or literal arguments.
+Note: `const O` narrows the params of `requireRole`, `updateUserAttribute`, and `updateMFAPreference` for inline-literal options. Callers passing widened `string` variables to these may need a cast or literal arguments.
