@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-auth-cognito": minor
+"@aws-blocks/bb-auth-cognito": patch
 ---
 
 Add an opt-in `auth.admin` handle to `AuthCognito` for server-side group-membership and user-lifecycle administration.
