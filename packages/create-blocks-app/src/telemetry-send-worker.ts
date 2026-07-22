@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NOTE: This worker is an intentional near-duplicate of
-// packages/create-blocks-app/src/telemetry-send-worker.ts. It is kept separate
+// packages/core/src/telemetry/telemetry-send-worker.ts. It is kept separate
 // because the worker must run with zero project/package imports. Any change
 // here should be mirrored in both files.
 
@@ -17,6 +17,7 @@
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
+// Matches the timeout in packages/core/src/telemetry/telemetry-send-worker.ts — keep in sync.
 const TIMEOUT_MS = 500;
 const debug = (process.env.NODE_DEBUG || '').includes('blocks-telemetry');
 
