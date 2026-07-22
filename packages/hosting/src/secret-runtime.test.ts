@@ -149,4 +149,37 @@ void describe('getSecret() runtime resolver', () => {
 		await assert.rejects(getSecret('STRIPE_KEY'), /access denied/);
 		delete process.env[`${env}_FALLBACK`];
 	});
+
+	void it('re-fetches after the configured TTL elapses (rotation without cold start)', async () => {
+		delete process.env.STRIPE_KEY;
+		process.env[secretEnvVarName('STRIPE_KEY')] = '/blocks/secrets/STRIPE_KEY';
+		process.env.HOSTING_SECRET_CACHE_TTL = '1'; // 1 second
+		let calls = 0;
+		_setSecretFetcher(async () => {
+			calls += 1;
+			return `v${calls}`;
+		});
+		assert.strictEqual(await getSecret('STRIPE_KEY'), 'v1');
+		assert.strictEqual(await getSecret('STRIPE_KEY'), 'v1'); // within TTL: cached
+		assert.strictEqual(calls, 1);
+		// Wait out the TTL, then the next read re-fetches the rotated value.
+		await new Promise((r) => setTimeout(r, 1100));
+		assert.strictEqual(await getSecret('STRIPE_KEY'), 'v2');
+		assert.strictEqual(calls, 2);
+	});
+
+	void it('caches for the process lifetime when no TTL is set (unchanged default)', async () => {
+		delete process.env.STRIPE_KEY;
+		delete process.env.HOSTING_SECRET_CACHE_TTL;
+		process.env[secretEnvVarName('STRIPE_KEY')] = '/blocks/secrets/STRIPE_KEY';
+		let calls = 0;
+		_setSecretFetcher(async () => {
+			calls += 1;
+			return 'v';
+		});
+		await getSecret('STRIPE_KEY');
+		await new Promise((r) => setTimeout(r, 50));
+		await getSecret('STRIPE_KEY');
+		assert.strictEqual(calls, 1);
+	});
 });

@@ -12,6 +12,15 @@
  * store; deploy/runtime only READ. Store is pluggable: SSM SecureString
  * (default) or Secrets Manager.
  *
+ * **Providing the value safely.** A value passed as a positional argument
+ * (`set KEY sk_live_…`) lands in `process.argv`, which is visible in `ps`
+ * output, `/proc/<pid>/cmdline`, and your shell history file. For a tool whose
+ * whole point is keeping secrets out of source, prefer either:
+ *   - `set KEY --value-stdin`  (pipe it: `cat key.txt | … set KEY --value-stdin`)
+ *   - `set KEY`  with no value → an interactive hidden prompt (no echo)
+ * The positional form still works (useful in trusted CI) but is documented as
+ * the exposed path.
+ *
  * @module
  */
 
@@ -191,15 +200,31 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 	// Pull an optional `--stage <name>` (or `--stage=<name>`) out of argv; a
 	// CLI-supplied stage overrides any preset on `opts`. Everything else is
 	// positional, so set/list/remove parsing below stays unchanged.
-	const { stage, positional } = extractStageFlag(argv);
+	const { stage, valueStdin, positional } = extractFlags(argv);
 	const effectiveOpts: SecretCliOptions = stage !== undefined ? { ...opts, stage } : opts;
 	const [subcommand, ...rest] = positional;
 	switch (subcommand) {
 		case 'set': {
 			const [key, ...valueParts] = rest;
-			const value = valueParts.join(' ');
-			if (!key || valueParts.length === 0) {
-				throw new Error(`Usage: ${label} set <KEY> <value> [--stage <name>]`);
+			if (!key) {
+				throw new Error(`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>]`);
+			}
+			// Value precedence: --value-stdin (piped) > positional > interactive
+			// hidden prompt. Prefer stdin/prompt: a positional value lands in
+			// argv (visible in `ps`, /proc, and shell history).
+			let value: string;
+			if (valueStdin) {
+				if (valueParts.length > 0) {
+					throw new Error('Pass the value via stdin OR as an argument, not both (`--value-stdin` was set).');
+				}
+				value = await readStdin();
+			} else if (valueParts.length > 0) {
+				value = valueParts.join(' ');
+			} else {
+				value = await promptHidden(`Enter value for secret '${key}' (hidden): `);
+			}
+			if (value.length === 0) {
+				throw new Error(`No value provided for secret '${key}'.`);
 			}
 			await setSecret(key, value, effectiveOpts);
 			break;
@@ -229,10 +254,14 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 	}
 }
 
-/** Extract `--stage <name>` / `--stage=<name>` from argv, returning the rest. */
-function extractStageFlag(argv: string[]): { stage?: string; positional: string[] } {
+/**
+ * Extract known flags (`--stage <name>` / `--stage=<name>`, `--value-stdin`)
+ * from argv, returning the remaining positional args.
+ */
+function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; positional: string[] } {
 	const positional: string[] = [];
 	let stage: string | undefined;
+	let valueStdin = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--stage') {
@@ -240,9 +269,46 @@ function extractStageFlag(argv: string[]): { stage?: string; positional: string[
 			if (stage === undefined) throw new Error('`--stage` requires a value, e.g. --stage prod');
 		} else if (arg.startsWith('--stage=')) {
 			stage = arg.slice('--stage='.length);
+		} else if (arg === '--value-stdin') {
+			valueStdin = true;
 		} else {
 			positional.push(arg);
 		}
 	}
-	return { stage, positional };
+	return { stage, valueStdin, positional };
+}
+
+/** Read all of stdin as a UTF-8 string, trimming a single trailing newline. */
+async function readStdin(): Promise<string> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+	return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '');
+}
+
+/**
+ * Prompt for a secret value on an interactive TTY with the input hidden (no
+ * echo), so it never appears on screen or in scrollback. Rejects if stdin is
+ * not a TTY (use `--value-stdin` in that case).
+ */
+async function promptHidden(prompt: string): Promise<string> {
+	if (!process.stdin.isTTY) {
+		throw new Error('No value provided and stdin is not a TTY. Pass `--value-stdin` and pipe the value instead.');
+	}
+	const { createInterface } = await import('node:readline');
+	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+	// Mute the output stream while the value is typed so it isn't echoed.
+	const output = rl as unknown as { output?: NodeJS.WriteStream; _writeToOutput?: (s: string) => void };
+	let muted = false;
+	output._writeToOutput = (str: string) => {
+		if (!muted) process.stdout.write(str);
+	};
+	process.stdout.write(prompt);
+	muted = true;
+	try {
+		const value = await new Promise<string>((resolve) => rl.question('', resolve));
+		process.stdout.write('\n');
+		return value;
+	} finally {
+		rl.close();
+	}
 }

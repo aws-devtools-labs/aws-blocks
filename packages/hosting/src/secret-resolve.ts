@@ -58,6 +58,15 @@ export interface SecretResolveOptions {
 	 * default. Omit for a single flat namespace (no fallback, unchanged behavior).
 	 */
 	stage?: string;
+	/**
+	 * Runtime cache lifetime in **seconds** for `getSecret()`. When set (and > 0),
+	 * a resolved value is re-fetched after this many seconds, so a rotated secret
+	 * is picked up by a warm compute without waiting for a cold start (at the cost
+	 * of a periodic store read). Omit (or `0`) to cache for the life of the
+	 * process — rotation then lands only on the next cold start (unchanged default).
+	 * Only affects runtime secrets; synth-time secrets are inlined at deploy.
+	 */
+	cacheTtlSeconds?: number;
 }
 
 /**
@@ -211,6 +220,12 @@ export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, opti
 	fn.addEnvironment(secretEnvVarName(key), primary);
 	if (store !== 'ssm') fn.addEnvironment(`${secretEnvVarName(key)}_STORE`, store);
 	if (fallback) fn.addEnvironment(secretFallbackEnvVarName(key), fallback);
+
+	// Optional runtime cache TTL (global to the function, not per-key). Injected
+	// only when configured; the runtime treats absent/0 as "cache until cold start".
+	if (options.cacheTtlSeconds && options.cacheTtlSeconds > 0) {
+		fn.addEnvironment('HOSTING_SECRET_CACHE_TTL', String(Math.floor(options.cacheTtlSeconds)));
+	}
 
 	// Read grant on every locator the runtime might read (primary + fallback),
 	// deduped. The KMS Decrypt grant is emitted separately, once, by

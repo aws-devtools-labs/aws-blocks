@@ -16,6 +16,14 @@
  * The value is held only in process memory and only after the first call;
  * it never lands in git, the CloudFormation template, or the browser.
  *
+ * **Cache lifetime.** By default a resolved value is cached for the life of the
+ * process, so a rotated secret is only picked up on the next cold start — with
+ * steady traffic or provisioned concurrency a warm compute can serve a stale
+ * value for a long time. Configure `secrets.cacheTtlSeconds` on the Hosting
+ * props to inject `HOSTING_SECRET_CACHE_TTL`; the resolver then re-fetches after
+ * the TTL elapses, so rotation lands without a cold start (at the cost of a
+ * periodic store read).
+ *
  * @module
  */
 
@@ -27,10 +35,31 @@ function isNotFoundError(error: unknown): boolean {
 	return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
 }
 
+/** A cached value plus the epoch-ms after which it is considered stale. */
+interface CacheEntry {
+	value: string;
+	/** Epoch ms when this entry expires; `Infinity` = cache forever (no TTL). */
+	expiresAt: number;
+}
+
 /** Cache of resolved secret values, keyed by logical secret name. */
-const cache = new Map<string, string>();
+const cache = new Map<string, CacheEntry>();
 /** In-flight fetches, so concurrent callers for the same key share one call. */
 const inFlight = new Map<string, Promise<string>>();
+
+/**
+ * Cache lifetime in ms, from `HOSTING_SECRET_CACHE_TTL` (seconds), injected by
+ * the Hosting wiring when a TTL is configured. Absent/invalid/`0` → `Infinity`
+ * (cache for the life of the process, i.e. until cold start — the historical
+ * behavior). A finite TTL lets a warm compute pick up a rotated value without
+ * waiting for a cold start.
+ */
+function cacheTtlMs(): number {
+	const raw = process.env.HOSTING_SECRET_CACHE_TTL;
+	if (!raw) return Number.POSITIVE_INFINITY;
+	const seconds = Number(raw);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Number.POSITIVE_INFINITY;
+}
 
 /** Pluggable fetcher so tests can resolve without a live endpoint. */
 type StoreFetcher = (locator: string, store: string) => Promise<string>;
@@ -79,12 +108,13 @@ async function defaultFetcher(locator: string, store: string): Promise<string> {
  */
 export async function getSecret(key: string): Promise<string> {
 	const cached = cache.get(key);
-	if (cached !== undefined) return cached;
+	if (cached !== undefined && Date.now() < cached.expiresAt) return cached.value;
 
 	// 1. Plaintext already in env (local dev, or exposeAsEnv escape hatch).
 	const direct = process.env[key];
 	if (direct !== undefined) {
-		cache.set(key, direct);
+		// Env-var values can't rotate under a running process, so cache forever.
+		cache.set(key, { value: direct, expiresAt: Number.POSITIVE_INFINITY });
 		return direct;
 	}
 
@@ -117,7 +147,9 @@ export async function getSecret(key: string): Promise<string> {
 			throw error;
 		})
 		.then((value) => {
-			cache.set(key, value);
+			const ttl = cacheTtlMs();
+			const expiresAt = ttl === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : Date.now() + ttl;
+			cache.set(key, { value, expiresAt });
 			return value;
 		})
 		.finally(() => {

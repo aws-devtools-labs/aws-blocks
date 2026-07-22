@@ -13,9 +13,22 @@ void describe('runSecretCli() argv parsing', () => {
 		await assert.rejects(runSecretCli(['frobnicate']), /Unknown secret subcommand/);
 	});
 
-	void it('requires a key and value for set (usage shows the consumer label)', async () => {
+	void it('requires a key for set (usage shows the consumer label)', async () => {
 		await assert.rejects(runSecretCli(['set'], { label: 'ampx hosting secret' }), /Usage: ampx hosting secret set/);
-		await assert.rejects(runSecretCli(['set', 'ONLY_KEY']), /Usage: secret set/);
+	});
+
+	void it('key-only set falls through to the hidden prompt (errors when stdin is not a TTY)', async () => {
+		// No positional value and no --value-stdin → interactive hidden prompt.
+		// The test runner's stdin is not a TTY, so it errors with the stdin hint
+		// instead of the old usage error.
+		await assert.rejects(runSecretCli(['set', 'ONLY_KEY']), /stdin is not a TTY.*--value-stdin/s);
+	});
+
+	void it('rejects passing a value both positionally and via --value-stdin', async () => {
+		await assert.rejects(
+			runSecretCli(['set', 'K', 'someval', '--value-stdin']),
+			/via stdin OR as an argument, not both/,
+		);
 	});
 
 	void it('requires a key for remove', async () => {
@@ -31,17 +44,18 @@ void describe('runSecretCli() argv parsing', () => {
 		await assert.rejects(runSecretCli(['set', 'K', 'v', '--stage']), /--stage.*requires a value/);
 	});
 
-	void it('strips --stage <name> from positionals (set still needs KEY + value)', async () => {
-		// With the stage flag removed, only a key remains → usage error (proves
-		// the flag+value were extracted, not treated as the value).
-		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage', 'prod']), /Usage:.*set <KEY> <value>/);
+	void it('strips --stage <name> from positionals (the flag+value are not the value)', async () => {
+		// With the stage flag removed, only a key remains → the hidden-prompt path
+		// (TTY hint here), proving the flag+value were extracted, not treated as
+		// the value.
+		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage', 'prod']), /stdin is not a TTY/);
 	});
 
 	void it('still validates the key when a stage is present', async () => {
 		await assert.rejects(runSecretCli(['set', '1bad', 'value', '--stage', 'prod']), /Invalid secret key/);
 	});
 
-	void it('accepts --stage=<name> form (key-only still errors on usage)', async () => {
-		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage=prod']), /Usage:.*set <KEY> <value>/);
+	void it('accepts --stage=<name> form (key-only falls through to the prompt)', async () => {
+		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage=prod']), /stdin is not a TTY/);
 	});
 });
