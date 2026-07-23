@@ -118,15 +118,31 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const hasParams = Object.hasOwn(parsed, 'params');
+  if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
+    return {
+      ok: false,
+      response: errorResponse(
+        RpcErrorCode.InvalidParams,
+        'Invalid params: expected an array or object',
+        id,
+        { name: 'InvalidParams' },
+      ),
+    };
+  }
+
+  let args: unknown[] = [];
+  if (hasParams) {
+    args = Array.isArray(parsed.params) ? parsed.params : Object.values(parsed.params);
+  }
+
   return {
     ok: true,
     request: {
       apiNamespace: parsed.method.substring(0, dotIndex),
       method: parsed.method.substring(dotIndex + 1),
-      // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
-      args: Array.isArray(parsed.params)
-        ? parsed.params
-        : Object.values(parsed.params ?? {}),
+      // JSON-RPC 2.0 §4.2: params may be array (positional), object (named), or omitted (empty).
+      args,
       id,
     },
   };
