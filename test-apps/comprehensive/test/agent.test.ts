@@ -21,37 +21,16 @@ export function agentTests(getApi: () => typeof apiType) {
   describe('Agent BB', () => {
 
     describe('Streaming', () => {
-      test('stream returns channelId immediately', async () => {
+      test('stream returns chunks with a done chunk', async () => {
         const api = getApi();
-        const result = await api.agentStream('Say hello');
-        assert.ok(result.channelId, 'should return a channelId');
+        const { chunks } = await api.agentStream('Say hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive a done chunk');
       });
 
-      test('getChannel returns a subscribable Realtime channel handle', async () => {
-        const api = getApi();
-        const result = await api.agentStream('Say hello');
-        const { channel } = await api.agentGetChannel(result.channelId);
-        assert.ok(channel, 'should return a channel handle');
-        assert.strictEqual(typeof channel.subscribe, 'function', 'channel should have subscribe method');
-      });
-
-      test('subscription receives streaming chunks', { timeout: 60_000 }, async () => {
+      test('stream yields streaming chunks', { timeout: 60_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.agentCreateConversationId();
-        // Subscribe BEFORE sending, await established before stream
-        const { channel } = await api.agentGetChannel(conversationId);
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 60s')), 60_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established
-            .then(() => api.agentStream('Say hello', conversationId, conversationId))
-            .catch(reject);
-        });
-        await done;
+        const { chunks } = await api.agentStream('Say hello', conversationId);
         assert.ok(chunks.filter((c: any) => c.type === 'text-delta').length > 0, 'should receive text-delta chunks');
         assert.ok(chunks.some((c: any) => c.type === 'done'), 'should receive done chunk');
       });
@@ -130,21 +109,21 @@ export function agentTests(getApi: () => typeof apiType) {
     });
 
     describe('Inference Only', () => {
-      test('inferenceOnly agent returns channelId', async () => {
+      test('inferenceOnly agent returns chunks with a done chunk', async () => {
         const api = getApi();
-        const result = await api.agentInferenceOnly('Say hello');
-        assert.ok(result.channelId, 'should return a channelId');
+        const { chunks } = await api.agentInferenceOnly('Say hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should return a done chunk');
       });
     });
 
-    // TODO: Realtime streaming e2e — test when useChat() hook is built (M7)
-    // TODO: Token usage — delivered via Realtime done chunk, test with useChat()
+    // TODO: SSE streaming e2e — test when useChat() hook is built (M7)
+    // TODO: Token usage — delivered via the SSE done chunk, test with useChat()
 
     describe('Tool Calling', () => {
       test('tool call persists to conversation history', async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        await api.cannedStream('use kvWrite', conversationId, conversationId);
+        await api.cannedStream('use kvWrite', conversationId);
 
         // Tool calls produce 4 messages: user, tool-call, tool-result, assistant
         const messages = await waitForMessages(api, conversationId, 4, 60000, true);
@@ -192,26 +171,11 @@ export function agentTests(getApi: () => typeof apiType) {
     describe('Model Fallback', () => {
       test('agent falls through to next candidate when first model is unreachable', { timeout: 10_000 }, async () => {
         const api = getApi();
-        const { channelId } = await api.fallbackStream('hello');
-        assert.ok(channelId, 'should return a channelId — agent resolved to canned fallback');
+        const { chunks } = await api.fallbackStream('hello');
+        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should return a done chunk — agent resolved to canned fallback');
       });
     });
 
-
-    describe('Long-Running Agent (>29s)', () => {
-      test('agent with slow tool completes beyond API Gateway timeout', async () => {
-        const api = getApi();
-        const { conversationId } = await api.cannedCreateConversationId();
-        await api.cannedStream('Use the slowTask now.', conversationId);
-
-        const messages = await waitForMessages(api, conversationId, 4, 90000, true);
-        assert.ok(messages.length >= 4, 'should have all messages after slow tool completes');
-        const toolResult = messages.find((m: any) => m.role === 'tool-result');
-        assert.ok(toolResult, 'should have tool-result');
-        const meta = toolResult!.metadata;
-        assert.ok(meta.toolName === 'slowTask', 'tool result should reference slowTask');
-      });
-    });
     describe('Conversation Isolation', () => {
       test('different conversations do not share messages', async () => {
         const api = getApi();
@@ -335,74 +299,39 @@ export function agentTests(getApi: () => typeof apiType) {
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
 
-        const chunks: any[] = [];
-        const interrupted = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No interrupt chunk within 10s')), 10_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'interrupt') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(() => {
-            api.cannedStream('use deleteRecords', conversationId, conversationId);
-          }).catch(reject);
-        });
-
-        await interrupted;
         const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
         assert.ok(interruptChunk, 'should receive interrupt chunk');
-        assert.ok(interruptChunk.interrupts.length > 0, 'should have pending interrupts');
-        assert.ok(interruptChunk.interrupts[0].name.includes('deleteRecords'), 'interrupt should reference deleteRecords');
+        assert.ok(interruptChunk.interrupts!.length > 0, 'should have pending interrupts');
+        assert.ok(interruptChunk.interrupts![0].name.includes('deleteRecords'), 'interrupt should reference deleteRecords');
       });
 
       test('resume after approval completes the agent turn', { timeout: 20_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(async () => {
-            await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            // Wait for interrupt to arrive
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-            }
-          }).catch(reject);
-        });
-
-        await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should have received done after resume');
+        const { chunks: resumed } = await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'yes' })),
+          conversationId,
+        );
+        assert.ok(resumed.some((c: any) => c.type === 'done'), 'should have received done after resume');
       });
 
       test('approval is persisted to conversation history', { timeout: 20_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const interruptReceived = new Promise<any>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No interrupt within 10s')), 10_000);
-          const sub = channel.subscribe((chunk: any) => {
-            if (chunk.type === 'interrupt') { clearTimeout(timer); resolve(chunk); }
-          });
-          sub.established.then(() => {
-            api.cannedStream('use deleteRecords', conversationId, conversationId);
-          }).catch(reject);
-        });
-
-        const interruptChunk = await interruptReceived;
-        await api.cannedResume(conversationId, interruptChunk.interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-        // Wait for agent to complete
-        await new Promise(r => setTimeout(r, 2000));
+        await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'yes' })),
+          conversationId,
+        );
 
         const { messages } = await api.cannedGetConversation(conversationId);
         const roles = messages.map((m: any) => m.role);
@@ -413,28 +342,15 @@ export function agentTests(getApi: () => typeof apiType) {
       test('denial skips tool execution and agent continues', { timeout: 60_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
-        const { channel } = await api.cannedGetChannel(conversationId);
+        const { chunks } = await api.cannedStream('use deleteRecords', conversationId);
+        const interruptChunk = chunks.find((c: any) => c.type === 'interrupt');
+        assert.ok(interruptChunk, 'should have received interrupt');
 
-        const chunks: any[] = [];
-        const done = new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
-            chunks.push(chunk);
-            if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
-          });
-          sub.established.then(async () => {
-            await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: false })), conversationId);
-            }
-          }).catch(reject);
-        });
-
-        await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'agent should complete after denial');
+        const { chunks: resumed } = await api.cannedResume(
+          interruptChunk.interrupts!.map((i: any) => ({ interruptId: i.id, response: 'no' })),
+          conversationId,
+        );
+        assert.ok(resumed.some((c: any) => c.type === 'done'), 'agent should complete after denial');
         // After denial, conversation history should show the tool was cancelled (not executed successfully)
         const { messages } = await api.cannedGetConversation(conversationId);
         const toolResult = messages.find((m: any) => m.role === 'tool-result');

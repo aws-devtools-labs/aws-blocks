@@ -1,9 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { z } from 'zod';
-import type { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { z } from 'zod';
 
 /** Any JSON-serializable value. */
 export type JSONValue = string | number | boolean | null | { [key: string]: JSONValue } | JSONValue[];
@@ -106,6 +105,18 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * Ignored by the mock and browser runtimes.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * CDK-only. An auth BB (AuthCognito / AuthOIDC) whose JWT the AgentCore Runtime should
+	 * validate on the streaming endpoint. When provided, the runtime uses a JWT authorizer
+	 * (Cognito user-pool / OIDC discovery); when omitted it defaults to IAM (SigV4).
+	 * Ignored by the mock, aws-runtime, and browser layers.
+	 */
+	auth?: unknown;
+	/**
+	 * CDK-only. Path to a pre-built AgentCore code-asset directory. When omitted, the CDK
+	 * layer co-bundles the app backend at synth time. Ignored by non-CDK layers.
+	 */
+	agentcoreAssetPath?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -117,8 +128,12 @@ export interface AgentConfig<TContext = DefaultToolContext> {
  * - `'summarizing'` — summarizes older messages, keeps recent ones intact
  */
 export type ConversationManagerConfig =
-	| { strategy?: 'sliding-window'; /** Number of messages to keep */ windowSize?: number }
-	| { strategy: 'summarizing'; /** Fraction of messages to summarize */ summaryRatio?: number; /** Recent messages to always preserve */ preserveRecentMessages?: number };
+	| { strategy?: 'sliding-window' /** Number of messages to keep */; windowSize?: number }
+	| {
+			strategy: 'summarizing' /** Fraction of messages to summarize */;
+			summaryRatio?: number /** Recent messages to always preserve */;
+			preserveRecentMessages?: number;
+	  };
 
 /** Context passed to tool handlers and interrupt functions. */
 export interface ToolHandlerArgs<TInput = any, TContext = DefaultToolContext> {
@@ -251,8 +266,6 @@ export interface ToolCallRecord {
 
 export interface StreamOptions<TContext = DefaultToolContext> {
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
-	channelId?: string;
 	/** User ID for conversation scoping. Defaults to 'anonymous'. */
 	userId?: string;
 	/**
@@ -265,29 +278,32 @@ export interface StreamOptions<TContext = DefaultToolContext> {
 }
 
 /**
- * Returned by stream(). Provides the channelId and server-side convenience methods.
+ * Compatibility result returned by the deprecated `stream()`/`resume()` wrappers.
  *
- * Safe to return directly from API methods — `toJSON()` serializes to
- * `{ channelId, channel: null }`. Only `channelId` is meaningful client-side;
- * `channel` is explicitly `null` to signal the live handle is server-side only,
- * and the `complete()` helper is dropped (functions don't serialize).
+ * It is BOTH an async-iterable of chunks (preferred: `for await (const c of result) ...`)
+ * and carries a `complete()` helper that drains to the terminal `done` chunk (throws on
+ * error, or `InterruptError` on interrupt) — matching the old ergonomics. There is no
+ * `channel`/`channelId`: the Realtime transport is gone. New code should call `streamSSE()`
+ * (or, on AWS, stream directly from the AgentCore endpoint) instead.
  */
-export interface AgentStreamResult {
-	/** Realtime channel ID where chunks are published. */
-	channelId: string;
-	/**
-	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
-	 *
-	 * @remarks
-	 * Unlike `RealtimeChannel.toJSON()` which produces a hydratable descriptor, this is nulled
-	 * because it's a `Promise` that can't round-trip. Clients reconstruct a subscribe-only
-	 * channel from `channelId` via the `useChat` `subscribe` callback.
-	 */
-	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
-	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
-	complete: () => Promise<AgentStreamChunk>;
-	/** Only `{ channelId, channel: null }` is serialized when this object crosses the RPC boundary. */
-	toJSON(): { channelId: string; channel: null };
+export interface AgentStreamResult extends AsyncIterable<AgentStreamChunk> {
+	/** Drain the stream to the final `done` chunk. Rejects on `error`, throws InterruptError on `interrupt`. */
+	complete(): Promise<AgentStreamChunk>;
+}
+
+/**
+ * What the AWS `Agent.getStreamEndpoint()` returns: where the client should open its SSE
+ * connection. Streaming happens on a direct SSE connection to the AgentCore Runtime — the
+ * client uses `sessionId` (= conversationId) as the
+ * `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` and invokes `runtimeArn`.
+ */
+export interface AgentCoreStreamResult {
+	/** ARN of the AgentCore Runtime hosting this agent. Client invokes it directly. */
+	runtimeArn: string;
+	/** AgentCore runtimeSessionId to route the invocation (maps to conversationId). */
+	sessionId: string;
+	/** Serialized verbatim across the RPC boundary — both fields are plain strings. */
+	toJSON(): { runtimeArn: string; sessionId: string };
 }
 
 export interface AgentStreamChunk {
@@ -299,7 +315,6 @@ export interface AgentStreamChunk {
 	error?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
-
 
 export interface MessageMetadata {
 	toolName?: string;
