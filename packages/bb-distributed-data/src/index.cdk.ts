@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -44,9 +44,9 @@ export class DistributedDatabase extends Scope {
 
     const endpoint = cluster.getAtt('Endpoint').toString();
 
-    // Env vars for runtime
-    this.handler.addEnvironment(`BLOCKS_${envName}_ENDPOINT`, endpoint);
-    this.handler.addEnvironment(`BLOCKS_${envName}_REGION`, region);
+    // Runtime configuration
+    registerConfig(this, `BLOCKS_${envName}_ENDPOINT`, endpoint);
+    registerConfig(this, `BLOCKS_${envName}_REGION`, region);
 
     // IAM grant — app Lambda gets DML-only access via custom DB role (least privilege)
     this.handler.addToRolePolicy(new iam.PolicyStatement({
