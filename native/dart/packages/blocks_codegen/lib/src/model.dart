@@ -93,8 +93,16 @@ class UnionLiteralRef extends TypeRef {
 class DiscriminatedUnionRef extends TypeRef {
   final String discriminant;
   final List<UnionVariant> variants;
-  const DiscriminatedUnionRef(
-      {required this.discriminant, required this.variants});
+
+  /// True when the discriminant is a boolean-enum (`{"type":"boolean",
+  /// "enum":[true|false]}`) rather than the usual string enum. Drives bool
+  /// (vs String) discriminant handling in the generator.
+  final bool discriminantIsBoolean;
+  const DiscriminatedUnionRef({
+    required this.discriminant,
+    required this.variants,
+    this.discriminantIsBoolean = false,
+  });
 }
 
 class UnionVariant {
