@@ -788,7 +788,58 @@ const agent = new Agent(scope, 'support', {
 });
 ```
 
-To wire this agent to a frontend, see [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the `useChat` hook streams responses and handles interrupts. Pass the authenticated `userId` as tool `context` so `getOrder` is scoped to the caller.
+Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. This agent declares a `toolContextSchema`, so its tools require a per-call `context`. You don't pass that from the browser (it couldn't be trusted anyway): **on a JWT runtime the server injects the authenticated `userId` (the validated token's `sub`) into tool `context`**, so `getOrder` is scoped to the caller with an unforgeable identity.
+
+**Backend** (`amplify/backend.ts`) — same shape as Example 1; `getStreamEndpoint` pairs the runtime endpoint with a short-lived JWT:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async createConversation() {
+    const user = await auth.requireAuth(context);
+    return { conversationId: await agent.createConversationId(user.userId) };
+  },
+  async getConversation(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const owned = await agent.listConversations(user.userId);
+    if (!owned.some((c) => c.conversationId === conversationId)) throw new Error('Not found');
+    return { messages: await agent.getConversation(conversationId) };
+  },
+  async getPendingInterrupts(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const owned = await agent.listConversations(user.userId);
+    if (!owned.some((c) => c.conversationId === conversationId)) throw new Error('Not found');
+    return { interrupts: await agent.getPendingInterrupts(conversationId) };
+  },
+  async getStreamEndpoint(conversationId?: string) {
+    await auth.requireAuth(context);
+    const endpoint = await agent.getStreamEndpoint({ conversationId });
+    const token = await auth.getAgentCoreToken(context);
+    return { ...endpoint.toJSON(), token };
+  },
+}));
+```
+
+**Frontend** (`app.ts`):
+
+```typescript
+import { useChat, createAgentCoreWsTransport } from '@aws-blocks/bb-agent/client';
+
+const chat = useChat({
+  api: {
+    createConversation: () => api.createConversation(),
+    getConversation: (id) => api.getConversation(id),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id),
+  },
+  // Opens a WebSocket straight to the AgentCore Runtime. The tool `context` is filled in
+  // server-side from the verified token — the browser sends no identity.
+  streamChunks: createAgentCoreWsTransport(({ conversationId }) => api.getStreamEndpoint(conversationId)),
+  onMessagesChange: (msgs) => renderMessages(msgs),
+});
+
+await chat.sendMessage('What is the status of order 12345?');
+```
+
+> Tool `context` on the browser-direct path is limited to what the server derives from the verified token — currently `userId` (the `sub`). An agent that needs richer per-call context should stream through a server-mediated API method that builds `context` itself.
 
 
 ## Best Practices
