@@ -27,11 +27,15 @@ test.before(async () => {
   api = mod.api;
   hello = mod.hello;
 
-  // Wait for server to be ready
+  // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 60; i++) {
-    try { await hello.greet('ping'); return; } catch {
-      await setTimeout(1000);
+    try {
+      const response = await fetch('http://localhost:3000/.blocks-sandbox/config.json');
+      if (response.ok) return;
+    } catch {
+      // The server is not listening yet.
     }
+    await setTimeout(1000);
   }
   throw new Error('Server not ready');
 });
