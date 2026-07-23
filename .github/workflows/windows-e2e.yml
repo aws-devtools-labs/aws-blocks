@@ -56,7 +56,7 @@ jobs:
       - run: npm run build
 
       - name: Pack to local registry
-        run: npm run publish:dry-run
+        run: npm run publish:local
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
