@@ -171,8 +171,8 @@ jobs:
       - name: Check API backward compatibility
         run: npm run check:api
 
-      - name: Unit Tests
-        run: npm run test:unit
+      - name: Unit Tests (with coverage)
+        run: npm run test:coverage
 
       - name: E2E Test Local
         run: npm run test:e2e:local
