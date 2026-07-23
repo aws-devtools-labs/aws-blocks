@@ -9,6 +9,11 @@
  *   (existing apps keep synthesizing while the asset-build is opt-in).
  * - With an existing `agentcoreAssetPath`, synth provisions an
  *   `AWS::BedrockAgentCore::Runtime` from the code asset.
+ * - Header-forwarding security invariant: the Runtime forwards the caller's
+ *   `Authorization` header (so the container can derive `userId` from the
+ *   gateway-validated JWT `sub`) ONLY when a JWT authorizer is configured.
+ *   An IAM runtime (no authorizer) must NOT forward the header — otherwise a
+ *   forgeable, un-validated token could reach the container.
  */
 import assert from 'node:assert';
 import { dirname } from 'node:path';
@@ -60,4 +65,36 @@ test('CDK: Agent with an existing agentcoreAssetPath provisions an AgentCore Run
 	new Agent(parent, 'chat', { systemPrompt: 'test', agentcoreAssetPath: ASSET_DIR });
 	const template = Template.fromStack(stack);
 	template.resourceCountIs('AWS::BedrockAgentCore::Runtime', 1);
+});
+
+test('CDK: an IAM Runtime (no authorizer) does NOT forward the Authorization header', () => {
+	// Security invariant: with no auth configured the Runtime is IAM-gated and no
+	// caller JWT exists. It must NOT set RequestHeaderConfiguration — the container
+	// would otherwise trust a forgeable, un-validated `sub`.
+	const { stack, parent } = setup();
+	new Agent(parent, 'chat', { systemPrompt: 'test', agentcoreAssetPath: ASSET_DIR });
+	const template = Template.fromStack(stack);
+	const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
+	const [runtime] = Object.values(runtimes);
+	assert.equal(
+		(runtime.Properties as any).RequestHeaderConfiguration,
+		undefined,
+		'IAM runtime must not forward the Authorization header',
+	);
+});
+
+test('CDK: a JWT-authorizer Runtime forwards ONLY the Authorization header', () => {
+	// With a JWT authorizer the gateway validates the token, so forwarding it lets
+	// the container derive an unforgeable `userId` from the `sub` claim. The allowlist
+	// must be exactly ['Authorization'] — nothing wider.
+	const { stack, parent } = setup();
+	new Agent(parent, 'chat', {
+		systemPrompt: 'test',
+		agentcoreAssetPath: ASSET_DIR,
+		auth: { oidcDiscoveryUrl: 'https://issuer.example.com/.well-known/openid-configuration' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
+		RequestHeaderConfiguration: { RequestHeaderAllowlist: ['Authorization'] },
+	});
 });
