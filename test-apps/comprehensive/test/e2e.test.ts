@@ -16,6 +16,7 @@ import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
+import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
@@ -212,6 +213,9 @@ authCognitoTests(() => api);
 
 // AuthCognito Sandbox tests (separate file)
 authCognitoSandboxTests(() => api);
+
+// AuthCognito admin-surface sandbox tests (separate file)
+authCognitoAdminTests(() => api);
 
 // AuthOIDC tests (separate file)
 oidcAuthTests(() => api);

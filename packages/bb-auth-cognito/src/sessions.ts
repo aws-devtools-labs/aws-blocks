@@ -244,4 +244,22 @@ export class SessionStore {
 		if (!existing) return;
 		await this.kv.put(sessionId, { ...existing, ...update });
 	}
+
+	/**
+	 * Delete every session belonging to a user. Used by the admin surface's
+	 * `revokeUserSessions` to force re-authentication (mock parity for
+	 * Cognito's `AdminUserGlobalSignOut`). Returns the number deleted.
+	 *
+	 * `SessionRecord` is deliberately minimal (tokens only — see its docs), so
+	 * the owning username is recovered by decoding each session's ID token
+	 * rather than read from a denormalized field.
+	 */
+	async deleteByUsername(username: string): Promise<number> {
+		const toDelete: string[] = [];
+		for await (const { key, value } of this.kv.scan()) {
+			if (decodeIdToken(value.idToken).username === username) toDelete.push(key);
+		}
+		for (const id of toDelete) await this.kv.delete(id);
+		return toDelete.length;
+	}
 }

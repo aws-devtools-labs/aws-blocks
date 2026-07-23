@@ -28,6 +28,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type {
+	AdminOptions,
 	AuthCognitoOptions,
 	PasswordPolicy,
 	SignInWith,
@@ -63,15 +64,18 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
+	/** Admin opt-in, captured for the IAM grant in `grantCognitoPermissions`. */
+	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
+		this.adminOptions = opts.admin;
 		const env = envVarNames(this.fullId);
 
 		// 0. Validate options. `USER_PASSWORD_AUTH` (classic) and `USER_AUTH`
@@ -344,8 +348,58 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> exte
 			],
 			resources: [poolArn],
 		}));
+
+		// Admin surface — opt-in only. Omitting `admin` grants NO Admin*/List*
+		// actions, so the synthesized role is byte-identical to today. When
+		// present, `admin.actions` scopes the grant; an omitted `actions`
+		// grants both groups + lifecycle. The same `actions` value scopes the
+		// typed `auth.admin` surface, so grant and types cannot drift.
+		const admin = this.adminOptions;
+		if (admin) {
+			const adminActions = adminIamActions(admin.actions);
+			if (adminActions.length > 0) {
+				fn.addToRolePolicy(new iam.PolicyStatement({
+					actions: adminActions,
+					resources: [poolArn],
+				}));
+			}
+		}
 	}
 
+}
+
+/**
+ * Map `AdminOptions.actions` to the Cognito `Admin*` / `List*` IAM actions.
+ * Omitted `actions` grants both slices. Keep in lockstep with the runtime
+ * `GroupAdmin` / `LifecycleAdmin` method sets.
+ */
+function adminIamActions(actions?: readonly ('groups' | 'lifecycle')[]): string[] {
+	const groups = [
+		'cognito-idp:AdminAddUserToGroup',
+		'cognito-idp:AdminRemoveUserFromGroup',
+		'cognito-idp:AdminListGroupsForUser',
+		'cognito-idp:ListUsersInGroup',
+	];
+	const lifecycle = [
+		'cognito-idp:AdminCreateUser',
+		'cognito-idp:AdminDeleteUser',
+		'cognito-idp:AdminEnableUser',
+		'cognito-idp:AdminDisableUser',
+		'cognito-idp:AdminResetUserPassword',
+		'cognito-idp:AdminSetUserPassword',
+		'cognito-idp:AdminGetUser',
+		// getUser also reports the user's group memberships (AdminGetUser does
+		// not return them), so the lifecycle slice must be self-sufficient for
+		// that read. Shared with the `groups` slice, which also grants it.
+		'cognito-idp:AdminListGroupsForUser',
+		'cognito-idp:ListUsers',
+		'cognito-idp:AdminUserGlobalSignOut',
+	];
+	const enabled = actions ?? ['groups', 'lifecycle'];
+	const out: string[] = [];
+	if (enabled.includes('groups')) out.push(...groups);
+	if (enabled.includes('lifecycle')) out.push(...lifecycle);
+	return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
