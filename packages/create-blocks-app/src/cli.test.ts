@@ -170,6 +170,17 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
+      const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      const serverPath = join(tmpDir, 'aws-blocks', 'scripts', 'server.ts');
+      const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
+      const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
+      assert.strictEqual(packageJson.scripts['blocks:dev'], 'tsx watch aws-blocks/scripts/server.ts');
+      assert.ok(existsSync(serverPath));
+      assert.match(readFileSync(serverPath, 'utf-8'), /startDevServer/);
+      assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
+      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
+      assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
+      assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
