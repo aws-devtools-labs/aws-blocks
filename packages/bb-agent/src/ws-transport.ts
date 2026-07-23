@@ -31,11 +31,15 @@ export interface AgentCoreWsEndpoint {
 	/** JWT the runtime's authorizer accepts (Cognito ACCESS token). Held in memory only. */
 	token: string;
 	/**
-	 * Conversation owner. The runtime's JWT authorizer validates the caller's token at the
-	 * gateway but does NOT forward it to the container, so the runtime can't re-derive identity
-	 * from the token — the client sends it in the turn payload. The app MUST source this from its
-	 * authenticated backend session (the same session that minted `token`), NOT from user input,
-	 * so a browser can't name another user's conversation. Omit for inferenceOnly agents.
+	 * Conversation owner — a FALLBACK, not the primary identity source on JWT runtimes.
+	 *
+	 * When the runtime has a JWT authorizer and forwards the caller token (CDK sets
+	 * `requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] }`), the server derives
+	 * `userId` from the validated token's `sub` claim (`userIdFromContext`) and IGNORES this value
+	 * — verified live, including on the WebSocket path where the token rides the subprotocol. This
+	 * field is only used when no token reaches the container: IAM runtimes, or any path without
+	 * header forwarding. Even then the app MUST source it from its authenticated backend session
+	 * (the same session that minted `token`), NOT from user input. Omit for inferenceOnly agents.
 	 */
 	userId?: string;
 }
