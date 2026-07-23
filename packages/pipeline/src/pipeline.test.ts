@@ -12,7 +12,9 @@ import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { CodePipelineSource } from 'aws-cdk-lib/pipelines';
 import { Annotations, Template, Match } from 'aws-cdk-lib/assertions';
+import { _setSynthSecretFetcher } from '@aws-blocks/hosting';
 import { Pipeline, validateAppFilePath } from './pipeline-construct.js';
+import { secret } from './index.js';
 import type { PipelineProps, PipelineStageConfig } from './types.js';
 
 // ================================================================
@@ -1813,5 +1815,141 @@ describe('_sourceOverride (internal test hook)', () => {
       })),
       /connectionArn.*must be a valid CodeConnections ARN/,
     );
+  });
+
+  // ── connectionArn as a secret() (Phase 3) ───────────────────────
+  describe('connectionArn secret()', () => {
+    it('rejects a secret() connectionArn on the sync constructor', () => {
+      const stack = new Stack(new App(), 'SyncSecretStack');
+      assert.throws(
+        () =>
+          new Pipeline(
+            stack,
+            'P',
+            defaultPipelineProps({
+              source: { repo: MOCK_REPO, connectionArn: secret('CONNECTION_ARN') },
+            }),
+          ),
+        /requires the async path.*Pipeline\.create/s,
+      );
+    });
+
+    it('resolves a secret() connectionArn at synth time via Pipeline.create()', async () => {
+      const app = new App();
+      // Resolve the synth-time fetcher to a valid ARN without hitting SSM.
+      _setSynthSecretFetcher(async () => MOCK_CONNECTION_ARN);
+      try {
+        const pipeline = await Pipeline.create(
+          app,
+          'AsyncSecretPipeline',
+          defaultPipelineProps({
+            source: { repo: MOCK_REPO, connectionArn: secret('CONNECTION_ARN') },
+          }),
+        );
+        // The resolved ARN reached the CodePipeline source action.
+        const stack = pipeline.node.scope as Stack;
+        const t = Template.fromStack(stack);
+        const json = JSON.stringify(t.toJSON());
+        assert.ok(json.includes('test-connection-id'), 'resolved ARN should be wired into the source');
+      } finally {
+        _setSynthSecretFetcher(null);
+      }
+    });
+
+    it('resolves connectionArn from the configured store + prefix (not the defaults)', async () => {
+      const app = new App();
+      // Capture the locator the resolver looks up, instead of bypassing it.
+      const seen: string[] = [];
+      _setSynthSecretFetcher(async (locator) => {
+        seen.push(locator);
+        return MOCK_CONNECTION_ARN;
+      });
+      try {
+        await Pipeline.create(
+          app,
+          'ConfiguredStorePipeline',
+          defaultPipelineProps({
+            source: { repo: MOCK_REPO, connectionArn: secret('CONNECTION_ARN') },
+            // The secrets prop must govern the connectionArn lookup too.
+            secrets: { store: 'ssm', prefix: '/myapp/secrets' },
+          }),
+        );
+        // SSM store keeps the leading-slash path form at the configured prefix —
+        // NOT the default Secrets-Manager slash-free 'hosting/secrets/...' name.
+        assert.deepStrictEqual(seen, ['/myapp/secrets/CONNECTION_ARN']);
+      } finally {
+        _setSynthSecretFetcher(null);
+      }
+    });
+  });
+
+  describe('buildSecrets', () => {
+    // The synth CodeBuild project carries the build-time secret env vars.
+    function synthProjectEnvVars(stack: Stack): Array<{ Name: string; Type: string; Value: unknown }> {
+      const t = Template.fromStack(stack);
+      const projects = t.findResources('AWS::CodeBuild::Project');
+      for (const project of Object.values(projects)) {
+        const vars = (project as { Properties?: { Environment?: { EnvironmentVariables?: unknown } } }).Properties
+          ?.Environment?.EnvironmentVariables;
+        if (Array.isArray(vars) && vars.some((v) => v.Name === 'NPM_TOKEN')) return vars;
+      }
+      return [];
+    }
+
+    it('wires a buildSecret as a SECRETS_MANAGER build env var (default store)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsSM');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+        }),
+      );
+      const vars = synthProjectEnvVars(stack);
+      const npm = vars.find((v) => v.Name === 'NPM_TOKEN');
+      assert.ok(npm, 'NPM_TOKEN env var present on the synth CodeBuild project');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      // Secrets Manager locator is the slash-free name.
+      assert.strictEqual(npm?.Value, 'hosting/secrets/NPM_TOKEN');
+    });
+
+    it('honors the ssm store + custom prefix (PARAMETER_STORE build env var)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsSSM');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+          secrets: { prefix: '/myapp/secrets', store: 'ssm' },
+        }),
+      );
+      const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'PARAMETER_STORE');
+      // SSM keeps the leading-slash path form.
+      assert.strictEqual(npm?.Value, '/myapp/secrets/NPM_TOKEN');
+    });
+
+    it('rejects a non-marker buildSecrets value', () => {
+      const stack = new Stack(new App(), 'BuildSecretsBad');
+      assert.throws(
+        () =>
+          new Pipeline(
+            stack,
+            'P',
+            defaultPipelineProps({
+              // @ts-expect-error — buildSecrets values must be secret() markers
+              buildSecrets: { NPM_TOKEN: 'npm_plaintext' },
+            }),
+          ),
+        /must be a secret\('\.\.\.'\) marker/,
+      );
+    });
+
+    it('omits environment variables entirely when no buildSecrets are given', () => {
+      const stack = new Stack(new App(), 'NoBuildSecrets');
+      new Pipeline(stack, 'P', defaultPipelineProps());
+      // No synth project should carry an NPM_TOKEN (nothing wired).
+      assert.deepStrictEqual(synthProjectEnvVars(stack), []);
+    });
   });
 });

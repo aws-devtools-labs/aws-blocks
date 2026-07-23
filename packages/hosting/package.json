@@ -26,6 +26,10 @@
     "./error": {
       "types": "./dist/hosting_error.d.ts",
       "default": "./dist/hosting_error.js"
+    },
+    "./secret": {
+      "types": "./dist/secret-exports.d.ts",
+      "default": "./dist/secret-exports.js"
     }
   },
   "main": "dist/index.js",
@@ -38,6 +42,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-cloudfront-keyvaluestore": "^3.1075.0",
+    "@aws-sdk/client-secrets-manager": "^3.700.0",
+    "@aws-sdk/client-ssm": "^3.700.0",
     "@aws-sdk/signature-v4a": "^3.1069.0",
     "cross-spawn": "^7.0.6",
     "fast-glob": "^3.3.2",

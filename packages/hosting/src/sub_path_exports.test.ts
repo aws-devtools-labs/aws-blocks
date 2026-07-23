@@ -17,6 +17,10 @@ void describe('sub-path exports', () => {
     assert.ok(require.resolve('@aws-blocks/hosting/error'));
   });
 
+  void it('resolves ./secret', () => {
+    assert.ok(require.resolve('@aws-blocks/hosting/secret'));
+  });
+
   void it('resolves main entry', () => {
     assert.ok(require.resolve('@aws-blocks/hosting'));
   });

@@ -49,6 +49,12 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { HostingResources } from '../types.js';
+import {
+  partitionEnvironment,
+  wireRuntimeSecret,
+  type EnvValue,
+  type SecretResolveOptions,
+} from '../secret-resolve.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
 import { StorageConstruct } from './storage_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
@@ -270,8 +276,25 @@ export type HostingConstructProps = {
     enabled: boolean;
     retentionDays?: number;
   };
-  /** Custom environment variables for all compute functions. */
-  environment?: Record<string, string>;
+  /**
+   * Custom environment variables for all compute functions. Values may be
+   * plain strings or {@link secret} markers. A `secret('K')` marker is wired at
+   * RUNTIME (secure default): the store locator is injected and the compute
+   * role granted read+decrypt; the app reads it via `getSecret('K')`. This
+   * makes runtime secrets work for ANY consumer of the construct (Blocks, a
+   * standalone hosting app, or any other caller) with no extra plumbing.
+   *
+   * Synth-time markers (`secret(..., { exposeAsEnv: true })`, domain secrets)
+   * require async resolution and must be pre-resolved by the async wrapper
+   * layer (e.g. `Hosting.create()`) — passing one here throws.
+   */
+  environment?: Record<string, EnvValue>;
+  /**
+   * Namespace + backing store for `secret()` markers in `environment`.
+   * Defaults to the neutral `/hosting/secrets` prefix on SSM. A branded
+   * consumer overrides the prefix (e.g. Blocks passes `/blocks/secrets`).
+   */
+  secrets?: SecretResolveOptions;
   /**
    * Build cache configuration. When enabled, provisions an S3 bucket for
    * framework build caches and exports the bucket name.
@@ -906,7 +929,21 @@ export class HostingConstruct extends Construct {
     const KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
     if (props.environment) {
-      for (const key of Object.keys(props.environment)) {
+      // Split markers from plain strings. Runtime secrets are wired below;
+      // exposeAsEnv/synth-time markers must be pre-resolved by the async
+      // wrapper layer, so any that reach here are a caller error.
+      const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment(props.environment);
+      if (exposeSecrets.length > 0) {
+        throw new HostingError('UnresolvedSecretError', {
+          message: `exposeAsEnv secret(s) [${exposeSecrets
+            .map((s) => s.key)
+            .join(', ')}] reached HostingConstruct unresolved.`,
+          resolution:
+            'Synth-time secrets must be resolved before construction — use the async create() wrapper (e.g. Hosting.create).',
+        });
+      }
+
+      for (const key of Object.keys(plain)) {
         if (!KEY_PATTERN.test(key)) {
           throw new HostingError('InvalidEnvironmentKeyError', {
             message: `Environment variable key '${key}' contains invalid characters.`,
@@ -933,7 +970,7 @@ export class HostingConstruct extends Construct {
               'Lambda environment variable keys must be 256 characters or fewer.',
           });
         }
-        const value = props.environment[key];
+        const value = plain[key];
         if (value.length > 8192) {
           throw new HostingError('EnvironmentValueTooLongError', {
             message: `Environment variable value for '${key}' exceeds 8KB limit.`,
@@ -945,8 +982,12 @@ export class HostingConstruct extends Construct {
 
       for (const [, fn] of this.computeFunctions.entries()) {
         if (fn instanceof LambdaFunction) {
-          for (const [key, value] of Object.entries(props.environment)) {
+          for (const [key, value] of Object.entries(plain)) {
             fn.addEnvironment(key, value);
+          }
+          // Runtime secret markers: inject the store locator + grant read/decrypt.
+          for (const s of runtimeSecrets) {
+            wireRuntimeSecret(fn, s.key, props.secrets);
           }
         }
       }

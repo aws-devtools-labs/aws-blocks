@@ -16,6 +16,7 @@ import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'node:url';
+import { isSecret, resolveSecretsAtSynth, secretStoreLocator } from '@aws-blocks/hosting';
 import type {
   BranchConfig,
   PipelineProps,
@@ -241,18 +242,22 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
       actualScope = new cdk.Stack(scope, id);
     }
 
+    // Resolve a secret() connectionArn at SYNTH time (before validation/use).
+    // CodeBuild has no `.env`, so a store-backed secret is the right mechanism.
+    const resolvedProps = await resolveSourceSecrets(props);
+
     // Create the Pipeline instance in async-init mode (skips sync pipeline building)
-    const instance = new Pipeline<TConfig>(actualScope, id, props, {
+    const instance = new Pipeline<TConfig>(actualScope, id, resolvedProps, {
       marker: Pipeline._ASYNC_INIT,
       pipelines: new Map(),
     });
 
-    validateProps(instance, props);
+    validateProps(instance, resolvedProps);
 
     const pipelines = new Map<string, CodePipeline>();
 
-    for (const branchConfig of props.branches) {
-      const pipeline = await createBranchPipelineAsync(instance, id, branchConfig, props, resolvedAppFile);
+    for (const branchConfig of resolvedProps.branches) {
+      const pipeline = await createBranchPipelineAsync(instance, id, branchConfig, resolvedProps, resolvedAppFile);
       pipelines.set(branchConfig.branch, pipeline);
     }
 
@@ -264,6 +269,66 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────
+
+/**
+ * Resolve a `secret()` marker on `source.connectionArn` to a plaintext ARN at
+ * synth time, returning props with the resolved literal. A plain-string ARN is
+ * returned unchanged. Uses the shared hosting resolver (SSM/Secrets Manager),
+ * so the pipeline needs no store code of its own.
+ */
+async function resolveSourceSecrets<TConfig>(props: PipelineProps<TConfig>): Promise<PipelineProps<TConfig>> {
+  const arn = props.source.connectionArn;
+  if (!isSecret(arn)) return props;
+
+  // Resolve from the SAME namespace/store the caller configured for
+  // buildSecrets — otherwise a `secrets: { store, prefix }` config would apply
+  // to buildSecrets but silently NOT to a secret() connectionArn.
+  const resolved = await resolveSecretsAtSynth([arn.key], {
+    prefix: props.secrets?.prefix,
+    store: props.secrets?.store,
+  });
+  const value = resolved.get(arn.key);
+  if (value === undefined) {
+    throw new Error(`Pipeline: connectionArn secret('${arn.key}') did not resolve.`);
+  }
+  return { ...props, source: { ...props.source, connectionArn: value } };
+}
+
+/**
+ * Map `buildSecrets` markers to CodeBuild environment variables that CodeBuild
+ * fetches from the store **at build time** (type `SECRETS_MANAGER` or
+ * `PARAMETER_STORE`). CodeBuild grants the build role read on each referenced
+ * secret and masks the value in build logs; the value never enters the template.
+ * Returns `undefined` when there are no build secrets, so the buildEnvironment
+ * is left untouched in that case.
+ */
+function buildSecretEnvVars<TConfig>(
+  props: PipelineProps<TConfig>,
+): Record<string, codebuild.BuildEnvironmentVariable> | undefined {
+  const buildSecrets = props.buildSecrets;
+  if (!buildSecrets || Object.keys(buildSecrets).length === 0) return undefined;
+
+  const prefix = props.secrets?.prefix;
+  const store = props.secrets?.store;
+  const type =
+    (store ?? 'secrets-manager') === 'secrets-manager'
+      ? codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER
+      : codebuild.BuildEnvironmentVariableType.PARAMETER_STORE;
+
+  const envVars: Record<string, codebuild.BuildEnvironmentVariable> = {};
+  for (const [name, marker] of Object.entries(buildSecrets)) {
+    if (!isSecret(marker)) {
+      throw new Error(
+        `Pipeline: buildSecrets['${name}'] must be a secret('...') marker. ` +
+          'Pass a marker so the value is read from the store at build time, never inlined.',
+      );
+    }
+    // CodeBuild resolves this locator at build time: the SM secret name or the
+    // SSM parameter name (secretStoreLocator produces the store-appropriate form).
+    envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store }) };
+  }
+  return envVars;
+}
 
 function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConfig>): void {
   if (props.stageFactory && props.appFile) {
@@ -277,6 +342,14 @@ function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConf
   if (!props.source.repo.includes('/')) {
     throw new Error(
       `Pipeline: \`repo\` must be in "owner/repo" format (got "${props.source.repo}").`,
+    );
+  }
+
+  if (isSecret(props.source.connectionArn)) {
+    throw new Error(
+      "Pipeline: `connectionArn: secret('...')` resolves at synth time and " +
+        'requires the async path — use `await Pipeline.create(scope, id, props)` ' +
+        'instead of `new Pipeline(...)`.',
     );
   }
 
@@ -397,11 +470,18 @@ function buildCodePipeline<TConfig>(
     ? false
     : (branchConfig.triggerOnPush ?? props.source.triggerOnPush ?? true);
 
+  // connectionArn is resolved to a plain string by resolveSourceSecrets (async
+  // path) and rejected as a marker by validateProps (sync path), so by here it
+  // is always a string. Guard defensively to satisfy the type + catch misuse.
+  const connectionArn = props.source.connectionArn;
+  if (isSecret(connectionArn)) {
+    throw new Error('Pipeline: unresolved connectionArn secret — use `await Pipeline.create(...)`.');
+  }
   const source = props._sourceOverride ?? CodePipelineSource.connection(
     props.source.repo,
     branchConfig.branch,
     {
-      connectionArn: props.source.connectionArn,
+      connectionArn,
       triggerOnPush,
     },
   );
@@ -429,6 +509,10 @@ function buildCodePipeline<TConfig>(
     ? undefined
     : (props.synth?.partialBuildSpec ?? DEFAULT_SYNTH_PARTIAL_BUILD_SPEC);
 
+  // buildSecrets → CodeBuild env vars fetched from the store at build time
+  // (SECRETS_MANAGER / PARAMETER_STORE). CodeBuild grants read + masks logs.
+  const secretEnvVars = buildSecretEnvVars(props);
+
   return new CodePipeline(construct, branchId, {
     synth: synthStep,
     selfMutation: props.selfMutation ?? true,
@@ -442,6 +526,9 @@ function buildCodePipeline<TConfig>(
       buildEnvironment: {
         buildImage: props.synth?.buildImage ?? codebuild.LinuxBuildImage.AMAZON_LINUX_2023_5,
         computeType: props.synth?.computeType ?? codebuild.ComputeType.MEDIUM,
+        // Only set environmentVariables when there are build secrets, so the
+        // field is omitted (not set to undefined) in the common no-secrets case.
+        ...(secretEnvVars ? { environmentVariables: secretEnvVars } : {}),
       },
     },
   });
