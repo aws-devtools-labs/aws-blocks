@@ -6,6 +6,7 @@ import { nextjsAdapter } from './nextjs.js';
 import { nitroAdapter } from './nitro.js';
 import { nuxtAdapter } from './nuxt.js';
 import { astroAdapter } from './astro.js';
+import { sveltekitAdapter } from './sveltekit.js';
 import { DeployManifest } from '../manifest/types.js';
 
 export { spaAdapter } from './spa.js';
@@ -18,6 +19,8 @@ export { nuxtAdapter } from './nuxt.js';
 export type { NuxtAdapterOptions } from './nuxt.js';
 export { astroAdapter } from './astro.js';
 export type { AstroAdapterOptions } from './astro.js';
+export { sveltekitAdapter } from './sveltekit.js';
+export type { SveltekitAdapterOptions } from './sveltekit.js';
 // Re-exported so the integration layer (core `Hosting`) can normalize a
 // user-declared `basePath` prop the same way adapters normalize the
 // framework-config value, keeping one canonical form for `manifest.basePath`.
@@ -52,6 +55,10 @@ const adapterRegistry = new Map<string, AdapterRegistryEntry>([
   // configs that pin `framework: 'nuxt'` keep working.
   ['nuxt', { adapter: (projectDir: string) => nuxtAdapter({ projectDir }) }],
   ['astro', { adapter: (projectDir: string) => astroAdapter({ projectDir }) }],
+  [
+    'sveltekit',
+    { adapter: (projectDir: string) => sveltekitAdapter({ projectDir }) },
+  ],
   ['spa', { adapter: spaAdapter }],
   ['static', { adapter: spaAdapter }],
 ]);
@@ -161,6 +168,14 @@ export const detectFramework = (projectDir: string): string => {
 
   if ('astro' in deps) {
     return 'astro';
+  }
+
+  // SvelteKit probe runs after the framework-specific checks above (a
+  // SvelteKit app declares `@sveltejs/kit`, never `next`/`nuxt`/`astro`) and
+  // before the SPA fallback. `svelte` alone (without `@sveltejs/kit`) is a
+  // plain Svelte + Vite SPA, so we key on `@sveltejs/kit` specifically.
+  if ('@sveltejs/kit' in deps) {
+    return 'sveltekit';
   }
 
   return 'spa';
