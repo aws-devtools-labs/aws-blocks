@@ -3,12 +3,12 @@
  *
  * Run: npm run blocks:generate-client
  *
- * Uses the core generateClientCode() to discover ApiNamespace exports,
+ * Uses generateClientCode() to discover ApiNamespace exports,
  * then injects the Amplify auth middleware and URL configuration.
  */
-import { resolve, dirname, join } from 'node:path';
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { generateClientCode } from '@aws-blocks/core/scripts';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { generateClientCode } from '@aws-blocks/blocks/scripts';
 
 const awsBlocksDir = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const foundationPath = join(awsBlocksDir, 'index.ts');
@@ -21,8 +21,8 @@ let code = await generateClientCode(foundationPath);
 // Standard: __BLOCKS_ApiNamespaceClient__('name')
 // Amplify:  __BLOCKS_ApiNamespaceClient__('name', { url: BLOCKS_API_URL })
 code = code.replace(
-  /__BLOCKS_ApiNamespaceClient__\('([^']+)'\)/g,
-  "__BLOCKS_ApiNamespaceClient__('$1', { url: BLOCKS_API_URL })"
+	/__BLOCKS_ApiNamespaceClient__\('([^']+)'\)/g,
+	"__BLOCKS_ApiNamespaceClient__('$1', { url: BLOCKS_API_URL })",
 );
 
 // Replace the auto-generated header and imports with Amplify-specific preamble

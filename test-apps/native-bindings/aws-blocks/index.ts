@@ -15,6 +15,7 @@ import {
   stubIdp,
   relayOrigin,
   Realtime,
+  RealtimeChannel,
   FileBucket,
   DistributedTable,
 } from '@aws-blocks/blocks';
@@ -339,7 +340,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Realtime
   // --------------------------------------------------------------------------
 
-  async realtimeGetChannel(channel?: string) {
+  async realtimeGetChannel(channel?: string): Promise<RealtimeChannel<Cursor>> {
     return realtime.getChannel('cursors', channel ?? 'default');
   },
 
