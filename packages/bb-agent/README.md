@@ -800,13 +800,13 @@ To wire this agent to a frontend, see [Example 1](#1-end-to-end-backend--fronten
 
 ## What It Provisions
 
-The Agent BB composes several internal Building Blocks automatically:
+The Agent BB provisions the following on AWS — the AgentCore Runtime plus two internal Building Blocks:
 
-| BB | AWS Resource | Purpose |
-|----|-------------|---------|
-| AgentCore `Runtime` | Bedrock AgentCore | Hosts and runs the agent; streams to the browser directly |
-| `FileBucket` | S3 | Session snapshot storage (agent state between turns) |
-| `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
+| Component | AWS Resource | Purpose |
+|-----------|-------------|---------|
+| AgentCore Runtime | Bedrock AgentCore | Hosts and runs the agent; streams to the browser directly |
+| `FileBucket` (BB) | S3 | Session snapshot storage (agent state between turns) |
+| `DistributedTable` × 2 (BB) | DynamoDB | Conversations table + messages table |
 
 When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
 
