@@ -717,7 +717,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   // The browser calls this to learn where to stream. It pairs the Agent's endpoint with a
   // short-lived JWT from the auth BB. userId comes from the authenticated session, not the
-  // client, so a caller can't stream as someone else.
+  // client, so a caller can't stream as someone else. Note: on the JWT/WebSocket path the
+  // runtime derives the persistence userId from the validated token `sub`, so this value is a
+  // fallback used only on IAM runtimes (see DESIGN.md "Canonical persistence identity").
   async getStreamEndpoint(conversationId?: string) {
     const user = await auth.requireAuth(context);
     const endpoint = await agent.getStreamEndpoint({ conversationId });
