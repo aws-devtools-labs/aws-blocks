@@ -14,7 +14,10 @@
  *   - `/ws` (WebSocket) — the browser-direct path. Browsers can't open the SSE endpoint
  *     cross-origin (no CORS), but WebSocket isn't subject to CORS and its session idle-timeout
  *     resets on every message, so a chat/HITL conversation streams with no API-Gateway 30s cap.
- * Both drive the SAME `agent.streamSSE()` generator and emit the SAME chunk frames.
+ * Both drive the SAME `agent.streamSSE()` generator and emit the SAME chunk frames. Both also
+ * derive identity from the gateway-validated JWT: the `sub` becomes the persistence `userId` and
+ * is injected into tool `context` as `context.userId` (see `resolveToolContext`), so a
+ * `toolContextSchema` agent runs browser-direct with an unforgeable caller identity.
  *
  * How the developer's agent definition reaches this process:
  *   The `tools` callback in AgentConfig is a JS closure and cannot be serialized across a
@@ -48,7 +51,14 @@ const requestSchema = z.object({
 	userId: z.string().optional(),
 	/** HITL resume: approval responses to apply instead of a new prompt. */
 	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
-	/** Per-call tool context, threaded through to tool handlers. Must be JSON-serializable. */
+	/**
+	 * Per-call tool context, threaded through to tool handlers. Must be JSON-serializable.
+	 *
+	 * On JWT runtimes the server injects the validated `sub` as `context.userId` (see
+	 * `resolveToolContext`), overriding any client-supplied `userId`. This lets a
+	 * `toolContextSchema` agent that scopes tools by `userId` run browser-direct (where the
+	 * transport carries no context) with an unforgeable identity.
+	 */
 	context: z.unknown().optional(),
 });
 
@@ -74,6 +84,23 @@ export function userIdFromContext(headers: Record<string, string> | undefined): 
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Fold the gateway-verified identity into the tool `context` handed to `streamSSE`.
+ *
+ * The browser-direct WebSocket transport carries no tool `context`, so a `toolContextSchema`
+ * agent (which requires `context`) could not otherwise run browser-direct. When a validated
+ * `jwtUserId` is present we inject it as `context.userId` — the same `sub` we key persistence
+ * on — so context-scoped tools receive an unforgeable caller identity. The verified value WINS
+ * over any client-supplied `userId` in `context`; a client cannot claim to be someone else.
+ * With no token (IAM runtimes / no header forwarding) the client `context` passes through
+ * unchanged, preserving the server-mediated pattern where the backend builds `context` itself.
+ */
+export function resolveToolContext(jwtUserId: string | undefined, rawContext: unknown): unknown {
+	if (jwtUserId == null) return rawContext;
+	const base = typeof rawContext === 'object' && rawContext !== null ? rawContext : {};
+	return { ...(base as Record<string, unknown>), userId: jwtUserId };
 }
 
 /**
@@ -110,7 +137,7 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 					conversationId: context.sessionId,
 					userId: jwtUserId ?? request.userId,
 					interruptResponses: request.interruptResponses,
-					context: request.context,
+					context: resolveToolContext(jwtUserId, request.context),
 				})) {
 					// The chunk's `type` is the SSE event name; the rest is the data payload.
 					const { type, ...data } = chunk;
@@ -135,7 +162,7 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 						conversationId: context.sessionId,
 						userId: jwtUserId ?? request.userId,
 						interruptResponses: request.interruptResponses,
-						context: request.context,
+						context: resolveToolContext(jwtUserId, request.context),
 					})) {
 						const { type, ...data } = chunk;
 						socket.send(JSON.stringify({ event: type, data }));

@@ -1418,7 +1418,7 @@ describe('createAgentCoreWsTransport', () => {
 
 // ── AgentCore entry: server-side userId from forwarded JWT ──────────────────
 
-import { userIdFromContext } from './agentcore-entry.js';
+import { resolveToolContext, userIdFromContext } from './agentcore-entry.js';
 
 describe('userIdFromContext', () => {
 	// Build an unsigned JWT with the given claims (we only decode the payload).
@@ -1448,5 +1448,28 @@ describe('userIdFromContext', () => {
 
 	test('returns undefined when the token carries no sub claim', () => {
 		assert.strictEqual(userIdFromContext({ Authorization: `Bearer ${jwt({ client_id: 'abc' })}` }), undefined);
+	});
+});
+
+describe('resolveToolContext', () => {
+	test('injects the verified userId when the client sent no context (browser-direct)', () => {
+		// A toolContextSchema agent requires context; the WS transport carries none, so the
+		// server supplies { userId: sub } from the validated token.
+		assert.deepStrictEqual(resolveToolContext('sub-123', undefined), { userId: 'sub-123' });
+	});
+
+	test('verified userId overrides a client-supplied userId (no spoofing)', () => {
+		const out = resolveToolContext('sub-123', { userId: 'someone-else', tier: 'gold' });
+		assert.deepStrictEqual(out, { userId: 'sub-123', tier: 'gold' });
+	});
+
+	test('passes client context through unchanged when there is no token (IAM runtime)', () => {
+		const ctx = { userId: 'server-built', tier: 'gold' };
+		assert.strictEqual(resolveToolContext(undefined, ctx), ctx);
+		assert.strictEqual(resolveToolContext(undefined, undefined), undefined);
+	});
+
+	test('handles a non-object client context by starting fresh', () => {
+		assert.deepStrictEqual(resolveToolContext('sub-123', 'garbage'), { userId: 'sub-123' });
 	});
 });
