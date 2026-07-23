@@ -558,6 +558,10 @@ function stripBasePath(uri, bp) {
  *   - SPA fallback (`/index.html`) for extensionless non-`.well-known` paths.
  *   - basePath canonical 308 + strip on static; kept on compute.
  *   - static → `/builds/<buildId>/` prefix; compute keeps URI + x-forwarded-host.
+ *   - HTML documents resolve from the CURRENT build (never a pinned `__dpl`
+ *     cookie build) so HTML, the response-stamped cookie, and the HTML's
+ *     content-hashed assets always agree on one generation (issue #245);
+ *     assets still honor the cookie for mid-session consistency.
  */
 export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
 ${SHARED_CF_HELPERS}
@@ -713,6 +717,19 @@ async function handler(event) {
       if (seg2.indexOf('.') === -1) { uri = uri + '/index.html'; }
     }
   }
+  // HTML documents always resolve from the CURRENT build, never a pinned
+  // __dpl cookie build. The viewer-response function stamps __dpl = current
+  // build on every HTML response, so honoring the cookie for HTML would serve
+  // a returning visitor the OLD build's HTML while advancing their cookie to
+  // the new build. The old HTML's content-hashed assets (which only exist
+  // under the old build prefix) then rewrite to the new build prefix and 404,
+  // rendering a blank page (issue #245). Assets keep honoring the cookie so a
+  // mid-session visitor's already-loaded page still resolves its old-build
+  // assets (old builds/<id>/ prefixes are retained via prune:false) until the
+  // next HTML navigation, which lands them consistently on the current build.
+  // This runs AFTER the SPA/directory-index fallback so extensionless routes
+  // rewritten to /index.html are covered too.
+  if (uri.lastIndexOf('.html') === uri.length - 5) { buildId = meta.b; }
   request.uri = '/builds/' + buildId + uri;
   return request;
 }`;

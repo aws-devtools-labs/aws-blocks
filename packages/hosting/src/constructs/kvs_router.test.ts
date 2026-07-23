@@ -395,13 +395,16 @@ void describe('request fn — F8 consolidated basePath strip (consistent boundar
 
 void describe('generated request fn — skew cookie gating', () => {
   const manifest = baseManifest({ routes: [{ pattern: '/*', target: 'static' }] });
-  const reqWithCookie = {
-    uri: '/page.html',
+  const assetWithCookie = {
+    uri: '/assets/index-oldhash.js',
     headers: { host: { value: 'x.test' } },
     cookies: { __dpl: { value: 'oldbuild-123' } },
   };
 
-  void it('HONORS __dpl when skew enabled (pins to cookie build)', async () => {
+  void it('HONORS __dpl for ASSETS when skew enabled (pins to cookie build)', async () => {
+    // A content-hashed asset must keep resolving from the cookie's build so a
+    // mid-session visitor's already-loaded page can still fetch its old-build
+    // assets after a new deploy lands (old builds/<id>/ prefixes are retained).
     const entries = buildKvsEntries({
       manifest,
       buildId: 'newbuild',
@@ -412,7 +415,7 @@ void describe('generated request fn — skew cookie gating', () => {
     const { output } = await runRequestFn(
       generateKvsRouterRequestCode(),
       entries,
-      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+      { ...assetWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
     );
     assert.match(output.uri, /^\/builds\/oldbuild-123\//);
   });
@@ -428,9 +431,78 @@ void describe('generated request fn — skew cookie gating', () => {
     const { output } = await runRequestFn(
       generateKvsRouterRequestCode(),
       entries,
-      { ...reqWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
+      { ...assetWithCookie, cookies: { __dpl: { value: 'oldbuild-123' } } },
     );
     assert.match(output.uri, /^\/builds\/newbuild\//);
+  });
+});
+
+void describe('generated request fn — HTML always resolves from the current build (#245)', () => {
+  // Regression guard for the returning-visitor blank page: the viewer-request
+  // function honored the __dpl cookie for HTML while the viewer-response
+  // function stamped __dpl = current build on every HTML response. A returning
+  // visitor was served the OLD build's HTML but advanced to the new cookie, so
+  // the old HTML's content-hashed assets rewrote to the new build prefix and
+  // 404'd — a blank page. HTML must resolve from the current build so HTML,
+  // cookie, and assets always agree on one generation.
+  const reqWith = (uri: string) => ({
+    uri,
+    headers: { host: { value: 'x.test' } },
+    cookies: { __dpl: { value: 'oldbuild-123' } },
+  });
+
+  void it('serves a static .html doc from the CURRENT build despite an old __dpl cookie', async () => {
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/page.html'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
+
+  void it('serves a non-SPA directory-index doc from the CURRENT build despite an old cookie', async () => {
+    // /about → /about/index.html (directory-index), which must also be current.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/about'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/about/index.html');
+  });
+
+  void it('serves the SPA fallback (/index.html) from the CURRENT build despite an old cookie', async () => {
+    // SPA rewrites an extensionless route to /index.html; the .html suffix
+    // check runs after the fallback, so the SPA shell is current too.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        routes: [{ pattern: '/*', target: 'static' }],
+        staticAssets: { directory: 'dist', spaFallback: true },
+      }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/dashboard'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/index.html');
   });
 });
 
