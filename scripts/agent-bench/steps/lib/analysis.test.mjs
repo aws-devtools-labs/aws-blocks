@@ -1,22 +1,20 @@
-// Unit tests for the analysis helpers (analysis.mjs) — the PURE pieces of the
-// two-level, bottom-up analysis feature: per-cell trimming + prompt building,
-// and the top-level roll-up prompt. These pin the trace-trimming caps and the
-// prompt shapes so the LLM input stays small and the roll-up correctly consumes
-// the per-cell `analysis` fields + low/regressed flags. Run under bare
-// `node --test` (no build step): plain .mjs, same as the module under test. The
-// Bedrock call (bedrockConverse) is I/O and intentionally NOT exercised here.
+// Unit tests for the PURE analysis helpers (analysis.mjs): trace trimming caps + prompt building for
+// the per-cell and roll-up prompts. Run under bare `node --test`. bedrockConverse (I/O) is not exercised.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	LOW_THRESHOLD,
+	MAX_CELL_ISSUES,
 	MAX_ERROR_LINES,
+	MAX_ISSUE_LEN,
 	MAX_TAIL_CHARS,
 	MAX_TOOL_NAMES,
 	REGRESSION_DELTA,
 	buildCellUserText,
 	buildRollupUserText,
 	oneLine,
+	parseCellAnalysis,
 	summarizeMetrics,
 	trimTrace,
 } from './analysis.mjs';
@@ -139,6 +137,52 @@ describe('buildCellUserText(input)', () => {
 		const text = buildCellUserText({ task: 't', template: 'x', judgeExplanation: long });
 		const noteLine = text.split('\n').find((l) => l.startsWith('Judge notes'));
 		assert.ok(noteLine.length < 700, `judge notes line should be trimmed, got ${noteLine.length}`);
+	});
+});
+
+describe('parseCellAnalysis(text)', () => {
+	it('splits the ANALYSIS + ISSUES contract into a one-line analysis and bullet issues', () => {
+		const raw = [
+			'ANALYSIS: Built a working notes app with AuthBasic + KVStore; clean pass.',
+			'A couple of bash retries early on.',
+			'ISSUES:',
+			'- Repeated fileEditor errors before finding the KVStore API',
+			'- Dev server took 3 restarts to bind a port',
+		].join('\n');
+		const { analysis, issues } = parseCellAnalysis(raw);
+		assert.equal(analysis, 'Built a working notes app with AuthBasic + KVStore; clean pass. A couple of bash retries early on.');
+		assert.deepEqual(issues, [
+			'Repeated fileEditor errors before finding the KVStore API',
+			'Dev server took 3 restarts to bind a port',
+		]);
+	});
+
+	it('treats "ISSUES: none" as no issues and strips the ANALYSIS label', () => {
+		const { analysis, issues } = parseCellAnalysis('ANALYSIS: Clean run — no notable struggle.\nISSUES: none');
+		assert.equal(analysis, 'Clean run — no notable struggle.');
+		assert.deepEqual(issues, []);
+	});
+
+	it('returns the whole text as analysis when there is no ISSUES section', () => {
+		const { analysis, issues } = parseCellAnalysis('Agent timed out — no trace to analyze.');
+		assert.equal(analysis, 'Agent timed out — no trace to analyze.');
+		assert.deepEqual(issues, []);
+	});
+
+	it('caps the issue count and the per-issue length', () => {
+		const many = ['ANALYSIS: x', 'ISSUES:'];
+		for (let i = 0; i < 20; i++) many.push(`- issue ${i} ${'y'.repeat(500)}`);
+		const { issues } = parseCellAnalysis(many.join('\n'));
+		assert.equal(issues.length, MAX_CELL_ISSUES);
+		for (const iss of issues) assert.ok(iss.length <= MAX_ISSUE_LEN);
+	});
+
+	it('is defensive about non-strings and empty issue lists', () => {
+		assert.deepEqual(parseCellAnalysis(null), { analysis: '', issues: [] });
+		assert.deepEqual(parseCellAnalysis(42), { analysis: '', issues: [] });
+		const { analysis, issues } = parseCellAnalysis('ANALYSIS: only analysis, blank issues.\nISSUES:\n\n');
+		assert.equal(analysis, 'only analysis, blank issues.');
+		assert.deepEqual(issues, []);
 	});
 });
 
