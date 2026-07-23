@@ -3,30 +3,33 @@
 Design document for the Agent Building Block. For usage, see [README.md](./README.md).
 
 **Package:** `@aws-blocks/bb-agent`
-**Type:** Composite (uses DistributedTable, Realtime, AsyncJob, FileBucket internally)
-**AWS Services:** Bedrock, DynamoDB, S3, SQS, AppSync Events
+**Type:** Composite (uses AgentCore Runtime, DistributedTable ×2, FileBucket internally)
+**AWS Services:** Bedrock (incl. AgentCore Runtime), DynamoDB, S3
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)
 
 ## Architecture
 
-The Agent BB is a composite Building Block — it creates and manages 4 internal BBs:
+The Agent BB is a composite Building Block. The agent loop runs on an **AgentCore Runtime** (replacing the former Lambda + SQS/AsyncJob + AppSync/Realtime streaming side-channel); conversation history + session state use DynamoDB and S3:
 
-| Internal BB | Purpose | Created when |
-|-------------|---------|-------------|
-| **FileBucket** | Session persistence (Strands SessionManager) | Always |
-| **DistributedTable** | Frontend message history | `inferenceOnly: false` |
-| **Realtime** | Streaming chunks to caller | Always |
-| **AsyncJob** | Async agent execution (avoids 29s API Gateway timeout) | Always |
+| Internal resource | Purpose | Created when |
+|-------------------|---------|-------------|
+| **AgentCore Runtime** | Hosts + runs the Strands agent loop; streams to the client | Always (deployed) |
+| **FileBucket** (S3) | Session persistence (Strands `S3SessionManager`) | Always |
+| **DistributedTable ×2** (DynamoDB) | Conversations table + messages table | `inferenceOnly: false` |
 
 ```
-stream() → AsyncJob.submit() → returns { channelId } immediately
-                ↓
-         AsyncJob consumer
-                ↓
-         runAgent() → Strands agent loop → publishes chunks to Realtime
-                                         → persists messages to DistributedTable
-                                         → SessionManager saves state to FileBucket
+streamSSE(message, { conversationId, userId })  ── runs the Strands agent loop and
+                                                    yields chunks as they are produced
+        │
+        ├─ AWS (browser): the runtime streams over a WebSocket (/ws) directly to the browser
+        ├─ AWS (buffered / non-browser): the runtime's /invocations (HTTP + SSE)
+        └─ Local dev: the dev-server SSE route (dev-stream.ts)
+        │
+        ├─ persists user / tool-call / tool-result / interrupt / assistant messages → DistributedTable
+        └─ Strands SessionManager saves agent state → S3 (for HITL resume)
 ```
+
+The old `stream()` → `AsyncJob.submit()` → Realtime-channel model is gone; `stream()`/`resume()` remain only as `@deprecated` wrappers over `streamSSE()`. See the "Streaming: layer / parity notes" section below for transport details and the browser WebSocket path.
 
 ## Session Persistence
 
