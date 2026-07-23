@@ -92,7 +92,7 @@ Each chunk yielded by `streamSSE()` has a `type` and type-specific fields:
 |------|--------|-------------|
 | `text-delta` | `text: string` | Incremental text token (in `'token'` streaming mode) or full block (in `'block'` mode). |
 | `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. |
-| `tool-result` | `toolName: string` | Tool returned a result. (No `text` on this chunk — read the tool output from conversation history if needed.) |
+| `tool-result` | `toolName: string` | Tool returned a result. Read the tool output from conversation history if you need it. |
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
 | `error` | `error: string` | Agent encountered an error. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
