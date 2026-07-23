@@ -9,6 +9,7 @@
   },
   "workspaces": ["aws-blocks"],
   "scripts": {
+    "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
     "dev": "tsx watch aws-blocks/scripts/server.ts",
