@@ -186,6 +186,21 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('generates a lazy backend import for the React template Lambda handler', () => {
+    const tmpDir = join(__dirname, '../.test-react-lambda-handler');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'react-app', version: '1.0.0' }));
+    try {
+      const result = run(['-y', '--skip-install', '--template', 'react'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const handler = readFileSync(join(tmpDir, 'aws-blocks', 'index.handler.ts'), 'utf-8');
+      assert.match(handler, /createLambdaHandler\(\(\) => import\('\.\/index\.js'\)\)/);
+      assert.doesNotMatch(handler, /import \* as backend/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('handles Yarn Classic workspace format (object with packages array)', () => {
     const tmpDir = join(__dirname, '../.test-yarn-classic');
     mkdirSync(tmpDir, { recursive: true });
