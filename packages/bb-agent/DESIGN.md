@@ -21,15 +21,14 @@ The Agent BB is a composite Building Block. The agent loop runs on an **AgentCor
 streamSSE(message, { conversationId, userId })  ── runs the Strands agent loop and
                                                     yields chunks as they are produced
         │
-        ├─ AWS (browser): the runtime streams over a WebSocket (/ws) directly to the browser
-        ├─ AWS (buffered / non-browser): the runtime's /invocations (HTTP + SSE)
+        ├─ AWS: the runtime's /invocations endpoint (HTTP + SSE)
         └─ Local dev: the dev-server SSE route (dev-stream.ts)
         │
         ├─ persists user / tool-call / tool-result / interrupt / assistant messages → DistributedTable
         └─ Strands SessionManager saves agent state → S3 (for HITL resume)
 ```
 
-The old `stream()` → `AsyncJob.submit()` → Realtime-channel model is gone; `stream()`/`resume()` remain only as `@deprecated` wrappers over `streamSSE()`. See the "Streaming: layer / parity notes" section below for transport details and the browser WebSocket path.
+The old `stream()` → `AsyncJob.submit()` → Realtime-channel model is gone; `stream()`/`resume()` remain only as `@deprecated` wrappers over `streamSSE()`. See the "Streaming: layer / parity notes" section below for transport details.
 
 ## Session Persistence
 
@@ -49,7 +48,7 @@ The CDK class mirrors the runtime's BB creation:
 
 ## Streaming: layer / parity notes
 
-- **`getStreamEndpoint()` is AWS-only by design.** It returns the deployed AgentCore Runtime endpoint the browser streams to; the base/mock implementation throws a clear error. This is an intentional parity choice, not a silent gap: locally there is no runtime to connect to, so streaming goes through the dev-server SSE route registered via `registerDevAttachment('@aws-blocks/bb-agent/dev-stream')`. The method exists on every layer (defined on `AgentBase`) so it type-checks everywhere; only the deployed runtime returns a real endpoint.
+- **`getStreamEndpoint()` is AWS-only by design.** It returns the deployed AgentCore Runtime endpoint the client streams to; the base/mock implementation throws a clear error. This is an intentional parity choice, not a silent gap: locally there is no runtime to connect to, so streaming goes through the dev-server SSE route registered via `registerDevAttachment('@aws-blocks/bb-agent/dev-stream')`. The method exists on every layer (defined on `AgentBase`) so it type-checks everywhere; only the deployed runtime returns a real endpoint.
 - **Body-supplied `userId` on the AgentCore invocation path is unauthenticated at this layer.** The `/invocations` handler reads `userId` from the request body, which scopes conversation persistence. Invocation itself is gated by the runtime's **authorizer** (IAM SigV4, or a JWT authorizer when an auth BB is wired). Server-verified identity — deriving `userId` from the validated JWT's `sub` claim so a caller cannot claim another user's history — is added with the browser-WebSocket / JWT-forwarding work. **Do not expose the runtime to untrusted callers without an authorizer.**
 
 ## Model Providers
