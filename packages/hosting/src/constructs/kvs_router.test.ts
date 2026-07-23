@@ -506,6 +506,33 @@ void describe('generated request fn — HTML always resolves from the current bu
   });
 });
 
+void describe('generated functions — CloudFront 10 KB code-size limit', () => {
+  // CloudFront Functions reject code larger than 10 KB with an opaque HTTP 413
+  // at deploy time ("Internal error reported from downstream service"), which
+  // rolls the whole stack back. The generated source (including any in-function
+  // comments) ships verbatim, so a verbose comment can silently blow the budget.
+  // These guards fail loudly at unit-test time instead. Regression for the #245
+  // fix, whose first draft added a multi-line rationale comment INSIDE the
+  // function string and pushed it from 9.6 KB to 10.6 KB → 413 on deploy.
+  const LIMIT = 10 * 1024;
+
+  void it('viewer-request function stays under 10 KB', () => {
+    const bytes = Buffer.byteLength(generateKvsRouterRequestCode(), 'utf8');
+    assert.ok(
+      bytes < LIMIT,
+      `viewer-request function is ${bytes} B; must stay under the CloudFront 10 KB (${LIMIT} B) limit`,
+    );
+  });
+
+  void it('viewer-response function stays under 10 KB', () => {
+    const bytes = Buffer.byteLength(generateKvsRouterResponseCode(86400), 'utf8');
+    assert.ok(
+      bytes < LIMIT,
+      `viewer-response function is ${bytes} B; must stay under the CloudFront 10 KB (${LIMIT} B) limit`,
+    );
+  });
+});
+
 void describe('generated response fn — per-pattern headers (mid-wildcard)', () => {
   void it('applies a header rule whose source has a mid-segment wildcard', async () => {
     const manifest = baseManifest({
