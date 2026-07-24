@@ -67,7 +67,7 @@ test('CDK: KVStore.fromExisting returns a branded ref', () => {
 test('CDK: calling a runtime data method throws an actionable error (not a cryptic TypeError)', () => {
   const { parent } = setup();
   const store = new KVStore(parent, 'sessions') as any;
-  for (const method of ['get', 'put', 'delete', 'scan']) {
+  for (const method of ['get', 'put', 'delete', 'scan', 'toAgentTools']) {
     assert.throws(
       () => store[method]('k'),
       /cannot be called during CDK synth/,

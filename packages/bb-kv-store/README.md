@@ -129,6 +129,33 @@ const legacy = new KVStore(scope, 'legacy', {
 });
 ```
 
+## Agent Tools
+
+KVStore supports `toAgentTools()` to expose its operations as tools for the [Agent BB](../bb-agent/README.md#bb-provided-tools-toagenttools). Available methods: `get`, `put`, `delete`, `scan`.
+
+A KVStore can hold per-user data, so `toAgentTools()` requires either `scope` (lock operations to the current user) or `unscoped: true` (opt out for a shared store) — otherwise it throws:
+
+```typescript
+// shared store — opt out of scoping
+const agent = new Agent(scope, 'assistant', {
+  tools: (tool) => ({
+    ...store.toAgentTools({ include: ['get', 'put'], unscoped: true }),
+  }),
+});
+
+// per-user store — scope every operation to the caller
+const agent = new Agent(scope, 'assistant', {
+  toolContextSchema: z.object({ userId: z.string() }),
+  tools: (tool) => ({
+    ...store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }), exclude: ['scan'] }),
+  }),
+});
+```
+
+`scan` cannot be scope-isolated — it lists the whole store, so on a scoped store it would return every user's entries. `toAgentTools()` throws if `scan` is exposed under `scope`; exclude it as above, or use `unscoped: true` only when cross-user results are intended.
+
+See the [Agent BB documentation](../bb-agent/README.md#bb-provided-tools-toagenttools) for filtering, overrides, and full usage.
+
 ## Best Practices
 
 - Keep keys short and descriptive (e.g., `user:{id}`, `session:{token}`)

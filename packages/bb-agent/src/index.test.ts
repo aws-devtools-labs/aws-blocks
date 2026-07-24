@@ -382,6 +382,22 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(started, ['getOrder']);
 	});
 
+	// toAgentTools() generates names as `{bbId}__{methodName}` (e.g. memory__get).
+	// The matcher must split on `__` so a natural prompt mentioning the method word
+	// triggers the tool — otherwise BB-provided tools are untestable via the canned provider.
+	test('triggers a BB tool named {bbId}__{method} when the method word appears', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'memory__scan', description: 'List entries', inputSchema: {} }];
+		const started: string[] = [];
+		for await (const event of provider.stream(
+			[{ role: 'user', content: [{ text: 'please scan the store' }] }] as any,
+			{ toolSpecs } as any,
+		)) {
+			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+		}
+		assert.deepStrictEqual(started, ['memory__scan']);
+	});
+
 	test('responds to tool result with acknowledgment', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];

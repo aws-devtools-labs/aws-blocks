@@ -1,10 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { z } from 'zod';
+import { isBlocksError, Scope } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 
 // Clean mock data between tests to avoid cross-contamination
@@ -214,4 +215,114 @@ test('KVStoreErrors.ItemTooLarge is a distinct name, not generic ValidationExcep
 test('fullId generation with parent', () => {
 	const store = new KVStore({ id: 'parent' } as any, 'child');
 	assert.strictEqual(store.fullId, 'parent-child');
+});
+
+// ── toAgentTools() ──────────────────────────────────────────────────────────
+
+describe('toAgentTools()', () => {
+	test('throws unless scoped or explicitly unscoped', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		assert.throws(() => store.toAgentTools(), /holds per-user data/);
+	});
+
+	test('unscoped: true opts out of the scoping requirement', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools({ unscoped: true });
+		assert.deepStrictEqual(Object.keys(tools).sort(), ['memory__delete', 'memory__get', 'memory__put', 'memory__scan']);
+	});
+
+	test('scope satisfies the scoping requirement', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		// scan can't be scope-isolated, so a scoped store must exclude it
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
+		assert.deepStrictEqual(Object.keys(tools).sort(), ['memory__delete', 'memory__get', 'memory__put']);
+	});
+
+	test('scoping while exposing scan throws', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		assert.throws(
+			() => store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }) }),
+			/scan.*cannot be scope-isolated/,
+		);
+	});
+
+	test('scan is allowed on an unscoped store', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools({ unscoped: true });
+		assert.ok('memory__scan' in tools);
+	});
+
+	test('get handler reads from the store', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		await store.put('k', 'v');
+		const tools = store.toAgentTools({ unscoped: true });
+		const result = await tools['memory__get'].handler({ input: { key: 'k' }, context: {} });
+		assert.strictEqual(result, 'v');
+	});
+
+	test('put handler writes to the store', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools({ unscoped: true });
+		await tools['memory__put'].handler({ input: { key: 'k', value: 'v' }, context: {} });
+		assert.strictEqual(await store.get('k'), 'v');
+	});
+
+	test('scope pins the key to the caller', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		await store.put('user-123', 'mine');
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
+		// model tries to read another user's key; scope overrides it to the caller's
+		const result = await tools['memory__get'].handler({
+			input: { key: 'user-999' },
+			context: { userId: 'user-123' },
+		});
+		assert.strictEqual(result, 'mine');
+	});
+
+	test('scoped key is stripped from the parameters the model sees', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const tools = store.toAgentTools({ scope: (ctx: { userId: string }) => ({ key: ctx.userId }), exclude: ['scan'] });
+		const props = (tools['memory__get'].parameters as any).properties;
+		assert.ok(!('key' in props), 'scoped key should not be exposed to the model');
+		assert.deepStrictEqual((tools['memory__get'].parameters as any).required, []);
+	});
+
+	test('scan handler collects all entries', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		await store.put('a', '1');
+		await store.put('b', '2');
+		const tools = store.toAgentTools({ unscoped: true });
+		const result = await tools['memory__scan'].handler({ input: {}, context: {} }) as any[];
+		assert.strictEqual(result.length, 2);
+	});
+
+	test('scan handler respects limit', async () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		for (let i = 0; i < 5; i++) await store.put(`key${i}`, `val${i}`);
+		const tools = store.toAgentTools({ unscoped: true });
+		const result = await tools['memory__scan'].handler({ input: { limit: 2 }, context: {} }) as any[];
+		assert.strictEqual(result.length, 2);
+	});
+
+	test('a zod schema override replaces the parameters the model sees', () => {
+		const scope = new Scope('app');
+		const store = new KVStore(scope, 'memory');
+		const putSchema = z.object({ key: z.string(), value: z.object({ note: z.string() }) });
+		const tools = store.toAgentTools({
+			unscoped: true,
+			overrides: { put: { schema: putSchema } },
+		});
+		assert.strictEqual(tools['memory__put'].parameters, putSchema);
+	});
 });

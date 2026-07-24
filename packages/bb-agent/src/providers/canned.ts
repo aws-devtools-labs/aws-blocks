@@ -57,9 +57,15 @@ function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[]): str
 	return toolSpecs.filter(t => {
 		const name = t.name.toLowerCase();
 		if (promptMentionsWord(lower, name)) return true;
-		// Split camelCase into words (getWeather -> "get weather") and match each
-		// on word boundaries. Skip short words (<=2 chars) to avoid noise.
-		const words = t.name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(' ');
+		// Split into words and match each on word boundaries. Handles camelCase
+		// (getWeather -> "get weather") and the `{bbId}__{method}` convention that
+		// `toAgentTools()` generates (memory__get -> "memory get"). Skip short words
+		// (<=2 chars) to avoid noise.
+		const words = t.name
+			.replace(/([a-z])([A-Z])/g, '$1 $2')
+			.replace(/_+/g, ' ')
+			.toLowerCase()
+			.split(' ');
 		return words.some(w => w.length > 2 && promptMentionsWord(lower, w));
 	}).map(t => t.name);
 }
