@@ -133,6 +133,15 @@ async function createConversationManager(config?: ConversationManagerConfig) {
 export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Developer-facing agent configuration. */
 	protected config: AgentConfig<TContext>;
+
+	/**
+	 * The app-defined per-turn tool-context resolver, if configured. Exposed for the AgentCore
+	 * entrypoint (agentcore-entry.ts), which runs it against the verified JWT claims per turn.
+	 * See {@link AgentConfig.resolveToolContext}.
+	 */
+	get toolContextResolver(): AgentConfig<TContext>['resolveToolContext'] {
+		return this.config.resolveToolContext;
+	}
 	/** Tools resolved from the `tools` callback into a name→tool map (name = Record key). */
 	private toolMap: Map<string, AgentTool<TContext>>;
 	/** Conversation metadata table. */
