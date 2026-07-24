@@ -4,6 +4,16 @@
 
 ```ts
 
+import { AdminAction } from '@aws-blocks/bb-auth-cognito';
+import { AdminActionGate } from '@aws-blocks/bb-auth-cognito';
+import { AdminCreateInit } from '@aws-blocks/bb-auth-cognito';
+import { AdminDisabled } from '@aws-blocks/bb-auth-cognito';
+import { AdminGetterOf } from '@aws-blocks/bb-auth-cognito';
+import { AdminGrants } from '@aws-blocks/bb-auth-cognito';
+import { AdminOptions } from '@aws-blocks/bb-auth-cognito';
+import { AdminSurface } from '@aws-blocks/bb-auth-cognito';
+import { AdminUser } from '@aws-blocks/bb-auth-cognito';
+import { AdminUserFilter } from '@aws-blocks/bb-auth-cognito';
 import { Agent } from '@aws-blocks/bb-agent';
 import { AgentConfig } from '@aws-blocks/bb-agent';
 import { AgentErrors } from '@aws-blocks/bb-agent';
@@ -94,12 +104,14 @@ import { fromExisting } from '@aws-blocks/bb-data';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth-oidc';
 import { google } from '@aws-blocks/bb-auth-oidc';
+import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
+import { LifecycleAdmin } from '@aws-blocks/bb-auth-cognito';
 import { LifecycleRule } from '@aws-blocks/bb-file-bucket';
 import { LogEntry } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -136,6 +148,7 @@ import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
+import { SetPasswordOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInNextStep } from '@aws-blocks/bb-auth-cognito';
 import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInResult } from '@aws-blocks/bb-auth-cognito';
@@ -164,6 +177,26 @@ import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
+
+export { AdminAction }
+
+export { AdminActionGate }
+
+export { AdminCreateInit }
+
+export { AdminDisabled }
+
+export { AdminGetterOf }
+
+export { AdminGrants }
+
+export { AdminOptions }
+
+export { AdminSurface }
+
+export { AdminUser }
+
+export { AdminUserFilter }
 
 export { Agent }
 
@@ -434,6 +467,8 @@ export { github }
 
 export { google }
 
+export { GroupAdmin }
+
 export { KnowledgeBase }
 
 export { KnowledgeBaseErrors }
@@ -445,6 +480,8 @@ export { KVStore }
 export { KVStoreErrors }
 
 export { KVStoreOptions }
+
+export { LifecycleAdmin }
 
 export { LifecycleRule }
 
@@ -517,6 +554,8 @@ export { Segment }
 export { SendBatchResult }
 
 export { SendResult }
+
+export { SetPasswordOptions }
 
 export { SignInNextStep }
 

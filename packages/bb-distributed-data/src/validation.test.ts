@@ -50,6 +50,12 @@ describe('validateStatement', () => {
     ['ISOLATION LEVEL', 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'],
     // DSQL only supports C collation — locale-aware sorting is not available
     ['COLLATE', 'SELECT * FROM t ORDER BY name COLLATE "en_US"'],
+    // DROP COLUMN is not in DSQL's supported ALTER TABLE subset — rebuild the table instead
+    ['DROP COLUMN', 'ALTER TABLE t DROP COLUMN x'],
+    // Postgres allows omitting the COLUMN keyword — same DROP COLUMN action, same rejection
+    ['DROP COLUMN shorthand', 'ALTER TABLE t DROP x'],
+    ['DROP COLUMN IF EXISTS shorthand', 'ALTER TABLE t DROP IF EXISTS x'],
+    ['DROP COLUMN quoted shorthand', 'ALTER TABLE t DROP "identity"'],
   ] as const;
 
   for (const [label, sql] of rejects) {
@@ -57,6 +63,30 @@ describe('validateStatement', () => {
       assert.throws(() => validateStatement(sql), { name: 'DsqlValidationError' });
     });
   }
+
+  it('allows supported ALTER TABLE forms that contain DROP', () => {
+    // Per the DSQL ALTER TABLE grammar, the ALTER COLUMN ... DROP actions and
+    // DROP CONSTRAINT are supported — must not be confused with the
+    // unsupported DROP [COLUMN].
+    // https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP NOT NULL'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP EXPRESSION'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP CONSTRAINT c'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP CONSTRAINT IF EXISTS c CASCADE'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t RENAME TO t2'));
+    assert.doesNotThrow(() => validateStatement('DROP TABLE t'));
+  });
+
+  it('allows a supported ALTER TABLE followed by an unrelated statement in one batch', () => {
+    // The DROP COLUMN rule must not match across a statement boundary: the
+    // ALTER TABLE here is a supported DROP DEFAULT, and the DROP TABLE that
+    // follows the semicolon belongs to a different statement.
+    assert.doesNotThrow(() =>
+      validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT; DROP TABLE archived'),
+    );
+  });
 });
 
 describe('classifyStatement', () => {
