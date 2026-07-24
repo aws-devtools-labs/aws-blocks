@@ -15,9 +15,10 @@
  *     cross-origin (no CORS), but WebSocket isn't subject to CORS and its session idle-timeout
  *     resets on every message, so a chat/HITL conversation streams with no API-Gateway 30s cap.
  * Both drive the SAME `agent.streamSSE()` generator and emit the SAME chunk frames. Both also
- * derive identity from the gateway-validated JWT: the `sub` becomes the persistence `userId` and
- * is injected into tool `context` as `context.userId` (see `resolveToolContext`), so a
- * `toolContextSchema` agent runs browser-direct with an unforgeable caller identity.
+ * derive identity from the gateway-validated JWT: the `sub` becomes the persistence `userId`, and
+ * tool `context` is built server-side (see `buildToolContext`) — the agent's optional
+ * `resolveToolContext(claims)` hook runs against the verified claims, then `sub` is overlaid as
+ * `context.userId` — so a `toolContextSchema` agent runs browser-direct with an unforgeable identity.
  *
  * How the developer's agent definition reaches this process:
  *   The `tools` callback in AgentConfig is a JS closure and cannot be serialized across a
@@ -56,10 +57,11 @@ const requestSchema = z.object({
 	/**
 	 * Per-call tool context, threaded through to tool handlers. Must be JSON-serializable.
 	 *
-	 * On JWT runtimes the server injects the validated `sub` as `context.userId` (see
-	 * `resolveToolContext`), overriding any client-supplied `userId`. This lets a
-	 * `toolContextSchema` agent that scopes tools by `userId` run browser-direct (where the
-	 * transport carries no context) with an unforgeable identity.
+	 * On JWT runtimes the server builds this context server-side (see `buildToolContext`): the
+	 * agent's `resolveToolContext(claims)` hook (if configured) runs against the verified claims,
+	 * then the validated `sub` is overlaid as `context.userId`, overriding any client-supplied
+	 * value. This lets a `toolContextSchema` agent that scopes tools by identity run browser-direct
+	 * (where the transport carries no context) with an unforgeable identity.
 	 */
 	context: z.unknown().optional(),
 });
@@ -75,17 +77,22 @@ const requestSchema = z.object({
  * runtimes, or a path where the header wasn't forwarded), so the caller can fall back to the
  * client-supplied `userId`.
  */
-export function userIdFromContext(headers: Record<string, string> | undefined): string | undefined {
+export function claimsFromContext(headers: Record<string, string> | undefined): Record<string, unknown> | undefined {
 	const auth = headers?.Authorization ?? headers?.authorization;
 	const token = auth?.replace(/^Bearer\s+/i, '');
 	const payload = token?.split('.')[1];
 	if (!payload) return undefined;
 	try {
-		const claims = JSON.parse(Buffer.from(payload, 'base64url').toString()) as { sub?: string };
-		return typeof claims.sub === 'string' ? claims.sub : undefined;
+		return JSON.parse(Buffer.from(payload, 'base64url').toString()) as Record<string, unknown>;
 	} catch {
 		return undefined;
 	}
+}
+
+/** The gateway-verified `sub` from the forwarded token, or `undefined` when no bearer token is present. */
+export function userIdFromContext(headers: Record<string, string> | undefined): string | undefined {
+	const sub = claimsFromContext(headers)?.sub;
+	return typeof sub === 'string' ? sub : undefined;
 }
 
 /**
@@ -111,19 +118,30 @@ export function requireVerifiedIdentity(jwtUserId: string | undefined): void {
 }
 
 /**
- * Fold the gateway-verified identity into the tool `context` handed to `streamSSE`.
+ * Build the tool `context` handed to `streamSSE`, folding in the gateway-verified identity.
  *
  * The browser-direct WebSocket transport carries no tool `context`, so a `toolContextSchema`
- * agent (which requires `context`) could not otherwise run browser-direct. When a validated
- * `jwtUserId` is present we inject it as `context.userId` — the same `sub` we key persistence
- * on — so context-scoped tools receive an unforgeable caller identity. The verified value WINS
- * over any client-supplied `userId` in `context`; a client cannot claim to be someone else.
- * With no token (IAM runtimes / no header forwarding) the client `context` passes through
- * unchanged, preserving the server-mediated pattern where the backend builds `context` itself.
+ * agent (which requires `context`) could not otherwise run browser-direct. Two things happen:
+ *
+ * 1. If the agent declares an app `resolveToolContext(claims)` and a validated token is present,
+ *    it runs against the trusted claims to build the base context (e.g. a role from
+ *    `cognito:groups`). It cannot be forged — the runtime's JWT authorizer already validated the
+ *    token. When there's no resolver, the base is the client-supplied `context` (as before).
+ * 2. The verified `sub` is overlaid as `context.userId` LAST, so identity is always authoritative
+ *    and WINS over anything the resolver or client set — a client cannot claim to be someone else.
+ *
+ * With no token (IAM runtimes / no header forwarding) neither step runs and the client `context`
+ * passes through unchanged, preserving the server-mediated pattern where the backend builds it.
  */
-export function resolveToolContext(jwtUserId: string | undefined, rawContext: unknown): unknown {
-	if (jwtUserId == null) return rawContext;
-	const base = typeof rawContext === 'object' && rawContext !== null ? rawContext : {};
+export async function buildToolContext(
+	claims: Record<string, unknown> | undefined,
+	rawContext: unknown,
+	resolver?: (claims: Record<string, unknown>) => unknown,
+): Promise<unknown> {
+	const jwtUserId = typeof claims?.sub === 'string' ? claims.sub : undefined;
+	if (jwtUserId == null) return rawContext; // IAM / local — trust nothing from a missing token.
+	const resolved = resolver ? await resolver(claims as Record<string, unknown>) : rawContext;
+	const base = typeof resolved === 'object' && resolved !== null ? resolved : {};
 	return { ...(base as Record<string, unknown>), userId: jwtUserId };
 }
 
@@ -156,13 +174,14 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 				// AgentCore routes every invocation for a session to the same warm microVM.
 				// runtimeSessionId maps to the Agent BB's conversationId (session state key).
 				// Prefer the gateway-validated JWT's `sub` (unforgeable); fall back to the payload.
-				const jwtUserId = userIdFromContext(context.headers);
+				const claims = claimsFromContext(context.headers);
+				const jwtUserId = typeof claims?.sub === 'string' ? claims.sub : undefined;
 				requireVerifiedIdentity(jwtUserId); // fail closed on JWT runtimes with no forwarded token
 				for await (const chunk of agent.streamSSE(request.prompt, {
 					conversationId: context.sessionId,
 					userId: jwtUserId ?? request.userId,
 					interruptResponses: request.interruptResponses,
-					context: resolveToolContext(jwtUserId, request.context),
+					context: await buildToolContext(claims, request.context, agent.toolContextResolver),
 				})) {
 					// The chunk's `type` is the SSE event name; the rest is the data payload.
 					const { type, ...data } = chunk;
@@ -179,7 +198,8 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 			// On the WS path the token arrives via the Sec-WebSocket-Protocol subprotocol. On a
 			// JWT runtime a missing token is a fail-closed error (see requireVerifiedIdentity,
 			// called per-message below); only on IAM/local runtimes do we fall back to request.userId.
-			const jwtUserId = userIdFromContext(context.headers);
+			const claims = claimsFromContext(context.headers);
+			const jwtUserId = typeof claims?.sub === 'string' ? claims.sub : undefined;
 			socket.on('message', async (raw: unknown) => {
 				try {
 					requireVerifiedIdentity(jwtUserId); // fail closed on JWT runtimes with no forwarded token
@@ -188,7 +208,7 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 						conversationId: context.sessionId,
 						userId: jwtUserId ?? request.userId,
 						interruptResponses: request.interruptResponses,
-						context: resolveToolContext(jwtUserId, request.context),
+						context: await buildToolContext(claims, request.context, agent.toolContextResolver),
 					})) {
 						const { type, ...data } = chunk;
 						socket.send(JSON.stringify({ event: type, data }));
