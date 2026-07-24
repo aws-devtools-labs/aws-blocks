@@ -14,5 +14,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "nuxt": "^4.4.7"
   }
 }

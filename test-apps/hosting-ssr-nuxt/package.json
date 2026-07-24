@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
-    "nuxt": "^4.0.0",
+    "nuxt": "^4.4.7",
     "vue": "^3.5.0"
   },
   "devDependencies": {
