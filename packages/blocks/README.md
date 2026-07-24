@@ -109,31 +109,77 @@ onAuthChange(authApi, (user) => {
 
 ## Building Blocks
 
-Each block is its own package; full per-block docs ship in this package under **`docs/<package-name>.md`**, and **`docs/index.md`** has a decision tree to help you pick.
+Start from what you need:
 
-| Building Block | Import | Use it for |
-|---|---|---|
-| `Scope` | `@aws-blocks/blocks` | Resource boundaries / grouping for your backend |
-| `ApiNamespace` | `@aws-blocks/blocks` | Type-safe APIs wired to the frontend automatically |
-| `KVStore` | `@aws-blocks/blocks` | Simple key-value get/put/delete (prefs, flags, caches) |
-| `DistributedTable` | `@aws-blocks/blocks` | Structured data with indexes and queries — **default for most data** |
-| `DistributedDatabase` | `@aws-blocks/blocks` | Serverless SQL (Aurora DSQL) — zero-ops, scales to zero |
-| `Database` | `@aws-blocks/blocks` | Full PostgreSQL (Aurora) — FKs, RLS, triggers, or an existing DB |
-| `AuthBasic` | `@aws-blocks/blocks` | Username/password auth for prototypes, internal tools, MVPs |
-| `AuthCognito` | `@aws-blocks/blocks` | Cognito User Pools — MFA, groups, hosted identity |
-| `AuthOIDC` | `@aws-blocks/blocks` | Sign-in gated by an external OIDC identity provider |
-| `Realtime` | `@aws-blocks/blocks` | Push to browsers — chat, presence, live dashboards |
-| `AsyncJob` | `@aws-blocks/blocks` | Fire-and-forget background work (emails, uploads, reports) |
-| `CronJob` | `@aws-blocks/blocks` | Scheduled / recurring tasks |
-| `FileBucket` | `@aws-blocks/blocks` | File storage — uploads, downloads, presigned URLs |
-| `AppSetting` | `@aws-blocks/blocks` | A single config value or secret (flags, API keys) |
-| `KnowledgeBase` | `@aws-blocks/blocks` | Semantic document retrieval / RAG (Bedrock + S3 Vectors) |
-| `Agent` | `@aws-blocks/blocks` | AI agent — tool use, streaming, conversation persistence |
-| `EmailClient` | `@aws-blocks/blocks` | Transactional email (SES) |
-| `Logger` / `Metrics` / `Tracer` / `Dashboard` | `@aws-blocks/blocks` | Observability — structured logs, metrics, traces, CloudWatch dashboard |
-| `Hosting` | `@aws-blocks/blocks` | Deploy a frontend (SPA / static / Next.js SSR) on CloudFront + S3 |
+- **Store data**
+  - Simple key → value (caches, flags, user prefs) → `KVStore` (bb-kv-store)
+  - Structured records with indexes and queries → `DistributedTable` (bb-distributed-table) — **default for most data**
+  - Relational / SQL (joins, transactions) → see [Choosing a data block](#choosing-a-data-block) below
+  - Files, blobs, uploads, static assets → `FileBucket` (bb-file-bucket)
+  - A single config value or secret → `AppSetting` (bb-app-setting)
+- **Authenticate users**
+  - Username/password, prototypes/MVPs → `AuthBasic` (bb-auth-basic)
+  - Cognito user pools, MFA, groups → `AuthCognito` (bb-auth-cognito)
+  - External identity provider (OIDC) → `AuthOIDC` (bb-auth-oidc)
+- **Run work outside the request/response**
+  - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
+  - Scheduled / recurring tasks → `CronJob` (bb-cron-job)
+- **Push live updates to browsers** (chat, presence, dashboards) → `Realtime` (bb-realtime)
+- **Build AI features**
+  - Agent with tool use + conversation → `Agent` (bb-agent)
+  - Semantic document retrieval (RAG) → `KnowledgeBase` (bb-knowledge-base)
+- **Send transactional email** → `EmailClient` (bb-email-client)
+- **Observe and operate**
+  - Structured logs → `Logger` (bb-logger)
+  - Custom metrics → `Metrics` (bb-metrics)
+  - Distributed traces → `Tracer` (bb-tracer)
+  - Auto CloudWatch dashboard → `Dashboard` (bb-dashboard)
 
-> **Not sure which data block?** Start with `DistributedTable` (DynamoDB). Reach for SQL only when you need joins across records, many-dimensional filtering, large transactions, or an existing Postgres database — `DistributedDatabase` for serverless Postgres, `Database` for full Aurora Postgres (FKs, RLS, triggers; carries idle cost / cold starts the other two don't). The full rationale is in `docs/index.md`.
+### Choosing a data block
+
+Default to `DistributedTable` for your data models unless your domain specifically requires SQL engine capabilities.
+
+Reach for one of the SQL blocks when you need to filter or join results across more than one related record, filter models on many dimensions with no preset hierarchy, store large objects, require transactions, or otherwise need the flexibility or familiarity of SQL that NoSQL does not offer.
+
+If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible querying. Use `Database` specifically when you need a full (more expensive) Postgres implementation where the engine itself provides and enforces foreign keys, row level security, triggers, views, large transactions (more than 3,000 rows), or integration with an existing Postgres database. Note it carries an idle cost at minimum 0.5 ACU, or a cold start when scaling from zero, unlike the other two blocks.
+
+## Building Block documentation
+
+Every Building Block ships its full docs — `README.md`, `API.md`, and `DESIGN.md` — inside the `@aws-blocks/blocks` package under `docs/<block>/`. To read them, locate the bundled folder:
+
+```bash
+node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
+```
+
+If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`) plus one subfolder per block; the catalog below lists every block.
+
+<!-- BEGIN:block-catalog -->
+| Block | What it does | Keywords |
+|-------|--------------|----------|
+| auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
+| bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
+| bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
+| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, SQS |
+| bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
+| bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
+| bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
+| bb-cron-job | Scheduled task execution backed by EventBridge Scheduler and Lambda. | cron, schedule, timer, periodic, recurring, rate, EventBridge, background, interval |
+| bb-dashboard | Auto-generated CloudWatch Dashboard for application observability. | — |
+| bb-data | Full PostgreSQL database — provisions Aurora Serverless v2 by default, or connects to an existing PostgreSQL database (Supabase, Neon, etc.) via `fromExisting()`. | — |
+| bb-distributed-data | Serverless SQL database backed by Amazon Aurora DSQL. | — |
+| bb-distributed-table | Structured data storage backed by DynamoDB with secondary indexes and rich query capabilities. | — |
+| bb-email-client | Transactional email sending via Amazon SES. | — |
+| bb-file-bucket | File storage backed by Amazon S3. | — |
+| bb-knowledge-base | Semantic document retrieval backed by Amazon Bedrock Knowledge Bases. | — |
+| bb-kv-store | Simple key-value storage backed by DynamoDB. | — |
+| bb-logger | Structured logging with consistent JSON format, log levels, and contextual metadata. | — |
+| bb-metrics | Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Format). | — |
+| bb-realtime | Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB. | — |
+| bb-tracer | Distributed tracing backed by AWS X-Ray. | — |
+| core | Core primitives for building full-stack applications with the AWS Blocks. | — |
+| hosting | Low-level CDK L3 constructs for deploying web applications on AWS | — |
+| pipeline | CDK Pipelines-based CI/CD construct for AWS Blocks applications. | — |
+<!-- END:block-catalog -->
 
 ## Local development and deploying
 
@@ -143,6 +189,8 @@ Each block is its own package; full per-block docs ship in this package under **
 | AWS account | not needed | required |
 | Data | persists to `.bb-data/` (delete to reset) | lives in AWS |
 | Use for | rapid iteration, tests | pre-production validation against real services |
+
+> **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
 
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
 
@@ -181,9 +229,22 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **`Database` when `DistributedTable` would do** — Aurora costs more and has cold starts; reach for SQL only when you need it.
 - **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC to a single `POST /aws-blocks/api`; use the typed import instead.
 
+## Security Considerations
+
+- Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
+- Use `new AppSetting(scope, id, { secret: true })` for API keys and credentials — never hardcode or use `.env` files
+- Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
+- Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
+- Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
+- Configure `CORS_ALLOWED_ORIGINS` explicitly for production — avoid wildcards
+- For cross-domain deployments, pass `crossDomain: true` to auth constructors (enables `SameSite=None; Secure; Partitioned`)
+- Enable `monitoring: { enabled: true, snsTopicArn: '...' }` on Hosting for production alerts
+- Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
+- Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
+
 ## Reference
 
-- **Per-block documentation:** `docs/<package-name>.md` (e.g. `docs/bb-distributed-table.md`); `docs/index.md` for the catalog + decision tree.
+- **Per-block documentation:** `docs/<block>/README.md` (overview), `docs/<block>/API.md` (full API reference), `docs/<block>/DESIGN.md` (architecture & rationale) — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
 - **UI components** (`@aws-blocks/blocks/ui`): `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `onAuthChange`, `broadcastAuthChange` — framework-agnostic, return DOM nodes. See the `@aws-blocks/auth-common` README.
 - **SSR** (`@aws-blocks/blocks/server`): `withAuth` forwards browser cookies to API calls during server rendering. See the `@aws-blocks/core` README.
 - **Wire protocol & debugging:** the client is JSON-RPC 2.0 over a single endpoint — you should never call it directly. For `curl`-level troubleshooting, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
