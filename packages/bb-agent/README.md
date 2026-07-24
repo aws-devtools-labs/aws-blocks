@@ -790,7 +790,7 @@ const agent = new Agent(scope, 'support', {
 
 Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. This agent declares a `toolContextSchema`, so its tools require a per-call `context`. You don't pass that from the browser (it couldn't be trusted anyway): **on a JWT runtime the server injects the authenticated `userId` (the validated token's `sub`) into tool `context`**, so `getOrder` is scoped to the caller with an unforgeable identity.
 
-**Backend** (`amplify/backend.ts`) — same shape as Example 1; `getStreamEndpoint` pairs the runtime endpoint with a short-lived JWT:
+**Backend** (`aws-blocks/index.ts`) — same shape as Example 1; `getStreamEndpoint` pairs the runtime endpoint with a short-lived JWT:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
