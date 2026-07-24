@@ -68,7 +68,7 @@ jobs:
           > **To complete this release:**
           > 1. Review the version bumps and changelogs below
           > 2. **Close and reopen this PR** to trigger CI checks (required due to GitHub token limitations)
-          > 3. Once all checks pass, merge with **Create a merge commit**
+          > 3. Once all checks pass, merge the PR
           > 4. The merge triggers npm publish automatically
 
           ---
