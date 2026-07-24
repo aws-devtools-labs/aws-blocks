@@ -1,7 +1,7 @@
 # AWS Blocks Kotlin
 
 [![Maven Central](https://img.shields.io/maven-central/v/com.aws.blocks.kotlin/runtime)](https://central.sonatype.com/search?namespace=com.aws.blocks.kotlin)
-[![Kotlin](https://img.shields.io/badge/kotlin-2.1.21-blue.svg?logo=kotlin)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.2.10-blue.svg?logo=kotlin)](https://kotlinlang.org)
 ![Android](http://img.shields.io/badge/platform-android-6EDB8D.svg?style=flat)
 ![iOS](http://img.shields.io/badge/platform-ios-CDCDCD.svg?style=flat)
 ![Desktop](http://img.shields.io/badge/platform-desktop-DB413D.svg?style=flat)
@@ -106,7 +106,7 @@ See the [`example/android`](example/android) directory for a complete Android ap
 
 ## Requirements
 
-- Kotlin 2.x
+- Kotlin 2.1+
 - JDK 17+
 - Gradle 7.4+
 - Android Gradle Plugin 7.1+ (for Android targets)
