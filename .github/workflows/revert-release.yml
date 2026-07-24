@@ -1,0 +1,68 @@
+name: Revert Release
+
+# Manually revert the last release: restores packages/ source to the previous
+# release and opens a changeset PR. Merging it publishes a superseding patch
+# (npm is immutable — this rolls forward, it does not un-publish). Main only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why the release is being reverted (goes in the changeset + PR)
+        type: string
+        required: true
+      force:
+        description: Override the guard if packages/ changed since the last release
+        type: boolean
+        default: false
+
+concurrency:
+  group: revert-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  revert:
+    name: Prepare revert PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce main branch
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::This workflow can only run from main (got '${{ github.ref_name }}')."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.OPS_GITHUB_TOKEN }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Prepare revert
+        id: prep
+        env:
+          REASON: ${{ inputs.reason }}
+          FORCE: ${{ inputs.force }}
+          PR_BODY_FILE: ${{ runner.temp }}/revert-body.md
+        run: node scripts/prepare-revert-release.mjs
+
+      - name: Open revert PR
+        if: steps.prep.outputs['has-changes'] == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          BRANCH="revert-release/${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "revert: roll back release ${{ steps.prep.outputs['last-release'] }}"
+          git push -u origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "Revert release ${{ steps.prep.outputs['last-release'] }}" \
+            --body-file "${{ runner.temp }}/revert-body.md"

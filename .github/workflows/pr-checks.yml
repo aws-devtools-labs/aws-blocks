@@ -178,7 +178,7 @@ jobs:
         run: npm run test:e2e:local
 
       - name: Pack for local registry
-        run: npm run publish:dry-run
+        run: npm run publish:local
 
       - name: Upload registry artifact
         uses: actions/upload-artifact@v5
