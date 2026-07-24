@@ -75,6 +75,7 @@ The core insight: PGlite supports everything DSQL doesn't. Without validation, c
 | `SET TRANSACTION ISOLATION LEVEL` | Fixed Repeatable Read |
 | `COLLATE` | C collation only |
 | `CREATE INDEX ... ASC/DESC` | Sort direction on index keys (NULLS FIRST/LAST is allowed) |
+| `ALTER TABLE ... DROP [COLUMN]` | Not in DSQL's supported ALTER TABLE subset (`DROP CONSTRAINT` and `ALTER COLUMN ... DROP DEFAULT/NOT NULL/EXPRESSION/IDENTITY` are supported) |
 
 ### Transaction Tracking
 
