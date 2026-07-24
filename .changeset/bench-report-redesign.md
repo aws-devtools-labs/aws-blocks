@@ -1,4 +1,5 @@
 ---
+"@aws-blocks/agent-bench": patch
 ---
 
 feat(bench): redesign agent-bench PR-vs-`main` report + fix baseline selection
