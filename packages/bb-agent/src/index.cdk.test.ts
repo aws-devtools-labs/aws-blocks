@@ -19,9 +19,9 @@ import assert from 'node:assert';
 import { dirname } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { DEFAULT_NODE_RUNTIME, Scope } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, finalizeAgentRuntimeRoles, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { Agent } from './index.cdk.js';
 
@@ -122,5 +122,37 @@ test('CDK: BB_AGENT_REQUIRE_VERIFIED_IDENTITY tracks the authorizer (fail-closed
 	});
 	Template.fromStack(jwt.stack).hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
 		EnvironmentVariables: { BB_AGENT_REQUIRE_VERIFIED_IDENTITY: 'true' },
+	});
+});
+
+test('CDK: the AgentCore runtime role inherits the handler role\'s BB grants', () => {
+	// The agent loop runs in the container, so its tool handlers call other BBs from the
+	// runtime role. BBs grant the shared Lambda handler role; the stack finalizer copies
+	// those grants onto every registered runtime role. Simulate a BB grant on the handler,
+	// run the finalizer (BlocksStack.create does this in a real app), and assert it lands.
+	const { stack, parent } = setup();
+	// A BB would do e.g. table.grantReadWriteData(this.handler); emulate with a distinctive action.
+	stack.handler.addToRolePolicy(
+		new cdk.aws_iam.PolicyStatement({
+			actions: ['dynamodb:GetItem'],
+			resources: ['arn:aws:dynamodb:us-east-1:123456789012:table/SomeOtherBBTable'],
+		}),
+	);
+	new Agent(parent, 'chat', { systemPrompt: 'test', agentcoreAssetPath: ASSET_DIR });
+	// The registry finalizer runs after all BBs construct; call it directly (the stub isn't a
+	// real BlocksStack.create, which would call it at index.ts:82).
+	finalizeAgentRuntimeRoles(stack, stack.handler);
+	const template = Template.fromStack(stack);
+	// The copied statement should appear on an IAM policy scoped to the other BB's table —
+	// i.e. the runtime role now has access it wouldn't get from the Agent's own grants.
+	template.hasResourceProperties('AWS::IAM::Policy', {
+		PolicyDocument: {
+			Statement: Match.arrayWith([
+				Match.objectLike({
+					Action: 'dynamodb:GetItem',
+					Resource: 'arn:aws:dynamodb:us-east-1:123456789012:table/SomeOtherBBTable',
+				}),
+			]),
+		},
 	});
 });

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { registerAgentRuntimeRole, registerConfig, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import {
 	AgentCoreRuntime,
@@ -166,6 +166,13 @@ export class Agent extends Scope {
 			// Expose the runtime ARN so the Lambda runtime path can return it from stream()
 			// and the client can open the SSE connection directly.
 			registerConfig(this, `BB_AGENT_${this.fullId}_RUNTIME_ARN`, runtime.agentRuntimeArn);
+
+			// The agent loop runs in the container, so its tool handlers call other BBs
+			// (KVStore, DistributedTable, …) from `runtime.role` — a different principal than
+			// the Lambda `handler` that every BB grants. Register the role so the stack
+			// finalizer copies the handler's accumulated BB permissions onto it (after all BBs
+			// have granted the handler); otherwise cross-BB tool calls hit AccessDenied on AWS.
+			registerAgentRuntimeRole(this, runtime.role);
 		}
 	}
 
