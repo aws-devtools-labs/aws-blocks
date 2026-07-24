@@ -157,6 +157,9 @@ else
   # Banner never appeared / port never became ready within the window. Record the signal + a brief
   # diagnostic (pid liveness + log tail) onto result.json, then proceed with APP_BASE_URL empty.
   echo "::warning::dev server banner never appeared / port never became ready within ~60s"
+  # Distinct dead-server / backend-crash signal so downstream can tell this apart from an agent that
+  # built a genuinely broken app (mirrors how build_succeeded/dev_server_started are emitted above).
+  echo "dev_server_status=dead" >> "$GITHUB_OUTPUT"
   dev_pid=""; [ -f "${CELL_TMP}/dev.pid" ] && dev_pid="$(cat "${CELL_TMP}/dev.pid" 2>/dev/null || true)"
   if [ -z "${dev_pid:-}" ]; then dev_pid_status="no-pidfile"
   elif kill -0 "$dev_pid" 2>/dev/null; then dev_pid_status="alive (pid=${dev_pid}) but not serving"
@@ -175,11 +178,22 @@ else
     try { r = JSON.parse(fs.readFileSync(p, "utf-8")); } catch {}
     r.dev_log_tail = process.env.DEV_LOG_TAIL || "";
     r.dev_pid_status = process.env.DEV_PID_STATUS || "";
+    r.dev_server_status = "dead";
     fs.writeFileSync(p, JSON.stringify(r, null, 2));
   ' || echo "::warning::failed to record dev_log_tail on result.json"
 fi
 export APP_BASE_URL
 
+# Only run Playwright when the dev server actually came up. If APP_BASE_URL is empty the server is
+# dead / the backend crashed (see the dead-server branch above) — launching Playwright with an empty
+# BLOCKS_URL would surface as bogus "invalid URL" test failures, so skip Playwright entirely and let
+# the recorded dev_server_status=dead signal drive the score instead. That signal classifies the cell
+# as a real FAIL — verdict 'fail', composite 0, and INCLUDED in the mean (DEAD_SERVER_KLASS in
+# lib/scoring.mjs) — so a backend crash HURTS the score rather than hiding as an excluded 'unknown',
+# while the failure root-cause still attributes owner=framework. The pessimistic defaults (tests 0/0/0,
+# dev_server_started=false) carry the honest signal and control still falls through to the
+# stable-evidence copy below.
+if [ -n "$APP_BASE_URL" ]; then
 # Record whether Playwright installed; on failure tests can't run, so emit the signal and bail.
 # Both the package install AND the chromium download must succeed before the signal flips true.
 if ! npm install --no-save --silent "@playwright/test@${PW_VERSION}"; then
@@ -252,6 +266,25 @@ if [ -f "$PW_RESULTS_JSON" ]; then
 else
   echo "::warning::Playwright produced no ${PW_RESULTS_JSON} (probably never ran); defaults retained"
 fi
+else
+  echo "::warning::dev server never came up (dead-server/backend-crash) — skipped Playwright to avoid masking it as invalid-URL test failures; tests stay at pessimistic defaults"
+fi
+
+# Stage the deep-failure evidence to STABLE /tmp paths for the later "analyze cell" step. CELL_TMP is
+# keyed on this script's PID, so it's gone by the time analyze-cell.mjs runs — mirror how the
+# trace/metrics already land at /tmp. Best-effort: a missing source or copy failure must never break
+# the green-regardless exit (analyze-cell degrades to null when a file is absent). Clear any stale
+# copies from a PRIOR cell first (runner-agnostic) so a skipped / again-missing source can't leave the
+# previous cell's evidence in place for analyze-cell to misread.
+# /tmp is sticky (+t): a stale copy from a PRIOR cell may be benchagent-owned (the agent's isolated
+# phase wrote it), so a plain `rm` as the runner uid hits EPERM and — under `set -e` — would abort the
+# step BEFORE the green-regardless `exit 0` below, mis-recording a cell that actually built + passed.
+# Mirror the reap/fuser lines above: `sudo -n rm` clears benchagent-owned files, unprivileged `rm` is
+# the fallback, and the trailing `|| true` guarantees this cleanup never aborts the step.
+sudo -n rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || rm -f /tmp/pw-results.json /tmp/dev.log /tmp/build.log 2>/dev/null || true
+cp "$PW_RESULTS_JSON" /tmp/pw-results.json 2>/dev/null || true
+cp "${CELL_TMP}/dev.log" /tmp/dev.log 2>/dev/null || true
+cp "${CELL_TMP}/build.log" /tmp/build.log 2>/dev/null || true
 
 # Always exit 0: real failures are already captured as $GITHUB_OUTPUT signals for the judge, and a
 # non-zero exit would break green-regardless.
