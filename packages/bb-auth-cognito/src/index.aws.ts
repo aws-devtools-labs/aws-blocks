@@ -16,6 +16,21 @@
 
 import crypto from 'node:crypto';
 import {
+	AdminAddUserToGroupCommand,
+	AdminCreateUserCommand,
+	AdminDeleteUserCommand,
+	AdminDisableUserCommand,
+	AdminEnableUserCommand,
+	AdminGetUserCommand,
+	AdminListGroupsForUserCommand,
+	AdminRemoveUserFromGroupCommand,
+	AdminResetUserPasswordCommand,
+	AdminSetUserPasswordCommand,
+	AdminUserGlobalSignOutCommand,
+	ListUsersCommand,
+	ListUsersInGroupCommand,
+	type AttributeType,
+	type UserType,
 	AssociateSoftwareTokenCommand,
 	ChangePasswordCommand,
 	ChallengeNameType,
@@ -88,6 +103,12 @@ import {
 	envVarNames,
 	isRetriableAuthError,
 	makeExternalUserPoolRef,
+	type AdminCreateInit,
+	type AdminGetterOf,
+	type AdminUser,
+	type AdminUserFilter,
+	type GroupAdmin,
+	type LifecycleAdmin,
 	type AuthCognitoOptions,
 	type CodeDeliveryDetails,
 	type AttrOf,
@@ -581,7 +602,7 @@ function statusForCognitoError(name: string): number {
  * See the mock entry (`./index.ts`) for full class-level JSDoc; both runtimes
  * share the same public API.
  */
-export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions>
 	extends Scope
 	implements BlocksAuth
 {
@@ -593,6 +614,8 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 	private readonly sessions: SessionStore;
 	private readonly sessionSecretSetting: AppSetting;
 	private sessionSecret?: string;
+	/** Full admin surface, built once; the single generic projection lives in `get admin()`. */
+	private readonly adminSurface: GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions>;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
@@ -632,6 +655,259 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 		// Nested scope `session-secret` — matches the CDK layer's AppSetting
 		// so both sides derive the same SSM parameter path.
 		this.sessionSecretSetting = new AppSetting(this, 'session-secret', { secret: true });
+		this.adminSurface = this.buildAdminSurface();
+	}
+
+	/**
+	 * Opt-in server-side admin surface (group membership + user lifecycle).
+	 * `AdminDisabled` (compile error on access) unless `admin` was configured;
+	 * throws at runtime for untyped JS callers. Methods are narrowed by
+	 * `admin.actions`; the runtime object always carries every method.
+	 *
+	 * @category admin
+	 */
+	get admin(): AdminGetterOf<O> {
+		if (!this.options.admin) {
+			throw new Error("admin not enabled: construct AuthCognito with { admin: {} }");
+		}
+		return this.adminSurface as AdminGetterOf<O>;
+	}
+
+	/** Pool ID for admin SDK calls. Throws if discovery env isn't populated. */
+	private adminUserPoolId(): string {
+		const { userPoolId } = getSdkIdentifiers(this);
+		if (!userPoolId) {
+			throw new ApiError('Cognito user pool not configured', 500, { name: DEFAULT_API_ERROR_NAME });
+		}
+		return userPoolId;
+	}
+
+	/**
+	 * Fast-fail when an admin method's action group wasn't granted by
+	 * `admin.actions` — the runtime half of the {@link AdminActionGate} compile
+	 * gate, so untyped callers get a clear error instead of Cognito's cryptic
+	 * `AccessDenied` (or, worse, an IAM failure only in production).
+	 */
+	private assertAdminAction(action: 'groups' | 'lifecycle'): void {
+		const actions = this.options.admin?.actions;
+		if (actions && !actions.includes(action)) {
+			throw new ApiError(
+				`admin.${action} actions not granted: construct AuthCognito with admin: { actions: [..., '${action}'] }`,
+				403,
+				{ name: AuthCognitoErrors.NotAuthorized },
+			);
+		}
+	}
+
+	private buildAdminSurface(): GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions> {
+		const toAdminUser = (u: UserType): AdminUser => {
+			const attributes: Record<string, string> = {};
+			for (const a of (u.Attributes ?? []) as AttributeType[]) {
+				if (a.Name) attributes[a.Name] = a.Value ?? '';
+			}
+			return {
+				username: u.Username ?? '',
+				userSub: attributes['sub'] ?? '',
+				enabled: u.Enabled ?? true,
+				attributes,
+			};
+		};
+		// Map an AdminUserFilter to a Cognito ListUsers Filter expression.
+		// Cognito uses `^=` for prefix and `=` for exact match, value quoted.
+		const toCognitoFilter = (filter?: AdminUserFilter): string | undefined => {
+			if (!filter) return undefined;
+			const op = filter.match === 'startsWith' ? '^=' : '=';
+			const escaped = filter.value.replace(/"/g, '\\"');
+			return `${filter.attribute} ${op} "${escaped}"`;
+		};
+
+		return {
+			// ── GroupAdmin ───────────────────────────────────────────────────
+			addUserToGroup: async (username, group) => {
+				this.assertAdminAction('groups');
+				try {
+					await this.client.send(new AdminAddUserToGroupCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			removeUserFromGroup: async (username, group) => {
+				this.assertAdminAction('groups');
+				try {
+					await this.client.send(new AdminRemoveUserFromGroupCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username, GroupName: String(group),
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			listGroupsForUser: async (username) => {
+				this.assertAdminAction('groups');
+				try {
+					const out: string[] = [];
+					let nextToken: string | undefined;
+					do {
+						const resp = await this.client.send(new AdminListGroupsForUserCommand({
+							UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+						}));
+						for (const g of resp.Groups ?? []) if (g.GroupName) out.push(g.GroupName);
+						nextToken = resp.NextToken;
+					} while (nextToken);
+					return out as GroupOf<AuthCognitoOptions>[];
+				} catch (e) { throw asApiError(e); }
+			},
+			listUsersInGroup: async (group) => {
+				this.assertAdminAction('groups');
+				try {
+					const out: AdminUser[] = [];
+					let nextToken: string | undefined;
+					do {
+						const resp = await this.client.send(new ListUsersInGroupCommand({
+							UserPoolId: this.adminUserPoolId(), GroupName: String(group), NextToken: nextToken,
+						}));
+						for (const u of resp.Users ?? []) out.push(toAdminUser(u));
+						nextToken = resp.NextToken;
+					} while (nextToken);
+					return out;
+				} catch (e) { throw asApiError(e); }
+			},
+
+			// ── LifecycleAdmin ───────────────────────────────────────────────
+			createUser: async (username, init) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					// Prefix declared custom attributes with `custom:` (matching signUp
+					// and the mock) — Cognito rejects an unprefixed custom attr name as
+					// "not defined in schema".
+					const attrs: AttributeType[] = Object.entries(this.prefixCustomAttrs(init?.attributes ?? {})).map(
+						([Name, Value]) => ({ Name, Value }),
+					);
+					const resp = await this.client.send(new AdminCreateUserCommand({
+						UserPoolId: this.adminUserPoolId(),
+						Username: username,
+						TemporaryPassword: init?.temporaryPassword,
+						UserAttributes: attrs.length ? attrs : undefined,
+						MessageAction: init?.suppressInvite ? 'SUPPRESS' : undefined,
+					}));
+					return resp.User ? toAdminUser(resp.User) : { username, userSub: '', enabled: true, attributes: {} };
+				} catch (e) { throw asApiError(e); }
+			},
+			deleteUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminDeleteUserCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			disableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminDisableUserCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			enableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminEnableUserCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			resetUserPassword: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminResetUserPasswordCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			setUserPassword: async (username, password, options) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminSetUserPasswordCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username, Password: password, Permanent: options?.permanent ?? false,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+			getUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					const resp = await this.client.send(new AdminGetUserCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+					const attributes: Record<string, string> = {};
+					for (const a of (resp.UserAttributes ?? []) as AttributeType[]) {
+						if (a.Name) attributes[a.Name] = a.Value ?? '';
+					}
+					// AdminGetUser does not return group memberships, so fetch them
+					// separately to populate AdminUser.groups (matches the mock,
+					// which reads groups from its in-memory state). The lifecycle
+					// IAM slice grants AdminListGroupsForUser for exactly this; if a
+					// hand-narrowed policy omits it, degrade to `groups: undefined`
+					// rather than failing the whole read.
+					let groups: string[] | undefined = [];
+					try {
+						let nextToken: string | undefined;
+						do {
+							const g = await this.client.send(new AdminListGroupsForUserCommand({
+								UserPoolId: this.adminUserPoolId(), Username: username, NextToken: nextToken,
+							}));
+							for (const grp of g.Groups ?? []) if (grp.GroupName) groups!.push(grp.GroupName);
+							nextToken = g.NextToken;
+						} while (nextToken);
+					} catch (e) {
+						// Missing AdminListGroupsForUser grant → report groups as unknown.
+						if (e instanceof Error && /AccessDenied|NotAuthorized/.test(e.name)) groups = undefined;
+						else throw e;
+					}
+					return {
+						username: resp.Username ?? username,
+						userSub: attributes['sub'] ?? '',
+						enabled: resp.Enabled ?? true,
+						attributes,
+						groups: groups as GroupOf<AuthCognitoOptions>[] | undefined,
+					};
+				} catch (e) {
+					if (e instanceof Error && e.name === AuthCognitoErrors.UserNotFound) return null;
+					throw asApiError(e);
+				}
+			},
+			scan: (filter?: AdminUserFilter) => {
+				this.assertAdminAction('lifecycle');
+				const self = this;
+				const cognitoFilter = toCognitoFilter(filter);
+				return (async function* () {
+					let paginationToken: string | undefined;
+					do {
+						const resp = await self.client.send(new ListUsersCommand({
+							UserPoolId: self.adminUserPoolId(), Limit: 60, Filter: cognitoFilter, PaginationToken: paginationToken,
+						}));
+						for (const u of resp.Users ?? []) {
+							const attributes: Record<string, string> = {};
+							for (const a of (u.Attributes ?? []) as AttributeType[]) {
+								if (a.Name) attributes[a.Name] = a.Value ?? '';
+							}
+							yield {
+								username: u.Username ?? '',
+								userSub: attributes['sub'] ?? '',
+								enabled: u.Enabled ?? true,
+								attributes,
+							};
+						}
+						paginationToken = resp.PaginationToken;
+					} while (paginationToken);
+				})();
+			},
+			revokeUserSessions: async (username) => {
+				this.assertAdminAction('lifecycle');
+				try {
+					await this.client.send(new AdminUserGlobalSignOutCommand({
+						UserPoolId: this.adminUserPoolId(), Username: username,
+					}));
+				} catch (e) { throw asApiError(e); }
+			},
+		};
 	}
 
 	private get verifier(): ReturnType<typeof CognitoJwtVerifier.create> {
