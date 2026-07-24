@@ -1329,6 +1329,26 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions>
 	}
 
 	/**
+	 * Return a JWT the AWS Bedrock AgentCore Runtime JWT-authorizer accepts, for opening a
+	 * browser-direct WebSocket to a JWT-authorized runtime (e.g. `Agent.getStreamEndpoint()`).
+	 *
+	 * Returns the Cognito **access token** (not the ID token): AgentCore's `customJWTAuthorizer`
+	 * validates the token's `client_id` claim against its `allowedClients`, and only the Cognito
+	 * access token carries `client_id` — the ID token carries `aud` instead and is rejected with
+	 * `403 "Claim 'client_id' value mismatch"`. Verified live against a deployed runtime.
+	 *
+	 * Auto-refreshes if the access token has expired (same path as `fetchAuthSession`). Throws
+	 * 401 if there is no active session. The token is short-lived and the caller should hand it
+	 * to the browser in memory only (for the WS handshake) — this deliberately relaxes the
+	 * HttpOnly-cookie posture for the connection, so weigh the XSS trade-off before exposing it.
+	 *
+	 * @category client
+	 */
+	async getAgentCoreToken(context: BlocksContext): Promise<string> {
+		return this.requireAccessToken(context);
+	}
+
+	/**
 	 * Read the signed-in user's attributes directly from Cognito via
 	 * `GetUserCommand`. Costs one extra Cognito call per invocation but
 	 * always returns fresh data — the session-record attributes are only

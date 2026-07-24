@@ -56,8 +56,10 @@ export interface AgentCoreStreamResult {
     sessionId: string;
     toJSON(): {
         runtimeArn: string;
+        wsUrl: string;
         sessionId: string;
     };
+    wsUrl: string;
 }
 
 // @public

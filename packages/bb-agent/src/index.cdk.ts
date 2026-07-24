@@ -78,6 +78,8 @@ export class Agent extends Scope {
 		// app's backend module path, discovered off the BlocksStack.
 		const assetPath = config?.agentcoreAssetPath ?? this.buildAgentCoreAsset();
 		if (assetPath) {
+			// Inbound auth: JWT from the app's auth BB, else IAM (SigV4) by default.
+			const authorizerConfiguration = resolveAuthorizer(config?.auth);
 			const runtime = new Runtime(this, 'AgentRuntime', {
 				agentRuntimeArtifact: AgentRuntimeArtifact.fromCodeAsset({
 					path: assetPath,
@@ -95,9 +97,21 @@ export class Agent extends Scope {
 					// registers under an un-prefixed fullId (e.g. `test-app-agent`) that won't
 					// match BB_AGENT_ID (`<stack>-test-app-agent`) → "No Agent registered".
 					BLOCKS_STACK_NAME: cdk.Stack.of(this).stackName,
+					// When a JWT authorizer is configured the gateway rejects tokenless requests,
+					// so every request reaching the container MUST carry a forwarded token. Tell the
+					// container to FAIL CLOSED if a verified `sub` is somehow absent (a forwarding
+					// regression / misconfigured allowlist) rather than silently trusting the
+					// client-supplied `userId`. Gated on the SAME condition as the header allowlist
+					// below so the two can't drift.
+					...(authorizerConfiguration ? { BB_AGENT_REQUIRE_VERIFIED_IDENTITY: 'true' } : {}),
 				},
-				// Inbound auth: JWT from the app's auth BB, else IAM (SigV4) by default.
-				authorizerConfiguration: resolveAuthorizer(config?.auth),
+				authorizerConfiguration,
+				// When a JWT authorizer is in play, forward the gateway-validated caller token to
+				// the container (`context.headers.Authorization`) so the agent can derive a
+				// trustworthy userId from its `sub` claim instead of trusting a client-supplied
+				// value (see agentcore-entry.ts `userIdFromContext`). No caller JWT exists on the
+				// IAM/SigV4 path, so only opt in when an authorizer resolved.
+				requestHeaderConfiguration: authorizerConfiguration ? { allowlistedHeaders: ['Authorization'] } : undefined,
 			});
 
 			// The runtime's execution role needs the same Bedrock access the Lambda has,

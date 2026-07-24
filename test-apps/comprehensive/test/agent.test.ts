@@ -4,6 +4,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { createAgentCoreWsTransport } from '@aws-blocks/bb-agent/client';
+
+// The direct browser→AgentCore WebSocket path only exists on a deployed runtime
+// (wsAgentGetStreamEndpoint resolves a live runtime ARN); locally there's no runtime to
+// connect to. Gate the WS long-running test to sandbox/production.
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isSandbox = ENV === 'sandbox' || ENV === 'production';
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -357,6 +364,52 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(toolResult, 'should have tool-result message');
         const output = toolResult.metadata.toolOutput;
         assert.ok(JSON.stringify(output).includes('denied'), 'tool-result should contain denial message');
+      });
+    });
+
+    // Direct browser→AgentCore WebSocket streaming. This is the whole point of moving off
+    // Lambda: a turn can run far past the API-Gateway ~30s cap. wsAgent runs a `slowStream`
+    // tool that sleeps 35s; the buffered RPC path (agentStream) would 504 at the gateway, but
+    // the WS transport streams the turn to completion. Sandbox-only (needs a deployed runtime).
+    describe('WebSocket long-running streaming (>35s)', { skip: !isSandbox || 'requires a deployed runtime' }, () => {
+      test('a >35s turn streams to completion over the direct WebSocket', { timeout: 120_000 }, async () => {
+        const api = getApi();
+
+        // wsAgentGetStreamEndpoint requires a session (it calls requireAuth) and sources the
+        // server-trusted userId from it — the runtime can't derive identity itself because its
+        // JWT authorizer validates the token at the gateway, not in the container. Provision the
+        // Cognito user server-side (the e2e runner's --conditions=browser can't construct the AWS
+        // SDK client-side, and Cognito self-signup codes aren't retrievable in-process), then
+        // sign in from here to establish the cookie session.
+        const { username, password } = await api.wsAgentTestCreateUser();
+
+        try {
+          await api.authCSignIn(username, password);
+
+          // Wire the shipped client transport exactly as an app would: the endpoint method
+          // returns { wsUrl, token, userId }; the transport opens the socket (JWT via the
+          // Sec-WebSocket-Protocol subprotocol) and yields chunks through useChat's seam.
+          const streamChunks = createAgentCoreWsTransport(
+            async ({ conversationId }) => await api.wsAgentGetStreamEndpoint(conversationId),
+          );
+
+          const conversationId = crypto.randomUUID();
+          const start = Date.now();
+          const chunks: string[] = [];
+          for await (const chunk of streamChunks({ conversationId, message: 'Please run slowStream now' })) {
+            chunks.push((chunk as any).type);
+          }
+          const elapsedMs = Date.now() - start;
+
+          assert.ok(elapsedMs > 35_000, `turn should run past the 35s slow tool (took ${elapsedMs}ms)`);
+          assert.ok(chunks.includes('tool-call'), 'should have called the slow tool');
+          assert.ok(chunks.includes('tool-result'), 'slow tool should have returned a result');
+          assert.ok(chunks.includes('done'), 'turn should complete with a done chunk');
+          assert.ok(!chunks.includes('error'), `turn should not error, got chunks: ${JSON.stringify(chunks)}`);
+        } finally {
+          await api.authCSignOut();
+          await api.wsAgentTestDeleteUser(username);
+        }
       });
     });
   });

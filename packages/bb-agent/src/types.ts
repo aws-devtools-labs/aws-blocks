@@ -292,18 +292,28 @@ export interface AgentStreamResult extends AsyncIterable<AgentStreamChunk> {
 }
 
 /**
- * What the AWS `Agent.getStreamEndpoint()` returns: where the client should open its SSE
- * connection. Streaming happens on a direct SSE connection to the AgentCore Runtime — the
- * client uses `sessionId` (= conversationId) as the
- * `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` and invokes `runtimeArn`.
+ * What the AWS `Agent.getStreamEndpoint()` returns: where the browser should open its
+ * WebSocket connection to stream directly from the AgentCore Runtime (bypassing Lambda,
+ * so a turn is not bounded by the API-Gateway ~30s cap). The browser opens `wsUrl` with the
+ * JWT passed via the `Sec-WebSocket-Protocol` subprotocol (browsers can't set WS headers).
+ *
+ * The Agent BB is auth-agnostic: this carries NO token. The app pairs it with a JWT from its
+ * auth BB — for AuthCognito that's `getAgentCoreToken()`, which returns the Cognito ACCESS
+ * token (the AgentCore JWT authorizer validates the `client_id` claim, which lives on the
+ * access token, NOT the ID token — verified live against the runtime).
  */
 export interface AgentCoreStreamResult {
-	/** ARN of the AgentCore Runtime hosting this agent. Client invokes it directly. */
+	/** ARN of the AgentCore Runtime hosting this agent. */
 	runtimeArn: string;
-	/** AgentCore runtimeSessionId to route the invocation (maps to conversationId). */
+	/**
+	 * Browser WebSocket URL for the runtime's `/ws` endpoint, with the session id already
+	 * embedded as the `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id` query param.
+	 */
+	wsUrl: string;
+	/** AgentCore runtimeSessionId routing the connection (maps to conversationId). */
 	sessionId: string;
-	/** Serialized verbatim across the RPC boundary — both fields are plain strings. */
-	toJSON(): { runtimeArn: string; sessionId: string };
+	/** Serialized verbatim across the RPC boundary — all fields are plain strings. */
+	toJSON(): { runtimeArn: string; wsUrl: string; sessionId: string };
 }
 
 export interface AgentStreamChunk {
