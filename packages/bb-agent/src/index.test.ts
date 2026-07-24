@@ -1414,6 +1414,29 @@ describe('createAgentCoreWsTransport', () => {
 		assert.strictEqual(chunks[0].type, 'error');
 		assert.match((chunks[0] as { error: string }).error, /failed/);
 	});
+
+	test('a server error frame is terminal — the turn ends without a turn-complete', async () => {
+		// The server's WS handler sends an `error` frame but no `turn-complete` after it.
+		// The iterator must yield the error chunk and then RETURN, not park until the socket
+		// idle-times out. If this regresses, the `for await` below never resolves and the
+		// test times out.
+		const { streamChunks, getSocket } = harness();
+		const chunks: AgentStreamChunk[] = [];
+		const p = (async () => {
+			for await (const c of streamChunks({ conversationId: 'c1', message: 'go' })) chunks.push(c);
+		})();
+		await new Promise((r) => setTimeout(r, 0));
+		const socket = getSocket();
+		socket.open();
+		socket.emit('text-delta', { delta: 'partial' });
+		socket.emit('error', { error: 'tool blew up' }); // no turn-complete follows
+		await p;
+		assert.deepStrictEqual(chunks, [
+			{ type: 'text-delta', delta: 'partial' },
+			{ type: 'error', error: 'tool blew up' },
+		]);
+		assert.ok(socket.closed, 'socket closes after the terminal error frame');
+	});
 });
 
 // ── AgentCore entry: server-side userId from forwarded JWT ──────────────────

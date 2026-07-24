@@ -141,6 +141,11 @@ async function* streamTurnOverWs(
 		}
 		// Reconstruct the chunk: server split `{ type, ...data }` into `{ event, data }`.
 		queue.push({ type: frame.event, ...(frame.data ?? {}) } as AgentStreamChunk);
+		// A server `error` frame is terminal: the turn won't continue and the server may not
+		// send a `turn-complete` after it. Mark done so the generator returns once it has
+		// yielded the error chunk (mirrors the local `failure` path), instead of parking on
+		// the wake promise until AgentCore's idle-timeout eventually closes the socket.
+		if (frame.event === 'error') done = true;
 		signal();
 	};
 	socket.onerror = () => {
