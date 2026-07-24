@@ -280,11 +280,12 @@ export function onAuthChange(
 /**
  * Container that renders content only when the user is signed in.
  * Automatically re-renders when auth state changes (same window + cross-tab).
- * Shows nothing when signed out.
+ * Shows the optional `fallback` when signed out, or nothing if no fallback is provided.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param render - Called with the authenticated user. Return the content to display.
- * @returns An HTMLElement that shows content when signed in, empty when signed out.
+ * @param fallback - Optional. A DOM node to display when the user is NOT signed in.
+ * @returns An HTMLElement that shows content when signed in, the fallback (or nothing) when signed out.
  *
  * @example
  * ```typescript
@@ -296,17 +297,33 @@ export function onAuthChange(
  *   })
  * );
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With a fallback for unauthenticated users
+ * const loginPrompt = document.createElement('p');
+ * loginPrompt.textContent = 'Please sign in to continue.';
+ *
+ * document.body.appendChild(
+ *   AuthenticatedContent(authApi, (user) => {
+ *     const el = document.createElement('div');
+ *     el.textContent = `Welcome, ${user.username}`;
+ *     return el;
+ *   }, loginPrompt)
+ * );
+ * ```
  */
 export function AuthenticatedContent(
 	api: AuthStateApi,
 	render: (user: AuthUser) => Node,
+	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
 	onAuthChange(api, (user) => {
 		if (user) {
 			container.replaceChildren(render(user));
 		} else {
-			container.replaceChildren();
+			container.replaceChildren(...(fallback ? [fallback] : []));
 		}
 	});
 	return container;
