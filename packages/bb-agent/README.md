@@ -788,7 +788,7 @@ const agent = new Agent(scope, 'support', {
 });
 ```
 
-Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. This agent declares a `toolContextSchema`, so its tools require a per-call `context`. You don't pass that from the browser (it couldn't be trusted anyway): **on a JWT runtime the server injects the authenticated `userId` (the validated token's `sub`) into tool `context`**, so `getOrder` is scoped to the caller with an unforgeable identity.
+Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. This agent declares a `toolContextSchema`, so its tools require a per-call `context`. You don't pass that from the browser (it couldn't be trusted anyway): **on a JWT runtime the server builds tool `context` from the validated token** — the authenticated `userId` (the token's `sub`) is always injected, and you can derive more via [`resolveToolContext`](#server-resolved-tool-context) (below) — so `getOrder` is scoped to the caller with an unforgeable identity.
 
 **Backend** (`aws-blocks/index.ts`) — same shape as Example 1; `getStreamEndpoint` pairs the runtime endpoint with a short-lived JWT:
 
@@ -839,7 +839,24 @@ const chat = useChat({
 await chat.sendMessage('What is the status of order 12345?');
 ```
 
-> Tool `context` on the browser-direct path is limited to what the server derives from the verified token — currently `userId` (the `sub`). An agent that needs richer per-call context should stream through a server-mediated API method that builds `context` itself.
+### Server-resolved tool context
+
+To build richer context than just `userId`, give the agent a `resolveToolContext` — a function that runs **in the runtime** each turn against the gateway-verified JWT claims and returns the tool `context`:
+
+```typescript
+const agent = new Agent(scope, 'support', {
+  toolContextSchema: z.object({ userId: z.string(), role: z.string() }),
+  resolveToolContext: (claims) => ({
+    userId: String(claims.sub),
+    role: (claims['cognito:groups'] as string[] | undefined)?.[0] ?? 'member',
+  }),
+  tools: (tool) => ({ /* handlers receive { context: { userId, role } } */ }),
+});
+```
+
+The claims are trustworthy (the runtime's JWT authorizer already validated the token) and the browser can't influence them. The verified `sub` is always overlaid as `context.userId` after the resolver runs, so identity stays authoritative.
+
+> **Available claims.** For AuthCognito the runtime receives the **access token**, so `resolveToolContext` can read `sub`, `username`, `cognito:groups`, and `scope` — but not `email` or `custom:*` attributes (those are on the ID token, which isn't forwarded). `resolveToolContext` is Cognito-only today (the OIDC auth BB doesn't yet forward a runtime token) and isn't called on IAM runtimes or local dev. For data that isn't identity (a database lookup, request-varying values), read it inside the tool handler — it runs in the runtime too — rather than in `resolveToolContext`.
 
 
 ## Best Practices
