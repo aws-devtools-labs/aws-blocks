@@ -524,6 +524,47 @@ void describe('generated request fn — HTML always resolves from the current bu
     );
     assert.match(output.uri, /^\/builds\/oldbuild-123\//);
   });
+
+  void it('serves HTML from the current build for a first-time visitor (skew on, NO __dpl cookie)', async () => {
+    // Makes the 'first-time/incognito visitor is unaffected' path explicit: with
+    // no cookie there is nothing to honor, so the current build (meta.b) is used
+    // whether or not the HTML override fires.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(generateKvsRouterRequestCode(), entries, {
+      uri: '/page.html',
+      headers: { host: { value: 'x.test' } },
+      cookies: {}, // first-time visitor: no __dpl
+    });
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
+
+  void it('composes basePath strip + .html override: /app/page.html → current build, basePath stripped', async () => {
+    // The .html override runs AFTER stripBasePath, so a basePath-prefixed HTML
+    // request resolves from the current build with the basePath removed from the
+    // S3 key — confirming the two steps compose in the right order.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({
+        basePath: '/app',
+        routes: [{ pattern: '/*', target: 'static' }],
+      }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/app/page.html'),
+    );
+    assert.equal(output.uri, '/builds/newbuild/page.html');
+  });
 });
 
 void describe('generated functions — CloudFront function-size limit', () => {

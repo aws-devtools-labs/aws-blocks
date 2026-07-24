@@ -575,6 +575,12 @@ function stripBasePath(uri, bp) {
  * stays consistent (old prefixes are retained via `prune: false`) until the
  * next HTML navigation lands the visitor on the current build.
  *
+ * Caveat: an in-session HTML *partial* fetch (HTMX, Turbo Frames, etc.) whose
+ * URI ends in `.html` also lands on the current build rather than the visitor's
+ * cookie build — a deliberate departure from the assets-honor-the-cookie rule,
+ * since these are treated as HTML documents. Acceptable for the targeted apps
+ * (a partial is fetched fresh, not a build-pinned content-hashed asset).
+ *
  * The suffix test is `uri.slice(-5) === '.html'`, NOT
  * `uri.lastIndexOf('.html') === uri.length - 5`: for a 4-char non-HTML URI like
  * `/x.y` the latter compares `-1 === -1` (true) and would wrongly force that
