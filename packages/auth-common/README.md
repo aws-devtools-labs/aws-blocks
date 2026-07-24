@@ -9,7 +9,7 @@ Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use
 | Export Path | What it provides |
 |---|---|
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange` |
+| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`, `submitAuthAction` |
 | `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest` |
 
 ## Session-cookie security policy (`/cookies`)
@@ -138,7 +138,26 @@ const unsubscribe = onAuthChange(authApi, (user) => {
 
 ## Broadcasting Auth Changes
 
-If you build custom auth UI instead of using the `Authenticator`, broadcast changes so other components and tabs react:
+If you build custom auth UI instead of using the `Authenticator`, the app still needs to know when auth changed so other components and tabs react. Use `submitAuthAction` as the single notifier: it submits the action, advances the cached state, and broadcasts on any signed-in / signed-out transition, so both sign-in **and** sign-out keep the UI reactive.
+
+```typescript
+import { submitAuthAction } from '@aws-blocks/auth-common/ui';
+import { authApi } from 'aws-blocks';
+
+// Sign-in: submits, updates the cache, and broadcasts the transition.
+const next = await submitAuthAction(authApi, { action: 'signIn', username: 'alice', password: 'secret' });
+if (next.retriable) showError(next.error); // wrong password / MFA code: re-prompt, nothing broadcast
+
+// Sign-out is the SAME call. The broadcast fires on the transition, so
+// AccountMenuBar, AuthenticatedContent, and other tabs update immediately.
+await submitAuthAction(authApi, { action: 'signOut' });
+```
+
+`submitAuthAction(api, input)` returns the resulting `AuthState`. A bare `setAuthState` call flips the server session but notifies **nothing** on the client, which is why custom UI that calls it directly goes stale (notably on sign-out; issue #185). The `Authenticator` uses `submitAuthAction` internally, so you get this for free when you use it.
+
+### `broadcastAuthChange` (lower-level primitive)
+
+`broadcastAuthChange` is the underlying broadcast primitive that `submitAuthAction` calls. Reach for it directly only when auth state changed through a path `submitAuthAction` doesn't cover and you need to fan the change out yourself:
 
 ```typescript
 import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
@@ -150,7 +169,7 @@ broadcastAuthChange({ userId: 'alice', username: 'alice' });
 broadcastAuthChange(null);
 ```
 
-The `Authenticator` component does this automatically. You only need `broadcastAuthChange` if you're building custom UI. For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
+For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
 
 ## Types Reference
 

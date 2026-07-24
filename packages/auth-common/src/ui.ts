@@ -197,6 +197,64 @@ export function broadcastAuthChange(user: AuthUser | null): void {
 }
 
 /**
+ * Submit an auth action and drive the SAME local notifications the framework's
+ * own `Authenticator` uses, so custom auth UIs built on {@link onAuthChange} /
+ * {@link AuthenticatedContent} re-render without hand-rolling the plumbing.
+ *
+ * `api.setAuthState()` is a plain RPC: it flips the server-side session (and
+ * the auth cookie) but notifies **nothing** on the client. A hand-rolled UI
+ * that calls it directly and relies on `onAuthChange` therefore goes dead —
+ * the footgun behind issue #185. `submitAuthAction` closes that gap by being
+ * the single client-side notifier for an action:
+ *
+ * 1. calls `setAuthState(input)`;
+ * 2. on a retriable failure, returns early — the caller keeps the current form
+ *    on screen (hidden fields like the challenge `session` token intact) and
+ *    overlays `error` as inline feedback; nothing is cached or broadcast;
+ * 3. otherwise advances the shared state cache, so the `Authenticator`'s own
+ *    subscriber re-renders (covers mid-flow challenge states too, e.g.
+ *    sign-in form → confirm-sign-in form);
+ * 4. and, only on a real signed-in / signed-out transition, broadcasts the
+ *    change so `onAuthChange` / `AuthenticatedContent` subscribers (this
+ *    window and other tabs) react. Mid-flow challenge states (`confirming*`)
+ *    advance the form but are deliberately NOT broadcast.
+ *
+ * Browser-only: it reaches `BroadcastChannel` / `window` via
+ * {@link broadcastAuthChange}, so it must not run in Node. `setAuthState`
+ * itself is intentionally left a pure RPC (it also runs server-side) — this
+ * helper, not `setAuthState`, owns client notification.
+ *
+ * @param api - The state machine API from `auth.createApi()`.
+ * @param input - The discriminated auth action to submit.
+ * @returns The resulting {@link AuthState}; inspect `.retriable` to render
+ *   inline errors without leaving the current form.
+ *
+ * @example
+ * ```typescript
+ * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
+ * if (next.retriable) showError(next.error);   // wrong password, bad MFA code, …
+ * // on success, onAuthChange / AuthenticatedContent have already re-rendered.
+ * ```
+ */
+export async function submitAuthAction(
+	api: AuthStateApi,
+	input: AuthActionInput,
+): Promise<AuthState> {
+	const newState = await api.setAuthState(input);
+	// Retriable failures keep the current form on screen so the user can
+	// resubmit — don't touch the shared cache or broadcast a change.
+	if (newState.retriable === true) return newState;
+	// Advance the local cache so the Authenticator's own subscriber re-renders.
+	updateState(api, newState);
+	// Only a real signed-in / signed-out transition should wake onAuthChange /
+	// AuthenticatedContent subscribers; challenge states are still mid-flow.
+	if (newState.state === 'signedIn' || newState.state === 'signedOut') {
+		broadcastAuthChange(newState.user ?? null);
+	}
+	return newState;
+}
+
+/**
  * Shallow structural equality for cached auth users. Used to suppress a
  * redundant repaint when the async hydration resolves to the same user that
  * was already emitted synchronously. Returns true for two `null`s and for the
@@ -493,10 +551,7 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 			for (const f of action.fields) {
 				if (f.defaultValue !== undefined) autoFields[f.name] = f.defaultValue;
 			}
-			void api.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
-				updateState(api, next);
-				broadcastAuthChange(next.user ?? null);
-			}).catch((e: any) => {
+			void submitAuthAction(api, { action: 'autoSignIn', ...autoFields } as AuthActionInput).catch((e: any) => {
 				// autoSignIn failed (cookie expired, network blip, etc.) —
 				// surface the error and leave the user at the manual fallback.
 				rerender({
@@ -599,15 +654,13 @@ function renderState(
 		if (actionOverride?.render) {
 			const submit = async (values: Record<string, string>) => {
 				try {
-					const newState = await api.setAuthState(
+					const newState = await submitAuthAction(
+						api,
 						{ action: action.name, ...values } as AuthActionInput,
 					);
 					if (newState.retriable === true) {
 						onNewState({ ...state, error: newState.error || 'An error occurred' });
-						return;
 					}
-					updateState(api, newState);
-					broadcastAuthChange(newState.user ?? null);
 				} catch (e: any) {
 					onNewState({
 						state: 'signedOut',
@@ -777,8 +830,10 @@ function renderInternalAction(
 			// The renderer can't statically know which action the user is
 			// submitting, so we widen at this one call site. Direct callers
 			// who know their action name get full discrimination via
-			// `AuthActionInput`'s per-variant shape.
-			const newState = await api.setAuthState(
+			// `AuthActionInput`'s per-variant shape. submitAuthAction owns the
+			// cache update + broadcast, guarded to real sign-in/out transitions.
+			const newState = await submitAuthAction(
+				api,
 				{ action: action.name, ...values } as AuthActionInput,
 			);
 			// Retriable errors surface as a signedOut state with `retriable: true`
@@ -789,12 +844,7 @@ function renderInternalAction(
 			// stay intact) and overlay the error as inline feedback.
 			if (newState.retriable === true) {
 				onNewState({ ...currentState, error: newState.error || 'An error occurred' });
-				return;
 			}
-			// Update shared cache + notify Authenticator's subscriber
-			updateState(api, newState);
-			// Broadcast to other components (AuthenticatedContent, other tabs)
-			broadcastAuthChange(newState.user ?? null);
 		} catch (e: any) {
 			// HTTP/network/parse errors — the server-side handler catches
 			// BB errors and surfaces them through the AuthState shape, so
@@ -1016,9 +1066,7 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			signOutBtn.textContent = 'Sign Out';
 			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 			signOutBtn.addEventListener('click', async () => {
-				const newState = await api.setAuthState({ action: 'signOut' });
-				updateState(api, newState);
-				broadcastAuthChange(newState.user ?? null);
+				await submitAuthAction(api, { action: 'signOut' });
 			});
 
 			bar.appendChild(username);

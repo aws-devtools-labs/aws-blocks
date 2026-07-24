@@ -5,7 +5,7 @@ hide parts of it, or replace it entirely, this guide covers the three depths of
 customization and the one rule that holds at every depth.
 
 For the basics (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`,
-`onAuthChange`, `broadcastAuthChange`, and the type reference), see the
+`onAuthChange`, `broadcastAuthChange`, `submitAuthAction`, and the type reference), see the
 [README](./README.md). This guide assumes you've read it.
 
 ## The one rule
@@ -128,12 +128,15 @@ every field value you want submitted. The renderer reads values off the input
 ## Depth 3: Fully custom UI (no Authenticator)
 
 Drive the state machine yourself when you want a component that owns its own
-rendering. You call `getAuthState()` once, render, and call `setAuthState()` on
-submit. The state API is on the object your backend returns from
-`auth.createApi()`.
+rendering. You call `getAuthState()` once, render, and submit each action with
+`submitAuthAction(api, input)`. That helper is the single notifier: it wraps
+`setAuthState`, advances the cached state, and broadcasts on every signed-in /
+signed-out transition, so `onAuthChange` / `AuthenticatedContent` subscribers
+(and other tabs) stay in sync. The state API is the object your backend returns
+from `auth.createApi()`.
 
 ```typescript
-import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import { submitAuthAction } from '@aws-blocks/auth-common/ui';
 import type { AuthActionInput } from '@aws-blocks/auth-common';
 import { authApi } from 'aws-blocks';
 
@@ -150,18 +153,28 @@ async function renderAuth(root: HTMLElement) {
   const action = state.actions[0];
   // ... build inputs from action.fields, collect values on submit ...
 
-  const next = await authApi.setAuthState({
+  // submitAuthAction is the single notifier: it calls setAuthState, advances
+  // the cached state, and broadcasts on any signed-in / signed-out transition
+  // (AccountMenuBar, AuthenticatedContent, other tabs). It is correct for BOTH
+  // sign-in and sign-out. A bare setAuthState would leave the UI stale
+  // (notably on sign-out; the issue #185 footgun).
+  const next = await submitAuthAction(authApi, {
     action: action.name,
     username: 'alice',
     password: 'secret',
   } as AuthActionInput);
 
-  // Tell the rest of the app (AccountMenuBar, AuthenticatedContent,
-  // other tabs) that auth changed. The Authenticator does this for you;
-  // here it's your responsibility.
-  if (next.state === 'signedIn') broadcastAuthChange(next.user ?? null);
+  // Retriable failures (wrong password/MFA) come back with retriable: true and
+  // are not broadcast; keep the current form up and show next.error inline.
+  if (next.retriable) showError(next.error);
 }
 ```
+
+`submitAuthAction` owns the notification plumbing shown above. The lower-level
+`broadcastAuthChange` primitive (documented in the
+[README](./README.md#broadcasting-auth-changes)) is still available for the rare
+case where you change auth state through a path `submitAuthAction` doesn't cover
+and need to fan the change out yourself.
 
 ### The `AuthActionInput` contract
 
