@@ -504,31 +504,58 @@ void describe('generated request fn — HTML always resolves from the current bu
     );
     assert.equal(output.uri, '/builds/newbuild/index.html');
   });
+
+  void it('does NOT treat a 4-char non-html asset URI (/x.y) as HTML — cookie still honored', async () => {
+    // Guards the suffix-test edge case: `lastIndexOf('.html') === uri.length - 5`
+    // is `-1 === -1` (true) for a 4-char URI like `/x.y`, which would wrongly
+    // force the asset onto the current build and skip its __dpl pin. The
+    // `slice(-5)` form must leave such an asset honoring the cookie.
+    const entries = buildKvsEntries({
+      manifest: baseManifest({ routes: [{ pattern: '/*', target: 'static' }] }),
+      buildId: 'newbuild',
+      hasServer: false,
+      hasImage: false,
+      skewEnabled: true,
+    });
+    const { output } = await runRequestFn(
+      generateKvsRouterRequestCode(),
+      entries,
+      reqWith('/x.y'),
+    );
+    assert.match(output.uri, /^\/builds\/oldbuild-123\//);
+  });
 });
 
-void describe('generated functions — CloudFront 10 KB code-size limit', () => {
-  // CloudFront Functions reject code larger than 10 KB with an opaque HTTP 413
-  // at deploy time ("Internal error reported from downstream service"), which
-  // rolls the whole stack back. The generated source (including any in-function
-  // comments) ships verbatim, so a verbose comment can silently blow the budget.
-  // These guards fail loudly at unit-test time instead. Regression for the #245
-  // fix, whose first draft added a multi-line rationale comment INSIDE the
-  // function string and pushed it from 9.6 KB to 10.6 KB → 413 on deploy.
-  const LIMIT = 10 * 1024;
+void describe('generated functions — CloudFront function-size limit', () => {
+  // CloudFront Functions reject code larger than the "Maximum size of the
+  // function code" quota with an opaque HTTP 413 at deploy time ("Internal error
+  // reported from downstream service"), which rolls the whole stack back. The
+  // generated source (including any in-function comments) ships verbatim, so a
+  // verbose comment can silently blow the budget. These guards fail loudly at
+  // unit-test time instead. Regression for the #245 fix, whose first draft added
+  // a multi-line rationale comment INSIDE the function string and pushed it from
+  // ~9.6 KB to ~10.6 KB → 413 on deploy.
+  //
+  // The quota is documented as "10 KB" without disambiguating decimal (10,000)
+  // vs binary (10,240) — so we assert against the CONSERVATIVE decimal value.
+  // Erring low is deliberate: a too-tight guard costs a trivial test fix, while
+  // a too-loose one lets code in the 10,001–10,240 range reach deploy and 413.
+  // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-functions-restrictions.html
+  const LIMIT = 10_000;
 
-  void it('viewer-request function stays under 10 KB', () => {
+  void it('viewer-request function stays under the CloudFront code-size limit', () => {
     const bytes = Buffer.byteLength(generateKvsRouterRequestCode(), 'utf8');
     assert.ok(
       bytes < LIMIT,
-      `viewer-request function is ${bytes} B; must stay under the CloudFront 10 KB (${LIMIT} B) limit`,
+      `viewer-request function is ${bytes} B; must stay under the CloudFront code-size limit (${LIMIT} B)`,
     );
   });
 
-  void it('viewer-response function stays under 10 KB', () => {
+  void it('viewer-response function stays under the CloudFront code-size limit', () => {
     const bytes = Buffer.byteLength(generateKvsRouterResponseCode(86400), 'utf8');
     assert.ok(
       bytes < LIMIT,
-      `viewer-response function is ${bytes} B; must stay under the CloudFront 10 KB (${LIMIT} B) limit`,
+      `viewer-response function is ${bytes} B; must stay under the CloudFront code-size limit (${LIMIT} B)`,
     );
   });
 });

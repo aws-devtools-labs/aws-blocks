@@ -575,6 +575,12 @@ function stripBasePath(uri, bp) {
  * stays consistent (old prefixes are retained via `prune: false`) until the
  * next HTML navigation lands the visitor on the current build.
  *
+ * The suffix test is `uri.slice(-5) === '.html'`, NOT
+ * `uri.lastIndexOf('.html') === uri.length - 5`: for a 4-char non-HTML URI like
+ * `/x.y` the latter compares `-1 === -1` (true) and would wrongly force that
+ * asset onto the current build, skipping its `__dpl` pin — the exact #245 bug,
+ * inverted. `slice(-5)` on a <5-char string returns the whole string, never `.html`.
+ *
  * NOTE: this function source ships to CloudFront, which enforces a 10 KB code
  * limit — keep in-function comments terse (the rationale lives here in the
  * JSDoc, which does NOT ship).
@@ -734,7 +740,7 @@ async function handler(event) {
     }
   }
   // HTML always resolves from the current build; assets honor __dpl (see #245 in JSDoc).
-  if (uri.lastIndexOf('.html') === uri.length - 5) { buildId = meta.b; }
+  if (uri.slice(-5) === '.html') { buildId = meta.b; }
   request.uri = '/builds/' + buildId + uri;
   return request;
 }`;
