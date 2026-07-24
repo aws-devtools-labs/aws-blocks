@@ -2,31 +2,39 @@
 
 Build a shared presence board in this AWS Blocks app. Each visitor picks a name and "joins"; everyone with the app open sees the live roster of who's present, updated in real time. The roster also survives a page reload.
 
+The shared board itself — registering, deduping, storing, and reading back the roster — must run through an **`api` namespace** backed by real framework blocks (a **distributed-table** block for the durable roster, a **realtime** block for fan-out). The page is a thin client over that API plus the realtime channel.
+
 ## Setup (do this first)
 
 The workspace has already been scaffolded. Begin by reading README.md, then do all your edits in this workspace.
 
 ## Requirements
 
-1. A visitor sees a name field and a join button.
-2. Submitting the name registers the visitor on the shared presence board and adds a row for them. Presence is **keyed by name**: joining with a name that is already present does **not** create a duplicate row — the board shows at most one row per name.
-3. **Realtime:** when one tab/visitor joins, every other open tab reflects the new presence within a couple of seconds — no manual refresh.
-4. The presence row for a given visitor renders that visitor's name.
-5. **Persistence:** the board is stored so that after a full page reload **every** present visitor is still shown — restore the whole shared roster, not just the visitor who joined in this tab. A freshly-opened tab must also load the current roster on first paint (fetch the stored board on load): a tab opened *after* others joined sees them immediately, not a blank board that only fills in on the next realtime event.
-6. **Input validation:** disable `[data-testid=join-btn]` whenever the name field is empty or whitespace-only (trim before the check); re-enable it once a real name is present.
-7. **Untrusted names:** names are visitor-supplied — render them as **text**, never as markup. A name like `<b>x</b>` must appear literally as text and must not create a real `<b>` element (no `innerHTML` injection). Non-ASCII and emoji names (e.g. `日本語 🙂`) must render correctly as text.
+### The `api` namespace (authoritative shared board)
+
+Expose an **`api` namespace** (the framework's server-side RPC surface — `POST /aws-blocks/api`) with:
+
+- **`api.join(name)`** — registers `name` on the shared board (persisting it via the **distributed-table** block) and broadcasts the change over the **realtime** block. **Keyed by name:** joining a name that is already present must **not** create a duplicate — the roster holds at most one entry per name. The name is stored and returned **verbatim** (a name like `<b>x</b>` is preserved literally as text; non-ASCII / emoji preserved exactly). A blank or whitespace-only `name` is rejected with a JSON-RPC **error** envelope and does not change the roster.
+- **`api.listPresent()`** — returns the current shared roster as an array `[{ name }]` read from the store. Because the roster is persisted, a fresh caller (or a freshly-loaded tab) sees everyone who has joined — not a blank board.
+
+### Realtime + persistence
+1. **Realtime:** when one tab/visitor joins, every other open tab reflects the new presence within a couple of seconds — no manual refresh (driven by the realtime block's broadcast).
+2. **Persistence / first paint:** on load the page fetches the stored roster via `api.listPresent()` and renders it, so a tab opened *after* others joined sees them immediately, and a reload restores the whole shared roster.
+
+### Chat UI (thin client / light smoke)
+3. A visitor sees a name field `[data-testid=presence-name-input]` and a join button `[data-testid=join-btn]`. Submitting the name calls `api.join`; a `[data-testid=presence-item]` row appears for each present visitor, rendering that visitor's name.
+4. **Input validation:** disable `[data-testid=join-btn]` whenever the name field is empty or whitespace-only (trim before the check); re-enable it once a real name is present.
+5. **Untrusted names:** render visitor names as **text**, never as markup — a name like `<b>x</b>` must appear literally and must not create a real `<b>` element (no `innerHTML` injection).
 
 A single shared board across all tabs — no login, no per-user filtering.
 
 ## Selector contract
 
-The Playwright test grades your work using these `data-testid` hooks. Implement them exactly.
-
 | Selector | Element | Purpose |
 |---|---|---|
 | `[data-testid=presence-name-input]` | `<input type="text">` | Where the visitor types their presence name |
-| `[data-testid=join-btn]` | `<button>` | Registers the typed name on the shared board |
-| `[data-testid=presence-item]` | one per present visitor | The row for a single present visitor |
+| `[data-testid=join-btn]` | `<button>` | Registers the typed name (`api.join`) on the shared board |
+| `[data-testid=presence-item]` | one per present visitor | The row for a single present visitor; renders the name as its text |
 
 Each `[data-testid=presence-item]` must render the visitor's name as its text (the test locates a visitor by `filter({ hasText: name })`).
 
