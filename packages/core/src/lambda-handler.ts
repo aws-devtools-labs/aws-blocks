@@ -256,20 +256,35 @@ export function isApiGatewayHttpEvent(event: any): boolean {
 }
 
 /**
+ * Default cap for the HTTP deadline guard.
+ *
+ * On Lambda behind API Gateway this is the fixed 28s guard. Container
+ * deployments have no API Gateway 29s cutoff and can raise it via the
+ * `BLOCKS_HTTP_TIMEOUT_MS` env var — the same bundle serves both
+ * environments, so the cap must come from the environment, not a code path.
+ *
+ * @internal Exported for testing only.
+ */
+export function defaultHttpDeadlineCapMs(): number {
+  const raw = Number(process.env.BLOCKS_HTTP_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : APIGW_TIMEOUT_MS;
+}
+
+/**
  * Compute the HTTP deadline in milliseconds.
  *
  * Uses the minimum of:
- * - `APIGW_TIMEOUT_MS` (28s fixed guard)
+ * - `capMs` (28s fixed guard by default; see {@link defaultHttpDeadlineCapMs})
  * - `context.getRemainingTimeInMillis() - REMAINING_TIME_BUFFER_MS` (actual remaining Lambda time)
  *
  * This handles the edge case where a warm Lambda has less than 29s remaining.
  *
  * @internal Exported for testing only.
  */
-export function computeHttpDeadlineMs(context?: LambdaContext): number {
-  if (!context?.getRemainingTimeInMillis) return APIGW_TIMEOUT_MS;
+export function computeHttpDeadlineMs(context?: LambdaContext, capMs = defaultHttpDeadlineCapMs()): number {
+  if (!context?.getRemainingTimeInMillis) return capMs;
   const remaining = context.getRemainingTimeInMillis() - REMAINING_TIME_BUFFER_MS;
-  return Math.min(APIGW_TIMEOUT_MS, Math.max(remaining, 0));
+  return Math.min(capMs, Math.max(remaining, 0));
 }
 
 /**

@@ -325,6 +325,14 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Optional container compute target (e.g. ECS Fargate, EKS). When set, the
+   * HTTP front door is served by load-balanced containers running the same
+   * bundle instead of API Gateway + Lambda; the Lambda is still created as a
+   * companion for event-source triggers and Building Block attachments.
+   * Only consumed at CDK synth time — local dev and mock layers ignore it.
+   */
+  compute?: import('../cdk/compute-target.js').ComputeTarget;
 }
 
 export class BlocksStack {
