@@ -128,4 +128,4 @@ The output is a single self-contained `.blocks.dart` file. For backends with rea
 
 ## License
 
-MIT
+Apache-2.0
