@@ -1,4 +1,5 @@
 ---
+"@aws-blocks/agent-bench": patch
 ---
 
 test(bench): reshape agent-bench task graders to be framework-surface-first
