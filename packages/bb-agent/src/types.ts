@@ -83,6 +83,30 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * so they can scope their behaviour to the caller.
 	 */
 	toolContextSchema?: z.ZodType<TContext>;
+	/**
+	 * Server-side per-turn tool-context resolver for browser-direct (JWT) streaming.
+	 *
+	 * On AWS the browser streams straight to the AgentCore Runtime, bypassing your API Lambda —
+	 * so there's no per-turn app hop to build tool `context`. This hook restores it: it runs IN
+	 * the AgentCore container on every turn, receives the **gateway-verified** JWT claims, and
+	 * returns the tool `context`. Because the runtime's JWT authorizer already validated the
+	 * token, the claims are trustworthy and the browser cannot forge them — use this to scope
+	 * tools to the caller (e.g. `userId` from `sub`, a role from `cognito:groups`).
+	 *
+	 * Only claims on the forwarded token are available. For AuthCognito that's the **access
+	 * token**: `sub`, `username`, `cognito:groups`, `scope` — NOT `email` or `custom:*`
+	 * attributes (those live on the ID token, which isn't forwarded). Cognito-only today
+	 * (the OIDC auth BB doesn't yet forward a runtime-acceptable token).
+	 *
+	 * The returned object must satisfy `toolContextSchema`. The verified `sub` is always
+	 * overlaid as `context.userId` AFTER this runs, so identity stays authoritative even if the
+	 * resolver omits or overrides it. Not called on IAM runtimes or local dev (no forwarded JWT);
+	 * there the `context` passed to `streamSSE()` is used as-is.
+	 *
+	 * For data that isn't identity — a database lookup, request-varying values — read it inside
+	 * the tool handler (which also runs in the container) rather than here.
+	 */
+	resolveToolContext?: (claims: Record<string, unknown>) => TContext | Promise<TContext>;
 	conversation?: ConversationManagerConfig;
 	structuredOutput?: z.ZodType;
 	/** Controls how text chunks are published to the client via Realtime.

@@ -385,11 +385,21 @@ const wsAgent = new Agent(scope, 'wsagent', {
   auth: authC,
   model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
   systemPrompt: 'You are a test agent for WebSocket streaming. Use tools when asked.',
+  // Browser-direct streaming carries no tool context, so resolve it server-side from the
+  // gateway-verified JWT claims. The container runs this each turn; `sub` is overlaid as
+  // `userId` afterward, so it stays authoritative. `sub` is always present on the access token.
+  toolContextSchema: z.object({ userId: z.string() }),
+  resolveToolContext: (claims) => ({ userId: String(claims.sub) }),
   tools: (tool) => ({
     sendEmail: tool({ description: 'Send an email',
       parameters: z.object({ to: z.string(), body: z.string() }),
       needsApproval: true,
       handler: async ({ input }) => ({ sent: true, to: input.to }) }),
+    // Returns the server-resolved identity so the e2e can assert the tool saw claim-derived,
+    // unforgeable context (the browser never sent it).
+    whoami: tool({ description: 'Return the caller identity',
+      parameters: z.object({}),
+      handler: async ({ context }) => ({ userId: context.userId }) }),
     // Sleeps past the API-Gateway ~30s cap: proves a WS turn streams to completion when the
     // browser talks DIRECTLY to AgentCore (the whole point of moving off Lambda RPC).
     slowStream: tool({ description: 'A slow long-running task',

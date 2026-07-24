@@ -1418,7 +1418,7 @@ describe('createAgentCoreWsTransport', () => {
 
 // ── AgentCore entry: server-side userId from forwarded JWT ──────────────────
 
-import { requireVerifiedIdentity, resolveToolContext, userIdFromContext } from './agentcore-entry.js';
+import { buildToolContext, claimsFromContext, requireVerifiedIdentity, userIdFromContext } from './agentcore-entry.js';
 
 describe('userIdFromContext', () => {
 	// Build an unsigned JWT with the given claims (we only decode the payload).
@@ -1451,26 +1451,65 @@ describe('userIdFromContext', () => {
 	});
 });
 
-describe('resolveToolContext', () => {
-	test('injects the verified userId when the client sent no context (browser-direct)', () => {
+describe('buildToolContext', () => {
+	const claims = (extra: Record<string, unknown> = {}) => ({ sub: 'sub-123', ...extra });
+
+	test('injects the verified userId when there is no resolver and no client context (browser-direct)', async () => {
 		// A toolContextSchema agent requires context; the WS transport carries none, so the
 		// server supplies { userId: sub } from the validated token.
-		assert.deepStrictEqual(resolveToolContext('sub-123', undefined), { userId: 'sub-123' });
+		assert.deepStrictEqual(await buildToolContext(claims(), undefined), { userId: 'sub-123' });
 	});
 
-	test('verified userId overrides a client-supplied userId (no spoofing)', () => {
-		const out = resolveToolContext('sub-123', { userId: 'someone-else', tier: 'gold' });
+	test('runs the app resolver against the verified claims to build the base context', async () => {
+		const resolver = (c: Record<string, unknown>) => ({ role: (c['cognito:groups'] as string[])?.[0] });
+		const out = await buildToolContext(claims({ 'cognito:groups': ['admin'] }), undefined, resolver);
+		assert.deepStrictEqual(out, { role: 'admin', userId: 'sub-123' });
+	});
+
+	test('verified sub overrides a userId the resolver returns (identity is authoritative)', async () => {
+		const resolver = () => ({ userId: 'someone-else', tier: 'gold' });
+		assert.deepStrictEqual(await buildToolContext(claims(), undefined, resolver), {
+			userId: 'sub-123',
+			tier: 'gold',
+		});
+	});
+
+	test('verified sub overrides a client-supplied userId when there is no resolver (no spoofing)', async () => {
+		const out = await buildToolContext(claims(), { userId: 'someone-else', tier: 'gold' });
 		assert.deepStrictEqual(out, { userId: 'sub-123', tier: 'gold' });
 	});
 
-	test('passes client context through unchanged when there is no token (IAM runtime)', () => {
+	test('passes client context through unchanged when there is no token (IAM runtime / local)', async () => {
 		const ctx = { userId: 'server-built', tier: 'gold' };
-		assert.strictEqual(resolveToolContext(undefined, ctx), ctx);
-		assert.strictEqual(resolveToolContext(undefined, undefined), undefined);
+		const resolver = () => ({ userId: 'never-called' });
+		// No claims → resolver is NOT invoked and the client context is used as-is.
+		assert.strictEqual(await buildToolContext(undefined, ctx, resolver), ctx);
+		assert.strictEqual(await buildToolContext(undefined, undefined), undefined);
 	});
 
-	test('handles a non-object client context by starting fresh', () => {
-		assert.deepStrictEqual(resolveToolContext('sub-123', 'garbage'), { userId: 'sub-123' });
+	test('awaits an async resolver', async () => {
+		const resolver = async (c: Record<string, unknown>) => ({ tenant: `t-${c.sub as string}` });
+		assert.deepStrictEqual(await buildToolContext(claims(), undefined, resolver), {
+			tenant: 't-sub-123',
+			userId: 'sub-123',
+		});
+	});
+});
+
+describe('claimsFromContext', () => {
+	function jwt(claims: Record<string, unknown>): string {
+		const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+		return `${b64({ alg: 'RS256' })}.${b64(claims)}.sig`;
+	}
+
+	test('decodes the full claim set from a Bearer token', () => {
+		const headers = { Authorization: `Bearer ${jwt({ sub: 's', 'cognito:groups': ['admin'], scope: 'x' })}` };
+		assert.deepStrictEqual(claimsFromContext(headers), { sub: 's', 'cognito:groups': ['admin'], scope: 'x' });
+	});
+
+	test('returns undefined when no token / malformed', () => {
+		assert.strictEqual(claimsFromContext({}), undefined);
+		assert.strictEqual(claimsFromContext({ Authorization: 'Bearer not-a-jwt' }), undefined);
 	});
 });
 

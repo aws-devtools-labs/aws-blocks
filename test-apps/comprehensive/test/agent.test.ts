@@ -411,6 +411,33 @@ export function agentTests(getApi: () => typeof apiType) {
           await api.wsAgentTestDeleteUser(username);
         }
       });
+
+      // wsAgent declares a toolContextSchema, so a turn REQUIRES tool `context`. The browser-direct
+      // transport carries none — before server-side context resolution this threw "Invalid tool
+      // context". Now the container resolves `{ userId: sub }` from the verified claims, so a
+      // context-scoped tool runs browser-direct. Completing without an error chunk proves it.
+      test('a context-scoped tool runs browser-direct (server-resolved context)', { timeout: 60_000 }, async () => {
+        const api = getApi();
+        const { username, password } = await api.wsAgentTestCreateUser();
+        try {
+          await api.authCSignIn(username, password);
+          const streamChunks = createAgentCoreWsTransport(
+            async ({ conversationId }) => await api.wsAgentGetStreamEndpoint(conversationId),
+          );
+          const conversationId = crypto.randomUUID();
+          const chunks: string[] = [];
+          for await (const chunk of streamChunks({ conversationId, message: 'Please run whoami now' })) {
+            chunks.push((chunk as any).type);
+          }
+          assert.ok(chunks.includes('tool-call'), 'should have called whoami');
+          assert.ok(chunks.includes('tool-result'), 'whoami should have returned (context was valid)');
+          assert.ok(chunks.includes('done'), 'turn should complete');
+          assert.ok(!chunks.includes('error'), `no error expected, got: ${JSON.stringify(chunks)}`);
+        } finally {
+          await api.authCSignOut();
+          await api.wsAgentTestDeleteUser(username);
+        }
+      });
     });
   });
 }
