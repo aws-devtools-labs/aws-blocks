@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import { finalizeAgentRuntimeRoles } from './runtime-role-registry.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -247,6 +248,9 @@ export class BlocksBackend extends Construct {
 
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(backend, backend.handler);
+    // Give each AgentCore Runtime role the handler's accumulated BB grants (after all BBs
+    // have granted the handler) so agent tools can reach other BBs from the container.
+    finalizeAgentRuntimeRoles(backend, backend.handler);
 
     return backend;
   }

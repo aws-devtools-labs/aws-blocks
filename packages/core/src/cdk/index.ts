@@ -14,12 +14,14 @@ import {
 } from '../common/index.js';
 import { assertCdkConditionActive, BlocksBackend, setupBlocksInfra } from './blocks-backend.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { finalizeAgentRuntimeRoles } from './runtime-role-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
 export type { ScopeOptions } from '../index.js';
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+export { finalizeAgentRuntimeRoles, registerAgentRuntimeRole } from './runtime-role-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { synthGuard } from './synth-guard.js';
@@ -75,6 +77,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		}
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.handler);
+		// Give each AgentCore Runtime role the handler's accumulated BB grants (after all BBs
+		// have granted the handler) so agent tools can reach other BBs from the container.
+		finalizeAgentRuntimeRoles(stack, stack.handler);
 
 		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
