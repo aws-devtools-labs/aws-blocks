@@ -44,7 +44,7 @@ jobs:
       - name: Build + pack to dist-registry
         run: |
           npm run build
-          npm run publish:dry-run
+          npm run publish:local
       - name: Upload dist-registry
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
