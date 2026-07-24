@@ -98,3 +98,29 @@ test('CDK: a JWT-authorizer Runtime forwards ONLY the Authorization header', () 
 		RequestHeaderConfiguration: { RequestHeaderAllowlist: ['Authorization'] },
 	});
 });
+
+test('CDK: BB_AGENT_REQUIRE_VERIFIED_IDENTITY tracks the authorizer (fail-closed gate)', () => {
+	// The container fails closed only when this env var is set. It must be present iff a JWT
+	// authorizer is configured — gated on the SAME condition as RequestHeaderConfiguration so
+	// the two can't drift. IAM runtime → absent (client-supplied identity is the intended path).
+	const iam = setup();
+	new Agent(iam.parent, 'chat', { systemPrompt: 'test', agentcoreAssetPath: ASSET_DIR });
+	const iamRuntime = Object.values(
+		Template.fromStack(iam.stack).findResources('AWS::BedrockAgentCore::Runtime'),
+	)[0];
+	assert.equal(
+		(iamRuntime.Properties as any).EnvironmentVariables?.BB_AGENT_REQUIRE_VERIFIED_IDENTITY,
+		undefined,
+		'IAM runtime must not set the fail-closed gate',
+	);
+
+	const jwt = setup();
+	new Agent(jwt.parent, 'chat', {
+		systemPrompt: 'test',
+		agentcoreAssetPath: ASSET_DIR,
+		auth: { oidcDiscoveryUrl: 'https://issuer.example.com/.well-known/openid-configuration' },
+	});
+	Template.fromStack(jwt.stack).hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
+		EnvironmentVariables: { BB_AGENT_REQUIRE_VERIFIED_IDENTITY: 'true' },
+	});
+});

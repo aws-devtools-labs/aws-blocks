@@ -97,6 +97,13 @@ export class Agent extends Scope {
 					// registers under an un-prefixed fullId (e.g. `test-app-agent`) that won't
 					// match BB_AGENT_ID (`<stack>-test-app-agent`) → "No Agent registered".
 					BLOCKS_STACK_NAME: cdk.Stack.of(this).stackName,
+					// When a JWT authorizer is configured the gateway rejects tokenless requests,
+					// so every request reaching the container MUST carry a forwarded token. Tell the
+					// container to FAIL CLOSED if a verified `sub` is somehow absent (a forwarding
+					// regression / misconfigured allowlist) rather than silently trusting the
+					// client-supplied `userId`. Gated on the SAME condition as the header allowlist
+					// below so the two can't drift.
+					...(authorizerConfiguration ? { BB_AGENT_REQUIRE_VERIFIED_IDENTITY: 'true' } : {}),
 				},
 				authorizerConfiguration,
 				// When a JWT authorizer is in play, forward the gateway-validated caller token to

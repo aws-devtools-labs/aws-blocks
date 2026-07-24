@@ -1418,7 +1418,7 @@ describe('createAgentCoreWsTransport', () => {
 
 // ── AgentCore entry: server-side userId from forwarded JWT ──────────────────
 
-import { resolveToolContext, userIdFromContext } from './agentcore-entry.js';
+import { requireVerifiedIdentity, resolveToolContext, userIdFromContext } from './agentcore-entry.js';
 
 describe('userIdFromContext', () => {
 	// Build an unsigned JWT with the given claims (we only decode the payload).
@@ -1471,5 +1471,33 @@ describe('resolveToolContext', () => {
 
 	test('handles a non-object client context by starting fresh', () => {
 		assert.deepStrictEqual(resolveToolContext('sub-123', 'garbage'), { userId: 'sub-123' });
+	});
+});
+
+describe('requireVerifiedIdentity', () => {
+	const KEY = 'BB_AGENT_REQUIRE_VERIFIED_IDENTITY';
+	// Save/restore the env var around each case (no beforeEach import needed).
+	const withEnv = (value: string | undefined, fn: () => void) => {
+		const prev = process.env[KEY];
+		if (value === undefined) delete process.env[KEY];
+		else process.env[KEY] = value;
+		try {
+			fn();
+		} finally {
+			if (prev === undefined) delete process.env[KEY];
+			else process.env[KEY] = prev;
+		}
+	};
+
+	test('throws on a JWT runtime when no verified sub reached the container (fail closed)', () => {
+		withEnv('true', () => assert.throws(() => requireVerifiedIdentity(undefined), /No verified caller identity/));
+	});
+
+	test('allows a JWT runtime turn when a verified sub is present', () => {
+		withEnv('true', () => assert.doesNotThrow(() => requireVerifiedIdentity('sub-123')));
+	});
+
+	test('is a no-op on IAM / local runtimes (env unset) even without a sub', () => {
+		withEnv(undefined, () => assert.doesNotThrow(() => requireVerifiedIdentity(undefined)));
 	});
 });

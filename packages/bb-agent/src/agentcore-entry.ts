@@ -42,11 +42,13 @@ const requestSchema = z.object({
 	/**
 	 * Owner of the conversation. Required when persistence is enabled (not inferenceOnly).
 	 *
-	 * This is a FALLBACK. When the runtime uses a JWT authorizer and forwards the caller's token
-	 * (CDK sets `requestHeaderConfiguration: { allowlistedHeaders: ['Authorization'] }`), the
-	 * server prefers the token's `sub` claim over this value — see `userIdFromContext`. The
-	 * client-supplied `userId` is used only when no token reaches the container: IAM/SigV4
-	 * runtimes (no caller JWT), or if header forwarding isn't available on a given path.
+	 * This is a FALLBACK for IAM/SigV4 runtimes only. When the runtime uses a JWT authorizer and
+	 * forwards the caller's token (CDK sets `requestHeaderConfiguration: { allowlistedHeaders:
+	 * ['Authorization'] }`), the server derives `userId` from the token's `sub` — see
+	 * `userIdFromContext` — and does NOT fall back to this value: if a verified `sub` is absent the
+	 * turn is rejected (`requireVerifiedIdentity`), so a forwarding regression can't silently
+	 * downgrade to a client-trusted identity. On IAM/SigV4 runtimes there is no caller JWT, so this
+	 * client-supplied `userId` is the intended identity.
 	 */
 	userId: z.string().optional(),
 	/** HITL resume: approval responses to apply instead of a new prompt. */
@@ -83,6 +85,28 @@ export function userIdFromContext(headers: Record<string, string> | undefined): 
 		return typeof claims.sub === 'string' ? claims.sub : undefined;
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * Fail closed on a JWT-authorized runtime when no verified identity reached the container.
+ *
+ * When the CDK configured a JWT authorizer it sets `BB_AGENT_REQUIRE_VERIFIED_IDENTITY` and
+ * allowlists the `Authorization` header, so the gateway rejects tokenless requests and every
+ * request reaching the container should carry a forwarded, gateway-validated token. If the
+ * verified `sub` is nonetheless absent — a header-forwarding regression or a misconfigured
+ * allowlist — falling back to the client-supplied `userId`/context would silently downgrade an
+ * unforgeable identity to a client-trusted one. Throw instead, so the failure is loud and the
+ * turn is rejected rather than run as a spoofable caller. No-op on IAM/local runtimes (the env
+ * var is unset there), where the client-supplied identity is the intended path.
+ */
+export function requireVerifiedIdentity(jwtUserId: string | undefined): void {
+	if (process.env.BB_AGENT_REQUIRE_VERIFIED_IDENTITY === 'true' && jwtUserId == null) {
+		throw new Error(
+			'No verified caller identity: this runtime has a JWT authorizer, but no gateway-validated ' +
+				'token reached the container (Authorization not forwarded). Refusing to fall back to a ' +
+				'client-supplied userId. Check the runtime `requestHeaderConfiguration` header allowlist.',
+		);
 	}
 }
 
@@ -133,6 +157,7 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 				// runtimeSessionId maps to the Agent BB's conversationId (session state key).
 				// Prefer the gateway-validated JWT's `sub` (unforgeable); fall back to the payload.
 				const jwtUserId = userIdFromContext(context.headers);
+				requireVerifiedIdentity(jwtUserId); // fail closed on JWT runtimes with no forwarded token
 				for await (const chunk of agent.streamSSE(request.prompt, {
 					conversationId: context.sessionId,
 					userId: jwtUserId ?? request.userId,
@@ -151,12 +176,13 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 		// same streamSSE() loop and send each chunk back as a JSON WS message, then close.
 		websocketHandler: async (socket, context) => {
 			// Prefer the gateway-validated JWT's `sub` (unforgeable) over the client payload.
-			// On the WS path the token arrives via the Sec-WebSocket-Protocol subprotocol; whether
-			// AgentCore forwards it as an Authorization header here is confirmed at deploy time —
-			// if absent, jwtUserId is undefined and we fall back to request.userId.
+			// On the WS path the token arrives via the Sec-WebSocket-Protocol subprotocol. On a
+			// JWT runtime a missing token is a fail-closed error (see requireVerifiedIdentity,
+			// called per-message below); only on IAM/local runtimes do we fall back to request.userId.
 			const jwtUserId = userIdFromContext(context.headers);
 			socket.on('message', async (raw: unknown) => {
 				try {
+					requireVerifiedIdentity(jwtUserId); // fail closed on JWT runtimes with no forwarded token
 					const request = requestSchema.parse(JSON.parse(String(raw)));
 					for await (const chunk of agent.streamSSE(request.prompt, {
 						conversationId: context.sessionId,
