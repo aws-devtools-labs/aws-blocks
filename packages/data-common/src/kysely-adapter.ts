@@ -13,13 +13,13 @@ import {
 import type { DatabaseEngine, TransactionHandle } from './engine.js';
 
 /**
- * An engine value that may not be resolved yet. The public `Database` class
- * exposes `getEngine(): Promise<DatabaseEngine>` (it lazily initializes the
- * underlying pool/Data API client), while the lower-level
- * `RLSEnabledDatabase`/`DatabaseBase` expose it synchronously. The adapter
- * accepts either and resolves lazily inside its already-async hooks.
+ * A thunk that produces the engine, either synchronously
+ * (`RLSEnabledDatabase`/`DatabaseBase`) or as a `Promise` (the public
+ * `Database` class, which initializes its pool/Data API client lazily).
+ * Invoked lazily on the first query, never at adapter creation — see
+ * {@link createKyselyAdapter} for why.
  */
-type EngineSource = DatabaseEngine | Promise<DatabaseEngine>;
+type EngineFactory = () => DatabaseEngine | Promise<DatabaseEngine>;
 
 /**
  * Kysely connection that routes queries through a DatabaseEngine.
@@ -28,14 +28,26 @@ type EngineSource = DatabaseEngine | Promise<DatabaseEngine>;
  */
 class EngineConnection implements DatabaseConnection {
   handle: TransactionHandle | null = null;
-  private enginePromise: Promise<DatabaseEngine>;
+  private enginePromise?: Promise<DatabaseEngine>;
 
-  constructor(engineSource: EngineSource) {
-    this.enginePromise = Promise.resolve(engineSource);
+  constructor(private getEngine: EngineFactory) {}
+
+  /** Resolve the engine on first use, memoizing it for this connection. */
+  private engine(): Promise<DatabaseEngine> {
+    if (!this.enginePromise) {
+      try {
+        this.enginePromise = Promise.resolve(this.getEngine());
+      } catch (err) {
+        // Don't memoize a synchronous failure — a later call may retry after a
+        // transient initialization error.
+        return Promise.reject(err);
+      }
+    }
+    return this.enginePromise;
   }
 
   async executeQuery<R>(compiledQuery: CompiledQuery): Promise<QueryResult<R>> {
-    const engine = await this.enginePromise;
+    const engine = await this.engine();
     if (this.handle) {
       const rows = await engine.queryInTransaction<R>(
         this.handle,
@@ -50,14 +62,14 @@ class EngineConnection implements DatabaseConnection {
 
   /** Begin a transaction on this connection's engine. */
   async begin(): Promise<void> {
-    const engine = await this.enginePromise;
+    const engine = await this.engine();
     this.handle = await engine.beginTransaction();
   }
 
   /** Commit the active transaction (if any). */
   async commit(): Promise<void> {
     if (this.handle) {
-      const engine = await this.enginePromise;
+      const engine = await this.engine();
       await engine.commitTransaction(this.handle);
       this.handle = null;
     }
@@ -66,7 +78,7 @@ class EngineConnection implements DatabaseConnection {
   /** Roll back the active transaction (if any). */
   async rollback(): Promise<void> {
     if (this.handle) {
-      const engine = await this.enginePromise;
+      const engine = await this.engine();
       await engine.rollbackTransaction(this.handle);
       this.handle = null;
     }
@@ -83,12 +95,12 @@ class EngineConnection implements DatabaseConnection {
  * run on the same connection — critical for pooled and stateless (Data API) engines.
  */
 class EngineDriver implements Driver {
-  constructor(private engineSource: EngineSource) {}
+  constructor(private getEngine: EngineFactory) {}
 
   async init(): Promise<void> {}
 
   async acquireConnection(): Promise<DatabaseConnection> {
-    return new EngineConnection(this.engineSource);
+    return new EngineConnection(this.getEngine);
   }
 
   async beginTransaction(connection: DatabaseConnection): Promise<void> {
@@ -112,10 +124,10 @@ class EngineDriver implements Driver {
  * Reuses PostgresDialect internals for query compilation and introspection.
  */
 class EngineDialect implements Dialect {
-  constructor(private engineSource: EngineSource) {}
+  constructor(private getEngine: EngineFactory) {}
 
   createDriver(): Driver {
-    return new EngineDriver(this.engineSource);
+    return new EngineDriver(this.getEngine);
   }
 
   createQueryCompiler() {
@@ -139,9 +151,10 @@ class EngineDialect implements Dialect {
  *
  * Accepts a `getEngine()` that returns the engine either synchronously
  * (`RLSEnabledDatabase`) or as a `Promise` (the public `Database` class, which
- * initializes its pool/Data API client lazily). The engine is resolved lazily
- * on first query, so passing a `Database` instance directly works without
- * `await` or casts.
+ * initializes its pool/Data API client lazily). `getEngine()` is not called
+ * here — it is invoked lazily on the first query — so creating the adapter is
+ * side-effect free. This makes it safe at module scope: backend files are also
+ * loaded during CDK synth, where the infra-only block builds have no engine.
  *
  * @param db - A Database instance (from index.mock.ts or index.aws.ts) or any
  *             object exposing `getEngine()`.
@@ -174,5 +187,5 @@ class EngineDialect implements Dialect {
 export function createKyselyAdapter<T>(
   db: { getEngine(): DatabaseEngine | Promise<DatabaseEngine> },
 ): Kysely<T> {
-  return new Kysely<T>({ dialect: new EngineDialect(db.getEngine()) });
+  return new Kysely<T>({ dialect: new EngineDialect(() => db.getEngine()) });
 }
