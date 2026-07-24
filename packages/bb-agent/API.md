@@ -41,6 +41,7 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     // (undocumented)
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
+    resolveToolContext?: (claims: Record<string, unknown>) => TContext | Promise<TContext>;
     streamingMode?: 'token' | 'block';
     // (undocumented)
     structuredOutput?: z.ZodType;
