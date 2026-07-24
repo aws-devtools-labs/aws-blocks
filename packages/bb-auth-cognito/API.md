@@ -12,6 +12,65 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
+// @public
+export type AdminAction = 'groups' | 'lifecycle';
+
+// @public
+export type AdminActionGate<O extends AuthCognitoOptions, A extends AdminAction> = AdminGrants<O, A> extends true ? [] : [ERROR_admin_action_not_granted: never];
+
+// @public
+export interface AdminCreateInit<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    attributes?: Partial<Record<AttrOf<O>, string>>;
+    suppressInvite?: boolean;
+    temporaryPassword?: string;
+}
+
+// @public
+export type AdminDisabled = {
+    readonly __adminNotEnabled: 'construct AuthCognito with { admin: {} }';
+};
+
+// @public
+export type AdminGetterOf<O extends AuthCognitoOptions> = O extends {
+    admin: object;
+} ? AdminSurface<O> : AdminDisabled;
+
+// @public
+export type AdminGrants<O extends AuthCognitoOptions, A extends AdminAction> = O extends {
+    admin: {
+        actions: infer L extends readonly string[];
+    };
+} ? (A extends L[number] ? true : false) : true;
+
+// @public
+export interface AdminOptions {
+    actions?: readonly AdminAction[];
+}
+
+// @public
+export type AdminSurface<O extends AuthCognitoOptions = AuthCognitoOptions> = GroupAdmin<O> & LifecycleAdmin<O>;
+
+// @public
+export interface AdminUser<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    // (undocumented)
+    attributes: Partial<Record<ReadAttrOf<O>, string>>;
+    // (undocumented)
+    enabled: boolean;
+    // (undocumented)
+    groups?: GroupOf<O>[];
+    // (undocumented)
+    username: string;
+    // (undocumented)
+    userSub: string;
+}
+
+// @public
+export interface AdminUserFilter {
+    attribute: string;
+    match: 'startsWith' | 'equals';
+    value: string;
+}
+
 // Warning: (ae-incompatible-release-tags) The symbol "AttrOf" is marked as @public, but its signature references "CustomAttrNames" which is marked as @internal
 //
 // @public
@@ -20,8 +79,9 @@ export type AttrOf<O extends AuthCognitoOptions> = O extends {
 } ? StandardUserAttributeKey | CustomAttrNames<O> | `custom:${CustomAttrNames<O>}` : string;
 
 // @public
-export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptions> extends Scope implements BlocksAuth {
+export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMockOptions> extends Scope implements BlocksAuth {
     constructor(scope: ScopeParent, id: string, options?: O);
+    get admin(): AdminGetterOf<O>;
     autoSignIn(context: BlocksContext): Promise<SignInResult<O>>;
     checkAuth(context: BlocksContext): Promise<boolean>;
     completePasskeyRegistration(context: BlocksContext, credential: string): Promise<CompletePasskeyRegistrationResult>;
@@ -114,6 +174,7 @@ export interface AuthCognitoMockOptions extends AuthCognitoOptions {
 
 // @public
 export interface AuthCognitoOptions {
+    admin?: AdminOptions;
     authFlowType?: AuthFlowType;
     crossDomain?: boolean;
     deviceTracking?: {
@@ -271,6 +332,18 @@ export interface FetchAuthSessionOptions {
 }
 
 // @public
+export interface GroupAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    // (undocumented)
+    addUserToGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
+    // (undocumented)
+    listGroupsForUser(username: string, ...gate: AdminActionGate<O, 'groups'>): Promise<GroupOf<O>[]>;
+    // (undocumented)
+    listUsersInGroup(group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<AdminUser<O>[]>;
+    // (undocumented)
+    removeUserFromGroup(username: string, group: GroupOf<O>, ...gate: AdminActionGate<O, 'groups'>): Promise<void>;
+}
+
+// @public
 export type GroupOf<O extends AuthCognitoOptions> = O extends {
     groups: readonly [unknown, ...unknown[]];
 } ? O extends {
@@ -290,6 +363,28 @@ export interface JWT {
     payload: Record<string, unknown>;
     // (undocumented)
     toString(): string;
+}
+
+// @public
+export interface LifecycleAdmin<O extends AuthCognitoOptions = AuthCognitoOptions> {
+    // (undocumented)
+    createUser(username: string, init?: AdminCreateInit<O>, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O>>;
+    // (undocumented)
+    deleteUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+    // (undocumented)
+    disableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+    // (undocumented)
+    enableUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+    // (undocumented)
+    getUser(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<AdminUser<O> | null>;
+    // (undocumented)
+    resetUserPassword(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+    // (undocumented)
+    revokeUserSessions(username: string, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+    // (undocumented)
+    scan(filter?: AdminUserFilter, ...gate: AdminActionGate<O, 'lifecycle'>): AsyncIterable<AdminUser<O>>;
+    // (undocumented)
+    setUserPassword(username: string, password: string, options?: SetPasswordOptions, ...gate: AdminActionGate<O, 'lifecycle'>): Promise<void>;
 }
 
 // @public
@@ -376,10 +471,16 @@ export interface SessionRecord {
 export class SessionStore {
     constructor(scope: ScopeParent, id?: string);
     createSession(record: SessionRecord): Promise<string>;
+    deleteByUsername(username: string): Promise<number>;
     deleteSession(sessionId: string): Promise<void>;
     lookupSession(sessionId: string): Promise<SessionRecord | null>;
     // (undocumented)
     updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void>;
+}
+
+// @public
+export interface SetPasswordOptions {
+    permanent?: boolean;
 }
 
 // @public
