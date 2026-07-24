@@ -760,22 +760,32 @@ Agent with tools that can look up orders and search documentation. Uses tool con
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
+// A JWT auth BB so the runtime forwards the verified caller token (see resolveToolContext below).
+const auth = new AuthCognito(scope, 'auth', { /* pool config */ });
 const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 const agent = new Agent(scope, 'support', {
+  auth,
   model: { deployed: BedrockModels.BALANCED },
   systemPrompt: 'You are a customer support agent. Look up orders and search documentation to help the user.',
+  // Tools are scoped to the caller. `context` is built server-side in the runtime from the
+  // gateway-verified JWT claims (see resolveToolContext) — never sent by the browser — so
+  // `getOrder` can only ever read the authenticated user's own orders.
   toolContextSchema: z.object({ userId: z.string() }),
+  resolveToolContext: (claims) => ({ userId: String(claims.sub) }),
   tools: (tool) => ({
     getOrder: tool({
       description: 'Get order details by ID',
       parameters: z.object({ orderId: z.string() }),
       handler: async ({ input, context }) => {
+        // `db` is your data layer (e.g. a DistributedTable). context.userId is the verified
+        // sub — a caller can't read another user's order.
         return db.getOrder(input.orderId, { userId: context.userId });
       },
     }),
@@ -788,7 +798,7 @@ const agent = new Agent(scope, 'support', {
 });
 ```
 
-Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. This agent declares a `toolContextSchema`, so its tools require a per-call `context`. You don't pass that from the browser (it couldn't be trusted anyway): **on a JWT runtime the server builds tool `context` from the validated token** — the authenticated `userId` (the token's `sub`) is always injected, and you can derive more via [`resolveToolContext`](#server-resolved-tool-context) (below) — so `getOrder` is scoped to the caller with an unforgeable identity.
+Wire it to a frontend exactly like [Example 1](#1-end-to-end-backend--frontend-with-usechat) — the browser streams over a WebSocket and `useChat` handles interrupts. Because this agent declares a `toolContextSchema`, its tools require a per-call `context`; the browser can't supply that (it couldn't be trusted anyway), so `resolveToolContext` above builds it in the runtime from the verified token. See [Server-resolved tool context](#server-resolved-tool-context) for the available claims and how to derive more than `userId`.
 
 **Backend** (`aws-blocks/index.ts`) — same shape as Example 1; `getStreamEndpoint` pairs the runtime endpoint with a short-lived JWT:
 
@@ -839,7 +849,7 @@ const chat = useChat({
 await chat.sendMessage('What is the status of order 12345?');
 ```
 
-### Server-resolved tool context
+#### Server-resolved tool context
 
 To build richer context than just `userId`, give the agent a `resolveToolContext` — a function that runs **in the runtime** each turn against the gateway-verified JWT claims and returns the tool `context`:
 
