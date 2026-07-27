@@ -63,7 +63,7 @@ The typed `import { api } from 'aws-blocks'` client is the normal path. The HTTP
 
 `POST` to the RPC path `/aws-blocks/api`:
 
-- Local dev: `http://localhost:3001/aws-blocks/api`
+- Local dev: `http://localhost:3000/aws-blocks/api` (the default template serves the backend and frontend from a single front door on `:3000`). Only the `backend` and `amplify` templates serve the API on `:3001`.
 - Deployed: the API Gateway stage URL + `/aws-blocks/api`
 
 The body is JSON-RPC 2.0:
@@ -79,7 +79,7 @@ The body is JSON-RPC 2.0:
 Working example:
 
 ```bash
-curl -X POST http://localhost:3001/aws-blocks/api \
+curl -X POST http://localhost:3000/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
