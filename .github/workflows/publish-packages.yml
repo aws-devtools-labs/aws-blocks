@@ -1,10 +1,10 @@
 name: Release
 
-# Version + publish via changesets/action. On push to main it either:
-#   1. Runs `changeset version`, pushes the changeset-release/main branch
-#   2. If no changesets remain (version PR was just merged), publishes to npm
+# On push to main:
+#   - If changesets exist: run `changeset version`, push changeset-release/main
+#   - If no changesets remain (version PR was just merged): publish to npm
 #
-# PR creation is handled manually — see docs/RELEASING.md for the full process.
+# PR creation is manual — see docs/RELEASING.md.
 
 on:
   push:
@@ -15,8 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write # push the version-PR branch + tags
-  pull-requests: write # open/update the Version Packages PR (when permitted)
+  contents: write # push the version branch + tags
   id-token: write # npm provenance
 
 jobs:
@@ -39,42 +38,53 @@ jobs:
 
       - run: npm ci
 
-      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
-        id: changesets
-        # The action may fail to create a PR if GitHub Actions is not permitted
-        # to create PRs on this repo. The branch push still succeeds, and
-        # maintainers create the PR manually (see docs/RELEASING.md).
-        continue-on-error: true
-        with:
-          version: npm run version
-          publish: npm run release
-          commit: 'chore: version packages'
-          title: 'chore: version packages'
+      # Check if there are pending changesets
+      - name: Check for changesets
+        id: check
+        run: |
+          if npx changeset status --since=origin/main 2>/dev/null | grep -q "NO packages"; then
+            echo "has_changesets=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changesets=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Mode 1: Version — bump versions and push the release branch
+      - name: Version packages
+        if: steps.check.outputs.has_changesets == 'true'
+        run: |
+          npm run version
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: version packages" || echo "No changes to commit"
+          git push origin HEAD:changeset-release/main --force
+
+      - name: Summary (version)
+        if: steps.check.outputs.has_changesets == 'true'
+        run: |
+          echo "## 📋 Version branch updated" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The \`changeset-release/main\` branch has been updated with version bumps." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Next step:** [Create the release PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "See [docs/RELEASING.md](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/RELEASING.md) for the full process." >> "$GITHUB_STEP_SUMMARY"
+
+      # Mode 2: Publish — no changesets means the version PR was just merged
+      - name: Publish to npm
+        if: steps.check.outputs.has_changesets == 'false'
+        run: npm run release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
-      # If the action failed AND it was a publish run (no changesets = publish mode),
-      # that's a real failure we should surface. Version-mode failures (PR creation
-      # permission denied) are expected and non-blocking.
-      - name: Fail on publish errors
-        if: steps.changesets.outcome == 'failure' && steps.changesets.outputs.published == 'true'
-        run: |
-          echo "::error::Publish step failed. Check the changesets/action logs above."
-          exit 1
+      - name: Create git tags and GitHub releases
+        if: steps.check.outputs.has_changesets == 'false'
+        run: npx changeset tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Summary
+      - name: Summary (publish)
+        if: steps.check.outputs.has_changesets == 'false'
         run: |
-          if [ "${{ steps.changesets.outputs.published }}" = "true" ]; then
-            echo "## ✅ Published to npm" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "${{ steps.changesets.outputs.pullRequestNumber }}" != "" ]; then
-            echo "## 📦 Version PR updated: #${{ steps.changesets.outputs.pullRequestNumber }}" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "## 📋 Version branch updated" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "The \`changeset-release/main\` branch has been updated with version bumps." >> "$GITHUB_STEP_SUMMARY"
-            echo "Create the release PR manually: [Create PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1)" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "See [docs/RELEASING.md](../docs/RELEASING.md) for the full release process." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "## ✅ Published to npm" >> "$GITHUB_STEP_SUMMARY"
