@@ -19,7 +19,7 @@ AWS Blocks uses [Changesets](https://github.com/changesets/changesets) for versi
 
 Open this link to create a PR from the prepared branch:
 
-**→ [Create Release PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1)**
+**→ [Create Release PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1&title=chore%3A+version+packages&body=Release+PR.+Steps+to+complete%3A%0A%0A1.+Get+2+approvals%0A2.+Close+and+reopen+to+trigger+CI+%28if+checks+aren%27t+running%29%0A3.+Merge+after+checks+pass+%E2%80%94+npm+publish+runs+automatically%0A%0ASee+%5Bdocs%2FRELEASING.md%5D%28https%3A%2F%2Fgithub.com%2Faws-devtools-labs%2Faws-blocks%2Fblob%2Fmain%2Fdocs%2FRELEASING.md%29+for+details.)**
 
 Title: `chore: version packages`
 
