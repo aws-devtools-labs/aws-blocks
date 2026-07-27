@@ -19,13 +19,14 @@ void describe('secret() marker', () => {
 	void it('returns a branded marker carrying the key', () => {
 		const s = secret('STRIPE_KEY');
 		assert.strictEqual(s.key, 'STRIPE_KEY');
-		assert.strictEqual(s.exposeAsEnv, false);
+		assert.strictEqual(s.resolveAt, 'runtime');
 		assert.strictEqual(s[SECRET_BRAND], true);
 	});
 
-	void it('honors exposeAsEnv', () => {
-		assert.strictEqual(secret('K', { exposeAsEnv: true }).exposeAsEnv, true);
-		assert.strictEqual(secret('K', { exposeAsEnv: false }).exposeAsEnv, false);
+	void it('honors resolveAt', () => {
+		assert.strictEqual(secret('K', { resolveAt: 'deploy' }).resolveAt, 'deploy');
+		assert.strictEqual(secret('K', { resolveAt: 'runtime' }).resolveAt, 'runtime');
+		assert.strictEqual(secret('K').resolveAt, 'runtime'); // default
 	});
 
 	void it('rejects invalid keys', () => {
@@ -44,7 +45,7 @@ void describe('secret() marker', () => {
 void describe('isSecret()', () => {
 	void it('accepts only real markers', () => {
 		assert.ok(isSecret(secret('K')));
-		assert.ok(!isSecret({ key: 'K', exposeAsEnv: false })); // look-alike, no brand
+		assert.ok(!isSecret({ key: 'K', resolveAt: 'runtime' })); // look-alike, no brand
 		assert.ok(!isSecret(null));
 		assert.ok(!isSecret('K'));
 		assert.ok(!isSecret(undefined));

@@ -40,18 +40,35 @@ export interface SecretValue {
 	 */
 	readonly key: string;
 	/**
-	 * Opt-in escape hatch. When `true`, the consumer resolves the secret at
-	 * **deploy time** and injects the plaintext value directly as a Lambda
-	 * environment variable, so `process.env[KEY]` works with no runtime code.
-	 *
-	 * ⚠️ Tradeoff: the resolved value then appears in plaintext in the Lambda's
-	 * configuration and the CloudFormation template — it is no longer encrypted
-	 * at rest. Leave this `false` (the default) unless an integration genuinely
-	 * needs `process.env` and you accept that exposure. The secure default
-	 * resolves the value at runtime via {@link getSecret}.
+	 * When the secret's value is resolved. See {@link SecretResolveAt}.
+	 * - `'runtime'` (default) — stays encrypted; fetched lazily via {@link getSecret}.
+	 * - `'deploy'` — resolved at synth and injected as a plaintext env var
+	 *   (escape hatch; the value leaves the encrypted store — see the security
+	 *   note on {@link SecretResolveAt}).
 	 */
-	readonly exposeAsEnv: boolean;
+	readonly resolveAt: SecretResolveAt;
 }
+
+/**
+ * When a secret's value is resolved and delivered.
+ *
+ * - `'runtime'` (**default, secure**) — only the store *locator* is wired into
+ *   the compute; `getSecret(KEY)` fetches + decrypts the value on first use. The
+ *   value stays encrypted at rest and never enters the CloudFormation template,
+ *   the Lambda configuration, or the client bundle.
+ * - `'deploy'` — the value is resolved at **synth time** (SDK read) and injected
+ *   as a **plaintext** Lambda environment variable, so `process.env[KEY]` works
+ *   with no runtime code. Use only when an integration insists on reading
+ *   `process.env` and can't call {@link getSecret}.
+ *
+ *   ⚠️ **Security implication of `'deploy'`.** The resolved plaintext leaves the
+ *   encrypted store: it is readable by anyone with `lambda:GetFunctionConfiguration`
+ *   (or in the Lambda console), and — for the SSM store — it is also inlined into
+ *   the CloudFormation template (readable via `cloudformation:GetTemplate`). It is
+ *   also baked in at deploy, so rotating the value requires a redeploy. The
+ *   `'runtime'` default has none of these properties; prefer it.
+ */
+export type SecretResolveAt = 'runtime' | 'deploy';
 
 /** Unique brand symbol. `Symbol.for` so the brand survives across module/realm copies. */
 export const SECRET_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.SecretValue');
@@ -95,11 +112,13 @@ export const DEFAULT_SECRET_STORE: SecretStore = 'secrets-manager';
 /** Options for {@link secret}. */
 export interface SecretOptions {
 	/**
-	 * Resolve the secret at deploy time and inject it as a plaintext Lambda
-	 * environment variable instead of resolving lazily at runtime. See
-	 * {@link SecretValue.exposeAsEnv} for the security tradeoff. @default false
+	 * When the value is resolved and delivered — expresses intent, not a side
+	 * effect. `'runtime'` (default) keeps it encrypted and fetched via
+	 * {@link getSecret}; `'deploy'` resolves at synth and inlines a plaintext env
+	 * var. See {@link SecretResolveAt} for the full semantics and the security
+	 * implication of `'deploy'`. @default 'runtime'
 	 */
-	exposeAsEnv?: boolean;
+	resolveAt?: SecretResolveAt;
 }
 
 /**
@@ -129,7 +148,7 @@ const SECRET_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
  *   domain: { domainName: secret('DOMAIN_PROD') },
  *   environment: {
  *     STRIPE_KEY: secret('STRIPE_KEY'),          // resolved at runtime via getSecret()
- *     LEGACY_TOKEN: secret('LEGACY', { exposeAsEnv: true }), // plaintext env (escape hatch)
+ *     LEGACY_TOKEN: secret('LEGACY', { resolveAt: 'deploy' }), // plaintext env (escape hatch)
  *   },
  * });
  * ```
@@ -145,7 +164,7 @@ export function secret(key: string, options: SecretOptions = {}): SecretValue {
 	return {
 		[SECRET_BRAND]: true,
 		key,
-		exposeAsEnv: options.exposeAsEnv ?? false,
+		resolveAt: options.resolveAt ?? 'runtime',
 	};
 }
 

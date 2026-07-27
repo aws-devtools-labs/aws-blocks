@@ -12,11 +12,11 @@ import {
 } from './hosting-secrets.js';
 
 void describe('partitionEnvironment()', () => {
-	void it('splits plain / runtime-secret / exposeAsEnv', () => {
+	void it('splits plain / runtime-secret / deploy-time', () => {
 		const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment({
 			FLAG: 'on',
 			STRIPE_KEY: secret('STRIPE_KEY'),
-			LEGACY: secret('LEGACY', { exposeAsEnv: true }),
+			LEGACY: secret('LEGACY', { resolveAt: 'deploy' }),
 		});
 		assert.deepStrictEqual(plain, { FLAG: 'on' });
 		assert.deepStrictEqual(
@@ -45,10 +45,10 @@ void describe('partitionEnvironment()', () => {
 });
 
 void describe('collectSynthSecretKeys()', () => {
-	void it('gathers domain + exposeAsEnv keys, deduped', () => {
+	void it('gathers domain + deploy-time keys, deduped', () => {
 		const keys = collectSynthSecretKeys(
 			['example.com', secret('DOMAIN_PROD')],
-			[secret('LEGACY', { exposeAsEnv: true }), secret('DOMAIN_PROD', { exposeAsEnv: true })],
+			[secret('LEGACY', { resolveAt: 'deploy' }), secret('DOMAIN_PROD', { resolveAt: 'deploy' })],
 		);
 		assert.deepStrictEqual([...keys].sort(), ['DOMAIN_PROD', 'LEGACY']);
 	});

@@ -1513,7 +1513,7 @@ describe('Hosting', () => {
   //
   // Runtime secrets: the SSM parameter NAME (never the value) is injected as a
   // Lambda env var, and the role is granted ssm:GetParameter + kms:Decrypt.
-  // Domain/exposeAsEnv secrets resolve at synth time via Hosting.create().
+  // Domain / resolveAt:'deploy' secrets resolve at synth time via Hosting.create().
 
   describe('secret() integration', () => {
     it('injects the SSM param NAME (not the value) and grants read+decrypt', () => {

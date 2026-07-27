@@ -12,7 +12,7 @@
  *   • `environment` runtime secret (secure default) — inject the store LOCATOR
  *     (never the value) as `HOSTING_SECRET_PARAM_<KEY>` + grant the compute role
  *     read+decrypt; `getSecret()` fetches at runtime.
- *   • `domain.domainName` / `exposeAsEnv` — resolved at SYNTH time via an SDK
+ *   • `domain.domainName` / `resolveAt: 'deploy'` — resolved at SYNTH time via an SDK
  *     GetParameter/GetSecretValue call and inlined as a literal (SecureString
  *     dynamic refs can't go in CloudFront Aliases / Lambda env).
  *
@@ -70,7 +70,7 @@ export interface SecretResolveOptions {
 }
 
 /**
- * Split an environment map into plain / runtime-secret / exposeAsEnv buckets.
+ * Split an environment map into plain / runtime-secret / deploy-time buckets.
  */
 export function partitionEnvironment(environment: Record<string, EnvValue> | undefined): {
 	plain: Record<string, string>;
@@ -89,7 +89,7 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 					resolution: `Use a matching key: ${key}: secret('${key}').`,
 				});
 			}
-			(value.exposeAsEnv ? exposeSecrets : runtimeSecrets).push(value);
+			(value.resolveAt === 'deploy' ? exposeSecrets : runtimeSecrets).push(value);
 		} else {
 			plain[key] = value;
 		}
@@ -97,7 +97,7 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 	return { plain, runtimeSecrets, exposeSecrets };
 }
 
-/** Every secret key that requires a synth-time fetch (domain + exposeAsEnv). */
+/** Every secret key that requires a synth-time fetch (domain + resolveAt: 'deploy'). */
 export function collectSynthSecretKeys(
 	domainName: DomainNameInput | undefined,
 	exposeSecrets: SecretValue[],
@@ -146,7 +146,7 @@ export async function resolveSecretsAtSynth(
 				if (!isNotFound(error)) throw error;
 				if (!fallback) {
 					throw new HostingError('UnresolvedSecretError', {
-						message: `secret '${key}' is referenced (domain or exposeAsEnv) but not set.`,
+						message: `secret '${key}' is referenced (domain or resolveAt: 'deploy') but not set.`,
 						resolution: `Set it before deploying:\n  secret set ${key} <value>`,
 					});
 				}
@@ -157,7 +157,7 @@ export async function resolveSecretsAtSynth(
 			} catch (error: unknown) {
 				if (isNotFound(error)) {
 					throw new HostingError('UnresolvedSecretError', {
-						message: `secret '${key}' is referenced (domain or exposeAsEnv) but set for neither stage '${stage}' nor the shared default.`,
+						message: `secret '${key}' is referenced (domain or resolveAt: 'deploy') but set for neither stage '${stage}' nor the shared default.`,
 						resolution:
 							`Set it before deploying:\n` +
 							`  secret set ${key} <value> --stage ${stage}   # or the shared:  secret set ${key} <value>`,

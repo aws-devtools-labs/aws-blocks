@@ -284,7 +284,7 @@ export type HostingConstructProps = {
    * makes runtime secrets work for ANY consumer of the construct (Blocks, a
    * standalone hosting app, or any other caller) with no extra plumbing.
    *
-   * Synth-time markers (`secret(..., { exposeAsEnv: true })`, domain secrets)
+   * Synth-time markers (`secret(..., { resolveAt: 'deploy' })`, domain secrets)
    * require async resolution and must be pre-resolved by the async wrapper
    * layer (e.g. `Hosting.create()`) — passing one here throws.
    */
@@ -930,12 +930,12 @@ export class HostingConstruct extends Construct {
 
     if (props.environment) {
       // Split markers from plain strings. Runtime secrets are wired below;
-      // exposeAsEnv/synth-time markers must be pre-resolved by the async
-      // wrapper layer, so any that reach here are a caller error.
+      // deploy-time (resolveAt: 'deploy') / domain markers must be pre-resolved
+      // by the async wrapper layer, so any that reach here are a caller error.
       const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment(props.environment);
       if (exposeSecrets.length > 0) {
         throw new HostingError('UnresolvedSecretError', {
-          message: `exposeAsEnv secret(s) [${exposeSecrets
+          message: `deploy-time secret(s) [${exposeSecrets
             .map((s) => s.key)
             .join(', ')}] reached HostingConstruct unresolved.`,
           resolution:

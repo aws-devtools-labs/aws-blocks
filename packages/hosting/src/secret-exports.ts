@@ -20,6 +20,7 @@ export {
 	isSecret,
 	SECRET_BRAND,
 	type SecretOptions,
+	type SecretResolveAt,
 	type SecretStore,
 	type SecretValue,
 	secret,

@@ -552,13 +552,13 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       assert.ok(json.includes('hosting/secrets/API_KEY'), 'neutral default prefix');
     });
 
-    void it('rejects an unresolved exposeAsEnv (synth-time) marker at construct level', () => {
+    void it('rejects an unresolved deploy-time (resolveAt: deploy) marker at construct level', () => {
       const stack = createEnvStack();
       assert.throws(
         () =>
           new HostingConstruct(stack, 'Hosting', {
             manifest: makeSsrManifest(),
-            environment: { LEGACY: secret('LEGACY', { exposeAsEnv: true }) },
+            environment: { LEGACY: secret('LEGACY', { resolveAt: 'deploy' }) },
             skipRegionValidation: true,
           }),
         /unresolved|UnresolvedSecret|create\(\)/,

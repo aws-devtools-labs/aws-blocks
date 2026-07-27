@@ -14,7 +14,7 @@
  *     and decrypted on first use at runtime via `getSecret()`. The secret stays
  *     encrypted at rest; it never enters the CloudFormation template.
  *
- *   • `domain.domainName` and `exposeAsEnv` env vars (synth time) — resolved by
+ *   • `domain.domainName` and `resolveAt: 'deploy'` env vars (synth time) — resolved by
  *     an SDK `GetParameter(WithDecryption)` call DURING `cdk synth` and inlined
  *     as a literal. A SecureString dynamic reference (`{{resolve:ssm-secure}}`)
  *     can't be used in CloudFront Aliases (CloudFormation restricts ssm-secure
@@ -23,7 +23,7 @@
  *     inlining the literal loses no confidentiality.
  *
  * Synth-time resolution is async, which is why callers that use domain secrets
- * or `exposeAsEnv` must construct via the async `Hosting.create()`.
+ * or `resolveAt: 'deploy'` must construct via the async `Hosting.create()`.
  *
  * ⚠️ **SSM-only by design.** This is a deliberately narrower engine than the
  * pluggable one in `@aws-blocks/hosting` (`secret-resolve.ts`): it is hardcoded
@@ -55,7 +55,7 @@ export type DomainNameInput = string | SecretValue | Array<string | SecretValue>
  * Split an environment map into the three handling buckets.
  * - `plain` — literal strings, injected verbatim (today's behavior).
  * - `runtimeSecrets` — `secret('K')`, resolved lazily at runtime.
- * - `exposeSecrets` — `secret('K', { exposeAsEnv: true })`, resolved at synth.
+ * - `exposeSecrets` — `secret('K', { resolveAt: 'deploy' })`, resolved at synth.
  */
 export function partitionEnvironment(environment: Record<string, EnvValue> | undefined): {
 	plain: Record<string, string>;
@@ -77,7 +77,7 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 						`the environment variable name. Use ${key}: secret('${key}').`,
 				);
 			}
-			(value.exposeAsEnv ? exposeSecrets : runtimeSecrets).push(value);
+			(value.resolveAt === 'deploy' ? exposeSecrets : runtimeSecrets).push(value);
 		} else {
 			plain[key] = value;
 		}
@@ -85,7 +85,7 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 	return { plain, runtimeSecrets, exposeSecrets };
 }
 
-/** Every secret key that requires a synth-time SDK fetch (domain + exposeAsEnv). */
+/** Every secret key that requires a synth-time SDK fetch (domain + resolveAt: 'deploy'). */
 export function collectSynthSecretKeys(
 	domainName: DomainNameInput | undefined,
 	exposeSecrets: SecretValue[],
@@ -123,7 +123,7 @@ export async function resolveSecretsAtSynth(
 				const e = error as { name?: string };
 				if (e?.name === 'ParameterNotFound') {
 					throw new Error(
-						`Hosting: secret '${key}' is referenced (domain or exposeAsEnv) but ` +
+						`Hosting: secret '${key}' is referenced (domain or resolveAt: 'deploy') but ` +
 							`not set. Set it before deploying:\n  blocks secret set ${key} <value>`,
 					);
 				}

@@ -223,7 +223,7 @@ export interface HostingProps {
    * template — safe for non-sensitive config). A `secret('K')` value injects
    * only the SSM parameter NAME and grants the Lambda decrypt access; fetch the
    * value at runtime with `await getSecret('K')`. Using
-   * `secret('K', { exposeAsEnv: true })` instead resolves the plaintext at
+   * `secret('K', { resolveAt: 'deploy' })` instead resolves the plaintext at
    * deploy time into the env var (requires `Hosting.create()`).
    *
    * The env-var name must equal the secret key: `STRIPE_KEY: secret('STRIPE_KEY')`.
@@ -438,7 +438,7 @@ export class Hosting extends Construct {
 
   /**
    * Async constructor. Required when any `secret()` resolves at **synth time** —
-   * i.e. a `domain.domainName` secret or a `secret(..., { exposeAsEnv: true })`
+   * i.e. a `domain.domainName` secret or a `secret(..., { resolveAt: 'deploy' })`
    * env value — because those values are fetched from SSM during synthesis.
    * Returns a fully-constructed {@link Hosting}.
    *
@@ -622,7 +622,7 @@ export class Hosting extends Construct {
       : undefined;
 
     // ── 6b. Resolve secret() markers ─────────────────────────────
-    //    Env values split into plain / runtime-secret / exposeAsEnv buckets;
+    //    Env values split into plain / runtime-secret / deploy-time buckets;
     //    domain names may contain markers resolved at synth time. See
     //    ./hosting-secrets.ts for the two-strategy rationale.
     const { plain: plainEnv, runtimeSecrets, exposeSecrets } =
@@ -638,13 +638,13 @@ export class Hosting extends Construct {
         }
       : undefined;
 
-    // exposeAsEnv secrets: inline the synth-resolved plaintext as a normal env
-    // var (escape hatch — value lands in the CloudFormation template).
+    // resolveAt: 'deploy' secrets: inline the synth-resolved plaintext as a
+    // normal env var (escape hatch — value lands in the CloudFormation template).
     for (const s of exposeSecrets) {
       const value = resolvedSecrets.get(s.key);
       if (value === undefined) {
         throw new Error(
-          `Hosting: secret('${s.key}', { exposeAsEnv: true }) requires async ` +
+          `Hosting: secret('${s.key}', { resolveAt: 'deploy' }) requires async ` +
             `resolution. Construct with: await Hosting.create(scope, id, props).`,
         );
       }
@@ -654,7 +654,7 @@ export class Hosting extends Construct {
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
-      // Plain env + exposeAsEnv literals go straight to the L3 (which stays
+      // Plain env + deploy-time literals go straight to the L3 (which stays
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.
       environment: Object.keys(plainEnv).length ? plainEnv : undefined,

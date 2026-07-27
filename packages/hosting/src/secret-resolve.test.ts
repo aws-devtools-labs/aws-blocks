@@ -16,11 +16,11 @@ import {
 } from './secret-resolve.js';
 
 void describe('partitionEnvironment()', () => {
-	void it('splits plain / runtime-secret / exposeAsEnv', () => {
+	void it('splits plain / runtime-secret / deploy-time', () => {
 		const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment({
 			FLAG: 'on',
 			STRIPE_KEY: secret('STRIPE_KEY'),
-			LEGACY: secret('LEGACY', { exposeAsEnv: true }),
+			LEGACY: secret('LEGACY', { resolveAt: 'deploy' }),
 		});
 		assert.deepStrictEqual(plain, { FLAG: 'on' });
 		assert.deepStrictEqual(
@@ -91,7 +91,15 @@ void describe('resolveSecretsAtSynth()', () => {
 					throw e;
 				},
 			}),
-			/secret set X <value>/,
+			(err: unknown) => {
+				// Structured HostingError: message names the unset secret, and the
+				// actionable `secret set` guidance lives in `resolution`.
+				const e = err as { name?: string; message?: string; resolution?: string };
+				assert.strictEqual(e.name, 'UnresolvedSecretError');
+				assert.match(e.message ?? '', /secret 'X' is referenced/);
+				assert.match(e.resolution ?? '', /secret set X <value>/);
+				return true;
+			},
 		);
 	});
 });
@@ -106,10 +114,10 @@ void describe('resolveDomainNames()', () => {
 		]);
 	});
 
-	void it('collectSynthSecretKeys gathers domain + exposeAsEnv, deduped', () => {
+	void it('collectSynthSecretKeys gathers domain + deploy-time, deduped', () => {
 		const keys = collectSynthSecretKeys(
 			['example.com', secret('DOMAIN_PROD')],
-			[secret('LEGACY', { exposeAsEnv: true }), secret('DOMAIN_PROD', { exposeAsEnv: true })],
+			[secret('LEGACY', { resolveAt: 'deploy' }), secret('DOMAIN_PROD', { resolveAt: 'deploy' })],
 		);
 		assert.deepStrictEqual([...keys].sort(), ['DOMAIN_PROD', 'LEGACY']);
 	});
