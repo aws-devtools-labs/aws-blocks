@@ -19,7 +19,7 @@ AWS Blocks uses [Changesets](https://github.com/changesets/changesets) for versi
 
 Open this link to create a PR from the prepared branch:
 
-**→ [Create Release PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1\&title=chore%3A+version+packages\&body=Release+PR.+Steps+to+complete%3A%0A%0A1.+Get+2+approvals%0A2.+Merge+after+checks+pass+%E2%80%94+npm+publish+runs+automatically%0A%0ASee+%5Bdocs%2FRELEASING.md%5D%28https%3A%2F%2Fgithub.com%2Faws-devtools-labs%2Faws-blocks%2Fblob%2Fmain%2Fdocs%2FRELEASING.md%29+for+details.)**
+**→ [Create Release PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1&title=chore%3A+version+packages&body=Release+PR.+Steps+to+complete%3A%0A%0A1.+Get+2+approvals%0A2.+Squash+merge+after+checks+pass%0A3.+Monitor+npm+for+successful+publish%0A%0ASee+%5Bdocs%2FRELEASING.md%5D%28https%3A%2F%2Fgithub.com%2Faws-devtools-labs%2Faws-blocks%2Fblob%2Fmain%2Fdocs%2FRELEASING.md%29+for+details.)**
 
 Title: `chore: version packages`
 
@@ -34,7 +34,7 @@ Require 2 team member approvals. Review the version bumps — ensure:
 
 ### 3. Merge after CI passes
 
-Once PR checks pass and approvals are in, merge the PR. Squash or merge commit — either works (the branch has a single commit).
+Once PR checks pass and approvals are in, squash merge the PR.
 
 ### 4. Verify the publish
 
