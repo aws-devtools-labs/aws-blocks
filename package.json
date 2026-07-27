@@ -85,6 +85,7 @@
     "build:tech-design-pdf": "node scripts/build-tech-design-pdf.mjs",
     "review-pr": "bash scripts/review-pr.sh",
     "publish:local": "tsx scripts/publish/publish.ts",
+    "version": "changeset version && npm install --package-lock-only",
     "release": "npm run build && changeset publish",
     "monte-carlo": "tsx scripts/monte-carlo.ts",
     "monte-carlo:cached": "tsx scripts/monte-carlo.ts --cached",
