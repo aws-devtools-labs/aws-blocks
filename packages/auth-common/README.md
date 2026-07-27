@@ -115,6 +115,25 @@ document.body.appendChild(
 );
 ```
 
+### Fallback for unauthenticated users
+
+Pass an optional third argument to display alternative content when the user is NOT signed in:
+
+```typescript
+const loginPrompt = document.createElement('p');
+loginPrompt.textContent = 'Please sign in to continue.';
+
+document.body.appendChild(
+  AuthenticatedContent(authApi, (user) => {
+    const el = document.createElement('div');
+    el.textContent = `Welcome, ${user.username}`;
+    return el;
+  }, loginPrompt)
+);
+```
+
+When no fallback is provided the container renders nothing while signed out (backward-compatible).
+
 ## Auth State Change Subscription
 
 Subscribe to auth state changes from any source (same window + other tabs):
