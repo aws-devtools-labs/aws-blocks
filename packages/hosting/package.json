@@ -34,6 +34,9 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "hosting-secret": "./dist/secret-cli-bin.js"
+  },
   "scripts": {
     "build": "tsc --build && npm run bundle:handlers",
     "bundle:handlers": "node scripts/bundle-handlers.mjs",

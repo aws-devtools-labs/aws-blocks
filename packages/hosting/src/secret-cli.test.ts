@@ -58,4 +58,33 @@ void describe('runSecretCli() argv parsing', () => {
 	void it('accepts --stage=<name> form (key-only falls through to the prompt)', async () => {
 		await assert.rejects(runSecretCli(['set', 'ONLY_KEY', '--stage=prod']), /stdin is not a TTY/);
 	});
+
+	// ── --prefix / --store flag parsing (for the standalone `hosting-secret` bin) ──
+	void it('rejects --prefix without a value', async () => {
+		await assert.rejects(runSecretCli(['set', 'K', 'v', '--prefix']), /--prefix.*requires a value/);
+	});
+
+	void it('rejects --store without a value', async () => {
+		await assert.rejects(runSecretCli(['set', 'K', 'v', '--store']), /--store.*requires a value/);
+	});
+
+	void it('rejects an invalid --store value', async () => {
+		await assert.rejects(runSecretCli(['set', 'K', 'v', '--store', 'vault']), /--store.*must be 'ssm' or 'secrets-manager'/);
+	});
+
+	void it('strips --prefix/--store from positionals (they are not the value)', async () => {
+		// Flags removed, only a key remains → hidden-prompt path (TTY hint here),
+		// proving --prefix <path> and --store <s> were extracted, not treated as the value.
+		await assert.rejects(
+			runSecretCli(['set', 'ONLY_KEY', '--prefix', '/myapp/secrets', '--store', 'ssm']),
+			/stdin is not a TTY/,
+		);
+	});
+
+	void it('accepts --prefix=<path> / --store=<s> forms', async () => {
+		await assert.rejects(
+			runSecretCli(['set', 'ONLY_KEY', '--prefix=/myapp/secrets', '--store=secrets-manager']),
+			/stdin is not a TTY/,
+		);
+	});
 });

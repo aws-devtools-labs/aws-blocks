@@ -200,14 +200,26 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 	// Pull an optional `--stage <name>` (or `--stage=<name>`) out of argv; a
 	// CLI-supplied stage overrides any preset on `opts`. Everything else is
 	// positional, so set/list/remove parsing below stays unchanged.
-	const { stage, valueStdin, positional } = extractFlags(argv);
-	const effectiveOpts: SecretCliOptions = stage !== undefined ? { ...opts, stage } : opts;
+	const { stage, valueStdin, prefix, store, positional } = extractFlags(argv);
+	// A CLI-supplied flag overrides the same field preset on `opts` (a wrapper's
+	// defaults). Only spread when something was passed, so the plain case is a no-op.
+	const effectiveOpts: SecretCliOptions =
+		stage !== undefined || prefix !== undefined || store !== undefined
+			? {
+					...opts,
+					...(stage !== undefined ? { stage } : {}),
+					...(prefix !== undefined ? { prefix } : {}),
+					...(store !== undefined ? { store } : {}),
+				}
+			: opts;
 	const [subcommand, ...rest] = positional;
 	switch (subcommand) {
 		case 'set': {
 			const [key, ...valueParts] = rest;
 			if (!key) {
-				throw new Error(`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>]`);
+				throw new Error(
+					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--store <ssm|secrets-manager>]`,
+				);
 			}
 			// Value precedence: --value-stdin (piped) > positional > interactive
 			// hidden prompt. Prefer stdin/prompt: a positional value lands in
@@ -255,13 +267,33 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
 }
 
 /**
- * Extract known flags (`--stage <name>` / `--stage=<name>`, `--value-stdin`)
- * from argv, returning the remaining positional args.
+ * Extract known flags from argv, returning the remaining positional args:
+ * - `--stage <name>` / `--stage=<name>` — environment segment
+ * - `--value-stdin` — read the value from stdin instead of argv
+ * - `--prefix <path>` / `--prefix=<path>` — namespace (for the standalone bin,
+ *   so it can target the app's own `secrets: { prefix }` without a wrapper)
+ * - `--store <ssm|secrets-manager>` / `--store=<…>` — backing store
+ *
+ * A flag always overrides the same field preset on `opts` by the caller.
  */
-function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; positional: string[] } {
+function extractFlags(argv: string[]): {
+	stage?: string;
+	valueStdin: boolean;
+	prefix?: string;
+	store?: SecretStore;
+	positional: string[];
+} {
 	const positional: string[] = [];
 	let stage: string | undefined;
 	let valueStdin = false;
+	let prefix: string | undefined;
+	let store: SecretStore | undefined;
+	const readStore = (raw: string): SecretStore => {
+		if (raw !== 'ssm' && raw !== 'secrets-manager') {
+			throw new Error(`\`--store\` must be 'ssm' or 'secrets-manager' (got ${JSON.stringify(raw)}).`);
+		}
+		return raw;
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--stage') {
@@ -271,11 +303,22 @@ function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; po
 			stage = arg.slice('--stage='.length);
 		} else if (arg === '--value-stdin') {
 			valueStdin = true;
+		} else if (arg === '--prefix') {
+			prefix = argv[++i];
+			if (prefix === undefined) throw new Error('`--prefix` requires a value, e.g. --prefix /myapp/secrets');
+		} else if (arg.startsWith('--prefix=')) {
+			prefix = arg.slice('--prefix='.length);
+		} else if (arg === '--store') {
+			const raw = argv[++i];
+			if (raw === undefined) throw new Error('`--store` requires a value: ssm | secrets-manager');
+			store = readStore(raw);
+		} else if (arg.startsWith('--store=')) {
+			store = readStore(arg.slice('--store='.length));
 		} else {
 			positional.push(arg);
 		}
 	}
-	return { stage, valueStdin, positional };
+	return { stage, valueStdin, prefix, store, positional };
 }
 
 /** Read all of stdin as a UTF-8 string, trimming a single trailing newline. */
