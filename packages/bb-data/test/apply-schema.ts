@@ -19,7 +19,14 @@ if (!dbUrl) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sql = fs.readFileSync(path.join(__dirname, 'fixtures/supabase-e2e-schema.sql'), 'utf8');
 
-const pool = new pg.Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false } });
+// Verify the server certificate against the pinned CA when DATABASE_CA_CERT is set
+// (always in CI — the e2e-supabase workflow pins the committed Supabase Root CA);
+// fall back to unverified only for ad-hoc local runs without a CA.
+const ssl = process.env.DATABASE_CA_CERT
+  ? { ca: fs.readFileSync(process.env.DATABASE_CA_CERT, 'utf8'), rejectUnauthorized: true as const }
+  : { rejectUnauthorized: false as const };
+
+const pool = new pg.Pool({ connectionString: dbUrl, ssl });
 
 try {
   await pool.query(sql);

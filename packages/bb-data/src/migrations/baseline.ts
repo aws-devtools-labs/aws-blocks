@@ -18,9 +18,11 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PgClientEngine } from '../engines/pg-client-engine.js';
+import { externalDbSsl, resolveCaPem } from '../external-ssl.js';
 
 /** The baseline migration filename. Lexicographically first so it applies before deltas. */
 export const BASELINE_FILE = '000_baseline.sql';
@@ -66,6 +68,13 @@ export interface GenerateBaselineOptions {
   connectionString: string;
   /** Directory to write the baseline into (the project's ./migrations). */
   migrationsDir: string;
+  /**
+   * Provider CA (inline PEM or a file path) captured by `db pull`. When present,
+   * both the version-check connection and `pg_dump` verify the server certificate
+   * against it (verify-full); when absent they fall back to `externalDbSsl()` /
+   * `sslmode=require` (encrypted but unverified), like the other operational paths.
+   */
+  caCert?: string;
 }
 
 export interface GenerateBaselineResult {
@@ -97,10 +106,15 @@ export async function generateBaseline(opts: GenerateBaselineOptions): Promise<G
     return { written: false, path: outPath, warning: e.message };
   }
 
+  // Resolve the captured CA once (if any) — shared by the version-check
+  // connection and pg_dump so both verify the server certificate when a CA is
+  // available, matching the introspection/runtime posture.
+  const caPem = opts.caCert ? resolveCaPem(opts.caCert) : undefined;
+
   // Version-check pg_dump against the server (pg_dump must be >= server major).
   const engine = new PgClientEngine({
     connectionString: opts.connectionString,
-    ssl: { rejectUnauthorized: false },
+    ssl: caPem ? { ca: caPem, rejectUnauthorized: true } : externalDbSsl(),
     poolSize: 1,
   });
   let serverMajor: number;
@@ -123,15 +137,29 @@ export async function generateBaseline(opts: GenerateBaselineOptions): Promise<G
   // Pass credentials via PG* env vars rather than in argv (avoids exposing the
   // password in the process list). Arg-array exec (no shell) — no injection.
   const u = new URL(opts.connectionString);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     PGHOST: u.hostname,
     PGPORT: u.port || '5432',
     PGUSER: decodeURIComponent(u.username),
     PGPASSWORD: decodeURIComponent(u.password),
     PGDATABASE: u.pathname.replace(/^\//, '') || 'postgres',
-    PGSSLMODE: 'require',
   };
+
+  // Match the verification posture of the rest of the pull: with a pinned CA,
+  // pg_dump verifies the server certificate (verify-full). pg_dump/libpq reads
+  // the CA from a file, so write the PEM to a short-lived temp file (0600) for
+  // the duration of the dump. Without a CA, fall back to encrypted-but-unverified
+  // (sslmode=require), consistent with externalDbSsl().
+  let caFile: string | undefined;
+  if (caPem) {
+    caFile = join(tmpdir(), `bb-data-baseline-ca-${process.pid}-${Date.now()}.crt`);
+    writeFileSync(caFile, caPem, { mode: 0o600 });
+    env.PGSSLMODE = 'verify-full';
+    env.PGSSLROOTCERT = caFile;
+  } else {
+    env.PGSSLMODE = 'require';
+  }
 
   let dump: string;
   try {
@@ -148,6 +176,11 @@ export async function generateBaseline(opts: GenerateBaselineOptions): Promise<G
       path: outPath,
       warning: `pg_dump failed while generating the baseline: ${(e?.stderr || e?.message || e).toString().trim()}`,
     };
+  } finally {
+    // Remove the temp CA file regardless of outcome.
+    if (caFile) {
+      try { unlinkSync(caFile); } catch { /* best-effort cleanup */ }
+    }
   }
 
   mkdirSync(opts.migrationsDir, { recursive: true });

@@ -1,0 +1,87 @@
+name: PR Agent Bench
+
+# Thin CALLER for the per-PR LLM-agent benchmark. This workflow owns the
+# triggers and the same-repo (fork) gate; the bench matrix + summary live in
+# the reusable workflow .github/workflows/agent-bench.yml, invoked below so
+# GitHub renders a nested check hierarchy: PR Agent Bench / bench / <cell>.
+#
+# Required configuration (publish environment, consumed inside agent-bench.yml):
+#   AWS_ROLE_ARN  secret    OIDC role with bedrock:InvokeModelWithResponseStream
+#                           on the bench model, plus s3:PutObject on bench/* in
+#                           the registry bucket (per-cell archive + the commit-
+#                           keyed baseline aggregate). Reading the baseline back
+#                           for the PR-vs-baseline overview also needs
+#                           s3:GetObject on bench/* — if the role lacks it the
+#                           overview simply degrades to "no baseline" (never an
+#                           error). See agent-bench.yml.
+#   S3_BUCKET     variable  Registry bucket (existing).
+
+on:
+  # Runs on same-repo PR open/update AND on push to main (a main run records the
+  # merged commit's baseline for later PRs to diff against). NO label gate: the
+  # bench is green-regardless — a failed cell / agent-timeout lands in the run
+  # summary, not the check status. Fork PRs get no secrets/OIDC under
+  # `pull_request` and are blocked by the same-repo `if`.
+  #
+  # ALLOWLIST: the bench only runs when something the building/grading agent
+  # actually consumes changes — the framework (packages/**, incl. agent-facing
+  # packages/**/*.md), the bench harness (scripts/agent-bench/**), the task
+  # prompts + graded specs (tasks/**), or the root dependency manifests
+  # (package.json / package-lock.json — a transitive/dev-dep bump can shift what
+  # the agent builds against, so it's worth a bench). Everything else is skipped
+  # as agent-inert: .github/** (CI/workflow config), docs/** and root prose,
+  # .changeset/**.
+  # NOTE: the task↔template matrix is defined INLINE in agent-bench.yml (under
+  # .github/**, intentionally NOT allowlisted so CI edits stay $0) — changes to
+  # those inline cell defs won't auto-trigger; use workflow_dispatch to bench them.
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'scripts/agent-bench/**'
+      - 'tasks/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+concurrency:
+  # A new commit cancels the prior in-flight run for the same PR (keyed by PR
+  # number) or branch (keyed by github.ref, e.g. push to main). github.ref —
+  # NOT run_id — is what makes cancel-in-progress actually cancel: run_id is
+  # unique per run, so the old group never collided and nothing was cancelled.
+  group: agent-bench-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    # Same-repo gate (and manual dispatch) lives HERE, on the calling job -- a
+    # `uses:` job may carry `if:`/`permissions`. The OIDC steps and
+    # `environment: publish` stay inside the reusable workflow (a calling job
+    # cannot set `environment`). Fork PRs get no secrets/OIDC under
+    # `pull_request`, but defense-in-depth: also gate on same-repo. Push to main
+    # is same-repo by definition. Mirrors pr-checks.yml.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    # Union token so the reusable workflow's per-job permissions resolve: both
+    # bench and summary narrow to id-token:write (OIDC -> Bedrock + S3) +
+    # contents:read. No pull-requests:write — the bench posts no PR comment
+    # (the scoreboard is the Actions run summary).
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/agent-bench.yml
+    secrets: inherit

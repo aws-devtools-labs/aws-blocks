@@ -12,9 +12,11 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { AuthBasicErrors } from './errors.js';
 
 export type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
 export type { AuthAction, AuthField } from '@aws-blocks/auth-common';
+export { AuthBasicErrors } from './errors.js';
 
 /**
  * User shape returned by AuthBasic. Extends the common `AuthUser`
@@ -83,31 +85,6 @@ export interface AuthBasicOptions {
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
-
-/**
- * Error constants for AuthBasic. Use with `isBlocksError()` for typed error handling.
- *
- * @example
- * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
- *
- * try {
- *   await auth.signIn('alice', 'wrong', context);
- * } catch (e) {
- *   if (isBlocksError(e, AuthBasicErrors.InvalidCredentials)) {
- *     // handle bad credentials
- *   }
- * }
- * ```
- */
-export const AuthBasicErrors = {
-	InvalidCredentials: 'InvalidCredentialsException',
-	UserAlreadyExists: 'UserAlreadyExistsException',
-	InvalidCode: 'InvalidCodeException',
-	SessionExpired: 'SessionExpiredException',
-	InvalidPassword: 'InvalidPasswordException',
-} as const;
 
 /** Internal user record stored in KVStore. */
 interface UserRecord {

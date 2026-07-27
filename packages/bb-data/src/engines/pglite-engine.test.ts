@@ -5,7 +5,7 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
-import { rmSync, existsSync } from 'node:fs';
+import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TEST_DIR = '.bb-data-test-' + process.pid;
@@ -174,4 +174,59 @@ test('constructor does not crash when parent directory is missing', async () => 
   await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
   const rows = await engine.query('SELECT * FROM t');
   assert.deepStrictEqual(rows, []);
+});
+
+test('constructor recovers an incomplete PGlite init directory', async () => {
+  const partial = join(TEST_DIR, 'partial-init');
+  mkdirSync(partial, { recursive: true });
+  writeFileSync(join(partial, 'PG_VERSION'), '16\n');
+
+  engine = new PGliteEngine(partial);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  await engine.execute("INSERT INTO t (id) VALUES ('ok')");
+
+  const rows = await engine.query<{ id: string }>('SELECT id FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'ok' }]);
+  assert.strictEqual(existsSync(join(partial, 'base')), true);
+  assert.strictEqual(existsSync(join(partial, 'global')), true);
+
+  const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('partial-init.corrupt-'));
+  assert.strictEqual(corruptDirs.length, 1);
+  assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'PG_VERSION')), true);
+});
+
+test('constructor recovers a PGlite init directory with empty required directories', async () => {
+  const partial = join(TEST_DIR, 'empty-required-dirs');
+  mkdirSync(join(partial, 'base'), { recursive: true });
+  mkdirSync(join(partial, 'global'), { recursive: true });
+  writeFileSync(join(partial, 'PG_VERSION'), '16\n');
+
+  engine = new PGliteEngine(partial);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  await engine.execute("INSERT INTO t (id) VALUES ('ok')");
+
+  const rows = await engine.query<{ id: string }>('SELECT id FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'ok' }]);
+  assert.strictEqual(existsSync(join(partial, 'global', 'pg_control')), true);
+
+  const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('empty-required-dirs.corrupt-'));
+  assert.strictEqual(corruptDirs.length, 1);
+  assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'global')), true);
+});
+
+test('constructor recovers a PGlite leaf directory before PG_VERSION is written', async () => {
+  const partial = join(TEST_DIR, 'pre-version-init');
+  mkdirSync(join(partial, 'base'), { recursive: true });
+
+  engine = new PGliteEngine(partial);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  await engine.execute("INSERT INTO t (id) VALUES ('ok')");
+
+  const rows = await engine.query<{ id: string }>('SELECT id FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'ok' }]);
+  assert.strictEqual(existsSync(join(partial, 'PG_VERSION')), true);
+
+  const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('pre-version-init.corrupt-'));
+  assert.strictEqual(corruptDirs.length, 1);
+  assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'base')), true);
 });

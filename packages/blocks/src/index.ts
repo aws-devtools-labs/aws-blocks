@@ -69,6 +69,19 @@ export type {
 	UserAttribute,
 	ExternalUserPoolRef,
 	CodeDeliveryFn,
+	AdminOptions,
+	AdminAction,
+	AdminUser,
+	AdminCreateInit,
+	AdminUserFilter,
+	SetPasswordOptions,
+	GroupAdmin,
+	LifecycleAdmin,
+	AdminSurface,
+	AdminGetterOf,
+	AdminDisabled,
+	AdminGrants,
+	AdminActionGate,
 } from '@aws-blocks/bb-auth-cognito';
 
 /**
@@ -286,7 +299,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * Full docs: `README.md` in the package directory above.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
 /**
  * **Distributed tracing backed by AWS X-Ray.**

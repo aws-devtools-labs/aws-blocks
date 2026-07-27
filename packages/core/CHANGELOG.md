@@ -1,5 +1,143 @@
 # @aws-blocks/core
 
+## 0.1.16
+
+### Patch Changes
+
+- b09e568: Add a SvelteKit framework adapter. SvelteKit apps are now auto-detected (via
+  `@sveltejs/kit`) and deployed through `@sveltejs/adapter-node` running on Lambda
+  behind the Lambda Web Adapter (the existing `http-server` compute path), fronted
+  by CloudFront + S3. Supports SSR pages, `+server.js` endpoints, form actions,
+  server `load`, `hooks.server`, streaming, prerendered/SSG pages (served frozen
+  from S3), custom headers, cookies, redirects, `error()`, and `paths.base`. A
+  transparent build bridge wires `@sveltejs/adapter-node` when the app hasn't
+  configured it, so no manual setup is required. Patch (not minor) per the
+  pre-1.0 caret convention — the change is additive and backward-compatible.
+- Updated dependencies [b09e568]
+  - @aws-blocks/hosting@0.1.7
+
+## 0.1.15
+
+### Patch Changes
+
+- 1f1287e: Never serve a stale placeholder `config.json` after a deploy. The build-time placeholder (`{"_placeholder":true}`) was uploaded with the 1-year mutable cache-control (`public, s-maxage=31536000, max-age=0, must-revalidate`), and the post-deploy CloudFront invalidation targeted `/.blocks-sandbox/*` — which never matches the real cache key, because the skew-protection viewer-request function rewrites the URI to `/builds/<buildId>/.blocks-sandbox/config.json` before the cache lookup. An edge that cached the placeholder during the deploy window could keep serving it for up to a year, making `getApiUrl()` throw and every client API call fail. The placeholder is now registered as a no-cache path (`no-cache, no-store, must-revalidate`) so edges never cache it long-term, and the config deployment now also invalidates the post-rewrite key `/builds/<buildId>/.blocks-sandbox/*`.
+
+## 0.1.14
+
+### Patch Changes
+
+- fc33428: fix(telemetry): inherit worker stderr in debug mode; enable telemetry in CI for create-blocks-app
+
+  - When `NODE_DEBUG=blocks-telemetry` is set, the telemetry worker subprocess
+    inherits the parent's stderr so delivery confirmation is observable. Silent
+    by default.
+  - Remove CI telemetry suppression from create-blocks-app to match core behavior.
+    Telemetry is now enabled in CI (same as all other CLI commands).
+  - Make `console` cross-platform and headless-safe: pick the OS browser opener
+    (`open`/`xdg-open`/`start`), resolve the region from the environment, and treat
+    a missing opener (CI / remote shells) as best-effort success instead of failing.
+  - Add an isolated E2E telemetry test suite (`test-apps/telemetry`) that verifies
+    payload structure, delivery to the real endpoint, disable mechanisms, and
+    per-command success/failure events.
+
+## 0.1.13
+
+### Patch Changes
+
+- a7427d4: Prevent verbose local RPC logging from turning successful void handlers into error responses.
+
+## 0.1.12
+
+### Patch Changes
+
+- 71eb746: Fix eleven reproducible hosting issues:
+
+  - **Astro SSR `/_image` content-type**: the SSR bundle now ships a linux-x64 `sharp` (installed post-build into `dist/server/node_modules`, wasm fallback pruned, ~19.5 MB), so Astro's default `sharp` image service works on Lambda and `/_image` returns a real optimized image with a correct MIME (`image/png`/`image/webp`) instead of the `noop` passthrough's `content-type: image/null`. Gated on the app using the sharp service; apps that pick `noop`/custom are skipped. A dedicated image Lambda isn't feasible for Astro (it fuses `/_image` into the SSR bundle via the `astro:assets` virtual module, unlike Nuxt IPX / OpenNext).
+
+  - **Next image optimizer on Next 15.x**: the `fetchInternalImage` arity patch was gated on an inverted version assumption (the `maximumResponseBody` parameter was added in Next 16, not 15.5). It now only applies on Next ≥ 16, so local image optimization no longer 500s on Next 15.x apps. Renamed `patchImageOptimizerForNext155` → `patchImageOptimizerForNext16`.
+  - **Image optimizer on disallowed types (SVG)**: an untrusted SVG (with `dangerouslyAllowSVG` disabled) now fails closed with its real `400` status instead of a blanket `500` — OpenNext was catching Next's 400 in a generic block that discarded the status.
+  - **SPA hashed assets**: the SPA adapter now marks Vite's content-hashed `assets/*` bundles `immutable` (`immutablePaths: ['assets/*']`) instead of leaving them in the revalidation-only cache tier.
+  - **Missing static assets**: the OAC bucket policy now grants `s3:ListBucket` so a missing key returns a clean `404 NoSuchKey` instead of leaking `403 AccessDenied` XML to the viewer.
+  - **RSC prefetch cache efficiency**: the SSR cache policy excludes Next's random `_rsc` prefetch query param from the cache key (`denyList('_rsc')`), so prefetches of the same page share one edge cache entry.
+  - **Wildcard redirects**: Next `:path*` named-catch-all redirects are now lifted to the edge router (converted to `/*`), with a bare-prefix companion redirect, so they no longer leak the literal `:path*` token in `Location`.
+  - **Route-table budget**: `TooManyRoutesError` now names which table (routes/redirects/headers) exceeded the budget and calls out `trailingSlash: true` as the likely driver, and the previously-hardcoded 64-chunk cap is now tunable via the `quotas.maxRouteChunks` hosting prop (default 64) for very large sites with measured edge-function headroom.
+  - **Nuxt ISR/SWR on-demand pages**: when ISR/SWR is active (`manifest.cache` set), route coalescing now folds a prerendered static sibling group into a single `parent/*` **compute** wildcard (instead of a static one), so a non-prebuilt on-demand child renders at the SSR Lambda instead of hard-404ing from S3 — while the route table stays bounded (one row per parent), avoiding the CloudFront-Function compute-limit 503 a non-coalesced fan-out would cause.
+  - **CloudFront S3-origin policy**: every behavior whose origin is S3 — the default behavior AND the edge-route (`runtime: 'edge'`) behavior — now uses a synthesized custom origin request policy instead of the managed `ALL_VIEWER_EXCEPT_HOST_HEADER`, which CloudFront rejects on S3 origins (`InvalidRequest` at distribution create). The sentinel behaviors keep the managed policy (their origins are the tagged server/image custom origins, not S3). A regression guard asserts no S3-origin behavior references a managed origin request policy.
+  - **Nuxt IPX remote images**: the IPX image Lambda now rides the shared SSR API Gateway (via a dedicated `<baseURL>/{proxy+}` resource) instead of an OAC Function URL, so an unencoded `://` in a remote source path no longer breaks SigV4 (was `403 InvalidSignatureException`); and the IPX runtime is configured with `httpStorage` scoped to the allowlisted domains so allowlisted remote images resolve instead of `404 IPX_RESOURCE_NOT_FOUND`.
+
+- Updated dependencies [71eb746]
+- Updated dependencies [71eb746]
+  - @aws-blocks/hosting@0.1.5
+
+## 0.1.11
+
+### Patch Changes
+
+- 76e1e50: fix(core): robust dev server — startup port reclaim, singleton guard, and :3000 EADDRINUSE handling
+
+  Hardens the local dev server against the port-contention failure modes that
+  survived PR #80 (which fixed only single-supervisor frontend self-restart):
+
+  - **Startup reclaim** — a fresh `server.ts` now frees a stale `:3000`/`:3100`
+    listener left by a crashed or `SIGKILL`'d predecessor before it binds the
+    front door / spawns the `--strictPort` frontend, instead of relying on the
+    previous process's `cleanup()` finishing within tsx-watch's ~5s window.
+  - **Singleton guard** — a per-port pidfile stops a second `npm run dev` from
+    spawning a competing supervisor that fights the first over `:3000`/`:3100`; it
+    exits cleanly with a clear message. A stable-parent (`tsx watch`) carve-out
+    keeps hot reload working, and a dead-owner pidfile never blocks startup.
+  - **`:3000` EADDRINUSE robustness** — the backend front door now emits a real
+    console error (not only telemetry), reclaims the stale owner and retries the
+    bind (bounded), and exits non-zero with a clear message on unrecoverable
+    failure, so a contended `:3000` never silently fails to serve.
+
+  Reuses the existing `waitForPortFree` / process-group-kill primitives (plus an
+  `lsof`/`netstat` listener probe mirroring the `cleanup` script) — no new
+  teardown mechanism. `--strictPort` is retained for local dev, made safe by the
+  startup reclaim guaranteeing `:3100` is free first.
+
+## 0.1.10
+
+### Patch Changes
+
+- e839301: fix: stack-scope the external-DB connection-string SSM parameter to prevent multi-app collision
+
+  The external-database connection string was stored in an SSM parameter named only
+  by stage (`/blocks/{stage}/db-connection-string`), so two Blocks apps deployed to
+  the same AWS account + region + stage computed the same name and silently
+  overwrote each other's credentials.
+
+  The parameter name is now stack-scoped (`/<stackName>-db-url`), derived from a
+  single new `getStackName({ sandbox, projectRoot })` helper that is also the one
+  place the CDK templates compute the stack name (replacing logic duplicated across
+  templates). The same `dbConnectionParameterName(stackName)` — fed the stack name
+  from `getStackName({ sandbox, projectRoot })` — is used
+  by the pre-deploy writer (`ensureSecrets`) and by the `db pull` generated wiring at
+  synth, so the written name and the read name are derived once, from committed
+  config (`.blocks/config.json`) — never from the connection string — and cannot
+  diverge. The name is computable before synth (enabled by the committed stackId from
+  PR #51), so no post-deploy write-back or staging-copy machinery is needed.
+
+  The previous stage-only parameter is orphaned and self-heals on the next deploy.
+
+## 0.1.9
+
+### Patch Changes
+
+- 9075b81: Fix four hosting correctness bugs:
+
+  - **Base path is now a first-class `Hosting` prop, and Nuxt `app.baseURL` is modelled.** Added a caller-declared `basePath` option to `Hosting` (e.g. `{ basePath: '/app' }`) — the recommended, framework-agnostic source of truth that CloudFront behaviors are prefixed with (plus a root→`/<basePath>/` 308 redirect). When the prop is omitted, the Nitro adapter now detects Nuxt's `app.baseURL` from the build output and sets `manifest.basePath` (parity with Next `basePath` / Astro `base`); previously it was silently dropped, so a Nuxt app with a base path deployed broken — pages rendered but their hashed `/<base>/_nuxt/*` assets 404'd (no hydration). If a base path is detected in the prerendered output but can't be read, synth fails loud instead of shipping a broken site.
+  - **Per-pattern header rules delegate to the SSR runtime instead of competing for CloudFront behavior slots.** For SSR (compute) deploys, a header rule whose pattern has no dedicated behavior is no longer wired as its own CloudFront behavior — the request falls through to the catch-all SSR Lambda, which already emits the framework's `headers()` / `routeRules` at runtime (CloudFront caches the response including those headers). This removes redundant behaviors that burned the scarce ~25-behavior budget and re-asserted a header the origin already sets, and it means SSR header rules can never trip the behavior cap. For **static-only** deploys (S3 origin, no runtime to emit the header) the cap still applies: a rule that would exceed it throws if it sets a security header (CSP, HSTS, X-Frame-Options, … — a lost CSP otherwise looks like a successful deploy) and is dropped with a warning if it's cosmetic.
+  - **config.json deploy ordering is now wired correctly.** The resolved `config.json` deployment now depends on the asset deployments so the build's placeholder config can't clobber it. The previous `tryFindChild('AssetDeployment')` never matched the real child ids and the dependency was silently never created.
+  - **AWS service quotas are now centrally accounted, configurable, and degrade gracefully.** A new `QuotaBudget` module centralizes the previously-scattered, hardcoded limits (CloudFront cache behaviors, Lambda@Edge associations, and the account-wide response-headers-policy quota — the last of which was previously unguarded and blew up opaquely at deploy time). Three things change:
+    - **Configurable:** a new `quotas` prop on `Hosting` (`{ cacheBehaviors?, edgeFunctions?, headerPolicies? }`) lets accounts that have been granted a Service Quota increase raise the corresponding ceiling, instead of hitting a hardcoded throw at the AWS default. Each field documents that synth cannot verify the real granted quota, so an over-set value just moves the failure to deploy time.
+    - **Graceful degradation (SSR):** when prerendered pages would exceed the behavior budget on a compute deploy, the lowest-priority pages are demoted to the SSR runtime (served by the catch-all Lambda) instead of failing the build — deterministically, and never touching hashed-asset prefixes, edge routes, image-opt, or non-default compute origins.
+    - **Grouping (static-only):** when co-located sibling pages would exceed the budget on a static deploy (no runtime to demote to), they collapse into one `<parent>/*` behavior — lossless, since every path under the parent resolves from S3 either way.
+    - **Deploy-fail guards for hard limits:** the static-asset upload Lambda (CDK's `BucketDeployment`) is now sized to 1024 MB / 1024 MiB `/tmp` (up from CDK's 128 MB / 512 MiB defaults, which large sites silently overran with an opaque CloudFormation failure), overridable via `storage.deployment`. Synth also now emits a warning as a stack approaches CloudFormation's hard 500-resource-per-stack limit, so the operator can split the stack before a deploy fails opaquely.
+
+- Updated dependencies [9075b81]
+  - @aws-blocks/hosting@0.1.4
+
 ## 0.1.8
 
 ### Patch Changes

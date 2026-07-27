@@ -4,15 +4,20 @@
 /**
  * Pre-deploy secret provisioning.
  *
- * Writes the connection string to an SSM SecureString parameter.
- * Parameter name includes the stage to prevent sandbox/prod collision:
- *   /blocks/{stage}/db-connection-string
+ * Writes the connection string to an SSM SecureString parameter. The parameter
+ * name is stack-scoped (`/<stackName>-db-url` via `dbConnectionParameterName`),
+ * so two Blocks apps in the same account/region/stage never collide. The synth
+ * step names the parameter with the same function and the same inputs
+ * (`projectRoot` + stage), so the value written here is read back under the
+ * identical name — which is why this must be given the same `projectRoot` the
+ * deploy command passes to synth.
  *
  * On first deploy: creates the parameter.
  * On subsequent deploys: updates if value changed, no-op otherwise.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dbConnectionParameterName } from '../db-naming.js';
+import { getStackName } from './stack-id.js';
 
 const CONNECTION_STRING_PATTERN = /_(DB_URL|CONNECTION_STRING)$/;
 
@@ -32,9 +37,15 @@ export function findConnectionString(): { name: string; value: string } | null {
 }
 
 /**
- * Ensure the connection string is stored in SSM for the current stage.
+ * Ensure the connection string is stored in SSM under this app's stack-scoped
+ * parameter name. `projectRoot` locates the committed `.blocks/config.json`
+ * that defines the stack name; it must match the root used at synth (the deploy
+ * commands pass it explicitly) so the written name equals the name the app reads.
  */
-export async function ensureSecrets(stage?: 'sandbox' | 'production'): Promise<EnsureSecretsResult> {
+export async function ensureSecrets(
+  stage?: string,
+  projectRoot?: string,
+): Promise<EnsureSecretsResult> {
   const result: EnsureSecretsResult = { created: [], updated: [], unchanged: [] };
 
   const conn = findConnectionString();
@@ -46,7 +57,7 @@ export async function ensureSecrets(stage?: 'sandbox' | 'production'): Promise<E
     await import('@aws-sdk/client-ssm');
 
   const client = new SSMClient();
-  const parameterName = dbConnectionParameterName(resolvedStage);
+  const parameterName = dbConnectionParameterName(getStackName({ sandbox: resolvedStage !== 'production', projectRoot }));
 
   let isNew = false;
   try {

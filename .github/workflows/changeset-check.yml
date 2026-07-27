@@ -3,6 +3,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Require changeset
@@ -14,8 +17,18 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      - run: npx @changesets/cli status --since=origin/main
+
+      # Guards import only Node built-ins, so Node type-strips and runs the TS
+      # directly.
+      # Catches malformed changesets (broken frontmatter, unknown package,
+      # invalid bump type) that the regex parser silently ignores and would
+      # otherwise fail post-merge at `changeset version`. Validates only the
+      # changesets on disk, so the release PR (no changesets left) passes.
+      - name: Validate changeset structure
+        run: node --experimental-strip-types scripts/changeset-guard.ts validate-structure
       - name: Verify changeset covers all changed packages
-        run: npx tsx scripts/verify-changeset-coverage.ts
+        run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+      - name: Block major version bumps (pre-release)
+        run: node --experimental-strip-types scripts/changeset-guard.ts block-major
