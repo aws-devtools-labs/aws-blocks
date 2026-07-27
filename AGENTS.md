@@ -326,6 +326,7 @@ Check correctness/security, mock↔aws↔cdk↔browser consistency + conditional
 - `packages/bb-realtime/` — reference for the full client↔server surface + the Transferable client-hydration pattern.
 - Each BB's `README.md` — the authoritative API doc for that block.
 - `docs/` — architecture and design background
+- `docs/RELEASING.md` — release process runbook (versioning, publishing to npm). **Releases are managed by the AWS Blocks team only.**
 - `packages/hosting/README.md` — SPA/SSR frontend hosting
 - `bb-data` / `bb-distributed-data` READMEs — DB migrations
 - `native/*` — Kotlin/Swift/Dart client codegen

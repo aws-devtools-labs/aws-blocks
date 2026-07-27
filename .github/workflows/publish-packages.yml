@@ -1,13 +1,10 @@
 name: Release
 
-# Version + publish via changesets/action. On push to main it either opens/updates
-# a "Version Packages" PR (running `changeset version`) or, once that PR is merged
-# and no changesets remain, publishes to npm. Merging the PR is the release gate.
-# Canary publishes live in publish-canary.yml.
+# Version + publish via changesets/action. On push to main it either:
+#   1. Runs `changeset version`, pushes the changeset-release/main branch
+#   2. If no changesets remain (version PR was just merged), publishes to npm
 #
-# NOTE: The Version Packages PR is created by GITHUB_TOKEN, so it does NOT
-# auto-trigger PR check workflows (GitHub platform limitation). To run checks
-# before merging, close and reopen the PR — this fires a real event and CI runs.
+# PR creation is handled manually — see docs/RELEASING.md for the full process.
 
 on:
   push:
@@ -19,7 +16,7 @@ concurrency:
 
 permissions:
   contents: write # push the version-PR branch + tags
-  pull-requests: write # open/update the Version Packages PR
+  pull-requests: write # open/update the Version Packages PR (when permitted)
   id-token: write # npm provenance
 
 jobs:
@@ -44,6 +41,10 @@ jobs:
 
       - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         id: changesets
+        # The action may fail to create a PR if GitHub Actions is not permitted
+        # to create PRs on this repo. The branch push still succeeds, and
+        # maintainers create the PR manually (see docs/RELEASING.md).
+        continue-on-error: true
         with:
           version: npm run version
           publish: npm run release
@@ -54,24 +55,26 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
 
-      # The Version PR is created with GITHUB_TOKEN, so it doesn't auto-trigger
-      # CI. Append operator instructions to the PR body.
-      - name: Add release instructions to Version PR
-        if: steps.changesets.outputs.pullRequestNumber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # If the action failed AND it was a publish run (no changesets = publish mode),
+      # that's a real failure we should surface. Version-mode failures (PR creation
+      # permission denied) are expected and non-blocking.
+      - name: Fail on publish errors
+        if: steps.changesets.outcome == 'failure' && steps.changesets.outputs.published == 'true'
         run: |
-          PR_NUM="${{ steps.changesets.outputs.pullRequestNumber }}"
-          CURRENT_BODY=$(gh pr view "$PR_NUM" --json body --jq .body)
-          INSTRUCTIONS="## Release Instructions
+          echo "::error::Publish step failed. Check the changesets/action logs above."
+          exit 1
 
-          > **To complete this release:**
-          > 1. Review the version bumps and changelogs below
-          > 2. **Close and reopen this PR** to trigger CI checks (required due to GitHub token limitations)
-          > 3. Once all checks pass, merge the PR
-          > 4. The merge triggers npm publish automatically
-
-          ---
-
-          "
-          gh pr edit "$PR_NUM" --body "${INSTRUCTIONS}${CURRENT_BODY}"
+      - name: Summary
+        run: |
+          if [ "${{ steps.changesets.outputs.published }}" = "true" ]; then
+            echo "## ✅ Published to npm" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ steps.changesets.outputs.pullRequestNumber }}" != "" ]; then
+            echo "## 📦 Version PR updated: #${{ steps.changesets.outputs.pullRequestNumber }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## 📋 Version branch updated" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The \`changeset-release/main\` branch has been updated with version bumps." >> "$GITHUB_STEP_SUMMARY"
+            echo "Create the release PR manually: [Create PR](https://github.com/aws-devtools-labs/aws-blocks/compare/main...changeset-release/main?expand=1)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "See [docs/RELEASING.md](../docs/RELEASING.md) for the full release process." >> "$GITHUB_STEP_SUMMARY"
+          fi
