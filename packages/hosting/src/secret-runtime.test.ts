@@ -18,7 +18,7 @@ void describe('getSecret() runtime resolver', () => {
 		_resetSecretCache();
 	});
 
-	void it('resolves from process.env first (local dev / exposeAsEnv)', async () => {
+	void it('resolves from process.env first (local dev / resolveAt: deploy)', async () => {
 		process.env.STRIPE_KEY = 'sk_local_123';
 		// Even if a fetcher is set, the env value wins and no fetch happens.
 		_setSecretFetcher(async () => {

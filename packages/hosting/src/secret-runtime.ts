@@ -7,7 +7,7 @@
  * `getSecret('STRIPE_KEY')` fetches and decrypts the value and returns it.
  *
  * Resolution order for a key:
- *   1. `process.env[KEY]` — local dev (and the `exposeAsEnv` escape hatch),
+ *   1. `process.env[KEY]` — local dev (and the `resolveAt: 'deploy'` escape hatch),
  *      where the plaintext is already present. No AWS call, works offline.
  *   2. `process.env[HOSTING_SECRET_PARAM_<KEY>]` — the store LOCATOR the Hosting
  *      wiring injected. `process.env[HOSTING_SECRET_PARAM_<KEY>_STORE]` (if set)
@@ -101,6 +101,20 @@ async function defaultFetcher(locator: string, store: string): Promise<string> {
 /**
  * Resolve a secret value at runtime.
  *
+ * **Local development.** `getSecret('KEY')` reads `process.env.KEY` first, so
+ * locally you don't need AWS at all — put the value in a `.env` file (or export
+ * it in your shell) and it's returned directly, with no store call. This is the
+ * same path the `resolveAt: 'deploy'` escape hatch uses. On a deployed function
+ * the plaintext env var isn't present, so it falls through to fetching the
+ * wired secret from the store.
+ *
+ * @example
+ * ```ts
+ * // .env (local only — never commit real secrets)
+ * //   STRIPE_KEY=sk_test_local_123
+ * const key = await getSecret('STRIPE_KEY'); // local: from .env · deployed: from the store
+ * ```
+ *
  * @param key - The logical secret name, exactly as passed to `secret('<key>')`.
  * @returns The decrypted plaintext value.
  * @throws If the secret is neither present in `process.env` nor backed by an
@@ -110,7 +124,7 @@ export async function getSecret(key: string): Promise<string> {
 	const cached = cache.get(key);
 	if (cached !== undefined && Date.now() < cached.expiresAt) return cached.value;
 
-	// 1. Plaintext already in env (local dev, or exposeAsEnv escape hatch).
+	// 1. Plaintext already in env (local dev, or resolveAt: 'deploy' escape hatch).
 	const direct = process.env[key];
 	if (direct !== undefined) {
 		// Env-var values can't rotate under a running process, so cache forever.
