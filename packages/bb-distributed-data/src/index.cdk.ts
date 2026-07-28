@@ -23,6 +23,10 @@ export class DistributedDatabase extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
     super(id, { parent: scope });
 
+    // DSQL uses public HTTPS endpoints — no gateway/interface endpoint needed.
+    // Lambda in a VPC with NAT gateway (private-with-egress) can reach DSQL directly.
+    // No registerVpcRequirements call needed.
+
     const stack = cdk.Stack.of(this);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
     const region = stack.region;

@@ -17,6 +17,11 @@ export class EmailClient extends Scope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for SES access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'ses', type: 'interface' }],
+		});
+
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
 			`   Guide: https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html\n`

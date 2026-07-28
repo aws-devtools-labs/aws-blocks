@@ -190,6 +190,11 @@ export class KnowledgeBase extends Scope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for Bedrock access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'bedrock-runtime', type: 'interface' }],
+		});
+
 		const dimensions = options.embeddingDimensions ?? 1024;
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────

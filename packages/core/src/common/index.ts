@@ -333,6 +333,14 @@ export interface BlocksStackProps extends StackProps {
    * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
    */
   defaults: import('../cdk/blocks-defaults.js').BlocksDefaults;
+  /**
+   * Place the app's compute and VPC-resident resources in a VPC.
+   * Pass a standard CDK VPC — Blocks handles Lambda placement,
+   * endpoint provisioning (based on BB requirements), and SG wiring.
+   *
+   * Omit for no VPC (default — Lambda runs in AWS-managed network).
+   */
+  vpc?: import('../cdk/vpc-types.js').BlocksVpcOptions;
 }
 
 export class BlocksStack {

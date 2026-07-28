@@ -30,6 +30,11 @@ export class Agent extends Scope {
 	constructor(scope: ScopeParent, id: string, config?: any) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for Bedrock access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'bedrock-runtime', type: 'interface' }],
+		});
+
 		this.handler.addToRolePolicy(new PolicyStatement({
 			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],
 			resources: [

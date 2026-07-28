@@ -34,6 +34,11 @@ export class DistributedTable<T = any> extends Scope {
 	constructor(scope: ScopeParent, id: string, public options: any) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for DynamoDB access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'dynamodb', type: 'gateway' }],
+		});
+
 		const config = options;
 
 		if (config?.table) {
