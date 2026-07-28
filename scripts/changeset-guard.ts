@@ -21,6 +21,13 @@
  *                   it can't parse, so a typo'd package or bad bump would slip
  *                   through and only fail post-merge at `changeset version`.
  *
+ *   verify-umbrella Exit non-zero if this PR releases a package the umbrella
+ *                   `@aws-blocks/blocks` re-exports without any pending
+ *                   changeset bumping the umbrella too. Caret ranges keep the
+ *                   sibling's new version in range, so `changeset version`
+ *                   leaves the umbrella alone while its packed content still
+ *                   moves, and publish then fails the whole release run.
+ *
  * Pre-1.0 semver convention:
  *   - `patch` (0.1.1 → 0.1.2): non-breaking change
  *   - `minor` (0.1.x → 0.2.0): BREAKING change (the pre-release breaking channel)
@@ -30,6 +37,7 @@
  *   node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
  *   node --experimental-strip-types scripts/changeset-guard.ts block-major
  *   node --experimental-strip-types scripts/changeset-guard.ts validate-structure
+ *   node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
  */
 
 import { execSync } from "node:child_process";
@@ -40,6 +48,7 @@ const ROOT = resolve(import.meta.dirname, "..");
 const PACKAGES_DIR = join(ROOT, "packages");
 const CHANGESET_DIR = join(ROOT, ".changeset");
 const SCOPE = "@aws-blocks/";
+const UMBRELLA_PKG = "@aws-blocks/blocks";
 
 // changesets/action opens its "Version Packages" PR with this title.
 const RELEASE_PR_TITLE_PREFIX = "chore: version packages";
@@ -84,22 +93,25 @@ function getCoveredPackages(): Set<string> {
 	return new Set(parseChangesets().map((e) => e.pkg));
 }
 
-/** Publishable @aws-blocks/* packages with file changes vs origin/main. */
-function getChangedPackages(): Set<string> {
+/** Files changed vs origin/main, as repo-relative paths. */
+function getChangedFiles(): string[] {
 	const mergeBase = execSync("git merge-base origin/main HEAD", {
 		cwd: ROOT,
 		encoding: "utf-8",
 	}).trim();
-	const changedFiles = execSync(`git diff --name-only ${mergeBase}`, {
+	return execSync(`git diff --name-only ${mergeBase}`, {
 		cwd: ROOT,
 		encoding: "utf-8",
 	})
 		.trim()
 		.split("\n")
 		.filter(Boolean);
+}
 
+/** Publishable @aws-blocks/* packages with file changes vs origin/main. */
+function getChangedPackages(): Set<string> {
 	const packages = new Set<string>();
-	for (const file of changedFiles) {
+	for (const file of getChangedFiles()) {
 		const match = file.match(/^packages\/([^/]+)\//);
 		if (!match) continue;
 
@@ -151,6 +163,84 @@ function verifyCoverage(): number {
 		console.log("✓ No publishable packages were changed.");
 	}
 	return 0;
+}
+
+/**
+ * The `@aws-blocks/*` packages the umbrella re-exports, read from its own
+ * dependencies. Releasing any of them can change what the umbrella's tarball
+ * ships without touching a single file the umbrella owns, which is why a file
+ * diff can't be the signal here.
+ */
+function getUmbrellaSiblings(): Set<string> {
+	const siblings = new Set<string>();
+	const pkgJsonPath = join(PACKAGES_DIR, "blocks", "package.json");
+	if (!existsSync(pkgJsonPath)) return siblings;
+
+	try {
+		const deps = JSON.parse(readFileSync(pkgJsonPath, "utf-8")).dependencies;
+		if (deps && typeof deps === "object") {
+			for (const name of Object.keys(deps)) {
+				if (name.startsWith(SCOPE) && name !== UMBRELLA_PKG) siblings.add(name);
+			}
+		}
+	} catch {
+		// unreadable package.json: nothing to assert against
+	}
+	return siblings;
+}
+
+/** Changeset filenames added or modified by this PR (vs origin/main). */
+function getChangedChangesetFiles(): Set<string> {
+	const names = new Set<string>();
+	for (const file of getChangedFiles()) {
+		const match = file.match(/^\.changeset\/(.+\.md)$/);
+		if (match && match[1] !== "README.md") names.add(match[1]);
+	}
+	return names;
+}
+
+function verifyUmbrella(): number {
+	const siblings = getUmbrellaSiblings();
+	const touched = getChangedChangesetFiles();
+	// Only this PR's own changesets trigger the check. Reading every pending
+	// changeset would fail unrelated PRs for an omission someone else merged.
+	const released = [
+		...new Set(
+			parseChangesets()
+				.filter((e) => touched.has(e.file) && siblings.has(e.pkg))
+				.map((e) => e.pkg),
+		),
+	].sort();
+
+	if (released.length === 0) {
+		console.log(`✓ No changeset here releases a package ${UMBRELLA_PKG} re-exports.`);
+		return 0;
+	}
+
+	// Coverage from any pending changeset counts: what matters is whether the
+	// next release republishes the umbrella, not which PR asked for it.
+	if (getCoveredPackages().has(UMBRELLA_PKG)) {
+		console.log(
+			`✓ ${released.length} re-exported package(s) released, and ${UMBRELLA_PKG} is bumped alongside them.`,
+		);
+		return 0;
+	}
+
+	console.error(`\n❌ This PR releases package(s) that ${UMBRELLA_PKG} re-exports:\n`);
+	for (const pkg of released) {
+		console.error(`   • ${pkg}`);
+	}
+	console.error(
+		`\nNothing bumps ${UMBRELLA_PKG}. It pins its siblings with caret ranges, so their\n` +
+		`new versions stay in range and \`changeset version\` leaves the umbrella at its\n` +
+		`current version. Its packed content still moves (the re-exported APIs, plus\n` +
+		`docs/ assembled from sibling READMEs at pack time), and publish then aborts the\n` +
+		`whole release run with "${UMBRELLA_PKG}@<version> already exists with different\n` +
+		`content" (issue #273, previously #212).\n\n` +
+		`Add this line to your changeset:\n\n` +
+		`   "${UMBRELLA_PKG}": patch\n`,
+	);
+	return 1;
 }
 
 function blockMajor(): number {
@@ -276,11 +366,14 @@ switch (command) {
 	case "validate-structure":
 		process.exit(validateStructure());
 		break;
+	case "verify-umbrella":
+		process.exit(verifyUmbrella());
+		break;
 	default:
 		console.error(
 			`Unknown command: ${command ?? "(none)"}\n` +
 			"Usage: node --experimental-strip-types scripts/changeset-guard.ts " +
-			"<verify-coverage|block-major|validate-structure>",
+			"<verify-coverage|block-major|validate-structure|verify-umbrella>",
 		);
 		process.exit(2);
 }
