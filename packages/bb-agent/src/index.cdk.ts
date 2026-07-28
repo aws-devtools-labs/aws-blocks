@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Scope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
@@ -30,10 +31,8 @@ export class Agent extends Scope {
 	constructor(scope: ScopeParent, id: string, config?: any) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for Bedrock access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'bedrock-runtime', type: 'interface' }],
-		});
+		// Register VPC endpoint for Bedrock access
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
 
 		this.handler.addToRolePolicy(new PolicyStatement({
 			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],

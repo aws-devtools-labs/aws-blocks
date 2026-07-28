@@ -42,25 +42,14 @@ export interface BlocksVpcOptions {
 
   /**
    * VPC endpoints to provision. When set to 'auto' (the default), endpoints
-   * are determined by the BBs in scope — each BB reports its VPC requirements
-   * to the Scope chain at construction time, and the framework provisions the
-   * necessary endpoints automatically. Set to 'none' to disable (e.g., when
-   * using a shared VPC that already has endpoints), or provide an explicit list
-   * to override auto-detection.
+   * are determined by the BBs in scope — each BB registers actual CDK endpoint
+   * service objects via `registerVpcEndpoint()`, and the framework deduplicates
+   * and provisions them automatically. Set to 'none' to disable (e.g., when
+   * using a shared VPC that already has endpoints).
    *
    * @default 'auto'
    */
-  endpoints?: 'auto' | 'none' | VpcEndpointConfig[];
-}
-
-/**
- * Explicit VPC endpoint configuration (for manual override).
- */
-export interface VpcEndpointConfig {
-  /** AWS service short name (e.g., 'dynamodb', 's3', 'secretsmanager'). */
-  service: string;
-  /** Endpoint type. Gateway endpoints (s3, dynamodb) are free; interface endpoints cost ~$7/mo per AZ. */
-  type?: 'gateway' | 'interface';
+  endpoints?: 'auto' | 'none';
 }
 
 /**
@@ -68,21 +57,17 @@ export interface VpcEndpointConfig {
  * Collected during finalization to provision endpoints.
  */
 export interface VpcRequirements {
-  /** Endpoints this BB needs to function inside a VPC. */
-  endpoints?: VpcEndpointRequirement[];
   /** Subnet role for VPC-resident resources (e.g., Aurora needs 'isolated'). */
   subnetRole?: SubnetRole;
 }
 
 /**
- * A single VPC endpoint requirement.
+ * A registered VPC endpoint — stores the actual CDK service object.
+ * The BB owns the knowledge of what service it needs.
  */
-export interface VpcEndpointRequirement {
-  /** AWS service short name (e.g., 'dynamodb', 'secretsmanager', 'rds-data'). */
-  service: string;
-  /** Endpoint type. Gateway endpoints are free; interface endpoints cost ~$7/mo per AZ. */
-  type: 'gateway' | 'interface';
-}
+export type VpcEndpointRegistration =
+  | { type: 'gateway'; service: ec2.GatewayVpcEndpointAwsService }
+  | { type: 'interface'; service: ec2.InterfaceVpcEndpointAwsService };
 
 /**
  * Internal VPC context propagated through the construct tree.

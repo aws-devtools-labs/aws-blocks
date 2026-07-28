@@ -4,6 +4,7 @@
 import { Construct } from 'constructs';
 import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { CustomResource, Duration } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Provider } from 'aws-cdk-lib/custom-resources';
@@ -34,10 +35,8 @@ export class DistributedTable<T = any> extends Scope {
 	constructor(scope: ScopeParent, id: string, public options: any) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for DynamoDB access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'dynamodb', type: 'gateway' }],
-		});
+		// Register VPC endpoint for DynamoDB access
+		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		const config = options;
 

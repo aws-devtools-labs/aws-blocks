@@ -5,6 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -49,10 +50,8 @@ export class AppSetting<T = string> extends Scope {
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for SSM access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'ssm', type: 'interface' }],
-		});
+		// Register VPC endpoint for SSM access
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.
