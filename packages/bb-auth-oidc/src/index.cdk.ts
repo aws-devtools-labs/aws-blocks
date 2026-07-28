@@ -92,6 +92,11 @@ export class AuthOIDC<
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for SSM (cookie secret storage)
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'ssm', type: 'interface' }],
+		});
+
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;
 

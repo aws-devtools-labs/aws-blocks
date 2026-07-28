@@ -26,6 +26,11 @@ export class KVStore extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for DynamoDB access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'dynamodb', type: 'gateway' }],
+		});
+
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name
 			// and grant the runtime Lambda read/write access.

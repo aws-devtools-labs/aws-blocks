@@ -49,6 +49,11 @@ export class AppSetting<T = string> extends Scope {
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for SSM access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'ssm', type: 'interface' }],
+		});
+
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.
 		const external = (options as InternalAppSettingOptions<T>).external ?? false;

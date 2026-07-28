@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { getVpcContext } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -32,6 +33,15 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
 export class Database extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
     super(id, { parent: scope });
+
+    // Register VPC endpoint requirements for RDS Data API + Secrets Manager
+    this.registerVpcRequirements({
+      endpoints: [
+        { service: 'secretsmanager', type: 'interface' },
+        { service: 'rds-data', type: 'interface' },
+      ],
+      subnetRole: 'isolated',
+    });
 
     const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 
@@ -77,6 +87,7 @@ export class Database extends Scope {
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
       postgresVersion: options?.postgresVersion,
+      vpcContext: getVpcContext(this),
     });
 
     // Inject config so DataApiEngine can read them at runtime
