@@ -35,21 +35,18 @@ export interface BlocksVpcOptions {
   vpc: ec2.IVpc;
 
   /**
-   * Subnet selection for Lambda placement.
+   * Subnet selection for Lambda and Blocks-managed compute placement.
    * @default { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }
    */
-  lambdaSubnets?: ec2.SubnetSelection;
+  subnets?: ec2.SubnetSelection;
 
   /**
-   * VPC endpoints to provision. When set to 'auto' (the default), endpoints
-   * are determined by the BBs in scope — each BB registers actual CDK endpoint
-   * service objects via `registerVpcEndpoint()`, and the framework deduplicates
-   * and provisions them automatically. Set to 'none' to disable (e.g., when
-   * using a shared VPC that already has endpoints).
+   * Whether to auto-provision VPC endpoints based on BB registrations.
+   * Set to `false` to disable (e.g., when using a shared VPC that already has endpoints).
    *
-   * @default 'auto'
+   * @default true
    */
-  endpoints?: 'auto' | 'none';
+  provisionEndpoints?: boolean;
 }
 
 /**
@@ -60,14 +57,6 @@ export interface VpcRequirements {
   /** Subnet role for VPC-resident resources (e.g., Aurora needs 'isolated'). */
   subnetRole?: SubnetRole;
 }
-
-/**
- * A registered VPC endpoint — stores the actual CDK service object.
- * The BB owns the knowledge of what service it needs.
- */
-export type VpcEndpointRegistration =
-  | { type: 'gateway'; service: ec2.GatewayVpcEndpointAwsService }
-  | { type: 'interface'; service: ec2.InterfaceVpcEndpointAwsService };
 
 /**
  * Internal VPC context propagated through the construct tree.

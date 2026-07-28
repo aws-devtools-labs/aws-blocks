@@ -3,33 +3,37 @@
 
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { registerVpcEndpoint, registerVpcRequirements, getVpcContext, setVpcContext, initializeVpc } from './vpc.js';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { registerVpcGatewayEndpoint, registerVpcInterfaceEndpoint, registerVpcRequirements, getVpcContext, setVpcContext } from './vpc.js';
 
 // We can't fully test CDK constructs without a Stack, but we can test
-// the registerVpcEndpoint and getVpcContext logic with mock constructs.
+// the registration and getVpcContext logic with mock constructs.
 
 describe('VPC utilities', () => {
-  it('registerVpcEndpoint stores endpoint registrations on the scope', () => {
+  it('registerVpcGatewayEndpoint stores gateway endpoints on the scope', () => {
     const fakeScope: any = { node: { children: [] } };
-    const fakeService = { name: 'dynamodb' };
-    registerVpcEndpoint(fakeScope, { type: 'gateway', service: fakeService as any });
-    const key = Symbol.for('BLOCKS_VPC_ENDPOINTS');
-    assert.deepEqual(fakeScope[key], [
-      { type: 'gateway', service: fakeService },
-    ]);
+    registerVpcGatewayEndpoint(fakeScope, ec2.GatewayVpcEndpointAwsService.DYNAMODB);
+    const key = Symbol.for('BLOCKS_VPC_GATEWAY_ENDPOINTS');
+    assert.equal(fakeScope[key].length, 1);
+    assert.equal(fakeScope[key][0], ec2.GatewayVpcEndpointAwsService.DYNAMODB);
   });
 
-  it('registerVpcEndpoint appends when called multiple times', () => {
+  it('registerVpcGatewayEndpoint appends when called multiple times', () => {
     const fakeScope: any = { node: { children: [] } };
-    const fakeGw = { name: 'dynamodb' };
-    const fakeIface = { name: 'com.amazonaws.secretsmanager' };
-    registerVpcEndpoint(fakeScope, { type: 'gateway', service: fakeGw as any });
-    registerVpcEndpoint(fakeScope, { type: 'interface', service: fakeIface as any });
-    const key = Symbol.for('BLOCKS_VPC_ENDPOINTS');
-    assert.deepEqual(fakeScope[key], [
-      { type: 'gateway', service: fakeGw },
-      { type: 'interface', service: fakeIface },
-    ]);
+    registerVpcGatewayEndpoint(fakeScope, ec2.GatewayVpcEndpointAwsService.DYNAMODB);
+    registerVpcGatewayEndpoint(fakeScope, ec2.GatewayVpcEndpointAwsService.S3);
+    const key = Symbol.for('BLOCKS_VPC_GATEWAY_ENDPOINTS');
+    assert.equal(fakeScope[key].length, 2);
+    assert.equal(fakeScope[key][0], ec2.GatewayVpcEndpointAwsService.DYNAMODB);
+    assert.equal(fakeScope[key][1], ec2.GatewayVpcEndpointAwsService.S3);
+  });
+
+  it('registerVpcInterfaceEndpoint stores interface endpoints on the scope', () => {
+    const fakeScope: any = { node: { children: [] } };
+    registerVpcInterfaceEndpoint(fakeScope, ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
+    const key = Symbol.for('BLOCKS_VPC_INTERFACE_ENDPOINTS');
+    assert.equal(fakeScope[key].length, 1);
+    assert.equal(fakeScope[key][0], ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
   });
 
   it('registerVpcRequirements stores subnet role on the scope', () => {

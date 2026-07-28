@@ -3,25 +3,38 @@
 
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
-import type { BlocksVpcOptions, VpcEndpointRegistration, VpcContext, VpcRequirements, SubnetRole } from './vpc-types.js';
+import type { BlocksVpcOptions, VpcContext, VpcRequirements, SubnetRole } from './vpc-types.js';
 
-const VPC_ENDPOINTS_KEY = Symbol.for('BLOCKS_VPC_ENDPOINTS');
+const VPC_GATEWAY_ENDPOINTS_KEY = Symbol.for('BLOCKS_VPC_GATEWAY_ENDPOINTS');
+const VPC_INTERFACE_ENDPOINTS_KEY = Symbol.for('BLOCKS_VPC_INTERFACE_ENDPOINTS');
 const VPC_REQUIREMENTS_KEY = Symbol.for('BLOCKS_VPC_REQUIREMENTS');
 const VPC_CONTEXT_KEY = Symbol.for('BLOCKS_VPC_CONTEXT');
 
 /**
- * Register a VPC endpoint that this Building Block needs.
- * Called by BB CDK constructors with the actual CDK endpoint service object.
- * The collection/provisioning layer deduplicates by service name and provisions
- * the endpoint at finalization time.
+ * Register a gateway VPC endpoint requirement for a Building Block.
+ * Called by BB CDK constructors to declare what gateway endpoints they need.
  * @internal
  */
-export function registerVpcEndpoint(scope: Construct, endpoint: VpcEndpointRegistration): void {
-  const existing = (scope as any)[VPC_ENDPOINTS_KEY] as VpcEndpointRegistration[] | undefined;
+export function registerVpcGatewayEndpoint(scope: Construct, service: ec2.GatewayVpcEndpointAwsService): void {
+  const existing = (scope as any)[VPC_GATEWAY_ENDPOINTS_KEY] as ec2.GatewayVpcEndpointAwsService[] | undefined;
   if (existing) {
-    existing.push(endpoint);
+    existing.push(service);
   } else {
-    (scope as any)[VPC_ENDPOINTS_KEY] = [endpoint];
+    (scope as any)[VPC_GATEWAY_ENDPOINTS_KEY] = [service];
+  }
+}
+
+/**
+ * Register an interface VPC endpoint requirement for a Building Block.
+ * Called by BB CDK constructors to declare what interface endpoints they need.
+ * @internal
+ */
+export function registerVpcInterfaceEndpoint(scope: Construct, service: ec2.InterfaceVpcEndpointAwsService): void {
+  const existing = (scope as any)[VPC_INTERFACE_ENDPOINTS_KEY] as ec2.InterfaceVpcEndpointAwsService[] | undefined;
+  if (existing) {
+    existing.push(service);
+  } else {
+    (scope as any)[VPC_INTERFACE_ENDPOINTS_KEY] = [service];
   }
 }
 
@@ -66,15 +79,14 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 }
 
 /**
- * Collect all VPC endpoint registrations from the construct tree rooted at `scope`.
- * Walks all children recursively.
+ * Collect all gateway endpoint registrations from the construct tree.
  * @internal
  */
-function collectVpcEndpoints(scope: Construct): VpcEndpointRegistration[] {
-  const all: VpcEndpointRegistration[] = [];
+function collectGatewayEndpoints(scope: Construct): ec2.GatewayVpcEndpointAwsService[] {
+  const all: ec2.GatewayVpcEndpointAwsService[] = [];
 
   function walk(node: Construct) {
-    const eps = (node as any)[VPC_ENDPOINTS_KEY] as VpcEndpointRegistration[] | undefined;
+    const eps = (node as any)[VPC_GATEWAY_ENDPOINTS_KEY] as ec2.GatewayVpcEndpointAwsService[] | undefined;
     if (eps) {
       all.push(...eps);
     }
@@ -90,30 +102,26 @@ function collectVpcEndpoints(scope: Construct): VpcEndpointRegistration[] {
 }
 
 /**
- * Get a unique string key for a service object to use for deduplication.
+ * Collect all interface endpoint registrations from the construct tree.
+ * @internal
  */
-function getServiceKey(endpoint: VpcEndpointRegistration): string {
-  if (endpoint.type === 'gateway') {
-    // GatewayVpcEndpointAwsService exposes a `.name` property
-    return `gateway:${(endpoint.service as any).name ?? endpoint.service}`;
-  }
-  // InterfaceVpcEndpointAwsService exposes a `.name` property
-  return `interface:${(endpoint.service as any).name ?? endpoint.service}`;
-}
+function collectInterfaceEndpoints(scope: Construct): ec2.InterfaceVpcEndpointAwsService[] {
+  const all: ec2.InterfaceVpcEndpointAwsService[] = [];
 
-/**
- * Deduplicate endpoint registrations by service identity.
- * First registration wins.
- */
-function deduplicateEndpoints(endpoints: VpcEndpointRegistration[]): VpcEndpointRegistration[] {
-  const map = new Map<string, VpcEndpointRegistration>();
-  for (const ep of endpoints) {
-    const key = getServiceKey(ep);
-    if (!map.has(key)) {
-      map.set(key, ep);
+  function walk(node: Construct) {
+    const eps = (node as any)[VPC_INTERFACE_ENDPOINTS_KEY] as ec2.InterfaceVpcEndpointAwsService[] | undefined;
+    if (eps) {
+      all.push(...eps);
+    }
+    for (const child of node.node.children) {
+      if ('node' in child) {
+        walk(child as Construct);
+      }
     }
   }
-  return Array.from(map.values());
+
+  walk(scope);
+  return all;
 }
 
 /**
@@ -125,9 +133,9 @@ function deduplicateEndpoints(endpoints: VpcEndpointRegistration[]): VpcEndpoint
  * @internal
  */
 export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcContext {
-  const { vpc, lambdaSubnets } = options;
+  const { vpc, subnets } = options;
 
-  const resolvedSubnets = lambdaSubnets ?? { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
+  const resolvedSubnets = subnets ?? { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
 
   const lambdaSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksLambdaSg', {
     vpc,
@@ -162,42 +170,43 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
  * @internal
  */
 export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
-  const endpointsOption = options.endpoints ?? 'auto';
-
-  if (endpointsOption === 'none') {
+  if (options.provisionEndpoints === false) {
     return;
   }
 
   const { vpc } = options;
 
-  // Collect from BB registrations
-  const collected = collectVpcEndpoints(scope);
-  // Always add CloudWatch Logs (Lambda needs it for log delivery from within VPC)
-  collected.push({ type: 'interface', service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS });
-  // Always add SSM (auth BBs and AppSetting all use SSM)
-  collected.push({ type: 'interface', service: ec2.InterfaceVpcEndpointAwsService.SSM });
+  // Collect gateway endpoints from BB registrations and deduplicate
+  const gatewayEndpoints = collectGatewayEndpoints(scope);
+  const provisionedGateway = new Set<string>();
 
-  const endpoints = deduplicateEndpoints(collected);
+  for (const service of gatewayEndpoints) {
+    const key = (service as any).name ?? String(service);
+    if (provisionedGateway.has(key)) continue;
+    provisionedGateway.add(key);
 
-  const provisionedKeys = new Set<string>();
-
-  for (const ep of endpoints) {
-    const key = getServiceKey(ep);
-    if (provisionedKeys.has(key)) continue;
-    provisionedKeys.add(key);
-
-    // Create a construct ID from the service key
     const constructId = `VpcEp${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+    vpc.addGatewayEndpoint(constructId, { service });
+  }
 
-    if (ep.type === 'gateway') {
-      vpc.addGatewayEndpoint(constructId, {
-        service: ep.service as ec2.GatewayVpcEndpointAwsService,
-      });
-    } else {
-      vpc.addInterfaceEndpoint(constructId, {
-        service: ep.service as ec2.InterfaceVpcEndpointAwsService,
-        privateDnsEnabled: true,
-      });
-    }
+  // Collect interface endpoints from BB registrations and deduplicate
+  const interfaceEndpoints = collectInterfaceEndpoints(scope);
+  // Always add CloudWatch Logs (Lambda needs it for log delivery from within VPC)
+  interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS);
+  // Always add SSM (auth BBs and AppSetting all use SSM)
+  interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.SSM);
+
+  const provisionedInterface = new Set<string>();
+
+  for (const service of interfaceEndpoints) {
+    const key = service.name;
+    if (provisionedInterface.has(key)) continue;
+    provisionedInterface.add(key);
+
+    const constructId = `VpcEp${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+    vpc.addInterfaceEndpoint(constructId, {
+      service,
+      privateDnsEnabled: true,
+    });
   }
 }

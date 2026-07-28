@@ -35,8 +35,8 @@ export class Database extends Scope {
     super(id, { parent: scope });
 
     // Register VPC endpoints for RDS Data API + Secrets Manager
-    this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
-    this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.RDS_DATA);
+    this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
+    this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.RDS_DATA);
     this.registerVpcRequirements({ subnetRole: 'isolated' });
 
     const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';

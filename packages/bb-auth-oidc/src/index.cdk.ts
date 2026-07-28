@@ -94,7 +94,7 @@ export class AuthOIDC<
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for SSM (cookie secret storage)
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;

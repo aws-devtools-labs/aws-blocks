@@ -29,7 +29,7 @@ export class KVStore extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for DynamoDB access
-		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
+		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

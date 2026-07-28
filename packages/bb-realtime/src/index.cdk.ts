@@ -129,7 +129,7 @@ export class Realtime extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for API Gateway (WebSocket management API)
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY);
 
 		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
 	}
