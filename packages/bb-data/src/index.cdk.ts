@@ -3,6 +3,7 @@
 
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import { getVpcContext } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -34,14 +35,10 @@ export class Database extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
     super(id, { parent: scope });
 
-    // Register VPC endpoint requirements for RDS Data API + Secrets Manager
-    this.registerVpcRequirements({
-      endpoints: [
-        { service: 'secretsmanager', type: 'interface' },
-        { service: 'rds-data', type: 'interface' },
-      ],
-      subnetRole: 'isolated',
-    });
+    // Register VPC endpoints for RDS Data API + Secrets Manager
+    this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
+    this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.RDS_DATA);
+    this.registerVpcRequirements({ subnetRole: 'isolated' });
 
     const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 

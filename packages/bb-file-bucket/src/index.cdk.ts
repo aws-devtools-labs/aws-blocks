@@ -3,6 +3,7 @@
 
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Scope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -35,10 +36,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for S3 access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 's3', type: 'gateway' }],
-		});
+		// Register VPC endpoint for S3 access
+		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.S3);
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and

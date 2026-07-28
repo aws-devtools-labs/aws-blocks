@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import { Scope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -26,10 +27,8 @@ export class KVStore extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for DynamoDB access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'dynamodb', type: 'gateway' }],
-		});
+		// Register VPC endpoint for DynamoDB access
+		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

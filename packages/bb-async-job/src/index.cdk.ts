@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Duration } from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Scope } from '@aws-blocks/core/cdk';
@@ -24,10 +25,8 @@ export class AsyncJob<T = unknown> extends Scope {
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for SQS access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'sqs', type: 'interface' }],
-		});
+		// Register VPC endpoint for SQS access
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SQS);
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 1;

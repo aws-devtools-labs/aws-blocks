@@ -19,6 +19,7 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -74,10 +75,8 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for SSM (session secret storage)
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'ssm', type: 'interface' }],
-		});
+		// Register VPC endpoint for SSM (session secret storage)
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);

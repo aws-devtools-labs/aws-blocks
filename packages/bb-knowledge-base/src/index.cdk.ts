@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
@@ -190,10 +191,8 @@ export class KnowledgeBase extends Scope {
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for Bedrock access
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'bedrock-runtime', type: 'interface' }],
-		});
+		// Register VPC endpoint for Bedrock access
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
