@@ -12,7 +12,8 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { kv, table, files, job, setting, rt, auth, logger, metrics, tracer } from '../aws-blocks/index.js';
+import { kv, table, files, job, setting, rt, auth, db, logger, metrics, tracer } from '../aws-blocks/index.js';
+import { sql } from '@aws-blocks/bb-data';
 
 describe('VPC Smoke Tests', () => {
 
@@ -73,6 +74,56 @@ describe('VPC Smoke Tests', () => {
       await assert.doesNotReject(async () => {
         await rt.publish('notifications', 'vpc-smoke-test', { text: 'vpc connectivity check' });
       });
+    });
+
+    test('client-side subscribe receives published message', async () => {
+      // Validates execute-api/WebSocket endpoint is reachable from within the VPC.
+      // getChannel() returns a Transferable with WebSocket URL + tokens.
+      // subscribe() opens a WebSocket to the API Gateway WebSocket endpoint.
+      const channelName = `subscribe-test-${Date.now()}`;
+      const channel = await rt.getChannel('notifications', channelName);
+      const received: Array<{ text: string }> = [];
+
+      const sub = channel.subscribe((msg: { text: string }) => {
+        received.push(msg);
+      });
+
+      // Wait for the WebSocket subscription to be established
+      await sub.established;
+
+      // Publish a message to the same channel — it should be delivered via WebSocket
+      const testPayload = { text: `vpc-ws-${Date.now()}` };
+      await rt.publish('notifications', channelName, testPayload);
+
+      // Give the message time to arrive (WebSocket delivery)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Verify the message was received via WebSocket subscription
+      assert.ok(received.length >= 1, `Expected at least 1 message, got ${received.length}`);
+      assert.strictEqual(received[0].text, testPayload.text);
+
+      sub.unsubscribe();
+    });
+  });
+
+  describe('Database (Aurora)', () => {
+    test('simple SQL query via Data API', async () => {
+      // Verifies RDS Data API + Secrets Manager endpoints are reachable from VPC.
+      // Executes a simple query that doesn't require any table setup.
+      const result = await db.query<{ ping: number }>(sql`SELECT 1 AS ping`);
+      assert.ok(result.length >= 1, 'Expected at least one row from SELECT 1');
+      assert.strictEqual(result[0].ping, 1);
+    });
+
+    test('create table, insert, and read back', async () => {
+      // Create a temporary table, insert, and read back via Data API
+      await db.execute(sql`CREATE TABLE IF NOT EXISTS vpc_smoke_test (id SERIAL PRIMARY KEY, value TEXT NOT NULL)`);
+      await db.execute(sql`INSERT INTO vpc_smoke_test (value) VALUES (${'vpc-aurora-test'})`);
+      const result = await db.query<{ value: string }>(sql`SELECT value FROM vpc_smoke_test WHERE value = ${'vpc-aurora-test'}`);
+      assert.ok(result.length >= 1);
+      assert.strictEqual(result[0].value, 'vpc-aurora-test');
+      // Clean up
+      await db.execute(sql`DROP TABLE IF EXISTS vpc_smoke_test`);
     });
   });
 
