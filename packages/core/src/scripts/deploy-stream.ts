@@ -38,6 +38,12 @@ export interface DeploySignalResponse {
   action: DeploySignalAction;
   /** Operator-facing line explaining what happened and how to force an abort. */
   message: string;
+  /**
+   * True when this signal is a duplicate delivery of one the operator already
+   * sent (see {@link SIGNAL_COALESCE_MS}), so the caller can skip logging it
+   * twice.
+   */
+  coalesced?: boolean;
 }
 
 /** Signals whose delivery we take over while a deploy is in flight. */
@@ -58,6 +64,23 @@ export const ABORT_GRACE_MS = 10_000;
 export const STREAM_FLUSH_GRACE_MS = 2_000;
 
 /**
+ * Window (ms) in which repeated SIGTERMs count as ONE operator request.
+ *
+ * A single external signal reaches this process more than once. `npm run deploy`
+ * runs `npm -> sh -> tsx -> node`, so a process-group SIGTERM is delivered to
+ * the node process directly AND relayed to it a second time by `tsx`, which
+ * forwards SIGTERM/SIGINT to its child. Measured on a real deploy: one
+ * `kill -TERM -<pgid>` produced two SIGTERMs about 50ms apart. Without this
+ * window the second delivery is read as "the operator insisted" and the deploy
+ * is abandoned, which is the exact failure this module exists to prevent.
+ *
+ * 2s is far longer than a delivery burst (tens of ms) and far shorter than a
+ * deliberate repeat (a human running `kill` twice, or a supervisor's
+ * SIGTERM-then-escalate cycle), so both intents stay distinguishable.
+ */
+export const SIGNAL_COALESCE_MS = 2_000;
+
+/**
  * Decide how to answer a signal that arrives while CloudFormation is still
  * converging. This is the whole "decouple the CLI lifecycle from the in-flight
  * deploy" policy, kept pure so it can be asserted directly.
@@ -66,21 +89,26 @@ export const STREAM_FLUSH_GRACE_MS = 2_000;
  *   away (a backgrounded `npm run deploy &`, a closed SSH session). The deploy
  *   is server-side work that is already paid for; killing the CLI here is what
  *   produced the phantom failures, so we keep streaming instead.
- * - `SIGTERM` → `defer` the first time, `abort` after that. A lone SIGTERM is
- *   almost always process-group collateral (a harness reaping the parent shell,
- *   a supervisor tidying up) rather than a deliberate "stop the deploy", so the
- *   first one only warns. An operator who really wants to stop sends it again.
- *   A SIGKILL follow-up (`docker stop`, most CI cancels) is uncatchable and
- *   still ends the process immediately, so this cannot wedge a shutdown.
+ * - `SIGTERM` → `defer` the first time. A lone SIGTERM is almost always
+ *   process-group collateral (a harness reaping the parent shell, a supervisor
+ *   tidying up) rather than a deliberate "stop the deploy", so it only warns.
+ *   Repeats inside {@link SIGNAL_COALESCE_MS} are duplicate *deliveries* of that
+ *   same signal (the group delivers it, then `tsx` relays it) and are coalesced
+ *   into the first. A SIGTERM after that window is a deliberate repeat and
+ *   aborts. A SIGKILL follow-up (`docker stop`, most CI cancels) is uncatchable
+ *   and still ends the process immediately, so this cannot wedge a shutdown.
  * - `SIGINT` → always `abort`. Ctrl-C is unambiguous, interactive intent, so it
  *   stays responsive on the first press.
  *
  * @param signal - the signal received.
- * @param termAlreadyDeferred - whether a SIGTERM has already been deferred.
+ * @param msSinceFirstDeferral - ms since the first SIGTERM was deferred, or
+ *   `null` when none has been deferred yet.
+ * @param coalesceWindowMs - see {@link SIGNAL_COALESCE_MS}.
  */
 export function decideSignalResponse(
   signal: NodeJS.Signals,
-  termAlreadyDeferred: boolean,
+  msSinceFirstDeferral: number | null,
+  coalesceWindowMs: number = SIGNAL_COALESCE_MS,
 ): DeploySignalResponse {
   if (signal === 'SIGINT') {
     return {
@@ -94,13 +122,23 @@ export function decideSignalResponse(
       action: 'defer',
       message:
         '⚠️  Ignoring SIGHUP: the deploy is still running and CloudFormation is still converging. Streaming continues; send SIGTERM twice to abort.',
+      coalesced: msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs,
     };
   }
-  if (signal === 'SIGTERM' && !termAlreadyDeferred) {
+  if (signal === 'SIGTERM' && msSinceFirstDeferral === null) {
     return {
       action: 'defer',
       message:
         '⚠️  Ignoring SIGTERM: the deploy is still running and CloudFormation is still converging. Send SIGTERM again to abort (the stack update continues server-side either way).',
+    };
+  }
+  if (signal === 'SIGTERM' && msSinceFirstDeferral !== null && msSinceFirstDeferral < coalesceWindowMs) {
+    // Same signal reaching us twice (process group + a wrapper's relay), not a
+    // second request — keep deploying and stay quiet about the duplicate.
+    return {
+      action: 'defer',
+      message: '',
+      coalesced: true,
     };
   }
   return {
@@ -284,7 +322,7 @@ export async function runStreaming(
   const startedAt = now();
   let lastOutputAt = startedAt;
   let aborting = false;
-  let termDeferred = false;
+  let firstDeferralAt: number | null = null;
   let exitObserved = false;
 
   const child: ChildProcess = spawnCommand(command, args, {
@@ -358,11 +396,18 @@ export async function runStreaming(
       // there is nothing left to defer or abort, and reporting an abort here
       // would turn a successful deploy into a failure.
       if (exitObserved) return;
-      const { action, message } = decideSignalResponse(signal, termDeferred);
+      const { action, message, coalesced } = decideSignalResponse(
+        signal,
+        firstDeferralAt === null ? null : now() - firstDeferralAt,
+      );
       if (action === 'defer') {
-        if (signal === 'SIGTERM') termDeferred = true;
-        lastOutputAt = now();
-        stdout.write(`${message}\n`);
+        if (signal === 'SIGTERM' && firstDeferralAt === null) firstDeferralAt = now();
+        // A coalesced duplicate is the same signal arriving twice (process group
+        // plus a wrapper relay); log it once, not once per delivery.
+        if (!coalesced) {
+          lastOutputAt = now();
+          stdout.write(`${message}\n`);
+        }
         return;
       }
       if (aborting) return; // already tearing down; a repeat signal is a no-op

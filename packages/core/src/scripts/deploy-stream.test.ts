@@ -15,6 +15,7 @@ import {
   formatElapsed,
   runStreaming,
   DeployProcessError,
+  SIGNAL_COALESCE_MS,
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
@@ -52,25 +53,40 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: n
 // only warn.
 describe('decideSignalResponse — a converging deploy is not abandoned by one signal', () => {
   it('defers the first SIGTERM and explains how to force an abort', () => {
-    const { action, message } = decideSignalResponse('SIGTERM', false);
+    const { action, message } = decideSignalResponse('SIGTERM', null);
     assert.strictEqual(action, 'defer');
     assert.match(message, /Ignoring SIGTERM/);
     assert.match(message, /send SIGTERM again to abort/i);
   });
 
-  it('aborts on a second SIGTERM so an operator is never stuck', () => {
-    const { action, message } = decideSignalResponse('SIGTERM', true);
+  // One `kill -TERM -<pgid>` reaches this process twice under `npm run deploy`:
+  // the group delivers it, then tsx relays it to its child ~50ms later (measured
+  // on a real deploy). Reading that second delivery as "the operator insisted"
+  // aborted deploys that nobody asked to stop.
+  it('coalesces a duplicate delivery of the same SIGTERM instead of aborting', () => {
+    const { action, coalesced } = decideSignalResponse('SIGTERM', 50);
+    assert.strictEqual(action, 'defer');
+    assert.strictEqual(coalesced, true);
+  });
+
+  it('still coalesces at the edge of the window and aborts past it', () => {
+    assert.strictEqual(decideSignalResponse('SIGTERM', SIGNAL_COALESCE_MS - 1).action, 'defer');
+    assert.strictEqual(decideSignalResponse('SIGTERM', SIGNAL_COALESCE_MS).action, 'abort');
+  });
+
+  it('aborts on a deliberate second SIGTERM so an operator is never stuck', () => {
+    const { action, message } = decideSignalResponse('SIGTERM', 5_000);
     assert.strictEqual(action, 'abort');
     assert.match(message, /SIGTERM/);
   });
 
   it('always defers SIGHUP — a closed terminal must not kill a backgrounded deploy', () => {
-    assert.strictEqual(decideSignalResponse('SIGHUP', false).action, 'defer');
-    assert.strictEqual(decideSignalResponse('SIGHUP', true).action, 'defer');
+    assert.strictEqual(decideSignalResponse('SIGHUP', null).action, 'defer');
+    assert.strictEqual(decideSignalResponse('SIGHUP', 60_000).action, 'defer');
   });
 
   it('aborts on the first SIGINT — Ctrl-C is unambiguous intent', () => {
-    const { action, message } = decideSignalResponse('SIGINT', false);
+    const { action, message } = decideSignalResponse('SIGINT', null);
     assert.strictEqual(action, 'abort');
     assert.match(message, /Interrupted/);
   });
@@ -279,6 +295,9 @@ describe('runStreaming — relays output while the child is still running', () =
     assert.ok(await waitFor(() => stdout.text().includes('working'), 15_000), 'child should be running');
     signals.emit('SIGTERM');
     assert.ok(await waitFor(() => stdout.text().includes('Ignoring SIGTERM'), 5_000), 'first SIGTERM is deferred');
+    // Past the coalescing window, so this reads as a deliberate second request
+    // rather than a duplicate delivery of the first.
+    await new Promise((r) => setTimeout(r, SIGNAL_COALESCE_MS + 250));
     signals.emit('SIGTERM');
 
     await assert.rejects(
@@ -290,6 +309,48 @@ describe('runStreaming — relays output while the child is still running', () =
       },
     );
     assert.match(stdout.text(), /Received SIGTERM while deploying/);
+  });
+
+  // The shape that broke a real deploy: `npm run deploy` is npm -> sh -> tsx ->
+  // node, so one `kill -TERM -<pgid>` lands on this process twice (group
+  // delivery, then tsx's relay). Both deliveries must count as one request.
+  it('survives a duplicate SIGTERM delivery and logs the deferral once', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-stream-'));
+    try {
+      const marker = join(dir, 'child-finished');
+      const script = join(dir, 'dup.mjs');
+      writeFileSync(
+        script,
+        `import { writeFileSync } from 'node:fs';\n` +
+          `console.log('ProbeStack | CREATE_IN_PROGRESS | AWS::S3::Bucket | Assets');\n` +
+          `setTimeout(() => { writeFileSync(${JSON.stringify(marker)}, 'ok'); console.log('ProbeStack | CREATE_COMPLETE'); }, 700);\n`,
+      );
+
+      const stdout = collectingSink();
+      const signals = new EventEmitter();
+      const run = runStreaming(process.execPath, [script], {
+        stdout,
+        stderr: collectingSink(),
+        heartbeatMs: 0,
+        signalTarget: signals as unknown as SignalRegistry,
+      });
+
+      assert.ok(
+        await waitFor(() => stdout.text().includes('CREATE_IN_PROGRESS'), 15_000),
+        'child should be mid-run before the signals',
+      );
+      signals.emit('SIGTERM');
+      await new Promise((r) => setTimeout(r, 50)); // tsx relays about this fast
+      signals.emit('SIGTERM');
+
+      await run; // resolves ⇒ the duplicate delivery did not abandon the deploy
+      const deferrals = stdout.text().split('\n').filter((line) => line.includes('Ignoring SIGTERM'));
+      assert.strictEqual(deferrals.length, 1, `expected one deferral line, got ${deferrals.length}`);
+      assert.doesNotMatch(stdout.text(), /Received SIGTERM while deploying/);
+      assert.ok(existsSync(marker), 'the deploy must have run to completion');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -490,6 +551,9 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
       assert.ok(child.pid, 'wrapper pid');
       process.kill(-child.pid, 'SIGTERM');
       assert.ok(await waitFor(() => out.includes('Ignoring SIGTERM'), 10_000), 'first SIGTERM is deferred');
+      // Wait out the coalescing window so this is read as a deliberate repeat
+      // rather than a duplicate delivery of the first signal.
+      await new Promise((r) => setTimeout(r, SIGNAL_COALESCE_MS + 250));
       process.kill(-child.pid, 'SIGTERM');
 
       assert.ok(
@@ -506,6 +570,41 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
         }, 15_000),
         'the abort must reap the cdk child, not orphan it',
       );
+    } finally {
+      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The real-world delivery shape, with real OS signals: `npm run deploy` puts
+  // npm, sh and tsx in the group alongside the deploy CLI, and tsx relays the
+  // SIGTERM it receives to its child, so the CLI is signalled twice in quick
+  // succession. Two group SIGTERMs ~50ms apart reproduce that, and the deploy
+  // must still finish (a real deploy against AWS aborted here before the
+  // coalescing window existed).
+  it('finishes the deploy when one reap delivers SIGTERM twice in quick succession', { timeout: 60_000 }, async () => {
+    const { dir, wrapper } = scaffold(14, 80);
+    const child = spawn(process.execPath, [wrapper, dir], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.setEncoding('utf-8');
+    child.stdout.on('data', (chunk: string) => { out += chunk; });
+
+    try {
+      assert.ok(await waitFor(() => out.includes('CREATE_IN_PROGRESS'), 20_000), 'deploy should be streaming');
+      assert.ok(child.pid, 'wrapper pid');
+
+      process.kill(-child.pid, 'SIGTERM');
+      await new Promise((r) => setTimeout(r, 50));
+      process.kill(-child.pid, 'SIGTERM'); // the wrapper relay, not a second request
+
+      assert.ok(
+        await waitFor(() => child.exitCode !== null || child.signalCode !== null, 30_000),
+        'the wrapper should finish on its own',
+      );
+      assert.doesNotMatch(out, /Received SIGTERM while deploying/, 'a duplicate delivery must not abort');
+      assert.ok(existsSync(join(dir, 'cfn-done')), 'the deploy itself must have run to completion');
+      assert.strictEqual(child.exitCode, 0, `wrapper should exit 0; stdout: ${out}`);
+      assert.strictEqual(readFileSync(join(dir, 'wrapper-status'), 'utf-8'), 'complete');
     } finally {
       if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } }
       rmSync(dir, { recursive: true, force: true });
