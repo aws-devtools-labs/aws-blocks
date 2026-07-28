@@ -285,7 +285,7 @@ jobs:
         run: npm run test:e2e:sandbox
 
   e2e-sandbox-vpc:
-    name: E2E Sandbox (VPC Smoke)
+    name: E2E VPC Smoke
     needs: [build-and-test-local, detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -319,7 +319,10 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: E2E Test Sandbox (VPC Smoke)
+      - name: Ensure persistent test VPC
+        run: cd test-infra && npx cdk deploy --require-approval never
+
+      - name: E2E VPC Smoke
         run: npm run test:e2e:sandbox:vpc
 
   e2e-production:
