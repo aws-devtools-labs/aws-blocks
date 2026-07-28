@@ -16,6 +16,7 @@
   "dependencies": {
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
+    "@aws-blocks/bb-data": "*",
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-table": "*",
     "@aws-blocks/bb-file-bucket": "*",

@@ -15,6 +15,7 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Database } from '@aws-blocks/bb-data';
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
 import { Tracer } from '@aws-blocks/bb-tracer';
@@ -60,6 +61,17 @@ export const rt = new Realtime(scope, 'events', {
 
 // AuthCognito → triggers SSM interface endpoint (session secret)
 export const auth = new AuthCognito(scope, 'auth');
+
+// Database (Aurora) → triggers Secrets Manager + RDS Data API interface endpoints
+// Uses the Aurora cluster provisioned in the shared test VPC (test-infra/vpc-test-stack.ts).
+// Connection details come from env vars: VPC_TEST_AURORA_CLUSTER_ARN, VPC_TEST_AURORA_SECRET_ARN.
+export const db = new Database(scope, 'aurora', {
+  connection: {
+    host: process.env.VPC_TEST_AURORA_CLUSTER_ARN || '',
+    secretArn: process.env.VPC_TEST_AURORA_SECRET_ARN || '',
+    database: 'blockstest',
+  },
+});
 
 // Logger → no VPC endpoint needed (uses CloudWatch Logs, always provisioned)
 export const logger = new Logger(scope, 'log', { level: 'info' });
