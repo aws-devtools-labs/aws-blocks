@@ -37,7 +37,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for S3 access
-		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.S3);
+		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.S3);
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and

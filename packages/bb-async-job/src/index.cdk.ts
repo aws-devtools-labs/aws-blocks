@@ -26,7 +26,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for SQS access
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SQS);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SQS);
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 1;

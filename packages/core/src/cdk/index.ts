@@ -16,7 +16,7 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
-import { registerVpcRequirements as registerVpcReqs, registerVpcEndpoint as registerVpcEp } from './vpc.js';
+import { registerVpcRequirements as registerVpcReqs, registerVpcGatewayEndpoint as registerGatewayEp, registerVpcInterfaceEndpoint as registerInterfaceEp } from './vpc.js';
 import { initializeVpc, finalizeVpc } from './vpc.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
@@ -28,7 +28,7 @@ export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 export { getVpcContext } from './vpc.js';
-export type { BlocksVpcOptions, VpcRequirements, VpcEndpointRegistration, VpcContext, SubnetRole } from './vpc-types.js';
+export type { BlocksVpcOptions, VpcRequirements, VpcContext, SubnetRole } from './vpc-types.js';
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
@@ -116,9 +116,8 @@ export class Scope extends Construct {
   }
 
   /**
-   * Declare what VPC resources this Building Block needs.
-   * Requirements are collected at finalization time and used to
-   * provision endpoints against the VPC.
+   * Declare what VPC resources this Building Block needs (subnet role).
+   * Requirements are collected at finalization time.
    *
    * @param requirements - Subnet role this BB requires
    */
@@ -127,18 +126,23 @@ export class Scope extends Construct {
   }
 
   /**
-   * Register a VPC endpoint service object that this Building Block needs.
-   * The collection/provisioning layer deduplicates (by service) and calls
-   * vpc.addGatewayEndpoint() or vpc.addInterfaceEndpoint() at finalization.
+   * Register a gateway VPC endpoint that this Building Block needs.
+   * Gateway endpoints (S3, DynamoDB) are free and attached to route tables.
    *
-   * @param service - The actual CDK endpoint service object (gateway or interface)
+   * @param service - The gateway VPC endpoint AWS service
    */
-  protected registerVpcEndpoint(service: ec2.GatewayVpcEndpointAwsService | ec2.InterfaceVpcEndpointAwsService): void {
-    if (service instanceof ec2.GatewayVpcEndpointAwsService) {
-      registerVpcEp(this, { type: 'gateway', service });
-    } else {
-      registerVpcEp(this, { type: 'interface', service: service as ec2.InterfaceVpcEndpointAwsService });
-    }
+  protected registerVpcGatewayEndpoint(service: ec2.GatewayVpcEndpointAwsService): void {
+    registerGatewayEp(this, service);
+  }
+
+  /**
+   * Register an interface VPC endpoint that this Building Block needs.
+   * Interface endpoints cost ~$7/mo per AZ and use ENIs + private DNS.
+   *
+   * @param service - The interface VPC endpoint AWS service
+   */
+  protected registerVpcInterfaceEndpoint(service: ec2.InterfaceVpcEndpointAwsService): void {
+    registerInterfaceEp(this, service);
   }
 
   get handler() {

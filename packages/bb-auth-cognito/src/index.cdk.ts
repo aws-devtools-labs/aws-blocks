@@ -76,7 +76,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for SSM (session secret storage)
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);

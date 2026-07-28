@@ -62,16 +62,9 @@ export const rt = new Realtime(scope, 'events', {
 // AuthCognito → triggers SSM interface endpoint (session secret)
 export const auth = new AuthCognito(scope, 'auth');
 
-// Database (Aurora) → triggers Secrets Manager + RDS Data API interface endpoints
-// Uses the Aurora cluster provisioned in the shared test VPC (test-infra/vpc-test-stack.ts).
-// Connection details come from env vars: VPC_TEST_AURORA_CLUSTER_ARN, VPC_TEST_AURORA_SECRET_ARN.
-export const db = new Database(scope, 'aurora', {
-  connection: {
-    host: process.env.VPC_TEST_AURORA_CLUSTER_ARN || '',
-    secretArn: process.env.VPC_TEST_AURORA_SECRET_ARN || '',
-    database: 'blockstest',
-  },
-});
+// Database (Aurora) → triggers Secrets Manager + RDS Data API interface endpoints.
+// bb-data detects the VPC context and creates its own Aurora in the shared VPC.
+export const db = new Database(scope, 'db');
 
 // Logger → no VPC endpoint needed (uses CloudWatch Logs, always provisioned)
 export const logger = new Logger(scope, 'log', { level: 'info' });

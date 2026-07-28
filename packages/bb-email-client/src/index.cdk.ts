@@ -19,7 +19,7 @@ export class EmailClient extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for SES access
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SES);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SES);
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
