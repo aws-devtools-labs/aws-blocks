@@ -488,7 +488,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       new HostingConstruct(stack, 'Hosting', {
         manifest: makeSsrManifest(),
         environment: { STRIPE_KEY: secret('STRIPE_KEY') },
-        secrets: { prefix: '/blocks/secrets' },
+        secretsConfig: { prefix: '/blocks/secrets' },
         skipRegionValidation: true,
       });
       const t = Template.fromStack(stack);
@@ -516,7 +516,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       new HostingConstruct(stack, 'Hosting', {
         manifest: makeSsrManifest(),
         environment: { STRIPE_KEY: secret('STRIPE_KEY') },
-        secrets: { prefix: '/blocks/secrets', store: 'ssm' },
+        secretsConfig: { prefix: '/blocks/secrets', store: 'ssm' },
         skipRegionValidation: true,
       });
       const t = Template.fromStack(stack);

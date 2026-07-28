@@ -15,7 +15,7 @@
  * **Covers hosting and pipeline.** Pipeline secrets (`source.connectionArn`,
  * `buildSecrets`) live in the same store/namespace as hosting secrets and are
  * set with this same CLI — point `--prefix`/`--store` at the pipeline's
- * `secrets: { prefix, store }` and the values are written where the pipeline
+ * `secretsConfig: { prefix, store }` and the values are written where the pipeline
  * reads them. One tool, one store, both surfaces.
  *
  * Usage:

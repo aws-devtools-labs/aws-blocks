@@ -281,11 +281,11 @@ async function resolveSourceSecrets<TConfig>(props: PipelineProps<TConfig>): Pro
   if (!isSecret(arn)) return props;
 
   // Resolve from the SAME namespace/store the caller configured for
-  // buildSecrets — otherwise a `secrets: { store, prefix }` config would apply
+  // buildSecrets — otherwise a `secretsConfig: { store, prefix }` would apply
   // to buildSecrets but silently NOT to a secret() connectionArn.
   const resolved = await resolveSecretsAtSynth([arn.key], {
-    prefix: props.secrets?.prefix,
-    store: props.secrets?.store,
+    prefix: props.secretsConfig?.prefix,
+    store: props.secretsConfig?.store,
   });
   const value = resolved.get(arn.key);
   if (value === undefined) {
@@ -308,8 +308,8 @@ function buildSecretEnvVars<TConfig>(
   const buildSecrets = props.buildSecrets;
   if (!buildSecrets || Object.keys(buildSecrets).length === 0) return undefined;
 
-  const prefix = props.secrets?.prefix;
-  const store = props.secrets?.store;
+  const prefix = props.secretsConfig?.prefix;
+  const store = props.secretsConfig?.store;
   const type =
     (store ?? 'secrets-manager') === 'secrets-manager'
       ? codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER

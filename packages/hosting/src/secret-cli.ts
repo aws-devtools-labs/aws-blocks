@@ -271,7 +271,7 @@ export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}):
  * - `--stage <name>` / `--stage=<name>` — environment segment
  * - `--value-stdin` — read the value from stdin instead of argv
  * - `--prefix <path>` / `--prefix=<path>` — namespace (for the standalone bin,
- *   so it can target the app's own `secrets: { prefix }` without a wrapper)
+ *   so it can target the app's own `secretsConfig: { prefix }` without a wrapper)
  * - `--store <ssm|secrets-manager>` / `--store=<…>` — backing store
  *
  * A flag always overrides the same field preset on `opts` by the caller.

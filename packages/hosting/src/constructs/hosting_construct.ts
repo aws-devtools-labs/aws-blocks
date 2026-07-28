@@ -290,11 +290,12 @@ export type HostingConstructProps = {
    */
   environment?: Record<string, EnvValue>;
   /**
-   * Namespace + backing store for `secret()` markers in `environment`.
-   * Defaults to the neutral `/hosting/secrets` prefix on SSM. A branded
-   * consumer overrides the prefix (e.g. Blocks passes `/blocks/secrets`).
+   * Configuration for how `secret()` markers in `environment` are resolved —
+   * namespace + backing store, NOT the secret values themselves. Defaults to the
+   * neutral `/hosting/secrets` prefix on SSM. A branded consumer overrides the
+   * prefix (e.g. Blocks passes `/blocks/secrets`).
    */
-  secrets?: SecretResolveOptions;
+  secretsConfig?: SecretResolveOptions;
   /**
    * Build cache configuration. When enabled, provisions an S3 bucket for
    * framework build caches and exports the bucket name.
@@ -987,7 +988,7 @@ export class HostingConstruct extends Construct {
           }
           // Runtime secret markers: inject the store locator + grant read/decrypt.
           for (const s of runtimeSecrets) {
-            wireRuntimeSecret(fn, s.key, props.secrets);
+            wireRuntimeSecret(fn, s.key, props.secretsConfig);
           }
         }
       }

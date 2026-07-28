@@ -1871,7 +1871,7 @@ describe('_sourceOverride (internal test hook)', () => {
           defaultPipelineProps({
             source: { repo: MOCK_REPO, connectionArn: secret('CONNECTION_ARN') },
             // The secrets prop must govern the connectionArn lookup too.
-            secrets: { store: 'ssm', prefix: '/myapp/secrets' },
+            secretsConfig: { store: 'ssm', prefix: '/myapp/secrets' },
           }),
         );
         // SSM store keeps the leading-slash path form at the configured prefix —
@@ -1920,7 +1920,7 @@ describe('_sourceOverride (internal test hook)', () => {
         'P',
         defaultPipelineProps({
           buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
-          secrets: { prefix: '/myapp/secrets', store: 'ssm' },
+          secretsConfig: { prefix: '/myapp/secrets', store: 'ssm' },
         }),
       );
       const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
