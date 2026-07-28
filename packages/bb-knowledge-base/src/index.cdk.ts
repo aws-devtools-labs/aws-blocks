@@ -192,7 +192,7 @@ export class KnowledgeBase extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for Bedrock access
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 

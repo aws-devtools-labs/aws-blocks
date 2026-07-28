@@ -36,7 +36,7 @@ export class DistributedTable<T = any> extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for DynamoDB access
-		this.registerVpcEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
+		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		const config = options;
 

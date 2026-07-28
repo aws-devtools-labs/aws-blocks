@@ -51,7 +51,7 @@ export class AppSetting<T = string> extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for SSM access
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		// `external` is package-internal (set only by fromExisting), not on the
 		// public AppSettingOptions — read it via the internal options type.

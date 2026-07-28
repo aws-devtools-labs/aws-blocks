@@ -32,7 +32,7 @@ export class Agent extends Scope {
 		super(id, { parent: scope });
 
 		// Register VPC endpoint for Bedrock access
-		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
+		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME);
 
 		this.handler.addToRolePolicy(new PolicyStatement({
 			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],
