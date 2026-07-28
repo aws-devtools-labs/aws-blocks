@@ -126,6 +126,12 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 export class Realtime extends Scope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope });
+
+		// Register VPC endpoint requirements for API Gateway (WebSocket management API)
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'execute-api', type: 'interface' }],
+		});
+
 		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
 	}
 

@@ -37,6 +37,11 @@ export class AsyncJob<T = unknown> extends Scope {
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for SQS access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'sqs', type: 'interface' }],
+		});
+
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 1;
 

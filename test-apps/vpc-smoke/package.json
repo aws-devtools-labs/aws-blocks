@@ -7,9 +7,25 @@
   "type": "module",
   "description": "Thin round-trip smoke tests verifying all BBs work in a VPC environment",
   "scripts": {
+    "build": "tsc --build",
     "test": "echo 'VPC smoke tests run during e2e:sandbox:vpc and e2e:production:vpc'",
-    "test:e2e:local": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0",
-    "test:e2e:sandbox": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0",
-    "test:e2e:production": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0"
+    "test:e2e:local": "echo 'VPC smoke tests require deployment — skipping local' && exit 0",
+    "test:e2e:sandbox": "echo 'Deploy with: NODE_OPTIONS=\"--conditions=cdk\" npx cdk deploy' && exit 0",
+    "test:e2e:production": "echo 'Deploy with: NODE_OPTIONS=\"--conditions=cdk\" npx cdk deploy' && exit 0"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/core": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/bb-distributed-table": "*",
+    "@aws-blocks/bb-file-bucket": "*",
+    "@aws-blocks/bb-async-job": "*",
+    "@aws-blocks/bb-app-setting": "*",
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
   }
 }

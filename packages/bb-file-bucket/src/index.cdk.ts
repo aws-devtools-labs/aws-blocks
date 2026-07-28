@@ -35,6 +35,11 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
 
+		// Register VPC endpoint requirements for S3 access
+		this.registerVpcRequirements({
+			endpoints: [{ service: 's3', type: 'gateway' }],
+		});
+
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
 			// grant read/write to the Blocks runtime Lambda.

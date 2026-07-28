@@ -73,6 +73,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
+
+		// Register VPC endpoint requirements for SSM (session secret storage)
+		this.registerVpcRequirements({
+			endpoints: [{ service: 'ssm', type: 'interface' }],
+		});
+
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;

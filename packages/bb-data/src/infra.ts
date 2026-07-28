@@ -21,6 +21,8 @@ import {
   VPC_MAX_AZS,
 } from './constants.js';
 
+import type { VpcContext } from '@aws-blocks/core/cdk';
+
 /**
  * Configuration for Aurora Serverless v2 infrastructure.
  */
@@ -37,6 +39,12 @@ export interface AuroraInfraConfig {
   removalPolicy?: cdk.RemovalPolicy;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * VPC context from the parent scope. When provided, Aurora is placed in the
+   * shared VPC's isolated subnets instead of creating its own VPC.
+   * @internal
+   */
+  vpcContext?: VpcContext;
 }
 
 /**
@@ -90,26 +98,44 @@ export function materialize(
   const { minCapacity = DEFAULT_MIN_CAPACITY, maxCapacity = DEFAULT_MAX_CAPACITY, databaseName } = options;
   const envName = name.replace(ENV_NAME_SANITIZE_PATTERN, '_');
 
-  // VPC with isolated subnets only — no NAT gateways needed for Data API path
-  const vpc = new ec2.Vpc(scope, `${name}Vpc`, {
-    maxAzs: VPC_MAX_AZS,
-    natGateways: 0,
-    subnetConfiguration: [
-      { name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-    ],
-  });
+  let vpc: ec2.IVpc;
+  let securityGroup: ec2.SecurityGroup;
 
-  // Security group allowing inbound PostgreSQL from within the VPC
-  const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
-    vpc,
-    description: `Security group for ${name} Aurora cluster`,
-    allowAllOutbound: false,
-  });
-  securityGroup.addIngressRule(
-    ec2.Peer.ipv4(vpc.vpcCidrBlock),
-    ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
-    'Allow PostgreSQL from VPC',
-  );
+  if (options.vpcContext) {
+    // Use the shared VPC — place Aurora in isolated subnets
+    vpc = options.vpcContext.vpc;
+    securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
+      vpc,
+      description: `Security group for ${name} Aurora cluster`,
+      allowAllOutbound: false,
+    });
+    // Allow inbound from the Lambda security group on PostgreSQL port
+    securityGroup.addIngressRule(
+      options.vpcContext.lambdaSecurityGroup,
+      ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
+      'Lambda to Aurora',
+    );
+  } else {
+    // Standalone fallback: create isolated VPC (current behavior)
+    vpc = new ec2.Vpc(scope, `${name}Vpc`, {
+      maxAzs: VPC_MAX_AZS,
+      natGateways: 0,
+      subnetConfiguration: [
+        { name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      ],
+    });
+
+    securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
+      vpc,
+      description: `Security group for ${name} Aurora cluster`,
+      allowAllOutbound: false,
+    });
+    securityGroup.addIngressRule(
+      ec2.Peer.ipv4(vpc.vpcCidrBlock),
+      ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
+      'Allow PostgreSQL from VPC',
+    );
+  }
 
   // Aurora Serverless v2 cluster with Data API enabled
   const removalPolicy = options.removalPolicy ?? cdk.RemovalPolicy.RETAIN;
