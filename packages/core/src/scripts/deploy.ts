@@ -9,7 +9,7 @@ import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { runSync } from './run-command.js';
+import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -57,18 +57,18 @@ export async function deploy(options: DeployOptions) {
     console.log('   (This may take a few minutes on first deploy)');
     console.log('   - Backend API (Lambda + API Gateway)');
     console.log('   - Frontend hosting (S3 + CloudFront)');
-    
+    console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
+    console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
+
     try {
-      runSync(
+      await runStreaming(
         "npx",
-        [
-          "cdk", "deploy",
-          "--require-approval", "never",
-          "--outputs-file", ".blocks-sandbox/outputs.json",
-          "--context", `projectRoot=${options.projectRoot}`,
-        ],
+        buildCdkDeployArgs({
+          projectRoot: options.projectRoot,
+          outputsFile: '.blocks-sandbox/outputs.json',
+        }),
         {
-          stdio: 'inherit',
+          label: 'cdk deploy',
           cwd: options.projectRoot,
           env: {
             ...process.env,
@@ -78,7 +78,11 @@ export async function deploy(options: DeployOptions) {
         }
       );
     } catch (error) {
-      console.error('\n❌ Deployment failed.');
+      // Terminal status on stdout: a caller that only captures stdout (the case
+      // that produced phantom failures) must still be able to tell a failed
+      // deploy from a killed process. The error itself still surfaces on stderr
+      // via the entrypoint's `console.error(error)`.
+      console.log('\n❌ Deployment failed.');
       throw error;
     }
     
