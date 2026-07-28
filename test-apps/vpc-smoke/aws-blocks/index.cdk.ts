@@ -32,16 +32,18 @@ const stackName = sandboxMode
   ? `bb-vpc-smoke-${id}${suffix ? `-${suffix}` : ''}`
   : `bb-vpc-smoke-prod-${suffix || 'default'}-${id}`;
 
-// Create a test VPC inline for now (persistent test VPC is a future optimization)
-const vpc = new ec2.Vpc(app, 'VpcSmokeTestVpc', {
-  maxAzs: 2,
-  natGateways: 1,
-  subnetConfiguration: [
-    { name: 'public', subnetType: ec2.SubnetType.PUBLIC },
-    { name: 'private', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-    { name: 'isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-  ],
-});
+// Look up the persistent test VPC by ID (from env var or CDK context).
+// Falls back to the VPC_TEST_VPC_ID env var set by the test-infra stack.
+const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
+
+if (!vpcId) {
+  throw new Error(
+    'Missing VPC ID. Set the VPC_TEST_VPC_ID env var or pass -c vpcId=vpc-xxx.\n' +
+    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy',
+  );
+}
+
+const vpc = ec2.Vpc.fromLookup(app, 'VpcSmokeTestVpc', { vpcId });
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),

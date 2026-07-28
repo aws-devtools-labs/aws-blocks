@@ -33,6 +33,7 @@ import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
 import type { IDependable } from 'constructs';
@@ -92,10 +93,8 @@ export class AuthOIDC<
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for SSM (cookie secret storage)
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'ssm', type: 'interface' }],
-		});
+		// Register VPC endpoint for SSM (cookie secret storage)
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;

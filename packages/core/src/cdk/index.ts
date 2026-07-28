@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
@@ -15,9 +16,8 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
-import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
-import { getStackBlocksDefaults } from './blocks-defaults.js';
-import { registerVpcRequirements as registerVpcReqs } from './vpc.js';
+import { type BlocksDefaults, BlocksPresets, getStackBlocksDefaults } from './blocks-defaults.js';
+import { registerVpcRequirements as registerVpcReqs, registerVpcEndpoint as registerVpcEp } from './vpc.js';
 import { initializeVpc, finalizeVpc } from './vpc.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
@@ -33,7 +33,7 @@ export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
 export { getVpcContext } from './vpc.js';
-export type { BlocksVpcOptions, VpcEndpointConfig, VpcRequirements, VpcEndpointRequirement, VpcContext, SubnetRole } from './vpc-types.js';
+export type { BlocksVpcOptions, VpcRequirements, VpcEndpointRegistration, VpcContext, SubnetRole } from './vpc-types.js';
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
@@ -132,10 +132,25 @@ export class Scope extends Construct {
    * Requirements are collected at finalization time and used to
    * provision endpoints against the VPC.
    *
-   * @param requirements - Endpoints and subnet role this BB requires
+   * @param requirements - Subnet role this BB requires
    */
   protected registerVpcRequirements(requirements: VpcRequirements): void {
     registerVpcReqs(this, requirements);
+  }
+
+  /**
+   * Register a VPC endpoint service object that this Building Block needs.
+   * The collection/provisioning layer deduplicates (by service) and calls
+   * vpc.addGatewayEndpoint() or vpc.addInterfaceEndpoint() at finalization.
+   *
+   * @param service - The actual CDK endpoint service object (gateway or interface)
+   */
+  protected registerVpcEndpoint(service: ec2.GatewayVpcEndpointAwsService | ec2.InterfaceVpcEndpointAwsService): void {
+    if (service instanceof ec2.GatewayVpcEndpointAwsService) {
+      registerVpcEp(this, { type: 'gateway', service });
+    } else {
+      registerVpcEp(this, { type: 'interface', service: service as ec2.InterfaceVpcEndpointAwsService });
+    }
   }
 
   get handler() {

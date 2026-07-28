@@ -21,6 +21,11 @@
     "@aws-blocks/bb-file-bucket": "*",
     "@aws-blocks/bb-async-job": "*",
     "@aws-blocks/bb-app-setting": "*",
+    "@aws-blocks/bb-realtime": "*",
+    "@aws-blocks/bb-auth-cognito": "*",
+    "@aws-blocks/bb-logger": "*",
+    "@aws-blocks/bb-metrics": "*",
+    "@aws-blocks/bb-tracer": "*",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
     "zod": "^3.23.0"

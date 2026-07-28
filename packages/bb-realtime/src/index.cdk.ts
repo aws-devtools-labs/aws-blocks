@@ -14,6 +14,7 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Scope, synthGuard } from '@aws-blocks/core/cdk';
@@ -127,10 +128,8 @@ export class Realtime extends Scope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope });
 
-		// Register VPC endpoint requirements for API Gateway (WebSocket management API)
-		this.registerVpcRequirements({
-			endpoints: [{ service: 'execute-api', type: 'interface' }],
-		});
+		// Register VPC endpoint for API Gateway (WebSocket management API)
+		this.registerVpcEndpoint(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY);
 
 		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
 	}

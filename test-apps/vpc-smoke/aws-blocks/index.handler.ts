@@ -6,6 +6,6 @@
  * Re-exports the BB instances for the runtime to use.
  */
 
-export { kv, table, files, job, setting } from './index.js';
+export { kv, table, files, job, setting, rt, auth, logger, metrics, tracer } from './index.js';
 
 export const handler = undefined; // Blocks wires this automatically
