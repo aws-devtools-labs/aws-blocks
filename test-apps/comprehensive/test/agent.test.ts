@@ -17,6 +17,26 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   return messages;
 }
 
+/**
+ * Sign up a user and confirm it with the verification code delivered for that
+ * username. Polls for the code rather than reading it once: the code is written
+ * to a shared store and read back over a separate request, so the read can lag
+ * the write.
+ */
+async function signUpAndConfirm(api: typeof apiType, username: string, password: string, timeoutMs = 15000): Promise<void> {
+  await api.authSignUp(username, password);
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const delivered = await api.authGetLastCode(username);
+    if (delivered) {
+      await api.authConfirmSignUp(username, delivered.code);
+      return;
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  throw new Error(`authGetLastCode(${username}) returned null after ${timeoutMs}ms`);
+}
+
 export function agentTests(getApi: () => typeof apiType) {
   describe('Agent BB', () => {
 
@@ -237,9 +257,7 @@ export function agentTests(getApi: () => typeof apiType) {
 
         // Sign up and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await api.authSignUp(userA, 'password123');
-        const codeA = await api.authGetLastCode();
-        await api.authConfirmSignUp(userA, codeA!.code);
+        await signUpAndConfirm(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -251,9 +269,7 @@ export function agentTests(getApi: () => typeof apiType) {
         // Sign out, sign up and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await api.authSignUp(userB, 'password123');
-        const codeB = await api.authGetLastCode();
-        await api.authConfirmSignUp(userB, codeB!.code);
+        await signUpAndConfirm(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation

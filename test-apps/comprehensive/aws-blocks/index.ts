@@ -51,14 +51,47 @@ const objStore = new KVStore<Profile>(scope, 'obj-store');
 const profileSchema = z.object({ name: z.string(), age: z.number(), tags: z.array(z.string()) });
 const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSchema });
 
+// ── Delivered verification codes (e2e read-back) ────────────────────────────
+//
+// e2e tests read verification codes back through the `getLast*Code` methods
+// below. The codes must therefore live somewhere every request can see them.
+//
+// A module-level variable does not qualify: in a deployed environment each API
+// call may be served by a different Lambda instance, so the code written by
+// `codeDelivery` on one instance is invisible to the instance that later serves
+// `authGetLastCode` — it reads its own `null`, or worse, a leftover code from
+// some earlier user it happened to handle. Both show up as flaky auth e2e runs.
+//
+// Persist them in the shared KVStore instead, keyed by username so a reader can
+// ask for the code it is actually waiting on and never pick up another user's.
+// A `__latest` pointer preserves the no-argument form of the API.
+
+type DeliveredCode = { username: string; code: string };
+type DeliveredCognitoCode = DeliveredCode & { purpose: string };
+
+const CODE_KEY_PREFIX = '__last-code';
+const codeKey = (channel: string, username: string) => `${CODE_KEY_PREFIX}:${channel}:${username}`;
+const latestCodeKey = (channel: string) => `${CODE_KEY_PREFIX}:${channel}:__latest`;
+
+async function recordDeliveredCode(channel: string, value: DeliveredCode | DeliveredCognitoCode): Promise<void> {
+  const serialized = JSON.stringify(value);
+  // Per-username first: once `__latest` moves, a reader polling for this
+  // username must already be able to find its own record.
+  await store.put(codeKey(channel, value.username), serialized);
+  await store.put(latestCodeKey(channel), serialized);
+}
+
+async function readDeliveredCode<T extends DeliveredCode>(channel: string, username?: string): Promise<T | null> {
+  const raw = await store.get(username ? codeKey(channel, username) : latestCodeKey(channel));
+  return raw === null ? null : (JSON.parse(raw) as T);
+}
+
 // AuthBasic - Authentication
-// Store last delivered code so e2e tests can retrieve and use it.
-let lastDeliveredCode: { username: string; code: string } | null = null;
 const auth = new AuthBasic(scope, 'auth', {
   sessionDuration: 86400,
   passwordPolicy: { minLength: 6 },
   codeDelivery: async (username, code) => {
-    lastDeliveredCode = { username, code };
+    await recordDeliveredCode('auth', { username, code });
     // In a real app, connect this to email: await sendEmail(username, `Your code: ${code}`);
     logCodeLocally(`[AuthBasic] Verification code for "${username}": ${code}`);
   },
@@ -78,7 +111,6 @@ const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
 // Tests confirm users via the verification-code flow (see auth-cognito.test.ts).
 // `mfa: 'off'` keeps the general suite simple — MFA-specific tests use the
 // `authCMfa` pool below.
-let lastCognitoCode: { username: string; code: string; purpose: string } | null = null;
 const authC = new AuthCognito(scope, 'authC', {
   passwordPolicy: { minLength: 8, requireDigits: true },
   userAttributes: [{ name: 'department' }],
@@ -90,7 +122,7 @@ const authC = new AuthCognito(scope, 'authC', {
   mfaTypes: ['SMS', 'TOTP', 'EMAIL'],
   selfSignUp: true,
   codeDelivery: async (username, code, purpose) => {
-    lastCognitoCode = { username, code, purpose };
+    await recordDeliveredCode('authC', { username, code, purpose });
     logCodeLocally(`[AuthCognito] ${purpose} code for "${username}": ${code}`);
   },
 });
@@ -103,14 +135,13 @@ const authC = new AuthCognito(scope, 'authC', {
 // (Part 2). TOTP has no such external dependency and exercises the
 // full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn
 // round-trip the Phase D + Phase E tests need.
-let lastCognitoMfaCode: { username: string; code: string; purpose: string } | null = null;
 const authCMfa = new AuthCognito(scope, 'authCMfa', {
   passwordPolicy: { minLength: 8, requireDigits: true },
   mfa: 'optional',
   mfaTypes: ['TOTP'],
   selfSignUp: true,
   codeDelivery: async (username, code, purpose) => {
-    lastCognitoMfaCode = { username, code, purpose };
+    await recordDeliveredCode('authCMfa', { username, code, purpose });
     logCodeLocally(`[AuthCognitoMfa] ${purpose} code for "${username}": ${code}`);
   },
 });
@@ -886,8 +917,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async authGetLastCode() {
-    return lastDeliveredCode;
+  /**
+   * Read back the verification code delivered to `username`.
+   *
+   * Pass the username you are waiting on. Omitting it returns whichever code
+   * was delivered most recently, which is only unambiguous when a single user
+   * is in flight.
+   */
+  async authGetLastCode(username?: string) {
+    return await readDeliveredCode<{ username: string; code: string }>('auth', username);
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -1049,8 +1087,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async authCGetLastCode() {
-    return lastCognitoCode;
+  async authCGetLastCode(username?: string) {
+    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authC', username);
   },
 
   // Phase G — devices: list + remember + forget.
@@ -1137,8 +1175,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await authCMfa.signOut(context);
     return { success: true };
   },
-  async authCMfaGetLastCode() {
-    return lastCognitoMfaCode;
+  async authCMfaGetLastCode(username?: string) {
+    return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authCMfa', username);
   },
   async authCMfaFetchMFAPreference() {
     return await authCMfa.fetchMFAPreference(context);
