@@ -54,7 +54,7 @@ const vpc = ec2.Vpc.fromLookup(lookupStack, 'VpcSmokeTestVpc', { vpcId });
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { vpc, provisionEndpoints: true },
+  vpc: { vpc, provisionEndpoints: false },
 });
 
 RemovalPolicies.of(blocksStack).destroy();

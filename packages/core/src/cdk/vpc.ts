@@ -185,8 +185,8 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
     if (provisionedGateway.has(key)) continue;
     provisionedGateway.add(key);
 
-    const constructId = `VpcEp${key.replace(/[^a-zA-Z0-9]/g, '')}`;
-    vpc.addGatewayEndpoint(constructId, { service });
+    const constructId = `VpcGw${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+    new ec2.GatewayVpcEndpoint(scope, constructId, { vpc, service: [service] });
   }
 
   // Collect interface endpoints from BB registrations and deduplicate
@@ -203,8 +203,9 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
     if (provisionedInterface.has(key)) continue;
     provisionedInterface.add(key);
 
-    const constructId = `VpcEp${key.replace(/[^a-zA-Z0-9]/g, '')}`;
-    vpc.addInterfaceEndpoint(constructId, {
+    const constructId = `VpcIf${key.replace(/[^a-zA-Z0-9]/g, '')}`;
+    new ec2.InterfaceVpcEndpoint(scope, constructId, {
+      vpc,
       service,
       privateDnsEnabled: true,
     });
