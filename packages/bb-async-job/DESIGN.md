@@ -22,6 +22,11 @@ Application code
                    └── routes record by queue name → registered handler
                         └── handler(payload, context)
 
+Status (only when trackStatus: true)
+    └── nested DistributedTable (partition key jobId, TTL expiresAt)
+         └── queued on submit, processing per delivery, complete/failed on settle
+              └── getStatus(jobId) / waitUntilComplete(jobId)
+
 Retry / failure
     └── SQS redrive: maxReceiveCount = maxRetries → dead-letter queue (DLQ)
 
@@ -65,9 +70,23 @@ Local Mock
 
 ### D-AJ-6: Browser stub is a no-op
 
-**Decision:** The `index.browser.ts` entry point exports an `AsyncJob` whose constructor does nothing and a reduced `AsyncJobErrors` map.
+**Decision:** The `index.browser.ts` entry point exports an `AsyncJob` whose constructor does nothing, re-exports the shared `AsyncJobErrors` map, and re-exports the package's types.
 
-**Rationale:** AsyncJob enqueues to SQS (AWS runtime) or runs an in-process queue (mock, Node). Neither is available in the browser. A no-op stub keeps the package importable in isomorphic bundles without pulling in the AWS SDK; job submission only happens server-side (server actions, API routes, Lambda handlers).
+**Rationale:** AsyncJob enqueues to SQS (AWS runtime) or runs an in-process queue (mock, Node). Neither is available in the browser. A no-op stub keeps the package importable in isomorphic bundles without pulling in the AWS SDK; job submission only happens server-side (server actions, API routes, Lambda handlers). Types and error constants are erased or inert, so re-exporting them costs nothing at runtime and lets isomorphic code type against `AsyncJobStatus` without importing the server entry point.
+
+### D-AJ-7: Job status is an append-only transition history, opt-in per job
+
+**Decision:** `trackStatus: true` provisions a nested `DistributedTable` (partition key `jobId`, TTL attribute `expiresAt`, 24-hour retention) and records a job's lifecycle into it: `queued` on submit, `processing` at the start of every delivery, and `complete` or `failed` once it settles. Transitions are **appended** to a `transitions` array rather than overwriting a single state field. Two runtime methods read it: `getStatus(jobId)` and `waitUntilComplete(jobId, options?)`. Without the flag nothing is provisioned and both methods throw `StatusNotTrackedException`.
+
+**Rationale:** The state a caller most wants to see is `processing`, and it is the one hardest to catch — a handler that finishes in a millisecond passes through it faster than any client can poll. Storing the current state alone therefore makes observation a race, which callers were previously forced to win by padding their handler with an artificial delay. An append-only history removes the race outright: a reader that polls once, after the job settled, still sees that it passed through `processing`, so no timing assumption is needed anywhere. A retry appends another `processing` entry instead of a second terminal state, which also makes attempt counts legible.
+
+Read-modify-write on the array is safe because SQS keeps a message invisible while its handler runs, so only one attempt writes a given job's record at a time.
+
+Tracking is opt-in because it is not free: it adds a DynamoDB table per job plus a write on submit and one per transition, and `submitBatch` would turn a single native SQS batch into an extra batch write. AsyncJob's default remains a single SQS call, and existing deployments gain no resources until they ask for them. `DistributedTable` rather than `KVStore` because only the former supports TTL, so status records expire on their own instead of accumulating.
+
+**Failure handling:** the `queued` write propagates to the caller — `submit()` asked for tracking, so failing loudly before the job is observable is correct. Writes on the handler path are swallowed and logged instead: throwing before the handler would retry work that was fine, and throwing after it succeeded would re-run work that had already completed. Status bookkeeping must never decide a job's fate.
+
+**Not chosen:** publishing transitions over `bb-realtime`. Push delivery does not solve the underlying problem — a subscriber that connects after the fact still misses the event — and it would add a WebSocket dependency to every AsyncJob. Recorded history is both smaller and strictly more useful, since it works for late readers, retries, and tests alike.
 
 ## Infrastructure (CDK)
 
@@ -76,6 +95,7 @@ Creates the following resources per AsyncJob instance:
 1. **SQS Dead-Letter Queue** — name `{fullId}-dlq` (truncated to 80 chars), 14-day retention, `SQS_MANAGED` encryption, `enforceSSL`.
 2. **SQS Main Queue** — name `{fullId}` (truncated to 80 chars), visibility timeout 900 s, redrive to the DLQ with `maxReceiveCount = maxRetries`, `SQS_MANAGED` encryption, `enforceSSL`.
 3. **Event Source Mapping** — `SqsEventSource(queue, { batchSize })` wired to the shared handler.
+4. **Status table** (only when `trackStatus: true`) — a nested `DistributedTable` at child id `status`, partition key `jobId`, TTL attribute `expiresAt`. Provisioned with the same child id and options as the runtime entry points so the table the runtime resolves is the one CDK created.
 
 **IAM grants to handler:** `grantSendMessages` on the main queue (so handlers can enqueue further work).
 **Environment variables injected:** `BLOCKS_QUEUE_URL_{FULLID}` (uppercased `fullId`, non-alphanumerics replaced with `_`) → the main queue URL, registered via `registerConfig`.
@@ -89,6 +109,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 - `submitBatch()` sends a `SendMessageBatchCommand` (max 10 entries). Successful entries map back to `jobIds` by index; failed entries populate `failed`. If any entry fails, it throws `BatchSubmitFailedException` carrying `failed` and `jobIds` for partial-result handling.
 - Each delivered record is parsed into `{ payload, context }` where `context = { jobId: messageId, receiveCount: ApproximateReceiveCount, sentAt: SentTimestamp }`.
 - SQS redrive handles retries; after `maxReceiveCount` deliveries the message lands in the DLQ.
+- When `trackStatus` is enabled, `submit()` records `queued` after the send (the job id *is* the SQS message id, so it is not known before), `submitBatch()` records the whole batch with one `putBatch`, and `_processRecord` records `processing` before the handler and `complete` after it. A handler error only records `failed` once `receiveCount` has reached `maxRetries` — SQS owns the retry decision, so earlier failures record nothing and the next delivery simply appends another `processing` entry.
 
 ## Mock Implementation
 
@@ -97,6 +118,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 - Retry semantics mirror AWS: on handler error the entry is retried until `receiveCount >= maxRetries`, then moved to an in-memory `failed` (DLQ) list with `failedAt` and `lastError` recorded.
 - Queue state is exposed on `_queue` (`pending`, `processing`, `delayed`, `failed`, `totalSubmitted`, `totalCompleted`) for dev-server inspection.
 - Identical schema and 256 KB payload-size validation runs before enqueue, producing the same typed errors as AWS.
+- When `trackStatus` is enabled, the same `JobStatusTracker` runs as in AWS — it composes a `DistributedTable`, whose own conditional exports resolve to the mock (JSON on disk under `.bb-data/`) locally and to DynamoDB in AWS, so there is one status code path rather than two. `submit()` records `queued` before scheduling the entry, and `processEntry` records `processing` per attempt and `complete`/`failed` on settle.
 - Console logs trace submission, completion (with duration), retries, and DLQ moves, prefixed `[AsyncJob:{id}]`.
 
 ### Mock vs AWS Behavior Differences
@@ -107,6 +129,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 | Handler runs in-process (not isolated) | Shared memory, no cold start, no per-job timeout enforcement | No mitigation — the shared Lambda in AWS is also not isolated per-job |
 | No real visibility timeout | Retries are immediate rather than after a timeout window | No mitigation — timing differences don't affect at-least-once + retry correctness |
 | `submitBatch()` never returns partial failures | The mock enqueues each payload locally, so `failed` is always empty and `BatchSubmitFailed` is never thrown | AWS surfaces per-entry failures; design handlers and callers to handle the `failed` array and `BatchSubmitFailedException` |
+| Status records never expire locally | The mock `DistributedTable` has no TTL sweeper, so status records persist in `.bb-data/` until it is cleared, whereas DynamoDB deletes them ~24 hours after the last transition | No mitigation needed — local records are small and `.bb-data/` is disposable. Do not rely on a record being *absent* after 24 hours in either runtime; DynamoDB TTL deletion is asynchronous and best-effort |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 
 ## Integration with CronJob
@@ -116,7 +139,7 @@ AsyncJob and CronJob are complementary primitives:
 | Aspect | AsyncJob | CronJob |
 |--------|----------|---------|
 | **Trigger** | Event-based (code calls `.submit()`) | Time-based (EventBridge schedule) |
-| **Runtime methods** | `.submit()`, `.submitBatch()` | None (infrastructure-only) |
+| **Runtime methods** | `.submit()`, `.submitBatch()`, `.getStatus()`, `.waitUntilComplete()` | None (infrastructure-only) |
 | **AWS service** | SQS | EventBridge Scheduler |
 | **Delivery guarantee** | At-least-once (SQS) | At-least-once (EventBridge) |
 | **Retry mechanism** | SQS redrive + DLQ | Lambda async invoke retry |

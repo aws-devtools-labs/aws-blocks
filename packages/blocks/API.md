@@ -28,6 +28,9 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AsyncJobContext } from '@aws-blocks/bb-async-job';
 import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
+import { AsyncJobState } from '@aws-blocks/bb-async-job';
+import { AsyncJobStatus } from '@aws-blocks/bb-async-job';
+import { AsyncJobTransition } from '@aws-blocks/bb-async-job';
 import { AuthAction } from '@aws-blocks/auth-common';
 import { AuthActionInput } from '@aws-blocks/auth-common';
 import { AuthBasic } from '@aws-blocks/bb-auth-basic';
@@ -176,6 +179,7 @@ import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
+import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
 export { AdminAction }
@@ -225,6 +229,12 @@ export { AsyncJobContext }
 export { AsyncJobErrors }
 
 export { AsyncJobOptions }
+
+export { AsyncJobState }
+
+export { AsyncJobStatus }
+
+export { AsyncJobTransition }
 
 export { AuthAction }
 
@@ -610,6 +620,8 @@ export { TransactionOptions }
 export { UpdateAttributeOutcome }
 
 export { UserAttribute }
+
+export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
 
