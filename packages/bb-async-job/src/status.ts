@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { isBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -22,10 +23,16 @@ export const STATUS_RETENTION_SECONDS = 86_400;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 
-/** Stored shape: the public record plus the DynamoDB TTL attribute. */
+/** Attempts allowed for the compare-and-swap in {@link JobStatusTracker.recordTransition}. */
+const MAX_CAS_ATTEMPTS = 5;
+const CAS_BACKOFF_MS = 20;
+
+/** Stored shape: the public record plus bookkeeping the caller never sees. */
 interface StatusRecord extends AsyncJobStatus {
 	/** Epoch seconds at which DynamoDB may delete this record. */
 	expiresAt: number;
+	/** Incremented on every write; the compare value for optimistic concurrency. */
+	version: number;
 }
 
 const STRING_FIELDS = ['jobId', 'state', 'submittedAt', 'updatedAt', 'error'] as const;
@@ -54,7 +61,7 @@ export const statusSchema: StandardSchemaV1<StatusRecord> = {
 					issues.push({ message: `${field} must be a string`, path: [field] });
 				}
 			}
-			for (const field of ['attempts', 'expiresAt'] as const) {
+			for (const field of ['attempts', 'expiresAt', 'version'] as const) {
 				if (field in record && typeof record[field] !== 'number') {
 					issues.push({ message: `${field} must be a number`, path: [field] });
 				}
@@ -160,28 +167,53 @@ export class JobStatusTracker {
 			submittedAt,
 			updatedAt: submittedAt,
 			expiresAt: expiresAt(),
+			version: 0,
 		};
 	}
 
 	/**
-	 * Record a job as `queued`. Called before the payload is handed to the
-	 * queue so a consumer can never observe `processing` before `queued`.
+	 * Record a job as `queued`.
+	 *
+	 * Conditional on the record not existing yet. In AWS the job id *is* the SQS
+	 * message id, so this write can only happen after `SendMessage` returns — by
+	 * which point SQS may already have delivered the message and the handler may
+	 * already have created the record via {@link recordTransition}. An
+	 * unconditional write would clobber that `processing` entry and strand the job
+	 * at `queued` forever. Losing the race is therefore success, not failure: the
+	 * handler's backfill already contains the `queued` transition.
 	 */
 	async recordQueued(jobId: string, submittedAt: string): Promise<void> {
-		await this.table.put(this.queuedRecord(jobId, submittedAt));
+		try {
+			await this.table.put(this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
+		} catch (err: unknown) {
+			if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+		}
 	}
 
-	/** Record several jobs as `queued` in one round trip. */
+	/**
+	 * Record several jobs as `queued`.
+	 *
+	 * Deliberately individual conditional writes rather than one `putBatch`:
+	 * DynamoDB's `BatchWriteItem` cannot carry a condition expression, so a batch
+	 * write would reintroduce the clobber described on {@link recordQueued}. A
+	 * batch is at most 10 items, so the puts are issued in parallel.
+	 */
 	async recordQueuedBatch(jobs: Array<{ jobId: string; submittedAt: string }>): Promise<void> {
 		if (jobs.length === 0) return;
-		await this.table.putBatch(jobs.map(j => this.queuedRecord(j.jobId, j.submittedAt)));
+		await Promise.all(jobs.map(j => this.recordQueued(j.jobId, j.submittedAt)));
 	}
 
 	/**
 	 * Append a transition to a job's history.
 	 *
-	 * Read-modify-write is safe here because SQS keeps a message invisible while
-	 * its handler runs, so only one attempt writes a given job's record at a time.
+	 * Appending is a read-modify-write, so it is guarded by a compare-and-swap on
+	 * `version`. SQS standard queues are at-least-once, and the block's own
+	 * contract tells handlers to expect more than one delivery, so two invocations
+	 * can hold the same record concurrently. Without the guard the later
+	 * full-item `put` would silently drop the other's transition — and if the
+	 * dropped entry were the terminal one, `waitUntilComplete()` would time out on
+	 * a job that had actually finished. On a lost swap the record is re-read and
+	 * the transition re-applied, so no entry is lost.
 	 */
 	async recordTransition(
 		jobId: string,
@@ -189,22 +221,35 @@ export class JobStatusTracker {
 		attempt: number,
 		error?: string,
 	): Promise<void> {
-		const now = new Date().toISOString();
-		const existing = await this.table.get({ jobId });
-		const base = existing ?? this.queuedRecord(jobId, now);
-		const transition: AsyncJobTransition = { state, at: now, attempt };
+		for (let cas = 1; ; cas++) {
+			const existing = await this.table.get({ jobId });
+			const now = new Date().toISOString();
+			const base = existing ?? this.queuedRecord(jobId, now);
+			const transition: AsyncJobTransition = { state, at: now, attempt };
 
-		const next: StatusRecord = {
-			...base,
-			state,
-			transitions: [...base.transitions, transition],
-			attempts: Math.max(base.attempts, attempt),
-			updatedAt: now,
-			expiresAt: expiresAt(),
-		};
-		if (error !== undefined) next.error = error;
+			const next: StatusRecord = {
+				...base,
+				state,
+				transitions: [...base.transitions, transition],
+				attempts: Math.max(base.attempts, attempt),
+				updatedAt: now,
+				expiresAt: expiresAt(),
+				version: base.version + 1,
+			};
+			if (error !== undefined) next.error = error;
 
-		await this.table.put(next);
+			try {
+				await this.table.put(
+					next,
+					existing ? { ifFieldEquals: { version: existing.version } } : { ifNotExists: true },
+				);
+				return;
+			} catch (err: unknown) {
+				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
+				await sleep(jitterInterval(CAS_BACKOFF_MS));
+			}
+		}
 	}
 
 	/**
@@ -235,7 +280,7 @@ export class JobStatusTracker {
 	async get(jobId: string): Promise<AsyncJobStatus | null> {
 		const record = await this.table.get({ jobId });
 		if (!record) return null;
-		const { expiresAt: _ttl, ...status } = record;
+		const { expiresAt: _ttl, version: _version, ...status } = record;
 		return status;
 	}
 

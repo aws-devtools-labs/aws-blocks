@@ -140,13 +140,21 @@ status.error;     // message from the last handler error
 | `updatedAt` | `string` | ISO 8601 timestamp of the most recent transition. |
 | `error` | `string \| undefined` | Message from the last handler error. Set when `state` is `failed`. |
 
-`getStatus()` returns `null` for a job id it has never seen. `waitUntilComplete()` resolves on **either** terminal state — check `state` to tell success from failure — and accepts `timeoutMs` (default `30000`), `pollIntervalMs` (default `250`, with ±20% jitter), and a `signal` (`AbortSignal`) that cancels the wait and rejects with the signal's abort reason. It throws `AsyncJobErrors.Timeout` if the job has not settled in time; a timeout means "still running", not "lost", so it is safe to keep waiting.
+`getStatus()` returns `null` for a job id it has never seen. `waitUntilComplete()` resolves on **either** terminal state — check `state` to tell success from failure — and accepts `timeoutMs` (default `30000`), `pollIntervalMs` (default `250`, with ±20% jitter), and a `signal` (`AbortSignal`) that cancels the wait and rejects with the signal's abort reason.
+
+### Reading a Timeout
+
+`waitUntilComplete()` throws `AsyncJobErrors.Timeout` when the job has not reached a terminal state in time. Treat that as **status unknown**, not as a verdict on the job.
+
+Almost always it means the job is still running, so waiting again is the right move and is safe. But status writes on the handler path are best-effort by design (see below), so there is a second, rarer reading: if the write that would have recorded `complete` or `failed` was itself dropped, the job has already finished and its record will never reach a terminal state, so waiting longer will never resolve. A `Timeout` therefore does not prove the job is still in flight, and it certainly does not mean the job failed.
+
+If you need a definitive answer, check the job's own effect rather than its status — the row it writes, the file it uploads, the message it sends. That is authoritative in a way bookkeeping cannot be. `status.updatedAt` is also a useful signal: a timestamp that stops advancing well past your handler's expected duration points at a dropped write rather than slow work.
 
 ### Cost of enabling it
 
 `trackStatus: true` provisions one DynamoDB table (on-demand billing) for the job's status records and adds a write on submit plus one per state change. Records expire 24 hours after their last transition. Leave the flag off for pure fire-and-forget work — nothing is provisioned and `submit()` stays a single SQS call. Calling `getStatus()` or `waitUntilComplete()` without the flag throws `AsyncJobErrors.StatusNotTracked`.
 
-Status writes on the handler path never fail a job: if one errors it is logged and the job's own outcome is unaffected, so a bookkeeping blip can neither retry work that succeeded nor mask work that failed.
+Status writes on the handler path never fail a job: if one errors it is logged and the job's own outcome is unaffected, so a bookkeeping blip can neither retry work that succeeded nor mask work that failed. That is a deliberate trade — the job's correctness outranks its record — and it is what makes the `Timeout` caveat above possible. Appends themselves are guarded by a compare-and-swap, so two overlapping deliveries of the same job cannot silently drop each other's transitions.
 
 ### Other options
 

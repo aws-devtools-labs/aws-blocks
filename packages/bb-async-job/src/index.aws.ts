@@ -208,9 +208,9 @@ export class AsyncJob<T = unknown> extends Scope {
 		}
 
 		// The job id is the SQS message id, so `queued` can only be recorded after the
-		// send. A consumer that reads a record before this write lands sees no record
-		// at all rather than an out-of-order one, and `recordTransition` backfills
-		// `queued` if `processing` somehow wins the race.
+		// send. SQS may already have delivered the message by now, so the write is
+		// conditional on the record not existing: if the handler got there first its
+		// backfill already carries the `queued` transition.
 		await this._status?.recordQueued(jobId, new Date().toISOString());
 
 		return { jobId };

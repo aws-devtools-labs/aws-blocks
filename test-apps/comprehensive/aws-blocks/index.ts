@@ -268,6 +268,27 @@ const validatedJob = new AsyncJob(scope, 'validated-job', {
   },
 });
 
+// AsyncJob with trackStatus - exercises the status table (DynamoDB when deployed).
+// The handler settles immediately on purpose: the transition history is what makes
+// the intermediate `processing` state observable, so there is no delay to widen it.
+const trackedJob = new AsyncJob(scope, 'tracked-job', {
+  trackStatus: true,
+  handler: async (payload: { key: string; value: string }) => {
+    await jobResults.put(`tracked:${payload.key}`, payload.value);
+  },
+});
+
+// Failure path for status tracking. maxRetries: 1 makes the first failure terminal
+// in both runtimes, so `failed` is recorded on the only delivery and the test does
+// not depend on redrive timing.
+const trackedFailingJob = new AsyncJob(scope, 'tracked-failing-job', {
+  trackStatus: true,
+  maxRetries: 1,
+  handler: async (payload: { reason: string }) => {
+    throw new Error(`tracked job failed on purpose: ${payload.reason}`);
+  },
+});
+
 // Agent BB - AI agent with tools and conversation persistence
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 
@@ -1660,6 +1681,37 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async asyncJobSubmitBatchDelayed(items: { key: string; value: string }[], delaySeconds: number) {
     const { jobIds } = await testJob.submitBatch(items, { delaySeconds });
     return { jobIds };
+  },
+
+  // ------------------------------------------------------------------------
+  // AsyncJob status tracking (trackStatus) Tests
+  // ------------------------------------------------------------------------
+
+  async asyncJobStatusSubmit(key: string, value: string) {
+    const { jobId } = await trackedJob.submit({ key, value });
+    return { jobId };
+  },
+
+  async asyncJobStatusSubmitBatch(items: Array<{ key: string; value: string }>) {
+    const { jobIds } = await trackedJob.submitBatch(items);
+    return { jobIds };
+  },
+
+  async asyncJobStatusGet(jobId: string) {
+    return trackedJob.getStatus(jobId);
+  },
+
+  async asyncJobStatusWait(jobId: string, timeoutMs: number) {
+    return trackedJob.waitUntilComplete(jobId, { timeoutMs });
+  },
+
+  async asyncJobStatusSubmitFailing(reason: string) {
+    const { jobId } = await trackedFailingJob.submit({ reason });
+    return { jobId };
+  },
+
+  async asyncJobStatusWaitFailing(jobId: string, timeoutMs: number) {
+    return trackedFailingJob.waitUntilComplete(jobId, { timeoutMs });
   },
 
   // ------------------------------------------------------------------------

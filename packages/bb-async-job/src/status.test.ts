@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { AsyncJob, AsyncJobErrors } from './index.mock.js';
-import { statusSchema, statusTableOptions, STATUS_TABLE_ID } from './status.js';
+import { statusSchema, statusTableOptions, STATUS_TABLE_ID, JobStatusTracker } from './status.js';
 
 // Every handler in this file settles immediately. The transition history is what
 // makes intermediate states observable, so none of these tests pad the handler
@@ -310,4 +310,63 @@ test('AsyncJob - status table is keyed by jobId with a TTL attribute', () => {
 	assert.strictEqual(STATUS_TABLE_ID, 'status');
 	assert.deepStrictEqual(statusTableOptions.key, { partitionKey: 'jobId' });
 	assert.strictEqual(statusTableOptions.ttl, 'expiresAt');
+});
+
+// ── Concurrency ───────────────────────────────────────────────────────
+// Appending a transition is a read-modify-write. SQS is at-least-once, so two
+// deliveries of the same message can overlap, and in AWS the `queued` write can
+// only happen after SendMessage returns, so it can land after the handler has
+// already created the record. Both cases are exercised directly against the
+// tracker rather than through submit(), since the mock queue cannot reproduce a
+// duplicate delivery on its own.
+
+test('JobStatusTracker - concurrent appends do not lose a transition', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-parallel' } as any);
+	await tracker.recordQueued('job-cas', new Date().toISOString());
+
+	await Promise.all([
+		tracker.recordTransition('job-cas', 'processing', 1),
+		tracker.recordTransition('job-cas', 'processing', 2),
+		tracker.recordTransition('job-cas', 'complete', 2),
+	]);
+
+	const status = await tracker.get('job-cas');
+	assert.strictEqual(
+		status?.transitions.length,
+		4,
+		`expected queued + 3 appended transitions, got ${JSON.stringify(status?.transitions)}`,
+	);
+	assert.strictEqual(status.transitions[0].state, 'queued');
+	assert.strictEqual(
+		status.transitions.filter(t => t.state === 'complete').length,
+		1,
+		'the terminal transition must survive a concurrent append',
+	);
+});
+
+test('JobStatusTracker - a late queued write does not clobber an earlier transition', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-late-queued' } as any);
+
+	// The handler wins the race: it creates the record by backfilling `queued`.
+	await tracker.recordTransition('job-late', 'processing', 1);
+	// submit()'s write arrives afterwards and must not reset the record.
+	await tracker.recordQueued('job-late', new Date().toISOString());
+
+	const status = await tracker.get('job-late');
+	assert.strictEqual(status?.state, 'processing', 'state must not fall back to queued');
+	assert.deepStrictEqual(status?.transitions.map(t => t.state), ['queued', 'processing']);
+});
+
+test('JobStatusTracker - get does not leak storage bookkeeping', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-clean' } as any);
+	await tracker.recordQueued('job-clean', new Date().toISOString());
+	await tracker.recordTransition('job-clean', 'complete', 1);
+
+	const status = await tracker.get('job-clean');
+	assert.ok(status);
+	assert.deepStrictEqual(
+		Object.keys(status).sort(),
+		['attempts', 'jobId', 'state', 'submittedAt', 'transitions', 'updatedAt'],
+		'expiresAt and version are storage details and must not surface',
+	);
 });

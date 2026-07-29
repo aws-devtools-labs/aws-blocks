@@ -84,9 +84,23 @@ Read-modify-write on the array is safe because SQS keeps a message invisible whi
 
 Tracking is opt-in because it is not free: it adds a DynamoDB table per job plus a write on submit and one per transition, and `submitBatch` would turn a single native SQS batch into an extra batch write. AsyncJob's default remains a single SQS call, and existing deployments gain no resources until they ask for them. `DistributedTable` rather than `KVStore` because only the former supports TTL, so status records expire on their own instead of accumulating.
 
-**Failure handling:** the `queued` write propagates to the caller — `submit()` asked for tracking, so failing loudly before the job is observable is correct. Writes on the handler path are swallowed and logged instead: throwing before the handler would retry work that was fine, and throwing after it succeeded would re-run work that had already completed. Status bookkeeping must never decide a job's fate.
+**Failure handling:** the `queued` write propagates to the caller — `submit()` asked for tracking, so failing loudly before the job is observable is correct. Writes on the handler path are swallowed and logged instead: throwing before the handler would retry work that was fine, and throwing after it succeeded would re-run work that had already completed. Status bookkeeping must never decide a job's fate. The visible consequence is that a dropped terminal write leaves a finished job without a terminal state, so `waitUntilComplete()` reports `Timeout` for work that actually succeeded — callers are told to read `Timeout` as "status unknown" rather than "still running", and to consult the job's own effect when they need certainty.
 
 **Not chosen:** publishing transitions over `bb-realtime`. Push delivery does not solve the underlying problem — a subscriber that connects after the fact still misses the event — and it would add a WebSocket dependency to every AsyncJob. Recorded history is both smaller and strictly more useful, since it works for late readers, retries, and tests alike.
+
+### D-AJ-8: Status writes use optimistic concurrency, not bare last-write-wins
+
+**Decision:** Appending a transition is a read-modify-write, guarded by a compare-and-swap on a `version` counter: the follow-up `put` is conditional on `ifFieldEquals: { version }` (or `ifNotExists` when creating), and a lost swap re-reads and re-applies, up to 5 attempts. `recordQueued` is likewise conditional on `ifNotExists`, and treats a lost race as success. Both `version` and the TTL attribute `expiresAt` are stripped from the record `getStatus()` returns.
+
+**Rationale:** two writers can hold the same job's record at once, in two distinct ways.
+
+The likely one is submit versus delivery. In AWS the job id *is* the SQS message id, so the `queued` write cannot happen until `SendMessage` has returned — by which point SQS may already have delivered the message and the handler may already have created the record by backfilling `queued`. An unconditional `queued` write would then overwrite the `processing` entry and reset the state, stranding a running job at `queued` permanently.
+
+The rarer one is duplicate delivery. Standard queues are at-least-once, and this block's own README already instructs handlers to expect more than one delivery, so two invocations can append concurrently. `batchSize` is *not* a factor: a batch carries distinct messages, hence distinct message ids and distinct partition keys, and SQS never returns the same message twice in one receive.
+
+Neither case can corrupt an item — DynamoDB `PutItem` is atomic per item — but plain last-write-wins would silently drop a transition, and dropping the terminal one converts a successful job into a `waitUntilComplete()` timeout. A version check is far cheaper than the alternative of modelling each transition as its own row with a sort key, which would double the read cost of `getStatus()` for a history that is only ever a handful of entries.
+
+`recordQueuedBatch` issues individual conditional writes in parallel rather than one `putBatch`, because DynamoDB's `BatchWriteItem` cannot carry a condition expression and would reintroduce the clobber. A batch is at most 10 items.
 
 ## Infrastructure (CDK)
 
@@ -130,6 +144,7 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 | No real visibility timeout | Retries are immediate rather than after a timeout window | No mitigation — timing differences don't affect at-least-once + retry correctness |
 | `submitBatch()` never returns partial failures | The mock enqueues each payload locally, so `failed` is always empty and `BatchSubmitFailed` is never thrown | AWS surfaces per-entry failures; design handlers and callers to handle the `failed` array and `BatchSubmitFailedException` |
 | Status records never expire locally | The mock `DistributedTable` has no TTL sweeper, so status records persist in `.bb-data/` until it is cleared, whereas DynamoDB deletes them ~24 hours after the last transition | No mitigation needed — local records are small and `.bb-data/` is disposable. Do not rely on a record being *absent* after 24 hours in either runtime; DynamoDB TTL deletion is asynchronous and best-effort |
+| Concurrent status writes never actually collide locally | The mock queue delivers each job once to a single in-process consumer, so the compare-and-swap in D-AJ-8 never has to retry and a dropped terminal write cannot happen. In AWS at-least-once delivery makes both reachable | The CAS is exercised directly against the tracker in unit tests rather than through the mock queue. Callers must read `waitUntilComplete()`'s `Timeout` as "status unknown" rather than "still running", since only the deployed runtime can drop a terminal write |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 
 ## Integration with CronJob

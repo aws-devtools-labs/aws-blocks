@@ -21,6 +21,7 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
+import { asyncJobStatusTests } from './async-job-status.test.js';
 import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -225,6 +226,9 @@ databaseTests(() => api);
 
 // AsyncJob tests (separate file)
 asyncJobTests(() => api);
+
+// AsyncJob status tracking tests (separate file)
+asyncJobStatusTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);
