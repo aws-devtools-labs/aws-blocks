@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc --build",
     "deploy": "npx cdk deploy --app 'npx tsx vpc-test-stack.ts'",
-    "synth": "npx cdk synth --app 'npx tsx vpc-test-stack.ts'"
+    "synth": "npx cdk synth --app 'npx tsx vpc-test-stack.ts'",
+    "test": "echo \"no tests for infra stack\""
   },
   "dependencies": {
     "aws-cdk-lib": "^2.257.0",
