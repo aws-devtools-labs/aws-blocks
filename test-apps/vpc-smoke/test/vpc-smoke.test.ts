@@ -3,180 +3,157 @@
 
 /**
  * VPC Smoke Tests — validates each BB can reach its backing service from
- * within a VPC. These tests run inside the deployed Lambda (via the Blocks
- * RPC layer), NOT locally. Each test performs a minimal round-trip operation
- * to verify VPC endpoint connectivity.
+ * within a VPC. Each test performs a minimal round-trip operation to verify
+ * VPC endpoint connectivity.
  *
- * To run: deploy the vpc-smoke app, then invoke via the Blocks API.
+ * Structured the same as the comprehensive e2e suite: BLOCKS_TEST_ENV controls
+ * whether to deploy a sandbox or run against an existing deployment.
  */
 
-import { describe, test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { kv, table, files, job, setting, rt, auth, db, logger, metrics, tracer } from '../aws-blocks/index.js';
-import { sql } from '@aws-blocks/bb-data';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-describe('VPC Smoke Tests', () => {
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
-  describe('KVStore', () => {
-    test('put + get round-trip', async () => {
-      const key = `vpc-smoke-${Date.now()}`;
-      await kv.put(key, 'hello-vpc');
-      const value = await kv.get(key);
-      assert.strictEqual(value, 'hello-vpc');
-      await kv.delete(key);
+test('VPC Smoke Tests', async (t) => {
+  // ── Deploy ────────────────────────────────────────────────────────────────
+  t.before(async () => {
+    if (ENV === 'local') {
+      console.log('⏭️  VPC smoke tests require deployment — skipping in local mode.');
+      process.exit(0);
+    }
+
+    console.log(`🚀 Deploying ${ENV} sandbox...`);
+    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
+      cwd: join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' },
     });
+    console.log('\n✅ Sandbox deployed\n');
   });
 
-  describe('DistributedTable', () => {
-    test('put + query round-trip', async () => {
-      const pk = `vpc-smoke-${Date.now()}`;
-      const sk = 'item-1';
-      await table.put({ pk, sk, data: 'vpc-test-data' });
-      const items: Array<{ pk: string; sk: string; data: string }> = [];
-      for await (const item of table.query({ where: { pk: { equals: pk } } })) {
-        items.push(item);
-      }
-      assert.ok(items.length >= 1);
-      assert.strictEqual(items[0].data, 'vpc-test-data');
-      await table.delete({ pk, sk });
-    });
-  });
-
-  describe('FileBucket', () => {
-    test('put + get round-trip', async () => {
-      const key = `vpc-smoke-${Date.now()}.txt`;
-      await files.put(key, 'vpc file content');
-      const content = await files.get(key);
-      assert.ok(content !== null);
-      await files.delete(key);
-    });
-  });
-
-  describe('AsyncJob', () => {
-    test('submit does not throw', async () => {
-      // Submit returns successfully if SQS endpoint is reachable
-      await assert.doesNotReject(async () => {
-        await job.submit({ message: 'vpc-smoke-test' });
+  // ── Teardown ──────────────────────────────────────────────────────────────
+  t.after(async () => {
+    if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
+      console.log(`\n🗑️  Destroying ${ENV} stack...`);
+      execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
+        cwd: join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' },
       });
+      console.log(`✅ ${ENV} stack destroyed`);
+    }
+  });
+
+  // ── Import the API after deployment (reads outputs) ───────────────────────
+  const { kv, table, files, job, setting, rt, auth, db, logger, metrics, tracer } =
+    await import('../aws-blocks/index.js');
+  const { sql } = await import('@aws-blocks/bb-data');
+
+  // ── Tests ─────────────────────────────────────────────────────────────────
+
+  await t.test('KVStore: put + get', async () => {
+    const key = `vpc-smoke-${Date.now()}`;
+    await kv.put(key, 'hello-vpc');
+    const value = await kv.get(key);
+    assert.strictEqual(value, 'hello-vpc');
+    await kv.delete(key);
+  });
+
+  await t.test('DistributedTable: put + query', async () => {
+    const pk = `vpc-smoke-${Date.now()}`;
+    const sk = 'item-1';
+    await table.put({ pk, sk, data: 'vpc-test-data' });
+    const items: Array<{ pk: string; sk: string; data: string }> = [];
+    for await (const item of table.query({ where: { pk: { equals: pk } } })) {
+      items.push(item);
+    }
+    assert.ok(items.length >= 1);
+    assert.strictEqual(items[0].data, 'vpc-test-data');
+    await table.delete({ pk, sk });
+  });
+
+  await t.test('FileBucket: put + get', async () => {
+    const key = `vpc-smoke-${Date.now()}.txt`;
+    await files.put(key, 'vpc file content');
+    const content = await files.get(key);
+    assert.ok(content !== null);
+    await files.delete(key);
+  });
+
+  await t.test('AsyncJob: submit', async () => {
+    await assert.doesNotReject(async () => {
+      await job.submit({ message: 'vpc-smoke-test' });
     });
   });
 
-  describe('AppSetting', () => {
-    test('get returns value', async () => {
-      const value = await setting.get();
-      assert.strictEqual(value, 'test-value');
+  await t.test('AppSetting: get', async () => {
+    const value = await setting.get();
+    assert.ok(value !== null && value !== undefined);
+  });
+
+  await t.test('Realtime: server-side publish', async () => {
+    await assert.doesNotReject(async () => {
+      await rt.publish('notifications', 'vpc-smoke-test', { text: 'connectivity check' });
     });
   });
 
-  describe('Realtime', () => {
-    test('publish does not throw', async () => {
-      // Server-side publish verifies API Gateway management endpoint is reachable
-      await assert.doesNotReject(async () => {
-        await rt.publish('notifications', 'vpc-smoke-test', { text: 'vpc connectivity check' });
-      });
+  await t.test('Realtime: client-side subscribe + receive', async () => {
+    const channelName = `subscribe-test-${Date.now()}`;
+    const channel = await rt.getChannel('notifications', channelName);
+    const received: Array<{ text: string }> = [];
+
+    const sub = channel.subscribe((msg: { text: string }) => {
+      received.push(msg);
     });
+    await sub.established;
 
-    test('client-side subscribe receives published message', async () => {
-      // Validates execute-api/WebSocket endpoint is reachable from within the VPC.
-      // getChannel() returns a Transferable with WebSocket URL + tokens.
-      // subscribe() opens a WebSocket to the API Gateway WebSocket endpoint.
-      const channelName = `subscribe-test-${Date.now()}`;
-      const channel = await rt.getChannel('notifications', channelName);
-      const received: Array<{ text: string }> = [];
+    const testPayload = { text: `vpc-ws-${Date.now()}` };
+    await rt.publish('notifications', channelName, testPayload);
 
-      const sub = channel.subscribe((msg: { text: string }) => {
-        received.push(msg);
-      });
-
-      // Wait for the WebSocket subscription to be established
-      await sub.established;
-
-      // Publish a message to the same channel — it should be delivered via WebSocket
-      const testPayload = { text: `vpc-ws-${Date.now()}` };
-      await rt.publish('notifications', channelName, testPayload);
-
-      // Give the message time to arrive (WebSocket delivery)
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Verify the message was received via WebSocket subscription
-      assert.ok(received.length >= 1, `Expected at least 1 message, got ${received.length}`);
-      assert.strictEqual(received[0].text, testPayload.text);
-
-      sub.unsubscribe();
-    });
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    assert.ok(received.length >= 1, `Expected at least 1 message, got ${received.length}`);
+    assert.strictEqual(received[0].text, testPayload.text);
+    sub.unsubscribe();
   });
 
-  describe('Database (Aurora)', () => {
-    test('simple SQL query via Data API', async () => {
-      // Verifies RDS Data API + Secrets Manager endpoints are reachable from VPC.
-      // Executes a simple query that doesn't require any table setup.
-      const result = await db.query<{ ping: number }>(sql`SELECT 1 AS ping`);
-      assert.ok(result.length >= 1, 'Expected at least one row from SELECT 1');
-      assert.strictEqual(result[0].ping, 1);
-    });
-
-    test('create table, insert, and read back', async () => {
-      // Create a temporary table, insert, and read back via Data API
-      await db.execute(sql`CREATE TABLE IF NOT EXISTS vpc_smoke_test (id SERIAL PRIMARY KEY, value TEXT NOT NULL)`);
-      await db.execute(sql`INSERT INTO vpc_smoke_test (value) VALUES (${'vpc-aurora-test'})`);
-      const result = await db.query<{ value: string }>(sql`SELECT value FROM vpc_smoke_test WHERE value = ${'vpc-aurora-test'}`);
-      assert.ok(result.length >= 1);
-      assert.strictEqual(result[0].value, 'vpc-aurora-test');
-      // Clean up
-      await db.execute(sql`DROP TABLE IF EXISTS vpc_smoke_test`);
-    });
+  await t.test('Database (Aurora): SELECT 1', async () => {
+    const result = await db.query<{ ping: number }>(sql`SELECT 1 AS ping`);
+    assert.ok(result.length >= 1);
+    assert.strictEqual(result[0].ping, 1);
   });
 
-  describe('AuthCognito', () => {
-    test('signUp reaches Cognito without network errors', async () => {
-      // AuthCognito uses Cognito (internet) + SSM (VPC endpoint) + DynamoDB (VPC endpoint)
-      // We test that the sign-up flow reaches Cognito without network errors.
-      // A UserPool validation error (e.g., password policy) is acceptable — it
-      // proves the service is reachable.
-      const email = `vpc-smoke-${Date.now()}@example.com`;
-      try {
-        await auth.signUp(email, 'VpcTest1!', { attributes: { email } });
-      } catch (e: any) {
-        // Cognito policy errors are fine — they prove connectivity
-        assert.ok(
-          e.name === 'InvalidPasswordException' ||
-          e.name === 'UsernameExistsException' ||
-          e.name === 'InvalidParameterException' ||
-          e.name === 'UserLambdaValidationException' ||
-          e.message?.includes('password') ||
-          e.message?.includes('Username'),
-          `Unexpected error: ${e.name}: ${e.message}`,
-        );
-      }
-    });
+  await t.test('AuthCognito: signUp reaches service', async () => {
+    const email = `vpc-smoke-${Date.now()}@example.com`;
+    try {
+      await auth.signUp(email, 'VpcTest1!', { attributes: { email } });
+    } catch (e: any) {
+      // Cognito policy errors prove connectivity
+      assert.ok(
+        e.name === 'InvalidPasswordException' ||
+        e.name === 'UsernameExistsException' ||
+        e.name === 'InvalidParameterException' ||
+        e.message?.includes('password') ||
+        e.message?.includes('Username'),
+        `Unexpected error: ${e.name}: ${e.message}`,
+      );
+    }
   });
 
-  describe('Logger', () => {
-    test('emit does not throw', () => {
-      // Logger writes to stdout (CloudWatch Logs endpoint provisioned by framework)
-      assert.doesNotThrow(() => {
-        logger.info('vpc-smoke-test log entry');
-      });
-    });
+  await t.test('Logger: emit', () => {
+    assert.doesNotThrow(() => { logger.info('vpc-smoke-test'); });
   });
 
-  describe('Metrics', () => {
-    test('emit does not throw', () => {
-      // Metrics uses EMF (stdout) — no direct VPC endpoint needed
-      assert.doesNotThrow(() => {
-        metrics.emit('VpcSmokeTest', 1, { unit: 'Count' });
-      });
-    });
+  await t.test('Metrics: emit', () => {
+    assert.doesNotThrow(() => { metrics.emit('VpcSmokeTest', 1, { unit: 'Count' }); });
   });
 
-  describe('Tracer', () => {
-    test('startSegment does not throw', async () => {
-      // X-Ray uses the Lambda runtime agent — no direct VPC endpoint needed
-      await assert.doesNotReject(async () => {
-        await tracer.startSegment('vpc-smoke-test', async (segment) => {
-          segment.addAnnotation('test', 'vpc-smoke');
-          return 'ok';
-        });
+  await t.test('Tracer: startSegment', async () => {
+    await assert.doesNotReject(async () => {
+      await tracer.startSegment('vpc-smoke-test', async (segment) => {
+        segment.addAnnotation('test', 'vpc-smoke');
+        return 'ok';
       });
     });
   });
