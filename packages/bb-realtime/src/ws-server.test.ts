@@ -98,20 +98,47 @@ describe('WebSocket server: subscribe authorization', () => {
 
 		// Give the intruder's rejected subscribe time to settle, then broadcast.
 		await new Promise((r) => setTimeout(r, 50));
-		const authedGotMessage = new Promise<any>((resolve) => {
+		const authedGotMessage = new Promise<{ type: string; channel: string; data: { sender: string; text: string } }>((resolve) => {
 			authed.on('message', (data) => {
 				const msg = JSON.parse(data.toString());
-				if (msg.type === 'message') resolve(msg.payload);
+				if (msg.type === 'message') resolve(msg);
 			});
 		});
 		localRealtimeBus.emit('broadcast', { channel: CHANNEL, payload: { sender: 'alice', text: 'Top secret' } });
 
-		const payload = await authedGotMessage;
-		assert.strictEqual(payload.text, 'Top secret', 'authorized client should receive the broadcast');
+		const message = await authedGotMessage;
+		assert.deepStrictEqual(message.data, { sender: 'alice', text: 'Top secret' });
+		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
 		assert.strictEqual(intruderGotMessage, false, 'unauthorized client must not receive the broadcast');
 
 		authed.close();
 		intruder.close();
+	});
+
+	it('uses the data key when forwarding a client publish', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		const { ws: subscriber } = await subscribe({ channel: CHANNEL, token });
+
+		const received = new Promise<{ type: string; channel: string; data: { text: string } }>((resolve) => {
+			subscriber.on('message', (data) => {
+				const message = JSON.parse(data.toString());
+				if (message.type === 'message') resolve(message);
+			});
+		});
+
+		const publisher = new WebSocket(`ws://localhost:${port}/realtime`);
+		await new Promise<void>((resolve, reject) => {
+			publisher.on('open', resolve);
+			publisher.on('error', reject);
+		});
+		publisher.send(JSON.stringify({ action: 'publish', channel: CHANNEL, payload: { text: 'from client' } }));
+
+		const message = await received;
+		assert.deepStrictEqual(message.data, { text: 'from client' });
+		assert.strictEqual('payload' in message, false, 'local messages must use the AWS runtime data key');
+
+		publisher.close();
+		subscriber.close();
 	});
 });
 

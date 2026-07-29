@@ -59,7 +59,7 @@ export function attach(httpServer: Server) {
 				} else if (msg.action === 'unsubscribe' && msg.channel) {
 					subscription.channels.delete(msg.channel);
 				} else if (msg.action === 'publish' && msg.channel && msg.payload !== undefined) {
-					const outMsg = JSON.stringify({ type: 'message', channel: msg.channel, payload: msg.payload });
+					const outMsg = JSON.stringify({ type: 'message', channel: msg.channel, data: msg.payload });
 					for (const [otherWs, otherSub] of clients) {
 						if (otherWs !== ws && otherSub.channels.has(msg.channel) && otherWs.readyState === WebSocket.OPEN) {
 							otherWs.send(outMsg);
@@ -76,7 +76,7 @@ export function attach(httpServer: Server) {
 	});
 
 	localRealtimeBus.on('broadcast', ({ channel, payload }) => {
-		const message = JSON.stringify({ type: 'message', channel, payload });
+		const message = JSON.stringify({ type: 'message', channel, data: payload });
 		for (const [ws, sub] of clients) {
 			if (sub.channels.has(channel) && ws.readyState === WebSocket.OPEN) {
 				ws.send(message);

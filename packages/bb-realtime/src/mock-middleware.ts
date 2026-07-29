@@ -110,7 +110,7 @@ function doConnect(wsUrl: string) {
 				} else if (data.type === 'message' && data.channel) {
 					const handlers = conn.subscriptions.get(data.channel);
 					if (handlers) {
-						handlers.forEach(h => { try { h(data.payload); } catch (e) { console.error('[Realtime] Handler error:', e); } });
+						handlers.forEach(h => { try { h(data.data); } catch (e) { console.error('[Realtime] Handler error:', e); } });
 					}
 				}
 			} catch (e) { console.error('[Realtime] Parse error:', e); }
