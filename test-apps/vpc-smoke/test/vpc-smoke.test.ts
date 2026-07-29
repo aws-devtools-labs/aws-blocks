@@ -11,13 +11,13 @@ import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { api as apiType } from 'aws-blocks';
+
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
-let api: typeof apiType;
+let api: any;
 
 test('VPC Smoke Tests', async (t) => {
   // ── Deploy ────────────────────────────────────────────────────────────────
