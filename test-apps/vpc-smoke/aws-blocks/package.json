@@ -1,5 +1,5 @@
 {
-  "name": "aws-blocks",
+  "name": "aws-blocks-vpc-smoke",
   "version": "0.1.0",
   "private": true,
   "type": "module",
