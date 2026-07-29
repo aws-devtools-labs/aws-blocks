@@ -186,7 +186,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
     provisionedGateway.add(key);
 
     const constructId = `VpcGw${key.replace(/[^a-zA-Z0-9]/g, '')}`;
-    new ec2.GatewayVpcEndpoint(scope, constructId, { vpc, service: [service] });
+    new ec2.GatewayVpcEndpoint(scope, constructId, { vpc, service });
   }
 
   // Collect interface endpoints from BB registrations and deduplicate
