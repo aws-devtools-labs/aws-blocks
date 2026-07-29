@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * VPC Smoke Test — Building Block instantiation.
- * Instantiates one of each VPC-relevant BB to verify endpoint auto-detection
- * and Lambda placement work correctly inside a VPC.
+ * VPC Smoke Test — Building Block instantiation + API surface for testing.
+ * Instantiates one of each VPC-relevant BB and exposes an API that exercises
+ * each BB's basic operation (for the smoke test to call via RPC).
  */
 
-import { Scope } from '@aws-blocks/core';
+import { ApiNamespace, Scope } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -15,7 +15,7 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import { Database } from '@aws-blocks/bb-data';
+import { Database, sql } from '@aws-blocks/bb-data';
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
 import { Tracer } from '@aws-blocks/bb-tracer';
@@ -23,11 +23,11 @@ import { z } from 'zod';
 
 const scope = new Scope('vpc-smoke');
 
-// KVStore → triggers DynamoDB gateway endpoint
-export const kv = new KVStore(scope, 'cache');
+// ── Building Blocks ─────────────────────────────────────────────────────────
 
-// DistributedTable → triggers DynamoDB gateway endpoint
-export const table = new DistributedTable(scope, 'items', {
+const kv = new KVStore(scope, 'cache');
+
+const table = new DistributedTable(scope, 'items', {
   schema: z.object({
     pk: z.string(),
     sk: z.string(),
@@ -36,41 +36,98 @@ export const table = new DistributedTable(scope, 'items', {
   key: { partitionKey: 'pk', sortKey: 'sk' },
 });
 
-// FileBucket → triggers S3 gateway endpoint
-export const files = new FileBucket(scope, 'uploads');
+const files = new FileBucket(scope, 'uploads');
 
-// AsyncJob → triggers SQS interface endpoint
-export const job = new AsyncJob(scope, 'processor', {
+const job = new AsyncJob(scope, 'processor', {
   schema: z.object({ message: z.string() }),
   handler: async (payload: { message: string }) => {
     console.log('Processing:', payload.message);
   },
 });
 
-// AppSetting → triggers SSM interface endpoint
-export const setting = new AppSetting(scope, 'config-val', {
+const setting = new AppSetting(scope, 'config-val', {
   value: 'test-value',
 });
 
-// Realtime → triggers API Gateway interface endpoint
-export const rt = new Realtime(scope, 'events', {
+const rt = new Realtime(scope, 'events', {
   namespaces: {
     notifications: { schema: z.object({ text: z.string() }) },
   },
 });
 
-// AuthCognito → triggers SSM interface endpoint (session secret)
-export const auth = new AuthCognito(scope, 'auth');
+const auth = new AuthCognito(scope, 'auth');
+export const authApi = auth.createApi();
 
-// Database (Aurora) → triggers Secrets Manager + RDS Data API interface endpoints.
-// bb-data detects the VPC context and creates its own Aurora in the shared VPC.
-export const db = new Database(scope, 'db');
+const db = new Database(scope, 'db');
 
-// Logger → no VPC endpoint needed (uses CloudWatch Logs, always provisioned)
-export const logger = new Logger(scope, 'log', { level: 'info' });
+const logger = new Logger(scope, 'log', { level: 'info' });
+const metrics = new Metrics(scope, 'metrics', { namespace: 'vpc-smoke' });
+const tracer = new Tracer(scope, 'tracer');
 
-// Metrics → no VPC endpoint needed (EMF writes to stdout)
-export const metrics = new Metrics(scope, 'metrics', { namespace: 'vpc-smoke' });
+// ── API (exposes operations for the smoke test to call via RPC) ─────────────
 
-// Tracer → no VPC endpoint needed (X-Ray agent handles egress)
-export const tracer = new Tracer(scope, 'tracer');
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async kvPutGet(key: string, value: string) {
+    await kv.put(key, value);
+    const result = await kv.get(key);
+    await kv.delete(key);
+    return result;
+  },
+
+  async tablePutQuery(pk: string, sk: string, data: string) {
+    await table.put({ pk, sk, data });
+    const items: Array<{ pk: string; sk: string; data: string }> = [];
+    for await (const item of table.query({ where: { pk: { equals: pk } } })) {
+      items.push(item);
+    }
+    await table.delete({ pk, sk });
+    return items;
+  },
+
+  async filePutGet(key: string, content: string) {
+    await files.put(key, content);
+    const result = await files.get(key);
+    await files.delete(key);
+    return result !== null ? 'ok' : 'fail';
+  },
+
+  async jobSubmit(message: string) {
+    await job.submit({ message });
+    return 'submitted';
+  },
+
+  async settingGet() {
+    return await setting.get();
+  },
+
+  async realtimePublish(channel: string, text: string) {
+    await rt.publish('notifications', channel, { text });
+    return 'published';
+  },
+
+  async realtimeGetChannel(channel: string) {
+    return rt.getChannel('notifications', channel);
+  },
+
+  async dbQuery() {
+    const result = await db.query<{ ping: number }>(sql`SELECT 1 AS ping`);
+    return result;
+  },
+
+  async logEmit(message: string) {
+    logger.info(message);
+    return 'logged';
+  },
+
+  async metricsEmit(name: string, value: number) {
+    metrics.emit(name, value, { unit: 'Count' });
+    return 'emitted';
+  },
+
+  async tracerRun(name: string) {
+    return await tracer.startSegment(name, async (segment) => {
+      segment.addAnnotation('test', 'vpc-smoke');
+      return 'traced';
+    });
+  },
+}));
