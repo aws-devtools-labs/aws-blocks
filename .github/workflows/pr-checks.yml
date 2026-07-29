@@ -318,7 +318,12 @@ jobs:
           aws-region: us-east-1
 
       - name: Ensure persistent test VPC
-        run: cd test-infra && npx cdk deploy --require-approval never
+        run: cd test-infra && npx cdk deploy --require-approval never --outputs-file outputs.json
+
+      - name: Export VPC ID
+        run: |
+          VPC_ID=$(cat test-infra/outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksTestVpc']['VpcId'])")
+          echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
 
       - name: E2E VPC Smoke
         run: npm run test:e2e:sandbox:vpc
