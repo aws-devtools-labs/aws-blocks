@@ -25,12 +25,12 @@ async function rpc(method: string, ...args: unknown[]): Promise<unknown> {
   const res = await fetch(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ method: `api.${method}`, args }),
+    body: JSON.stringify({ jsonrpc: "2.0", method: `api.${method}`, params: args, id: 1 }),
   });
   if (!res.ok) throw new Error(`RPC ${method} failed: ${res.status} ${await res.text()}`);
   const json = await res.json() as any;
   if (json.error) throw new Error(`RPC ${method} error: ${json.error.message || JSON.stringify(json.error)}`);
-  return json.result;
+  return json.result ?? json.data;
 }
 
 test('VPC Smoke Tests', async (t) => {
