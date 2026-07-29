@@ -34,7 +34,7 @@ test('VPC Smoke Tests', async (t) => {
     console.log('\n✅ Deployed\n');
 
     // Import the generated client (reads sandbox outputs for API URL)
-    const module = await import('aws-blocks');
+    const module = await import('../aws-blocks/index.js');
     api = module.api;
   });
 

@@ -45,7 +45,6 @@
     "test-apps/hosting-ssr-astro-default404/aws-blocks",
     "test-apps/hosting-ssr-sveltekit/aws-blocks",
     "test-apps/vpc-smoke",
-    "test-apps/vpc-smoke/aws-blocks",
     "test-apps/extending-blocks-guide",
     "test-apps/extending-blocks-guide/aws-blocks",
     "test-apps/extending-blocks-guide/packages/bb-queue",
