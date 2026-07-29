@@ -1,5 +1,11 @@
 # @aws-blocks/bb-auth-basic
 
+## 0.1.4
+
+### Patch Changes
+
+- 61bd709: Keep AuthBasic error constants browser-safe by exporting them from a shared module instead of re-exporting through the server entry.
+
 ## 0.1.3
 
 ### Patch Changes

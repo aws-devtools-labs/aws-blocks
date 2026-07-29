@@ -1,24 +1,10 @@
-// Top-level ROLL-UP of the per-cell analyses. This runs ONCE in the summary job
-// and is BOTTOM-UP: it CONSUMES the `analysis` string each cell already wrote
-// into its own result.json (steps/analyze-cell.mjs, right after that cell's
-// judge) — it no longer re-reads raw traces centrally. It produces:
-//   - an `## Executive summary` that SYNTHESIZES the per-cell analyses via ONE
-//     Bedrock call (Opus 4.8) over the collected analyses + the run aggregate
-//     (mean, verdict mix, low/regressed flags), and
-//   - a per-cell one-liner list (cell → composite/verdict → its analysis),
-// appended to $GITHUB_STEP_SUMMARY, plus a run-level bench-analysis.json
-// artifact assembled from the per-cell analyses.
-//
-// The scoreboard table + PR-vs-baseline overview are rendered separately by
-// steps/summary.mjs and are unchanged.
-//
-// ISOLATION CONTRACT — purely additive, must NEVER fail the summary job:
-//   - The whole run is wrapped so it can NEVER throw; on any failure it exits 0.
-//   - The executive-summary Bedrock call is best-effort: on any error (no creds /
-//     permission / throttled out) it emits a benign note and still exits 0.
-// It runs under bare `node` in the summary job, which does NOT `npm ci`, so it
-// uses ONLY Node built-ins + the runner's AWS CLI (via lib/analysis.mjs, no SDK)
-// and the pure .mjs scoring/overview helpers.
+// Top-level ROLL-UP of the per-cell analyses. Runs ONCE in the summary job and is BOTTOM-UP: it
+// consumes each cell's `analysis` string + `analysis_issues` array (written by analyze-cell.mjs). It
+// appends three sections to $GITHUB_STEP_SUMMARY — Executive summary (one best-effort Bedrock call,
+// Opus 4.8), ⚠️ Potential issues (deterministic flags + per-cell issues), Per-cell analysis
+// (collapsed) — and writes bench-analysis.json. Additive: wrapped so it can NEVER fail the summary
+// job (any error → benign note, exit 0). Runs under bare `node` (no npm ci): Node built-ins + AWS CLI
+// (via lib/analysis.mjs, no SDK) + the pure scoring/overview helpers only.
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -31,7 +17,7 @@ import {
 	buildRollupUserText,
 	fmt,
 } from './lib/analysis.mjs';
-import { verdictOf } from './lib/scoring.mjs';
+import { compositeBand, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, diffAgainstBaseline } from './lib/overview.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -57,8 +43,8 @@ function main() {
 		}
 	}
 	if (cells.length === 0) {
-		emit(['## Agent analysis', '', '_No cell results to roll up._', '']);
-		writeAnalysis({ executive_summary: null, cells: [], note: 'no cell results' });
+		emit(['## Executive summary', '', '_No cell results to roll up._', '']);
+		writeAnalysis({ executive_summary: null, potential_issues: [], cells: [], note: 'no cell results' });
 		return;
 	}
 
@@ -91,28 +77,58 @@ function main() {
 			template: c.template ?? '—',
 			composite,
 			verdict,
+			klass: c.klass ?? null,
 			delta,
 			low: composite !== null && composite < LOW_THRESHOLD,
 			regressed: delta !== null && delta < REGRESSION_DELTA,
 			analysis: c.analysis || null,
+			issues: Array.isArray(c.analysis_issues) ? c.analysis_issues.filter((s) => typeof s === 'string' && s.trim()) : [],
 		};
 	});
 
 	// ── Executive summary: ONE best-effort Bedrock synthesis over the analyses ─
 	const execSummary = synthesize(aggregate, verdictCounts, rows);
 
-	// ── Render ────────────────────────────────────────────────────────────────
-	const out = ['## Agent analysis', ''];
-	out.push('### Executive summary', '');
+	// ── Potential issues: deterministic flags + each cell's emitted issues ─────
+	const potential = collectPotentialIssues(rows);
+
+	// ── Render: Executive summary → Potential issues → collapsible per-cell ────
+	const out = [];
+	out.push('## Executive summary', '');
 	out.push(execSummary.text, '');
-	out.push('### Per-cell analysis', '');
-	out.push(`_Each cell's analysis was generated in-cell right after its judge. Model: \`${MODEL_ID}\`._`, '');
-	for (const r of rows) {
-		const flags = [r.low ? '🔴 low' : '', r.regressed ? `▼ regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
-		const head = `\`${r.task}/${r.template}\` — composite ${fmt(r.composite)} (${r.verdict})${flags ? ` [${flags}]` : ''}`;
-		out.push(`- ${head}: ${r.analysis ?? '_no per-cell analysis_'}`);
+
+	out.push('## ⚠️ Potential issues', '');
+	if (potential.length === 0) {
+		out.push('_None surfaced — no low or regressed cells, and no per-cell analysis flagged an issue._', '');
+	} else {
+		for (const line of potential) out.push(`- ${line}`);
+		out.push('');
 	}
+
+	// Whole section collapsed; EACH cell also collapsed within it.
+	out.push('## Per-cell analysis', '');
+	out.push('<details>');
+	out.push(
+		`<summary>Per-cell analysis — ${rows.length} cell(s), generated in-cell right after each judge · model <code>${MODEL_ID}</code> (click to expand)</summary>`,
+	);
 	out.push('');
+	for (const r of rows) {
+		const band = typeof r.composite === 'number' ? compositeBand(r.composite) : '⚪';
+		const flags = [r.low ? '🔴 low' : '', r.regressed ? `🔴 regressed Δ${fmt(r.delta)}` : ''].filter(Boolean).join(', ');
+		const head = `${band} \`${r.task}/${r.template}\` — composite ${fmt(r.composite)} (${r.verdict})${flags ? ` [${flags}]` : ''}`;
+		out.push('<details>');
+		out.push(`<summary>${head}</summary>`);
+		out.push('');
+		out.push(`- ${r.analysis ?? '_no per-cell analysis_'}`);
+		if (r.issues.length > 0) {
+			out.push('- **Potential issues:**');
+			for (const iss of r.issues) out.push(`  - ${iss}`);
+		}
+		out.push('');
+		out.push('</details>');
+		out.push('');
+	}
+	out.push('</details>', '');
 	emit(out);
 
 	writeAnalysis({
@@ -121,8 +137,36 @@ function main() {
 		verdict_counts: verdictCounts,
 		executive_summary: execSummary.text,
 		executive_summary_error: execSummary.error ?? null,
+		potential_issues: potential,
 		cells: rows,
 	});
+}
+
+// Deterministic "Potential issues": harness/agent failures + low/regressed composites first, then
+// every per-cell issue, each attributed to its cell.
+function collectPotentialIssues(rows) {
+	const out = [];
+	for (const r of rows) {
+		const cell = `\`${r.task}/${r.template}\``;
+		if (r.verdict === 'harness_error') {
+			out.push(`🧰 ${cell} — harness error (no gradeable app; excluded from the mean)`);
+			continue;
+		}
+		if (r.klass === 'agent_fail') {
+			out.push(`🔴 ${cell} — agent produced no app within budget (scored composite 0)`);
+			continue;
+		}
+		const flags = [];
+		if (r.low) flags.push(`low composite ${fmt(r.composite)}`);
+		if (r.regressed) flags.push(`regressed Δ${fmt(r.delta)} vs \`main\``);
+		if (flags.length) out.push(`🔴 ${cell} — ${flags.join('; ')}`);
+	}
+	for (const r of rows) {
+		if (r.issues.length === 0) continue;
+		const cell = `\`${r.task}/${r.template}\``;
+		for (const iss of r.issues) out.push(`${cell} — ${iss}`);
+	}
+	return out;
 }
 
 // One Bedrock call synthesizing the per-cell analyses into an executive summary.
@@ -142,8 +186,7 @@ function synthesize(aggregate, verdictCounts, rows) {
 		maxTokens: ROLLUP_MAX_TOKENS,
 	});
 	if (error) return { text: `_Executive summary unavailable: ${error}_`, error };
-	// Keep the model's paragraph structure (don't collapse to one line) so the
-	// executive summary renders as prose, not a wall of run-on text.
+	// Keep the model's paragraph structure so it renders as prose, not run-on text.
 	const clean = text.trim();
 	return clean ? { text: clean } : { text: '_Executive summary unavailable: empty completion_', error: 'empty completion' };
 }
@@ -169,7 +212,7 @@ function writeAnalysis(extra) {
 			ANALYSIS_PATH,
 			`${JSON.stringify(
 				{
-					schema: 2,
+					schema: 3,
 					generated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
 					model: MODEL_ID,
 					low_threshold: LOW_THRESHOLD,
@@ -185,8 +228,7 @@ function writeAnalysis(extra) {
 	}
 }
 
-// TOP-LEVEL ISOLATION: never throw, never non-zero. A roll-up failure must never
-// turn the summary job red or block the green-regardless bench.
+// TOP-LEVEL ISOLATION: never throw, never non-zero — a roll-up failure must not turn the job red.
 try {
 	main();
 } catch (err) {

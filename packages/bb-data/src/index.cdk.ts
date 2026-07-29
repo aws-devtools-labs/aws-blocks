@@ -76,6 +76,7 @@ export class Database extends Scope {
       databaseName,
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
+      postgresVersion: options?.postgresVersion,
     });
 
     // Inject config so DataApiEngine can read them at runtime

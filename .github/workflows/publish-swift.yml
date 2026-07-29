@@ -136,12 +136,17 @@ jobs:
             -not -name '..' \
             -exec rm -rf {} +
 
-          # Copy native/swift contents to target repo root
+          # Copy native/swift contents to target repo root.
+          # Anchor the root package.json/package-lock.json excludes with a
+          # leading '/' so they only skip native/swift's changeset-tooling
+          # manifests. Unanchored patterns match at every depth and would also
+          # drop Demo/typescript-demo/package.json + package-lock.json, which
+          # the demo needs (and which carry the dependency/security fixes).
           rsync -a --exclude='.changeset' \
                    --exclude='node_modules' \
                    --exclude='.build' \
-                   --exclude='package.json' \
-                   --exclude='package-lock.json' \
+                   --exclude='/package.json' \
+                   --exclude='/package-lock.json' \
                    --exclude='Demo/typescript-demo/node_modules' \
                    ./ ../../target-repo/
 

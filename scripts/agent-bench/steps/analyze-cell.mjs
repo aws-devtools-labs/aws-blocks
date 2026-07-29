@@ -1,23 +1,11 @@
-// Per-cell analysis: runs INSIDE each matrix cell right after the judge +
-// finalize, colocated with that cell's fresh trace/metrics. It reads THIS cell's
-// result.json (score context stamped by the judge + finalize), trace.json and
-// metrics.json (both written locally by step 2 at /tmp), asks the judge Bedrock
-// model (Opus 4.8) for a CONCISE 2-4 sentence analysis of what the agent built +
-// any struggles visible in the data, and writes that back into result.json as an
-// `analysis` string. The top-level summary job later ROLLS UP these per-cell
-// analyses (steps/analyze.mjs) — it no longer re-reads raw traces centrally.
-//
-// ISOLATION CONTRACT — purely additive, must NEVER affect the green-regardless
-// bench:
-//   - The whole run is wrapped so it can NEVER throw; it always exits 0.
-//   - It only ADDS the `analysis` field — it never touches the score, verdict,
-//     klass, or any other field finalize-result stamped.
-//   - No trace/metrics, a harness/agent failure, or any Bedrock error → it
-//     writes a benign fallback string and still exits 0 (never blocks upload).
-// Runs under bare `node` in the cell (which DID `npm ci`, but this uses only
-// Node built-ins + the runner's AWS CLI via lib/analysis.mjs — no SDK import).
+// Per-cell analysis: runs INSIDE each matrix cell right after the judge, colocated with that cell's
+// fresh trace/metrics. Reads this cell's result.json + trace.json + metrics.json, asks the judge model
+// (Opus 4.8) for a concise analysis, and writes it back as `analysis` + `analysis_issues[]`
+// (analyze.mjs rolls these up later). Additive & isolated: wrapped so it can NEVER throw (always exits
+// 0), only ADDS those two fields, and falls back to a benign string on any error. Runs under bare
+// `node`: Node built-ins + AWS CLI via lib/analysis.mjs, no SDK.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { CELL_MAX_TOKENS, CELL_SYSTEM, DEFAULT_MODEL_ID, FALLBACK_ANALYSIS, bedrockConverse, buildCellUserText, oneLine } from './lib/analysis.mjs';
+import { CELL_MAX_TOKENS, CELL_SYSTEM, DEFAULT_MODEL_ID, FALLBACK_ANALYSIS, bedrockConverse, buildCellUserText, parseCellAnalysis } from './lib/analysis.mjs';
 
 const RESULT_PATH = process.env.RESULT_PATH ?? '/tmp/result.json';
 const TRACE_PATH = process.env.TRACE ?? '/tmp/trace.json';
@@ -33,18 +21,21 @@ function readJson(path) {
 	}
 }
 
-// Decide the per-cell analysis text. Returns a string — never throws. Only calls
-// Bedrock when there is actual data to analyze; a harness/agent failure with no
-// trace gets a benign, self-describing note without spending a model call.
+// Decide the per-cell analysis — never throws. Only calls Bedrock when there's data; a failure with
+// no trace gets a benign note and no model call.
 function analyze(result, trace, metrics) {
 	const klass = result?.klass ?? null;
 	if (klass === 'harness_error') {
-		return 'Cell failed before producing a gradeable app (harness error) — no agent trace to analyze.';
+		return { analysis: 'Cell failed before producing a gradeable app (harness error) — no agent trace to analyze.', issues: [] };
 	}
 	if (!trace && !metrics) {
-		return klass === 'agent_fail'
-			? 'Agent timed out / produced no app within budget — no trace was emitted, so there is nothing to analyze.'
-			: 'No trace/metrics artifact available for this cell — nothing to analyze.';
+		return {
+			analysis:
+				klass === 'agent_fail'
+					? 'Agent timed out / produced no app within budget — no trace was emitted, so there is nothing to analyze.'
+					: 'No trace/metrics artifact available for this cell — nothing to analyze.',
+			issues: [],
+		};
 	}
 
 	const userText = buildCellUserText({
@@ -65,8 +56,9 @@ function analyze(result, trace, metrics) {
 		region: REGION,
 		maxTokens: CELL_MAX_TOKENS,
 	});
-	if (error) return `${FALLBACK_ANALYSIS}: ${error}`;
-	return oneLine(text) || FALLBACK_ANALYSIS;
+	if (error) return { analysis: `${FALLBACK_ANALYSIS}: ${error}`, issues: [] };
+	const parsed = parseCellAnalysis(text);
+	return { analysis: parsed.analysis || FALLBACK_ANALYSIS, issues: parsed.issues };
 }
 
 function main() {
@@ -80,24 +72,27 @@ function main() {
 	const metrics = readJson(METRICS_PATH);
 
 	let analysis;
+	let issues = [];
 	try {
-		analysis = analyze(result, trace, metrics);
+		const out = analyze(result, trace, metrics);
+		analysis = out.analysis;
+		issues = Array.isArray(out.issues) ? out.issues : [];
 	} catch (err) {
 		analysis = `${FALLBACK_ANALYSIS}: ${err?.message ?? err}`;
 	}
 
-	// Add ONLY the analysis field — never touch score/verdict/klass/etc.
+	// Add ONLY the analysis fields — never touch score/verdict/klass/etc.
 	result.analysis = analysis;
+	result.analysis_issues = issues;
 	try {
 		writeFileSync(RESULT_PATH, JSON.stringify(result, null, 2));
-		process.stderr.write(`[analyze-cell] wrote analysis (${analysis.length} chars) to ${RESULT_PATH}\n`);
+		process.stderr.write(`[analyze-cell] wrote analysis (${analysis.length} chars, ${issues.length} issue(s)) to ${RESULT_PATH}\n`);
 	} catch (err) {
 		process.stderr.write(`[analyze-cell] failed to write analysis to ${RESULT_PATH} (ignored): ${err?.message ?? err}\n`);
 	}
 }
 
-// TOP-LEVEL ISOLATION: never throw, never non-zero. A per-cell analysis failure
-// must never block the cell's result upload or turn the cell red.
+// TOP-LEVEL ISOLATION: never throw, never non-zero — must not block the result upload or red the cell.
 try {
 	main();
 } catch (err) {

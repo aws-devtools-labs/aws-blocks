@@ -1,16 +1,6 @@
-/**
- * Shared shell infrastructure for the agent-bench builder (2-agent-run.ts) and
- * judge (4-judge.ts) steps. Both vend the framework's bash/fileEditor tools
- * through a host-execution Sandbox rooted at a fixed directory; this module is
- * the single source of that Sandbox + its backgrounded-process-safe runner, so
- * the containment fix lives in exactly one place.
- *
- * The ONLY behavioral difference between the two callers is WorkspaceSandbox's
- * `minTimeoutSec` (the builder floors bash timeouts to BASH_MIN_TIMEOUT_SEC=600
- * so npm install/build survive; the judge leaves it at 0 so the vended bash's
- * own 120s per-command default stands) — that stays at the call sites.
- */
-import { spawn } from 'node:child_process';
+/** Shared shell Sandbox + backgrounded-process-safe runner for the builder and judge steps. */
+import { spawn, spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
 import {
 	type ExecuteOptions,
 	type ExecutionResult,
@@ -20,25 +10,135 @@ import {
 	type StreamChunk,
 } from '@strands-agents/sdk';
 
-// Bounded grace (ms) between the direct bash process exiting and force-resolving
-// the shell result. Normal commands resolve earlier on 'close' (all stdio
-// drained); this only fires for the pathological case where a backgrounded
-// grandchild escaped the process group (e.g. via `setsid`) and still holds the
-// inherited stdout/stderr pipes open, so 'close' would otherwise never fire.
+// Process-identity isolation for the builder's agent shell (issue #184): run it as a
+// dedicated unprivileged user (`benchagent`) via `sudo -n runuser -u benchagent -- env
+// <full-env> bash -c`, so the agent's broad by-name/by-user kills (pkill/killall/fuser -k)
+// hit a cross-uid EPERM instead of reaping the parent harness. UID isolation (not a PID
+// namespace) so a `setsid` dev server the agent backgrounds persists across bash calls.
+// runuser isn't a login shell, so the full resolved env is re-materialized via `env
+// KEY=VAL … bash -c` (survives sudo's env scrub); HOME points at benchagent's home. Used
+// only when passwordless sudo+runuser works AND prepareWorkspaceIsolation's ACL is granted
+// (probed once, memoized); otherwise falls back to bare `bash -c`.
+export const BENCH_AGENT_USER = process.env.BENCH_AGENT_USER || 'benchagent';
+
+let isolationProbe: boolean | undefined;
+let agentHome: string | undefined;
+
+// benchagent's home dir (from its passwd entry) so HOME is writable; falls back to /home/<user>.
+function resolveAgentHome(): string {
+	try {
+		const r = spawnSync('getent', ['passwd', BENCH_AGENT_USER], { encoding: 'utf8', timeout: 5000 });
+		if (r.status === 0 && typeof r.stdout === 'string') {
+			const home = r.stdout.trim().split(':')[5];
+			if (home) return home;
+		}
+	} catch {
+		/* fall through */
+	}
+	return `/home/${BENCH_AGENT_USER}`;
+}
+
+// Probe (once, memoized) whether the agent shell can run as benchagent via passwordless
+// sudo+runuser, using the EXACT privilege transition runShell uses; false → caller falls back.
+// NOTE (probe breadth): this only exercises `sudo -n runuser`, but the reap path (killGroup)
+// also relies on `sudo -n kill` — and the harness's stale-server sweep on `sudo -n fuser`/`rm`.
+// We probe just the one verb because the runner grants benchagent's sudoers entry as
+// `NOPASSWD:ALL` (a single rule covering every command), so a passing `runuser` probe implies
+// the others pass too. If that sudoers policy is ever narrowed to per-command rules, this probe
+// must be widened to verify each verb the reap/sweep depends on.
+export function isolationAvailable(): boolean {
+	if (isolationProbe !== undefined) return isolationProbe;
+	try {
+		const r = spawnSync('sudo', ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'true'], {
+			stdio: 'ignore',
+			timeout: 5000,
+		});
+		isolationProbe = r.status === 0 && !r.error;
+		if (isolationProbe) agentHome = resolveAgentHome();
+	} catch {
+		isolationProbe = false;
+	}
+	return isolationProbe;
+}
+
+// Grant benchagent + the harness user rwx on the workspace (recursive + default ACL, so
+// files either creates later stay mutually accessible), AND grant benchagent search (x) on
+// every ANCESTOR dir — the kernel checks x on each parent when resolving an ABSOLUTE path,
+// and npm/node/tsc resolve modules absolutely, so without it absolute-path opens EACCES
+// even though the workspace itself is rwx. Ancestor grant is best-effort per dir. Returns
+// true only if the workspace grants succeed; false → caller disables isolation.
+export function prepareWorkspaceIsolation(root: string): boolean {
+	if (!isolationAvailable()) return false;
+	let me = process.env.USER ?? '';
+	if (!me) {
+		try {
+			me = spawnSync('id', ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
+		} catch {
+			me = '';
+		}
+	}
+	const abs = resolve(root);
+	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
+	const access = spawnSync('setfacl', ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	const dflt = spawnSync('setfacl', ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
+	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
+	// Grant benchagent search (x) up the ancestor chain so absolute-path opens can traverse.
+	let dir = dirname(abs);
+	let prev = '';
+	while (dir && dir !== prev && dir !== '/') {
+		spawnSync('setfacl', ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
+		prev = dir;
+		dir = dirname(dir);
+	}
+	return true;
+}
+
+// Build the argv for one agent shell command (`cd <cwd> && <command>`), wrapped to run as
+// benchagent when isolation is requested and available. Exported so the wrap decision is
+// unit-testable without spawning. `isolate` defaults false so the judge keeps the bare spawn.
+export function buildAgentSpawn(
+	command: string,
+	cwd: string,
+	isolate: boolean,
+	env: Record<string, string>,
+): { file: string; args: string[]; isolated: boolean } {
+	const inner = `cd ${shellQuote(cwd)} && ${command}`;
+	if (isolate && isolationAvailable()) {
+		const forwarded: Record<string, string> = { ...env, HOME: agentHome ?? `/home/${BENCH_AGENT_USER}` };
+		// Only forward valid shell identifier names (drops exported-function keys like
+		// `BASH_FUNC_x%%`); values pass as argv so need no quoting.
+		// NOTE (secrets-on-argv): any OIDC/AWS creds in the env land here on `env KEY=VAL … bash`
+		// argv, so they're briefly world-readable via `/proc/<pid>/cmdline`. Writing them to a
+		// 0600 env-file and `env -S "$(cat file)"` would avoid the exposure, but the file must be
+		// readable by benchagent (defeating 0600 across the uid boundary) and complicates the
+		// isolation path. Deferred: the runner is a single-tenant ephemeral GitHub-hosted VM, so
+		// the only local reader is benchagent itself, which already receives the creds by design.
+		const envPairs = Object.entries(forwarded)
+			.filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k))
+			.map(([k, v]) => `${k}=${v}`);
+		return {
+			file: 'sudo',
+			args: ['-n', 'runuser', '-u', BENCH_AGENT_USER, '--', 'env', ...envPairs, 'bash', '-c', inner],
+			isolated: true,
+		};
+	}
+	return { file: 'bash', args: ['-c', inner], isolated: false };
+}
+
+// Bounded grace (ms) before force-resolving if a backgrounded grandchild escaped the
+// process group (e.g. via `setsid`) and still holds the inherited pipes open.
 export const EXIT_DRAIN_GRACE_MS = 2000;
 
-// Host-execution Sandbox rooted at a fixed directory. The vended bash +
-// fileEditor tools route every command and file operation through the agent's
-// configured Sandbox, so rooting it at `root` makes containment structural (the
-// shell's cwd is that dir) rather than a prompt convention. PosixShellSandbox
-// already implements readFile/writeFile/listFiles on top of executeStreaming, so
-// rooting the shell roots the file editor too — the only method we must supply
-// is executeStreaming. `minTimeoutSec` floors the per-command timeout (builder
-// passes BASH_MIN_TIMEOUT_SEC so npm install/build survive; judge leaves it 0).
+// Host-execution Sandbox rooted at a fixed dir: the vended bash + fileEditor route every
+// op through it, so rooting at `root` makes containment structural. `minTimeoutSec` floors
+// the per-command timeout (builder passes BASH_MIN_TIMEOUT_SEC so npm install/build survive).
 export class WorkspaceSandbox extends PosixShellSandbox {
+	// `isolate` runs each command as benchagent (cross-uid EPERM shields the harness); builder
+	// passes true, judge leaves false (its shell is read-only and never issues kills).
 	constructor(
 		private readonly root: string,
 		private readonly minTimeoutSec = 0,
+		private readonly isolate = false,
 	) {
 		super();
 	}
@@ -48,56 +148,44 @@ export class WorkspaceSandbox extends PosixShellSandbox {
 		options?: ExecuteOptions,
 	): AsyncGenerator<StreamChunk | ExecutionResult, void, undefined> {
 		const cwd = options?.cwd ?? this.root;
-		// The vended bash callback always passes a timeout (its own 120s default
-		// when the model omits one), which would kill npm install/build. Floor it
-		// to minTimeoutSec so long commands survive. `undefined` means the caller
-		// opted out of a timeout (e.g. the file-editor's internal read/write execs
-		// run with none) — leave that untouched.
+		// Floor the vended bash's timeout (its 120s default would kill npm install/build) to
+		// minTimeoutSec; `undefined` means the caller opted out of a timeout — leave untouched.
 		const timeout = options?.timeout === undefined ? undefined : Math.max(options.timeout, this.minTimeoutSec);
-		const result = await runShell(command, cwd, timeout, options?.signal, options?.env);
+		const result = await runShell(command, cwd, timeout, options?.signal, options?.env, this.isolate);
 		if (result.stdout) yield { type: 'streamChunk', data: result.stdout, streamType: 'stdout' };
 		if (result.stderr) yield { type: 'streamChunk', data: result.stderr, streamType: 'stderr' };
 		yield result;
 	}
 }
 
-// Run one command through a POSIX shell rooted at `cwd`, buffering output and
-// resolving the final ExecutionResult. Throws the SDK's SandboxTimeoutError /
-// SandboxAbortError so the vended bash surfaces a timeout as BashTimeoutError.
-// Buffering (rather than incremental streaming) matches the only consumers here
-// — Sandbox.execute and the file editor, which need just the final result.
+// Run one command through a POSIX shell rooted at `cwd`, buffering output and resolving the
+// final ExecutionResult (throws the SDK's SandboxTimeoutError/SandboxAbortError).
 //
-// Backgrounded-process containment (the post-invoke-hang fix): the agent may
-// background a long-lived process (e.g. `npm run dev &`). Two safeguards keep
-// that from wedging the harness:
-//   1. Spawn `detached: true` so bash leads its OWN process group (pgid == pid).
-//      Under non-interactive job control a `&` child stays in that group, so a
-//      negative-pid signal reaps the whole tree in one shot.
-//   2. Resolve on 'close' (all stdio drained to EOF) so the buffered stdout is
-//      COMPLETE — the vended fileEditor reads files via `base64 < file` and
-//      decodes result.stdout, so a truncated capture would corrupt reads/writes.
-//      But 'close' alone BLOCKS for the full timeout when a backgrounded child
-//      inherits the stdout/stderr pipes (their write-ends never close). So the
-//      moment BASH ITSELF exits we SIGKILL the process group: that reaps the
-//      backgrounded child and closes the leaked pipe FDs, letting 'close' fire
-//      promptly with the foreground output intact (e.g. `npm run dev & sleep 3;
-//      echo` returns in ~3s, not the 600s floor). A bounded post-exit grace
-//      (EXIT_DRAIN_GRACE_MS) resolves anyway if a child escaped the group (e.g.
-//      via `setsid`) and still holds the pipes, so we never hang.
+// Backgrounded-process containment (the post-invoke-hang fix): (1) spawn `detached: true` so
+// the process leads its own group and a negative-pid signal reaps the whole tree (a `setsid`
+// server the agent persists across calls escapes it by design); (2) resolve on 'close' for a
+// complete capture, but SIGKILL the group the moment the shell exits so a backgrounded child's
+// leaked pipe FDs close and 'close' fires promptly, with EXIT_DRAIN_GRACE_MS as a fallback.
+// `isolate` (builder only) runs as benchagent via sudo+runuser, so the group kill escalates
+// through `sudo kill` (the harness uid can't signal a benchagent-owned group directly).
 export function runShell(
 	command: string,
 	cwd: string,
 	timeoutSec: number | undefined,
 	signal: AbortSignal | undefined,
 	env: Record<string, string> | undefined,
+	isolate = false,
 ): Promise<ExecutionResult> {
 	return new Promise<ExecutionResult>((resolve, reject) => {
-		const proc = spawn('bash', ['-c', `cd ${shellQuote(cwd)} && ${command}`], {
-			env: env ? { ...process.env, ...env } : process.env,
+		// Resolve the full env ONCE so the spawn and buildAgentSpawn's re-materialization match.
+		const merged: Record<string, string> = {};
+		for (const [k, v] of Object.entries(process.env)) if (v !== undefined) merged[k] = v;
+		if (env) for (const [k, v] of Object.entries(env)) merged[k] = v;
+		const { file, args } = buildAgentSpawn(command, cwd, isolate, merged);
+		const proc = spawn(file, args, {
+			env: merged,
 			detached: true,
-			// Give stdin an explicit EOF (ignore) so an interactive prompt (npx
-			// install y/n, a bare `read`) fails fast instead of blocking on a TTY
-			// that never comes until the timeout floor.
+			// Explicit stdin EOF so an interactive prompt fails fast instead of blocking on a TTY.
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		let stdout = '';
@@ -106,18 +194,20 @@ export function runShell(
 		let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 		let drainHandle: ReturnType<typeof setTimeout> | undefined;
 
-		// SIGKILL the whole process group (negative pid). This reaps any process
-		// the command backgrounded — whose inherited stdout/stderr pipe write-ends
-		// are exactly what keeps 'close' from firing (blocking the tool call for
-		// the full timeout) and holds libuv's loop open so Node never exits after
-		// invoke() returns. Guarded: pid is undefined if spawn failed, and the
-		// group may already be gone (ESRCH).
+		// SIGKILL the whole process group (negative pid) to reap any backgrounded child whose
+		// inherited pipe write-ends keep 'close' from firing and hold libuv's loop open. Guarded
+		// (pid may be undefined / group already ESRCH). When isolated the group is benchagent-owned,
+		// so escalate via `sudo kill`; a `setsid` server escapes the group and keeps running.
 		const killGroup = (): void => {
 			if (proc.pid === undefined) return;
+			if (isolate) {
+				spawnSync('sudo', ['-n', 'kill', '-9', `-${proc.pid}`], { stdio: 'ignore', timeout: 5000 });
+				return;
+			}
 			try {
 				process.kill(-proc.pid, 'SIGKILL');
 			} catch {
-				// group already reaped — nothing to do
+				// group already reaped
 			}
 		};
 
@@ -144,10 +234,8 @@ export function runShell(
 			stderr += String(d);
 		});
 		proc.on('error', (err) => settle(() => reject(err)));
-		// The direct bash process has terminated (its foreground pipeline is done);
-		// only `&`-backgrounded children can still be alive. Reap the group so their
-		// leaked pipe FDs close and 'close' can fire, and arm the grace fallback for
-		// a child that escaped the group.
+		// bash's foreground pipeline is done; only `&`-backgrounded children may survive. Reap the
+		// group so their leaked pipe FDs close ('close' can fire) and arm the grace fallback.
 		proc.on('exit', (code, sig) => {
 			if (settled) return;
 			killGroup();

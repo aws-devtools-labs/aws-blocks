@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-data",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
