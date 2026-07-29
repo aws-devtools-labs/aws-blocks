@@ -1,5 +1,5 @@
 {
-  "name": "aws-blocks",
+  "name": "bb-vpc-smoke-backend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
