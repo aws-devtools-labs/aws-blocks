@@ -10,8 +10,8 @@
     "build": "tsc --build",
     "test": "echo 'VPC smoke tests run via test:e2e:sandbox'",
     "test:e2e:local": "echo 'VPC smoke tests require deployment \u2014 skipping local' && exit 0",
-    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox tsx -C browser test/vpc-smoke.test.ts",
-    "test:e2e:production": "BLOCKS_TEST_ENV=production tsx -C browser test/vpc-smoke.test.ts"
+    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox npx tsx test/vpc-smoke.test.ts",
+    "test:e2e:production": "BLOCKS_TEST_ENV=production npx tsx test/vpc-smoke.test.ts"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
