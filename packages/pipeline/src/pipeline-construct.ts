@@ -16,7 +16,7 @@ import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'node:url';
-import { isSecret, resolveSecretsAtSynth, secretStoreLocator } from '@aws-blocks/hosting';
+import { DEFAULT_SECRET_STORE, isSecret, resolveSecretsAtSynth, secretStoreLocator } from '@aws-blocks/hosting';
 import type {
   BranchConfig,
   PipelineProps,
@@ -310,8 +310,10 @@ function buildSecretEnvVars<TConfig>(
 
   const prefix = props.secretsConfig?.prefix;
   const store = props.secretsConfig?.store;
+  // Route the fallback through the shared DEFAULT_SECRET_STORE seam so pipeline
+  // and hosting can never disagree on the default (both are SSM today).
   const type =
-    (store ?? 'secrets-manager') === 'secrets-manager'
+    (store ?? DEFAULT_SECRET_STORE) === 'secrets-manager'
       ? codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER
       : codebuild.BuildEnvironmentVariableType.PARAMETER_STORE;
 

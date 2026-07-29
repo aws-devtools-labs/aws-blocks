@@ -157,32 +157,31 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
 	});
 
-	void it('secrets-manager (DEFAULT): slash-free locator + _STORE hint + secretsmanager:GetSecretValue', () => {
+	void it('SSM (DEFAULT): leading-slash param NAME + ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
 		const { stack, fn } = fnStack();
-		// No `store` passed → the default (Secrets Manager) must apply.
+		// No `store` passed → the default (SSM Parameter Store) must apply.
 		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
 				Variables: Match.objectLike({
-					// SM names are slash-free at the root (see secretStoreLocator).
-					HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
-					HOSTING_SECRET_PARAM_STRIPE_KEY_STORE: 'secrets-manager',
+					// SSM keeps the leading-slash path form (see secretStoreLocator).
+					HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
 				}),
 			},
 		});
 		t.hasResourceProperties('AWS::IAM::Policy', {
 			PolicyDocument: {
 				Statement: Match.arrayWith([
-					Match.objectLike({ Action: 'secretsmanager:GetSecretValue' }),
+					Match.objectLike({ Action: 'ssm:GetParameter' }),
 					Match.objectLike({ Action: 'kms:Decrypt' }),
 				]),
 			},
 		});
-		// IAM ARN scopes to this secret via SM's -?????? suffix wildcard.
-		assert.ok(JSON.stringify(t.toJSON()).includes('blocks/secrets/STRIPE_KEY-??????'));
-		// The default-store wiring equals an explicit secrets-manager wiring.
-		assert.strictEqual(DEFAULT_SECRET_STORE, 'secrets-manager');
+		// SSM is the default, so no _STORE hint is emitted (the runtime defaults to SSM).
+		assert.ok(!JSON.stringify(t.toJSON()).includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
+		// The default-store wiring equals an explicit ssm wiring.
+		assert.strictEqual(DEFAULT_SECRET_STORE, 'ssm');
 	});
 
 	void it('with a stage: injects stage locator + _FALLBACK shared locator, grants BOTH ARNs', () => {

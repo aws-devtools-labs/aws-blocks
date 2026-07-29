@@ -68,8 +68,8 @@ void describe('secret path + env naming', () => {
 });
 
 void describe('store default + store-aware locator', () => {
-	void it('defaults to Secrets Manager (AWS guidance: SM for application secrets/credentials)', () => {
-		assert.strictEqual(DEFAULT_SECRET_STORE, 'secrets-manager');
+	void it('defaults to SSM (ecosystem consistency: AppSetting + Amplify Gen2 are SSM; free at standard tier)', () => {
+		assert.strictEqual(DEFAULT_SECRET_STORE, 'ssm');
 	});
 
 	void it('the no-store locator matches the DEFAULT store form (guards the default flip)', () => {

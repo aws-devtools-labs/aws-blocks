@@ -26,7 +26,7 @@
  * Pass the SAME `--prefix` / `--store` your `HostingConstruct({ secrets })` (or
  * `Pipeline({ secrets })`) uses, so the value is written and read under the same
  * locator. Defaults match the construct defaults (neutral `/hosting/secrets`
- * prefix, Secrets Manager).
+ * prefix, SSM Parameter Store SecureString).
  *
  * Prefer `--value-stdin` (or the interactive prompt when no value is given) over
  * a positional value, which would land in your shell history / `ps` output.

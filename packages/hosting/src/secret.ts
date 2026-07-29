@@ -75,39 +75,46 @@ export const SECRET_BRAND: unique symbol = Symbol.for('@aws-blocks/hosting.Secre
 
 /**
  * Which backing store holds a secret value.
- * - `'secrets-manager'` — AWS Secrets Manager (**default**): encrypted at rest,
- *   with **built-in automatic rotation** and native service integrations. This
- *   is the store AWS's public guidance recommends for application secrets and
- *   credentials (API tokens, database passwords) — see
+ * - `'ssm'` — SSM Parameter Store SecureString (**default**): encrypted at rest
+ *   (KMS), free at standard tier, and scales to zero. It is the store already
+ *   used by `AppSetting` and Amplify Gen2's `secret()`, so defaulting here keeps
+ *   secrets in **one store** across Blocks (one place to look, one IAM pattern,
+ *   one future migration path) — the ecosystem-consistency goal (G10).
+ * - `'secrets-manager'` — AWS Secrets Manager: encrypted at rest with **built-in
+ *   automatic rotation** and native service integrations. A first-class opt-in
+ *   for values that genuinely need rotation — per AWS's public guidance for
+ *   application credentials, see
  *   https://aws.amazon.com/blogs/security/how-to-choose-the-right-aws-service-for-managing-secrets-and-configurations/
- * - `'ssm'` — SSM Parameter Store SecureString: free and scales to zero. Per
- *   the same guidance, best for *non-sensitive* configuration and simple
- *   key-value pairs that don't need rotation; kept as a first-class opt-in.
+ *   Bills ~$0.40/secret/month, so it is opt-in rather than the default.
  */
 export type SecretStore = 'ssm' | 'secrets-manager';
 
 /**
- * Default backing store for hosting/pipeline secrets: **`'secrets-manager'`**.
- * AWS's public guidance ("How to choose the right AWS service for managing
- * secrets and configurations", 2025) recommends Secrets Manager for application
- * secrets and credentials — for its automatic rotation, multi-Region
- * replication, and native service integrations — while Parameter Store is for
- * non-sensitive configuration. `secret()` holds credentials, so it defaults to
- * Secrets Manager.
+ * Default backing store for hosting/pipeline secrets: **`'ssm'`** (SSM Parameter
+ * Store SecureString). SSM is free at standard tier, and three of the four Blocks
+ * secret surfaces are already SSM (`AppSetting`, Blocks core `secret`, Amplify
+ * Gen2 backend `secret()`), so defaulting hosting/pipeline to SSM too yields
+ * **one store across the ecosystem** — one place to look and a single migration
+ * path — rather than values split across two services for no visible reason.
+ * Secrets Manager stays a first-class per-construct opt-in (`store:
+ * 'secrets-manager'`) for values that need its built-in rotation (per AWS's
+ * credentials→SM guidance); nothing is lost, the guidance-aligned choice is one
+ * config flag away.
  *
  * MIGRATION SEAM: this single constant selects the default for every consumer
  * (CLI write, wireRuntimeSecret, resolveSecretsAtSynth, runtime getSecret).
  * Callers that pin an explicit `store` are unaffected. NOTE for anyone who set
- * secrets under an earlier SSM default: SSM and Secrets Manager are distinct
- * services — an SSM value is NOT auto-copied to SM, so re-run
- * `secret set <KEY>` once per key after upgrading (or pin `store: 'ssm'`).
+ * secrets under an earlier Secrets Manager default (a pre-release build of this
+ * branch): SSM and Secrets Manager are distinct services — a Secrets Manager
+ * value is NOT auto-copied to SSM, so re-run `secret set <KEY>` once per key
+ * after upgrading (or pin `store: 'secrets-manager'` to stay put).
  *
  * NOTE: this is the leaf's neutral default for DIRECT consumers (a standalone
  * hosting app, pipeline, or any other framework-neutral caller of the L3).
  * `@aws-blocks/core` (Blocks) pins its own SSM `/blocks/secrets` namespace
  * independently and is unaffected by this constant.
  */
-export const DEFAULT_SECRET_STORE: SecretStore = 'secrets-manager';
+export const DEFAULT_SECRET_STORE: SecretStore = 'ssm';
 
 /** Options for {@link secret}. */
 export interface SecretOptions {

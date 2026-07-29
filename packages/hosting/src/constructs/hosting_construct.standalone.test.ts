@@ -483,7 +483,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
 
   // ---- secret() markers in environment (any framework-neutral consumer) ----
   void describe('environment secret() markers', () => {
-    void it('wires a runtime secret marker on the DEFAULT store (Secrets Manager): slash-free locator + grants, no value leak', () => {
+    void it('wires a runtime secret marker on the DEFAULT store (SSM): param name + ssm:GetParameter, no _STORE hint, no value leak', () => {
       const stack = createEnvStack();
       new HostingConstruct(stack, 'Hosting', {
         manifest: makeSsrManifest(),
@@ -492,35 +492,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
         skipRegionValidation: true,
       });
       const t = Template.fromStack(stack);
-      // Secrets Manager (default) uses the slash-free name + sets the _STORE hint.
-      t.hasResourceProperties('AWS::Lambda::Function', {
-        Environment: {
-          Variables: Match.objectLike({
-            HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
-            HOSTING_SECRET_PARAM_STRIPE_KEY_STORE: 'secrets-manager',
-          }),
-        },
-      });
-      t.hasResourceProperties('AWS::IAM::Policy', {
-        PolicyDocument: {
-          Statement: Match.arrayWith([Match.objectLike({ Action: 'secretsmanager:GetSecretValue' })]),
-        },
-      });
-      // Marker value never appears; only the locator does.
-      const json = JSON.stringify(t.toJSON());
-      assert.ok(!json.includes('"STRIPE_KEY":'), 'secret value must not be a plaintext env var');
-    });
-
-    void it('wires a runtime secret marker on the SSM opt-in store: param name + ssm:GetParameter, no _STORE hint', () => {
-      const stack = createEnvStack();
-      new HostingConstruct(stack, 'Hosting', {
-        manifest: makeSsrManifest(),
-        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
-        secretsConfig: { prefix: '/blocks/secrets', store: 'ssm' },
-        skipRegionValidation: true,
-      });
-      const t = Template.fromStack(stack);
-      // SSM keeps the leading-slash path form and injects no _STORE hint.
+      // SSM (default) keeps the leading-slash path form and injects no _STORE hint.
       t.hasResourceProperties('AWS::Lambda::Function', {
         Environment: {
           Variables: Match.objectLike({
@@ -534,13 +506,37 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
         },
       });
       const json = JSON.stringify(t.toJSON());
-      assert.ok(
-        !json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'),
-        'ssm store injects no _STORE hint',
-      );
+      // No _STORE hint for the SSM default, and the marker value never appears.
+      assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'), 'ssm default injects no _STORE hint');
+      assert.ok(!json.includes('"STRIPE_KEY":'), 'secret value must not be a plaintext env var');
     });
 
-    void it('uses the neutral /hosting/secrets prefix by default (SM name is slash-free)', () => {
+    void it('wires a runtime secret marker on the Secrets Manager opt-in store: slash-free locator + _STORE hint + grants', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+        secretsConfig: { prefix: '/blocks/secrets', store: 'secrets-manager' },
+        skipRegionValidation: true,
+      });
+      const t = Template.fromStack(stack);
+      // Secrets Manager uses the slash-free name + sets the _STORE hint.
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
+            HOSTING_SECRET_PARAM_STRIPE_KEY_STORE: 'secrets-manager',
+          }),
+        },
+      });
+      t.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([Match.objectLike({ Action: 'secretsmanager:GetSecretValue' })]),
+        },
+      });
+    });
+
+    void it('uses the neutral /hosting/secrets prefix by default (SSM keeps the leading slash)', () => {
       const stack = createEnvStack();
       new HostingConstruct(stack, 'Hosting', {
         manifest: makeSsrManifest(),
@@ -548,8 +544,8 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
         skipRegionValidation: true,
       });
       const json = JSON.stringify(Template.fromStack(stack).toJSON());
-      // Default store is Secrets Manager → locator is the slash-free name.
-      assert.ok(json.includes('hosting/secrets/API_KEY'), 'neutral default prefix');
+      // Default store is SSM → locator keeps the leading-slash path form.
+      assert.ok(json.includes('/hosting/secrets/API_KEY'), 'neutral default prefix');
     });
 
     void it('rejects an unresolved deploy-time (resolveAt: deploy) marker at construct level', () => {

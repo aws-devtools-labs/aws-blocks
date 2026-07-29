@@ -37,7 +37,7 @@ const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export interface SecretCliOptions {
 	/** Path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
 	prefix?: string;
-	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'secrets-manager'`). */
+	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'ssm'`). */
 	store?: SecretStore;
 	/**
 	 * Optional environment segment. When set, the value is written under

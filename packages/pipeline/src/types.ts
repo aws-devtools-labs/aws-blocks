@@ -389,9 +389,10 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
    * Configuration for how the pipeline's `secret()` markers are resolved —
    * namespace + backing store, NOT the secret values themselves. Governs both
    * {@link buildSecrets} and a secret `connectionArn`. Defaults to the neutral
-   * `/hosting/secrets` prefix and the default store (Secrets Manager). Set
-   * `store: 'ssm'` to use SSM Parameter Store, or `prefix` to pin your own
-   * namespace — the CLI that sets the values and this deploy must agree on both.
+   * `/hosting/secrets` prefix and the default store (SSM Parameter Store). Set
+   * `store: 'secrets-manager'` to use AWS Secrets Manager, or `prefix` to pin
+   * your own namespace — the CLI that sets the values and this deploy must agree
+   * on both.
    */
   readonly secretsConfig?: { readonly prefix?: string; readonly store?: SecretStore };
 

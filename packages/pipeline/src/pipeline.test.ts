@@ -1896,8 +1896,8 @@ describe('_sourceOverride (internal test hook)', () => {
       return [];
     }
 
-    it('wires a buildSecret as a SECRETS_MANAGER build env var (default store)', () => {
-      const stack = new Stack(new App(), 'BuildSecretsSM');
+    it('wires a buildSecret as a PARAMETER_STORE build env var (default store: SSM)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsSSM');
       new Pipeline(
         stack,
         'P',
@@ -1908,25 +1908,25 @@ describe('_sourceOverride (internal test hook)', () => {
       const vars = synthProjectEnvVars(stack);
       const npm = vars.find((v) => v.Name === 'NPM_TOKEN');
       assert.ok(npm, 'NPM_TOKEN env var present on the synth CodeBuild project');
-      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
-      // Secrets Manager locator is the slash-free name.
-      assert.strictEqual(npm?.Value, 'hosting/secrets/NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'PARAMETER_STORE');
+      // SSM keeps the leading-slash path form.
+      assert.strictEqual(npm?.Value, '/hosting/secrets/NPM_TOKEN');
     });
 
-    it('honors the ssm store + custom prefix (PARAMETER_STORE build env var)', () => {
-      const stack = new Stack(new App(), 'BuildSecretsSSM');
+    it('honors the secrets-manager store + custom prefix (SECRETS_MANAGER build env var)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsSM');
       new Pipeline(
         stack,
         'P',
         defaultPipelineProps({
           buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
-          secretsConfig: { prefix: '/myapp/secrets', store: 'ssm' },
+          secretsConfig: { prefix: '/myapp/secrets', store: 'secrets-manager' },
         }),
       );
       const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
-      assert.strictEqual(npm?.Type, 'PARAMETER_STORE');
-      // SSM keeps the leading-slash path form.
-      assert.strictEqual(npm?.Value, '/myapp/secrets/NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      // Secrets Manager locator is the slash-free name.
+      assert.strictEqual(npm?.Value, 'myapp/secrets/NPM_TOKEN');
     });
 
     it('rejects a non-marker buildSecrets value', () => {
