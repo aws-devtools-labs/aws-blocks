@@ -43,7 +43,13 @@ if (!vpcId) {
   );
 }
 
-const vpc = ec2.Vpc.fromLookup(app, 'VpcSmokeTestVpc', { vpcId });
+// fromLookup must be scoped to a Stack (CDK requirement), so we create a
+// lightweight lookup stack. The VPC itself is shared infrastructure — this
+// stack holds no real resources, just the cached context lookup.
+const lookupStack = new cdk.Stack(app, `${stackName}-vpc-lookup`, {
+  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION || 'us-east-1' },
+});
+const vpc = ec2.Vpc.fromLookup(lookupStack, 'VpcSmokeTestVpc', { vpcId });
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
