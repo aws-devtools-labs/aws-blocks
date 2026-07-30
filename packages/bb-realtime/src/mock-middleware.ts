@@ -93,7 +93,7 @@ function doConnect(wsUrl: string) {
 				if (data.type === 'subscribe_success' && data.channel) {
 					const pending = conn.pendingEstablished.get(data.channel);
 					if (pending) {
-						pending.forEach(p => p.resolve());
+						pending.forEach(p => { p.resolve(); });
 						conn.pendingEstablished.delete(data.channel);
 					}
 				} else if (data.type === 'error' && data.channel) {
@@ -101,7 +101,7 @@ function doConnect(wsUrl: string) {
 					if (pending) {
 						const err = new Error(data.message || 'Subscription rejected');
 						err.name = 'ConnectionFailedException';
-						pending.forEach(p => p.reject(err));
+						pending.forEach(p => { p.reject(err); });
 						conn.pendingEstablished.delete(data.channel);
 					}
 					// Remove the subscription entry since it was rejected

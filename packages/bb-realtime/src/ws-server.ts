@@ -75,8 +75,8 @@ export function attach(httpServer: Server) {
 		ws.on('error', () => { clients.delete(ws); });
 	});
 
-	localRealtimeBus.on('broadcast', ({ channel, payload }) => {
-		const message = JSON.stringify({ type: 'message', channel, data: payload });
+	localRealtimeBus.on('broadcast', ({ channel, data }) => {
+		const message = JSON.stringify({ type: 'message', channel, data });
 		for (const [ws, sub] of clients) {
 			if (sub.channels.has(channel) && ws.readyState === WebSocket.OPEN) {
 				ws.send(message);

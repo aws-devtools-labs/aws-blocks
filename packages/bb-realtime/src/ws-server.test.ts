@@ -13,7 +13,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import { attach, closeWebSocketServer, localRealtimeBus } from './ws-server.js';
 import { LOCAL_TOKEN_SECRET } from './local-dev.js';
@@ -104,7 +104,7 @@ describe('WebSocket server: subscribe authorization', () => {
 				if (msg.type === 'message') resolve(msg);
 			});
 		});
-		localRealtimeBus.emit('broadcast', { channel: CHANNEL, payload: { sender: 'alice', text: 'Top secret' } });
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { sender: 'alice', text: 'Top secret' } });
 
 		const message = await authedGotMessage;
 		assert.deepStrictEqual(message.data, { sender: 'alice', text: 'Top secret' });
@@ -167,7 +167,7 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 		// Wait for the middleware to reconnect and resubscribe (backoff starts ~1s).
 		await new Promise((r) => setTimeout(r, 1500));
 
-		localRealtimeBus.emit('broadcast', { channel: CHANNEL, payload: { text: 'after reconnect' } });
+		localRealtimeBus.emit('broadcast', { channel: CHANNEL, data: { text: 'after reconnect' } });
 
 		// Allow the broadcast to round-trip to the reconnected client.
 		await new Promise((r) => setTimeout(r, 200));
