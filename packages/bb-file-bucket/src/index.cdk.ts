@@ -5,7 +5,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { VpcRequirements, ScopeOptions } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
 import { validateBucketName } from './bucket-name.js';
@@ -21,7 +22,7 @@ const httpMethodMap: Record<string, s3.HttpMethods> = {
 	HEAD: s3.HttpMethods.HEAD,
 };
 
-export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
+export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends BuildingBlockScope {
 	private bucket: s3.IBucket;
 
 	/**
@@ -33,11 +34,14 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
 	}
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for S3 access
-		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.S3);
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and

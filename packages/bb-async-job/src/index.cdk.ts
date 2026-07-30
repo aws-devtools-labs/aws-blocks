@@ -5,8 +5,9 @@ import { Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
@@ -31,15 +32,18 @@ export type {
 	WaitUntilCompleteOptions,
 } from './types.js';
 
-export class AsyncJob<T = unknown> extends Scope {
+export class AsyncJob<T = unknown> extends BuildingBlockScope {
 	public readonly queue: Queue;
 	public readonly dlq: Queue;
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for SQS access
-		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SQS);
 
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 1;

@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerConfig, synthGuard, getVpcContext } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, synthGuard, getVpcContext } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
@@ -30,14 +31,19 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  * // With custom capacity:
  * const db = new Database(scope, 'analytics', { minCapacity: 1, maxCapacity: 8 });
  */
-export class Database extends Scope {
+export class Database extends BuildingBlockScope {
+  getVpcRequirements(): VpcRequirements {
+    return {
+      interfaceEndpoints: [
+        ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+        ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
+      ],
+      subnetRole: 'isolated',
+    };
+  }
+
   constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
     super(id, { parent: scope });
-
-    // Register VPC endpoints for RDS Data API + Secrets Manager
-    this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER);
-    this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.RDS_DATA);
-    this.registerVpcRequirements({ subnetRole: 'isolated' });
 
     const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 

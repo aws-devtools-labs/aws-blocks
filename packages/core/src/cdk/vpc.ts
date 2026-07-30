@@ -5,54 +5,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
 import type { BlocksVpcOptions, VpcContext, VpcRequirements, SubnetRole } from './vpc-types.js';
 
-const VPC_GATEWAY_ENDPOINTS_KEY = Symbol.for('BLOCKS_VPC_GATEWAY_ENDPOINTS');
-const VPC_INTERFACE_ENDPOINTS_KEY = Symbol.for('BLOCKS_VPC_INTERFACE_ENDPOINTS');
-const VPC_REQUIREMENTS_KEY = Symbol.for('BLOCKS_VPC_REQUIREMENTS');
 const VPC_CONTEXT_KEY = Symbol.for('BLOCKS_VPC_CONTEXT');
-
-/**
- * Register a gateway VPC endpoint requirement for a Building Block.
- * Called by BB CDK constructors to declare what gateway endpoints they need.
- * @internal
- */
-export function registerVpcGatewayEndpoint(scope: Construct, service: ec2.GatewayVpcEndpointAwsService): void {
-  const existing = (scope as any)[VPC_GATEWAY_ENDPOINTS_KEY] as ec2.GatewayVpcEndpointAwsService[] | undefined;
-  if (existing) {
-    existing.push(service);
-  } else {
-    (scope as any)[VPC_GATEWAY_ENDPOINTS_KEY] = [service];
-  }
-}
-
-/**
- * Register an interface VPC endpoint requirement for a Building Block.
- * Called by BB CDK constructors to declare what interface endpoints they need.
- * @internal
- */
-export function registerVpcInterfaceEndpoint(scope: Construct, service: ec2.InterfaceVpcEndpointAwsService): void {
-  const existing = (scope as any)[VPC_INTERFACE_ENDPOINTS_KEY] as ec2.InterfaceVpcEndpointAwsService[] | undefined;
-  if (existing) {
-    existing.push(service);
-  } else {
-    (scope as any)[VPC_INTERFACE_ENDPOINTS_KEY] = [service];
-  }
-}
-
-/**
- * Register VPC requirements (subnet role) for a Building Block.
- * Called by BB CDK constructors to declare what subnet role they need.
- * @internal
- */
-export function registerVpcRequirements(scope: Construct, requirements: VpcRequirements): void {
-  const existing = (scope as any)[VPC_REQUIREMENTS_KEY] as VpcRequirements | undefined;
-  if (existing) {
-    (scope as any)[VPC_REQUIREMENTS_KEY] = {
-      subnetRole: requirements.subnetRole || existing.subnetRole,
-    };
-  } else {
-    (scope as any)[VPC_REQUIREMENTS_KEY] = requirements;
-  }
-}
 
 /**
  * Set the VPC context on a scope (BlocksStack or BlocksBackend).
@@ -79,49 +32,11 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 }
 
 /**
- * Collect all gateway endpoint registrations from the construct tree.
- * @internal
+ * Type guard: does this construct implement the BuildingBlockScope protocol
+ * (i.e., has a getVpcRequirements method)?
  */
-function collectGatewayEndpoints(scope: Construct): ec2.GatewayVpcEndpointAwsService[] {
-  const all: ec2.GatewayVpcEndpointAwsService[] = [];
-
-  function walk(node: Construct) {
-    const eps = (node as any)[VPC_GATEWAY_ENDPOINTS_KEY] as ec2.GatewayVpcEndpointAwsService[] | undefined;
-    if (eps) {
-      all.push(...eps);
-    }
-    for (const child of node.node.children) {
-      if ('node' in child) {
-        walk(child as Construct);
-      }
-    }
-  }
-
-  walk(scope);
-  return all;
-}
-
-/**
- * Collect all interface endpoint registrations from the construct tree.
- * @internal
- */
-function collectInterfaceEndpoints(scope: Construct): ec2.InterfaceVpcEndpointAwsService[] {
-  const all: ec2.InterfaceVpcEndpointAwsService[] = [];
-
-  function walk(node: Construct) {
-    const eps = (node as any)[VPC_INTERFACE_ENDPOINTS_KEY] as ec2.InterfaceVpcEndpointAwsService[] | undefined;
-    if (eps) {
-      all.push(...eps);
-    }
-    for (const child of node.node.children) {
-      if ('node' in child) {
-        walk(child as Construct);
-      }
-    }
-  }
-
-  walk(scope);
-  return all;
+function hasBuildingBlockProtocol(construct: Construct): construct is Construct & { getVpcRequirements(): VpcRequirements } {
+  return typeof (construct as any).getVpcRequirements === 'function';
 }
 
 /**
@@ -165,7 +80,8 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
 }
 
 /**
- * Finalize VPC: collect endpoint registrations from all BBs, deduplicate, and provision.
+ * Finalize VPC: query all BuildingBlockScope children for their VPC requirements,
+ * deduplicate, and provision endpoints.
  * Called after all BBs are constructed (alongside finalizeConfigRegistry).
  * @internal
  */
@@ -176,8 +92,23 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 
   const { vpc } = options;
 
-  // Collect gateway endpoints from BB registrations and deduplicate
-  const gatewayEndpoints = collectGatewayEndpoints(scope);
+  const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
+  const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];
+
+  // Pull requirements from all BuildingBlockScope instances in the tree
+  for (const child of scope.node.findAll()) {
+    if (hasBuildingBlockProtocol(child)) {
+      const reqs = child.getVpcRequirements();
+      if (reqs.gatewayEndpoints) {
+        gatewayEndpoints.push(...reqs.gatewayEndpoints);
+      }
+      if (reqs.interfaceEndpoints) {
+        interfaceEndpoints.push(...reqs.interfaceEndpoints);
+      }
+    }
+  }
+
+  // Provision gateway endpoints (deduplicated)
   const provisionedGateway = new Set<string>();
 
   for (const service of gatewayEndpoints) {
@@ -189,13 +120,12 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
     new ec2.GatewayVpcEndpoint(scope, constructId, { vpc, service });
   }
 
-  // Collect interface endpoints from BB registrations and deduplicate
-  const interfaceEndpoints = collectInterfaceEndpoints(scope);
   // Always add CloudWatch Logs (Lambda needs it for log delivery from within VPC)
   interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS);
   // Always add SSM (auth BBs and AppSetting all use SSM)
   interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.SSM);
 
+  // Provision interface endpoints (deduplicated)
   const provisionedInterface = new Set<string>();
 
   for (const service of interfaceEndpoints) {

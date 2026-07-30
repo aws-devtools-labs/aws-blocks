@@ -51,9 +51,14 @@ export interface BlocksVpcOptions {
 
 /**
  * VPC requirements declared by a Building Block.
- * Collected during finalization to provision endpoints.
+ * Returned by `BuildingBlockScope.getVpcRequirements()` and collected
+ * during finalization to provision endpoints.
  */
 export interface VpcRequirements {
+  /** Gateway VPC endpoints this BB needs (e.g., S3, DynamoDB). */
+  gatewayEndpoints?: ec2.GatewayVpcEndpointAwsService[];
+  /** Interface VPC endpoints this BB needs (e.g., SQS, SSM, Secrets Manager). */
+  interfaceEndpoints?: ec2.InterfaceVpcEndpointAwsService[];
   /** Subnet role for VPC-resident resources (e.g., Aurora needs 'isolated'). */
   subnetRole?: SubnetRole;
 }

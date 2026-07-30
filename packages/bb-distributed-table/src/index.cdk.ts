@@ -9,7 +9,8 @@ import { CustomResource, Duration } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Scope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef } from './types.js';
 import { fileURLToPath } from 'node:url';
@@ -18,7 +19,7 @@ import { dirname, join } from 'node:path';
 export { DistributedTableErrors } from './errors.js';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef } from './types.js';
 
-export class DistributedTable<T = any> extends Scope {
+export class DistributedTable<T = any> extends BuildingBlockScope {
 	private table: ITable;
 
 	/**
@@ -32,11 +33,14 @@ export class DistributedTable<T = any> extends Scope {
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, public options: any) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for DynamoDB access
-		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		const config = options;
 

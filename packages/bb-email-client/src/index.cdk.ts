@@ -5,7 +5,8 @@ import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Stack } from 'aws-cdk-lib';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -14,12 +15,15 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions } from './types.js';
 
-export class EmailClient extends Scope {
+export class EmailClient extends BuildingBlockScope {
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for SES access
-		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SES);
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
