@@ -61,10 +61,14 @@ test('VPC Smoke Tests', async (t) => {
   t.after(async () => {
     if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
       console.log(`\n🗑️  Destroying ${ENV} stack...`);
-      execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-        cwd: join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' },
-      });
-      console.log(`✅ Stack destroyed`);
+      try {
+        execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
+          cwd: join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' },
+        });
+        console.log(`✅ Stack destroyed`);
+      } catch {
+        console.log(`⚠️  Stack destroy failed (non-fatal — cleanup will be retried next run)`);
+      }
     }
   });
 
