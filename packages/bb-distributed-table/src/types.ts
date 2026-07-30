@@ -44,6 +44,52 @@ export interface DistributedTableOptions<
 	 * ```
 	 */
 	ttl?: keyof T & string;
+	/**
+	 * Enable DynamoDB Point-in-Time Recovery (continuous backups).
+	 *
+	 * PITR lets you restore the table to any second within the retention
+	 * window (35 days), protecting against accidental writes/deletes and
+	 * logical corruption.
+	 *
+	 * Defaults to **`true` on production deploys** and **`false` in sandbox
+	 * mode** (`--context sandboxMode=true`) to keep throwaway sandboxes cheap.
+	 * Set explicitly to override that default in either environment.
+	 */
+	pointInTimeRecovery?: boolean;
+	/**
+	 * Enable DynamoDB deletion protection. When enabled, DynamoDB refuses to
+	 * delete the table (blocking a stray `cdk destroy` or console delete) until
+	 * protection is turned off.
+	 *
+	 * Defaults to **`true` on production deploys** and **`false` in sandbox
+	 * mode** so `sandbox:destroy` can tear the stack down without manual steps.
+	 * Set explicitly to override that default in either environment.
+	 */
+	deletionProtection?: boolean;
+	/**
+	 * Server-side encryption at rest.
+	 *
+	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
+	 *   key. Auditable via CloudTrail with no per-key monthly charge.
+	 * - `'customer-managed'`: provisions a dedicated customer-managed KMS key
+	 *   (CMK) for this table, giving you full control over rotation and key
+	 *   policy. Incurs standard KMS key + request charges.
+	 *
+	 * DynamoDB is always encrypted at rest; this only selects the key type.
+	 */
+	encryption?: 'aws-managed' | 'customer-managed';
+	/**
+	 * Controls what happens to the table when the enclosing CloudFormation
+	 * stack is deleted.
+	 *
+	 * - `'retain'`: keep the table (orphan it) — the safe default for
+	 *   production so stack teardown never destroys data.
+	 * - `'destroy'`: delete the table with the stack.
+	 *
+	 * Defaults to **`'retain'` on production deploys** and **`'destroy'` in
+	 * sandbox mode**. Set explicitly to override.
+	 */
+	removalPolicy?: 'retain' | 'destroy';
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */

@@ -100,6 +100,16 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Mock/AWS parity:** the mock checks serialized byte length client-side and throws `ItemTooLarge` directly. On AWS, DynamoDB raises a generic `ValidationException` for an oversized item; the runtime narrows on the size-specific message (`size has exceeded`) and re-maps only that case to `ItemTooLarge`. Other `ValidationException` causes (malformed expressions, type mismatches) propagate unchanged. Both layers therefore surface the same `error.name`, and the shared message lives in `errors.ts` (`DistributedTableMessages.itemTooLarge`) so the two stay byte-for-byte aligned.
 
+### D-DT-9: Secure-by-default durability & encryption, gated on sandbox mode
+
+Production tables default to Point-in-Time Recovery **on**, deletion protection **on**, SSE with the AWS-managed KMS key, and `RemovalPolicy.RETAIN`. In sandbox mode (`--context sandboxMode=true`) PITR and deletion protection default **off** and the removal policy is `DESTROY`, so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. Every default is overridable per table via `pointInTimeRecovery`, `deletionProtection`, `encryption`, and `removalPolicy`; an explicit option always wins over the environment default.
+
+**Why gate deletion protection inside the construct rather than at the stack layer.** The app templates already run `Mixins.of(stack).apply(new SandboxDisableDeletionProtection())` in sandbox mode, so a natural alternative would be to enable deletion protection unconditionally and let that mixin relax it for sandboxes. That does **not** work here: the mixin duck-types on a `deletionProtection` *instance* property, and the DynamoDB L2 `Table` only accepts `deletionProtection` as a constructor prop — it exposes no such instance property to flip afterward (pinned by `core/src/cdk/mixins.test.ts`). If we enabled it unconditionally, `sandbox:destroy` would fail on every table. So the sandbox/prod decision is made in the constructor using the same `sandboxMode` context the mixin reads.
+
+**Why AWS-managed (not customer-managed) KMS by default.** AWS-managed SSE (`aws/dynamodb`) gives CloudTrail-auditable encryption at rest with no per-key monthly charge and no extra stack resources, satisfying "SSE-KMS by default" without imposing cost. Teams that need key rotation/policy control opt into a dedicated CMK with `encryption: 'customer-managed'`.
+
+**`fromExisting` is untouched.** When binding to a pre-existing table these options don't apply — the customer owns that table's durability/encryption configuration, exactly as they own its GSIs.
+
 ## Infrastructure (CDK)
 
 Creates a single DynamoDB table:
@@ -110,7 +120,7 @@ Creates a single DynamoDB table:
 - **TTL:** Enabled via `TimeToLiveSpecification` when `options.ttl` is set
 - **Billing mode:** PAY_PER_REQUEST
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
-- **Removal policy:** DESTROY (sandbox), configurable for production
+- **Durability & encryption:** Secure-by-default in production — PITR, deletion protection, SSE-KMS, and `RemovalPolicy.RETAIN` (see D-DT-9)
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically, plus explicit `dynamodb:Query` on `index/*`
 
 Attribute types are inferred from the schema at synth time. The CDK layer probes the schema's `StandardSchemaV1.validate()` method with a test value of `0` for each key field — if the field accepts it without issues, it's numeric (`AttributeType.NUMBER`), otherwise string (`AttributeType.STRING`). This is schema-library-agnostic and uses only the standard validation interface.
@@ -194,3 +204,4 @@ Items are stored as DynamoDB JSON (marshalled via `@aws-sdk/lib-dynamodb` Docume
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | In-memory index queries vs DynamoDB index reads | Index query performance characteristics differ; no GSI throughput throttling | No mitigation — correctness is preserved. Performance testing requires sandbox |
 | TTL not enforced locally | Items with expired TTL remain in mock data | Document the gap; test TTL behavior in sandbox |
+| Durability/encryption options (`pointInTimeRecovery`, `deletionProtection`, `encryption`, `removalPolicy`) are CDK-only | These provisioning-time settings have no observable effect on mock reads/writes | No mitigation needed — they're infrastructure config, not data behavior; verify the synthesized template in sandbox/prod |

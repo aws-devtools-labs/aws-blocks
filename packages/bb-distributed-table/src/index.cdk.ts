@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Construct } from 'constructs';
-import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
+import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import * as cdk from 'aws-cdk-lib';
-import { CustomResource, Duration } from 'aws-cdk-lib';
+import { CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -71,6 +71,28 @@ export class DistributedTable<T = any> extends Scope {
 		const getDdbType = (fieldName: string): AttributeType =>
 			isNumericField(fieldName) ? AttributeType.NUMBER : AttributeType.STRING;
 
+		// Secure-by-default durability & encryption.
+		// Production tables enable PITR (continuous backups), deletion
+		// protection, and are retained on stack delete so a stray `cdk destroy`
+		// can't wipe customer data unrecoverably. Sandboxes default the opposite
+		// way so `sandbox:destroy` stays a one-command teardown and throwaway
+		// stacks don't accrue backup cost. An explicit option always wins.
+		//
+		// NOTE: deletion protection is gated here (not left to the stack-level
+		// SandboxDisableDeletionProtection mixin) because that mixin duck-types
+		// on a `deletionProtection` instance property, which the DynamoDB L2
+		// Table does not expose — so it can't relax it after the fact.
+		const pitrEnabled = config.pointInTimeRecovery ?? !isSandbox;
+		const deletionProtection = config.deletionProtection ?? !isSandbox;
+		const removalPolicy = config.removalPolicy === 'destroy'
+			? RemovalPolicy.DESTROY
+			: config.removalPolicy === 'retain'
+				? RemovalPolicy.RETAIN
+				: (isSandbox ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN);
+		const encryption = config.encryption === 'customer-managed'
+			? TableEncryption.CUSTOMER_MANAGED
+			: TableEncryption.AWS_MANAGED;
+
 		this.table = new Table(this, 'table', {
 			tableName,
 			partitionKey: {
@@ -83,6 +105,14 @@ export class DistributedTable<T = any> extends Scope {
 			} : undefined,
 			billingMode: BillingMode.PAY_PER_REQUEST,
 			timeToLiveAttribute: config.ttl || undefined,
+			// PITR spec is only emitted when enabled — leaving it undefined keeps
+			// the CloudFormation template clean for sandboxes / opt-outs.
+			pointInTimeRecoverySpecification: pitrEnabled
+				? { pointInTimeRecoveryEnabled: true }
+				: undefined,
+			deletionProtection,
+			removalPolicy,
+			encryption,
 		});
 
 		this.table.grantReadWriteData(this.handler);

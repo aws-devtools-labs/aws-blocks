@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
 import { DistributedTable } from './index.cdk.js';
@@ -47,6 +47,14 @@ function setup(): { stack: StubBlocksStack; parent: Scope } {
 	return { stack, parent };
 }
 
+/** Same as setup() but simulates a sandbox deploy (`--context sandboxMode=true`). */
+function setupSandbox(): { stack: StubBlocksStack; parent: Scope } {
+	const app = new cdk.App({ context: { sandboxMode: 'true' } });
+	const stack = new StubBlocksStack(app, 'TestStack');
+	const parent = new Scope('app');
+	return { stack, parent };
+}
+
 test('CDK: default DistributedTable provisions a DynamoDB table', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
@@ -55,6 +63,156 @@ test('CDK: default DistributedTable provisions a DynamoDB table', () => {
 	});
 	const template = Template.fromStack(stack);
 	template.resourceCountIs('AWS::DynamoDB::Table', 1);
+});
+
+// ── Secure-by-default durability & encryption (prod) ────────────────────────
+// Regression for the bug bash finding: prod DDB tables shipped with
+// DeletionProtection off, PITR disabled, and SSE (KMS) unset.
+
+test('CDK: prod DistributedTable enables PITR by default', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+	});
+});
+
+test('CDK: prod DistributedTable enables DeletionProtection by default', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		DeletionProtectionEnabled: true,
+	});
+});
+
+test('CDK: prod DistributedTable enables SSE (KMS-managed) by default', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	// AWS_MANAGED emits SSEEnabled:true with no SSEType (the aws/dynamodb key).
+	// Contrast with the AWS-owned default, which emits no SSESpecification at all,
+	// and customer-managed, which adds SSEType:'KMS' + a KMSMasterKeyId.
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		SSESpecification: { SSEEnabled: true, SSEType: Match.absent() },
+	});
+});
+
+test('CDK: prod DistributedTable table is RETAINed on stack delete by default', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', {
+		DeletionPolicy: 'Retain',
+	});
+});
+
+// ── Sandbox stays cheap & fully deletable ───────────────────────────────────
+
+test('CDK: sandbox DistributedTable disables DeletionProtection (so sandbox:destroy works)', () => {
+	const { stack, parent } = setupSandbox();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		DeletionProtectionEnabled: false,
+	});
+});
+
+test('CDK: sandbox DistributedTable does not enable PITR (cost)', () => {
+	const { stack, parent } = setupSandbox();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: Match.absent(),
+	});
+});
+
+test('CDK: sandbox DistributedTable table is DESTROYed on stack delete', () => {
+	const { stack, parent } = setupSandbox();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', {
+		DeletionPolicy: 'Delete',
+	});
+});
+
+// ── Customer overrides win over the secure defaults ─────────────────────────
+
+test('CDK: customer can opt OUT of PITR/DeletionProtection in prod', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecovery: false,
+		deletionProtection: false,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: Match.absent(),
+		DeletionProtectionEnabled: false,
+	});
+});
+
+test('CDK: customer can opt INTO durable/protected tables even in sandbox', () => {
+	const { stack, parent } = setupSandbox();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecovery: true,
+		deletionProtection: true,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+		DeletionProtectionEnabled: true,
+	});
+});
+
+test('CDK: customer-managed encryption provisions a KMS key', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'customer-managed',
+	});
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::KMS::Key', 1);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		SSESpecification: { SSEEnabled: true, SSEType: 'KMS' },
+	});
+});
+
+test('CDK: fromExisting does not emit durability props (customer owns the table)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		table: DistributedTable.fromExisting('preexisting-users-table'),
+	});
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::DynamoDB::Table', 0);
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {

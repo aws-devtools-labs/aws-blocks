@@ -40,7 +40,11 @@ const table = new DistributedTable(scope, id, options)
 | `key` | `TableKeyConfig<T>` | Yes | Primary key configuration: `{ partitionKey, sortKey? }`. Field names must exist in the schema. |
 | `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions. |
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
-| `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. |
+| `pointInTimeRecovery` | `boolean` | No | Enable Point-in-Time Recovery (continuous backups, 35-day window). **Defaults to `true` in production, `false` in sandbox.** |
+| `deletionProtection` | `boolean` | No | Block table deletion until turned off. **Defaults to `true` in production, `false` in sandbox.** |
+| `encryption` | `'aws-managed' \| 'customer-managed'` | No | At-rest encryption key type. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK. |
+| `removalPolicy` | `'retain' \| 'destroy'` | No | What happens to the table on stack delete. **Defaults to `'retain'` in production, `'destroy'` in sandbox.** |
+| `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. Durability/encryption options are ignored — the customer owns the table's configuration. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
 ### Key Object Pattern
@@ -282,6 +286,35 @@ const legacy = new DistributedTable(scope, 'legacy', {
 - **GSI limit:** Up to 20 global secondary indexes per table
 - **Cost:** ~$1.25 per million writes, ~$0.25 per million reads
 - **Durability:** 99.999999999% (11 nines) across 3 AZs
+
+## Durability & Security defaults
+
+Production tables are **secure by default**. On a normal (`npm run deploy`) deploy, every table provisioned by this block ships with:
+
+- **Point-in-Time Recovery** enabled — restore to any second in the last 35 days.
+- **Deletion protection** enabled — a stray `cdk destroy` or console delete is refused until you turn protection off.
+- **SSE-KMS** with the AWS-managed `aws/dynamodb` key — encryption-at-rest that's auditable via CloudTrail, at no per-key charge.
+- **`RemovalPolicy.RETAIN`** — deleting the stack orphans (keeps) the table rather than destroying your data.
+
+In **sandbox mode** (`npm run sandbox`, i.e. `--context sandboxMode=true`) these default the other way — PITR off, deletion protection off, `RemovalPolicy.DESTROY` — so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE-KMS stays on in both.
+
+Every default is overridable per table:
+
+```typescript
+// Cost-sensitive prod table: keep protection, skip PITR
+const cache = new DistributedTable(scope, 'cache', {
+  schema, key: { partitionKey: 'id' },
+  pointInTimeRecovery: false,
+});
+
+// Compliance-strict table: dedicated customer-managed KMS key
+const ledger = new DistributedTable(scope, 'ledger', {
+  schema, key: { partitionKey: 'id' },
+  encryption: 'customer-managed',
+});
+```
+
+> Overrides always win over the environment default, so you can force a fully durable, protected table in a sandbox (or relax one in prod) explicitly. When you bring your own table via `fromExisting()`, none of these options apply — you own that table's configuration.
 
 ## Local Development
 
