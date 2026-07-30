@@ -117,7 +117,37 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 
 // AuthOIDC - OIDC sign-in gate
 // Uses the stub IdP in mock runtime — no real IdP needed for local tests.
-let lastOidcSignInUser: { userId: string; email: string | null; provider: string } | null = null;
+//
+// ── Sign-in records (e2e read-back) ─────────────────────────────────────────
+//
+// `onSignIn` runs while the OIDC callback is being served; the e2e reads the
+// result back over a later, separate request. A module-level variable cannot
+// carry it: in a deployed environment those two requests may be served by
+// different Lambda instances, so the reader either sees its own `null` or the
+// record of whoever signed in last, on either instance. The second case is
+// worse than a failure because it can pass by accident.
+//
+// Persist to the shared KVStore keyed by `userId` and scoped per AuthOIDC
+// instance, and require `userId` on the read, so a test can only ask for the
+// sign-in it is actually waiting on.
+//
+// These keys are bounded, unlike the verification codes: the stub IdP returns a
+// fixed user per provider, so each sign-in overwrites its own record.
+
+const oidcProfiles = new KVStore(scope, 'oidc-profiles');
+
+type SignInRecord = { userId: string; email: string | null; provider: string };
+
+const signInKey = (instance: string, userId: string) => `signin:${instance}:${userId}`;
+
+async function recordSignIn(instance: string, user: SignInRecord): Promise<void> {
+  await oidcProfiles.put(signInKey(instance, user.userId), JSON.stringify(user));
+}
+
+async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
+  const raw = await oidcProfiles.get(signInKey(instance, userId));
+  return raw === null ? null : (JSON.parse(raw) as SignInRecord);
+}
 
 const oidcProviders = [
   stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
@@ -127,16 +157,13 @@ const oidcProviders = [
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
   onSignIn: async (user) => {
-    lastOidcSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth', { userId: user.userId, email: user.email, provider: user.provider });
   },
 });
 
 // AuthOIDC (second instance) — exercises the onSignIn hook with a profile
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
-const oidcProfiles = new KVStore(scope, 'oidc-profiles');
-let lastExtrasSignInUser: { userId: string; email: string | null; provider: string } | null = null;
-
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   providers: [
     stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
@@ -148,7 +175,7 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
   // alongside the user, and /aws-blocks/auth/extras/refresh renews tokens.
   allowBearerAuth: true,
   onSignIn: async (user) => {
-    lastExtrasSignInUser = { userId: user.userId, email: user.email, provider: user.provider };
+    await recordSignIn('oidc-auth-extras', { userId: user.userId, email: user.email, provider: user.provider });
     // Upsert profile — the canonical post-sign-in pattern.
     await oidcProfiles.put(`profile:${user.userId}`, JSON.stringify({
       userId: user.userId,
@@ -1193,8 +1220,17 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async oidcGetLastSignInUser() {
-    return lastOidcSignInUser;
+  /**
+   * Read back the sign-in record `onSignIn` wrote for `userId`, or `null` if
+   * that user has not signed in through this instance.
+   *
+   * `userId` is required. The hook fires on a different request than this read,
+   * so "whoever signed in last" is not a safe question to ask: the answer can
+   * be another user, or another AuthOIDC instance's user, and the test would
+   * pass on the wrong record.
+   */
+  async oidcGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth', userId);
   },
 
   async oidcGetProviders() {
@@ -1210,8 +1246,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { userId: user.userId, email: user.email, name: user.name, provider: user.provider, sub: user.sub, iss: user.iss };
   },
 
-  async oidcExtrasGetLastSignInUser() {
-    return lastExtrasSignInUser;
+  /** Read back the sign-in record for `userId`. See `oidcGetLastSignInUser`. */
+  async oidcExtrasGetLastSignInUser(userId: string) {
+    return await readSignIn('oidc-auth-extras', userId);
   },
 
   async oidcExtrasGetProfile(userId: string) {
