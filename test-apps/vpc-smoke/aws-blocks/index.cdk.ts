@@ -32,8 +32,6 @@ const stackName = sandboxMode
   ? `bb-vpc-smoke-${id}${suffix ? `-${suffix}` : ''}`
   : `bb-vpc-smoke-prod-${suffix || 'default'}-${id}`;
 
-// Look up the persistent test VPC by ID (from env var or CDK context).
-// Falls back to the VPC_TEST_VPC_ID env var set by the test-infra stack.
 const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 
 if (!vpcId) {
@@ -43,19 +41,26 @@ if (!vpcId) {
   );
 }
 
-// fromLookup must be scoped to a Stack (CDK requirement), so we create a
-// lightweight lookup stack. The VPC itself is shared infrastructure — this
-// stack holds no real resources, just the cached context lookup.
-const lookupStack = new cdk.Stack(app, `${stackName}-vpc-lookup`, {
-  env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION || 'us-east-1' },
-});
-const vpc = ec2.Vpc.fromLookup(lookupStack, 'VpcSmokeTestVpc', { vpcId });
+// fromLookup needs a Stack scope. We use the BlocksStack itself by creating
+// it without VPC first, then looking up the VPC inside it.
+// NOTE: BlocksStack.create() returns the stack — we pass VPC separately.
+const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION || 'us-east-1' };
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { vpc, provisionEndpoints: false },
+  vpc: {
+    // Use fromLookup with the stack's own env — CDK will resolve it at synth.
+    // This works because BlocksStack IS a Stack, satisfying CDK's scope requirement.
+    vpc: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
+    provisionEndpoints: false,
+  },
 });
+
+// Make the vpc-ref stack depend on nothing and have no resources — it's just
+// a context lookup container. Tag it for cleanup.
+const refStack = app.node.findChild(`${stackName}-vpc-ref`) as cdk.Stack;
+RemovalPolicies.of(refStack).destroy();
 
 RemovalPolicies.of(blocksStack).destroy();
 Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
