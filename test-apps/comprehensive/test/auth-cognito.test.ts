@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
 const NotAuthorized = 'NotAuthorizedException';
 const NotAuthenticated = 'NotAuthenticatedException';
@@ -40,39 +41,14 @@ function uniqueUser() {
  */
 
 type CognitoCode = { username: string; code: string; purpose: string };
-type CodeReader = (username: string) => Promise<CognitoCode | null>;
 
-/**
- * Poll until the verification code for `username` is readable, optionally
- * waiting for a code that differs from one already consumed (resend/reset
- * issue a second code for the same user). Always scope the wait to a username:
- * waiting on "any code at all" is satisfied instantly by a leftover record from
- * another user.
- */
-async function pollForCodeVia(
-	label: string,
-	read: CodeReader,
-	username: string,
-	options: { not?: string; maxMs?: number } = {},
-): Promise<CognitoCode> {
-	const { not, maxMs = 15000 } = options;
-	const start = Date.now();
-	let seen: CognitoCode | null = null;
-	while (Date.now() - start < maxMs) {
-		seen = await read(username);
-		if (seen && seen.code !== not) return seen;
-		await new Promise(r => setTimeout(r, 200));
-	}
-	throw new Error(
-		`${label}(${username}) returned no ${not ? 'new ' : ''}code after ${maxMs}ms (last seen: ${JSON.stringify(seen)})`,
-	);
-}
+/** Wait for a code delivered by the `authC` pool. See ./poll-for-code.ts. */
+const pollForCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
+	codePoller<CognitoCode>('authCGetLastCode', u => api.authCGetLastCode(u))(username, options);
 
-const pollForCode = (api: typeof apiType, username: string, options?: { not?: string; maxMs?: number }) =>
-	pollForCodeVia('authCGetLastCode', u => api.authCGetLastCode(u), username, options);
-
-const pollForMfaCode = (api: typeof apiType, username: string, options?: { not?: string; maxMs?: number }) =>
-	pollForCodeVia('authCMfaGetLastCode', u => api.authCMfaGetLastCode(u), username, options);
+/** Wait for a code delivered by the MFA pool. See ./poll-for-code.ts. */
+const pollForMfaCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
+	codePoller<CognitoCode>('authCMfaGetLastCode', u => api.authCMfaGetLastCode(u))(username, options);
 
 /** Sign up and confirm a user. Returns the sign-up code that was consumed. */
 async function createConfirmedUser(

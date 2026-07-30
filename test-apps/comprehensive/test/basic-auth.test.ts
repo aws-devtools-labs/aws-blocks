@@ -5,6 +5,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 
 const InvalidCredentials = 'InvalidCredentialsException';
 const UserAlreadyExists = 'UserAlreadyExistsException';
@@ -16,33 +17,9 @@ function uniqueUser() {
   return `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-/**
- * Poll until the verification code for `username` is readable.
- *
- * The code is written to a shared store by `codeDelivery` and read back over a
- * separate request, so the read can briefly lag the write (eventually
- * consistent reads in deployed environments). Always poll for a specific
- * username: waiting on "any code at all" is satisfied instantly by a leftover
- * record from another user, which then fails the username assertion or gets
- * rejected as an invalid code.
- */
-async function pollForCode(
-  api: typeof apiType,
-  username: string,
-  options: { not?: string; maxMs?: number } = {},
-): Promise<{ username: string; code: string }> {
-  const { not, maxMs = 15000 } = options;
-  const start = Date.now();
-  let seen: { username: string; code: string } | null = null;
-  while (Date.now() - start < maxMs) {
-    seen = await api.authGetLastCode(username);
-    if (seen && seen.code !== not) return seen;
-    await new Promise(r => global.setTimeout(r, 200));
-  }
-  throw new Error(
-    `authGetLastCode(${username}) returned no ${not ? 'new ' : ''}code after ${maxMs}ms (last seen: ${JSON.stringify(seen)})`,
-  );
-}
+/** Wait for the AuthBasic code delivered to `username`. See ./poll-for-code.ts. */
+const pollForCode = (api: typeof apiType, username: string, options?: PollForCodeOptions) =>
+  codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username, options);
 
 export function basicAuthTests(getApi: () => typeof apiType) {
 
@@ -318,6 +295,9 @@ export function basicAuthTests(getApi: () => typeof apiType) {
     // environment the request serving `authGetLastCode` often read its own
     // `null` — or a leftover code from an earlier user it had handled — which
     // made every code-confirmed auth test intermittently red.
+    //
+    // Codes now live in the shared KVStore under one key per user, and
+    // `authGetLastCode` requires the username, so neither half can come back.
 
     describe('verification code read-back', () => {
       test('delivered code is readable from shared state, not just process memory', async () => {
@@ -368,6 +348,46 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await pollForCode(api, username);
 
         assert.strictEqual(await api.authGetLastCode(`${username}-never-signed-up`), null);
+      });
+
+      test('delivery writes exactly one record — no shared "latest" pointer', async () => {
+        const api = getApi();
+        const username = uniqueUser();
+
+        // Start from a known-empty set: the mock store persists to disk between
+        // local runs, so leftovers from an earlier build would mask what this
+        // delivery actually wrote.
+        await api.authPurgeDeliveredCodes();
+        await api.authSignUp(username, 'password123');
+        await pollForCode(api, username);
+
+        // Exactly one key. An unkeyed "latest code" slot is what made this
+        // flaky in the first place: whoever delivered last owned it, so a
+        // reader could be handed another user's code. Nothing reads one, so
+        // nothing writes one — and that also halves the writes per delivery.
+        const codeKeys = (await api.kvScan())
+          .map((e) => e.key)
+          .filter((key) => key.startsWith('__last-code:'));
+
+        assert.deepStrictEqual(codeKeys, [`__last-code:auth:${username}`]);
+      });
+
+      // Runs last in this suite: it clears every channel's codes, and the
+      // suites that follow deliver their own.
+      test('purge clears code records and leaves other keys alone', async () => {
+        const api = getApi();
+        const username = uniqueUser();
+        const bystander = `kv-bystander-${Date.now().toString(36)}`;
+        await api.kvPut(bystander, 'keep me');
+        await api.authSignUp(username, 'password123');
+        await pollForCode(api, username);
+
+        const { deleted } = await api.authPurgeDeliveredCodes();
+        assert.ok(deleted >= 1, `expected at least one record purged, got ${deleted}`);
+
+        assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
+        assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
+        await api.kvDelete(bystander);
       });
     });
 

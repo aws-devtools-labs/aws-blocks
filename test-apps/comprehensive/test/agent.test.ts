@@ -4,6 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { codePoller } from './poll-for-code.js';
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -19,22 +20,13 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
 
 /**
  * Sign up a user and confirm it with the verification code delivered for that
- * username. Polls for the code rather than reading it once: the code is written
- * to a shared store and read back over a separate request, so the read can lag
- * the write.
+ * username. The agent per-user isolation test needs two distinct signed-in
+ * users, so the code has to be matched to the right one.
  */
-async function signUpAndConfirm(api: typeof apiType, username: string, password: string, timeoutMs = 15000): Promise<void> {
+async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
   await api.authSignUp(username, password);
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const delivered = await api.authGetLastCode(username);
-    if (delivered) {
-      await api.authConfirmSignUp(username, delivered.code);
-      return;
-    }
-    await new Promise(r => setTimeout(r, 200));
-  }
-  throw new Error(`authGetLastCode(${username}) returned null after ${timeoutMs}ms`);
+  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
+  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {

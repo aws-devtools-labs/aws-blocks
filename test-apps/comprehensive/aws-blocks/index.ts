@@ -62,28 +62,39 @@ const validatedStore = new KVStore(scope, 'validated-store', { schema: profileSc
 // `authGetLastCode` — it reads its own `null`, or worse, a leftover code from
 // some earlier user it happened to handle. Both show up as flaky auth e2e runs.
 //
-// Persist them in the shared KVStore instead, keyed by username so a reader can
-// ask for the code it is actually waiting on and never pick up another user's.
-// A `__latest` pointer preserves the no-argument form of the API.
+// Persist them in the shared KVStore instead, keyed by username. `username` is
+// required on both the write and the read: a reader can only ask for the code it
+// is actually waiting on, so there is no way to express "give me any code" and
+// pick up another user's by accident.
+//
+// One small record per test user, overwritten when that user gets a new code
+// (resend, password reset). They do pile up: the mock store persists to
+// .bb-data/ between local runs, and a suite run leaves ~30 behind. CI throws the
+// whole table away at teardown, so sweep with `authPurgeDeliveredCodes()` when
+// that is not true — local dev, or a sandbox kept via BLOCKS_SANDBOX_KEEP.
 
 type DeliveredCode = { username: string; code: string };
 type DeliveredCognitoCode = DeliveredCode & { purpose: string };
 
 const CODE_KEY_PREFIX = '__last-code';
 const codeKey = (channel: string, username: string) => `${CODE_KEY_PREFIX}:${channel}:${username}`;
-const latestCodeKey = (channel: string) => `${CODE_KEY_PREFIX}:${channel}:__latest`;
 
 async function recordDeliveredCode(channel: string, value: DeliveredCode | DeliveredCognitoCode): Promise<void> {
-  const serialized = JSON.stringify(value);
-  // Per-username first: once `__latest` moves, a reader polling for this
-  // username must already be able to find its own record.
-  await store.put(codeKey(channel, value.username), serialized);
-  await store.put(latestCodeKey(channel), serialized);
+  await store.put(codeKey(channel, value.username), JSON.stringify(value));
 }
 
-async function readDeliveredCode<T extends DeliveredCode>(channel: string, username?: string): Promise<T | null> {
-  const raw = await store.get(username ? codeKey(channel, username) : latestCodeKey(channel));
+async function readDeliveredCode<T extends DeliveredCode>(channel: string, username: string): Promise<T | null> {
+  const raw = await store.get(codeKey(channel, username));
   return raw === null ? null : (JSON.parse(raw) as T);
+}
+
+async function purgeDeliveredCodes(): Promise<number> {
+  const keys: string[] = [];
+  for await (const entry of store.scan()) {
+    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+  }
+  for (const key of keys) await store.delete(key);
+  return keys.length;
 }
 
 // AuthBasic - Authentication
@@ -918,14 +929,28 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   /**
-   * Read back the verification code delivered to `username`.
+   * Read back the verification code delivered to `username`, or `null` if none
+   * has been delivered yet.
    *
-   * Pass the username you are waiting on. Omitting it returns whichever code
-   * was delivered most recently, which is only unambiguous when a single user
-   * is in flight.
+   * `username` is required. Delivery is asynchronous and the read travels over a
+   * separate request, so a caller has to poll — and polling for "any code at
+   * all" is satisfied instantly by whatever another user left behind. Scoping
+   * the read to a username makes that mistake unexpressible.
    */
-  async authGetLastCode(username?: string) {
+  async authGetLastCode(username: string) {
     return await readDeliveredCode<{ username: string; code: string }>('auth', username);
+  },
+
+  /**
+   * Delete every recorded verification code, across all auth channels. Returns
+   * how many records were removed.
+   *
+   * Codes are one small record per test user and CI destroys the table at
+   * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
+   * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+   */
+  async authPurgeDeliveredCodes() {
+    return { deleted: await purgeDeliveredCodes() };
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -1087,7 +1112,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async authCGetLastCode(username?: string) {
+  /** Read back the code delivered to `username`. See `authGetLastCode`. */
+  async authCGetLastCode(username: string) {
     return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authC', username);
   },
 
@@ -1175,7 +1201,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await authCMfa.signOut(context);
     return { success: true };
   },
-  async authCMfaGetLastCode(username?: string) {
+  /** Read back the code delivered to `username`. See `authGetLastCode`. */
+  async authCMfaGetLastCode(username: string) {
     return await readDeliveredCode<{ username: string; code: string; purpose: string }>('authCMfa', username);
   },
   async authCMfaFetchMFAPreference() {
