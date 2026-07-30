@@ -4,7 +4,8 @@
 import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RemovalPolicy } from 'aws-cdk-lib';
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KVStoreOptions, ExternalTableRef } from './types.js';
 import { TTL_ATTRIBUTE } from './ttl.js';
@@ -13,7 +14,7 @@ import { TTL_ATTRIBUTE } from './ttl.js';
 export { KVStoreErrors } from './errors.js';
 export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
 
-export class KVStore extends Scope {
+export class KVStore extends BuildingBlockScope {
 	private table: ITable;
 
 	/**
@@ -25,11 +26,14 @@ export class KVStore extends Scope {
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for DynamoDB access
-		this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB);
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name

@@ -29,7 +29,8 @@
  */
 
 import { type ScopeParent } from '@aws-blocks/core';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
@@ -86,15 +87,18 @@ export type {
  */
 export class AuthOIDC<
 	P extends readonly ProviderConfig[] = readonly ProviderConfig[],
-> extends Scope {
+> extends BuildingBlockScope {
 	public readonly callbackPath: string;
 	public readonly signOutPath: string;
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope });
-
-		// Register VPC endpoint for SSM (cookie secret storage)
-		this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM);
 
 		this.callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
 		this.signOutPath = options.signOutPath ?? DEFAULT_SIGNOUT_PATH;

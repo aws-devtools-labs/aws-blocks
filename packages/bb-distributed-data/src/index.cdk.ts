@@ -7,7 +7,8 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -19,13 +20,15 @@ import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
 
-export class DistributedDatabase extends Scope {
-  constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope });
-
+export class DistributedDatabase extends BuildingBlockScope {
+  getVpcRequirements(): VpcRequirements {
     // DSQL uses public HTTPS endpoints — no gateway/interface endpoint needed.
     // Lambda in a VPC with NAT gateway (private-with-egress) can reach DSQL directly.
-    // No registerVpcRequirements call needed.
+    return {};
+  }
+
+  constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
+    super(id, { parent: scope });
 
     const stack = cdk.Stack.of(this);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');

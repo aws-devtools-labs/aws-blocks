@@ -17,7 +17,6 @@ import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blo
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets, getStackBlocksDefaults } from './blocks-defaults.js';
-import { registerVpcRequirements as registerVpcReqs, registerVpcGatewayEndpoint as registerGatewayEp, registerVpcInterfaceEndpoint as registerInterfaceEp } from './vpc.js';
 import { initializeVpc, finalizeVpc } from './vpc.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
@@ -100,7 +99,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(stack, stack.handler);
 
-    // Finalize VPC: collect requirements → deduplicate → provision endpoints
+    // Finalize VPC: pull requirements from BBs → deduplicate → provision endpoints
     if (stack._vpcOptions) {
       finalizeVpc(stack, stack._vpcOptions);
     }
@@ -125,36 +124,6 @@ export class Scope extends Construct {
     super(parent, id);
     this.id = id;
     this.parent = parent;
-  }
-
-  /**
-   * Declare what VPC resources this Building Block needs (subnet role).
-   * Requirements are collected at finalization time.
-   *
-   * @param requirements - Subnet role this BB requires
-   */
-  protected registerVpcRequirements(requirements: VpcRequirements): void {
-    registerVpcReqs(this, requirements);
-  }
-
-  /**
-   * Register a gateway VPC endpoint that this Building Block needs.
-   * Gateway endpoints (S3, DynamoDB) are free and attached to route tables.
-   *
-   * @param service - The gateway VPC endpoint AWS service
-   */
-  protected registerVpcGatewayEndpoint(service: ec2.GatewayVpcEndpointAwsService): void {
-    registerGatewayEp(this, service);
-  }
-
-  /**
-   * Register an interface VPC endpoint that this Building Block needs.
-   * Interface endpoints cost ~$7/mo per AZ and use ENIs + private DNS.
-   *
-   * @param service - The interface VPC endpoint AWS service
-   */
-  protected registerVpcInterfaceEndpoint(service: ec2.InterfaceVpcEndpointAwsService): void {
-    registerInterfaceEp(this, service);
   }
 
   get handler() {
@@ -232,4 +201,21 @@ export class Scope extends Construct {
   registerLambdaEventHandler(_eventSource: string, _identifier: string, _handler: (record: any) => Promise<void>): void {}
   get clientMiddleware(): readonly string[] { return []; }
   get devAttachments(): readonly string[] { return []; }
+}
+
+/**
+ * Abstract base class for Building Block CDK constructs that declare VPC requirements.
+ *
+ * BBs extend this instead of `Scope` directly. The framework calls
+ * `getVpcRequirements()` at finalization time (only when a VPC is configured)
+ * to collect gateway/interface endpoint needs and provision them centrally.
+ */
+export abstract class BuildingBlockScope extends Scope {
+  /**
+   * Declare what VPC resources this BB needs when deployed in a VPC.
+   * Called at finalization time ONLY when a VPC is configured.
+   *
+   * Return an empty object `{}` if no VPC-specific resources are needed.
+   */
+  abstract getVpcRequirements(): VpcRequirements;
 }
