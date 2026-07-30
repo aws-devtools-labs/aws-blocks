@@ -78,10 +78,13 @@ export async function deploy(options: DeployOptions) {
         }
       );
     } catch (error) {
-      // Terminal status on stdout: a caller that only captures stdout (the case
+      // Terminal verdict on stdout: a caller that only captures stdout (the case
       // that produced phantom failures) must still be able to tell a failed
-      // deploy from a killed process. The error itself still surfaces on stderr
-      // via the entrypoint's `console.error(error)`.
+      // deploy from a killed process. This banner deliberately moved off stderr,
+      // so grepping stderr for this exact string no longer matches — the failure
+      // *reason* is still there. The CDK CLI keeps error-level output on stderr
+      // even under `--ci`, and the entrypoint prints the error itself with
+      // `console.error(error)`.
       console.log('\n❌ Deployment failed.');
       throw error;
     }

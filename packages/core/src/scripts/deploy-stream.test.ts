@@ -1,6 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import { describe, it } from 'node:test';
+import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { spawn, spawnSync } from 'node:child_process';
@@ -45,6 +45,16 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: n
     await new Promise((r) => setTimeout(r, 25));
   }
   return false;
+}
+
+/** How many relayed lines mention `needle` — one signal must log one line. */
+function countLines(text: string, needle: string): number {
+  return text.split('\n').filter((line) => line.includes(needle)).length;
+}
+
+/** Read an env switch without treating `''`, `'0'` or `'false'` as "on". */
+function envFlag(value: string | undefined): boolean {
+  return value !== undefined && value !== '' && value !== '0' && value !== 'false';
 }
 
 // ── signal policy ───────────────────────────────────────────────────────────
@@ -344,25 +354,130 @@ describe('runStreaming — relays output while the child is still running', () =
       signals.emit('SIGTERM');
 
       await run; // resolves ⇒ the duplicate delivery did not abandon the deploy
-      const deferrals = stdout.text().split('\n').filter((line) => line.includes('Ignoring SIGTERM'));
-      assert.strictEqual(deferrals.length, 1, `expected one deferral line, got ${deferrals.length}`);
+      const deferrals = countLines(stdout.text(), 'Ignoring SIGTERM');
+      assert.strictEqual(deferrals, 1, `expected one deferral line, got ${deferrals}`);
       assert.doesNotMatch(stdout.text(), /Received SIGTERM while deploying/);
       assert.ok(existsSync(marker), 'the deploy must have run to completion');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // A hangup is delivered twice for the same reason a SIGTERM is (the group hangs
+  // up, then a wrapper relays it), and it used to print the deferral line once per
+  // delivery. One hangup is one line; a later hangup is a new event and reports
+  // again rather than being muted for the rest of a multi-minute deploy.
+  it('logs one line for a duplicated SIGHUP and reports a later one again', { timeout: 30_000 }, async () => {
+    const stdout = collectingSink();
+    const signals = new EventEmitter();
+    const run = runStreaming(
+      process.execPath,
+      ['-e', `console.log('working'); setTimeout(() => {}, ${SIGNAL_COALESCE_MS * 2 + 2_000});`],
+      { stdout, stderr: collectingSink(), heartbeatMs: 0, signalTarget: signals as unknown as SignalRegistry },
+    );
+
+    assert.ok(await waitFor(() => stdout.text().includes('working'), 15_000), 'child should be running');
+    signals.emit('SIGHUP');
+    await new Promise((r) => setTimeout(r, 50)); // a relay arrives about this fast
+    signals.emit('SIGHUP');
+    assert.ok(await waitFor(() => stdout.text().includes('Ignoring SIGHUP'), 5_000), 'the hangup is deferred');
+    assert.strictEqual(
+      countLines(stdout.text(), 'Ignoring SIGHUP'),
+      1,
+      `one hangup must log one line, got: ${JSON.stringify(stdout.text())}`,
+    );
+
+    await new Promise((r) => setTimeout(r, SIGNAL_COALESCE_MS + 250));
+    signals.emit('SIGHUP'); // outside the window ⇒ a genuinely new hangup
+    assert.ok(
+      await waitFor(() => countLines(stdout.text(), 'Ignoring SIGHUP') === 2, 5_000),
+      `a later hangup must be reported too, got: ${JSON.stringify(stdout.text())}`,
+    );
+
+    await run; // resolves ⇒ no number of hangups abandons the deploy
+  });
+
+  // Each signal gets its own deferral window. A SIGHUP used to share the SIGTERM's
+  // window, so a hangup landing just after a deferred SIGTERM was swallowed with
+  // no line at all — and the operator lost the one hint that it had been ignored.
+  it('reports a SIGHUP that lands right after a deferred SIGTERM, and still defers', { timeout: 30_000 }, async () => {
+    const stdout = collectingSink();
+    const signals = new EventEmitter();
+    const run = runStreaming(process.execPath, ['-e', "console.log('working'); setTimeout(() => {}, 2500);"], {
+      stdout,
+      stderr: collectingSink(),
+      heartbeatMs: 0,
+      signalTarget: signals as unknown as SignalRegistry,
+    });
+
+    assert.ok(await waitFor(() => stdout.text().includes('working'), 15_000), 'child should be running');
+    signals.emit('SIGTERM');
+    assert.ok(await waitFor(() => stdout.text().includes('Ignoring SIGTERM'), 5_000), 'first SIGTERM is deferred');
+    signals.emit('SIGHUP');
+    assert.ok(
+      await waitFor(() => stdout.text().includes('Ignoring SIGHUP'), 5_000),
+      'the SIGHUP must be reported, not swallowed by the SIGTERM window',
+    );
+
+    await run; // resolves ⇒ neither signal abandoned the deploy
+    assert.doesNotMatch(stdout.text(), /Received SIG(TERM|HUP) while deploying/);
+  });
+
+  // The stream contract from the failure side: progress goes to stdout, but the
+  // reason a deploy failed stays on stderr (the CDK CLI keeps error level there
+  // even under `--ci`) and the runner never merges the two.
+  it('keeps a deploy failure reason on stderr while progress stays on stdout', { timeout: 30_000 }, async () => {
+    const reason =
+      'ProbeStack | CREATE_FAILED | AWS::S3::Bucket | Assets Resource handler returned message: "bucket already exists" (HandlerErrorCode: AlreadyExists)';
+    const stdout = collectingSink();
+    const stderr = collectingSink();
+
+    await assert.rejects(
+      () =>
+        runStreaming(
+          process.execPath,
+          [
+            '-e',
+            "console.log('ProbeStack | CREATE_IN_PROGRESS | AWS::S3::Bucket | Assets');" +
+              `console.error(${JSON.stringify(reason)});` +
+              'process.exit(1);',
+          ],
+          { stdout, stderr, heartbeatMs: 0, signalTarget: new EventEmitter() as unknown as SignalRegistry },
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof DeployProcessError);
+        assert.strictEqual(error.exitCode, 1);
+        assert.strictEqual(error.aborted, false);
+        return true;
+      },
+    );
+
+    assert.match(stderr.text(), /Resource handler returned message/, 'the failure reason belongs on stderr');
+    assert.doesNotMatch(stdout.text(), /Resource handler returned message/, 'and must not be duplicated onto stdout');
+    assert.match(stdout.text(), /CREATE_IN_PROGRESS/, 'progress still streams to stdout');
+  });
 });
 
 // ── the root cause, verified against the real CDK CLI ───────────────────────
-// `buildCdkDeployArgs` passing `--ci` is load-bearing, so it is checked against
-// the actual CLI rather than trusted: a `cdk deploy` that reaches the credential
-// check writes NOTHING to stdout by default (every line goes to stderr) and
-// writes to stdout once CI mode is on. No credentials, no network and no
-// mutation are involved — the probe deploys a pre-synthesized assembly pinned to
-// the all-zeros account, which never resolves, so CDK always stops before any
-// AWS write.
-describe('the real CDK CLI only logs to stdout in CI mode', () => {
+// `buildCdkDeployArgs` passing `--ci` is load-bearing, so the routing is checked
+// against the actual CLI rather than trusted: a `cdk deploy` writes NOTHING to
+// stdout by default (every line goes to stderr) and writes to stdout once CI mode
+// is on, while the reason a deploy failed stays on stderr either way.
+//
+// The probe is hermetic. It deploys a pre-synthesized assembly pinned to the
+// all-zeros account with every CI marker and credential source stripped from the
+// child's environment, so the CLI stops at the same credential check on every
+// machine: no credentials, no network calls, no mutation, the same two streams
+// every run.
+//
+// Being hermetic is what lets it be mandatory, and mandatory is the point: a
+// probe that quietly skips reads as "covered" while asserting nothing. So there
+// is no environmental skip left. It fails when the CDK CLI cannot be resolved
+// while the probe is required, fails (never skips) when the CLI stops anywhere
+// other than the credential check, and prints CDK_ROUTING_PROBE_EXECUTED — which
+// the last test in this block asserts, and which pr-checks.yml re-checks through
+// BLOCKS_CDK_PROBE_MARKER so a probe that stops running fails the build.
+describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stderr', () => {
   const cdkBin = (() => {
     try {
       return createRequire(import.meta.url).resolve('aws-cdk/bin/cdk');
@@ -370,6 +485,45 @@ describe('the real CDK CLI only logs to stdout in CI mode', () => {
       return undefined;
     }
   })();
+
+  /** Printed on stdout (and written to `BLOCKS_CDK_PROBE_MARKER`) once the probe ran. */
+  const PROBE_MARKER = 'CDK_ROUTING_PROBE_EXECUTED';
+
+  // CI must run this probe, so a CDK CLI it cannot resolve is a failure there,
+  // not a skip. `BLOCKS_SKIP_CDK_PROBE=1` is the one explicit, greppable way to
+  // opt a runner out on purpose.
+  const probeRequired =
+    (envFlag(process.env.CI) || envFlag(process.env.BLOCKS_REQUIRE_CDK_PROBE)) &&
+    !envFlag(process.env.BLOCKS_SKIP_CDK_PROBE);
+
+  // The line the CLI stops on: the hermetic environment has no credentials for
+  // the all-zeros account, so every probe run reaches exactly this.
+  const FAILURE_REASON =
+    /Need to perform AWS calls for account 000000000000, but no credentials have been configured/;
+
+  // CI markers (the CDK CLI derives its CI default from them) plus every
+  // credential source, so neither the flag under test nor the stop point can be
+  // decided by the environment this suite happens to run in.
+  const STRIPPED_ENV = [
+    'CI',
+    'GITHUB_ACTIONS',
+    'CONTINUOUS_INTEGRATION',
+    'BUILD_NUMBER',
+    'AWS_PROFILE',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'AWS_ROLE_ARN',
+    'AWS_WEB_IDENTITY_TOKEN_FILE',
+    'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+    'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+  ];
+
+  interface ProbeRun {
+    stdout: string;
+    stderr: string;
+    status: number | null;
+  }
 
   function writeProbeAssembly(): string {
     const dir = mkdtempSync(join(tmpdir(), 'blocks-cdk-probe-'));
@@ -395,49 +549,263 @@ describe('the real CDK CLI only logs to stdout in CI mode', () => {
     return dir;
   }
 
-  function probeDeploy(assembly: string, ciFlag: '--ci' | '--no-ci') {
-    const env: NodeJS.ProcessEnv = { ...process.env, AWS_EC2_METADATA_DISABLED: 'true' };
-    // CDK derives its CI default from the environment; drop those markers so the
-    // explicit flag is the only thing deciding the routing.
-    for (const key of ['CI', 'GITHUB_ACTIONS', 'CONTINUOUS_INTEGRATION', 'BUILD_NUMBER']) delete env[key];
-    return spawnSync(
-      process.execPath,
-      [
-        cdkBin as string,
-        ...buildCdkDeployArgs({ projectRoot: assembly, outputsFile: join(assembly, 'outputs.json') }).slice(1),
-        ciFlag,
-        'ProbeStack',
-        '--app',
-        assembly,
-      ],
-      { encoding: 'utf-8', env, timeout: 120_000 },
-    );
+  /**
+   * argv for one probe deploy. The flag under test *replaces* the `--ci` that
+   * {@link buildCdkDeployArgs} already adds instead of being appended after it,
+   * so a probe never argues with itself over two conflicting CI flags.
+   */
+  function probeArgv(assembly: string, ciFlag: '--ci' | '--no-ci'): string[] {
+    const deployArgs = buildCdkDeployArgs({
+      projectRoot: assembly,
+      outputsFile: join(assembly, 'outputs.json'),
+    })
+      .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
+      .filter((arg) => arg !== '--ci');
+    return [...deployArgs, ciFlag, 'ProbeStack', '--app', assembly];
+  }
+
+  function probeDeploy(assembly: string, ciFlag: '--ci' | '--no-ci'): ProbeRun {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AWS_EC2_METADATA_DISABLED: 'true',
+      // Point the shared config/credentials files at paths that do not exist so a
+      // developer's ~/.aws profile cannot carry the probe past the credential check.
+      AWS_SHARED_CREDENTIALS_FILE: join(assembly, 'no-credentials'),
+      AWS_CONFIG_FILE: join(assembly, 'no-config'),
+    };
+    for (const key of STRIPPED_ENV) delete env[key];
+    const result = spawnSync(process.execPath, [cdkBin as string, ...probeArgv(assembly, ciFlag)], {
+      encoding: 'utf-8',
+      env,
+      timeout: 120_000,
+    });
+    return { stdout: result.stdout ?? '', stderr: result.stderr ?? '', status: result.status };
+  }
+
+  function cdkVersion(): string {
+    try {
+      const manifest = createRequire(import.meta.url).resolve('aws-cdk/package.json');
+      return JSON.parse(readFileSync(manifest, 'utf-8')).version;
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  let probes: { withCi: ProbeRun; withoutCi: ProbeRun } | undefined;
+  let executionMarker: string | undefined;
+
+  /**
+   * Run both probe deploys once (they only read the CLI's behaviour) and prove
+   * they got where they were meant to. Returns `undefined` only when there is no
+   * CDK CLI to probe *and* the probe is not required — the single skip left.
+   */
+  function probeOnce(t: TestContext): { withCi: ProbeRun; withoutCi: ProbeRun } | undefined {
+    if (!cdkBin) {
+      assert.ok(
+        !probeRequired,
+        'the real-CDK stream-routing probe is required here but aws-cdk could not be resolved — run `npm ci` at the repo root, or set BLOCKS_SKIP_CDK_PROBE=1 to opt this runner out on purpose',
+      );
+      t.skip('aws-cdk CLI is not installed in this workspace');
+      return undefined;
+    }
+    if (!probes) {
+      const assembly = writeProbeAssembly();
+      try {
+        probes = { withCi: probeDeploy(assembly, '--ci'), withoutCi: probeDeploy(assembly, '--no-ci') };
+      } finally {
+        rmSync(assembly, { recursive: true, force: true });
+      }
+    }
+    // Stopping anywhere other than the credential check means the CLI changed or
+    // the environment leaked credentials, and either invalidates the probe. This
+    // used to skip, which is exactly how a probe rots into a no-op.
+    for (const [flag, run] of [
+      ['--ci', probes.withCi],
+      ['--no-ci', probes.withoutCi],
+    ] as const) {
+      assert.match(
+        run.stderr,
+        FAILURE_REASON,
+        `the ${flag} probe never reached the credential check (exit ${run.status}). stdout: ${JSON.stringify(run.stdout.slice(0, 400))} stderr: ${JSON.stringify(run.stderr.slice(0, 400))}`,
+      );
+    }
+    if (!executionMarker) {
+      executionMarker =
+        `${PROBE_MARKER} aws-cdk@${cdkVersion()} ` +
+        `--ci{stdout:${probes.withCi.stdout.length}B,stderr:${probes.withCi.stderr.length}B} ` +
+        `--no-ci{stdout:${probes.withoutCi.stdout.length}B,stderr:${probes.withoutCi.stderr.length}B}`;
+      console.log(executionMarker);
+      const markerFile = process.env.BLOCKS_CDK_PROBE_MARKER;
+      if (markerFile) writeFileSync(markerFile, `${executionMarker}\n`);
+    }
+    return probes;
   }
 
   it('sends every deploy log line to stderr by default, and to stdout with --ci', { timeout: 180_000 }, (t) => {
-    if (!cdkBin) return t.skip('aws-cdk CLI is not installed in this workspace');
-    const assembly = writeProbeAssembly();
-    try {
-      const withCi = probeDeploy(assembly, '--ci');
-      const reachedCredentialCheck = /Need to perform AWS calls|credentials/i.test(withCi.stderr ?? '');
-      if (!reachedCredentialCheck) {
-        return t.skip(`cdk probe never reached the credential check: ${(withCi.stderr ?? '').slice(0, 300)}`);
-      }
+    const probe = probeOnce(t);
+    if (!probe) return;
+    assert.strictEqual(
+      probe.withoutCi.stdout,
+      '',
+      'the CDK default routes every log line to stderr — this is the 0-byte stdout in issue #222',
+    );
+    assert.notStrictEqual(probe.withoutCi.stderr, '', 'the log output still exists, just on the wrong stream');
+    assert.notStrictEqual(
+      probe.withCi.stdout,
+      '',
+      '--ci must move the deploy log (CloudFormation progress included) onto stdout',
+    );
+  });
 
-      const withoutCi = probeDeploy(assembly, '--no-ci');
-      assert.strictEqual(
-        withoutCi.stdout,
-        '',
-        'the CDK default routes every log line to stderr — this is the 0-byte stdout in issue #222',
+  // The other half of the stream contract this fix tightens: moving progress onto
+  // stdout must not drag the failure reason along with it. The CDK io host routes
+  // error level to stderr whatever CI mode says, so a caller grepping stderr for
+  // why a deploy failed still finds it there under `--ci`.
+  it('keeps a genuine deploy failure reason on stderr under --ci', { timeout: 180_000 }, (t) => {
+    const probe = probeOnce(t);
+    if (!probe) return;
+    assert.notStrictEqual(probe.withCi.status, 0, 'the probe deploy must really have failed');
+    assert.match(probe.withCi.stderr, FAILURE_REASON, 'the failure reason must stay on stderr under --ci');
+    assert.doesNotMatch(
+      probe.withCi.stdout,
+      FAILURE_REASON,
+      '--ci must not move the failure reason onto stdout — stderr stays the place to grep for it',
+    );
+    // Same failure under the default routing: stderr carries the reason *and* the
+    // progress that `--ci` lifts onto stdout.
+    assert.match(probe.withoutCi.stderr, FAILURE_REASON);
+  });
+
+  it('probes with exactly one CI flag on the argv', () => {
+    for (const flag of ['--ci', '--no-ci'] as const) {
+      const argv = probeArgv('/probe-assembly', flag);
+      assert.deepStrictEqual(
+        argv.filter((arg) => arg === '--ci' || arg === '--no-ci'),
+        [flag],
+        `the probe argv must carry only the flag under test: ${argv.join(' ')}`,
       );
-      assert.notStrictEqual(withoutCi.stderr, '', 'the log output still exists, just on the wrong stream');
-      assert.notStrictEqual(
-        withCi.stdout,
-        '',
-        '--ci must move the deploy log (CloudFormation progress included) onto stdout',
-      );
+    }
+  });
+
+  // Guards the guard. If the probe ever stops executing — a dropped dependency, a
+  // reordered CI step, an early return sneaking back in — this fails instead of
+  // the suite quietly shrinking to nothing.
+  it('leaves a greppable marker proving the probe executed', (t) => {
+    if (!cdkBin && !probeRequired) return t.skip('aws-cdk CLI is not installed in this workspace');
+    assert.ok(
+      executionMarker?.startsWith(PROBE_MARKER),
+      `the real-CDK stream-routing probe did not run: expected a ${PROBE_MARKER} line on stdout`,
+    );
+  });
+});
+
+interface FakeDeployOptions {
+  /** How many CloudFormation-shaped event lines the fake cdk prints. */
+  ticks: number;
+  /** Gap between those lines, so a test can keep the deploy mid-flight. */
+  tickMs: number;
+  /**
+   * When set, the fake cdk fails after its last tick instead of completing: it
+   * prints this reason on *stderr* — where the real CDK CLI keeps error level,
+   * `--ci` or not — and exits 1.
+   */
+  failWith?: string;
+}
+
+/**
+ * Write a fake CDK CLI plus the deploy wrapper that runs it through
+ * {@link runStreaming}.
+ *
+ * The wrapper mirrors the entrypoint the templates generate
+ * (`deploy(...).catch((error) => { console.error(error); process.exit(1); })`):
+ * the ❌ verdict goes to stdout so a stdout-only capture can tell a failed deploy
+ * from a killed process, and the error itself goes to stderr.
+ */
+function scaffoldFakeDeploy({ ticks, tickMs, failWith }: FakeDeployOptions): { dir: string; wrapper: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'blocks-deploy-'));
+  const moduleUrl = new URL('./deploy-stream.js', import.meta.url).href;
+  const lastTick = failWith
+    ? `    console.error(${JSON.stringify(failWith)});\n` + `    process.exit(1);\n`
+    : `    writeFileSync(dir + '/cfn-done', 'ok');\n` +
+      `    console.log('ProbeStack | CREATE_COMPLETE | AWS::CloudFormation::Stack | ProbeStack');\n` +
+      `    return;\n`;
+  writeFileSync(
+    join(dir, 'fake-cdk.mjs'),
+    `import { writeFileSync } from 'node:fs';\n` +
+      `const dir = process.argv[2];\n` +
+      `writeFileSync(dir + '/cdk.pid', String(process.pid));\n` +
+      `let n = 0;\n` +
+      `const tick = () => {\n` +
+      `  n += 1;\n` +
+      `  console.log('ProbeStack | ' + n + '/${ticks} | CREATE_IN_PROGRESS | AWS::Lambda::Function | Handler' + n);\n` +
+      `  if (n >= ${ticks}) {\n` +
+      lastTick +
+      `  }\n` +
+      `  setTimeout(tick, ${tickMs});\n` +
+      `};\n` +
+      `tick();\n`,
+  );
+  const wrapper = join(dir, 'wrapper.mjs');
+  writeFileSync(
+    wrapper,
+    `import { writeFileSync } from 'node:fs';\n` +
+      `import { runStreaming } from ${JSON.stringify(moduleUrl)};\n` +
+      `const dir = process.argv[2];\n` +
+      `try {\n` +
+      `  await runStreaming(process.execPath, [dir + '/fake-cdk.mjs', dir], { label: 'cdk deploy', heartbeatMs: 0 });\n` +
+      `  console.log('✅ Deployment complete!');\n` +
+      `  writeFileSync(dir + '/wrapper-status', 'complete');\n` +
+      `} catch (error) {\n` +
+      `  console.log('\\n❌ Deployment failed.');\n` +
+      `  console.error(error);\n` +
+      `  writeFileSync(dir + '/wrapper-status', error && error.aborted ? 'aborted' : 'failed');\n` +
+      `  process.exitCode = 1;\n` +
+      `}\n`,
+  );
+  return { dir, wrapper };
+}
+
+// ── a failed deploy keeps its reason on stderr ──────────────────────────────
+// The exact contract this fix tightens, end to end and platform-independent:
+// moving CloudFormation progress onto stdout must not move the *reason* a deploy
+// failed with it. The reason (and the error object) stay on stderr; only the
+// human-facing ❌ verdict is on stdout, which is a deliberate change — grepping
+// stderr for "Deployment failed" no longer finds it, grepping for the reason
+// still does.
+describe('a failed deploy reports its reason on stderr and its verdict on stdout', () => {
+  it('splits the CDK failure reason (stderr) from the ❌ verdict (stdout)', { timeout: 60_000 }, async () => {
+    const { dir, wrapper } = scaffoldFakeDeploy({
+      ticks: 3,
+      tickMs: 40,
+      failWith:
+        'ProbeStack | CREATE_FAILED | AWS::S3::Bucket | Assets Resource handler returned message: "bucket already exists" (HandlerErrorCode: AlreadyExists)',
+    });
+    // No `detached` here: this asserts the stream contract, not signal handling,
+    // so it runs on every platform including Windows.
+    const child = spawn(process.execPath, [wrapper, dir], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    let err = '';
+    child.stdout.setEncoding('utf-8');
+    child.stderr.setEncoding('utf-8');
+    child.stdout.on('data', (chunk: string) => { out += chunk; });
+    child.stderr.on('data', (chunk: string) => { err += chunk; });
+
+    try {
+      // 'close' (not 'exit') so both pipes are fully drained before asserting.
+      const code = await new Promise<number | null>((resolve) => child.once('close', resolve));
+
+      assert.strictEqual(code, 1, `a failed deploy must exit non-zero; stdout: ${out}\nstderr: ${err}`);
+      assert.match(err, /Resource handler returned message/, 'the failure reason must land on stderr');
+      assert.doesNotMatch(out, /Resource handler returned message/, 'the failure reason must not move to stdout');
+      assert.match(err, /DeployProcessError/, "the entrypoint's console.error(error) puts the error on stderr");
+      assert.match(out, /❌ Deployment failed\./, 'the verdict is on stdout so a stdout-only capture sees it');
+      assert.doesNotMatch(err, /❌ Deployment failed\./, 'the verdict is no longer on stderr (see the changeset)');
+      assert.match(out, /CREATE_IN_PROGRESS/, 'progress still streams to stdout');
+      assert.strictEqual(readFileSync(join(dir, 'wrapper-status'), 'utf-8'), 'failed');
+      assert.ok(!existsSync(join(dir, 'cfn-done')), 'the failing deploy must not report completion');
     } finally {
-      rmSync(assembly, { recursive: true, force: true });
+      if (child.pid) { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
@@ -451,49 +819,55 @@ describe('the real CDK CLI only logs to stdout in CI mode', () => {
 // exactly what a harness reaping a backgrounded `npm run deploy &` does. The
 // fake cdk stands in for the CDK CLI: it prints CloudFormation-shaped events and
 // installs no signal handler, so it dies if a signal reaches it.
+//
+// Process groups and OS-delivered SIGTERM/SIGHUP are POSIX-only, which is why
+// this whole block is — and why the signal resilience is documented as POSIX-only
+// rather than universal.
 describe('a backgrounded deploy survives the group SIGTERM that killed it before', { skip: posixOnly }, () => {
-  function scaffold(totalTicks: number, tickMs: number): { dir: string; wrapper: string } {
-    const dir = mkdtempSync(join(tmpdir(), 'blocks-deploy-'));
-    const moduleUrl = new URL('./deploy-stream.js', import.meta.url).href;
-    writeFileSync(
-      join(dir, 'fake-cdk.mjs'),
-      `import { writeFileSync } from 'node:fs';\n` +
-        `const dir = process.argv[2];\n` +
-        `writeFileSync(dir + '/cdk.pid', String(process.pid));\n` +
-        `let n = 0;\n` +
-        `const tick = () => {\n` +
-        `  n += 1;\n` +
-        `  console.log('ProbeStack | ' + n + '/${totalTicks} | CREATE_IN_PROGRESS | AWS::Lambda::Function | Handler' + n);\n` +
-        `  if (n >= ${totalTicks}) {\n` +
-        `    writeFileSync(dir + '/cfn-done', 'ok');\n` +
-        `    console.log('ProbeStack | CREATE_COMPLETE | AWS::CloudFormation::Stack | ProbeStack');\n` +
-        `    return;\n` +
-        `  }\n` +
-        `  setTimeout(tick, ${tickMs});\n` +
-        `};\n` +
-        `tick();\n`,
-    );
-    const wrapper = join(dir, 'wrapper.mjs');
-    writeFileSync(
-      wrapper,
-      `import { writeFileSync } from 'node:fs';\n` +
-        `import { runStreaming } from ${JSON.stringify(moduleUrl)};\n` +
-        `const dir = process.argv[2];\n` +
-        `try {\n` +
-        `  await runStreaming(process.execPath, [dir + '/fake-cdk.mjs', dir], { label: 'cdk deploy', heartbeatMs: 0 });\n` +
-        `  console.log('✅ Deployment complete!');\n` +
-        `  writeFileSync(dir + '/wrapper-status', 'complete');\n` +
-        `} catch (error) {\n` +
-        `  console.log('❌ Deployment failed.');\n` +
-        `  writeFileSync(dir + '/wrapper-status', error && error.aborted ? 'aborted' : 'failed');\n` +
-        `  process.exitCode = 1;\n` +
-        `}\n`,
-    );
-    return { dir, wrapper };
-  }
+
+  // The mechanism behind every case below, asserted directly: on POSIX the CDK
+  // CLI is spawned into its own process group, which is what stops a reap aimed
+  // at the parent shell from reaching it. Windows has no equivalent.
+  it('spawns the CDK CLI into its own process group', { timeout: 30_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-pgid-'));
+    try {
+      const pidFile = join(dir, 'child.pid');
+      const gate = join(dir, 'may-exit');
+      const script = join(dir, 'report-pid.mjs');
+      writeFileSync(
+        script,
+        `import { existsSync, writeFileSync } from 'node:fs';\n` +
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+          `const wait = () => existsSync(${JSON.stringify(gate)}) ? process.exit(0) : setTimeout(wait, 25);\n` +
+          `wait();\n`,
+      );
+
+      const run = runStreaming(process.execPath, [script], {
+        stdout: collectingSink(),
+        stderr: collectingSink(),
+        heartbeatMs: 0,
+        signalTarget: new EventEmitter() as unknown as SignalRegistry,
+      });
+
+      assert.ok(await waitFor(() => existsSync(pidFile), 15_000), 'child should report its pid');
+      const childPid = Number(readFileSync(pidFile, 'utf-8'));
+      // A process group whose id is the child's pid exists only if the child
+      // leads it — i.e. it was spawned detached, not into this process's group,
+      // so a signal sent to our group cannot reach it.
+      assert.doesNotThrow(
+        () => process.kill(-childPid, 0),
+        `the child must lead its own process group (pid ${childPid})`,
+      );
+
+      writeFileSync(gate, 'go');
+      await run;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it('keeps streaming and finishes the deploy after one group SIGTERM', { timeout: 60_000 }, async () => {
-    const { dir, wrapper } = scaffold(12, 80);
+    const { dir, wrapper } = scaffoldFakeDeploy({ ticks: 12, tickMs: 80 });
     // `detached` makes the wrapper a process-group leader, so the test can
     // signal the whole group the way a shell/harness reaps a background job.
     const child = spawn(process.execPath, [wrapper, dir], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -537,7 +911,8 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
   });
 
   it('stops the deploy when the group SIGTERM is repeated', { timeout: 60_000 }, async () => {
-    const { dir, wrapper } = scaffold(200, 80); // long enough to still be mid-deploy
+    // 200 ticks: long enough that the deploy is still mid-flight when signalled.
+    const { dir, wrapper } = scaffoldFakeDeploy({ ticks: 200, tickMs: 80 });
     const child = spawn(process.execPath, [wrapper, dir], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.setEncoding('utf-8');
@@ -583,7 +958,7 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
   // must still finish (a real deploy against AWS aborted here before the
   // coalescing window existed).
   it('finishes the deploy when one reap delivers SIGTERM twice in quick succession', { timeout: 60_000 }, async () => {
-    const { dir, wrapper } = scaffold(14, 80);
+    const { dir, wrapper } = scaffoldFakeDeploy({ ticks: 14, tickMs: 80 });
     const child = spawn(process.execPath, [wrapper, dir], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.setEncoding('utf-8');
@@ -617,7 +992,7 @@ describe('a backgrounded deploy survives the group SIGTERM that killed it before
   // tests are not vacuous: here the wrapper dies (exit 143 / SIGTERM) and takes
   // the in-flight deploy down with it, exactly as reported in issue #222.
   it('demonstrates the old behaviour: a blocking spawnSync deploy is killed mid-flight', { timeout: 60_000 }, async () => {
-    const { dir } = scaffold(200, 80);
+    const { dir } = scaffoldFakeDeploy({ ticks: 200, tickMs: 80 });
     const baseline = join(dir, 'baseline.mjs');
     writeFileSync(
       baseline,

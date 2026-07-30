@@ -30,6 +30,13 @@ import { terminateProcessTree } from './process-tree.js';
 // progress, and puts the deploy's lifecycle under this CLI's control: the child
 // runs in its own process group and a single SIGTERM/SIGHUP no longer abandons
 // an in-flight deploy.
+//
+// The signal half of that is POSIX-only. It relies on process groups (`detached`)
+// and on real SIGTERM/SIGHUP delivery, neither of which Windows has: `detached`
+// is passed only when `process.platform !== 'win32'`, and on Windows nothing
+// outside the process delivers those signals (a `taskkill` on the tree still
+// ends the deploy). Streaming, the heartbeat and the argv contract are
+// cross-platform; only "survives a stray reap" is POSIX.
 
 /** What to do with a signal that arrives while a deploy is in flight. */
 export type DeploySignalAction = 'defer' | 'abort';
@@ -88,7 +95,9 @@ export const SIGNAL_COALESCE_MS = 2_000;
  * - `SIGHUP` → always `defer`. A hangup means the terminal or parent shell went
  *   away (a backgrounded `npm run deploy &`, a closed SSH session). The deploy
  *   is server-side work that is already paid for; killing the CLI here is what
- *   produced the phantom failures, so we keep streaming instead.
+ *   produced the phantom failures, so we keep streaming instead. Duplicate
+ *   deliveries inside {@link SIGNAL_COALESCE_MS} are coalesced so one hangup
+ *   logs one line, not one per delivery.
  * - `SIGTERM` → `defer` the first time. A lone SIGTERM is almost always
  *   process-group collateral (a harness reaping the parent shell, a supervisor
  *   tidying up) rather than a deliberate "stop the deploy", so it only warns.
@@ -101,8 +110,10 @@ export const SIGNAL_COALESCE_MS = 2_000;
  *   stays responsive on the first press.
  *
  * @param signal - the signal received.
- * @param msSinceFirstDeferral - ms since the first SIGTERM was deferred, or
- *   `null` when none has been deferred yet.
+ * @param msSinceFirstDeferral - ms since the first deferral of *this* signal, or
+ *   `null` when this signal has not been deferred yet. Each signal is tracked
+ *   separately, so a deferred SIGHUP never consumes the SIGTERM abort budget
+ *   (and a repeated SIGHUP is deduped the same way a repeated SIGTERM is).
  * @param coalesceWindowMs - see {@link SIGNAL_COALESCE_MS}.
  */
 export function decideSignalResponse(
@@ -288,18 +299,25 @@ export class DeployProcessError extends Error {
  * - **Idle heartbeat.** While the child is silent for `heartbeatMs`, a
  *   `still deploying` line with elapsed time is written to `stdout`, so a
  *   ten-minute RDS resource never looks like a hung process.
- * - **Own process group.** The child is spawned `detached` on POSIX, so a
- *   process-group signal aimed at the parent shell (`kill -TERM -pgid`, a
- *   harness reaping a backgrounded job) cannot kill the CDK CLI behind our
- *   back; this runner is the only thing that signals it. Windows has no
- *   process groups, so the tree is reaped by pid via `terminateProcessTree`.
+ * - **Own process group (POSIX only).** The child is spawned `detached` on
+ *   POSIX, so a process-group signal aimed at the parent shell
+ *   (`kill -TERM -pgid`, a harness reaping a backgrounded job) cannot kill the
+ *   CDK CLI behind our back; this runner is the only thing that signals it.
+ *   Windows has neither process groups nor OS-delivered SIGTERM/SIGHUP, so the
+ *   signal resilience below does not apply there — a `taskkill` on the tree ends
+ *   the deploy, and the abort path reaps by pid via `terminateProcessTree`.
  * - **No stdin.** The child gets `ignore` for stdin so a backgrounded deploy
  *   can never be stopped by SIGTTIN trying to read a terminal it no longer
  *   owns; the caller must keep passing `--require-approval never`.
- * - **Signal policy.** See {@link decideSignalResponse}: a deferred signal only
- *   logs (which itself doubles as a progress signal on stdout), while an abort
- *   reaps the child tree and throws a {@link DeployProcessError} with
- *   `aborted: true`.
+ * - **Signal policy (POSIX).** See {@link decideSignalResponse}: a deferred
+ *   signal only logs (which itself doubles as a progress signal on stdout),
+ *   while an abort reaps the child tree and throws a {@link DeployProcessError}
+ *   with `aborted: true`. Repeat deliveries of the same signal inside
+ *   {@link SIGNAL_COALESCE_MS} log once, not once per delivery.
+ * - **Streams stay separated.** Child stdout and child stderr are relayed to
+ *   their own sinks and never merged, so a deploy failure reason (which the CDK
+ *   CLI keeps on stderr even under `--ci`) stays on stderr while progress is on
+ *   stdout.
  *
  * Resolves when the child exits 0; otherwise throws {@link DeployProcessError}.
  */
@@ -322,8 +340,11 @@ export async function runStreaming(
   const startedAt = now();
   let lastOutputAt = startedAt;
   let aborting = false;
-  let firstDeferralAt: number | null = null;
   let exitObserved = false;
+  // Per signal, when its current deferral window opened. Kept per signal so a
+  // deferred SIGHUP neither consumes the SIGTERM abort budget nor silently
+  // swallows its own log line.
+  const deferredAt = new Map<NodeJS.Signals, number>();
 
   const child: ChildProcess = spawnCommand(command, args, {
     cwd,
@@ -396,15 +417,18 @@ export async function runStreaming(
       // there is nothing left to defer or abort, and reporting an abort here
       // would turn a successful deploy into a failure.
       if (exitObserved) return;
+      const openedAt = deferredAt.get(signal);
       const { action, message, coalesced } = decideSignalResponse(
         signal,
-        firstDeferralAt === null ? null : now() - firstDeferralAt,
+        openedAt === undefined ? null : now() - openedAt,
       );
       if (action === 'defer') {
-        if (signal === 'SIGTERM' && firstDeferralAt === null) firstDeferralAt = now();
         // A coalesced duplicate is the same signal arriving twice (process group
-        // plus a wrapper relay); log it once, not once per delivery.
+        // plus a wrapper relay); log it once, not once per delivery. Anything
+        // outside the window is a fresh request, so it opens a new window and
+        // reports again instead of being muted for the rest of the deploy.
         if (!coalesced) {
+          deferredAt.set(signal, now());
           lastOutputAt = now();
           stdout.write(`${message}\n`);
         }
