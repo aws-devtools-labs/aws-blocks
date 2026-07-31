@@ -85,7 +85,7 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
 ```
 
-##### How the server reads `params` (and what it rejects)
+#### How the server reads `params` (and what it rejects)
 
 The request body is parsed by `parseRpcRequest`, which turns `params` into the positional argument list your method is called with:
 
@@ -118,6 +118,8 @@ The generated client does not hardcode the API URL; it resolves one at first cal
 2. `BLOCKS_CONFIG` env var (the whole config as JSON).
 3. Node only: the file `.blocks-sandbox/config.json`, read from the **process working directory**.
 4. Browser only: `fetch('/.blocks-sandbox/config.json')`.
+
+Both env vars are normally written for you: `Hosting` injects them into every SSR compute function at synth, and `npm run sandbox` sets `BLOCKS_API_URL` on the dev server it spawns. You set `BLOCKS_API_URL` yourself only when you run the SSR host outside that tooling, like a framework dev server on its own port (`BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev`) or your own container. `BLOCKS_CONFIG` is Hosting's serialized `backendConfig` rather than a knob to hand-write, so prefer `BLOCKS_API_URL` for a custom host.
 
 Two things about that path burn time when debugging:
 

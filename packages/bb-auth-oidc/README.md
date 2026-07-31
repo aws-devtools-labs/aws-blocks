@@ -126,7 +126,7 @@ One route per configured provider, mounted by the block. It needs no client-side
 2. The IdP authenticates the user and redirects back to `GET /aws-blocks/auth/callback?code=…&state=…`.
 3. The callback sees the pending-auth cookie, exchanges the code, runs `onSignIn`, sets the session cookie, and `302`s to `postSignInPath` (default `/`).
 
-The provider name is URL-encoded, so a provider called `my provider` is at `/aws-blocks/auth/signin/my%20provider`. An unknown provider, or a failure while building the authorize URL, returns JSON (`{"error":"...","name":"..."}`) with the error's status instead of a redirect. A provider name you never declared gives `ProviderNotConfiguredException`.
+The provider name is URL-encoded, so a provider called `my provider` is at `/aws-blocks/auth/signin/my%20provider`. Because there is one route per *configured* provider, a name you never declared has no route at all and `404`s; the `ProviderNotConfiguredException` for an unknown provider surfaces from `getSignInUrl()` (the RPC path), not from here. A failure while building the authorize URL, IdP discovery for example, returns JSON (`{"error":"...","name":"..."}`) with the error's status instead of a redirect.
 
 This is the path the block's own integration tests drive, because it is scriptable end to end with nothing but `fetch` and manual redirects:
 
@@ -148,6 +148,8 @@ curl -b cookies.txt -X POST http://localhost:3000/aws-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.whoami","params":[],"id":1}'
 ```
+
+Every response above is asserted, not just described. `test-apps/comprehensive/test/oidc-auth.test.ts` walks the same three redirects in `full sign-in flow via HTTP redirects — google` (and again against a custom OIDC provider in the `corporate` variant), checking the `302` chain, the pending-auth and session cookies, the `Location: /` that `postSignInPath` produces, and the authenticated RPC call that follows. The `404`s for an undeclared provider and for a `GET` on the sign-out route are asserted in the same file; the default `postSignInPath` and the `%20` provider encoding are asserted by the `path configuration` tests in `packages/bb-auth-oidc/src/index.test.ts`.
 
 Use it for server-rendered and zero-JS pages, for `<a>`-tag sign-in, and for integration tests. Reach for the client PKCE API instead when the frontend and API are on different origins, or when an SPA wants to stay on its own route and handle the callback itself. Both flows write the same session cookie, so `requireAuth` / `getAuthState` don't care which one signed the user in. Sign-out is the same route either way: `POST /aws-blocks/auth/signout` (a `GET` is a 404), normally via `auth.signOut()`.
 
