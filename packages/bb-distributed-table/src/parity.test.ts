@@ -761,3 +761,60 @@ describe('DistributedTableErrors split the old single Validation bucket into int
 		assert.strictEqual((DistributedTableErrors as any).Validation, undefined);
 	});
 });
+
+describe('readValidation behaves identically on the mock and the AWS runtime', () => {
+	// V2 schema adds `currency` with a default; a legacy row lacks it.
+	const schemaV2 = z.object({ orderId: z.string(), total: z.number(), currency: z.string().default('USD') });
+	const legacyRow = { orderId: 'o1', total: 10 };
+	const coerced = { orderId: 'o1', total: 10, currency: 'USD' };
+
+	test("mock get() coerces a stored legacy-shaped row under the default 'coerce'", async () => {
+		// Write the legacy-shaped row directly into the store (bypassing put's
+		// write validation) to simulate a row that predates the V2 schema, then
+		// read it back through the V2 schema (readValidation defaults to 'coerce').
+		const v2 = new DistributedTable(testScope(), 'orders', {
+			schema: schemaV2, key: { partitionKey: 'orderId' },
+		});
+		(v2 as any).data.set((v2 as any).serializeKey({ orderId: 'o1' }), legacyRow);
+		assert.deepStrictEqual(await v2.get({ orderId: 'o1' }), coerced);
+	});
+
+	test("AWS get() coerces the same legacy row identically under the default 'coerce'", async () => {
+		const table = awsTableWithFakeClient('ovr-aws-1',
+			{ schema: schemaV2, key: { partitionKey: 'orderId' } },
+			async () => ({ Item: legacyRow }),
+		);
+		assert.deepStrictEqual(await table.get({ orderId: 'o1' }), coerced);
+	});
+
+	test("AWS get() with readValidation 'off' returns the raw legacy row unchanged", async () => {
+		const table = awsTableWithFakeClient('ovr-aws-2',
+			{ schema: schemaV2, key: { partitionKey: 'orderId' }, readValidation: 'off' },
+			async () => ({ Item: legacyRow }),
+		);
+		assert.deepStrictEqual(await table.get({ orderId: 'o1' }), legacyRow);
+	});
+
+	test("AWS get() 'coerce' returns an uncoercible row RAW and never throws", async () => {
+		const strict = z.object({ orderId: z.string(), total: z.number() });
+		const bad = { orderId: 'x', total: 'not-a-number' };
+		const table = awsTableWithFakeClient('ovr-aws-3',
+			{ schema: strict, key: { partitionKey: 'orderId' }, readValidation: 'coerce' },
+			async () => ({ Item: bad }),
+		);
+		assert.deepStrictEqual(await table.get({ orderId: 'x' }), bad);
+	});
+
+	test("AWS get() 'strict' throws ValidationFailed on the same uncoercible row (mock parity)", async () => {
+		const strict = z.object({ orderId: z.string(), total: z.number() });
+		const bad = { orderId: 'x', total: 'not-a-number' };
+		const table = awsTableWithFakeClient('ovr-aws-4',
+			{ schema: strict, key: { partitionKey: 'orderId' }, readValidation: 'strict' },
+			async () => ({ Item: bad }),
+		);
+		await assert.rejects(
+			() => table.get({ orderId: 'x' }),
+			(err: any) => err.name === 'ValidationFailedException',
+		);
+	});
+});

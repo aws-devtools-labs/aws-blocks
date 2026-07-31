@@ -1,6 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ReadValidationMode } from './types.js';
+
 /**
  * Typed error constants for DistributedTable. Use with `isBlocksError()` in catch blocks.
  *
@@ -142,4 +146,43 @@ export function remapItemTooLarge(err: unknown): unknown {
 		return remapped;
 	}
 	return err;
+}
+
+/**
+ * @internal Reconcile a stored item with the schema on read, per the
+ * `readValidation` mode. Shared by the mock and AWS runtime so all three modes
+ * behave identically in both. `null` (a missing item) always passes through
+ * untouched, preserving not-found semantics.
+ *
+ * - `'off'` — return the raw item, no validation.
+ * - `'coerce'` — return the schema's output (defaults filled / types narrowed for
+ *   transform-bearing schemas). On validation failure, return the **raw** item and
+ *   `warn` — never throws — so drifted/legacy rows stay readable and the "reads
+ *   return data or `null`" contract holds.
+ * - `'strict'` — throw `ValidationFailed` on any item that doesn't satisfy the
+ *   schema.
+ *
+ * Schemas may validate synchronously or asynchronously; this awaits either.
+ */
+export async function applyReadValidation<T>(
+	mode: ReadValidationMode,
+	schema: StandardSchemaV1<T>,
+	item: T | null,
+	log: Pick<ChildLogger, 'warn'>,
+	context?: Record<string, unknown>,
+): Promise<T | null> {
+	if (item == null || mode === 'off') return item;
+	const result = schema['~standard'].validate(item);
+	const resolved = result instanceof Promise ? await result : result;
+	if (resolved.issues) {
+		if (mode === 'strict') {
+			throw blocksError(DistributedTableErrors.ValidationFailed, resolved.issues[0]?.message ?? 'stored item failed schema validation on read');
+		}
+		log.warn(
+			`readValidation: stored item failed schema validation, returning the raw value. ${resolved.issues[0]?.message ?? ''}`.trim(),
+			context,
+		);
+		return item;
+	}
+	return resolved.value as T;
 }

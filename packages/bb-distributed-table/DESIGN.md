@@ -100,6 +100,25 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Mock/AWS parity:** the mock checks serialized byte length client-side and throws `ItemTooLarge` directly. On AWS, DynamoDB raises a generic `ValidationException` for an oversized item; the runtime narrows on the size-specific message (`size has exceeded`) and re-maps only that case to `ItemTooLarge`. Other `ValidationException` causes (malformed expressions, type mismatches) propagate unchanged. Both layers therefore surface the same `error.name`, and the shared message lives in `errors.ts` (`DistributedTableMessages.itemTooLarge`) so the two stay byte-for-byte aligned.
 
+### D-DT-9: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
+
+**Decision:** Writes always validate. Reads reconcile a stored item with the schema per the `readValidation` mode, which defaults to **`'coerce'`**. `get`/`getBatch`/`query`/`scan` pass each stored value through `schema['~standard'].validate()`:
+- **`'coerce'`** (default) — return the schema's output (defaults filled / types narrowed for transform-bearing schemas); on validation failure return the **raw** value with a `warn` log — never throws.
+- **`'strict'`** — throw `ValidationFailed` on any item that doesn't satisfy the schema.
+- **`'off'`** — return the raw stored value, no validation.
+
+**Rationale:** The asymmetry "validate on write, return raw on read" breaks the documented read-modify-write update pattern after a schema change, in two ways. A newly added field is absent from the read, so `get()` returns a value that silently violates the declared type `T` and any schema `.default()` is neither applied nor persisted on write-back; and if the new field is required with no default, the `put()` half of the cycle throws `ValidationFailed`, stranding the row. Coercing on read fixes the round-trip for the coercible case (added fields with `.default()`, widened/narrowed types) by handing the caller a value the current schema accepts. It cannot invent a required-no-default value — those rows fall through to the raw + warn path and still need an explicit migration.
+
+**Why `coerce` is the default (this changed from an opt-in `validateOnRead` boolean).** The bug is that the *default* read violates `T`; a fix only users who discover a flag can enable isn't a fix. Market research across comparable typed data layers backs a coercing default: Rails ActiveRecord type-casts on load, Mongoose applies defaults/casts when hydrating, ElectroDB runs getters and returns schema-shaped items — none re-throw on stored data, and Postgres itself synthesizes an added column's `DEFAULT` at read time (`ALTER TABLE ADD COLUMN … DEFAULT`), which is coerce-on-read in all but name. AWS Blocks is in preview, so making `coerce` the default is an acceptable behavioral change to the read path (see the changeset), and the boolean's two-value shape couldn't express the three behaviors below anyway.
+
+**Why not `strict` by default.** Throwing on read makes legacy/corrupt rows unreadable — you couldn't fetch them to migrate — turns one bad row into a whole-`scan`/`getBatch` outage, and violates the project rule that reads return data or `null` and throw only for violated preconditions. Every surveyed library that ships a strict read (DynamoDB-Toolbox `format()`, the `zod-firebase` converter) also ships an escape hatch. So `strict` is offered as an opt-in for tables that want mismatch treated as corruption, not as the default.
+
+**Why keep `off`.** The raw escape hatch (ElectroDB's `data:'raw'`, Mongoose's `.lean()`) is needed for hot paths, trusted write-validated data, and reading rows that can't yet be coerced during a migration.
+
+**Best-effort coercion caveat.** Standard Schema only guarantees `validate()` *checks*; it does not require transformation. Zod fills defaults/coerces, but a check-only Valibot/ArkType schema returns its input unchanged — so `'coerce'` degrades to pass-through for those validators. Documented as best-effort; coercion never fabricates a required value.
+
+**Mock/AWS parity:** both layers call the same `applyReadValidation()` helper in `errors.ts`, so all three modes (coerced output, raw-fallback + warn, strict throw) behave identically. `null` (a missing item) passes through untouched in every mode, preserving not-found semantics.
+
 ## Infrastructure (CDK)
 
 Creates a single DynamoDB table:
