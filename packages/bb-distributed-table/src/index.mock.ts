@@ -129,12 +129,15 @@ export class DistributedTable<
 	private indexes: Indexes;
 	private readValidation: ReadValidationMode;
 
-	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
+	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
-		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Default level is 'warn' (not 'error') so the readValidation='coerce'
+		// raw-fallback warning actually surfaces — it's the only log the block
+		// emits, so this doesn't add noise. Callers can pass their own logger.
+		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		this.filePath = join(getMockDataDir(this), 'data.json');
 		this.data = this.loadFromDisk();
 		this.schema = options.schema;

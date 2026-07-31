@@ -136,6 +136,7 @@ import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
+import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
@@ -530,6 +531,8 @@ export { OllamaModels }
 export { PasswordPolicy }
 
 export { PutUrlOptions }
+
+export { ReadValidationMode }
 
 export { Realtime }
 

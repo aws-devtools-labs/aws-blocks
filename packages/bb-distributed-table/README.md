@@ -165,7 +165,9 @@ await orders.put({ ...order, total: 20 });          // round-trips without Valid
 
 > **Best-effort coercion (validator-dependent).** Coercion depends on the schema *transforming* its input. Zod fills defaults and casts; a check-only Standard Schema validator (some Valibot/ArkType schemas) validates without transforming, so `'coerce'` returns the value unchanged for those — it never invents data.
 
-Choose **`'strict'`** for tables where a schema mismatch should be treated as corruption and rejected (note: one bad row then fails the whole `query`/`scan`/`getBatch`). Choose **`'off'`** for hot paths, data you trust was written through this schema, or to read rows you can't yet coerce during a migration.
+> **⚠️ `'coerce'` can drop stored keys not in the schema.** It returns the validator's *output*, and most schemas discard unrecognized keys (Zod object schemas `.strip()` by default). So a stored row carrying fields beyond the current schema loses them on read — and if you write that read back (the read-modify-write pattern), the `put()` **persists the stripped item, permanently deleting those fields**. If you must preserve unknown/legacy fields (e.g. during a staged migration, or when another writer owns some columns), read with **`readValidation: 'off'`** so the raw item passes through intact, or use a schema that keeps unknowns (e.g. Zod's `.passthrough()`).
+
+Choose **`'strict'`** for tables where a schema mismatch should be treated as corruption and rejected (note: one bad row then fails the whole `query`/`scan`/`getBatch`). Choose **`'off'`** for hot paths, data you trust was written through this schema, or to read (and preserve) rows you can't yet coerce during a migration.
 
 ### Error Handling
 

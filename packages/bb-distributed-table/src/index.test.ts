@@ -292,6 +292,25 @@ describe('DistributedTable', () => {
 			assert.deepEqual(row, { orderId: 'bad', total: 'not-a-number' }); // raw fallback
 		});
 
+		test("'coerce' drops stored keys not in the schema; 'off' preserves them", async () => {
+			const scope = legacyScope();
+			// Row stored under a schema that had an extra `legacyNote` field.
+			const wide = z.object({ orderId: z.string(), total: z.number(), legacyNote: z.string() });
+			const narrow = z.object({ orderId: z.string(), total: z.number() }); // current schema dropped legacyNote
+			const w = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', total: 10, legacyNote: 'keep me' });
+
+			// coerce (default): Zod strips the unknown key — data loss risk on write-back.
+			const coerceReader = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await coerceReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10 });
+
+			// off: raw passthrough preserves the extra key.
+			const offReader = new DistributedTable(scope, 'orders', {
+				schema: narrow, key: { partitionKey: 'orderId' }, readValidation: 'off',
+			});
+			assert.deepEqual(await offReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, legacyNote: 'keep me' });
+		});
+
 		test("'strict': get() throws ValidationFailed on a non-conforming stored row", async () => {
 			const scope = legacyScope();
 			const loose = z.object({ orderId: z.string(), total: z.any() });

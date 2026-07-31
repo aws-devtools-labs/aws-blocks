@@ -117,6 +117,8 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Best-effort coercion caveat.** Standard Schema only guarantees `validate()` *checks*; it does not require transformation. Zod fills defaults/coerces, but a check-only Valibot/ArkType schema returns its input unchanged — so `'coerce'` degrades to pass-through for those validators. Documented as best-effort; coercion never fabricates a required value.
 
+**Unknown-key stripping caveat.** `'coerce'` returns the validator's *output*, and most object schemas discard unrecognized keys (Zod `.strip()`s by default). A stored row with fields beyond the current schema therefore loses them on read, and a read-modify-write (`get()` → `put()`) then persists the stripped item — silently deleting data that `'off'` would have preserved. This is the one case where the "safer default" can *lose* information rather than add it, so it's called out in the README with the mitigations (`readValidation: 'off'`, or a passthrough schema). It's an accepted trade-off: the common evolution is *adding* fields (where coerce is strictly better), and staged/removal migrations are exactly when a caller should reach for `'off'`.
+
 **Mock/AWS parity:** both layers call the same `applyReadValidation()` helper in `errors.ts`, so all three modes (coerced output, raw-fallback + warn, strict throw) behave identically. `null` (a missing item) passes through untouched in every mode, preserving not-found semantics.
 
 ## Infrastructure (CDK)
