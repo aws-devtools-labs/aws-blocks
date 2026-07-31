@@ -185,6 +185,8 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 ## VPC Support
 
+A VPC is useful when you need network-level isolation or need to connect to VPC-bound resources (e.g., ElastiCache, an existing RDS cluster). See [Amazon VPC overview](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html).
+
 Place your app in a VPC by passing a standard CDK VPC to `BlocksStack` or `BlocksBackend`:
 
 ```typescript
@@ -204,17 +206,24 @@ Blocks handles:
 - **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, etc.)
 - **Security group wiring** (e.g., Lambda → Aurora on port 5432)
 
-For a shared/platform-managed VPC, disable auto-provisioning if endpoints already exist:
+For a shared or separately managed VPC:
 
 ```typescript
 const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   ...,
-  vpc: { vpc: sharedVpc, provisionEndpoints: false },
+  vpc: { vpc: sharedVpc },  // Blocks provisions endpoints automatically
 });
 ```
 
-**When to pass `vpc`:** When you want all resources in a single shared VPC — enterprise networking requirements, compliance, or connecting to existing infrastructure (e.g., an Aurora cluster managed by another team). If you don't pass `vpc`, everything works fine — BBs that need VPC resources (like Aurora) manage their own automatically.
+If VPC endpoints are also managed separately (e.g., in another stack, via the AWS console, or by another team entirely):
+
+```typescript
+await BlocksStack.create(app, stackName, {
+  ...,
+  vpc: { vpc: sharedVpc, provisionEndpoints: false },
+});
+```
 
 See `docs/design/VPC-DESIGN.md` for the full design.
 
