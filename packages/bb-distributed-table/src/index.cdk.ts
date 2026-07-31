@@ -4,7 +4,7 @@
 import { Construct } from 'constructs';
 import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import * as cdk from 'aws-cdk-lib';
-import { CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -41,6 +41,20 @@ export class DistributedTable<T = any> extends Scope {
 			// and grant the runtime Lambda read/write + index query access.
 			// We deliberately skip the GSI custom resource — the customer owns the
 			// table's index lifecycle when they bring their own.
+			//
+			// Durability/encryption options don't apply to an existing table (we
+			// never emit a `Table` resource to attach them to). Surface that at
+			// synth so a `deletionProtection: true` on what looks like a fresh
+			// table isn't a silent no-op.
+			const ignoredForExisting = (['pointInTimeRecovery', 'deletionProtection', 'encryption', 'removalPolicy'] as const)
+				.filter((key) => config[key] !== undefined);
+			if (ignoredForExisting.length > 0) {
+				Annotations.of(this).addWarningV2(
+					'@aws-blocks/bb-distributed-table:IgnoredOptionsForExistingTable',
+					`Ignoring ${ignoredForExisting.join(', ')} because this table is wrapped via fromExisting() — ` +
+						`the existing table owns its own durability/encryption configuration.`,
+				);
+			}
 			this.table = Table.fromTableName(this, 'table', config.table.tableName);
 			this.table.grantReadWriteData(this.handler);
 			this.handler.addToRolePolicy(new PolicyStatement({
@@ -82,6 +96,25 @@ export class DistributedTable<T = any> extends Scope {
 		// SandboxDisableDeletionProtection mixin) because that mixin duck-types
 		// on a `deletionProtection` instance property, which the DynamoDB L2
 		// Table does not expose — so it can't relax it after the fact.
+		// `options` is typed `any` here, so an unrecognized string (typo, wrong
+		// casing) would otherwise fall through to the environment default. For
+		// `removalPolicy` that's dangerous — a typo'd `retain` in a sandbox would
+		// silently DESTROY. Warn instead of guessing.
+		if (config.removalPolicy !== undefined && config.removalPolicy !== 'retain' && config.removalPolicy !== 'destroy') {
+			Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-distributed-table:UnknownRemovalPolicy',
+				`Unrecognized removalPolicy '${config.removalPolicy}' (expected 'retain' or 'destroy') — ` +
+					`falling back to the ${isSandbox ? 'sandbox' : 'production'} default.`,
+			);
+		}
+		if (config.encryption !== undefined && config.encryption !== 'aws-managed' && config.encryption !== 'customer-managed') {
+			Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-distributed-table:UnknownEncryption',
+				`Unrecognized encryption '${config.encryption}' (expected 'aws-managed' or 'customer-managed') — ` +
+					`falling back to 'aws-managed'.`,
+			);
+		}
+
 		const pitrEnabled = config.pointInTimeRecovery ?? !isSandbox;
 		const deletionProtection = config.deletionProtection ?? !isSandbox;
 		const removalPolicy = config.removalPolicy === 'destroy'

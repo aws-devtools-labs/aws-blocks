@@ -204,15 +204,22 @@ test('CDK: customer-managed encryption provisions a KMS key', () => {
 	});
 });
 
-test('CDK: fromExisting does not emit durability props (customer owns the table)', () => {
+test('CDK: fromExisting ignores durability props (customer owns the table)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		table: DistributedTable.fromExisting('preexisting-users-table'),
+		// These must be inert when wrapping an existing table.
+		pointInTimeRecovery: true,
+		deletionProtection: true,
+		encryption: 'customer-managed',
 	});
 	const template = Template.fromStack(stack);
+	// No table is provisioned, and customer-managed encryption does NOT
+	// provision a CMK — proving the durability options are ignored.
 	template.resourceCountIs('AWS::DynamoDB::Table', 0);
+	template.resourceCountIs('AWS::KMS::Key', 0);
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
