@@ -1,6 +1,6 @@
 # VPC Support — Design
 
-> **Status:** Implemented (PR #277, branch `feat/vpc-support`)
+> **Status:** Implemented (PR #286, branch `feat/vpc-pull-pattern`)
 
 ---
 
@@ -72,26 +72,26 @@ Each Building Block declares what VPC endpoints it needs via two explicit method
 
 ```typescript
 // On Scope (core/cdk)
-protected registerVpcGatewayEndpoint(service: ec2.GatewayVpcEndpointAwsService): void;
-protected registerVpcInterfaceEndpoint(service: ec2.InterfaceVpcEndpointAwsService): void;
+protected getVpcRequirements()(service: ec2.GatewayVpcEndpointAwsService): void;
+protected getVpcRequirements()(service: ec2.InterfaceVpcEndpointAwsService): void;
 ```
 
 ### Per-BB Declarations
 
 | Building Block | Registration Call |
 |----------------|-----------------|
-| bb-kv-store | `this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
-| bb-distributed-table | `this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
-| bb-file-bucket | `this.registerVpcGatewayEndpoint(ec2.GatewayVpcEndpointAwsService.S3)` |
-| bb-data | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER)` + `...RDS_DATA` |
-| bb-async-job | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SQS)` |
-| bb-agent | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
-| bb-knowledge-base | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
-| bb-email-client | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SES)` |
-| bb-app-setting | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM)` |
-| bb-realtime | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY)` |
-| bb-auth-cognito | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM)` |
-| bb-auth-oidc | `this.registerVpcInterfaceEndpoint(ec2.InterfaceVpcEndpointAwsService.SSM)` |
+| bb-kv-store | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
+| bb-distributed-table | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
+| bb-file-bucket | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.S3)` |
+| bb-data | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER)` + `...RDS_DATA` |
+| bb-async-job | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SQS)` |
+| bb-agent | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
+| bb-knowledge-base | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
+| bb-email-client | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SES)` |
+| bb-app-setting | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
+| bb-realtime | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY)` |
+| bb-auth-cognito | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
+| bb-auth-oidc | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
 | bb-distributed-data | None (DSQL uses public HTTPS, reachable via NAT) |
 
 ### Always-Added Endpoints
@@ -163,7 +163,7 @@ test-apps/vpc-smoke/
 ### Phase 1: CDK-level VPC (this PR)
 
 - `vpc` prop on `BlocksStack` / `BlocksBackend`
-- `registerVpcGatewayEndpoint()` / `registerVpcInterfaceEndpoint()` on `Scope`
+- `getVpcRequirements()()` / `getVpcRequirements()()` on `Scope`
 - Per-BB endpoint declarations in each BB's CDK constructor
 - Finalization: collect + deduplicate + provision endpoints
 - Lambda placement in private subnets + security group

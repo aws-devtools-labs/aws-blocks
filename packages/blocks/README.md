@@ -245,6 +245,41 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
 - Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
 
+## VPC Support
+
+Place your app in a VPC by passing a standard CDK VPC to `BlocksStack` or `BlocksBackend`:
+
+```typescript
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+
+const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
+
+await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  vpc: { vpc },
+});
+```
+
+Blocks handles:
+- **Lambda placement** in private subnets (configurable via `subnets`)
+- **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, etc.)
+- **Security group wiring** (e.g., Lambda → Aurora on port 5432)
+
+For a shared/platform-managed VPC, disable auto-provisioning if endpoints already exist:
+
+```typescript
+const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
+await BlocksStack.create(app, stackName, {
+  ...,
+  vpc: { vpc: sharedVpc, provisionEndpoints: false },
+});
+```
+
+**When do you need a VPC?** Only if you use a service that requires it (Aurora via `Database` BB) or compliance mandates network isolation. Most BBs (KVStore, DistributedTable, FileBucket, AsyncJob) work without a VPC — they access public AWS services via IAM.
+
+See `docs/design/VPC-DESIGN.md` for the full design.
+
 ## Reference
 
 - **Per-block documentation:** `docs/<block>/README.md` (overview), plus `docs/<block>/API.md` (full API reference) and `docs/<block>/DESIGN.md` (architecture & rationale) where present — e.g. `docs/bb-distributed-table/README.md`. The catalog + decision tree live in `docs/README.md`.
