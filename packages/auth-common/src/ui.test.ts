@@ -857,6 +857,41 @@ describe('test hooks', () => {
 		assert.strictEqual(testId(form!, 'authenticator-submit')?.textContent, 'Sign in with Google');
 	});
 
+	// Federated action names carry a `<action>:<provider>` suffix, and the hook
+	// keeps it verbatim, so the documented name contains a colon. That is only a
+	// hazard where a locator would parse the value as selector grammar, so pin
+	// the quoted-attribute lookup and the exact-match behavior both here and in
+	// CUSTOMIZING-AUTH-UI.md.
+	test('provider-suffixed action names keep the suffix in the hook', async () => {
+		const api = mockApi(signedOutState([
+			{ name: 'signIn', label: 'Sign In', fields: [
+				{ name: 'username', label: 'Username', type: 'text', required: true },
+			]},
+			{ name: 'signIn:google', label: 'Sign in with Google', url: 'https://accounts.google.com/o/oauth2/auth', method: 'GET', fields: [] },
+			{ name: 'signIn:okta', label: 'Sign in with Okta', url: 'https://example.okta.com/oauth2/v1/authorize', method: 'POST', fields: [] },
+		]));
+		const el = Authenticator(api);
+		await flush();
+
+		const google = testId(el, 'authenticator-action-signIn:google');
+		const okta = testId(el, 'authenticator-action-signIn:okta');
+		assert.ok(google, 'colon-suffixed hook resolves through a quoted attribute selector');
+		assert.ok(okta, 'a second provider gets its own hook');
+		assert.notStrictEqual(google, okta, 'providers do not collide on one hook');
+		assert.strictEqual(testId(google!, 'authenticator-submit')?.textContent, 'Sign in with Google');
+
+		// The bare `signIn` hook matches exactly, not by prefix, or scoping a
+		// form-flow test would land on an OAuth button.
+		const bare = testId(el, 'authenticator-action-signIn');
+		assert.ok(bare, 'the internal signIn action keeps its own hook');
+		assert.ok(testId(bare!, 'authenticator-username'), 'scoping through the bare hook still works');
+		assert.strictEqual(
+			testId(bare!, 'authenticator-action-signIn:google'),
+			null,
+			'suffixed actions are siblings of the bare action, not children',
+		);
+	});
+
 	test('AuthenticatedContent container is addressable', async () => {
 		const api = mockApi(signedInState());
 		const el = AuthenticatedContent(api, () => document.createElement('span'));

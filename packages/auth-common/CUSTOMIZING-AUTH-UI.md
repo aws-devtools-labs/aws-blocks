@@ -201,9 +201,16 @@ handling and still get your custom look.
 
 ## Test hooks
 
-Every built-in auth component renders stable `data-testid` attributes, so e2e
-suites can drive the shipped UI instead of forking it for selectors. Treat the
-names as public API: renaming one is a breaking change.
+Every interactive element the built-in auth components render carries a stable
+`data-testid`, so e2e suites can drive the shipped UI instead of forking it for
+selectors. Treat the names as public API: renaming one is a breaking change.
+
+Inputs, buttons, and the containers you assert against are hooked. Purely
+presentational markup is not, on purpose: hint text from `fields.<name>.hint`,
+the bordered panel inside the `authenticator` container, the `AccountMenuBar`
+layout row, and the modal's inner content box carry no `data-testid`. Hooking
+those would pin our styling structure into your tests, so read the text off the
+nearest hooked ancestor instead.
 
 | Hook | Element |
 |---|---|
@@ -211,7 +218,7 @@ names as public API: renaming one is a breaking change.
 | `authenticator-heading` | Heading above the actions |
 | `authenticator-signed-in` | Heading rendered when `state === 'signedIn'`; text is `Signed in as: <username>` |
 | `authenticator-error` | Inline error message. Absent when the state carries no error |
-| `authenticator-action-<action>` | One wrapper per rendered action, e.g. `authenticator-action-signIn` |
+| `authenticator-action-<action>` | One wrapper per rendered action, e.g. `authenticator-action-signIn`. Federated actions keep their provider suffix, so `signIn:google` gives `authenticator-action-signIn:google` |
 | `authenticator-<field>` | One per input, named after the field the server declared, e.g. `authenticator-username`, `authenticator-password`, `authenticator-code`. Hidden fields (session tokens, echoed usernames) carry it too |
 | `authenticator-submit` | The action's submit button |
 | `authenticated-content` | Container returned by `AuthenticatedContent` |
@@ -225,6 +232,16 @@ names as public API: renaming one is a breaking change.
 Action and field names come from the server, so the hooks follow whatever the
 Building Block emits: `authenticator-action-confirmSignUp`,
 `authenticator-newPassword`, and so on.
+
+Federated actions are named `<action>:<provider>`, and the hook keeps the suffix
+verbatim: an action named `signIn:google` renders as
+`authenticator-action-signIn:google`. The colon is safe in the selectors you'd
+normally write. `page.getByTestId('authenticator-action-signIn:google')` matches
+on the attribute value, and
+`querySelector('[data-testid="authenticator-action-signIn:google"]')` works
+because that value is a quoted string rather than selector grammar. Keep the
+quotes though: a bare `[data-testid=authenticator-action-signIn:google]` is
+invalid, because an unquoted attribute value has to be a CSS identifier.
 
 Field and submit hooks repeat once per action, because a state can offer more
 than one. The signed-out state renders `signIn` and `signUp` side by side and

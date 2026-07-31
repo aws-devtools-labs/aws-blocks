@@ -457,11 +457,13 @@ export interface AuthenticatorOptions {
  * - Broadcasts auth changes via `broadcastAuthChange()` so other components
  *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically
  * - Listens for auth changes from other tabs and re-renders
- * - Renders stable `data-testid` hooks (`authenticator`,
- *   `authenticator-action-<action>`, `authenticator-<field>`,
+ * - Renders stable `data-testid` hooks on every interactive element
+ *   (`authenticator`, `authenticator-action-<action>`, `authenticator-<field>`,
  *   `authenticator-submit`, `authenticator-error`, `authenticator-signed-in`)
- *   for e2e suites. The full contract is in CUSTOMIZING-AUTH-UI.md; treat the
- *   names as public API.
+ *   for e2e suites. Federated action names keep their provider suffix, so
+ *   `signIn:google` gives `authenticator-action-signIn:google`. Presentational
+ *   markup (hint text, layout wrappers) carries no hook. The full contract is
+ *   in CUSTOMIZING-AUTH-UI.md; treat the names as public API.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
