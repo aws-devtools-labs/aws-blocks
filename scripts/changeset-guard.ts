@@ -27,6 +27,20 @@
  *                   sibling's new version in range, so `changeset version`
  *                   leaves the umbrella alone while its packed content still
  *                   moves, and publish then fails the whole release run.
+ *                   Withdrawal counts as the same failure: removing an umbrella
+ *                   entry an existing changeset already declared re-opens the
+ *                   hole, so that case is checked against every pending sibling
+ *                   release rather than only this PR's.
+ *                   Only the entry's presence is checked, never its bump level.
+ *                   A `patch` on the umbrella satisfies the guard even when a
+ *                   sibling ships `minor` (a pre-1.0 break), because deciding
+ *                   how breakage should propagate through re-exports is a
+ *                   versioning-policy question, separate from the publish
+ *                   failure this guard exists to prevent.
+ *
+ * Guards fail loudly. When one cannot read what it asserts against (a missing
+ * or malformed package.json, say) it exits non-zero with the reason instead of
+ * printing a green line it did not earn.
  *
  * Pre-1.0 semver convention:
  *   - `patch` (0.1.1 → 0.1.2): non-breaking change
@@ -40,7 +54,7 @@
  *   node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -63,29 +77,54 @@ interface Entry {
 	type: BumpType;
 }
 
-function parseChangesets(): Entry[] {
+/**
+ * A guard could not evaluate what it was asked to assert. Reported as a normal
+ * failure (exit 1) with the reason, never swallowed.
+ */
+class GuardError extends Error {}
+
+/** Parse a JSON file, failing the guard loudly if it is unreadable or invalid. */
+function readJson(path: string, label: string): Record<string, unknown> {
+	let raw: string;
+	try {
+		raw = readFileSync(path, "utf-8");
+	} catch (err) {
+		throw new GuardError(`Cannot read ${label} (${path}): ${(err as Error).message}`);
+	}
+	try {
+		return JSON.parse(raw);
+	} catch (err) {
+		throw new GuardError(`Cannot parse ${label} (${path}) as JSON: ${(err as Error).message}`);
+	}
+}
+
+/** The `@aws-blocks/*` bumps declared in one changeset's frontmatter. */
+function parseEntries(file: string, content: string): Entry[] {
 	const entries: Entry[] = [];
-	if (!existsSync(CHANGESET_DIR)) return entries;
+	const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+	if (!frontmatterMatch) return entries;
+
+	for (const line of frontmatterMatch[1].split("\n")) {
+		const entryMatch = line.match(
+			/['"]?(@aws-blocks\/[^'":\s]+)['"]?\s*:\s*['"]?(major|minor|patch)['"]?/,
+		);
+		if (entryMatch) {
+			entries.push({ file, pkg: entryMatch[1], type: entryMatch[2] as BumpType });
+		}
+	}
+	return entries;
+}
+
+function parseChangesets(): Entry[] {
+	if (!existsSync(CHANGESET_DIR)) return [];
 
 	const files = readdirSync(CHANGESET_DIR).filter(
 		(f) => f.endsWith(".md") && f !== "README.md",
 	);
 
-	for (const file of files) {
-		const content = readFileSync(join(CHANGESET_DIR, file), "utf-8");
-		const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-		if (!frontmatterMatch) continue;
-
-		for (const line of frontmatterMatch[1].split("\n")) {
-			const entryMatch = line.match(
-				/['"]?(@aws-blocks\/[^'":\s]+)['"]?\s*:\s*['"]?(major|minor|patch)['"]?/,
-			);
-			if (entryMatch) {
-				entries.push({ file, pkg: entryMatch[1], type: entryMatch[2] as BumpType });
-			}
-		}
-	}
-	return entries;
+	return files.flatMap((file) =>
+		parseEntries(file, readFileSync(join(CHANGESET_DIR, file), "utf-8")),
+	);
 }
 
 /** Package names (@aws-blocks/*) covered by any changeset entry. */
@@ -93,19 +132,31 @@ function getCoveredPackages(): Set<string> {
 	return new Set(parseChangesets().map((e) => e.pkg));
 }
 
-/** Files changed vs origin/main, as repo-relative paths. */
+/** Where this branch left origin/main. Memoised: several guards ask for it. */
+let mergeBaseCache: string | undefined;
+function getMergeBase(): string {
+	if (mergeBaseCache === undefined) {
+		mergeBaseCache = execFileSync("git", ["merge-base", "origin/main", "HEAD"], {
+			cwd: ROOT,
+			encoding: "utf-8",
+		}).trim();
+	}
+	return mergeBaseCache;
+}
+
+/** Files changed vs origin/main, as repo-relative paths. Includes deletions. */
+let changedFilesCache: string[] | undefined;
 function getChangedFiles(): string[] {
-	const mergeBase = execSync("git merge-base origin/main HEAD", {
-		cwd: ROOT,
-		encoding: "utf-8",
-	}).trim();
-	return execSync(`git diff --name-only ${mergeBase}`, {
-		cwd: ROOT,
-		encoding: "utf-8",
-	})
-		.trim()
-		.split("\n")
-		.filter(Boolean);
+	if (changedFilesCache === undefined) {
+		changedFilesCache = execFileSync("git", ["diff", "--name-only", getMergeBase()], {
+			cwd: ROOT,
+			encoding: "utf-8",
+		})
+			.trim()
+			.split("\n")
+			.filter(Boolean);
+	}
+	return changedFilesCache;
 }
 
 /** Publishable @aws-blocks/* packages with file changes vs origin/main. */
@@ -118,13 +169,9 @@ function getChangedPackages(): Set<string> {
 		const pkgJsonPath = join(PACKAGES_DIR, match[1], "package.json");
 		if (!existsSync(pkgJsonPath)) continue;
 
-		try {
-			const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
-			if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
-				packages.add(pkgJson.name);
-			}
-		} catch {
-			// skip unreadable package.json
+		const pkgJson = readJson(pkgJsonPath, `packages/${match[1]}/package.json`);
+		if (typeof pkgJson.name === "string" && pkgJson.name.startsWith(SCOPE)) {
+			packages.add(pkgJson.name);
 		}
 	}
 	return packages;
@@ -170,47 +217,110 @@ function verifyCoverage(): number {
  * dependencies. Releasing any of them can change what the umbrella's tarball
  * ships without touching a single file the umbrella owns, which is why a file
  * diff can't be the signal here.
+ *
+ * An unreadable, malformed or sibling-less package.json fails the guard. With an
+ * empty sibling set every PR would sail through the check while printing the
+ * green line, so the one thing this must not do is carry on quietly.
  */
 function getUmbrellaSiblings(): Set<string> {
-	const siblings = new Set<string>();
 	const pkgJsonPath = join(PACKAGES_DIR, "blocks", "package.json");
-	if (!existsSync(pkgJsonPath)) return siblings;
+	const deps = readJson(pkgJsonPath, `${UMBRELLA_PKG}'s package.json`).dependencies;
 
-	try {
-		const deps = JSON.parse(readFileSync(pkgJsonPath, "utf-8")).dependencies;
-		if (deps && typeof deps === "object") {
-			for (const name of Object.keys(deps)) {
-				if (name.startsWith(SCOPE) && name !== UMBRELLA_PKG) siblings.add(name);
-			}
-		}
-	} catch {
-		// unreadable package.json: nothing to assert against
+	if (deps === null || typeof deps !== "object") {
+		throw new GuardError(
+			`${UMBRELLA_PKG}'s package.json (${pkgJsonPath}) has no "dependencies" object, so\n` +
+			`the set of re-exported siblings cannot be determined.`,
+		);
+	}
+
+	const siblings = new Set(
+		Object.keys(deps as Record<string, unknown>).filter(
+			(name) => name.startsWith(SCOPE) && name !== UMBRELLA_PKG,
+		),
+	);
+
+	if (siblings.size === 0) {
+		throw new GuardError(
+			`${UMBRELLA_PKG}'s package.json (${pkgJsonPath}) declares no ${SCOPE}* dependencies.\n` +
+			`The umbrella exists to re-export its siblings, so either that file was edited by\n` +
+			`mistake or the umbrella has moved and this guard needs updating. Passing every PR\n` +
+			`on an empty sibling set would be worse than failing here.`,
+		);
 	}
 	return siblings;
 }
 
-/** Changeset filenames added or modified by this PR (vs origin/main). */
+/** Changeset filenames added, modified or deleted by this PR (vs origin/main). */
 function getChangedChangesetFiles(): Set<string> {
 	const names = new Set<string>();
 	for (const file of getChangedFiles()) {
-		const match = file.match(/^\.changeset\/(.+\.md)$/);
+		const match = file.match(/^\.changeset\/([^/]+\.md)$/);
 		if (match && match[1] !== "README.md") names.add(match[1]);
 	}
 	return names;
 }
 
+/** A changeset's entries as of the merge base; empty if this PR added the file. */
+function parseChangesetAtMergeBase(file: string): Entry[] {
+	let content: string;
+	try {
+		content = execFileSync("git", ["show", `${getMergeBase()}:.changeset/${file}`], {
+			cwd: ROOT,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+	} catch {
+		return []; // absent at the merge base
+	}
+	return parseEntries(file, content);
+}
+
+/**
+ * Changesets this PR takes the umbrella entry away from: they declared
+ * `@aws-blocks/blocks` at the merge base and no longer do, whether the line was
+ * deleted or the whole file was. Coverage can be withdrawn as easily as it can
+ * be forgotten, and the release aborts either way.
+ */
+function getWithdrawnUmbrellaFiles(pending: Entry[]): string[] {
+	const stillDeclaring = new Set(
+		pending.filter((e) => e.pkg === UMBRELLA_PKG).map((e) => e.file),
+	);
+	return [...getChangedChangesetFiles()]
+		.filter(
+			(file) =>
+				!stillDeclaring.has(file) &&
+				parseChangesetAtMergeBase(file).some((e) => e.pkg === UMBRELLA_PKG),
+		)
+		.sort();
+}
+
+/** Why an unbumped umbrella takes the whole release run down with it. */
+const UMBRELLA_PUBLISH_FAILURE =
+	`${UMBRELLA_PKG} pins its siblings with caret ranges, so their new versions stay in\n` +
+	`range and \`changeset version\` leaves the umbrella at its current version. Its packed\n` +
+	`content still moves (the re-exported APIs, plus docs/ assembled from sibling READMEs at\n` +
+	`pack time), and publish then aborts the whole release run with "${UMBRELLA_PKG}@<version>\n` +
+	`already exists with different content" (issue #273, previously #212).\n\n`;
+
 function verifyUmbrella(): number {
 	const siblings = getUmbrellaSiblings();
+	const pending = parseChangesets();
 	const touched = getChangedChangesetFiles();
-	// Only this PR's own changesets trigger the check. Reading every pending
-	// changeset would fail unrelated PRs for an omission someone else merged.
-	const released = [
-		...new Set(
-			parseChangesets()
-				.filter((e) => touched.has(e.file) && siblings.has(e.pkg))
-				.map((e) => e.pkg),
-		),
-	].sort();
+	const withdrawnFrom = getWithdrawnUmbrellaFiles(pending);
+
+	const siblingReleases = (entries: Entry[]) =>
+		[...new Set(entries.filter((e) => siblings.has(e.pkg)).map((e) => e.pkg))].sort();
+
+	// Normally only this PR's own changesets trigger the check: reading every
+	// pending changeset would fail unrelated PRs for an omission someone else
+	// merged. Withdrawal is the exception. This PR is what removed the coverage,
+	// so every pending sibling release becomes its problem, including ones it
+	// never touched. A revert that drops the sibling entries along with the
+	// umbrella one leaves nothing pending and still passes.
+	const released =
+		withdrawnFrom.length > 0
+			? siblingReleases(pending)
+			: siblingReleases(pending.filter((e) => touched.has(e.file)));
 
 	if (released.length === 0) {
 		console.log(`✓ No changeset here releases a package ${UMBRELLA_PKG} re-exports.`);
@@ -219,11 +329,28 @@ function verifyUmbrella(): number {
 
 	// Coverage from any pending changeset counts: what matters is whether the
 	// next release republishes the umbrella, not which PR asked for it.
-	if (getCoveredPackages().has(UMBRELLA_PKG)) {
+	if (pending.some((e) => e.pkg === UMBRELLA_PKG)) {
 		console.log(
 			`✓ ${released.length} re-exported package(s) released, and ${UMBRELLA_PKG} is bumped alongside them.`,
 		);
 		return 0;
+	}
+
+	if (withdrawnFrom.length > 0) {
+		console.error(`\n❌ This PR removes the ${UMBRELLA_PKG} entry from:\n`);
+		for (const file of withdrawnFrom) {
+			console.error(`   • .changeset/${file}`);
+		}
+		console.error("\nwhile these re-exported package(s) are still pending release:\n");
+		for (const pkg of released) {
+			console.error(`   • ${pkg}`);
+		}
+		console.error(
+			`\nNothing bumps ${UMBRELLA_PKG} any more. ${UMBRELLA_PUBLISH_FAILURE}` +
+			`Keep the entry, or move it to another pending changeset:\n\n` +
+			`   "${UMBRELLA_PKG}": patch\n`,
+		);
+		return 1;
 	}
 
 	console.error(`\n❌ This PR releases package(s) that ${UMBRELLA_PKG} re-exports:\n`);
@@ -231,12 +358,7 @@ function verifyUmbrella(): number {
 		console.error(`   • ${pkg}`);
 	}
 	console.error(
-		`\nNothing bumps ${UMBRELLA_PKG}. It pins its siblings with caret ranges, so their\n` +
-		`new versions stay in range and \`changeset version\` leaves the umbrella at its\n` +
-		`current version. Its packed content still moves (the re-exported APIs, plus\n` +
-		`docs/ assembled from sibling READMEs at pack time), and publish then aborts the\n` +
-		`whole release run with "${UMBRELLA_PKG}@<version> already exists with different\n` +
-		`content" (issue #273, previously #212).\n\n` +
+		`\nNothing bumps ${UMBRELLA_PKG}. ${UMBRELLA_PUBLISH_FAILURE}` +
 		`Add this line to your changeset:\n\n` +
 		`   "${UMBRELLA_PKG}": patch\n`,
 	);
@@ -269,24 +391,20 @@ function blockMajor(): number {
  *  may legitimately reference). Workspace entries here are explicit paths. */
 function getWorkspacePackageNames(): Set<string> {
 	const names = new Set<string>();
-	let workspaces: unknown;
-	try {
-		workspaces = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf-8")).workspaces;
-	} catch {
-		return names;
+	const workspaces = readJson(join(ROOT, "package.json"), "the root package.json").workspaces;
+	if (!Array.isArray(workspaces)) {
+		throw new GuardError(
+			'The root package.json has no "workspaces" array, so changeset package names cannot\n' +
+			"be validated against the workspace.",
+		);
 	}
-	if (!Array.isArray(workspaces)) return names;
 
 	for (const ws of workspaces) {
 		if (typeof ws !== "string" || ws.includes("*")) continue;
 		const pkgJsonPath = join(ROOT, ws, "package.json");
 		if (!existsSync(pkgJsonPath)) continue;
-		try {
-			const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
-			if (typeof pkg.name === "string") names.add(pkg.name);
-		} catch {
-			// skip unreadable package.json
-		}
+		const pkg = readJson(pkgJsonPath, `${ws}/package.json`);
+		if (typeof pkg.name === "string") names.add(pkg.name);
 	}
 	return names;
 }
@@ -354,26 +472,32 @@ function validateStructure(): number {
 	return 0;
 }
 
-const command = process.argv[2];
+function main(): number {
+	const command = process.argv[2];
 
-switch (command) {
-	case "verify-coverage":
-		process.exit(verifyCoverage());
-		break;
-	case "block-major":
-		process.exit(blockMajor());
-		break;
-	case "validate-structure":
-		process.exit(validateStructure());
-		break;
-	case "verify-umbrella":
-		process.exit(verifyUmbrella());
-		break;
-	default:
-		console.error(
-			`Unknown command: ${command ?? "(none)"}\n` +
-			"Usage: node --experimental-strip-types scripts/changeset-guard.ts " +
-			"<verify-coverage|block-major|validate-structure|verify-umbrella>",
-		);
-		process.exit(2);
+	switch (command) {
+		case "verify-coverage":
+			return verifyCoverage();
+		case "block-major":
+			return blockMajor();
+		case "validate-structure":
+			return validateStructure();
+		case "verify-umbrella":
+			return verifyUmbrella();
+		default:
+			console.error(
+				`Unknown command: ${command ?? "(none)"}\n` +
+				"Usage: node --experimental-strip-types scripts/changeset-guard.ts " +
+				"<verify-coverage|block-major|validate-structure|verify-umbrella>",
+			);
+			return 2;
+	}
+}
+
+try {
+	process.exit(main());
+} catch (err) {
+	if (!(err instanceof GuardError)) throw err;
+	console.error(`\n❌ ${err.message}\n`);
+	process.exit(1);
 }
