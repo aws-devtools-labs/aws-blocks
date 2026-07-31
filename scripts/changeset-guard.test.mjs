@@ -302,6 +302,21 @@ describe("verify-umbrella: withdrawing the umbrella entry", () => {
 		assert.equal(status, 0, output);
 		assert.doesNotMatch(output, /archive/);
 	});
+
+	it("copes with a merge base that has no .changeset directory at all", (t) => {
+		// Nothing can have been withdrawn from a directory that did not exist, so
+		// the missing base listing must not read as a git failure.
+		const dir = baseRepo(t, {
+			".changeset/config.json": null,
+			".changeset/README.md": null,
+		});
+		commitPr(dir, { ".changeset/ship-core.md": changeset({ [SIBLING]: "patch" }) });
+
+		const { status, output } = guard(dir, "verify-umbrella");
+		assert.equal(status, 1, output);
+		assert.match(output, /releases package\(s\) that @aws-blocks\/blocks re-exports/);
+		assert.doesNotMatch(output, /fatal|ENOENT/);
+	});
 });
 
 describe("verify-umbrella: fails loudly instead of asserting nothing", () => {

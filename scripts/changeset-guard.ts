@@ -260,18 +260,34 @@ function getChangedChangesetFiles(): Set<string> {
 	return names;
 }
 
-/** A changeset's entries as of the merge base; empty if this PR added the file. */
-function parseChangesetAtMergeBase(file: string): Entry[] {
-	let content: string;
-	try {
-		content = execFileSync("git", ["show", `${getMergeBase()}:.changeset/${file}`], {
-			cwd: ROOT,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-	} catch {
-		return []; // absent at the merge base
+/** Changeset filenames that existed in .changeset/ at the merge base. */
+let baseChangesetsCache: Set<string> | undefined;
+function getChangesetsAtMergeBase(): Set<string> {
+	if (baseChangesetsCache === undefined) {
+		let listing: string;
+		try {
+			listing = execFileSync("git", ["ls-tree", "--name-only", `${getMergeBase()}:.changeset`], {
+				cwd: ROOT,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+		} catch {
+			// No .changeset directory at the merge base, so nothing can have been
+			// withdrawn. This is the only reason the listing can legitimately fail,
+			// which is why it is asked for once here rather than per file below.
+			listing = "";
+		}
+		baseChangesetsCache = new Set(listing.split("\n").filter(Boolean));
 	}
+	return baseChangesetsCache;
+}
+
+/** A changeset's entries as of the merge base. Only call it for files that existed there. */
+function parseChangesetAtMergeBase(file: string): Entry[] {
+	const content = execFileSync("git", ["show", `${getMergeBase()}:.changeset/${file}`], {
+		cwd: ROOT,
+		encoding: "utf-8",
+	});
 	return parseEntries(file, content);
 }
 
@@ -285,10 +301,12 @@ function getWithdrawnUmbrellaFiles(pending: Entry[]): string[] {
 	const stillDeclaring = new Set(
 		pending.filter((e) => e.pkg === UMBRELLA_PKG).map((e) => e.file),
 	);
+	const atMergeBase = getChangesetsAtMergeBase();
 	return [...getChangedChangesetFiles()]
 		.filter(
 			(file) =>
 				!stillDeclaring.has(file) &&
+				atMergeBase.has(file) &&
 				parseChangesetAtMergeBase(file).some((e) => e.pkg === UMBRELLA_PKG),
 		)
 		.sort();
