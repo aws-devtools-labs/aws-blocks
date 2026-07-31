@@ -276,7 +276,7 @@ await BlocksStack.create(app, stackName, {
 });
 ```
 
-**When do you need a VPC?** Only if you use a service that requires it (Aurora via `Database` BB) or compliance mandates network isolation. Most BBs (KVStore, DistributedTable, FileBucket, AsyncJob) work without a VPC — they access public AWS services via IAM.
+**When to pass `vpc`:** When you want all resources in a single shared VPC — enterprise networking requirements, compliance, or connecting to existing infrastructure (e.g., an Aurora cluster managed by another team). If you don't pass `vpc`, everything works fine — BBs that need VPC resources (like Aurora) manage their own automatically.
 
 See `docs/design/VPC-DESIGN.md` for the full design.
 
