@@ -10,7 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
-import { ApiError } from './errors.js';
+import { ApiError, DEFAULT_API_ERROR_NAME } from './errors.js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -140,17 +140,21 @@ export function successResponse(result: unknown, id: string | number | null): st
 /**
  * Encode an error as a JSON-RPC 2.0 response string.
  *
- * For `ApiError` instances the HTTP status becomes the error code (positive
- * integers never collide with the reserved -32xxx range). Generic errors
- * use code 500.
+ * Only `ApiError` is a deliberate, wire-safe shape: its HTTP status becomes
+ * the error code (positive integers never collide with the reserved -32xxx
+ * range), and its BB-level `name`/`retriable` flags cross the wire. Every
+ * other throw — driver/SDK exceptions (Postgres, DynamoDB, …) and unexpected
+ * bugs — collapses to a generic 500 so raw exception class names and messages
+ * never leak to the client. Callers log the full error server-side.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  const code = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
-  const data: Record<string, unknown> = {};
-  if (error instanceof Error && error.name && error.name !== 'Error') data.name = error.name;
-  if (error instanceof ApiError && error.retriable) data.retriable = true;
-  return errorResponse(code, message, id, Object.keys(data).length > 0 ? data : undefined);
+  if (error instanceof ApiError) {
+    const data: Record<string, unknown> = {};
+    if (error.name && error.name !== DEFAULT_API_ERROR_NAME) data.name = error.name;
+    if (error.retriable) data.retriable = true;
+    return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
+  }
+  return errorResponse(500, 'Internal error', id);
 }
 
 /** Encode a "method not found" error. */
