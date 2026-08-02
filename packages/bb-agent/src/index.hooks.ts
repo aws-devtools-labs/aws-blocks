@@ -274,6 +274,8 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	let activeSub: { unsubscribe(): void } | null = null;
 	let assistantId: string | null = null;
 	let assistantText = '';
+	let loadingHistory = false;
+	let bufferedChunks: AgentStreamChunk[] = [];
 	/** Timer id for the post-reconnect failsafe (see RECONNECT_FAILSAFE_MS). null when disarmed. */
 	let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
 	/**
@@ -485,6 +487,24 @@ export function useChat(options: UseChatOptions): ChatInstance {
 
 	/** Handle a chunk from the Realtime subscription. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		if (destroyed) return;
+		if (loadingHistory) {
+			bufferedChunks.push(chunk);
+			return;
+		}
+		applyChunk(chunk);
+	}
+
+	function ensureAssistantMessage() {
+		if (assistantId) return;
+		const message: ChatMessage = { id: nextId(), role: 'assistant', content: '' };
+		assistantId = message.id;
+		assistantText = '';
+		messages = [...messages, message];
+		options.onMessagesChange?.(messages);
+	}
+
+	function applyChunk(chunk: AgentStreamChunk, skipTextUpdate = false, replayHistoryChunk = false) {
 		// Teardown guard: the ChunkQueue drains items buffered before destroy()'s unsubscribe()
 		// closed the stream, so a chunk can still arrive after destroy(). Drop it so no onChunk/
 		// onMessagesChange/onError/onInterrupt fires post-teardown (mirrors handleReconnect and
@@ -498,15 +518,19 @@ export function useChat(options: UseChatOptions): ChatInstance {
 
 		options.onChunk?.(chunk);
 
-		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
+		if (chunk.type === 'text-delta' && chunk.text && !skipTextUpdate && (assistantId || replayHistoryChunk)) {
+			ensureAssistantMessage();
 			assistantText += chunk.text;
 			messages = messages.map(m => m.id === assistantId ? { ...m, content: assistantText } : m);
 			options.onMessagesChange?.(messages);
 		}
 
 		if (chunk.type === 'done') {
-			if (chunk.text && assistantId) {
-				messages = messages.map(m => m.id === assistantId ? { ...m, content: chunk.text! } : m);
+			const text = chunk.text;
+			if (text && !skipTextUpdate && (assistantId || replayHistoryChunk)) {
+				ensureAssistantMessage();
+				assistantText = text;
+				messages = messages.map(m => m.id === assistantId ? { ...m, content: text } : m);
 				options.onMessagesChange?.(messages);
 			}
 			// Null assistantId so it is a reliable in-flight signal: a later-resolving
@@ -711,36 +735,57 @@ export function useChat(options: UseChatOptions): ChatInstance {
 
 		async loadConversation(id: string) {
 			conversationId = id;
+			assistantId = null;
+			assistantText = '';
+			bufferedChunks = [];
+			loadingHistory = true;
 
-			// 1. Subscribe FIRST — catch any in-flight chunks
-			await ensureSubscribed(id);
+			try {
+				// 1. Subscribe FIRST — catch any in-flight chunks
+				await ensureSubscribed(id);
 
-			// 2. THEN load history from DB
-			// TODO: buffer chunks received between subscribe and history load, then deduplicate/merge
-			const { messages: history } = await options.api.getConversation(id);
-			messages = history.flatMap<ChatMessage>(m => {
-				// metadata arrives as `unknown` (customers pass their backend shape
-				// straight through — no adapter). Narrow it HERE, once, so the customer
-				// never writes this: a plain object becomes the JSON record, anything
-				// else is dropped.
-				const record = asJSONRecord(m.metadata);
-				if (m.role === 'user' || m.role === 'assistant') {
-					return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+				// 2. THEN load history from DB. Chunks can arrive while this request is in flight,
+				// so replay them after the history establishes the message list they extend.
+				const { messages: history } = await options.api.getConversation(id);
+				messages = history.flatMap<ChatMessage>(m => {
+					// metadata arrives as `unknown` (customers pass their backend shape
+					// straight through — no adapter). Narrow it HERE, once, so the customer
+					// never writes this: a plain object becomes the JSON record, anything
+					// else is dropped.
+					const record = asJSONRecord(m.metadata);
+					if (m.role === 'user' || m.role === 'assistant') {
+						return [{ id: nextId(), role: m.role, content: m.content, metadata: record }];
+					}
+					if (m.role === 'approval') {
+						// Project the narrowed record into the typed ApprovalMetadata shape:
+						// read the known keys, keep the JSON-safe types.
+						const meta: ApprovalMetadata = {};
+						const src = record ?? {};
+						if (typeof src.approved === 'boolean') meta.approved = src.approved;
+						if (typeof src.trust === 'boolean') meta.trust = src.trust;
+						if (typeof src.toolName === 'string') meta.toolName = src.toolName;
+						if (src.input !== undefined) meta.input = src.input;
+						return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
+					}
+					return [];
+				});
+				options.onMessagesChange?.(messages);
+
+				const chunks = bufferedChunks;
+				bufferedChunks = [];
+				loadingHistory = false;
+				const completion = [...chunks].reverse().find(chunk => chunk.type === 'done' && chunk.text);
+				const latestMessage = messages.at(-1);
+				const historyAlreadyHasCompletion = completion?.text !== undefined
+					&& latestMessage?.role === 'assistant'
+					&& latestMessage.content === completion.text;
+				for (const chunk of chunks) {
+					applyChunk(chunk, historyAlreadyHasCompletion && (chunk.type === 'text-delta' || chunk.type === 'done'), true);
 				}
-				if (m.role === 'approval') {
-					// Project the narrowed record into the typed ApprovalMetadata shape:
-					// read the known keys, keep the JSON-safe types.
-					const meta: ApprovalMetadata = {};
-					const src = record ?? {};
-					if (typeof src.approved === 'boolean') meta.approved = src.approved;
-					if (typeof src.trust === 'boolean') meta.trust = src.trust;
-					if (typeof src.toolName === 'string') meta.toolName = src.toolName;
-					if (src.input !== undefined) meta.input = src.input;
-					return [{ id: nextId(), role: 'approval', content: m.content, metadata: meta }];
-				}
-				return [];
-			});
-			options.onMessagesChange?.(messages);
+			} finally {
+				loadingHistory = false;
+				bufferedChunks = [];
+			}
 
 			// Check for pending interrupts (e.g., user left mid-approval)
 			if (options.api.getPendingInterrupts) {
