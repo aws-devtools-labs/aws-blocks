@@ -72,6 +72,8 @@ The handler receives a second argument, `ctx: AsyncJobContext`, carrying metadat
 | `receiveCount` | `number` | Number of times this message has been received (`1` on first delivery; increments on each retry). |
 | `sentAt` | `string` | ISO 8601 timestamp of when the message was sent (enqueued). |
 
+In AWS, `receiveCount` is the SQS `ApproximateReceiveCount` attribute, and the name is SQS's own warning: it is a best-effort counter, not an exact one. A delivery SQS records but never hands to a handler, or a redrive that re-counts, moves it without a matching attempt. Read it as roughly how many times the job has been tried. The `attempt` on each status transition and the `attempts` total both carry this same number, so the caveat travels with them. In local dev the queue is in-process and the count is exact, so a test that asserts on an exact attempt number can pass locally and still be wrong in AWS.
+
 ## Error Constants
 
 ```typescript
@@ -146,9 +148,17 @@ status.error;     // message from the last handler error
 
 `waitUntilComplete()` throws `AsyncJobErrors.Timeout` when the job has not reached a terminal state in time. Treat that as **status unknown**, not as a verdict on the job.
 
-Almost always it means the job is still running, so waiting again is the right move and is safe. But status writes on the handler path are best-effort by design (see below), so there is a second, rarer reading: if the write that would have recorded `complete` or `failed` was itself dropped, the job has already finished and its record will never reach a terminal state, so waiting longer will never resolve. A `Timeout` therefore does not prove the job is still in flight, and it certainly does not mean the job failed.
+Almost always it means the job is still running, so waiting again is the right move and is safe. But status writes on the handler path are best-effort by design (see below), so there is a second, rarer reading: if the write that would have recorded `complete` or `failed` was itself dropped, the job has already finished and its record will never reach a terminal state, so waiting longer will never resolve. A `Timeout` therefore does not prove the job is still in flight, and it certainly does not mean the job failed. A third reading, below, is that the delivery was killed outright.
 
 If you need a definitive answer, check the job's own effect rather than its status — the row it writes, the file it uploads, the message it sends. That is authoritative in a way bookkeeping cannot be. `status.updatedAt` is also a useful signal: a timestamp that stops advancing well past your handler's expected duration points at a dropped write rather than slow work.
+
+### Known limitation: a killed delivery records no failure
+
+The `failed` transition is written from the handler's `catch`, so it exists only for errors the handler actually throws. A delivery that dies without unwinding — Lambda timeout, an out-of-memory kill, a hard crash — never reaches that `catch`, and nothing writes a terminal state on its behalf.
+
+The record therefore stays at its last transition, normally `processing`, and stays there for good. `waitUntilComplete()` keeps polling until it gives up with `AsyncJobErrors.Timeout`, so a job that is definitively dead reads as status unknown rather than as a failure. The work itself is not lost track of: SQS redelivers on its own schedule and the message still reaches the dead-letter queue once it has burned through `maxRetries`. It is only the status record that stops telling you anything.
+
+AsyncJob does not detect this for you yet. Until it does, a `Timeout` on a job whose `updatedAt` stopped advancing is the signal to look outside the status record: the dead-letter queue, and the handler's own CloudWatch logs for a `Task timed out` or out-of-memory line. A handler that runs close to its limit can also catch the condition itself — check the remaining wall clock and throw before the Lambda deadline, so the `catch` does run and `failed` is recorded.
 
 ### Cost of enabling it
 
