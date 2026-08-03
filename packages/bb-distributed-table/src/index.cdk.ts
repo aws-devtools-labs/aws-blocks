@@ -8,14 +8,15 @@ import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-li
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
 import { Scope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { ExternalTableRef } from './types.js';
+import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 export { DistributedTableErrors } from './errors.js';
-export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef } from './types.js';
+export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 
 export class DistributedTable<T = any> extends Scope {
 	private table: ITable;
@@ -29,6 +30,19 @@ export class DistributedTable<T = any> extends Scope {
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	/**
+	 * Reference an existing customer-managed KMS key to encrypt the table,
+	 * instead of letting `encryption: 'customer-managed'` provision a dedicated
+	 * key per table. Pass the result as the `encryption` option so several
+	 * tables can share one key (and one monthly charge).
+	 *
+	 * @param keyArn - ARN of a KMS key you already own. The deploying principal
+	 *   and the DynamoDB service must have the usual grants on it.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	constructor(scope: ScopeParent, id: string, public options: any) {
@@ -107,11 +121,22 @@ export class DistributedTable<T = any> extends Scope {
 					`falling back to the ${isSandbox ? 'sandbox' : 'production'} default.`,
 			);
 		}
-		if (config.encryption !== undefined && config.encryption !== 'aws-managed' && config.encryption !== 'customer-managed') {
+		// `encryption` accepts two string literals or an ExternalKmsKeyRef
+		// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
+		// Anything else is a typo — warn rather than silently using the default.
+		const isKmsKeyRef = typeof config.encryption === 'object'
+			&& config.encryption !== null
+			&& config.encryption.__brand === 'ExternalKmsKeyRef';
+		if (
+			config.encryption !== undefined
+			&& config.encryption !== 'aws-managed'
+			&& config.encryption !== 'customer-managed'
+			&& !isKmsKeyRef
+		) {
 			Annotations.of(this).addWarningV2(
 				'@aws-blocks/bb-distributed-table:UnknownEncryption',
-				`Unrecognized encryption '${config.encryption}' (expected 'aws-managed' or 'customer-managed') — ` +
-					`falling back to 'aws-managed'.`,
+				`Unrecognized encryption '${String(config.encryption)}' (expected 'aws-managed', ` +
+					`'customer-managed', or DistributedTable.fromKmsKey(arn)) — falling back to 'aws-managed'.`,
 			);
 		}
 
@@ -122,9 +147,19 @@ export class DistributedTable<T = any> extends Scope {
 			: config.removalPolicy === 'retain'
 				? RemovalPolicy.RETAIN
 				: (isSandbox ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN);
-		const encryption = config.encryption === 'customer-managed'
-			? TableEncryption.CUSTOMER_MANAGED
-			: TableEncryption.AWS_MANAGED;
+		// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
+		// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
+		// Otherwise the AWS-managed `aws/dynamodb` key.
+		let encryptionKey: IKey | undefined;
+		let encryption: TableEncryption;
+		if (isKmsKeyRef) {
+			encryption = TableEncryption.CUSTOMER_MANAGED;
+			encryptionKey = Key.fromKeyArn(this, 'encryption-key', config.encryption.keyArn);
+		} else if (config.encryption === 'customer-managed') {
+			encryption = TableEncryption.CUSTOMER_MANAGED;
+		} else {
+			encryption = TableEncryption.AWS_MANAGED;
+		}
 
 		this.table = new Table(this, 'table', {
 			tableName,
@@ -146,6 +181,9 @@ export class DistributedTable<T = any> extends Scope {
 			deletionProtection,
 			removalPolicy,
 			encryption,
+			// Only set when bringing an existing CMK; `CUSTOMER_MANAGED` without a
+			// key lets CDK provision a dedicated one.
+			encryptionKey,
 		});
 
 		this.table.grantReadWriteData(this.handler);

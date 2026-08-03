@@ -108,6 +108,8 @@ Production tables default to Point-in-Time Recovery **on**, deletion protection 
 
 **Why AWS-managed (not customer-managed) KMS by default.** AWS-managed SSE (`aws/dynamodb`) gives CloudTrail-auditable encryption at rest with no per-key monthly charge and no extra stack resources, satisfying "SSE-KMS by default" without imposing cost. Teams that need key rotation/policy control opt into a dedicated CMK with `encryption: 'customer-managed'`.
 
+**Bring-your-own / shared CMK.** `encryption: 'customer-managed'` provisions a **dedicated CMK per table**, so an app with many customer-managed tables accrues one key (and one monthly charge) each. To share a single key across tables, callers pass `DistributedTable.fromKmsKey(keyArn)` — a branded `ExternalKmsKeyRef` — as the `encryption` value; the CDK layer resolves it with `Key.fromKeyArn(...)` and sets it as the table's `encryptionKey` (no new key is minted). The `encryption` option is therefore a three-way value (`'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`) rather than a separate `encryptionKey` field — folding it into one knob avoids a contradictory state (e.g. `encryption: 'aws-managed'` alongside a customer key). This follows the same branded-reference pattern as `fromExisting()` (`ExternalTableRef`) and deliberately keeps the CDK `IKey` type out of the public `types.ts`, which must stay runtime-agnostic across the four export layers — the public surface only ever sees the key's ARN string wrapped in a brand.
+
 **`fromExisting` is untouched.** When binding to a pre-existing table these options don't apply — the customer owns that table's durability/encryption configuration, exactly as they own its GSIs.
 
 ## Infrastructure (CDK)

@@ -42,7 +42,7 @@ const table = new DistributedTable(scope, id, options)
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
 | `pointInTimeRecovery` | `boolean` | No | Enable Point-in-Time Recovery (continuous backups, 35-day window). **Defaults to `true` in production, `false` in sandbox.** |
 | `deletionProtection` | `boolean` | No | Block table deletion until turned off. **Defaults to `true` in production, `false` in sandbox.** |
-| `encryption` | `'aws-managed' \| 'customer-managed'` | No | At-rest encryption key type. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | No | At-rest encryption key. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK; pass `DistributedTable.fromKmsKey(arn)` to encrypt with an existing CMK you own (shareable across tables). |
 | `removalPolicy` | `'retain' \| 'destroy'` | No | What happens to the table on stack delete. **Defaults to `'retain'` in production, `'destroy'` in sandbox.** |
 | `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. Durability/encryption options are ignored — the customer owns the table's configuration. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
@@ -312,11 +312,22 @@ const ledger = new DistributedTable(scope, 'ledger', {
   schema, key: { partitionKey: 'id' },
   encryption: 'customer-managed',
 });
+
+// Share one customer-managed key across several tables (one key, one bill)
+const key = DistributedTable.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+const orders = new DistributedTable(scope, 'orders', {
+  schema, key: { partitionKey: 'id' },
+  encryption: key,
+});
+const events = new DistributedTable(scope, 'events', {
+  schema, key: { partitionKey: 'id' },
+  encryption: key,
+});
 ```
 
 > Overrides always win over the environment default, so you can force a fully durable, protected table in a sandbox (or relax one in prod) explicitly. When you bring your own table via `fromExisting()`, none of these options apply — you own that table's configuration.
 
-> **`customer-managed` provisions a dedicated CMK per table** — an app with a dozen customer-managed tables gets a dozen KMS keys (~$1/month each, plus request charges). There is currently no way to share one key across tables; use the default `'aws-managed'` unless a table needs its own rotation/key-policy control.
+> **`customer-managed` provisions a dedicated CMK per table** — an app with a dozen customer-managed tables gets a dozen KMS keys (~$1/month each, plus request charges). To share one key across several tables, create the key once and pass `DistributedTable.fromKmsKey(keyArn)` as the `encryption` option on each table (see below). Use the default `'aws-managed'` unless a table needs its own rotation/key-policy control.
 
 ## Local Development
 

@@ -71,13 +71,27 @@ export interface DistributedTableOptions<
 	 *
 	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
 	 *   key. Auditable via CloudTrail with no per-key monthly charge.
-	 * - `'customer-managed'`: provisions a dedicated customer-managed KMS key
-	 *   (CMK) for this table, giving you full control over rotation and key
-	 *   policy. Incurs standard KMS key + request charges.
+	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
+	 *   key (CMK) for this table, giving you full control over rotation and key
+	 *   policy. Incurs standard KMS key + request charges — and note this mints
+	 *   a **separate key per table**, so a dozen tables means a dozen keys.
+	 * - a {@link ExternalKmsKeyRef} from {@link DistributedTable.fromKmsKey}:
+	 *   uses an **existing** CMK you already own, so several tables can share one
+	 *   key (and one monthly charge) instead of each provisioning its own.
 	 *
-	 * DynamoDB is always encrypted at rest; this only selects the key type.
+	 * DynamoDB is always encrypted at rest; this only selects the key.
+	 *
+	 * @example
+	 * ```ts
+	 * // Share one key across several tables
+	 * const key = DistributedTable.fromKmsKey(
+	 *   'arn:aws:kms:us-east-1:111122223333:key/abcd-1234',
+	 * );
+	 * new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * new DistributedTable(scope, 'events', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * ```
 	 */
-	encryption?: 'aws-managed' | 'customer-managed';
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
 	/**
 	 * Controls what happens to the table when the enclosing CloudFormation
 	 * stack is deleted.
@@ -99,6 +113,17 @@ export interface DistributedTableOptions<
 export interface ExternalTableRef {
 	readonly __brand: 'ExternalTableRef';
 	readonly tableName: string;
+}
+
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link DistributedTable.fromKmsKey}. Pass it as the `encryption` option to
+ * encrypt the table with a CMK you already own — letting several tables share
+ * one key instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
 }
 
 // ── Key type for get/delete ─────────────────────────────────────────────────

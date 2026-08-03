@@ -22,6 +22,7 @@ export type {
 	TableKeyConfig,
 	DistributedTableOptions,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	TableKey,
 	PartitionKeyCondition,
 	SortKeyCondition,
@@ -36,6 +37,7 @@ import type {
 	TableKeyConfig,
 	DistributedTableOptions,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	ScanOptions,
 	PutOptions,
 	DeleteOptions,
@@ -269,6 +271,10 @@ export class DistributedTable<
 
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
 	// ── Internal ────────────────────────────────────────────────────────────

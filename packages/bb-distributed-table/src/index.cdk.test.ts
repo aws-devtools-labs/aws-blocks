@@ -204,6 +204,41 @@ test('CDK: customer-managed encryption provisions a KMS key', () => {
 	});
 });
 
+test('CDK: fromKmsKey encrypts with an existing key and provisions no new KMS key', () => {
+	const { stack, parent } = setup();
+	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
+	new DistributedTable(parent, 'orders', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: DistributedTable.fromKmsKey(keyArn),
+	});
+	const template = Template.fromStack(stack);
+	// Bringing an existing key must NOT mint a new one (the whole point — a
+	// shared key across tables instead of one dedicated key each).
+	template.resourceCountIs('AWS::KMS::Key', 0);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		SSESpecification: { SSEEnabled: true, SSEType: 'KMS', KMSMasterKeyId: keyArn },
+	});
+});
+
+test('CDK: two tables sharing one fromKmsKey ref provision zero KMS keys', () => {
+	const { stack, parent } = setup();
+	const sharedKey = DistributedTable.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/shared-1');
+	new DistributedTable(parent, 'orders', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: sharedKey,
+	});
+	new DistributedTable(parent, 'events', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: sharedKey,
+	});
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::KMS::Key', 0);
+	template.resourceCountIs('AWS::DynamoDB::Table', 2);
+});
+
 test('CDK: fromExisting ignores durability props (customer owns the table)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
