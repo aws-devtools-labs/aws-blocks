@@ -41,6 +41,7 @@ Start from what you need:
   - Agent with tool use + conversation → \`Agent\` ([bb-agent](./bb-agent.md))
   - Semantic document retrieval (RAG) → \`KnowledgeBase\` ([bb-knowledge-base](./bb-knowledge-base.md))
 - **Send transactional email** → \`EmailClient\` ([bb-email-client](./bb-email-client.md))
+- **Serve a raw HTTP endpoint** (webhook receiver, health check, redirect, non-JSON response) → \`RawRoute\` ([core](./core.md#rawroute)); everything else goes through \`ApiNamespace\` RPC
 - **Observe and operate**
   - Structured logs → \`Logger\` ([bb-logger](./bb-logger.md))
   - Custom metrics → \`Metrics\` ([bb-metrics](./bb-metrics.md))
