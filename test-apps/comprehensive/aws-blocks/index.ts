@@ -37,11 +37,18 @@ function logCodeLocally(message: string): void {
 // than a missing one: report it as absent so the caller's poller keeps waiting
 // and times out on its own message, rather than failing the test with a JSON
 // syntax error. An empty string is treated the same way.
-function parseStoredRecord<T>(raw: string | null): T | null {
+//
+// Absent is not silent though: a corrupt record means a bad write, which is a
+// real bug and not the race the pollers exist to absorb, so warn with the key
+// that failed. The value and the parser message are deliberately left out — the
+// message quotes the input it choked on, and these records hold verification
+// codes, which must never reach CloudWatch (see `logCodeLocally` above).
+function parseStoredRecord<T>(key: string, raw: string | null): T | null {
   if (!raw) return null;
   try {
     return JSON.parse(raw) as T;
   } catch {
+    console.warn(`[test-app] ignoring unparseable record at "${key}" (${raw.length} bytes) — treating it as absent`);
     return null;
   }
 }
@@ -97,8 +104,8 @@ async function recordDeliveredCode(channel: string, value: DeliveredCode | Deliv
 }
 
 async function readDeliveredCode<T extends DeliveredCode>(channel: string, username: string): Promise<T | null> {
-  const raw = await store.get(codeKey(channel, username));
-  return parseStoredRecord<T>(raw);
+  const key = codeKey(channel, username);
+  return parseStoredRecord<T>(key, await store.get(key));
 }
 
 async function purgeDeliveredCodes(): Promise<number> {
@@ -200,8 +207,8 @@ async function recordSignIn(instance: string, user: SignInRecord): Promise<void>
 }
 
 async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
-  const raw = await oidcProfiles.get(signInKey(instance, userId));
-  return parseStoredRecord<SignInRecord>(raw);
+  const key = signInKey(instance, userId);
+  return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
 const oidcProviders = [

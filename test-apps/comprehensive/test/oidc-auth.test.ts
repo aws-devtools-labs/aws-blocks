@@ -85,7 +85,17 @@ async function signInVia(
 
   const meCall = await rpcCall(baseUrl, 'api', requireAuthMethod, [], { cookies: sessionCookies });
   assert.strictEqual(meCall.status, 200, `${requireAuthMethod} should succeed after sign-in`);
-  return { userId: meCall.result.userId, sessionCookies };
+
+  // Every caller keys a sign-in record read on this id. A missing or non-string
+  // one would still build a key (`signin:instance:undefined`), so the poller
+  // would wait out its full timeout and report "no record" for what is really a
+  // broken requireAuth response. Fail here instead, where the cause is obvious.
+  const userId = meCall.result?.userId;
+  assert.ok(
+    typeof userId === 'string' && userId.length > 0,
+    `${requireAuthMethod} should return a non-empty string userId, got ${JSON.stringify(meCall.result)}`,
+  );
+  return { userId, sessionCookies };
 }
 
 export function oidcAuthTests(getApi: () => typeof apiType) {
