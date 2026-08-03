@@ -4,6 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
+import { codePoller } from './poll-for-code.js';
 
 /** Poll getConversation until expected message count is reached or timeout. */
 async function waitForMessages(api: typeof apiType, conversationId: string, expectedCount: number, timeoutMs = 60000, useCanned = false): Promise<any[]> {
@@ -15,6 +16,17 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   }
   const { messages } = useCanned ? await api.cannedGetConversation(conversationId) : await api.agentGetConversation(conversationId);
   return messages;
+}
+
+/**
+ * Sign up a user and confirm it with the verification code delivered for that
+ * username. The agent per-user isolation test needs two distinct signed-in
+ * users, so the code has to be matched to the right one.
+ */
+async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
+  await api.authSignUp(username, password);
+  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
+  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {
@@ -237,9 +249,7 @@ export function agentTests(getApi: () => typeof apiType) {
 
         // Sign up and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await api.authSignUp(userA, 'password123');
-        const codeA = await api.authGetLastCode();
-        await api.authConfirmSignUp(userA, codeA!.code);
+        await signUpAndConfirm(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -251,9 +261,7 @@ export function agentTests(getApi: () => typeof apiType) {
         // Sign out, sign up and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await api.authSignUp(userB, 'password123');
-        const codeB = await api.authGetLastCode();
-        await api.authConfirmSignUp(userB, codeB!.code);
+        await signUpAndConfirm(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation

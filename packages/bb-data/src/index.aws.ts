@@ -91,9 +91,16 @@ export class Database extends Scope {
     const database = conn?.database || this.options?.databaseName || process.env[`${ENV_VAR_PREFIX}_${envName}_DATABASE`] || envName;
 
     if (!resourceArn || !resolvedSecretArn) {
+      // This branch is the Aurora Data API path — reached only when no external
+      // `connectionString` connection was configured (those route to PgClientEngine
+      // in `_initBase`). The message covers both intents so a user who *meant* to
+      // connect to an external database (Supabase/Neon/etc.) but whose wiring never
+      // reached this class isn't left staring at an Aurora-only error.
       throw new Error(
-        `Missing environment variables: ${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN and/or ${ENV_VAR_PREFIX}_${envName}_SECRET_ARN. ` +
-        `These are injected by the CDK layer — ensure the Database is provisioned.`
+        `Database is not configured. For a provisioned Aurora database, the CDK layer ` +
+        `injects ${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN and ${ENV_VAR_PREFIX}_${envName}_SECRET_ARN — ` +
+        `ensure the Database is provisioned. For an external database (Supabase/Neon/etc.), ` +
+        `pass a connection via Database.fromExisting({ connectionString }).`
       );
     }
 

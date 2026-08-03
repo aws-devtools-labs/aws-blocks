@@ -150,7 +150,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
   const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch", "--hotswap",
+    "cdk", "watch",
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${process.cwd()}`,
     `--context`, `sandboxMode=true`,
