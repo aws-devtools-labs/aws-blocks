@@ -33,6 +33,19 @@ function logCodeLocally(message: string): void {
   if (!isDeployedLambda) console.log(message);
 }
 
+// Shared by the record readers below. A record we cannot parse is worth no more
+// than a missing one: report it as absent so the caller's poller keeps waiting
+// and times out on its own message, rather than failing the test with a JSON
+// syntax error. An empty string is treated the same way.
+function parseStoredRecord<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================================
 // Building Block Instances
 // ============================================================================
@@ -85,7 +98,7 @@ async function recordDeliveredCode(channel: string, value: DeliveredCode | Deliv
 
 async function readDeliveredCode<T extends DeliveredCode>(channel: string, username: string): Promise<T | null> {
   const raw = await store.get(codeKey(channel, username));
-  return raw === null ? null : (JSON.parse(raw) as T);
+  return parseStoredRecord<T>(raw);
 }
 
 async function purgeDeliveredCodes(): Promise<number> {
@@ -188,15 +201,7 @@ async function recordSignIn(instance: string, user: SignInRecord): Promise<void>
 
 async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
   const raw = await oidcProfiles.get(signInKey(instance, userId));
-  if (!raw) return null;
-  // A record we cannot parse is worth no more than a missing one: report it as
-  // "not signed in yet" and let the poller keep waiting or time out on its own
-  // message, rather than failing the test with a JSON syntax error.
-  try {
-    return JSON.parse(raw) as SignInRecord;
-  } catch {
-    return null;
-  }
+  return parseStoredRecord<SignInRecord>(raw);
 }
 
 const oidcProviders = [
