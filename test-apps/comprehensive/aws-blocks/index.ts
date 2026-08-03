@@ -224,7 +224,7 @@ const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
 // e2e tests can obtain a real, verifiable token without a live issuer. The
 // dev-only `bearerJwtMint` method below hands a minted token to the test client;
 // `bearerJwtRequired` is the gated method that calls requireAuth(context).
-const { auth: bearerJwt, mint: mintBearerJwt } = await createLocalJwt(scope, 'bearer-jwt', {
+const { auth: bearerJwt, mint: mintBearerJwt } = createLocalJwt(scope, 'bearer-jwt', {
   audience: 'authenticated',
 });
 

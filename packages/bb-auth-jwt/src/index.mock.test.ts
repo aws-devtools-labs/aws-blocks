@@ -22,7 +22,7 @@ function ctx(authHeader?: string): BlocksContext {
 
 describe('createLocalJwt (local-JWKS mock)', () => {
 	test('verifies a minted token offline and maps the user', async () => {
-		const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth');
+		const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth');
 		const token = await mint({ sub: 'user-1', email: 'a@b.com' });
 		const user = await auth.requireAuth(ctx(`Bearer ${token}`));
 		assert.strictEqual(user.userId, 'user-1');
@@ -30,26 +30,26 @@ describe('createLocalJwt (local-JWKS mock)', () => {
 	});
 
 	test('checkAuth true with a minted token, false without', async () => {
-		const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth');
+		const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth');
 		assert.strictEqual(await auth.checkAuth(ctx(`Bearer ${await mint()}`)), true);
 		assert.strictEqual(await auth.checkAuth(ctx()), false);
 	});
 
 	test('rejects a token from a different (foreign) local instance', async () => {
-		const a = await createLocalJwt({ id: 'app' }, 'auth');
-		const b = await createLocalJwt({ id: 'app' }, 'auth'); // different keypair
+		const a = createLocalJwt({ id: 'app' }, 'auth');
+		const b = createLocalJwt({ id: 'app' }, 'auth'); // different keypair
 		const foreign = await b.mint({ sub: 'attacker' });
 		assert.strictEqual(await a.auth.checkAuth(ctx(`Bearer ${foreign}`)), false);
 	});
 
 	test('rejects an expired minted token', async () => {
-		const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth');
+		const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth');
 		const expired = await mint({ sub: 'user-1', expiresIn: '-1h' });
 		await assert.rejects(() => auth.requireAuth(ctx(`Bearer ${expired}`)));
 	});
 
 	test('enforces requiredClaims', async () => {
-		const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth', { requiredClaims: ['org_id'] });
+		const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth', { requiredClaims: ['org_id'] });
 		const missing = await mint({ sub: 'user-1' });
 		await assert.rejects(
 			() => auth.requireAuth(ctx(`Bearer ${missing}`)),
@@ -61,7 +61,7 @@ describe('createLocalJwt (local-JWKS mock)', () => {
 	});
 
 	test('enforces audience when configured', async () => {
-		const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth', { audience: 'api://x' });
+		const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth', { audience: 'api://x' });
 		const user = await auth.requireAuth(ctx(`Bearer ${await mint({ sub: 'u-1' })}`));
 		assert.strictEqual(user.userId, 'u-1');
 	});

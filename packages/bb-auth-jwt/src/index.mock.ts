@@ -14,12 +14,13 @@
  *
  * @example
  * ```typescript
- * const { auth, mint } = await createLocalJwt({ id: 'app' }, 'auth');
+ * const { auth, mint } = createLocalJwt({ id: 'app' }, 'auth');
  * const token = await mint({ sub: 'user-1', email: 'a@b.com' });
  * // send `Authorization: Bearer ${token}` to a handler that calls auth.requireAuth(context)
  * ```
  */
-import { SignJWT, exportJWK, generateKeyPair, createLocalJWKSet, type JWK } from 'jose';
+import { SignJWT, createLocalJWKSet, type JWK } from 'jose';
+import { generateKeyPairSync } from 'node:crypto';
 import type { ScopeParent } from '@aws-blocks/core';
 import { AuthBearerJwt } from './index.js';
 
@@ -67,18 +68,28 @@ const DEFAULT_ISSUER = 'https://local-dev.example.com';
 /**
  * Build an `AuthBearerJwt` backed by a locally-generated ES256 key + in-memory
  * JWKS, plus a `mint()` token factory. No network, no real issuer.
+ *
+ * Synchronous by design: this is called at module scope from a backend
+ * definition, and that module is bundled to CJS for Lambda, where a top-level
+ * `await` is a build error. The key pair is therefore generated with Node's
+ * synchronous crypto rather than jose's promise-based `generateKeyPair`.
  */
-export async function createLocalJwt(
+export function createLocalJwt(
 	scope: ScopeParent,
 	id: string,
 	options: LocalJwtOptions = {},
-): Promise<LocalJwt> {
+): LocalJwt {
 	const issuer = options.issuer ?? DEFAULT_ISSUER;
 	const audience = options.audience;
 
-	const { privateKey, publicKey } = await generateKeyPair('ES256');
+	const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 	const kid = 'local-dev-key';
-	const publicJwk: JWK = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
+	const publicJwk: JWK = {
+		...(publicKey.export({ format: 'jwk' }) as JWK),
+		kid,
+		alg: 'ES256',
+		use: 'sig',
+	};
 
 	// Local (in-memory) JWKS — same resolver shape as createRemoteJWKSet, no fetch.
 	const jwks = createLocalJWKSet({ keys: [publicJwk] });
