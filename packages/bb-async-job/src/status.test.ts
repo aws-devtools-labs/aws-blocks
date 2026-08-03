@@ -357,6 +357,103 @@ test('JobStatusTracker - a late queued write does not clobber an earlier transit
 	assert.deepStrictEqual(status?.transitions.map(t => t.state), ['queued', 'processing']);
 });
 
+test('JobStatusTracker - a late queued write corrects the backfilled submission time', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-backdate' } as any);
+
+	// The job really was submitted a full minute before the handler observed it.
+	// The handler cannot know that, so its backfill dates the submission from its
+	// own clock.
+	const submittedAt = new Date(Date.now() - 60_000).toISOString();
+
+	await tracker.recordTransition('job-backdate', 'processing', 1);
+
+	const backfilled = await tracker.get('job-backdate');
+	assert.ok(
+		Date.parse(backfilled!.submittedAt) > Date.parse(submittedAt),
+		'precondition: the backfill must have stamped a later submittedAt',
+	);
+
+	// submit()'s write loses the create race, so it corrects the record instead of
+	// silently dropping the only accurate submission time anybody holds.
+	await tracker.recordQueued('job-backdate', submittedAt);
+
+	const status = await tracker.get('job-backdate');
+	assert.strictEqual(
+		status?.submittedAt,
+		submittedAt,
+		'submittedAt must be the real submission time, not the time the handler first saw the job',
+	);
+	assert.strictEqual(
+		status.transitions[0].at,
+		submittedAt,
+		'the queued transition and submittedAt are the same instant and must agree',
+	);
+
+	// The correction must not cost anything else on the record.
+	assert.strictEqual(status.state, 'processing', 'state must not fall back to queued');
+	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued', 'processing']);
+	assert.strictEqual(status.attempts, 1);
+	assert.strictEqual(
+		status.transitions[1].at,
+		backfilled!.transitions[1].at,
+		'the processing transition must keep its own timestamp',
+	);
+	assert.strictEqual(status.updatedAt, backfilled!.updatedAt, 'updatedAt tracks transitions, not submission');
+});
+
+test('JobStatusTracker - queued only ever moves the submission time earlier', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-monotonic' } as any);
+
+	// submit() wins the race here, so the record already holds the true time.
+	const submittedAt = new Date(Date.now() - 60_000).toISOString();
+	await tracker.recordQueued('job-monotonic', submittedAt);
+
+	// A later write for the same id must not drag the submission forward: nothing
+	// is submitted twice, so a later timestamp is never the better one.
+	await tracker.recordQueued('job-monotonic', new Date().toISOString());
+
+	const status = await tracker.get('job-monotonic');
+	assert.strictEqual(status?.submittedAt, submittedAt);
+	assert.strictEqual(status.transitions[0].at, submittedAt);
+	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued']);
+});
+
+test('JobStatusTracker - correcting the submission time does not drop a concurrent transition', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-backdate-parallel' } as any);
+
+	const submittedAt = new Date(Date.now() - 60_000).toISOString();
+	await tracker.recordTransition('job-both', 'processing', 1);
+
+	// The correction is a read-modify-write, so it races the handler's terminal
+	// append exactly as two appends race each other. Neither may be lost.
+	await Promise.all([
+		tracker.recordQueued('job-both', submittedAt),
+		tracker.recordTransition('job-both', 'complete', 1),
+	]);
+
+	const status = await tracker.get('job-both');
+	assert.strictEqual(status?.state, 'complete', 'the terminal transition must survive the correction');
+	assert.deepStrictEqual(status.transitions.map(t => t.state), ['queued', 'processing', 'complete']);
+	assert.strictEqual(
+		status.submittedAt,
+		submittedAt,
+		'the correction must survive a concurrent append',
+	);
+	assert.strictEqual(status.transitions[0].at, submittedAt);
+});
+
+test('JobStatusTracker - correcting a record that is gone does not recreate it', async () => {
+	const tracker = new JobStatusTracker({ id: 'cas-reaped' } as any);
+
+	// The TTL can reap a job's history in the window between submit()'s failed
+	// create and the correction's read. Writing the correction blind would put the
+	// record back and report a job as freshly queued long after its history was
+	// deliberately dropped, so a missing record has to stay missing.
+	await (tracker as any).backdateSubmission('job-reaped', new Date().toISOString());
+
+	assert.strictEqual(await tracker.get('job-reaped'), null);
+});
+
 test('JobStatusTracker - get does not leak storage bookkeeping', async () => {
 	const tracker = new JobStatusTracker({ id: 'cas-clean' } as any);
 	await tracker.recordQueued('job-clean', new Date().toISOString());

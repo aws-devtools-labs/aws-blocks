@@ -23,7 +23,7 @@ export const STATUS_RETENTION_SECONDS = 86_400;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 
-/** Attempts allowed for the compare-and-swap in {@link JobStatusTracker.recordTransition}. */
+/** Attempts allowed for either compare-and-swap in {@link JobStatusTracker}. */
 const MAX_CAS_ATTEMPTS = 5;
 const CAS_BACKOFF_MS = 20;
 
@@ -181,12 +181,83 @@ export class JobStatusTracker {
 	 * unconditional write would clobber that `processing` entry and strand the job
 	 * at `queued` forever. Losing the race is therefore success, not failure: the
 	 * handler's backfill already contains the `queued` transition.
+	 *
+	 * It is not a plain no-op either. The handler cannot know when the job was
+	 * submitted, so its backfill dates the submission from the moment it first
+	 * observed the job. This is the only caller holding the real submission time,
+	 * so on a lost race it goes back and corrects the record rather than
+	 * abandoning a `submittedAt` that the README defines as the time of
+	 * submission. The correction is best-effort: by this point the message is
+	 * already on the queue and the job will run, so a failed metadata fix must not
+	 * turn a successful `submit()` into a throw.
 	 */
 	async recordQueued(jobId: string, submittedAt: string): Promise<void> {
 		try {
 			await this.table.put(this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
+			return;
 		} catch (err: unknown) {
 			if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+		}
+
+		try {
+			await this.backdateSubmission(jobId, submittedAt);
+		} catch (err: unknown) {
+			this.log?.error?.(
+				`AsyncJob: failed to correct submittedAt for job ${jobId}: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			);
+		}
+	}
+
+	/**
+	 * Replace a backfilled submission time with the real one.
+	 *
+	 * `submittedAt` and the `queued` transition are corrected together: they are
+	 * two views of the same instant, and callers are entitled to expect
+	 * `transitions[0].at` to equal `submittedAt`.
+	 *
+	 * The correction only ever moves the timestamp earlier. Submission precedes
+	 * every transition, so a stored value that is already earlier did not come
+	 * from a backfill and is not ours to overwrite. That also makes this
+	 * idempotent, which matters because the write below can be retried.
+	 *
+	 * Like {@link recordTransition} this is a read-modify-write and carries the
+	 * same compare-and-swap on `version`, so a handler appending a transition
+	 * concurrently cannot have it dropped by this write, nor this correction by
+	 * theirs.
+	 */
+	private async backdateSubmission(jobId: string, submittedAt: string): Promise<void> {
+		const submitted = Date.parse(submittedAt);
+
+		for (let cas = 1; ; cas++) {
+			const existing = await this.table.get({ jobId });
+			// Gone between the failed create and this read: the record hit its TTL, or
+			// the job id was never tracked. Re-creating it would resurrect a job whose
+			// history has already been reaped.
+			if (!existing) return;
+
+			// Also covers an unparseable stored timestamp, where NaN makes the
+			// comparison false and leaves the record untouched.
+			if (!(submitted < Date.parse(existing.submittedAt))) return;
+
+			const next: StatusRecord = {
+				...existing,
+				submittedAt,
+				transitions: existing.transitions.map((t, i) =>
+					i === 0 && t.state === 'queued' ? { ...t, at: submittedAt } : t,
+				),
+				version: existing.version + 1,
+			};
+
+			try {
+				await this.table.put(next, { ifFieldEquals: { version: existing.version } });
+				return;
+			} catch (err: unknown) {
+				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
+				await sleep(jitterInterval(CAS_BACKOFF_MS));
+			}
 		}
 	}
 
@@ -214,6 +285,11 @@ export class JobStatusTracker {
 	 * dropped entry were the terminal one, `waitUntilComplete()` would time out on
 	 * a job that had actually finished. On a lost swap the record is re-read and
 	 * the transition re-applied, so no entry is lost.
+	 *
+	 * When no record exists yet this backfills one, because the handler can run
+	 * before `submit()` has written `queued`. The submission time it stamps there
+	 * is provisional: the handler only knows when it first saw the job.
+	 * {@link recordQueued} replaces it with the real one when it arrives.
 	 */
 	async recordTransition(
 		jobId: string,
