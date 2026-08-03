@@ -119,6 +119,28 @@ export type {
 } from '@aws-blocks/bb-auth-oidc';
 
 /**
+ * **Stateless bearer-JWT verifier.**
+ *
+ * Use when sign-in is owned elsewhere (a third-party IdP or provider SDK) and
+ * the backend only needs to verify the forwarded `Authorization: Bearer` token
+ * before running a handler. Validates the JWT against a configured issuer +
+ * JWKS (asymmetric RS256/ES256 by default; HS256 opt-in) and exposes the
+ * verified user to any API-namespace handler via `requireAuth(context)`.
+ * Provider-agnostic — configuration is just issuer + JWKS + audience.
+ *
+ * Package: `@aws-blocks/bb-auth-jwt`
+ * Full docs: `README.md` in the package directory above.
+ *
+ * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
+ */
+export { AuthBearerJwt, AuthBearerJwtErrors } from '@aws-blocks/bb-auth-jwt';
+export type {
+	AuthBearerUser,
+	AuthBearerJwtOptions,
+	SecretLike,
+} from '@aws-blocks/bb-auth-jwt';
+
+/**
  * **Shared auth interfaces and UI components for all Blocks auth Building Blocks.**
  *
  * Provides the `BlocksAuth` interface (implemented by every auth BB), auth state
