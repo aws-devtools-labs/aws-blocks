@@ -158,6 +158,15 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         }
       });
 
+      test('an undeclared provider has no signin route at all (404)', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signin/nonexistent`, { redirect: 'manual' });
+        await resp.text();
+        // One GET route is mounted per *configured* provider, so an unknown name
+        // never reaches a handler and cannot surface ProviderNotConfigured.
+        assert.strictEqual(resp.status, 404, 'Undeclared provider should have no route');
+      });
+
       test('full sign-in flow via HTTP redirects — google', async () => {
         const baseUrl = getBaseUrl();
 
@@ -454,6 +463,13 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const setCookies = signoutResp.headers.getSetCookie?.() ?? [];
         const sessionClear = setCookies.find(c => c.includes('session') && c.includes('Max-Age=0'));
         assert.ok(sessionClear, 'Should clear session cookie with Max-Age=0');
+      });
+
+      test('GET on the signout route is a 404 (the route is POST-only)', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signout`, { redirect: 'manual' });
+        await resp.text();
+        assert.strictEqual(resp.status, 404, 'Sign-out is POST-only');
       });
     });
 
