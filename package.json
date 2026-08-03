@@ -111,7 +111,7 @@
     "@microsoft/api-extractor": "^7.58.1",
     "@types/node": "^20.0.0",
     "aws-cdk": "^2.1117.0",
-    "aws-cdk-lib": "2.257.0",
+    "aws-cdk-lib": "^2.263.0",
     "constructs": "^10.6.0",
     "esbuild": "^0.27.1",
     "husky": "^9.1.7",

@@ -33,7 +33,7 @@
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
-    "aws-cdk-lib": "^2.245.0",
+    "aws-cdk-lib": "^2.263.0",
     "constructs": "^10.6.0"
   },
   "license": "Apache-2.0"
