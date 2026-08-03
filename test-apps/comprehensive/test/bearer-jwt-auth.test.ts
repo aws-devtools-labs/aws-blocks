@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import type { api as apiType } from 'aws-blocks';
 
 // AuthBearerJwt surfaces a 401 with this error name when a request carries no
-// valid bearer token.
+// valid bearer token. The name arrives as the JSON-RPC error's `data.name`.
 const MissingToken = 'MissingTokenException';
 const InvalidToken = 'InvalidTokenException';
 
@@ -21,13 +21,22 @@ function getBaseUrl(): string {
  * Drive an API method over the raw JSON-RPC wire so we can attach an
  * `Authorization: Bearer` header per call — the generated client is
  * cookie-based and does not expose per-request bearer headers.
+ *
+ * JSON-RPC 2.0 keeps the transport status at 200 and reports failures in the
+ * body, so an `ApiError`'s HTTP status arrives as the error `code` and its
+ * class name as `error.data.name` (see `errorResponseFromCatch` in
+ * @aws-blocks/core). Both the dev server and the Lambda handler answer 200.
  */
 async function rpcCall(
   baseUrl: string,
   method: string,
   args: unknown[],
   init?: { bearer?: string },
-): Promise<{ status: number; result?: unknown; error?: { name?: string; message?: string } }> {
+): Promise<{
+  status: number;
+  result?: unknown;
+  error?: { code?: number; message?: string; data?: { name?: string } };
+}> {
   const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
     method: 'POST',
     headers: {
@@ -57,14 +66,24 @@ export function bearerJwtAuthTests(getApi: () => typeof apiType) {
 
     test('a missing token is rejected with 401 MissingToken', async () => {
       const res = await rpcCall(getBaseUrl(), 'bearerJwtRequired', []);
-      assert.strictEqual(res.status, 401, `expected 401, got ${res.status}`);
-      assert.strictEqual(res.error?.name, MissingToken, `expected ${MissingToken}, got ${res.error?.name}`);
+      assert.strictEqual(res.error?.code, 401, `expected 401, got ${res.error?.code}`);
+      assert.strictEqual(
+        res.error?.data?.name,
+        MissingToken,
+        `expected ${MissingToken}, got ${res.error?.data?.name}`,
+      );
+      assert.strictEqual(res.result, undefined, 'a rejected call must not return a result');
     });
 
     test('a malformed token is rejected with 401 InvalidToken', async () => {
       const res = await rpcCall(getBaseUrl(), 'bearerJwtRequired', [], { bearer: 'not-a-real-jwt' });
-      assert.strictEqual(res.status, 401, `expected 401, got ${res.status}`);
-      assert.strictEqual(res.error?.name, InvalidToken, `expected ${InvalidToken}, got ${res.error?.name}`);
+      assert.strictEqual(res.error?.code, 401, `expected 401, got ${res.error?.code}`);
+      assert.strictEqual(
+        res.error?.data?.name,
+        InvalidToken,
+        `expected ${InvalidToken}, got ${res.error?.data?.name}`,
+      );
+      assert.strictEqual(res.result, undefined, 'a rejected call must not return a result');
     });
   });
 }

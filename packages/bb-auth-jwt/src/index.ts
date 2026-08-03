@@ -10,6 +10,7 @@ import {
   decodeJwt,
   type JWTPayload,
   type JWTVerifyGetKey,
+  type ProtectedHeaderParameters,
 } from 'jose';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -246,7 +247,7 @@ export class AuthBearerJwt extends Scope implements BlocksAuth {
   }
 
   private validateAlgorithm(token: string): void {
-    let header;
+    let header: ProtectedHeaderParameters;
     try {
       header = decodeProtectedHeader(token);
     } catch {
