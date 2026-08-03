@@ -102,6 +102,8 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 ### D-DT-9: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
 
+> The **default choice** (`'coerce'` over `'off'`) is recorded as a cross-cutting architectural decision in [`docs/DECISIONS.md` D-015](../../docs/DECISIONS.md#d-015-distributedtable-reads-default-to-readvalidation-coerce-not-off). This section covers the per-BB mechanics.
+
 **Decision:** Writes always validate. Reads reconcile a stored item with the schema per the `readValidation` mode, which defaults to **`'coerce'`**. `get`/`getBatch`/`query`/`scan` pass each stored value through `schema['~standard'].validate()`:
 - **`'coerce'`** (default) — return the schema's output (defaults filled / types narrowed for transform-bearing schemas); on validation failure return the **raw** value with a `warn` log — never throws.
 - **`'strict'`** — throw `ValidationFailed` on any item that doesn't satisfy the schema.

@@ -619,3 +619,44 @@ write-back/staging machinery.
 - Code: `packages/core/src/scripts/stack-id.ts` (`getStackName`),
   `packages/core/src/db-naming.ts`, `packages/core/src/scripts/ensure-secrets.ts`,
   `packages/bb-data/src/db-pull/generate.ts`.
+
+## D-015: `DistributedTable` reads default to `readValidation: 'coerce'` (not `'off'`)
+
+**Date**: 2026-08-03
+**Authors:** osama-rizk
+
+### Context
+
+`DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
+
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The open question — raised in PR #283 review — was which value should be the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-9).
+
+### Decision
+
+Reads default to **`'coerce'`**:
+
+- **`'coerce'`** (default) — return the schema's coerced output (defaults filled, types narrowed for transform-bearing schemas). On a value that cannot be coerced, return the **raw** value and log a `warn` — **never throws**.
+- **`'strict'`** — throw `ValidationFailed` on any non-conforming item (opt-in reject).
+- **`'off'`** — return the raw stored value with no validation (matches the prior behavior).
+
+### Rationale
+
+- **The bug is the default read violating `T`.** A fix only reachable via an opt-in flag would leave the reported default broken for anyone who doesn't discover the flag; the default itself must return schema-conformant data.
+- **Precedent from comparable typed data layers.** Schema-on-read peers reconcile on read and don't throw: Mongoose fills defaults/casts on hydrate; ElectroDB returns schema-shaped items via getters; Rails ActiveRecord type-casts on load; Postgres materializes `ADD COLUMN … DEFAULT` at read time (coerce-on-read in all but name). None default to raw passthrough once a schema is declared. (SQL ORMs like Prisma/Drizzle *do* pass raw through — but only because the engine enforces schema on write, a guarantee DynamoDB lacks, so their behavior is not transferable.)
+- **Non-throwing keeps the read contract.** A read that threw on a bad row would make legacy/corrupt rows unreadable (you couldn't fetch them to migrate) and violate the project rule that reads return data or `null` and throw only for violated preconditions. Every surveyed library that ships a strict read (DynamoDB-Toolbox `format()`, `zod-firebase`) also ships an escape hatch — so `'strict'` is offered, not defaulted.
+
+### Alternatives Considered
+
+- **`'off'` as the default (coercion opt-in).** Lossless and fully backward-compatible, but ships the original bug as the default and only helps users who find the flag. Rejected as the default; retained as the explicit opt-out.
+- **`'strict'` as the default.** Rejected: turns one bad row into a whole-`scan`/`getBatch` outage, blocks migration reads, and breaks the reads-don't-throw contract.
+- **A `validateOnRead: boolean` (the PR's first iteration).** Cannot express three distinct behaviors; replaced by the enum before merge.
+
+### Known trade-off (accepted)
+
+`'coerce'` returns the validator's output, and most object schemas discard unrecognized keys (Zod `.strip()` by default). A stored row carrying fields beyond the current schema therefore loses them on read, and a read-modify-write then persists the stripped item — the one case where the safer default can *lose* information rather than add it. Accepted because additive evolution (where `'coerce'` is strictly safer) is far more common than field-removal/unknown-key cases, and those cases have a documented mitigation: read with `readValidation: 'off'` (or a passthrough schema). This is called out in the README and DESIGN D-DT-9. Coercion is also best-effort/validator-dependent: check-only Standard Schema validators (some Valibot/ArkType schemas) neither strip nor fill, so `'coerce'` degrades to pass-through for them.
+
+### References
+
+- Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
+- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-9.
+- Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
