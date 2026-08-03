@@ -299,7 +299,7 @@ export class DistributedTable<
 		// and lets concurrent callers re-collide; equal jitter preserves a minimum
 		// spacing while still de-synchronising retries under shared throttling.
 		// See: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html#Programming.Errors.BatchOperations
-		const capped = Math.min(BASE_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
+		const capped = Math.min(BASE_BACKOFF_MS * 2 ** attempt, MAX_BACKOFF_MS);
 		const ms = capped / 2 + Math.random() * (capped / 2);
 		return new Promise(resolve => setTimeout(resolve, ms));
 	}

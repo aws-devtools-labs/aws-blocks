@@ -40,10 +40,10 @@ const table = new DistributedTable(scope, id, options)
 | `key` | `TableKeyConfig<T>` | Yes | Primary key configuration: `{ partitionKey, sortKey? }`. Field names must exist in the schema. |
 | `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions. |
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
-| `pointInTimeRecovery` | `boolean` | No | Enable Point-in-Time Recovery (continuous backups, 35-day window). **Defaults to `true` in production, `false` in sandbox.** |
-| `deletionProtection` | `boolean` | No | Block table deletion until turned off. **Defaults to `true` in production, `false` in sandbox.** |
+| `pointInTimeRecovery` | `boolean` | No | Enable Point-in-Time Recovery (continuous backups). **Defaults to `true` in production, `false` in sandbox.** Bills for backup storage per GB-month. |
+| `pointInTimeRecoveryDays` | `number` | No | PITR recovery window in days (**1–35**, default **35**). Only applies when PITR is enabled; a shorter window trims backup-storage cost. |
+| `protection` | `'disposable' \| 'retained' \| 'locked'` | No | How hard the table is to destroy (spans removal policy + deletion protection). `'disposable'` = deleted with the stack; `'retained'` = orphaned on stack delete but a direct delete still works; `'locked'` = orphaned **and** deletion-protected. **Defaults to `'locked'` in production, `'disposable'` in sandbox.** |
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | No | At-rest encryption key. `'aws-managed'` (default) uses the `aws/dynamodb` KMS key (auditable, no key charge); `'customer-managed'` provisions a dedicated CMK; pass `DistributedTable.fromKmsKey(arn)` to encrypt with an existing CMK you own (shareable across tables). |
-| `removalPolicy` | `'retain' \| 'destroy'` | No | What happens to the table on stack delete. **Defaults to `'retain'` in production, `'destroy'` in sandbox.** |
 | `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. Durability/encryption options are ignored — the customer owns the table's configuration. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
@@ -292,19 +292,28 @@ const legacy = new DistributedTable(scope, 'legacy', {
 Production tables are **secure by default**. On a normal (`npm run deploy`) deploy, every table provisioned by this block ships with:
 
 - **Point-in-Time Recovery** enabled — restore to any second in the last 35 days.
-- **Deletion protection** enabled — a stray `cdk destroy` or console delete is refused until you turn protection off.
+- **`protection: 'locked'`** — the table is retained if the stack is deleted **and** DynamoDB deletion protection is on, so neither a stack teardown nor a stray `cdk destroy`/console delete can wipe it until you explicitly relax protection.
 - **SSE-KMS** with the AWS-managed `aws/dynamodb` key — encryption-at-rest that's auditable via CloudTrail, at no per-key charge.
-- **`RemovalPolicy.RETAIN`** — deleting the stack orphans (keeps) the table rather than destroying your data.
 
-In **sandbox mode** (`npm run sandbox`, i.e. `--context sandboxMode=true`) these default the other way — PITR off, deletion protection off, `RemovalPolicy.DESTROY` — so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE-KMS stays on in both.
+In **sandbox mode** (`npm run sandbox`, i.e. `--context sandboxMode=true`) these default the other way — PITR off and `protection: 'disposable'` (`RemovalPolicy.DESTROY`, deletion protection off) — so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE-KMS stays on in both.
+
+> **PITR is not free.** Point-in-Time Recovery charges for continuous-backup storage (per GB-month of table size), so a large production table carries an ongoing cost. It's on by default because unrecoverable data loss is usually the worse outcome — but for regenerable data (caches, derived tables) set `pointInTimeRecovery: false`.
+
+> **`protection: 'locked'`/`'retained'` orphans the table on stack delete.** Because the removal policy is `RETAIN`, deleting the stack leaves the table behind (by design — your data survives). But the table name is derived deterministically from the block's id, so **redeploying the same app afterward fails with `Table already exists`** until you delete the orphaned table (`aws dynamodb delete-table`, after disabling deletion protection if `'locked'`) or import it into the new stack. This is inherent to retain-on-delete; use `protection: 'disposable'` for tables you expect to recreate freely.
 
 Every default is overridable per table:
 
 ```typescript
-// Cost-sensitive prod table: keep protection, skip PITR
+// Cost-sensitive prod table: keep it protected, skip PITR's backup cost
 const cache = new DistributedTable(scope, 'cache', {
   schema, key: { partitionKey: 'id' },
   pointInTimeRecovery: false,
+});
+
+// Long-lived data you still want to be able to delete directly
+const staging = new DistributedTable(scope, 'staging', {
+  schema, key: { partitionKey: 'id' },
+  protection: 'retained',   // survives stack delete, but not deletion-protected
 });
 
 // Compliance-strict table: dedicated customer-managed KMS key

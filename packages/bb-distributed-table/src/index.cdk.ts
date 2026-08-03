@@ -58,9 +58,9 @@ export class DistributedTable<T = any> extends Scope {
 			//
 			// Durability/encryption options don't apply to an existing table (we
 			// never emit a `Table` resource to attach them to). Surface that at
-			// synth so a `deletionProtection: true` on what looks like a fresh
+			// synth so a `protection: 'locked'` on what looks like a fresh
 			// table isn't a silent no-op.
-			const ignoredForExisting = (['pointInTimeRecovery', 'deletionProtection', 'encryption', 'removalPolicy'] as const)
+			const ignoredForExisting = (['pointInTimeRecovery', 'protection', 'encryption'] as const)
 				.filter((key) => config[key] !== undefined);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(
@@ -110,15 +110,18 @@ export class DistributedTable<T = any> extends Scope {
 		// SandboxDisableDeletionProtection mixin) because that mixin duck-types
 		// on a `deletionProtection` instance property, which the DynamoDB L2
 		// Table does not expose — so it can't relax it after the fact.
-		// `options` is typed `any` here, so an unrecognized string (typo, wrong
-		// casing) would otherwise fall through to the environment default. For
-		// `removalPolicy` that's dangerous — a typo'd `retain` in a sandbox would
-		// silently DESTROY. Warn instead of guessing.
-		if (config.removalPolicy !== undefined && config.removalPolicy !== 'retain' && config.removalPolicy !== 'destroy') {
+		//
+		// `protection` is a single knob (disposable | retained | locked) spanning
+		// removal policy + deletion protection, so the contradictory
+		// "protect + destroy" state can't be expressed. `options` is typed `any`
+		// here, so guard against an unrecognized string (typo) rather than
+		// silently falling through to the environment default.
+		const PROTECTION_VALUES = ['disposable', 'retained', 'locked'] as const;
+		if (config.protection !== undefined && !PROTECTION_VALUES.includes(config.protection)) {
 			Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-distributed-table:UnknownRemovalPolicy',
-				`Unrecognized removalPolicy '${config.removalPolicy}' (expected 'retain' or 'destroy') — ` +
-					`falling back to the ${isSandbox ? 'sandbox' : 'production'} default.`,
+				'@aws-blocks/bb-distributed-table:UnknownProtection',
+				`Unrecognized protection '${String(config.protection)}' (expected 'disposable', 'retained', ` +
+					`or 'locked') — falling back to the ${isSandbox ? 'sandbox' : 'production'} default.`,
 			);
 		}
 		// `encryption` accepts two string literals or an ExternalKmsKeyRef
@@ -141,12 +144,28 @@ export class DistributedTable<T = any> extends Scope {
 		}
 
 		const pitrEnabled = config.pointInTimeRecovery ?? !isSandbox;
-		const deletionProtection = config.deletionProtection ?? !isSandbox;
-		const removalPolicy = config.removalPolicy === 'destroy'
+		// PITR recovery window (days). DynamoDB accepts 1–35; undefined → 35.
+		// Warn (and drop back to the default) on an out-of-range value rather
+		// than letting CloudFormation reject the whole deploy at apply time.
+		let pitrDays: number | undefined = config.pointInTimeRecoveryDays;
+		if (pitrDays !== undefined && (!Number.isInteger(pitrDays) || pitrDays < 1 || pitrDays > 35)) {
+			Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-distributed-table:InvalidPitrDays',
+				`pointInTimeRecoveryDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
+					`falling back to the 35-day default.`,
+			);
+			pitrDays = undefined;
+		}
+		// Resolve the single `protection` knob into the two CDK properties.
+		// Default: 'locked' in prod, 'disposable' in sandbox. An explicit value
+		// wins. 'retained' orphans-but-doesn't-lock; 'locked' does both.
+		const protection = PROTECTION_VALUES.includes(config.protection)
+			? config.protection
+			: (isSandbox ? 'disposable' : 'locked');
+		const deletionProtection = protection === 'locked';
+		const removalPolicy = protection === 'disposable'
 			? RemovalPolicy.DESTROY
-			: config.removalPolicy === 'retain'
-				? RemovalPolicy.RETAIN
-				: (isSandbox ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN);
+			: RemovalPolicy.RETAIN;
 		// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
 		// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
 		// Otherwise the AWS-managed `aws/dynamodb` key.
@@ -175,8 +194,13 @@ export class DistributedTable<T = any> extends Scope {
 			timeToLiveAttribute: config.ttl || undefined,
 			// PITR spec is only emitted when enabled — leaving it undefined keeps
 			// the CloudFormation template clean for sandboxes / opt-outs.
+			// recoveryPeriodInDays is only set when the caller narrows it (an
+			// omitted value keeps DynamoDB's 35-day default without emitting it).
 			pointInTimeRecoverySpecification: pitrEnabled
-				? { pointInTimeRecoveryEnabled: true }
+				? {
+					pointInTimeRecoveryEnabled: true,
+					...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
+				}
 				: undefined,
 			deletionProtection,
 			removalPolicy,

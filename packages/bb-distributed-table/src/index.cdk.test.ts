@@ -81,6 +81,67 @@ test('CDK: prod DistributedTable enables PITR by default', () => {
 	});
 });
 
+test('CDK: default PITR does not pin a recovery window (DynamoDB 35-day default)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: {
+			PointInTimeRecoveryEnabled: true,
+			RecoveryPeriodInDays: Match.absent(),
+		},
+	});
+});
+
+test('CDK: pointInTimeRecoveryDays sets the recovery window', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecoveryDays: 7,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: {
+			PointInTimeRecoveryEnabled: true,
+			RecoveryPeriodInDays: 7,
+		},
+	});
+});
+
+test('CDK: an out-of-range pointInTimeRecoveryDays falls back to the default (no window pinned)', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecoveryDays: 60,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: {
+			PointInTimeRecoveryEnabled: true,
+			RecoveryPeriodInDays: Match.absent(),
+		},
+	});
+});
+
+test('CDK: pointInTimeRecoveryDays is ignored when PITR is disabled', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecovery: false,
+		pointInTimeRecoveryDays: 7,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: Match.absent(),
+	});
+});
+
 test('CDK: prod DistributedTable enables DeletionProtection by default', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
@@ -160,19 +221,20 @@ test('CDK: sandbox DistributedTable table is DESTROYed on stack delete', () => {
 
 // ── Customer overrides win over the secure defaults ─────────────────────────
 
-test('CDK: customer can opt OUT of PITR/DeletionProtection in prod', () => {
+test('CDK: customer can opt OUT of PITR + protection in prod', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		pointInTimeRecovery: false,
-		deletionProtection: false,
+		protection: 'disposable',
 	});
 	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::DynamoDB::Table', {
 		PointInTimeRecoverySpecification: Match.absent(),
 		DeletionProtectionEnabled: false,
 	});
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
 });
 
 test('CDK: customer can opt INTO durable/protected tables even in sandbox', () => {
@@ -181,12 +243,28 @@ test('CDK: customer can opt INTO durable/protected tables even in sandbox', () =
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		pointInTimeRecovery: true,
-		deletionProtection: true,
+		protection: 'locked',
 	});
 	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::DynamoDB::Table', {
 		PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
 		DeletionProtectionEnabled: true,
+	});
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+});
+
+test("CDK: protection 'retained' orphans the table without locking deletes", () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		protection: 'retained',
+	});
+	const template = Template.fromStack(stack);
+	// RETAIN on stack delete, but deletion protection OFF (a direct delete works).
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		DeletionProtectionEnabled: false,
 	});
 });
 
@@ -247,7 +325,7 @@ test('CDK: fromExisting ignores durability props (customer owns the table)', () 
 		table: DistributedTable.fromExisting('preexisting-users-table'),
 		// These must be inert when wrapping an existing table.
 		pointInTimeRecovery: true,
-		deletionProtection: true,
+		protection: 'locked',
 		encryption: 'customer-managed',
 	});
 	const template = Template.fromStack(stack);

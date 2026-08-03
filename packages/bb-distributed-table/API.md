@@ -59,13 +59,13 @@ export const DistributedTableErrors: {
 
 // @public (undocumented)
 export interface DistributedTableOptions<T, K extends TableKeyConfig<T> = TableKeyConfig<T>, Indexes extends Record<string, TableKeyConfig<T>> = Record<string, TableKeyConfig<T>>> {
-    deletionProtection?: boolean;
     encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     indexes?: Indexes;
     key: K;
     logger?: ChildLogger;
     pointInTimeRecovery?: boolean;
-    removalPolicy?: 'retain' | 'destroy';
+    pointInTimeRecoveryDays?: number;
+    protection?: 'disposable' | 'retained' | 'locked';
     schema: StandardSchemaV1<T>;
     table?: ExternalTableRef;
     ttl?: keyof T & string;

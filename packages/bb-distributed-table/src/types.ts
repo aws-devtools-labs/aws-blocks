@@ -48,24 +48,55 @@ export interface DistributedTableOptions<
 	 * Enable DynamoDB Point-in-Time Recovery (continuous backups).
 	 *
 	 * PITR lets you restore the table to any second within the retention
-	 * window (35 days), protecting against accidental writes/deletes and
-	 * logical corruption.
+	 * window (see {@link pointInTimeRecoveryDays}), protecting against
+	 * accidental writes/deletes and logical corruption.
 	 *
 	 * Defaults to **`true` on production deploys** and **`false` in sandbox
 	 * mode** (`--context sandboxMode=true`) to keep throwaway sandboxes cheap.
 	 * Set explicitly to override that default in either environment.
+	 *
+	 * Note: PITR bills for continuous-backup storage (per GB-month of table
+	 * size), so it is not free on large tables.
 	 */
 	pointInTimeRecovery?: boolean;
 	/**
-	 * Enable DynamoDB deletion protection. When enabled, DynamoDB refuses to
-	 * delete the table (blocking a stray `cdk destroy` or console delete) until
-	 * protection is turned off.
+	 * The recovery window, in days, that Point-in-Time Recovery keeps
+	 * continuous backups for — you can restore to any second within this many
+	 * preceding days.
 	 *
-	 * Defaults to **`true` on production deploys** and **`false` in sandbox
-	 * mode** so `sandbox:destroy` can tear the stack down without manual steps.
-	 * Set explicitly to override that default in either environment.
+	 * Accepts **1–35**; defaults to **35** (the maximum) when omitted. Only
+	 * meaningful when PITR is enabled; ignored when `pointInTimeRecovery` is
+	 * `false`. A shorter window reduces backup-storage cost at the expense of
+	 * how far back you can restore.
 	 */
-	deletionProtection?: boolean;
+	pointInTimeRecoveryDays?: number;
+	/**
+	 * How hard the table is to destroy — a single knob spanning DynamoDB
+	 * deletion protection and the CloudFormation removal policy, which together
+	 * answer one question: "can this table be destroyed?"
+	 *
+	 * - `'disposable'`: `RemovalPolicy.DESTROY`, deletion protection **off**.
+	 *   Deleting the stack deletes the table. The **sandbox default** — keeps
+	 *   `sandbox:destroy` a one-command teardown.
+	 * - `'retained'`: `RemovalPolicy.RETAIN`, deletion protection **off**.
+	 *   Deleting the stack orphans (keeps) the table, but a direct
+	 *   `DeleteTable`/console delete still works. Use when you want the data to
+	 *   survive stack teardown without blocking intentional deletes.
+	 * - `'locked'`: `RemovalPolicy.RETAIN` **and** deletion protection **on**.
+	 *   The table survives stack deletion and DynamoDB refuses a direct delete
+	 *   until protection is turned off. The **production default**.
+	 *
+	 * Defaults to **`'locked'` on production deploys** and **`'disposable'` in
+	 * sandbox mode** (`--context sandboxMode=true`). Set explicitly to override
+	 * in either environment.
+	 *
+	 * Replaces the separate `deletionProtection` + `removalPolicy` booleans:
+	 * those two knobs could encode the contradictory `deletionProtection: true`
+	 * + `removalPolicy: 'destroy'` state, which wedges stack deletion (CFN
+	 * issues `DeleteTable`, DynamoDB refuses it, the stack lands in
+	 * `DELETE_FAILED`). A single enum makes that state unrepresentable.
+	 */
+	protection?: 'disposable' | 'retained' | 'locked';
 	/**
 	 * Server-side encryption at rest.
 	 *
@@ -92,18 +123,6 @@ export interface DistributedTableOptions<
 	 * ```
 	 */
 	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
-	/**
-	 * Controls what happens to the table when the enclosing CloudFormation
-	 * stack is deleted.
-	 *
-	 * - `'retain'`: keep the table (orphan it) — the safe default for
-	 *   production so stack teardown never destroys data.
-	 * - `'destroy'`: delete the table with the stack.
-	 *
-	 * Defaults to **`'retain'` on production deploys** and **`'destroy'` in
-	 * sandbox mode**. Set explicitly to override.
-	 */
-	removalPolicy?: 'retain' | 'destroy';
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
