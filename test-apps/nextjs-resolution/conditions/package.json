@@ -1,0 +1,22 @@
+{
+  "name": "nextjs-resolution-aws-blocks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'No tests (IFC subpackage)'"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "aws-runtime": "./m-aws-runtime.js",
+      "cdk": "./m-cdk.js",
+      "browser": "./m-browser.js",
+      "react-server": "./m-react-server.js",
+      "edge-light": "./m-edge-light.js",
+      "require": "./m-require.cjs",
+      "import": "./m-import.js",
+      "default": "./m-default.js"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "bb-test-nextjs-resolution",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "Tripwire: asserts which export condition each Next.js graph resolves, under the default bundler",
+  "workspaces": [
+    "conditions"
+  ],
+  "scripts": {
+    "build": "next build",
+    "test": "echo 'E2e tripwire runs via test:e2e:local (needs next build)'",
+    "test:resolution": "node --test --test-concurrency=1 test/resolution.test.js",
+    "test:e2e:local": "npm run build && npm run test:resolution"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "next": "^16.0.0",
+    "nextjs-resolution-aws-blocks": "*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.3.0"
+  }
+}

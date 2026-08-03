@@ -1,0 +1,30 @@
+{
+  "name": "bb-test-dx-poc",
+  "version": "0.1.0",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "description": "POC: the Next-native programming model — blocks as plain app-code modules, used in process by server code",
+  "scripts": {
+    "dev": "next dev --port 3310",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'E2e runs via test:e2e:local'",
+    "test:e2e:local": "npm run typecheck && node --test --test-concurrency=1 test/schema-fresh.test.js test/dx-poc.test.js test/data-api.test.js test/no-server-leak.test.js"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/nextjs": "*",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.3.0"
+  }
+}

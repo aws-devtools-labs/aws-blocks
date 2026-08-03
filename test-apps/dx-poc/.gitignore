@@ -1,0 +1,4 @@
+node_modules/
+.next/
+.bb-data/
+next-env.d.ts

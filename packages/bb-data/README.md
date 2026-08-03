@@ -64,6 +64,64 @@ Migrations run automatically:
 
 Applied migrations are tracked in a `_migrations` table. Each file runs once.
 
+## Fluent Query Client
+
+A typed, schema-aware client for everyday reads and writes. Table and column names are
+checked against the schema generated from your migrations, so a rename that breaks a
+query is a compile error rather than a runtime one.
+
+```typescript
+import { createDataClient } from '@aws-blocks/bb-data/fluent';
+import { tableMeta, type TableMeta } from './schema/database.meta.js';
+
+export const data = createDataClient<TableMeta>(db, tableMeta);
+
+const notes = await data.from('notes')
+  .select('id', 'text')          // result type narrows to { id, text }
+  .eq('done', false)
+  .order('created_at', 'desc')
+  .limit(20);
+
+const note = await data.from('notes').insert({ text: 'hello' });
+await data.from('notes').update({ done: true }).eq('id', note.id);
+await data.from('notes').delete().eq('id', note.id);
+```
+
+Both arguments come from
+[`@aws-blocks/bb-data/schema-sync`](#deriving-types-from-migrations), so the types
+follow your migrations with no hand-maintained interface.
+
+**What it guarantees**
+
+- **Values are always parameterized** and identifiers are validated against the
+  schema, so nothing a caller passes can become SQL.
+- **Errors throw.** No `{ data, error }` tuple that the compiler can't force you to
+  check — match failures with `isBlocksError`.
+- **Writes require a filter.** `update()` and `delete()` throw unless narrowed, so a
+  forgotten `.eq(...)` can't rewrite or empty a table.
+- **Reads that find nothing return `null`**, not an error: `first()` is ordinary
+  control flow.
+- Queries are real promises (`.catch()`, `.finally()`, `Promise.all` all work) and run
+  once no matter how often they're awaited.
+
+`insert()` accepts exactly what Postgres will: server-managed columns (serial,
+`DEFAULT now()`) are rejected, columns with a default or that are nullable are
+optional, everything else is required.
+
+### Choosing between the three query tiers
+
+| Use | When |
+|---|---|
+| Fluent client | everyday CRUD, filters, ordering, pagination |
+| Kysely adapter | joins, subqueries, CTEs — anything relational |
+| `sql` tag | window functions, `FILTER`, extensions, hand-tuned SQL |
+
+All three run against the same database and can be mixed freely.
+
+`db.crud()` (below) predates the fluent client and covers the same ground with
+generated per-table method names. It remains supported; new code should prefer the
+fluent client, which checks column names and narrows result types.
+
 ## Kysely Query Builder
 
 For type-safe queries without raw SQL:
@@ -100,6 +158,113 @@ await kysely.transaction().execute(async (trx) => {
 ```
 
 See [Kysely documentation](https://kysely.dev) for the full query builder API.
+
+## Deriving types from migrations
+
+Your migrations are the source of truth; the types follow from them with no command to
+run and nothing to keep fresh by hand.
+
+```typescript
+import { syncSchema } from '@aws-blocks/bb-data/schema-sync';
+
+await syncSchema({ migrationsPath: './migrations', outDir: './lib/schema' });
+```
+
+This writes `database.types.ts` (a row interface per table) and `database.meta.ts` (the
+runtime metadata the fluent client validates against). In a Next.js app,
+[`@aws-blocks/nextjs`](https://www.npmjs.com/package/@aws-blocks/nextjs) runs it for
+you during `next dev` and re-runs it whenever a migration changes.
+
+Migrations are applied to a **throwaway** database rather than your dev one, for two
+reasons: PGlite is single-writer per data directory, so introspecting a running dev
+server's database would contend for its lock; and the types should describe what the
+migrations produce, not whatever state a long-lived dev database has drifted into.
+
+Files are only rewritten when their content changes, so this is safe to call on every
+file-change event. Commit the output — a fresh clone then typechecks and editors have
+types before the dev server has ever run — and consider a check that regenerates and
+fails on a diff, so it can't drift.
+
+> Temporal columns are typed as `Date`, which is what both `pg` and PGlite return.
+> Note that the older `db pull` generator declares them `string`; that mapping is
+> unchanged for backward compatibility.
+
+## Browser-Direct Queries (Data API)
+
+Lets browser code read and write tables with no endpoint written per query, while
+authorization stays in the database as RLS policy.
+
+```typescript
+// server — one endpoint for every table
+import { createDataApi } from '@aws-blocks/bb-data/data-api';
+
+const dataApi = createDataApi({
+  db,
+  schema: tableMeta,
+  tables: ['notes'],                             // opt-in only
+  auth: async () => auth.requireAuth(context),   // required
+});
+
+export async function POST(request: Request) {
+  return Response.json(await dataApi.execute(await request.json()));
+}
+```
+
+```typescript
+// browser — no URL and no API key; rides the session you already have
+import { createRemoteDataClient } from '@aws-blocks/bb-data/data-api/client';
+
+const data = createRemoteDataClient<TableMeta>(async (query) => {
+  const res = await fetch('/api/data', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(query),
+  });
+  if (!res.ok) throw new Error((await res.json()).message);
+  return res.json();
+});
+
+const notes = await data.from('notes').select('id', 'text').eq('done', false).limit(20);
+```
+
+The browser client mirrors the [fluent client](#fluent-query-client), so the same query
+reads the same on either side of the wire.
+
+### What protects it
+
+- **Authentication is mandatory.** `auth` is required and must resolve a user — there is
+  no anonymous mode to forget to turn off. This is the substantive difference from an
+  anon-key model, where a table is world-readable until RLS is added. Callers are
+  authenticated *before* validation, so an anonymous prober learns nothing about your
+  schema from error messages.
+- **Tables are opt-in.** A table present in the schema but absent from `tables` is
+  refused.
+- **The client never sends SQL.** It sends a description; the server validates it
+  against the introspected schema and a closed operator set, then builds the statement
+  itself. Unknown tables, columns, operators and order directions, and non-scalar filter
+  values, are all rejected.
+- **Every query runs under `withRLS`** with the caller's claims, so policies decide which
+  rows are visible.
+- **Writes are constrained.** `update` and `delete` require a filter, database-managed
+  columns cannot be set, and a limit is always applied so a single request cannot pull an
+  entire table.
+
+### Let Postgres assign ownership
+
+Give the owning column a default that reads the caller's claims:
+
+```sql
+ALTER TABLE notes ADD COLUMN owner TEXT NOT NULL
+    DEFAULT COALESCE(NULLIF(current_setting('request.jwt.claims', true), '')::json->>'sub', 'system');
+```
+
+Introspection then classifies `owner` as server-managed, so the data API refuses any
+attempt to set it — a client cannot create a row for someone else even before the
+policy's `WITH CHECK` is consulted.
+
+> **Trusted server code bypasses RLS.** The [fluent client](#fluent-query-client) runs
+> queries directly, so scope them yourself (`.eq('owner', user.userId)`) or go through
+> `withRLS`. RLS is the gate for *untrusted* callers; server code is already trusted.
 
 ## Row Level Security (RLS)
 

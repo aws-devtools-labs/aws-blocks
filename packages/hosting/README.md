@@ -76,6 +76,52 @@ import { HostingError } from '@aws-blocks/hosting/error';
 └──────────────────────────────────────────────┘
 ```
 
+## Next.js module resolution
+
+Blocks selects its implementation per environment through Node conditional exports,
+so what a Next.js app resolves depends on which graph the import sits in. Measured
+against Next 16 under the default bundler (Turbopack) and under `--webpack` — both
+agree, and neither needs any resolution configuration:
+
+| Context | Condition resolved |
+|---|---|
+| Server Component | `react-server` |
+| Route handler | `react-server` |
+| Server Action | `react-server` |
+| Client Component, SSR pass | `import` |
+| Client Component, browser bundle | `browser` |
+
+Two consequences when writing an export map for a backend package:
+
+- **`react-server` is the server condition.** It is set natively by Next.js in every
+  server context, so pointing it at a real backend needs no custom condition name and
+  no bundler flags.
+- **The SSR pass of a Client Component resolves `import`, not `browser`.** So `import`
+  must point wherever `browser` points. The intuitive map — `browser` to a client, and
+  `default` to the real backend — hands Client Components the real backend during SSR
+  and the client after hydration: a server-side crash plus a hydration mismatch.
+
+### Blocks that load WASM or native assets
+
+A block whose runtime loads an asset via `new URL(..., import.meta.url)` must be marked
+external, or the bundler rewrites that URL and asset loading breaks. `bb-data` is the
+current case — its PGlite engine fails with `The "path" argument must be of type string
+or an instance of Buffer or URL. Received an instance of URL` under both bundlers:
+
+```ts
+// next.config.ts
+const nextConfig: NextConfig = {
+  serverExternalPackages: ['@aws-blocks/bb-data', '@electric-sql/pglite'],
+};
+```
+
+With this set, `postgres.wasm` is traced correctly into `output: 'standalone'`. Marking
+a block external also hands its resolution back to Node, which honors custom conditions
+such as `aws-runtime`.
+
+`test-apps/nextjs-resolution` asserts this whole contract against the standalone build
+and runs in CI. Treat a Next.js major release as a re-validation event.
+
 ## Custom domains
 
 Configure a custom domain through the `domain` prop on `HostingConstruct`

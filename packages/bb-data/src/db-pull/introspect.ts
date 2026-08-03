@@ -10,6 +10,7 @@
  *
  * @module
  */
+import type { DatabaseEngine } from '@aws-blocks/data-common';
 import type { ColumnInfo, IntrospectionResult, TableInfo } from './types.js';
 import { SUPABASE_AUTH } from './supabase.js';
 import { externalDbSsl, resolveCaPem } from '../external-ssl.js';
@@ -49,6 +50,24 @@ export function isServerManagedDefault(columnDefault: string | null): boolean {
     d.includes('auth.uid()') ||
     d.includes("current_setting('request.jwt.claims")
   );
+}
+
+/**
+ * Introspect an already-connected engine.
+ *
+ * Every query here is standard Postgres catalog access, so this works against any
+ * engine — including PGlite, which is how local schema sync introspects the schema
+ * a migration set produces without needing a remote database.
+ *
+ * Does not destroy the engine; the caller owns its lifecycle.
+ *
+ * Note for non-Supabase engines: `missingGrants` is computed from grants held by
+ * Supabase's `authenticated` role, which does not exist elsewhere, so it reports
+ * `true` for every table. Callers outside the Supabase migration path should ignore
+ * that field.
+ */
+export async function introspectEngine(engine: DatabaseEngine): Promise<IntrospectionResult> {
+	return introspectWith(engine);
 }
 
 export async function introspect(connectionString: string, caCert?: string): Promise<IntrospectionResult> {
@@ -93,6 +112,15 @@ export async function introspect(connectionString: string, caCert?: string): Pro
   });
 
   try {
+    return await introspectWith(engine);
+  } finally {
+    await engine.destroy();
+  }
+}
+
+/** Shared catalog queries. Does not own the engine's lifecycle. */
+async function introspectWith(engine: DatabaseEngine): Promise<IntrospectionResult> {
+  {
     // Get columns
     const columns = await engine.query<ColumnInfo>(`
       SELECT table_name, column_name, data_type, is_nullable, column_default, ordinal_position
@@ -202,7 +230,5 @@ export async function introspect(connectionString: string, caCert?: string): Pro
     }
 
     return { tables, tablesUsingSupabaseAuth, nonStandardClaims };
-  } finally {
-    await engine.destroy();
   }
 }

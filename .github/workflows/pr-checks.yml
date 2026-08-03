@@ -177,6 +177,20 @@ jobs:
       - name: E2E Test Local
         run: npm run test:e2e:local
 
+      # Tripwire for the Next.js export-condition contract the Next-native
+      # programming model depends on. `next build` for this app already ran in the
+      # Build step above (root build covers workspaces), so only assert here.
+      # Runs under the default bundler (Turbopack) — a Next.js major must be
+      # treated as a re-validation event.
+      - name: Next.js resolution tripwire
+        run: npm run test:resolution -w bb-test-nextjs-resolution
+
+      # The Next-native programming model: blocks as plain app-code modules used in
+      # process by Server Components and Server Actions. Also asserts that no
+      # server-only code reaches the browser bundle.
+      - name: E2E Next-native DX POC
+        run: npm run test:e2e:local -w bb-test-dx-poc
+
       - name: Pack for local registry
         run: npm run publish:local
 

@@ -1,20 +1,53 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/hosting" },
-    { "path": "packages/pipeline" },
-    { "path": "packages/core" },
-    { "path": "packages/bb-kv-store" },
-    { "path": "packages/bb-distributed-table" },
-    { "path": "packages/bb-data" },
-    { "path": "packages/bb-realtime" },
-    { "path": "packages/auth-common" },
-    { "path": "packages/bb-auth-basic" },
-    { "path": "packages/bb-app-setting" },
-    { "path": "packages/bb-file-bucket" },
-    { "path": "packages/bb-agent" },
-    { "path": "packages/bb-knowledge-base" },
-    { "path": "packages/bb-email-client" },
-    { "path": "packages/blocks" }
+    {
+      "path": "packages/hosting"
+    },
+    {
+      "path": "packages/pipeline"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/bb-kv-store"
+    },
+    {
+      "path": "packages/bb-distributed-table"
+    },
+    {
+      "path": "packages/bb-data"
+    },
+    {
+      "path": "packages/bb-realtime"
+    },
+    {
+      "path": "packages/auth-common"
+    },
+    {
+      "path": "packages/bb-auth-basic"
+    },
+    {
+      "path": "packages/bb-app-setting"
+    },
+    {
+      "path": "packages/bb-file-bucket"
+    },
+    {
+      "path": "packages/bb-agent"
+    },
+    {
+      "path": "packages/bb-knowledge-base"
+    },
+    {
+      "path": "packages/bb-email-client"
+    },
+    {
+      "path": "packages/blocks"
+    },
+    {
+      "path": "packages/nextjs"
+    }
   ]
 }

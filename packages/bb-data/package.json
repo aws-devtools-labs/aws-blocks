@@ -24,6 +24,22 @@
       "aws-runtime": "./dist/index.aws.js",
       "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
+    },
+    "./schema-sync": {
+      "types": "./dist/schema-sync.d.ts",
+      "default": "./dist/schema-sync.js"
+    },
+    "./fluent": {
+      "types": "./dist/fluent/index.d.ts",
+      "default": "./dist/fluent/index.js"
+    },
+    "./data-api": {
+      "types": "./dist/data-api/index.d.ts",
+      "default": "./dist/data-api/index.js"
+    },
+    "./data-api/client": {
+      "types": "./dist/data-api/client.d.ts",
+      "default": "./dist/data-api/client.js"
     }
   },
   "scripts": {
