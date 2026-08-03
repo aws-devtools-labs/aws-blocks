@@ -150,8 +150,6 @@ export async function startSandbox(options: SandboxOptions) {
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
   const cdkWatch = spawnCommand("npx", [
-    // `cdk watch` already hotswaps by default, so passing `--hotswap` is
-    // redundant and emits a duplicate-option warning on some aws-cdk versions.
     "cdk", "watch",
     `--outputs-file`, `${outDir}/outputs.json`,
     `--context`, `projectRoot=${process.cwd()}`,
