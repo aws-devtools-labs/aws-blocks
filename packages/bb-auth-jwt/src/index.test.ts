@@ -10,6 +10,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { SignJWT, exportJWK, generateKeyPair, importJWK } from 'jose';
 import { AuthBearerJwt, AuthBearerJwtErrors } from './index.js';
+import type { AuthBearerJwtOptions } from './index.js';
 import type { BlocksContext } from '@aws-blocks/core';
 
 const ISSUER = 'https://issuer.example.com';
@@ -45,17 +46,30 @@ async function signToken(claims: Record<string, unknown>, options?: { alg?: stri
     .sign(privateKey);
 }
 
-/** AuthBearerJwt wired to the local test key via an injected JWKS resolver. */
-function createAuth(options?: { requiredClaims?: string[]; issuer?: string | string[] }): AuthBearerJwt {
-  const resolver = async (protectedHeader: any) => {
+/** A JWKS resolver bound to the local test key (no network). */
+function localResolver() {
+  return async (protectedHeader: any) => {
     if (protectedHeader.kid && protectedHeader.kid !== kid) throw new Error('Key not found');
     return importJWK(publicJwk, 'ES256');
   };
+}
+
+/** AuthBearerJwt wired to the local test key via an injected JWKS resolver. */
+function createAuth(options?: {
+  requiredClaims?: string[];
+  issuer?: string | string[];
+  subjectClaim?: string;
+  clockTolerance?: number;
+  mapUser?: AuthBearerJwtOptions['mapUser'];
+}): AuthBearerJwt {
   return new AuthBearerJwt({ id: 'test-scope' }, 'auth', {
     issuer: options?.issuer ?? ISSUER,
     audience: AUDIENCE,
-    jwks: resolver as any,
+    jwks: localResolver() as any,
     requiredClaims: options?.requiredClaims,
+    subjectClaim: options?.subjectClaim,
+    clockTolerance: options?.clockTolerance,
+    mapUser: options?.mapUser,
   });
 }
 
@@ -224,6 +238,63 @@ describe('AuthBearerJwt', async () => {
       const es = await signToken({ sub: 'u-1' }); // ES256
       await assert.rejects(() => auth.requireAuth(mockContext(`Bearer ${es}`)), (e: any) => {
         assert.strictEqual(e.name, AuthBearerJwtErrors.UnsupportedAlgorithm);
+        return true;
+      });
+    });
+  });
+
+  describe('option coverage', () => {
+    test('subjectClaim maps userId from a custom claim', async () => {
+      const auth = createAuth({ subjectClaim: 'user_id' });
+      const token = await signToken({ sub: 'ignored', user_id: 'custom-42' });
+      const user = await auth.requireAuth(mockContext(`Bearer ${token}`));
+      assert.strictEqual(user.userId, 'custom-42');
+    });
+
+    test('mapUser overrides the default user mapping', async () => {
+      const auth = createAuth({
+        mapUser: (claims) => ({ userId: `u:${claims.sub}`, username: 'mapped', claims }),
+      });
+      const user = await auth.requireAuth(mockContext(`Bearer ${await signToken({ sub: 'abc', email: 'a@b.com' })}`));
+      assert.strictEqual(user.userId, 'u:abc');
+      assert.strictEqual(user.username, 'mapped'); // not the email default
+    });
+
+    test('clockTolerance accepts a token that just expired within the window', async () => {
+      const auth = createAuth({ clockTolerance: 60 });
+      // exp 5s in the past — outside strict (0) but inside a 60s tolerance.
+      const token = await signToken({ sub: 'u-skew' }, { exp: '-5s' });
+      const user = await auth.requireAuth(mockContext(`Bearer ${token}`));
+      assert.strictEqual(user.userId, 'u-skew');
+    });
+
+    test('strict clockTolerance (default 0) rejects the same expired token', async () => {
+      const auth = createAuth(); // clockTolerance defaults to 0
+      const token = await signToken({ sub: 'u-skew' }, { exp: '-5s' });
+      await assert.rejects(() => auth.requireAuth(mockContext(`Bearer ${token}`)), (e: any) => {
+        assert.strictEqual(e.name, AuthBearerJwtErrors.InvalidToken);
+        return true;
+      });
+    });
+  });
+
+  describe('per-issuer JWKS map', () => {
+    // The map path uses createRemoteJWKSet per issuer; here we only exercise the
+    // pre-verify issuer-selection branch, which needs no network: a token whose
+    // `iss` is not a configured key rejects with a 401 before any fetch.
+    test('rejects a token whose issuer is not in the configured map', async () => {
+      const auth = new AuthBearerJwt({ id: 't' }, 'auth', {
+        issuer: ['https://a.example.com', 'https://b.example.com'],
+        audience: AUDIENCE,
+        jwks: {
+          'https://a.example.com': 'https://a.example.com/.well-known/jwks.json',
+          'https://b.example.com': 'https://b.example.com/.well-known/jwks.json',
+        },
+      });
+      const token = await signToken({ sub: 'u' }, { iss: 'https://evil.example.com' });
+      await assert.rejects(() => auth.requireAuth(mockContext(`Bearer ${token}`)), (e: any) => {
+        assert.strictEqual(e.name, AuthBearerJwtErrors.InvalidToken);
+        assert.match(e.message, /Untrusted or unknown issuer/);
         return true;
       });
     });

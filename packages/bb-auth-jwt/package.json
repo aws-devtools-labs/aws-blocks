@@ -13,6 +13,7 @@
   ],
   "exports": {
     ".": {
+      "browser": "./dist/index.browser.js",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
@@ -22,7 +23,6 @@
     }
   },
   "scripts": {
-    "prebuild": "node ../../scripts/generate-version.mjs AuthBearerJwt",
     "build": "tsc --build",
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
