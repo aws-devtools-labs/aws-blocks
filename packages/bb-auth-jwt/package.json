@@ -23,6 +23,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs AuthBearerJwt",
     "build": "tsc --build",
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },

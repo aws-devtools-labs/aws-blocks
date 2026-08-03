@@ -14,6 +14,7 @@ import {
 } from 'jose';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { BB_NAME, BB_VERSION } from './version.js';
 
 export type { BlocksAuth, AuthUser } from '@aws-blocks/auth-common';
 
@@ -161,7 +162,7 @@ export class AuthBearerJwt extends Scope implements BlocksAuth {
   protected log: ChildLogger;
 
   constructor(scope: ScopeParent, id: string, options: AuthBearerJwtOptions) {
-    super(id, { parent: scope });
+    super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
     this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 
     this.issuers = Array.isArray(options.issuer) ? options.issuer : [options.issuer];

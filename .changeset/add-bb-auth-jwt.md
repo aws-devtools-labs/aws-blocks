@@ -9,3 +9,5 @@ Add `AuthBearerJwt`, a provider-agnostic bearer-JWT Building Block. It validates
 The `@aws-blocks/blocks` umbrella package receives a `patch` because it now re-exports `AuthBearerJwt` (and its error/type surface) from `@aws-blocks/bb-auth-jwt`. Sibling patch/minor releases stay inside the umbrella's caret range, so `changeset version` would not bump it on its own (#212); it is declared explicitly so it republishes in step with the block it hands to consumers.
 
 The umbrella also registers the block in its `aws-blocks.vendorize` map (`AuthBearerJwt`), so `blocks-vendorize AuthBearerJwt` resolves it by Building Block name like every other block. `@aws-blocks/core` receives a `patch` because that map is the source for `OFFICIAL_BB_NAMES` (generated into `packages/core` by `scripts/generate-bb-names.mjs`), which telemetry consults to decide which blocks it may name.
+
+`AuthBearerJwt` passes `bbName`/`bbVersion` to `Scope`, so it reports itself in telemetry like the other Building Blocks — `blocks-vendorize`, `OFFICIAL_BB_NAMES` and the block all use the name `AuthBearerJwt`, and the version comes from the package's own generated `version.ts`.
