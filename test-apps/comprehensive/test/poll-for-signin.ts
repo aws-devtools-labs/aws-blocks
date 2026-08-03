@@ -16,7 +16,6 @@
  * belong to that `userId` before it is returned.
  *
  * Sibling of `poll-for-code.ts`, which does the same job for verification codes.
- * Worth folding the two into one generic poller once both have landed.
  */
 
 /** Shape of the sign-in record the backend hands back. */

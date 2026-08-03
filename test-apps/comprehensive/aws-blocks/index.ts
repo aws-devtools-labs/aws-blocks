@@ -188,7 +188,15 @@ async function recordSignIn(instance: string, user: SignInRecord): Promise<void>
 
 async function readSignIn(instance: string, userId: string): Promise<SignInRecord | null> {
   const raw = await oidcProfiles.get(signInKey(instance, userId));
-  return raw === null ? null : (JSON.parse(raw) as SignInRecord);
+  if (!raw) return null;
+  // A record we cannot parse is worth no more than a missing one: report it as
+  // "not signed in yet" and let the poller keep waiting or time out on its own
+  // message, rather than failing the test with a JSON syntax error.
+  try {
+    return JSON.parse(raw) as SignInRecord;
+  } catch {
+    return null;
+  }
 }
 
 const oidcProviders = [
