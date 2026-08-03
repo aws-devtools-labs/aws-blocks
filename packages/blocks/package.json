@@ -117,6 +117,9 @@
       "@aws-blocks/bb-auth-oidc": [
         "AuthOIDC"
       ],
+      "@aws-blocks/bb-auth-jwt": [
+        "AuthBearerJwt"
+      ],
       "@aws-blocks/bb-agent": [
         "Agent"
       ],
