@@ -84,25 +84,31 @@ describe('DELTA_THRESHOLDS — the one place the bands live', () => {
 });
 
 describe('deltaColor(baseline, pr, threshold, direction) — significance + direction of the change', () => {
-	it('higher-is-better: 🟢 beyond threshold up, 🔴 beyond threshold down, 🟡 within (either way)', () => {
-		assert.equal(deltaColor(5, 11, 5, 'up'), '🟢'); // +6 beyond +5 → improved
-		assert.equal(deltaColor(11, 5, 5, 'up'), '🔴'); // -6 beyond -5 → regressed
-		assert.equal(deltaColor(10, 13, 5, 'up'), '🟡'); // +3 within → noise
-		assert.equal(deltaColor(10, 10, 5, 'up'), '🟡'); // flat → noise
+	it('higher-is-better: ✨ beyond threshold up, ⚠️ slight regression, ❌ serious regression, ✅ within (either way)', () => {
+		assert.equal(deltaColor(5, 11, 5, 'up'), '✨'); // +6 beyond +5 → improved
+		assert.equal(deltaColor(11, 5, 5, 'up'), '⚠️'); // -6 beyond -5 → slight regression
+		assert.equal(deltaColor(10, 13, 5, 'up'), '✅'); // +3 within → noise
+		assert.equal(deltaColor(10, 10, 5, 'up'), '✅'); // flat → noise
 	});
-	it('lower-is-better (cost/tokens): a DROP is 🟢, a RISE is 🔴', () => {
-		assert.equal(deltaColor(100, 80, 5, 'down'), '🟢'); // -20 → improved (cheaper)
-		assert.equal(deltaColor(100, 120, 5, 'down'), '🔴'); // +20 → regressed (pricier)
-		assert.equal(deltaColor(100, 103, 5, 'down'), '🟡'); // +3 within → noise
+	it('serious regression (>2× threshold) returns ❌', () => {
+		assert.equal(deltaColor(20, 9, 5, 'up'), '❌'); // -11 beyond 2×5=10 → serious
+		assert.equal(deltaColor(20, 10, 5, 'up'), '⚠️'); // -10 exactly at 2× boundary → still slight (boundary inclusive of slight)
+		assert.equal(deltaColor(20, 11, 5, 'up'), '⚠️'); // -9 beyond 1× but within 2× → slight
 	});
-	it('the threshold boundary is inclusive-of-noise (exactly ±threshold is 🟡, not 🟢/🔴)', () => {
-		assert.equal(deltaColor(0, 5, 5, 'up'), '🟡'); // exactly +threshold
-		assert.equal(deltaColor(0, -5, 5, 'up'), '🟡'); // exactly -threshold
+	it('lower-is-better (cost/tokens): a DROP is ✨, a RISE is ⚠️/❌', () => {
+		assert.equal(deltaColor(100, 80, 5, 'down'), '✨'); // -20 → improved (cheaper)
+		assert.equal(deltaColor(100, 120, 5, 'down'), '❌'); // +20 → serious regression (>2×5=10)
+		assert.equal(deltaColor(100, 108, 5, 'down'), '⚠️'); // +8 → slight regression (>5, <=10)
+		assert.equal(deltaColor(100, 103, 5, 'down'), '✅'); // +3 within → noise
 	});
-	it('⚪ when either side is missing (no baseline value for the field)', () => {
-		assert.equal(deltaColor(null, 5, 5, 'up'), '⚪');
-		assert.equal(deltaColor(5, null, 5, 'up'), '⚪');
-		assert.equal(deltaColor(undefined, undefined, 5, 'up'), '⚪');
+	it('the threshold boundary is inclusive-of-noise (exactly ±threshold is ✅, not ✨/⚠️)', () => {
+		assert.equal(deltaColor(0, 5, 5, 'up'), '✅'); // exactly +threshold
+		assert.equal(deltaColor(0, -5, 5, 'up'), '✅'); // exactly -threshold
+	});
+	it('🆕 when either side is missing (no baseline value for the field)', () => {
+		assert.equal(deltaColor(null, 5, 5, 'up'), '🆕');
+		assert.equal(deltaColor(5, null, 5, 'up'), '🆕');
+		assert.equal(deltaColor(undefined, undefined, 5, 'up'), '🆕');
 	});
 });
 
@@ -209,11 +215,12 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 });
 
 describe('deltaBall(delta) — headline composite mean-delta', () => {
-	it('🟢 / 🔴 beyond ±5, 🟡 within (inclusive), empty for null', () => {
-		assert.equal(deltaBall(5.2), '🟢');
-		assert.equal(deltaBall(-6.4), '🔴');
-		assert.equal(deltaBall(0), '🟡');
-		assert.equal(deltaBall(5), '🟡');
+	it('✨ / ⚠️ / ❌ beyond thresholds, ✅ within (inclusive), empty for null', () => {
+		assert.equal(deltaBall(5.2), '✨');
+		assert.equal(deltaBall(-6.4), '⚠️');
+		assert.equal(deltaBall(-10.1), '❌'); // beyond 2× threshold (serious)
+		assert.equal(deltaBall(0), '✅');
+		assert.equal(deltaBall(5), '✅');
 		assert.equal(deltaBall(null), '');
 	});
 });
@@ -269,7 +276,7 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 		const r = diffAgainstBaseline(buildAggregate([PASS], {}), partialBase).rows.find((x) => x.key === 'auth-notes/demo');
 		assert.notEqual(r.base, null); // base IS attached (no whole-row gate)
 		assert.equal(r.base.judge_score, 7); // a field it HAS
-		assert.equal(r.base.cost, null); // a field it LACKS → null (renders ⚪ "(new)")
+		assert.equal(r.base.cost, null); // a field it LACKS → null (renders 🆕 "(new)")
 		assert.equal(r.base.tests_passed, null);
 		assert.equal(r.delta, 12); // composite still comparable (92 - 80)
 	});
@@ -335,19 +342,19 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		assert.doesNotMatch(md, /Tokens|LOC|Files/); // removed columns gone from the header
 	});
 
-	it('scalar cells are INLINE `<ball> <value> (<Δ>)` (tests/cost/turns/score)', () => {
+	it('scalar cells are INLINE `<indicator> <value> (<Δ>)` (tests/cost/turns/score)', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
-		assert.match(row, /🟡 4\/4 \(0\)/); // tests 4→4, ±1 → 🟡
-		assert.match(row, /🟢 \$1\.75 \(-\$0\.25\)/); // cost $2→$1.75 (−12.5% beyond ±10%) → 🟢
-		assert.match(row, /🔴 22 \(\+4\)/); // turns 18→22 (+4 beyond ±3, lower-better) → 🔴
-		assert.match(row, /🟢 52\.6 \(\+12\.6\)/); // score 40→52.6 (+12.6 beyond ±5) → 🟢
+		assert.match(row, /✅ 4\/4 \(0\)/); // tests 4→4, ±1 → ✅
+		assert.match(row, /✨ \$1\.75 \(-\$0\.25\)/); // cost $2→$1.75 (−12.5% beyond ±10%) → ✨
+		assert.match(row, /⚠️ 22 \(\+4\)/); // turns 18→22 (+4 beyond ±3, lower-better) → ⚠️
+		assert.match(row, /✨ 52\.6 \(\+12\.6\)/); // score 40→52.6 (+12.6 beyond ±5) → ✨
 		assert.match(row, /\| end_turn \|$/); // stop reason retained, last column
 	});
 
 	it('JUDGE is ONE inline cell — overall score + delta ONLY, no per-dimension shorthand', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
-		assert.equal(judge, '🟢 8 (+1)'); // overall 7→8 beyond ±0.3 → 🟢; ball + score + delta, nothing else
+		assert.equal(judge, '✨ 8 (+1)'); // overall 7→8 beyond ±0.3 → ✨; indicator + score + delta, nothing else
 		assert.doesNotMatch(judge, /·/); // no ` · ` separator
 		assert.doesNotMatch(judge, /F\d|S\d|P\d|C\d|B\d/); // no per-dimension shorthand (F/S/P/C/B)
 		assert.equal(judge.split('<br>').length, 1); // single line — no <br> stacking
@@ -358,20 +365,20 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		assert.doesNotMatch(md, /<br>/); // Tokens/LOC/Files stacking and multi-line judge are gone
 	});
 
-	it('no baseline at all → ⚪ + the CURRENT value + (new) for every metric (value never hidden)', () => {
+	it('no baseline at all → 🆕 + the CURRENT value + (new) for every metric (value never hidden)', () => {
 		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), null));
-		assert.match(row, /⚪ 4\/4 \(new\)/); // tests
+		assert.match(row, /🆕 4\/4 \(new\)/); // tests
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
-		assert.equal(judge, '⚪ 8 (new)'); // judge: overall score only — no per-dim shorthand
-		assert.match(row, /⚪ \$1\.75 \(new\)/); // cost
-		assert.match(row, /⚪ 22 \(new\)/); // turns
-		assert.match(row, /⚪ 52\.6 \(new\)/); // score
+		assert.equal(judge, '🆕 8 (new)'); // judge: overall score only — no per-dim shorthand
+		assert.match(row, /🆕 \$1\.75 \(new\)/); // cost
+		assert.match(row, /🆕 22 \(new\)/); // turns
+		assert.match(row, /🆕 52\.6 \(new\)/); // score
 	});
 
-	it('a run that predates turns: the Turns cell reads — while tests/judge/cost/score still color', () => {
+	it('a run that predates turns: the Turns cell reads — while tests/judge/cost/score still indicate', () => {
 		// PASS has tokens_in/out + judge_dimensions but NO cycle_count (turns).
 		const row = rowFor(diffAgainstBaseline(buildAggregate([PASS], {}), BASE_FULL));
-		assert.match(row, /🟢 \$1\.75/); // cost present → colored
+		assert.match(row, /✨ \$1\.75/); // cost present → indicated
 		const inner = row.split('|').slice(1, -1).map((c) => c.trim());
 		assert.equal(inner.length, 8);
 		assert.equal(inner[5], '—'); // Turns column (index: Task,Template,Tests,Judge,Cost,Turns) absent this run
@@ -410,7 +417,7 @@ describe('renderDetailed(diff) — the expanded single results table', () => {
 		const partialDims = { ...FULL, judge_dimensions: { functional_completeness: 9, selector_contract: 8, code_quality: 7 } };
 		const row = rowFor(diffAgainstBaseline(buildAggregate([partialDims], {}), null));
 		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
-		assert.equal(judge, '⚪ 8 (new)'); // overall score only — the per-dim data exists but is NOT rendered
+		assert.equal(judge, '🆕 8 (new)'); // overall score only — the per-dim data exists but is NOT rendered
 		assert.doesNotMatch(judge, /·|F\d|S\d|P\d|C\d|B\d/); // no shorthand tail
 		assert.equal(judge.split('<br>').length, 1); // single line, never <br>-stacked
 	});

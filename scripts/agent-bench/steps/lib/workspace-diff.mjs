@@ -5,7 +5,7 @@
 // the app are never touched. Safe under agent-shell UID isolation because prepareWorkspaceIsolation
 // grants the harness user a DEFAULT ACL on the workspace, so files the benchagent UID creates stay
 // readable by this (harness-UID) process. ANY failure degrades to null churn (never throws into the
-// hot path) so the report renders ⚪ "(new)"/— rather than corrupting the run.
+// hot path) so the report renders 🆕 "(new)"/— rather than corrupting the run.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

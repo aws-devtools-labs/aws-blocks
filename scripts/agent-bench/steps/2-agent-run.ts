@@ -201,7 +201,7 @@ process.on('SIGINT', () => writePartialEnvelopeAndExit('SIGINT'));
 writeCheckpoint();
 
 // Snapshot the scaffolded workspace NOW (before the agent touches it) so a post-run diff can report
-// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders ⚪ "(new)").
+// LOC/files churn. Best-effort: null on any failure → the cell persists no loc/files (renders 🆕 "(new)").
 // Uses a throwaway external git dir, so it never disturbs the workspace/app or the agent's own git.
 const snapshot = beginWorkspaceDiff(WORKSPACE);
 process.stderr.write(`[bench] workspace churn snapshot: ${snapshot ? 'captured' : 'unavailable (loc/files → null)'}\n`);
@@ -292,7 +292,7 @@ const cacheWrite = Math.max(partialCacheWrite, winnerUsage?.cacheWriteInputToken
 
 // LOC/files churn from the pre-run scaffold snapshot (best-effort; null on any failure — see
 // workspace-diff.mjs). Computed only on the success path: a timed-out/errored cell left the workspace
-// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ ⚪ "(new)").
+// mid-flight, so its diff would be misleading — those paths persist no loc/files (→ 🆕 "(new)").
 const churn = finishWorkspaceDiff(snapshot, WORKSPACE);
 
 writeFileSync(

@@ -137,18 +137,20 @@ and a broken (composite 0) cell scores 0 no matter how cheap it was. A cell with
 no recorded tokens renders `—` (never a fake `$0`). Flip the single
 `SCORE_PER_DOLLAR` constant in `lib/scoring.mjs` for cost-per-point instead.
 
-**Colors vs baseline (per metric).** In the report every metric cell shows its
-current value on top and, underneath, the **signed delta vs the baseline value**
-for that metric, colored by the SIGNIFICANCE + DIRECTION of the change (not
-absolute quality): 🟢 meaningful improvement · 🟡 change within the noise band ·
-🔴 meaningful regression · ⚪ no baseline value for that field (a new cell, or a
+**Indicators vs baseline (per metric).** In the report every metric cell shows its
+current value with a **signed delta vs the baseline value**
+for that metric, using an emoji indicator for the SIGNIFICANCE + DIRECTION of the change (not
+absolute quality): ✨ noticeably improved · ✅ OK / no significant change (within noise band) ·
+⚠️ slight regression (beyond 1× threshold) · ❌ serious regression (beyond 2× threshold) ·
+🆕 no baseline value for that field (a new cell, or a
 metric the baseline predates) — the current value is still shown, tagged `(new)`
 · `—` nothing to show this run · 🗑️ cell gone since the baseline. Directions:
 tests, judge, score are higher-better; cost, turns are lower-better. The
 per-metric noise bands are a SINGLE tunable, `DELTA_THRESHOLDS` in
 `lib/overview.mjs`, consumed by `deltaColor`: composite/score ±5 points, judge
-±0.3, tests ±1 pass, cost ±10% (relative), turns ±3. A
-change within its band reads 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction.
+±0.3, tests ±1 pass, cost ±10% (relative, floor $0.02), turns ±3. A
+change within its band reads ✅ (noise, since N=1); beyond 1× threshold ✨/⚠️ by
+direction; beyond 2× threshold ❌ (serious regression).
 
 **Verdict tiers** are pure pass-rate — the judge plays no part, so an LLM
 failure can never flip a verdict:
@@ -243,9 +245,9 @@ judge scores, builder tokens, cost, and score-per-$, plus the mean) to S3 at
 pointer `bench/runs/latest-main.json`. The summary job fetches a baseline and
 renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
 `TASK · TEMPLATE · TESTS · JUDGE · COST · TURNS · SCORE · STOP REASON`.
-Each metric cell is a single inline line — `<color> <value> (<Δ vs main>)`: the
-current value with its signed delta vs the baseline (`⚪ (new)` when the baseline
-has no value for that field — the value is still shown), colored by `deltaColor`
+Each metric cell is a single inline line — `<indicator> <value> (<Δ vs main>)`: the
+current value with its signed delta vs the baseline (`🆕 (new)` when the baseline
+has no value for that field — the value is still shown), indicated by `deltaColor`
 per the `DELTA_THRESHOLDS` bands. The JUDGE cell shows the overall judge score
 with its signed delta; the per-dimension breakdown lives in the judge artifact
 JSON. There is no separate colors-only Overview and no standalone `Δ vs base`
@@ -267,7 +269,7 @@ commit; `latest-main.json`, refreshed on every push to `main`, can't. A **push t
 `main`** instead diffs against the immediately preceding main commit
 (`github.event.before`) by exact sha — the ONLY place a commit-keyed baseline is
 read — with `latest-main` as the fallback. With no baseline found the table shows
-current values only (every metric ⚪ `(new)`) and a "no baseline" note (never an
+current values only (every metric 🆕 `(new)`) and a "no baseline" note (never an
 error).
 Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 `s3:PutObject` on `bench/*`); a missing grant just degrades to "no baseline".

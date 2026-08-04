@@ -116,17 +116,32 @@ const md = [];
 // 1) Glossary & notes — collapsed, at the very top.
 const lastRun = (process.env.GITHUB_RUN_STARTED_AT || new Date().toISOString()).replace(/\.\d{3}Z$/, 'Z');
 md.push('<details>');
-md.push('<summary>📖 Glossary &amp; notes — scoring, colors, per-metric thresholds (click to expand)</summary>');
+md.push('<summary>📖 Glossary &amp; notes — scoring, indicators, per-metric thresholds (click to expand)</summary>');
 md.push('');
 md.push('- **N = 1** — one rep per cell, so a small delta may be model variance, not a real change; re-run for certainty.');
 md.push(
-	'- **Colors (change vs baseline, per metric):** 🟢 meaningful improvement · 🟡 change within the noise band · 🔴 meaningful regression · ⚪ no baseline value yet (a new cell, or a metric the baseline predates) — the current value is still shown, tagged `(new)` · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<color> <value> (<Δ vs main>)` inline.',
+	'- **Indicators (change vs baseline, per metric):** ✨ noticeably improved · ✅ OK / no significant change (within noise band) · ⚠️ slight regression (beyond 1× threshold) · ❌ serious regression (beyond 2× threshold) · 🆕 new — no baseline value yet (current value shown, tagged `(new)`) · — nothing to show this run · 🗑️ cell gone since the baseline. Each cell shows `<indicator> <value> (<Δ vs main>)` inline.',
 );
 md.push(
-	'- **Columns:** Tests (pass/denom) · Judge (overall 0-10 score with signed delta; per-dimension breakdown lives in the judge artifact JSON) · Cost · Turns (agent cycles) · Score · Stop reason. Turns is new — it reads ⚪ `(new)` until a `main` bench records a baseline for it.',
+	'- **Columns:** Tests (pass/denom) · Judge (overall 0-10 score with signed delta; per-dimension breakdown lives in the judge artifact JSON) · Cost · Turns (agent cycles) · Score · Stop reason.',
 );
 md.push(
-	'- **Thresholds (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):** composite/score ±5 points · judge (& each dimension) ±0.3 · tests ±1 pass · cost ±10% · turns ±3. A change within the threshold is 🟡 (noise, since N=1); beyond it, 🟢/🔴 by direction. Edit that one map to tune them.',
+	'- **Threshold definitions (per metric, `DELTA_THRESHOLDS` in `overview.mjs`):**',
+);
+md.push(
+	'  - composite/score: **±5 points** — a change ≤5 pts is ✅; >5 improving is ✨; >5 worsening is ⚠️; >10 worsening is ❌.',
+);
+md.push(
+	'  - judge (overall + each dimension): **±0.3** — a shift ≤0.3 is ✅; >0.3 improving is ✨; >0.3 worsening is ⚠️; >0.6 worsening is ❌.',
+);
+md.push(
+	'  - tests: **±1 pass** — a ≤1 pass change is ✅; >1 improving is ✨; >1 worsening is ⚠️; >2 worsening is ❌.',
+);
+md.push(
+	'  - cost: **±10% of baseline** (floor $0.02) — within 10% is ✅; >10% cheaper is ✨; >10% more expensive is ⚠️; >20% more expensive is ❌.',
+);
+md.push(
+	'  - turns: **±3 cycles** — a ≤3 turn change is ✅; >3 fewer is ✨; >3 more is ⚠️; >6 more is ❌.',
 );
 md.push(
 	'- **Directions:** higher is better for tests, judge (+ dimensions), and score; lower is better for cost and turns.',
@@ -153,7 +168,7 @@ md.push('');
 if (cells.length > 0) {
 	let heading = '## Results — PR vs `main` baseline';
 	let note;
-	const legend = '🟢 improved · 🟡 within noise · 🔴 regressed · ⚪ no baseline yet (value shown, tagged `(new)`).';
+	const legend = '✨ improved · ✅ within noise · ⚠️ slight regression · ❌ serious regression · 🆕 no baseline yet (value shown, tagged `(new)`).';
 	const baseLabel = baseline?.sha ? `\`${String(baseline.sha).slice(0, 7)}\`` : 'the recorded baseline';
 	if (benchEvent === 'push') {
 		// A push-to-main run IS the new baseline; diffs against the previous main bench, else absolute.
@@ -161,11 +176,11 @@ if (cells.length > 0) {
 		const rec = `Baseline run (push to \`main\`): recorded as the new \`main\` baseline for \`${benchSha.slice(0, 7) || '(unknown)'}\`.`;
 		note = baseline
 			? `${rec} Each metric colored vs the PREVIOUS \`main\` baseline ${baseLabel}. ${legend}`
-			: `${rec} No earlier baseline to diff — current values only (every metric ⚪).`;
+			: `${rec} No earlier baseline to diff — current values only (every metric 🆕).`;
 	} else if (baseline) {
 		note = `Each metric shows its current value colored by the change vs the latest \`main\` baseline ${baseLabel}. ${legend}`;
 	} else {
-		note = 'No `main` baseline recorded yet — showing current values only (every metric ⚪). Colored deltas vs `main` appear once a `main` bench has stored one.';
+		note = 'No `main` baseline recorded yet — showing current values only (every metric 🆕). Deltas vs `main` appear once a `main` bench has stored one.';
 	}
 	md.push(heading, '');
 	md.push(note, '');

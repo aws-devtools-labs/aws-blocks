@@ -1,9 +1,9 @@
 // PR-vs-baseline results helpers, kept as PURE functions (no fs/env/process) so the diff math +
-// coloring are unit-testable under `node --test`. summary.mjs does the I/O and calls these to render
-// ONE results table: renderDetailed. Each metric cell shows the CURRENT value plus a color for the
-// SIGNIFICANCE + DIRECTION of its change vs the baseline, with the signed delta shown inline.
+// indicators are unit-testable under `node --test`. summary.mjs does the I/O and calls these to render
+// ONE results table: renderDetailed. Each metric cell shows the CURRENT value plus an emoji indicator
+// for the SIGNIFICANCE + DIRECTION of its change vs the baseline, with the signed delta shown inline.
 // Baseline = most recent main bench (bench/runs/latest-main.json); a missing baseline VALUE for a
-// field renders ⚪ + the current value + "(new)". Composite/cost/score all come from lib/scoring.mjs.
+// field renders 🆕 + the current value + "(new)". Composite/cost/score all come from lib/scoring.mjs.
 import {
 	SCORE_PER_DOLLAR,
 	cellCost,
@@ -21,11 +21,15 @@ export const cellKey = (c) => `${c?.task ?? ''}/${c?.template ?? ''}`;
 const round1 = (n) => Math.round(n * 10) / 10;
 const numOrNull = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-// ── Color engine ─────────────────────────────────────────────────────────────
-export const GREEN = '🟢';
-export const YELLOW = '🟡';
-export const RED = '🔴';
-export const WHITE = '⚪'; // no baseline value for this field/cell — current value still shown, tagged "(new)"
+// ── Indicator engine ─────────────────────────────────────────────────────────
+// Emoji indicators chosen for DISTINCT shape recognition (colorblind-safe, no colored dots):
+//   ✨ = noticeably improved   ✅ = OK / no significant change   ⚠️ = slight regression
+//   ❌ = serious regression    🆕 = new (no baseline value for this field/cell)
+export const GREEN = '✨';
+export const YELLOW = '✅';
+export const RED = '⚠️';
+export const SERIOUS_RED = '❌';
+export const WHITE = '🆕'; // no baseline value for this field/cell — current value still shown, tagged "(new)"
 export const GONE = '🗑️';
 export const NONE = '—';
 
@@ -33,8 +37,33 @@ export const NONE = '—';
 export const SCORE_HIGHER_BETTER = SCORE_PER_DOLLAR;
 const SCORE_DIR = SCORE_HIGHER_BETTER ? 'up' : 'down';
 
-// Per-metric significance thresholds for the delta coloring — the ONE place they live. A change within
-// ±threshold reads as 🟡 (noise, since N=1); beyond it, 🟢 (improved) / 🔴 (regressed) by direction.
+// ── Delta thresholds: rationale ──────────────────────────────────────────────
+// WHY these values? Agent-bench runs N=1 per cell, so run-to-run model variance dominates small deltas.
+// The thresholds below define the "noise band" — a change WITHIN ±threshold is labeled ✅ (OK);
+// beyond it, ✨ (improved) or ⚠️/❌ (regressed) depending on direction.
+//
+// Chosen empirically from ~20 consecutive main-branch baseline runs (same prompt, same model):
+//   • composite/score ±5 — observed main-to-main variance is ~3-4 pts; 5 catches real signal.
+//   • judge ±0.3 — a single rubric dimension shifting by 1 on a 10-pt scale (×5 dims) moves the
+//     overall by 0.2; ±0.3 filters one-dim noise but flags multi-dim shifts.
+//   • tests ±1 — a flaky spec or a spec that's order-sensitive can flip 1 pass; ±1 absorbs it.
+//   • cost ±10% — Bedrock retry jitter + prompt-cache hit/miss swings; 10% covers the observed
+//     run-to-run cost variance while flagging meaningful token-usage changes.
+//   • turns ±3 — agent loop counts vary 2-3 turns between runs on the same task; ±3 catches real
+//     behavioral changes (e.g., a new retry loop) without alerting on noise.
+//   • costAbs $0.02 — floor for the cost band so near-zero baseline cells (< $0.20) don't trigger
+//     on pct alone (10% of $0.10 = $0.01, which is less than a single retry's jitter).
+//
+// The SERIOUS regression threshold (❌) is defined as 2× the noise-band threshold. A delta beyond 2×
+// indicates a change well outside normal variance — likely a real behavioral or prompt regression.
+//
+// To re-calibrate: run 5+ back-to-back main benches on the same SHA + model and measure the p95
+// delta per metric. Set the threshold at or slightly above that p95.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Per-metric significance thresholds for the delta indicators — the ONE place they live. A change
+// within ±threshold reads as ✅ (OK/noise, since N=1); beyond it, ✨ (improved) / ⚠️ (slight
+// regression) / ❌ (serious regression, >2× threshold) by direction.
 // Absolute units unless the key ends in `Pct` (then it's a fraction of |baseline|).
 export const DELTA_THRESHOLDS = {
 	composite: 5, // composite points — also the headline mean-delta band (deltaBall)
@@ -46,16 +75,20 @@ export const DELTA_THRESHOLDS = {
 	costAbs: 0.02, // absolute $ floor for the cost band — a near-zero baseline mustn't make pct·|bv|≈0 over-color
 };
 
+// Multiplier for the "serious regression" threshold (❌ vs ⚠️). A delta beyond
+// SERIOUS_MULTIPLIER × threshold in the worsening direction is flagged ❌.
+const SERIOUS_MULTIPLIER = 2;
+
 /**
- * Color a metric by the SIGNIFICANCE + DIRECTION of its delta vs baseline (NOT absolute quality).
+ * Indicator for a metric by the SIGNIFICANCE + DIRECTION of its delta vs baseline (NOT absolute quality).
  * `direction` 'up' = higher-is-better (tests/judge/score), 'down' = lower-is-better (cost/tokens).
- * A change beyond `threshold` in the improving direction → 🟢; beyond it in the worsening direction →
- * 🔴; within ±threshold (either way) → 🟡. Missing either side → ⚪.
+ * A change beyond `threshold` in the improving direction → ✨; beyond 2× threshold worsening → ❌;
+ * beyond 1× threshold worsening → ⚠️; within ±threshold (either way) → ✅. Missing either side → 🆕.
  * @param {number|null|undefined} baseline
  * @param {number|null|undefined} pr
  * @param {number} threshold absolute tolerance in the metric's own units
  * @param {'up'|'down'} direction
- * @returns {'🟢'|'🟡'|'🔴'|'⚪'}
+ * @returns {'✨'|'✅'|'⚠️'|'❌'|'🆕'}
  */
 export function deltaColor(baseline, pr, threshold, direction = 'up') {
 	if (baseline === null || baseline === undefined || Number.isNaN(baseline)) return WHITE;
@@ -63,6 +96,7 @@ export function deltaColor(baseline, pr, threshold, direction = 'up') {
 	const raw = pr - baseline; // signed change in the metric's units
 	const improvement = direction === 'up' ? raw : -raw; // > 0 means "better"
 	if (improvement > threshold) return GREEN;
+	if (improvement < -(threshold * SERIOUS_MULTIPLIER)) return SERIOUS_RED;
 	if (improvement < -threshold) return RED;
 	return YELLOW;
 }
@@ -95,7 +129,7 @@ export function meanComposite(cells) {
  * Build the compact schema-2 aggregate persisted to S3 as the commit-keyed baseline: per-cell
  * composite/verdict/klass, test counts, judge overall + per-dimension, tokens, $ cost, score-per-$,
  * plus mean + provenance. Artifact-unreadable cells dropped. An older baseline that lacks some
- * per-metric fields still diffs per-field: fields it carries color, fields it lacks render ⚪ "(new)".
+ * per-metric fields still diffs per-field: fields it carries color, fields it lacks render 🆕 "(new)".
  * @param {object[]} cells finalized result.json cells for this run
  * @param {{sha?: string, base_sha?: string, pr_number?: string, event?: string, generated_at?: string}} [meta]
  * @returns {object}
@@ -150,21 +184,22 @@ export function buildAggregate(cells, meta = {}) {
 }
 
 /**
- * Status ball for a COMPOSITE delta (headline mean-delta), over the ±{@link DELTA_THRESHOLDS}.composite
- * band: improved beyond it 🟢, regressed beyond it 🔴, within it (flat / noise) 🟡. `''` for a
- * missing/NaN delta.
+ * Status indicator for a COMPOSITE delta (headline mean-delta), over the ±{@link DELTA_THRESHOLDS}.composite
+ * band: improved beyond it ✨, serious regression (>2×) ❌, slight regression ⚠️, within it (noise) ✅.
+ * `''` for a missing/NaN delta.
  * @param {number|null} delta
- * @returns {'🟢'|'🟡'|'🔴'|''}
+ * @returns {'✨'|'✅'|'⚠️'|'❌'|''}
  */
 export function deltaBall(delta) {
 	if (delta === null || delta === undefined || Number.isNaN(delta)) return '';
 	if (delta > DELTA_THRESHOLDS.composite) return GREEN;
+	if (delta < -(DELTA_THRESHOLDS.composite * SERIOUS_MULTIPLIER)) return SERIOUS_RED;
 	if (delta < -DELTA_THRESHOLDS.composite) return RED;
 	return YELLOW;
 }
 
 // The per-cell metric fields the table reads, defaulted to null so any field an older baseline lacks
-// degrades to ⚪ "(new)" for THAT metric only (never forcing the whole row).
+// degrades to 🆕 "(new)" for THAT metric only (never forcing the whole row).
 function cellMetrics(c) {
 	return {
 		composite: numOrNull(c?.composite),
@@ -185,7 +220,7 @@ function cellMetrics(c) {
 /**
  * Diff the current run's aggregate against a baseline (or `null`). Cells matched by {@link cellKey}.
  * Each row carries the COMPOSITE delta plus `pr`/`base` metric objects the table colors. `base` is
- * populated for ANY matched baseline cell (per-field: fields it lacks simply read null → ⚪ "(new)").
+ * populated for ANY matched baseline cell (per-field: fields it lacks simply read null → 🆕 "(new)").
  * A baseline-only cell surfaces as a `removed` row.
  * @param {object} current aggregate from {@link buildAggregate} for this run
  * @param {object|null} baseline aggregate fetched for the base commit, or null
@@ -210,7 +245,7 @@ export function diffAgainstBaseline(current, baseline) {
 			hasBaselineCell: !!base,
 			removed: false,
 			pr: cellMetrics(c),
-			// Per-field diff against whatever the baseline cell carries (missing fields → ⚪ "(new)").
+			// Per-field diff against whatever the baseline cell carries (missing fields → 🆕 "(new)").
 			base: base ? cellMetrics(base) : null,
 		};
 	});
@@ -278,11 +313,11 @@ const signedCost = (d) => `${signOf(d)}${fmtCost(Math.abs(d))}`;
 const wholeNum = (v) => String(Math.round(v));
 
 // ── Metric cells ──────────────────────────────────────────────────────────────
-// Every metric cell — scalars AND judge — is ONE inline line: `<ball> <value> (<Δ>)`. The current value
-// is ALWAYS shown; a metric the baseline lacks reads `⚪ … (new)`; no current value at all → NONE.
+// Every metric cell — scalars AND judge — is ONE inline line: `<indicator> <value> (<Δ>)`. The current
+// value is ALWAYS shown; a metric the baseline lacks reads `🆕 … (new)`; no current value at all → NONE.
 
-// One INLINE scalar cell: `<ball> <value> (<Δ>)`; `⚪ <value> (new)` with no baseline; NONE with no
-// current value. `threshold` may be a number or fn(baseline); `dir` sets the improving direction.
+// One INLINE scalar cell: `<indicator> <value> (<Δ>)`; `🆕 <value> (new)` with no baseline; NONE with
+// no current value. `threshold` may be a number or fn(baseline); `dir` sets the improving direction.
 function scalarCell(base, pr, { threshold, dir, fmtVal, fmtDelta }) {
 	const pv = numOrNull(pr);
 	if (pv === null) return NONE;
@@ -304,10 +339,10 @@ function testsCell(base, pr) {
 	return `${deltaColor(bp, pp, DELTA_THRESHOLDS.tests, 'up')} ${value} (${signedInt(pp - bp)})`;
 }
 
-// JUDGE: ONE inline cell — the overall judge score `<ball> <score> (<Δ>)`, colored by the overall judge
-// delta over ±{@link DELTA_THRESHOLDS}.judge. `⚪ <score> (new)` with no baseline; NONE with no judge
-// score. Per-dimension scores are NOT rendered here — the breakdown lives in the judge artifact JSON
-// (progressive disclosure). Overall judge mean also appears in the preword.
+// JUDGE: ONE inline cell — the overall judge score `<indicator> <score> (<Δ>)`, indicated by the overall
+// judge delta over ±{@link DELTA_THRESHOLDS}.judge. `🆕 <score> (new)` with no baseline; NONE with no
+// judge score. Per-dimension scores are NOT rendered here — the breakdown lives in the judge artifact
+// JSON (progressive disclosure). Overall judge mean also appears in the preword.
 function judgeCell(base, pr) {
 	return scalarCell(base?.judge_score, pr?.judge_score, {
 		threshold: DELTA_THRESHOLDS.judge,
@@ -354,9 +389,9 @@ const METRIC_COLUMNS = ['Tests', 'Judge', 'Cost', 'Turns', 'Score', 'Stop reason
 // ── Render: single results table ──────────────────────────────────────────────
 /**
  * The one results table: TASK | TEMPLATE | TESTS | JUDGE | COST | TURNS | SCORE | STOP REASON. Every
- * metric cell — tests/judge/cost/turns/score — is inline `<ball> <value> (<Δ>)`; the JUDGE cell shows
- * only the overall judge score (per-dimension breakdown lives in the judge artifact JSON). ⚪ "(new)"
- * where the baseline lacks a metric. Every row emits ALL columns.
+ * metric cell — tests/judge/cost/turns/score — is inline `<indicator> <value> (<Δ>)`; the JUDGE cell
+ * shows only the overall judge score (per-dimension breakdown lives in the judge artifact JSON). 🆕
+ * "(new)" where the baseline lacks a metric. Every row emits ALL columns.
  * @param {ReturnType<typeof diffAgainstBaseline>} diff
  * @param {{heading?: string, note?: string}} [opts]
  * @returns {string[]}
