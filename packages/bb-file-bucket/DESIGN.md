@@ -47,6 +47,18 @@ versions/{key}/__deleted__        delete marker (sentinel)
 **Decision:** The derived bucket name (`scope.fullId`) is validated against S3's naming rules (`bucket-name.ts`) before the bucket is constructed. An invalid name throws a `ValidationFailed` error with an actionable message. The same validator runs in the mock constructor so local dev (`bb dev`) fails identically — parity. `FileBucket.fromExisting(...)` skips validation since the name is externally owned.
 **Rationale:** S3 bucket names are globally unique and immutable. Truncating to fit 63 chars risks collisions, and a name that shifts between deploys (e.g. after a hash input changes) would orphan or replace the customer's data — a far worse outcome than a fast, fixable synth error. Erroring puts the fix in the developer's hands (shorten a scope id once; the name is then stable forever) and matches the manual-shortening pattern already used in `bb-agent`. This deliberately differs from DynamoDB-backed BBs (KVStore/DistributedTable) which `substring(0, 255)` — DynamoDB's 255 limit is generous and table names are internal, disposable, and not globally unique, so silent truncation is acceptable there.
 
+**D-FB-9: Versioning stays opt-in (default off)**
+**Decision:** `versioned` remains `false` by default despite the security-review recovery finding (R6/R8). Versioning is enabled explicitly via `options.versioned: true`; the recommended recovery posture is to enable it alongside a noncurrent-version lifecycle rule.
+**Rationale:** Flipping the default to `true` is behavior- and cost-changing (every overwrite is retained → ongoing storage cost) and it changes mock runtime behavior (the versioned put/get/delete/delete-marker path activates). It also creates a type/runtime mismatch: the version-aware option types (`GetOptionsFor`/`DeleteOptionsFor`/`GetUrlOptionsFor` in `types.ts`) key off the `O extends { versioned: true }` literal, so a caller who omits the flag would get non-versioned option types while the bucket is versioned at runtime — a silent disagreement. Per the framework's minimal-breaking-change stance, we keep the safe, cheap default and close the finding through documentation and the one-line opt-in rather than a default flip. If the security posture later requires versioning-on-by-default, it should ship as its own minor/major with a `versioned: false` opt-out and a migration note, not bundled with the R6/R8 hardening.
+
+**D-FB-10: `enforceSSL` always on; server access logging opt-in**
+**Decision:** The bucket always sets `enforceSSL: true` (a bucket policy denying non-TLS requests). Server access logging is opt-in via `options.accessLogging`; when enabled it provisions a dedicated, private log bucket (BLOCK_ALL, SSE-S3, `enforceSSL`, `ExpireAccessLogs` lifecycle keyed off `logRetentionDays`, default 90) and points the file bucket at it under the `access-logs/` prefix. The log bucket follows the file bucket's removal/auto-delete rules rather than an unconditional DESTROY.
+**Rationale:** `enforceSSL` is effectively always safe — all SDK and presigned-URL traffic is already HTTPS — so it is a zero-risk, high-value default that closes the in-transit-encryption gap; it matches the hosting/inventory buckets which already enforce it. Access logging, by contrast, provisions a second bucket per FileBucket (extra resources + storage cost + a log-delivery bucket policy), so it mirrors the established `accessLogging?: boolean` opt-in precedent in `packages/hosting/src/constructs/storage_construct.ts` rather than defaulting on. The log bucket does not use `objectOwnership: BUCKET_OWNER_PREFERRED` (that was hosting's CloudFront-ACL need); S3 *server* access logging delivers via the log-delivery group and works with default ownership.
+
+**D-FB-11: Dev file-server CORS is hardened; no default CORS on the deployed bucket**
+**Decision:** The deployed S3 bucket emits CORS *only* from user-supplied `options.corsRules` — there is no implicit/default CORS. The local dev file-server (`file-server.ts`) reflects the request `Origin` (falling back to `*`) and allows `GET, PUT, OPTIONS`, but no longer sets `Access-Control-Allow-Credentials`.
+**Rationale:** A security scan flagged "wildcard CORS for PUT" against FileBucket. The only wildcard in FileBucket's own code was the localhost-only dev file-server, which paired a reflected/`*` origin with `Access-Control-Allow-Credentials: true` — the classic permissive-CORS pattern. That credentials header is unnecessary: presigned-URL auth is carried in a query-string token, not a cookie. Removing it neutralizes the finding without breaking local cross-port dev (origin reflection is retained). The deployed bucket was never the source (it emits no default CORS), so no construct-level change is needed; users are instead directed to pass explicit-origin `corsRules` (never `['*']` with a mutating method) for production browser uploads.
+
 ## Infrastructure (CDK)
 
 Creates a single S3 bucket:
@@ -54,11 +66,13 @@ Creates a single S3 bucket:
 - **Bucket name:** Derived from `scope.fullId` (the bucket id joined to its parent scope ids with `-`). Validated at synth against S3's naming rules — see D-FB-6.
 - **Block public access:** All four settings enabled (BLOCK_ALL)
 - **Encryption:** S3-managed keys (SSE-S3)
-- **Versioning:** Disabled by default, enabled via `options.versioned`
-- **CORS:** Configured from `options.corsRules` if provided
+- **Transport encryption:** `enforceSSL: true` always — a bucket policy denies any request where `aws:SecureTransport` is false (see D-FB-10)
+- **Versioning:** Disabled by default, enabled via `options.versioned` (see D-FB-9)
+- **Server access logging:** Off by default; opt in with `options.accessLogging`, which provisions a dedicated private log bucket (BLOCK_ALL, SSE-S3, `enforceSSL`, log expiry) and wires the file bucket's `serverAccessLogsBucket`/`serverAccessLogsPrefix` (`access-logs/`). Retention is `options.logRetentionDays` (default 90). See D-FB-10
+- **CORS:** Configured from `options.corsRules` if provided — no default CORS is emitted (see D-FB-11)
 - **Lifecycle rules:** Configured from `options.lifecycleRules` if provided
 - **Removal policy:** DESTROY (sandbox), configurable for production
-- **Auto-delete objects:** Enabled when removal policy is DESTROY
+- **Auto-delete objects:** Enabled when removal policy is DESTROY (the log bucket follows the same rule)
 - **Permissions:** `grantReadWrite` to the parent scope's handler automatically
 
 ## Mock Implementation
@@ -81,7 +95,9 @@ Creates a single S3 bucket:
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | No lifecycle rules | Objects never expire or transition locally | No mitigation — lifecycle rules are a background S3 process |
-| No CORS enforcement | Browser requests succeed regardless of origin locally | No mitigation — CORS is enforced by the browser + S3, not the mock |
+| No CORS enforcement | Browser requests succeed regardless of origin locally | No mitigation — CORS is enforced by the browser + S3, not the mock. The dev file-server sets permissive dev-only CORS headers (no credentials) so local uploads/downloads work across ports |
+| No server access logs | `accessLogging` provisions no log bucket locally; no access logs are written | No mitigation — server access logging is an S3-side feature. Infra-only option, ignored by the mock |
+| No transport enforcement | `enforceSSL` has no effect locally (the dev file-server is plain HTTP on localhost) | No mitigation — TLS enforcement is an S3 bucket policy. Infra-only, ignored by the mock |
 | No storage classes | Transition rules have no effect locally | No mitigation — storage classes are a cost optimization |
 | No multipart upload | Large files use simple write locally | No mitigation — mock uses `fs.writeFile` regardless of size |
 | Presigned URLs are localhost-only | URLs only work against the local dev server | No mitigation — expected behavior for local development |

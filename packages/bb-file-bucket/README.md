@@ -33,12 +33,18 @@ const bucket = new FileBucket(scope, id, options?)
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `versioned` | `boolean` | Enable S3 object versioning. Default: `false`. |
-| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. |
+| `versioned` | `boolean` | Enable S3 object versioning. Default: `false`. Enable it (ideally with a noncurrent-version lifecycle rule) when you need recovery from accidental overwrite or delete. |
+| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. Required for production browser uploads/downloads via presigned URLs — see the note below. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
+| `accessLogging` | `boolean` | Enable S3 server access logging to a dedicated private log bucket. Default: `false`. CDK-only — ignored by the mock and browser runtimes. |
+| `logRetentionDays` | `number` | Days to retain server access logs (only applies when `accessLogging` is `true`). Default: `90`. CDK-only. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, CDK's default (RETAIN) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+
+> **Transport encryption is always on.** The provisioned bucket sets `enforceSSL: true` — a bucket policy denies any non-HTTPS request. All SDK and presigned-URL traffic is already HTTPS, so this is transparent.
+
+> **CORS for production browser uploads.** The provisioned bucket has **no CORS by default**. A browser `PUT`/`GET` to a presigned URL hits S3 directly, so the bucket needs a matching `corsRules` entry or the request is blocked by the browser. Set `allowedOrigins` to your specific app origins (e.g. `['https://app.example.com']`) — **never** `['*']` combined with a mutating method (`PUT`/`POST`/`DELETE`), which would let any website upload to or modify your bucket.
 
 ### PutOptions
 
@@ -225,7 +231,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and CORS have no effect locally.
+Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules, CORS, `accessLogging`, and `enforceSSL` are infrastructure-only and have no effect locally. The dev file-server sets permissive, localhost-only CORS headers (origin reflected, no credentials) purely so a local frontend on any port can upload/download.
 
 
 

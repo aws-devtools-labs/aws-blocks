@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { FileBucket } from './index.cdk.js';
 
@@ -81,4 +81,59 @@ test('CDK: fromExisting skips derived-name validation even when the chain is ove
       bucket: FileBucket.fromExisting('preexisting-bucket-123'),
     }),
   );
+});
+
+// ── secure defaults: enforceSSL + server access logging (R6/R8) ──────────────
+//
+// The provisioned bucket must deny non-TLS requests (enforceSSL) and support
+// opt-in S3 server access logging to a dedicated private log bucket.
+
+test('CDK: bucket enforces SSL by default', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  // `enforceSSL: true` emits a bucket policy denying requests where
+  // aws:SecureTransport is false.
+  template.hasResourceProperties('AWS::S3::BucketPolicy', {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Effect: 'Deny',
+          Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+        }),
+      ]),
+    },
+  });
+});
+
+test('CDK: access logging is off by default (single bucket, no LoggingConfiguration)', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::S3::Bucket', 1);
+  template.hasResourceProperties(
+    'AWS::S3::Bucket',
+    Match.not(Match.objectLike({ LoggingConfiguration: Match.anyValue() })),
+  );
+});
+
+test('CDK: accessLogging:true provisions a dedicated log bucket and wires LoggingConfiguration', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { accessLogging: true });
+  const template = Template.fromStack(stack);
+  // Main bucket + dedicated access-log bucket.
+  template.resourceCountIs('AWS::S3::Bucket', 2);
+  template.hasResourceProperties('AWS::S3::Bucket', {
+    LoggingConfiguration: { LogFilePrefix: 'access-logs/' },
+  });
+  // The log bucket is itself locked down: public access blocked + encrypted.
+  template.hasResourceProperties('AWS::S3::Bucket', {
+    PublicAccessBlockConfiguration: {
+      BlockPublicAcls: true,
+      BlockPublicPolicy: true,
+      IgnorePublicAcls: true,
+      RestrictPublicBuckets: true,
+    },
+    BucketEncryption: Match.objectLike({ ServerSideEncryptionConfiguration: Match.anyValue() }),
+  });
 });
