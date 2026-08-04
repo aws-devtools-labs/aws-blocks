@@ -325,6 +325,14 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure-hardening defaults applied to every Building
+   * Block (log retention, API throttling, DynamoDB point-in-time recovery, …).
+   * Any field a block also exposes as a per-block option is overridden by that
+   * option. Omit to accept the framework's secure defaults. See
+   * `HardeningDefaults` in `@aws-blocks/core/cdk`.
+   */
+  hardening?: import('../cdk/hardening-defaults.js').HardeningDefaults;
 }
 
 export class BlocksStack {

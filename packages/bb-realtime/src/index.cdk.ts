@@ -14,10 +14,11 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
-import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
+import { WebSocketApi, WebSocketStage, CfnStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { Scope, synthGuard } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
+import { registerConfig, resolveApiThrottle, resolveApiAccessLogs, resolveLogRetention } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -91,11 +92,41 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 		},
 	});
 
+	// Apply the stack-wide hardening defaults (overridable per stack via the
+	// `hardening` prop on BlocksStack/BlocksBackend). The WebSocket stage was
+	// previously created with no throttling and no access logs — a single
+	// client could drive unbounded message volume with zero observability.
+	const throttle = resolveApiThrottle(stack);
 	const stage = new WebSocketStage(stack, 'BlocksRtStage', {
 		webSocketApi: wsApi,
 		stageName: 'rt',
 		autoDeploy: true,
+		throttle: { rateLimit: throttle.rateLimit, burstLimit: throttle.burstLimit },
 	});
+
+	// Access logging. API Gateway v2 has no L2 helper for stage access logs, so
+	// reach the underlying CfnStage and point it at a dedicated log group.
+	if (resolveApiAccessLogs(stack)) {
+		const accessLogGroup = new LogGroup(stack, 'BlocksRtAccessLogs', {
+			retention: resolveLogRetention(stack),
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		});
+		const cfnStage = stage.node.defaultChild as CfnStage;
+		cfnStage.accessLogSettings = {
+			destinationArn: accessLogGroup.logGroupArn,
+			// Structured JSON with the WebSocket-relevant fields.
+			format: JSON.stringify({
+				requestId: '$context.requestId',
+				requestTime: '$context.requestTime',
+				eventType: '$context.eventType',
+				routeKey: '$context.routeKey',
+				connectionId: '$context.connectionId',
+				status: '$context.status',
+				ip: '$context.identity.sourceIp',
+				integrationError: '$context.integrationErrorMessage',
+			}),
+		};
+	}
 
 	// API Gateway Management API: postToConnection for fan-out + subscribe responses
 	wsApi.grantManageConnections(handler);
