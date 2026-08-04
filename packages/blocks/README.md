@@ -129,6 +129,7 @@ Start from what you need:
   - Agent with tool use + conversation → `Agent` (bb-agent)
   - Semantic document retrieval (RAG) → `KnowledgeBase` (bb-knowledge-base)
 - **Send transactional email** → `EmailClient` (bb-email-client)
+- **Serve a raw HTTP endpoint** (webhook receiver, health check, redirect, non-JSON response) → `RawRoute` (core); everything else goes through `ApiNamespace` RPC
 - **Observe and operate**
   - Structured logs → `Logger` (bb-logger)
   - Custom metrics → `Metrics` (bb-metrics)
@@ -193,6 +194,8 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 > **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). Use **least-privilege** credentials scoped to the services your blocks deploy — not broad `Administrator` access.
 
 `npm run deploy` does a full production deploy; `npm run sandbox:destroy` tears the sandbox down. The same backend code runs in all three — blocks switch implementations automatically.
+
+`npm run deploy` streams CloudFormation events to **stdout** as they happen, so `npm run deploy | tee deploy.log` shows live progress instead of going silent for minutes, and a deploy failure keeps its reason on **stderr** (that stays the place to grep for why a deploy failed). On POSIX the deploy also survives a stray reap: a single `SIGTERM`, or any `SIGHUP` — a closed terminal, a backgrounded `npm run deploy &` — logs a line and keeps streaming rather than abandoning a stack update CloudFormation is still applying. Press Ctrl-C, or send `SIGTERM` twice, to stop it. That signal resilience is POSIX-only: Windows has no process groups and no OS-delivered `SIGTERM`/`SIGHUP`, so there a kill on the process tree still ends the deploy.
 
 ## Testing
 

@@ -63,3 +63,26 @@ describe('Database (aws runtime): _initBase forwards conn.ssl to the pool', () =
     assert.deepStrictEqual(ssl, { minVersion: 'TLSv1.2', rejectUnauthorized: true });
   });
 });
+
+/**
+ * When no connection is configured and no Aurora ARNs are injected, `_initBase`
+ * falls through to the Data API branch and throws. The message must guide *both*
+ * intents — a provisioned Aurora database and an external `fromExisting` connection
+ * (Supabase/Neon/etc.) — so an external-DB user isn't shown an Aurora-only error
+ * with no hint about the connectionString path. See aws-amplify/amplify-backend#3238.
+ */
+describe('Database (aws runtime): unconfigured connection error is intent-aware', () => {
+  test('error names both the Aurora provisioning and the fromExisting external path', async () => {
+    const scope = new Scope(`cfg-test-${Math.random().toString(36).slice(2)}`);
+    const db = new Database(scope, 'db', {});
+    await assert.rejects(
+      () => db.getEngine(),
+      (err: Error) => {
+        assert.match(err.message, /Supabase|external database/i, 'should mention the external-DB path');
+        assert.match(err.message, /fromExisting/, 'should point at Database.fromExisting({ connectionString })');
+        assert.match(err.message, /CLUSTER_ARN/, 'should still cover the provisioned Aurora path');
+        return true;
+      },
+    );
+  });
+});
