@@ -1,5 +1,5 @@
 ---
-"@aws-blocks/bb-async-job": minor
+"@aws-blocks/bb-async-job": patch
 "@aws-blocks/blocks": patch
 ---
 
