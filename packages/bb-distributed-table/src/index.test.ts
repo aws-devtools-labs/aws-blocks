@@ -292,23 +292,77 @@ describe('DistributedTable', () => {
 			assert.deepEqual(row, { orderId: 'bad', total: 'not-a-number' }); // raw fallback
 		});
 
-		test("'coerce' drops stored keys not in the schema; 'off' preserves them", async () => {
+		test("'coerce' PRESERVES stored keys not in the schema (no silent data loss)", async () => {
 			const scope = legacyScope();
 			// Row stored under a schema that had an extra `legacyNote` field.
 			const wide = z.object({ orderId: z.string(), total: z.number(), legacyNote: z.string() });
-			const narrow = z.object({ orderId: z.string(), total: z.number() }); // current schema dropped legacyNote
+			const narrow = z.object({ orderId: z.string(), total: z.number() }); // current schema no longer declares legacyNote
 			const w = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
 			await w.put({ orderId: 'o1', total: 10, legacyNote: 'keep me' });
 
-			// coerce (default): Zod strips the unknown key — data loss risk on write-back.
+			// coerce (default): unknown key is preserved (coerced output merged over the raw item).
 			const coerceReader = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
-			assert.deepEqual(await coerceReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10 });
+			assert.deepEqual(await coerceReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, legacyNote: 'keep me' });
 
-			// off: raw passthrough preserves the extra key.
+			// off also preserves (raw passthrough) — same observable result here.
 			const offReader = new DistributedTable(scope, 'orders', {
 				schema: narrow, key: { partitionKey: 'orderId' }, readValidation: 'off',
 			});
 			assert.deepEqual(await offReader.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, legacyNote: 'keep me' });
+		});
+
+		test("'coerce' read-modify-write does NOT drop an unknown stored key (the reviewer's scenario)", async () => {
+			const scope = legacyScope();
+			const wide = z.object({ orderId: z.string(), total: z.number(), couponCode: z.string() });
+			const narrow = z.object({ orderId: z.string(), total: z.number() }); // couponCode no longer in schema
+			const seed = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await seed.put({ orderId: 'A1', total: 10, couponCode: 'SAVE10' });
+
+			// Read, change an unrelated field, write back — couponCode must survive.
+			const t = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			const row = await t.get({ orderId: 'A1' });
+			assert.ok(row);
+			await t.put({ ...row, total: 50 });
+			const after = await t.get({ orderId: 'A1' });
+			assert.deepEqual(after, { orderId: 'A1', total: 50, couponCode: 'SAVE10' });
+		});
+
+		test("'coerce' adds a new default AND preserves an unknown key at the same time", async () => {
+			const scope = legacyScope();
+			const v1 = new DistributedTable(scope, 'orders', {
+				schema: z.object({ orderId: z.string(), total: z.number(), couponCode: z.string() }),
+				key: { partitionKey: 'orderId' },
+			});
+			await v1.put({ orderId: 'o1', total: 10, couponCode: 'X' });
+
+			// V2 adds currency (default) and no longer declares couponCode.
+			const v2 = new DistributedTable(scope, 'orders', {
+				schema: z.object({ orderId: z.string(), total: z.number(), currency: z.string().default('USD') }),
+				key: { partitionKey: 'orderId' },
+			});
+			assert.deepEqual(await v2.get({ orderId: 'o1' }), { orderId: 'o1', total: 10, currency: 'USD', couponCode: 'X' });
+		});
+
+		test("'coerce' preserves unknown keys nested inside a known object (deep)", async () => {
+			const scope = legacyScope();
+			const wide = z.object({ orderId: z.string(), meta: z.object({ a: z.number(), legacy: z.boolean() }) });
+			const narrow = z.object({ orderId: z.string(), meta: z.object({ a: z.number() }) }); // dropped meta.legacy
+			const w = new DistributedTable(scope, 'orders', { schema: wide, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', meta: { a: 1, legacy: true } });
+
+			const t = new DistributedTable(scope, 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await t.get({ orderId: 'o1' }), { orderId: 'o1', meta: { a: 1, legacy: true } });
+		});
+
+		test("'coerce' replaces arrays wholesale — never duplicates elements", async () => {
+			const scope = legacyScope();
+			const schema = z.object({ orderId: z.string(), tags: z.array(z.string()) });
+			const w = new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'orderId' } });
+			await w.put({ orderId: 'o1', tags: ['a', 'b'] });
+
+			// Same schema on read: coerced tags === raw tags; merge must NOT concat them.
+			const t = new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'orderId' } });
+			assert.deepEqual(await t.get({ orderId: 'o1' }), { orderId: 'o1', tags: ['a', 'b'] });
 		});
 
 		test("'strict': get() throws ValidationFailed on a non-conforming stored row", async () => {

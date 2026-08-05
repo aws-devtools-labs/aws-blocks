@@ -817,4 +817,23 @@ describe('readValidation behaves identically on the mock and the AWS runtime', (
 			(err: any) => err.name === 'ValidationFailedException',
 		);
 	});
+
+	// coerce preserves unknown stored keys (adds default) — must be identical mock ↔ aws.
+	const narrow = z.object({ orderId: z.string(), total: z.number(), currency: z.string().default('USD') });
+	const legacyWithExtra = { orderId: 'o1', total: 10, couponCode: 'X' }; // couponCode not in schema
+	const preserved = { orderId: 'o1', total: 10, couponCode: 'X', currency: 'USD' };
+
+	test("mock 'coerce' preserves an unknown key while adding the new default", async () => {
+		const t = new DistributedTable(testScope(), 'orders', { schema: narrow, key: { partitionKey: 'orderId' } });
+		(t as any).data.set((t as any).serializeKey({ orderId: 'o1' }), legacyWithExtra);
+		assert.deepStrictEqual(await t.get({ orderId: 'o1' }), preserved);
+	});
+
+	test("AWS 'coerce' preserves the same unknown key identically", async () => {
+		const table = awsTableWithFakeClient('ovr-aws-5',
+			{ schema: narrow, key: { partitionKey: 'orderId' } },
+			async () => ({ Item: legacyWithExtra }),
+		);
+		assert.deepStrictEqual(await table.get({ orderId: 'o1' }), preserved);
+	});
 });

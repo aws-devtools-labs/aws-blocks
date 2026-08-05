@@ -1,9 +1,32 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
+
+/**
+ * @internal Right-biased deep merge for the `'coerce'` read path: overlay the
+ * schema-coerced item onto the raw stored item so schema output (filled defaults,
+ * narrowed types) wins, while keys the schema stripped (e.g. attributes from an
+ * older schema version or another writer) are preserved rather than silently
+ * dropped on a read-modify-write.
+ *
+ * Arrays are treated as **opaque leaves** — the coerced array replaces the raw
+ * array wholesale. defu concatenates arrays by default, which is wrong here: the
+ * coerced array is derived from the same raw array, so concatenation would
+ * duplicate every element. This customizer overrides that one behavior; plain
+ * objects still deep-merge (so nested unknown keys survive), and defu's built-in
+ * `__proto__`/`constructor` guard is retained.
+ */
+const mergeCoercedOverRaw = createDefu((obj, key, value) => {
+	if (Array.isArray(obj[key]) || Array.isArray(value)) {
+		obj[key] = obj[key] ?? value;
+		return true;
+	}
+	return false;
+});
 
 /**
  * Typed error constants for DistributedTable. Use with `isBlocksError()` in catch blocks.
@@ -155,10 +178,15 @@ export function remapItemTooLarge(err: unknown): unknown {
  * untouched, preserving not-found semantics.
  *
  * - `'off'` — return the raw item, no validation.
- * - `'coerce'` — return the schema's output (defaults filled / types narrowed for
- *   transform-bearing schemas). On validation failure, return the **raw** item and
- *   `warn` — never throws — so drifted/legacy rows stay readable and the "reads
- *   return data or `null`" contract holds.
+ * - `'coerce'` — apply the schema (fill defaults / narrow types for
+ *   transform-bearing schemas) **without dropping data**: the coerced output is
+ *   deep-merged over the raw item, so schema output wins per key while attributes
+ *   the schema doesn't declare (from an older schema version or another writer)
+ *   are preserved. Without this merge, returning the bare validator output would
+ *   strip unknown keys (Zod `.strip()` default), and a read-modify-write would
+ *   then persist the stripped item — silently deleting stored data. On validation
+ *   failure, return the **raw** item and `warn` — never throws — so drifted/legacy
+ *   rows stay readable and the "reads return data or `null`" contract holds.
  * - `'strict'` — throw `ValidationFailed` on any item that doesn't satisfy the
  *   schema.
  *
@@ -184,5 +212,19 @@ export async function applyReadValidation<T>(
 		);
 		return item;
 	}
+	// Merge coerced output over the raw item: schema wins per key, but keys the
+	// schema stripped are preserved (see mergeCoercedOverRaw). Only merge when both
+	// sides are plain objects — a schema whose output is a primitive/array (rare
+	// for a table item) is returned as-is.
+	if (isPlainObject(item) && isPlainObject(resolved.value)) {
+		return mergeCoercedOverRaw(resolved.value as Record<string, unknown>, item as Record<string, unknown>) as T;
+	}
 	return resolved.value as T;
+}
+
+/** True for a plain `{}` object (not null, array, Date, or class instance). */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+	if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+	const proto = Object.getPrototypeOf(v);
+	return proto === Object.prototype || proto === null;
 }

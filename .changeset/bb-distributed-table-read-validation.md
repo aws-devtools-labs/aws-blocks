@@ -9,7 +9,7 @@
 
 Reads now reconcile stored items with the schema via `readValidation?: 'off' | 'coerce' | 'strict'`:
 
-- **`'coerce'`** (default) — return the schema's coerced output (defaults filled, types narrowed) so legacy rows conform to `T` and round-trip cleanly. On a value that can't be coerced, return the raw value + log a warning — **never throws**.
+- **`'coerce'`** (default) — apply the schema (fill defaults, narrow types) so legacy rows conform to `T` and round-trip cleanly, **without dropping data**: the coerced output is deep-merged over the raw stored item, so attributes not in the current schema (older-schema fields, columns another writer owns) are preserved rather than silently stripped on a read-modify-write. Arrays are replaced wholesale. On a value that can't be coerced, return the raw value + log a warning — **never throws**.
 - **`'strict'`** — throw `ValidationFailed` on any non-conforming item (opt-in; treats a mismatch as corruption).
 - **`'off'`** — return the raw stored value with no validation (the previous default behavior).
 
