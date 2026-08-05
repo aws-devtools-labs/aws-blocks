@@ -141,7 +141,22 @@ export function attach(httpServer: Server) {
 			}
 
 			const body = readFileSync(readPath);
-			res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': body.length.toString() });
+			// The stored object body and its Content-Type are attacker-controlled
+			// (any client with a presigned PUT can upload arbitrary bytes under an
+			// arbitrary content type). Serving that back inline turns the dev file
+			// server into a stored-XSS vector: an uploaded `text/html` (or sniffed
+			// HTML/SVG) payload would execute in the origin of the local app.
+			// `nosniff` stops the browser from MIME-sniffing octet-streams into
+			// HTML, and `Content-Disposition: attachment` forces a download rather
+			// than inline rendering — so an uploaded document can never run as a
+			// page. Real S3 objects served through CloudFront are hardened the same
+			// way; this keeps local dev from being weaker than production.
+			res.writeHead(200, {
+				'Content-Type': contentType,
+				'Content-Length': body.length.toString(),
+				'X-Content-Type-Options': 'nosniff',
+				'Content-Disposition': 'attachment',
+			});
 			res.end(body);
 		} else if (req.method === 'PUT') {
 			const valid = validateFileToken(token, LOCAL_FILE_SECRET, fullId, path, 'PUT');
