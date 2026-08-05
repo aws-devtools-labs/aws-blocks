@@ -213,7 +213,7 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * Full docs: `README.md` in the package directory above.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
+export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 
 /**
  * **AI agent with streaming, tool calling, and conversation persistence.**
