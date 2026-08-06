@@ -24,6 +24,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs Logger",
     "build": "tsc --build",
     "test": "node --test dist/**/*.test.js"
   },
