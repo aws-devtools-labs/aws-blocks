@@ -11,14 +11,27 @@ import type {
 	AsyncJobOptions,
 	SubmitOptions,
 	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
+import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 export { AsyncJobErrors } from './errors.js';
-export type { AsyncJobContext, AsyncJobOptions, SubmitOptions, BatchSubmitResult } from './types.js';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	WaitUntilCompleteOptions,
+} from './types.js';
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
 const MAX_BATCH_SIZE = 10;
@@ -29,6 +42,8 @@ export class AsyncJob<T = unknown> extends Scope {
 	private _envKey: string;
 	private _id: string;
 	private _sqsClient: SQSClient;
+	private _maxRetries: number;
+	private _status?: JobStatusTracker;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -39,6 +54,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		this._handler = options.handler;
 		this._schema = options.schema;
 		this._id = id;
+		this._maxRetries = options.maxRetries ?? 3;
 		this._sqsClient = new SQSClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
@@ -49,11 +65,63 @@ export class AsyncJob<T = unknown> extends Scope {
 
 		registerSdkIdentifiers(this.fullId, { queueUrl });
 
+		if (options.trackStatus) {
+			this._status = new JobStatusTracker(this, this.log);
+		}
+
 		// Only register handler if queue URL is available (i.e., running in Lambda, not codegen)
 		if (queueUrl) {
 			const queueName = queueUrl.split('/').pop()!;
 			this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName, (record) => this._processRecord(record));
 		}
+	}
+
+	/** Throws unless this job was created with `trackStatus: true`. */
+	private requireStatus(): JobStatusTracker {
+		if (!this._status) throw statusNotTrackedError(this._id);
+		return this._status;
+	}
+
+	/**
+	 * Read a job's recorded status, including every state it has passed through.
+	 *
+	 * Requires `trackStatus: true`. Because `transitions` is append-only, a single
+	 * read after the job settled still shows the intermediate `processing` state,
+	 * so there is no need to slow the handler down to make it observable.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @returns The status record, or `null` if nothing is recorded for that id.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.getStatus(jobId);
+	 * if (status?.state === 'failed') console.error(status.error);
+	 * ```
+	 */
+	async getStatus(jobId: string): Promise<AsyncJobStatus | null> {
+		return this.requireStatus().get(jobId);
+	}
+
+	/**
+	 * Wait until a job reaches `complete` or `failed`.
+	 *
+	 * Requires `trackStatus: true`. Resolves on either terminal state — inspect
+	 * `state` and `error` on the returned record to tell them apart.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @param options - Optional. `timeoutMs` (default 30000), `pollIntervalMs` (default 250), `signal`.
+	 * @returns The final status record.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 * @throws {AsyncJobErrors.Timeout} If the job does not settle within `timeoutMs`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.waitUntilComplete(jobId, { timeoutMs: 60_000 });
+	 * ```
+	 */
+	async waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
+		return this.requireStatus().waitUntilComplete(jobId, options);
 	}
 
 	/** Ensures queue URL is available, throws descriptive error if not */
@@ -78,7 +146,23 @@ export class AsyncJob<T = unknown> extends Scope {
 			receiveCount: parseInt(record.attributes.ApproximateReceiveCount, 10),
 			sentAt: new Date(parseInt(record.attributes.SentTimestamp, 10)).toISOString(),
 		};
-		await this._handler(payload, ctx);
+
+		await this._status?.tryRecordTransition(ctx.jobId, 'processing', ctx.receiveCount);
+
+		try {
+			await this._handler(payload, ctx);
+		} catch (error: unknown) {
+			// SQS redrive owns the retry decision: this delivery is only terminal once
+			// the receive count has reached maxReceiveCount. Earlier failures record
+			// nothing, so the next attempt simply appends another `processing` entry.
+			if (ctx.receiveCount >= this._maxRetries) {
+				const message = error instanceof Error ? error.message : String(error);
+				await this._status?.tryRecordTransition(ctx.jobId, 'failed', ctx.receiveCount, message);
+			}
+			throw error;
+		}
+
+		await this._status?.tryRecordTransition(ctx.jobId, 'complete', ctx.receiveCount);
 	}
 
 	/** Validates payload and returns the serialized JSON string for reuse */
@@ -122,6 +206,12 @@ export class AsyncJob<T = unknown> extends Scope {
 		if (!jobId) {
 			throw new Error('SQS SendMessage succeeded but returned no MessageId');
 		}
+
+		// The job id is the SQS message id, so `queued` can only be recorded after the
+		// send. SQS may already have delivered the message by now, so the write is
+		// conditional on the record not existing: if the handler got there first its
+		// backfill already carries the `queued` transition.
+		await this._status?.recordQueued(jobId, new Date().toISOString());
 
 		return { jobId };
 	}
@@ -179,6 +269,13 @@ export class AsyncJob<T = unknown> extends Scope {
 			(err as any).failed = failed;
 			(err as any).jobIds = jobIds;
 			throw err;
+		}
+
+		if (this._status) {
+			const submittedAt = new Date().toISOString();
+			await this._status.recordQueuedBatch(
+				jobIds.filter((id): id is string => id !== null).map(jobId => ({ jobId, submittedAt }))
+			);
 		}
 
 		return { jobIds, failed: [] };

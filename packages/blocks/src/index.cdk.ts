@@ -43,7 +43,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
+export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AgentConfig, AgentResult, AgentStreamChunk, ToolDefinition, ToolCallRecord, ModelConfig, StreamOptions, TokenUsage } from '@aws-blocks/bb-agent';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
