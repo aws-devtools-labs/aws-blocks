@@ -39,7 +39,8 @@ function isCI(): boolean {
     process.env.JENKINS_URL ||
     process.env.TF_BUILD ||
     process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE
+    process.env.BUILDKITE ||
+    process.env.RENDER
   );
 }
 
