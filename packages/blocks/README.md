@@ -160,7 +160,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | auth-common | Shared interfaces and UI components for all AWS Blocks auth Building Blocks. | — |
 | bb-agent | AI agent with streaming, tool calling, and conversation persistence. | — |
 | bb-app-setting | A single application configuration value backed by SSM Parameter Store. | — |
-| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, SQS |
+| bb-async-job | Background job processing backed by SQS and Lambda. | queue, job, background, async, worker, submit, batch, retry, status, transitions, SQS |
 | bb-auth-basic | Simple username/password authentication with JWT sessions, password policy, and optional code-confirmed signup and password reset. | — |
 | bb-auth-cognito | Authentication backed by Amazon Cognito User Pools. | — |
 | bb-auth-oidc | OIDC sign-in gate for AWS Blocks applications. | — |
