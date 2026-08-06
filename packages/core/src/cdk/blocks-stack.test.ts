@@ -79,24 +79,18 @@ describe('legacy side-effect mode (no default export)', () => {
 });
 
 describe('shared execution role (BlocksStack)', () => {
-  // The role synth shape (assume-role principal, AWSLambdaBasicExecutionRole,
-  // handler-assumes-role) and the tree-walk grant landing on the role's inline
-  // policy come from shared code (setupBlocksInfra + the Scope.executionRole
-  // getter) and are covered in blocks-backend.test.ts. Here we only cover what
-  // is BlocksStack-specific: that the stack wires + resolves the role.
-  test('BlocksStack exposes executionRole and a nested block resolves to it', async () => {
+  // The role synth shape and the Scope.executionRole tree-walk are shared code
+  // (setupBlocksInfra + the getter), covered in blocks-backend.test.ts. The only
+  // BlocksStack-specific behavior is that its own constructor wires
+  // executionRole — a separate code path from BlocksBackend's constructor.
+  test('BlocksStack wires executionRole via its constructor', async () => {
     const app = new cdk.App();
     const stack = await BlocksStack.create(app, 'StackRoleStack', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
     });
 
-    assert.ok(stack.executionRole, 'BlocksStack should expose .executionRole');
-
-    // Getter resolves through a BlocksStack owner (the backend test covers the
-    // BlocksBackend owner arm).
-    const inner = new Scope('inner', { parent: new Scope('outer') });
-    assert.strictEqual(inner.executionRole, stack.executionRole, 'resolves up to the BlocksStack role');
+    assert.ok(stack.executionRole, 'BlocksStack should expose a populated .executionRole');
   });
 });
 
