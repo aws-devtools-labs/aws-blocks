@@ -146,13 +146,13 @@ If you need SQL, prefer `DistributedDatabase` for basic Postgres-compatible quer
 
 ## Building Block documentation
 
-Every Building Block ships its full docs — `README.md`, `API.md`, and `DESIGN.md` — inside the `@aws-blocks/blocks` package under `docs/<block>/`. To read them, locate the bundled folder:
+Every Building Block ships its full docs — `README.md`, `API.md`, `DESIGN.md`, and `CHANGELOG.md` — inside the `@aws-blocks/blocks` package under `docs/<block>/`. To read them, locate the bundled folder:
 
 ```bash
 node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
 ```
 
-If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`) plus one subfolder per block; the catalog below lists every block.
+If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That folder holds this guide (`README.md`), the framework's own `API.md`, `TROUBLESHOOTING.md`, and `CHANGELOG.md` (version history — read when troubleshooting), plus one subfolder per block; the catalog below lists every block.
 
 <!-- BEGIN:block-catalog -->
 | Block | What it does | Keywords |
