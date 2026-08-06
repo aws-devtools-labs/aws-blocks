@@ -40,7 +40,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const packagesDir = join(__dirname, '..', 'packages');
 const readmePath = join(packagesDir, 'blocks', 'README.md');
 
-const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
+const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app', 'bb-lambda-compute']);
 
 const BEGIN_MARKER = '<!-- BEGIN:block-catalog -->';
 const END_MARKER = '<!-- END:block-catalog -->';
