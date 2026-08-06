@@ -8,6 +8,19 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
+// ── Read validation ─────────────────────────────────────────────────────────
+
+/**
+ * Controls how reads reconcile a stored item with the schema. See
+ * {@link DistributedTableOptions.readValidation} for full semantics.
+ *
+ * - `'coerce'` (default): pass through the schema, return coerced output; on
+ *   validation failure return the raw value + warn (never throws).
+ * - `'strict'`: validate and throw `ValidationFailed` on any non-conforming item.
+ * - `'off'`: return the raw stored value with no validation.
+ */
+export type ReadValidationMode = 'off' | 'coerce' | 'strict';
+
 // ── Key configuration ───────────────────────────────────────────────────────
 
 export interface TableKeyConfig<T> {
@@ -123,6 +136,47 @@ export interface DistributedTableOptions<
 	 * ```
 	 */
 	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
+	 * How reads (`get`, `getBatch`, `query`, `scan`) reconcile a stored item with
+	 * the configured `schema`. Writes (`put`/`putBatch`) always validate; this
+	 * governs the read side, which matters after a schema change: a row written
+	 * under an older schema may no longer conform to the current type `T`.
+	 *
+	 * - **`'coerce'`** (default) — pass each stored item through the schema and
+	 *   return its output. For transform-bearing schemas (e.g. Zod) this fills
+	 *   `.default()`s and narrows types so the value satisfies `T` and the
+	 *   read-modify-write cycle (`get()` → mutate → `put()`) round-trips. **Never
+	 *   throws:** an item that fails validation is returned **as-is** with a
+	 *   warning, keeping drifted/legacy rows readable for migration.
+	 * - **`'strict'`** — validate on read and **throw** `ValidationFailed` on any
+	 *   item that doesn't satisfy the schema. For tables where a mismatch should be
+	 *   treated as corruption/tampering and rejected rather than absorbed. Note
+	 *   this makes a single bad row fail the whole `query`/`scan`/`getBatch`.
+	 * - **`'off'`** — return the raw stored value with no validation (lowest cost).
+	 *   Use for hot paths, data you trust was written through this schema, or to
+	 *   read items you can't yet coerce during a migration.
+	 *
+	 * Defaults to `'coerce'`.
+	 *
+	 * > **Best-effort coercion (validator-dependent).** Coercion relies on the
+	 * > schema *transforming* its input. Zod fills defaults and casts; a check-only
+	 * > Standard Schema validator (some Valibot/ArkType schemas) validates without
+	 * > transforming, so `'coerce'` returns the value unchanged for those — it never
+	 * > invents data. A required field with no default is never fabricated: under
+	 * > `'coerce'` such a row is returned raw + warned; under `'strict'` it throws.
+	 *
+	 * @example
+	 * ```typescript
+	 * const orders = new DistributedTable(scope, 'orders', {
+	 *   schema: orderSchemaV2,        // adds `currency: z.string().default('USD')`
+	 *   key: { partitionKey: 'orderId' },
+	 *   // readValidation: 'coerce' is the default
+	 * });
+	 * const order = await orders.get({ orderId: 'o1' }); // legacy row → currency: 'USD'
+	 * await orders.put({ ...order, total: 20 });         // round-trips cleanly
+	 * ```
+	 */
+	readValidation?: ReadValidationMode;
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */

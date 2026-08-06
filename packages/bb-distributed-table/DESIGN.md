@@ -114,6 +114,29 @@ Production tables default to Point-in-Time Recovery **on**, SSE with the AWS-man
 
 **`fromExisting` is untouched.** When binding to a pre-existing table these options don't apply — the customer owns that table's durability/encryption configuration, exactly as they own its GSIs.
 
+### D-DT-10: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
+
+> The **default choice** (`'coerce'` over `'off'`) is recorded as a cross-cutting architectural decision in [`docs/DECISIONS.md` D-015](../../docs/DECISIONS.md#d-015-distributedtable-reads-default-to-readvalidation-coerce-not-off). This section covers the per-BB mechanics.
+
+**Decision:** Writes always validate. Reads reconcile a stored item with the schema per the `readValidation` mode, which defaults to **`'coerce'`**. `get`/`getBatch`/`query`/`scan` pass each stored value through `schema['~standard'].validate()`:
+- **`'coerce'`** (default) — return the schema's output (defaults filled / types narrowed for transform-bearing schemas); on validation failure return the **raw** value with a `warn` log — never throws.
+- **`'strict'`** — throw `ValidationFailed` on any item that doesn't satisfy the schema.
+- **`'off'`** — return the raw stored value, no validation.
+
+**Rationale:** The asymmetry "validate on write, return raw on read" breaks the documented read-modify-write update pattern after a schema change, in two ways. A newly added field is absent from the read, so `get()` returns a value that silently violates the declared type `T` and any schema `.default()` is neither applied nor persisted on write-back; and if the new field is required with no default, the `put()` half of the cycle throws `ValidationFailed`, stranding the row. Coercing on read fixes the round-trip for the coercible case (added fields with `.default()`, widened/narrowed types) by handing the caller a value the current schema accepts. It cannot invent a required-no-default value — those rows fall through to the raw + warn path and still need an explicit migration.
+
+**Why `coerce` is the default.** The bug is that the *default* read violates `T`; a fix only users who discover a flag can enable isn't a fix. Market research across comparable typed data layers backs a coercing default: Rails ActiveRecord type-casts on load, Mongoose applies defaults/casts when hydrating, ElectroDB runs getters and returns schema-shaped items — none re-throw on stored data, and Postgres itself synthesizes an added column's `DEFAULT` at read time (`ALTER TABLE ADD COLUMN … DEFAULT`), which is coerce-on-read in all but name.
+
+**Why not `strict` by default.** Throwing on read makes legacy/corrupt rows unreadable — you couldn't fetch them to migrate — turns one bad row into a whole-`scan`/`getBatch` outage, and violates the project rule that reads return data or `null` and throw only for violated preconditions. Every surveyed library that ships a strict read (DynamoDB-Toolbox `format()`, the `zod-firebase` converter) also ships an escape hatch. So `strict` is offered as an opt-in for tables that want mismatch treated as corruption, not as the default.
+
+**Why keep `off`.** The raw escape hatch (ElectroDB's `data:'raw'`, Mongoose's `.lean()`) is needed for hot paths, trusted write-validated data, and reading rows that can't yet be coerced during a migration.
+
+**Best-effort coercion caveat.** Standard Schema only guarantees `validate()` *checks*; it does not require transformation. Zod fills defaults/coerces, but a check-only Valibot/ArkType schema returns its input unchanged — so `'coerce'` degrades to pass-through for those validators. Documented as best-effort; coercion never fabricates a required value.
+
+**`coerce` preserves unknown keys.** Most validators discard unrecognized keys when they produce their output (Zod `.strip()`s by default), so a stored row carrying attributes beyond the current schema — fields from an older schema version, or columns another writer owns — would lose them on read, and a read-modify-write (`get()` → `put()`) would persist that loss, silently deleting data. To prevent this, `'coerce'` deep-merges the coerced value **over the raw stored item** (`mergeCoercedOverRaw` in `errors.ts`, built on `defu`'s `createDefu`): schema output wins per key (defaults filled, types narrowed), while keys the schema doesn't declare — including nested ones — survive. Arrays are treated as opaque leaves: the coerced array replaces the raw array wholesale (defu concatenates arrays by default, which would *duplicate* elements here since the coerced array is derived from the raw one, so that one behavior is overridden). The merge runs only when both the stored item and the coerced value are plain objects; defu's `__proto__`/`constructor` guard is retained. `'coerce'` is therefore additive-and-lossless for the common cases (added fields, nested unknowns, type coercion). The one residual: a schema whose *transform* deliberately renames or removes a key — the merge resurrects the old key, so transform-heavy schemas should use `'strict'` or `'off'`. `defu` is used rather than a hand-rolled merge because treating arrays as leaves requires custom config in every merge library regardless, and defu is a maintained, prototype-safe, zero-dependency ESM package.
+
+**Mock/AWS parity:** both layers call the same `applyReadValidation()` helper in `errors.ts`, so all three modes (coerced output, raw-fallback + warn, strict throw) behave identically. `null` (a missing item) passes through untouched in every mode, preserving not-found semantics.
+
 ## Infrastructure (CDK)
 
 Creates a single DynamoDB table:
