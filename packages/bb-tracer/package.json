@@ -24,6 +24,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs Tracer",
     "build": "tsc --build",
     "test": "node --test --test-concurrency=1 dist/*.test.js"
   },
