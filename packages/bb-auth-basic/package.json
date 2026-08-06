@@ -19,6 +19,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs AuthBasic",
     "build": "tsc --build",
     "test": "node --test dist/**/*.test.js"
   },
