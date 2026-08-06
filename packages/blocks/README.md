@@ -225,7 +225,7 @@ await BlocksStack.create(app, stackName, {
 });
 ```
 
-See `docs/design/VPC-DESIGN.md` for the full design.
+See [VPC.md](./VPC.md) for cost details, guidance on when to use a VPC, and configuration options.
 
 ## Reference
 
