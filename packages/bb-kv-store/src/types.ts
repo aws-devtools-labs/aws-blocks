@@ -49,6 +49,28 @@ export interface PutOptions<T = unknown> extends ConditionalWriteOptions<T> {
 	expiresAt?: Date | number;
 }
 
+/**
+ * Options accepted by `scan`.
+ */
+export interface ScanOptions {
+	/**
+	 * Yield items whose `ttl` has passed but which DynamoDB's reaper has not
+	 * deleted yet. Defaults to `false`, so a scan sees only live items.
+	 *
+	 * Enable this only for maintenance sweeps that must act on every row still
+	 * physically present — deleting the remains of expired items, for example.
+	 * Reads that answer "is this still valid?" must leave it off.
+	 *
+	 * @example
+	 * ```typescript
+	 * for await (const { key } of sessions.scan({ includeExpired: true })) {
+	 *   await sessions.delete(key);
+	 * }
+	 * ```
+	 */
+	includeExpired?: boolean;
+}
+
 export interface ConditionalDeleteOptions<T = unknown> {
 	/** Only delete if the key exists. Throws ConditionalCheckFailedException otherwise. */
 	ifExists?: boolean;

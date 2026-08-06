@@ -39,6 +39,11 @@ export function nowEpochSeconds(): number {
  * Resolve `ttlSeconds` / `expiresAt` to an absolute Unix epoch-seconds value,
  * or `undefined` when the caller asked for no expiry.
  *
+ * `expiresAt` accepts any point in time, including one already past — that
+ * reads as "expire immediately", so there is no lower bound beyond being a
+ * finite time. Only the epoch-milliseconds guard caps the upper end.
+ * `ttlSeconds` is a duration rather than an instant, so it must be positive.
+ *
  * @throws {KVStoreErrors.ValidationFailed} If both options are set, or either is not a usable time.
  */
 export function resolveTtlEpochSeconds(options?: PutOptions<unknown>): number | undefined {
@@ -61,8 +66,8 @@ export function resolveTtlEpochSeconds(options?: PutOptions<unknown>): number | 
 		if (!Number.isFinite(ms)) invalidTtl('put: `expiresAt` is an Invalid Date');
 		return Math.floor(ms / 1000);
 	}
-	if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-		invalidTtl(`put: \`expiresAt\` must be a Date or a positive Unix epoch time in seconds (received ${String(expiresAt)})`);
+	if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
+		invalidTtl(`put: \`expiresAt\` must be a Date or a Unix epoch time in seconds (received ${String(expiresAt)})`);
 	}
 	if (expiresAt >= MAX_PLAUSIBLE_EPOCH_SECONDS) {
 		invalidTtl('put: `expiresAt` looks like epoch milliseconds; DynamoDB TTL expects seconds — pass a Date or divide by 1000');

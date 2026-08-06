@@ -1,9 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionStore, safeStringArrayClaim, safeStringClaim } from './sessions.js';
 import type { SessionRecord } from './sessions.js';
@@ -121,11 +122,27 @@ function nowSeconds(): number {
 	return Math.floor(Date.now() / 1000);
 }
 
+/**
+ * These tests assert on the mock store's persisted `ttl` attribute, so they
+ * wipe its data root between cases. The mock resolves that root from
+ * `process.cwd()`, and the test runner executes files concurrently by default —
+ * so wiping the shared `.bb-data` would delete directories a sibling test file
+ * is actively reading. Run against a private root instead.
+ */
+const originalCwd = process.cwd();
+const dataRoot = mkdtempSync(join(tmpdir(), 'bb-auth-cognito-sessions-'));
+process.chdir(dataRoot);
+
+after(() => {
+	process.chdir(originalCwd);
+	rmSync(dataRoot, { recursive: true, force: true });
+});
+
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch { /* ignore */ }
+	rmSync('.bb-data', { recursive: true, force: true });
 });
 afterEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch { /* ignore */ }
+	rmSync('.bb-data', { recursive: true, force: true });
 });
 
 describe('SessionStore TTL', () => {
@@ -221,5 +238,23 @@ describe('SessionStore TTL', () => {
 		assert.strictEqual(await store.deleteByUsername('alice'), 1);
 		assert.strictEqual(await store.lookupSession(aliceTwo), null);
 		assert.ok(await store.lookupSession(bob), "bob's session must survive");
+	});
+
+	test('deleteByUsername physically deletes a session past its ttl that the reaper has not collected', async () => {
+		const store = new SessionStore(ROOT, 'delete-expired', 3600);
+		const stale = await store.createSession(recordFor('alice'));
+		const live = await store.createSession(recordFor('alice'));
+		const bob = await store.createSession(recordFor('bob'));
+
+		rewriteTtl('delete-expired', stale, nowSeconds() - 60);
+		assert.ok(stale in storedItems('delete-expired'), 'row is still on disk — this is the case under test');
+
+		const reopened = new SessionStore(ROOT, 'delete-expired', 3600);
+		assert.strictEqual(await reopened.deleteByUsername('alice'), 2, 'revoke must count the expired row too');
+
+		const remaining = storedItems('delete-expired');
+		assert.ok(!(stale in remaining), 'expired row must be physically deleted, not left holding a refresh token');
+		assert.ok(!(live in remaining));
+		assert.ok(bob in remaining, "bob's session must survive");
 	});
 });

@@ -272,10 +272,15 @@ export class SessionStore {
 	 * `SessionRecord` is deliberately minimal (tokens only — see its docs), so
 	 * the owning username is recovered by decoding each session's ID token
 	 * rather than read from a denormalized field.
+	 *
+	 * The sweep scans with `includeExpired` because DynamoDB's reaper runs up to
+	 * ~48 h after expiry. A row past its TTL but still on disk holds a live
+	 * refresh token, and a deliberate revoke is the one moment retention matters
+	 * most — so it is deleted rather than skipped as already-invisible.
 	 */
 	async deleteByUsername(username: string): Promise<number> {
 		const toDelete: string[] = [];
-		for await (const { key, value } of this.kv.scan()) {
+		for await (const { key, value } of this.kv.scan({ includeExpired: true })) {
 			if (decodeIdToken(value.idToken).username === username) toDelete.push(key);
 		}
 		for (const id of toDelete) await this.kv.delete(id);

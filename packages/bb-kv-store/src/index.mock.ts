@@ -22,9 +22,10 @@ export type {
 	PutOptions,
 	KVStoreOptions,
 	ExternalTableRef,
+	ScanOptions,
 } from './types.js';
 
-import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+import type { ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
 import { KVStoreErrors } from './errors.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
@@ -189,11 +190,18 @@ export class KVStore<T = string> extends Scope {
 
 	/**
 	 * Enumerate all key-value pairs. Reads every item in the store —
-	 * use sparingly on large datasets. Expired items are skipped.
+	 * use sparingly on large datasets. Expired items are skipped unless
+	 * `includeExpired` is set.
 	 *
 	 * @returns An async iterable of key-value entries.
 	 */
-	async *scan(): AsyncIterable<{ key: string; value: T }> {
+	async *scan(options?: ScanOptions): AsyncIterable<{ key: string; value: T }> {
+		if (options?.includeExpired) {
+			for (const [key, entry] of this.data) {
+				yield { key, value: JSON.parse(entry.value) as T };
+			}
+			return;
+		}
 		this.pruneExpired();
 		for (const [key, entry] of this.data) {
 			yield { key, value: JSON.parse(entry.value) as T };

@@ -11,16 +11,33 @@
  * the production put/get/scan code paths execute unchanged.
  */
 
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KVStore as MockKVStore, KVStoreErrors } from './index.mock.js';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { TTL_ATTRIBUTE, isExpired, nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
 
+/**
+ * These tests assert on the mock's persisted bytes, so they wipe its data root
+ * between cases. The mock resolves that root from `process.cwd()`, and the test
+ * runner executes files concurrently by default — so wiping the shared
+ * `.bb-data` would delete directories a sibling test file is actively reading.
+ * Run against a private root instead.
+ */
+const originalCwd = process.cwd();
+const dataRoot = mkdtempSync(join(tmpdir(), 'bb-kv-store-ttl-'));
+process.chdir(dataRoot);
+
+after(() => {
+	process.chdir(originalCwd);
+	rmSync(dataRoot, { recursive: true, force: true });
+});
+
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
+	rmSync('.bb-data', { recursive: true, force: true });
 });
 
 function mockStore<T = string>(id: string): MockKVStore<T> {
@@ -99,6 +116,12 @@ describe('resolveTtlEpochSeconds', () => {
 	test('expiresAt in the past is allowed (caller asked for immediate expiry)', () => {
 		const past = nowEpochSeconds() - 60;
 		assert.strictEqual(resolveTtlEpochSeconds({ expiresAt: past }), past);
+	});
+
+	test('expiresAt has no positive lower bound — epoch 0 and negatives are past instants', () => {
+		assert.strictEqual(resolveTtlEpochSeconds({ expiresAt: 0 }), 0);
+		assert.strictEqual(resolveTtlEpochSeconds({ expiresAt: -1 }), -1);
+		assert.strictEqual(resolveTtlEpochSeconds({ expiresAt: new Date(0) }), 0);
 	});
 
 	test('rejects epoch milliseconds passed as expiresAt', () => {
@@ -206,6 +229,25 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		for await (const _ of store.scan()) { /* drain */ }
 		const onDisk = JSON.parse(readFileSync(storeFile('ttl-scan-prune'), 'utf8'));
 		assert.deepStrictEqual(Object.keys(onDisk), ['live']);
+	});
+
+	test('scan({ includeExpired }) yields expired-but-unreaped items', async () => {
+		const store = mockStore('ttl-scan-include');
+		await store.put('live', 'a');
+		await store.put('dead', 'b', { expiresAt: nowEpochSeconds() - 1 });
+
+		const seen: string[] = [];
+		for await (const { key } of store.scan({ includeExpired: true })) seen.push(key);
+		assert.deepStrictEqual(seen.sort(), ['dead', 'live']);
+	});
+
+	test('scan({ includeExpired }) leaves expired rows on disk for the caller to delete', async () => {
+		const store = mockStore('ttl-scan-include-nodelete');
+		await store.put('dead', 'b', { expiresAt: nowEpochSeconds() - 1 });
+
+		for await (const _ of store.scan({ includeExpired: true })) { /* drain */ }
+		const onDisk = JSON.parse(readFileSync(storeFile('ttl-scan-include-nodelete'), 'utf8'));
+		assert.deepStrictEqual(Object.keys(onDisk), ['dead']);
 	});
 
 	test('expiry survives a restart (persisted, not in-memory only)', async () => {

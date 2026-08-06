@@ -25,9 +25,13 @@ TTL is opt-in at the construct (`{ ttl: true }`) and per write (`put(k, v, { ttl
 
 The attribute name is fixed to `ttl` rather than configurable like `DistributedTable`'s `ttl?: keyof T`. A `DistributedTable` item's attributes are the customer's schema fields, so TTL points at one of them; a `KVStore` item is always `{ pk, value }` with the customer payload opaque inside `value`, so there is no customer attribute to name. Fixing it also matches the `timeToLiveAttribute: 'ttl'` convention already used elsewhere in the repo.
 
-`ttlSeconds` (relative) and `expiresAt` (absolute `Date` or epoch seconds) resolve through one shared helper (`src/ttl.ts`) used by both runtimes, so the mock and AWS layers cannot drift on the value written or on when an item counts as expired. It rejects mutually-exclusive options, non-positive durations, and numbers large enough to be epoch milliseconds — a milliseconds value would be accepted by DynamoDB as a year-5138 expiry, silently defeating the feature.
+`ttlSeconds` (relative) and `expiresAt` (absolute `Date` or epoch seconds) resolve through one shared helper (`src/ttl.ts`) used by both runtimes, so the mock and AWS layers cannot drift on the value written or on when an item counts as expired. It rejects mutually-exclusive options, non-positive `ttlSeconds` durations, and numbers large enough to be epoch milliseconds — a milliseconds value would be accepted by DynamoDB as a year-5138 expiry, silently defeating the feature. `expiresAt` is an instant rather than a duration, so it has no positive lower bound: any past timestamp, epoch `0` included, reads as "expire immediately".
 
 Because DynamoDB deletes expired items asynchronously (typically within 48 hours), an expired item can still be physically present. Both runtimes therefore filter on read: `get` returns `null` and `scan` skips the item as soon as its expiry passes. Conditional expressions still see the stored item until it is actually deleted, matching DynamoDB.
+
+Maintenance sweeps that must act on every row still physically present — deleting the remains of expired items rather than waiting on the reaper — opt out of that filter with `scan({ includeExpired: true })`. It is deliberately not the default: a read answering "is this still valid?" must never see an expired item. `AuthCognito`'s session revoke uses it so a deliberate revoke physically deletes rows whose refresh tokens are still at rest.
+
+This read-side filtering is a `KVStore` guarantee only. `DistributedTable` also supports TTL (`ttl?: keyof T`) but sets `timeToLiveAttribute` without filtering reads, so an expired item there keeps reading as live until the reaper collects it — up to 48 hours. Do not assume the two blocks behave the same; a `DistributedTable` consumer relying on TTL for expiry semantics needs its own read-side check.
 
 ## Serialization & Validation
 

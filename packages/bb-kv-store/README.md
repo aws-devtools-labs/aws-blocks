@@ -19,7 +19,7 @@ const store = new KVStore(scope, id, options?)
 | `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. |
 | `put(key, value, options?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set; accepts an optional expiry. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a value. |
-| `scan()` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items. Expensive on large datasets. |
+| `scan(options?)` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items unless `{ includeExpired: true }`. Expensive on large datasets. |
 | `KVStore.fromExisting(tableName)` | `ExternalTableRef` | Wrap a pre-existing DynamoDB table. |
 
 **Runtime only.** Data methods (`get`, `put`, `delete`, `scan`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct (no data methods), so a top-level call throws `store.<method> is not a function` (throws `TypeError` at runtime if called during CDK synth). To seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.

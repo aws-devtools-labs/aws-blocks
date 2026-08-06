@@ -202,6 +202,27 @@ describe('TTL parity between mock and AWS runtimes', () => {
 		assert.deepStrictEqual(awsKeys, mockKeys);
 	});
 
+	test('both runtimes yield expired items during scan({ includeExpired })', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-scan-include');
+		await mock.put('live', 'a');
+		await mock.put('dead', 'b', { expiresAt: expired });
+		const mockKeys: string[] = [];
+		for await (const { key } of mock.scan({ includeExpired: true })) mockKeys.push(key);
+		assert.deepStrictEqual(mockKeys.sort(), ['dead', 'live']);
+
+		const { store } = captureAws('parity-scan-include-aws', () => ({
+			Items: [
+				{ pk: 'live', value: JSON.stringify('a') },
+				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
+			],
+		}));
+		const awsKeys: string[] = [];
+		for await (const { key } of store.scan({ includeExpired: true })) awsKeys.push(key);
+		assert.deepStrictEqual(awsKeys.sort(), mockKeys.sort());
+	});
+
 	test('both runtimes reject the same invalid TTL options with the same error name', async () => {
 		const bad = [
 			{ ttlSeconds: 60, expiresAt: 123456 },

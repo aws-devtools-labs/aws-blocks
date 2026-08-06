@@ -13,7 +13,8 @@ import { TTL_ATTRIBUTE, isExpired, resolveTtlEpochSeconds } from './ttl.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
+import type { ScanOptions } from './types.js';
 
 /**
  * Simple key-value storage backed by DynamoDB.
@@ -152,11 +153,13 @@ export class KVStore<T = string> extends Scope {
 	/**
 	 * Enumerate all key-value pairs. Reads every item in the table —
 	 * use sparingly on large datasets. Uses DynamoDB's native Scan operation.
-	 * Expired items are skipped even if DynamoDB has not reaped them yet.
+	 * Expired items are skipped even if DynamoDB has not reaped them yet,
+	 * unless `includeExpired` is set.
 	 *
 	 * @returns An async iterable of key-value entries.
 	 */
-	async *scan(): AsyncIterable<{ key: string; value: T }> {
+	async *scan(options?: ScanOptions): AsyncIterable<{ key: string; value: T }> {
+		const includeExpired = options?.includeExpired === true;
 		let lastKey: Record<string, any> | undefined;
 		do {
 			const result = await this.docClient.send(new ScanCommand({
@@ -164,7 +167,7 @@ export class KVStore<T = string> extends Scope {
 				ExclusiveStartKey: lastKey,
 			}));
 			for (const item of result.Items ?? []) {
-				if (isExpired(item[TTL_ATTRIBUTE])) continue;
+				if (!includeExpired && isExpired(item[TTL_ATTRIBUTE])) continue;
 				yield { key: item.pk as string, value: JSON.parse(item.value as string) as T };
 			}
 			lastKey = result.LastEvaluatedKey;
