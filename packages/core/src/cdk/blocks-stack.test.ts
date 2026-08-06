@@ -6,8 +6,10 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
+import { Template, Match } from 'aws-cdk-lib/assertions';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksBackend } from './blocks-backend.js';
-import { BlocksStack } from './index.js';
+import { BlocksStack, Scope } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
 before(() => {
@@ -74,6 +76,79 @@ describe('legacy side-effect mode (no default export)', () => {
     assert.ok(
       marker,
       'Side-effect-only module should register construct via globalThis.CURRENT_BLOCKS_STACK',
+    );
+  });
+});
+
+describe('shared execution role (BlocksStack)', () => {
+  const MARKER_ACTION = 'blocks-test:StackMarkerAction';
+
+  test('BlocksStack exposes executionRole and the handler assumes it', async () => {
+    const app = new cdk.App();
+    const stack = await BlocksStack.create(app, 'StackRoleStack', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    assert.ok(stack.executionRole, 'BlocksStack should expose .executionRole');
+
+    const template = Template.fromStack(stack);
+    const roles = template.findResources('AWS::IAM::Role');
+    const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
+    assert.ok(blocksRoleId, 'expected a role from the BlocksRole construct');
+    assert.ok(
+      JSON.stringify(roles[blocksRoleId].Properties.ManagedPolicyArns ?? []).includes('AWSLambdaBasicExecutionRole'),
+      'BlocksRole should attach AWSLambdaBasicExecutionRole',
+    );
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
+    });
+  });
+
+  test('a nested block resolves executionRole to the BlocksStack role', async () => {
+    const app = new cdk.App();
+    const stack = await BlocksStack.create(app, 'StackRoleResolveStack', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    const outer = new Scope('outer');
+    const inner = new Scope('inner', { parent: outer });
+    assert.strictEqual(inner.executionRole, stack.executionRole, 'resolves up to the BlocksStack role');
+
+    inner.executionRole.addToPrincipalPolicy(
+      new PolicyStatement({ actions: [MARKER_ACTION], resources: ['*'] }),
+    );
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([Match.objectLike({ Action: MARKER_ACTION })]),
+      },
+    });
+  });
+});
+
+describe('executionRole globalThis fallback', () => {
+  test('resolves via globalThis.CURRENT_BLOCKS_STACK when no owner is in the tree', async () => {
+    const app = new cdk.App();
+    const stack = await BlocksStack.create(app, 'FallbackStack', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    // A Scope whose construct-tree ancestry has no BlocksStack/BlocksBackend
+    // (parented under a plain cdk.Stack) exhausts the tree-walk and falls back
+    // to globalThis.CURRENT_BLOCKS_STACK. The `as any` is test plumbing — a
+    // plain Stack isn't a ScopeParent, but it IS a valid Construct parent.
+    const plainStack = new cdk.Stack(app, 'PlainStack');
+    (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+    const orphan = new Scope('orphan', { parent: plainStack as any });
+
+    assert.strictEqual(
+      orphan.executionRole,
+      stack.executionRole,
+      'fallback resolves to the ambient stack role',
     );
   });
 });

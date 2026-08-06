@@ -58,6 +58,9 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   // AWSLambdaBasicExecutionRole is attached explicitly because the auto-role
   // included it by default — omitting it would silently break CloudWatch Logs.
   const executionRole = new iam.Role(scope, 'BlocksRole', {
+    // CompositePrincipal (rather than a bare ServicePrincipal) so additional
+    // compute types can assume this same shared role as they are introduced
+    // (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
     assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),

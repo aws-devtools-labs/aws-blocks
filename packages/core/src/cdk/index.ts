@@ -108,8 +108,10 @@ export class Scope extends Construct {
 
   /**
    * The shared IAM role assumed by all Blocks compute. Building Blocks grant
-   * their permissions to this role (grants accumulate in the stack's shared
-   * managed policy) instead of to an individual function's auto-role.
+   * their permissions to this role instead of to an individual function's
+   * auto-role. CDK's `grant*()` / `addToPrincipalPolicy()` route those grants
+   * to the role's default (inline) policy — exactly where they landed on the
+   * auto-generated role before.
    *
    * Resolves the same way as {@link handler}: walk up to the owning
    * BlocksStack/BlocksBackend, falling back to the ambient stack.
