@@ -521,6 +521,8 @@ Cognito scales automatically. Default quotas: 40 sign-ups/sec, 120 sign-ins/sec 
 
 AWS Blocks auth follows the BFF pattern: the browser sends `{username, password}` to the customer's Lambda over TLS; Lambda forwards to Cognito. The customer's Lambda is inside the user's trust boundary by design — same as `AuthBasic`, `AuthOIDC`, NextAuth, Devise, and every server-mediated auth library. Cognito tokens never reach the browser — instead, the BB issues an opaque HMAC-signed session cookie that maps to a server-side `SessionRecord` in a nested `KVStore`.
 
+The user pool client sets `PreventUserExistenceErrors: ENABLED`, so sign-in and forgot-password responses return a uniform error whether or not the username exists — closing the account-enumeration oracle Cognito exposes by default.
+
 See the auth-cognito technical design (see source repo) for the full architecture and mock-vs-AWS parity notes.
 
 ## Cookies and sessions

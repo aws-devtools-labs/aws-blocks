@@ -238,6 +238,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 			userPool: this.userPool,
 			generateSecret: false,
+			// Return a uniform error for "user doesn't exist" and "wrong
+			// password" so sign-in / forgot-password responses can't be used to
+			// enumerate which usernames are registered. Without this, Cognito
+			// leaks a distinct UserNotFoundException, which is an account-
+			// enumeration oracle. Amazon's recommended posture is ENABLED.
+			preventUserExistenceErrors: true,
 			// SDK + session-cookie auth only; the hosted UI is never used.
 			// Off by default CDK would enable the implicit grant and a
 			// placeholder example.com callback — unused attack surface.

@@ -5,17 +5,30 @@ import { Duration } from 'aws-cdk-lib';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Scope } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
 	AsyncJobOptions,
 	SubmitOptions,
+	AsyncJobStatus,
+	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
+import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
 
 export { AsyncJobErrors } from './errors.js';
-export type { AsyncJobContext, AsyncJobOptions, SubmitOptions } from './types.js';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	WaitUntilCompleteOptions,
+} from './types.js';
 
 export class AsyncJob<T = unknown> extends Scope {
 	public readonly queue: Queue;
@@ -56,5 +69,21 @@ export class AsyncJob<T = unknown> extends Scope {
 		);
 
 		this.handler.addEventSource(new SqsEventSource(this.queue, { batchSize }));
+
+		// Same child id and options as the runtime entry points, so the provisioned
+		// table is the one JobStatusTracker resolves at request time.
+		if (options.trackStatus) {
+			new DistributedTable(this, STATUS_TABLE_ID, statusTableOptions as never);
+		}
+	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+
+	getStatus(_jobId: string): Promise<AsyncJobStatus | null> {
+		return synthGuard('AsyncJob', 'getStatus');
+	}
+
+	waitUntilComplete(_jobId: string, _options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
+		return synthGuard('AsyncJob', 'waitUntilComplete');
 	}
 }

@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -107,6 +107,16 @@ export class DistributedDatabase extends Scope {
 
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
+  }
+
+  /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed cluster.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope).
+   */
+  getEngine(): never {
+    return synthGuard('DistributedDatabase', 'getEngine');
   }
 }
 
