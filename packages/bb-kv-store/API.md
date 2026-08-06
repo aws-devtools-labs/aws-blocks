@@ -39,7 +39,7 @@ export class KVStore<T = string> extends Scope {
     get(key: string): Promise<T | null>;
     // @internal
     protected log: ChildLogger;
-    put(key: string, value: T, conditions?: ConditionalWriteOptions<T>): Promise<void>;
+    put(key: string, value: T, options?: PutOptions<T>): Promise<void>;
     scan(): AsyncIterable<{
         key: string;
         value: T;
@@ -59,6 +59,13 @@ export interface KVStoreOptions<T = string> {
     removalPolicy?: 'destroy' | 'retain';
     schema?: StandardSchemaV1<T>;
     table?: ExternalTableRef;
+    ttl?: boolean;
+}
+
+// @public
+export interface PutOptions<T = unknown> extends ConditionalWriteOptions<T> {
+    expiresAt?: Date | number;
+    ttlSeconds?: number;
 }
 
 // (No @packageDocumentation comment for this package)

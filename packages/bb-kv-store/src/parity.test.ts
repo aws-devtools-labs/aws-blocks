@@ -9,6 +9,8 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { KVStore, KVStoreErrors } from './index.mock.js';
+import { KVStore as AwsKVStore } from './index.aws.js';
+import { TTL_ATTRIBUTE, nowEpochSeconds } from './ttl.js';
 import { z } from 'zod';
 
 beforeEach(() => {
@@ -114,5 +116,113 @@ describe('ifValueEquals: undefined is treated as no-op', () => {
 	test('delete with ifValueEquals: undefined on missing key succeeds silently', async () => {
 		const store = new KVStore({ id: 'root' } as any, 'undef-del-new');
 		await store.delete('nonexistent', { ifValueEquals: undefined } as any);
+	});
+});
+
+// TTL parity. DynamoDB's reaper is asynchronous, so an expired item can still
+// be physically present; both runtimes must therefore hide expired items on
+// read, and neither may write the `ttl` attribute unless asked. Divergence here
+// means code that self-expires sessions locally silently retains them in AWS.
+
+/**
+ * Capture what the AWS runtime would send to DynamoDB and control what it reads
+ * back, without touching the network. Real `KVStore`, real `PutCommand`.
+ */
+function captureAws(id: string, respond: () => any = () => ({})): {
+	store: AwsKVStore<string>;
+	items: () => any[];
+} {
+	const store = new AwsKVStore<string>({ id: 'root' } as any, id);
+	const sent: any[] = [];
+	(store as any).docClient.middlewareStack.add(
+		(_next: any) => async (args: any) => {
+			sent.push(args.input);
+			return { output: respond() };
+		},
+		{ step: 'initialize', name: 'kv-parity-intercept', override: true },
+	);
+	return { store, items: () => sent };
+}
+
+describe('TTL parity between mock and AWS runtimes', () => {
+	test('neither runtime writes a ttl attribute when none is requested', async () => {
+		const mock = new KVStore({ id: 'root' } as any, 'parity-no-ttl');
+		await mock.put('k', 'v');
+		assert.strictEqual(await mock.get('k'), 'v');
+
+		const { store, items } = captureAws('parity-no-ttl-aws');
+		await store.put('k', 'v');
+		assert.ok(!(TTL_ATTRIBUTE in items()[0].Item));
+	});
+
+	test('both runtimes hide an item whose expiry has passed', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-expired');
+		await mock.put('k', 'v', { expiresAt: expired });
+		assert.strictEqual(await mock.get('k'), null);
+
+		const { store } = captureAws('parity-expired-aws', () => ({
+			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: expired },
+		}));
+		assert.strictEqual(await store.get('k'), null);
+	});
+
+	test('both runtimes still return an item whose expiry is in the future', async () => {
+		const future = nowEpochSeconds() + 600;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-live');
+		await mock.put('k', 'v', { expiresAt: future });
+		assert.strictEqual(await mock.get('k'), 'v');
+
+		const { store } = captureAws('parity-live-aws', () => ({
+			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: future },
+		}));
+		assert.strictEqual(await store.get('k'), 'v');
+	});
+
+	test('both runtimes skip expired items during scan', async () => {
+		const expired = nowEpochSeconds() - 1;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-scan');
+		await mock.put('live', 'a');
+		await mock.put('dead', 'b', { expiresAt: expired });
+		const mockKeys: string[] = [];
+		for await (const { key } of mock.scan()) mockKeys.push(key);
+		assert.deepStrictEqual(mockKeys, ['live']);
+
+		const { store } = captureAws('parity-scan-aws', () => ({
+			Items: [
+				{ pk: 'live', value: JSON.stringify('a') },
+				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
+			],
+		}));
+		const awsKeys: string[] = [];
+		for await (const { key } of store.scan()) awsKeys.push(key);
+		assert.deepStrictEqual(awsKeys, mockKeys);
+	});
+
+	test('both runtimes reject the same invalid TTL options with the same error name', async () => {
+		const bad = [
+			{ ttlSeconds: 60, expiresAt: 123456 },
+			{ ttlSeconds: 0 },
+			{ ttlSeconds: -1 },
+			{ expiresAt: Date.now() },
+		] as const;
+
+		const mock = new KVStore({ id: 'root' } as any, 'parity-invalid');
+		const { store } = captureAws('parity-invalid-aws');
+
+		for (const options of bad) {
+			const label = JSON.stringify(options);
+			await assert.rejects(() => mock.put('k', 'v', options as any), (err: any) => {
+				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `mock: ${label}`);
+				return true;
+			});
+			await assert.rejects(() => store.put('k', 'v', options as any), (err: any) => {
+				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `aws: ${label}`);
+				return true;
+			});
+		}
 	});
 });

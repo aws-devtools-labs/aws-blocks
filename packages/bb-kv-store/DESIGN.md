@@ -14,9 +14,20 @@ Creates a single DynamoDB table:
 - **Billing mode:** PAY_PER_REQUEST
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
 - **Removal policy:** DESTROY (sandbox), configurable for production
+- **Time-to-Live:** Disabled by default; `{ ttl: true }` sets `timeToLiveAttribute: 'ttl'`
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically
 
 No sort key, no GSIs. This is intentional — `KVStore` is the simple case. Customers needing sort keys or secondary indexes should use `DistributedTable`.
+
+## Expiry (TTL)
+
+TTL is opt-in at the construct (`{ ttl: true }`) and per write (`put(k, v, { ttlSeconds })` or `{ expiresAt }`), because switching TTL on for a table that already exists is a CloudFormation update to the live table.
+
+The attribute name is fixed to `ttl` rather than configurable like `DistributedTable`'s `ttl?: keyof T`. A `DistributedTable` item's attributes are the customer's schema fields, so TTL points at one of them; a `KVStore` item is always `{ pk, value }` with the customer payload opaque inside `value`, so there is no customer attribute to name. Fixing it also matches the `timeToLiveAttribute: 'ttl'` convention already used elsewhere in the repo.
+
+`ttlSeconds` (relative) and `expiresAt` (absolute `Date` or epoch seconds) resolve through one shared helper (`src/ttl.ts`) used by both runtimes, so the mock and AWS layers cannot drift on the value written or on when an item counts as expired. It rejects mutually-exclusive options, non-positive durations, and numbers large enough to be epoch milliseconds — a milliseconds value would be accepted by DynamoDB as a year-5138 expiry, silently defeating the feature.
+
+Because DynamoDB deletes expired items asynchronously (typically within 48 hours), an expired item can still be physically present. Both runtimes therefore filter on read: `get` returns `null` and `scan` skips the item as soon as its expiry passes. Conditional expressions still see the stored item until it is actually deleted, matching DynamoDB.
 
 ## Serialization & Validation
 
@@ -31,6 +42,7 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 - Conditional write/delete failures throw with `error.name = 'ConditionalCheckFailedException'`.
 - Schema validation on `put()` when configured, throws `ValidationFailedException`.
 - Validates the 400 KB item size limit; throws `ItemTooLargeException` (`KVStoreErrors.ItemTooLarge`) on oversized items. On AWS, DynamoDB raises a generic `ValidationException`; the runtime narrows on the size-specific message and re-maps only that case to `ItemTooLarge`, so both layers surface the same `error.name`.
+- Emulates TTL: items with an expiry are persisted as `{ "value": "...", "ttl": 1234567890 }` and pruned lazily on `get` (single key) and `scan` (full sweep), standing in for DynamoDB's background reaper. Items without an expiry stay bare serialized strings, so stores written by earlier versions load unchanged and non-expiring writes produce no format churn.
 
 ### Mock vs AWS Behavior Differences
 
@@ -41,3 +53,4 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 | Immediate consistency (vs eventual) | Reads always reflect the latest write locally | No mitigation — eventual consistency is inherently non-deterministic |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | Disk I/O vs DynamoDB latency | Local ops are faster and never timeout | No mitigation needed — latency differences don't affect correctness |
+| TTL deletion is immediate on read (vs up to 48 h in DynamoDB) | An expired item's storage is reclaimed sooner locally | Both layers hide expired items from `get`/`scan`, so observable behavior matches; only physical deletion timing differs |
