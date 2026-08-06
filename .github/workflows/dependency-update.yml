@@ -43,7 +43,7 @@ jobs:
 
       - name: Install and build
         run: |
-          npm install
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Verify with local e2e
