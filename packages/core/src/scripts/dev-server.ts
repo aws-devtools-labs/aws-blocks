@@ -1244,6 +1244,20 @@ function handleApiRequest(
     return;
   }
 
-  res.writeHead(404);
-  res.end();
+  // Anything that reaches here didn't match `POST /aws-blocks/api`. Returning a
+  // bare empty 404 leaves a developer poking at the endpoint (e.g. opening it in
+  // a browser, which sends a GET, or trying a REST-style URL) with no feedback.
+  // Reply with a small JSON hint pointing at the one supported shape. When the
+  // path was right but the method wasn't, say so explicitly.
+  const wrongMethodOnApi = url.pathname === BLOCKS_RPC_PREFIX;
+  const message = wrongMethodOnApi
+    ? `The AWS Blocks JSON-RPC API expects POST, not ${method}.`
+    : 'Not found. The AWS Blocks JSON-RPC API is served at POST /aws-blocks/api.';
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(
+    JSON.stringify({
+      error: message,
+      expected: { method: 'POST', path: BLOCKS_RPC_PREFIX },
+    }),
+  );
 }

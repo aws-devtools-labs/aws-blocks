@@ -21,6 +21,7 @@ export { DistributedTableErrors } from './errors.js';
 export type {
 	TableKeyConfig,
 	DistributedTableOptions,
+	ReadValidationMode,
 	ExternalTableRef,
 	TableKey,
 	PartitionKeyCondition,
@@ -42,8 +43,9 @@ import type {
 	PartitionKeyCondition,
 	SortKeyCondition,
 	TableKey,
+	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -79,18 +81,23 @@ export class DistributedTable<
 	private schema: StandardSchemaV1<T>;
 	private keyConfig: K;
 	private indexes: Indexes;
+	private readValidation: ReadValidationMode;
 	private docClient: DynamoDBDocumentClient;
 
-	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
+	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
-		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Default level is 'warn' (not 'error') so the readValidation='coerce'
+		// raw-fallback warning actually surfaces — it's the only log the block
+		// emits, so this doesn't add noise. Callers can pass their own logger.
+		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		const tableName = options.table?.tableName ?? this.fullId.substring(0, 255);
 		this.schema = options.schema;
 		this.keyConfig = options.key;
 		this.indexes = (options.indexes ?? {}) as Indexes;
+		this.readValidation = options.readValidation ?? 'coerce';
 		const client = new DynamoDBClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
@@ -103,7 +110,7 @@ export class DistributedTable<
 			TableName: getSdkIdentifiers(this).tableName,
 			Key: this.buildKey(key),
 		}));
-		return (result.Item as T) ?? null;
+		return this.reconcileRead((result.Item as T) ?? null);
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
@@ -178,7 +185,7 @@ export class DistributedTable<
 			const result = await this.docClient.send(command);
 
 			for (const item of result.Items ?? []) {
-				yield item as T;
+				yield (await this.reconcileRead(item as T)) as T;
 				if (options.limit && ++count >= options.limit) return;
 			}
 
@@ -198,7 +205,7 @@ export class DistributedTable<
 			}));
 
 			for (const item of result.Items ?? []) {
-				yield item as T;
+				yield (await this.reconcileRead(item as T)) as T;
 				if (options?.limit && ++count >= options.limit) return;
 			}
 
@@ -225,7 +232,9 @@ export class DistributedTable<
 				},
 			);
 		}
-		return keys.map(key => results.get(JSON.stringify(this.buildKey(key))) ?? null);
+		return Promise.all(
+			keys.map(key => this.reconcileRead(results.get(JSON.stringify(this.buildKey(key))) ?? null)),
+		);
 	}
 
 	async putBatch(items: T[]): Promise<void> {
@@ -281,6 +290,16 @@ export class DistributedTable<
 		}
 	}
 
+	/**
+	 * Reconcile a stored value with the schema per this table's `readValidation`
+	 * mode (`off` → raw, `coerce` → coerced output / raw+warn on failure, `strict`
+	 * → throw on mismatch). `null` (a missing item) passes straight through. See
+	 * {@link applyReadValidation}.
+	 */
+	private reconcileRead(item: T | null): Promise<T | null> {
+		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
+	}
+
 	private buildKey(key: TableKey<T, K>): Record<string, any> {
 		const result: Record<string, any> = { [this.keyConfig.partitionKey]: (key as any)[this.keyConfig.partitionKey] };
 		if (this.keyConfig.sortKey) result[this.keyConfig.sortKey] = (key as any)[this.keyConfig.sortKey];
@@ -293,7 +312,7 @@ export class DistributedTable<
 		// and lets concurrent callers re-collide; equal jitter preserves a minimum
 		// spacing while still de-synchronising retries under shared throttling.
 		// See: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html#Programming.Errors.BatchOperations
-		const capped = Math.min(BASE_BACKOFF_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
+		const capped = Math.min(BASE_BACKOFF_MS * 2 ** attempt, MAX_BACKOFF_MS);
 		const ms = capped / 2 + Math.random() * (capped / 2);
 		return new Promise(resolve => setTimeout(resolve, ms));
 	}

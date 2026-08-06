@@ -132,6 +132,15 @@ describe('AuthCognito (CDK) — user pool client', () => {
 		});
 	});
 
+	test('client enables PreventUserExistenceErrors (no username enumeration oracle)', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth');
+		});
+		template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+			PreventUserExistenceErrors: 'ENABLED',
+		});
+	});
+
 	test('hosted-UI / OAuth flows are disabled (no implicit grant, no placeholder callback)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth');
