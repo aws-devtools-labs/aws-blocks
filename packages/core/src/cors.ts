@@ -2,6 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
+ * `Access-Control-Max-Age` for preflight responses, in seconds.
+ *
+ * Chromium caps the preflight cache at 7200s and silently clamps anything
+ * higher, so a larger value buys nothing while widening the window in which a
+ * stale per-origin grant can be served. Shared by the Lambda handler and the
+ * local dev server so the two can't drift.
+ */
+export const CORS_MAX_AGE = '7200';
+
+/**
  * Parse a comma-separated CORS origin string into anchored RegExp patterns.
  *
  * Each entry is treated as a regex pattern:
@@ -73,6 +83,25 @@ export function isOriginAllowed(origin: string): boolean {
 }
 
 /**
+ * Distinct origins already warned about, so a caller retrying — or a bot
+ * spraying bogus `Origin` values — can't amplify one log line per request now
+ * that this helper runs on every response path.
+ */
+const warnedOrigins = new Set<string>();
+
+/** Cap on {@link warnedOrigins} so an untrusted input can't grow it unbounded. */
+const WARNED_ORIGINS_LIMIT = 100;
+
+function warnDisallowedOriginOnce(origin: string): void {
+  if (warnedOrigins.has(origin)) return;
+  if (warnedOrigins.size < WARNED_ORIGINS_LIMIT) warnedOrigins.add(origin);
+  const example = 'CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$';
+  console.warn(
+    `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: ${example}`
+  );
+}
+
+/**
  * Build the CORS response headers for a request origin.
  *
  * Only reflects the origin when it matches the configured allowlist. When no
@@ -80,18 +109,21 @@ export function isOriginAllowed(origin: string): boolean {
  * `Access-Control-Allow-Origin` / `Access-Control-Allow-Credentials` headers
  * are emitted, so a disallowed origin is never reflected back.
  *
+ * `Vary: Origin` is always emitted, including on the not-allowed path: the
+ * response headers depend on the request `Origin`, so any shared cache (CDN,
+ * forward proxy) must key on it or it can serve one origin's grant — or one
+ * origin's *absence* of a grant — to a different origin.
+ *
  * @param origin - The `Origin` header value from the request (may be empty)
- * @returns The CORS headers to merge into the response (empty when not allowed)
+ * @returns The CORS headers to merge into the response
  */
 export function buildCorsHeaders(origin: string): Record<string, string> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { Vary: 'Origin' };
   if (isOriginAllowed(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Credentials'] = 'true';
   } else if (origin) {
-    console.warn(
-      `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$`
-    );
+    warnDisallowedOriginOnce(origin);
   }
   return headers;
 }
@@ -102,14 +134,15 @@ export function buildCorsHeaders(origin: string): Record<string, string> {
 export function corsRejection(): { statusCode: number; headers: Record<string, string>; body: string } {
   return {
     statusCode: 403,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Vary: 'Origin' },
     body: JSON.stringify({ error: 'Forbidden: cross-origin request rejected' }),
   };
 }
 
 /**
- * Reset the lazy CORS pattern cache. **For testing only.**
+ * Reset the lazy CORS pattern cache and the warned-origin set. **For testing only.**
  */
 export function _resetCorsPatterns(): void {
   _corsPatterns = undefined;
+  warnedOrigins.clear();
 }

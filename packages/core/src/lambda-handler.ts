@@ -15,7 +15,7 @@ import {
   errorResponseFromCatch,
   methodNotFoundResponse,
 } from './rpc.js';
-import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders } from './cors.js';
+import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -456,7 +456,7 @@ function createHandler(backend: any) {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '7200',
+          'Access-Control-Max-Age': CORS_MAX_AGE,
         },
         body: '',
       };
