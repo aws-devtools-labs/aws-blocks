@@ -92,7 +92,7 @@ describe('synth shape (drop into existing stack)', () => {
   });
 });
 
-describe('shared execution role (A1)', () => {
+describe('shared execution role', () => {
   test('exposes executionRole on the backend', async () => {
     const app = new cdk.App();
     const parent = new cdk.Stack(app, 'RoleSurfaceStack');
