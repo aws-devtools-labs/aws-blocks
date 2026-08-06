@@ -156,7 +156,7 @@ export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions,
  * Full docs: `README.md` in the package directory above.
  */
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
+export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 
 /**
  * **Real-time pub/sub messaging backed by AppSync Events.**

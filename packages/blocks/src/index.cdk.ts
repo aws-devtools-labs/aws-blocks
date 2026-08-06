@@ -35,7 +35,7 @@ export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aw
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
+export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 export { Realtime } from '@aws-blocks/bb-realtime';
 export { Database, DatabaseErrors, fromExisting } from '@aws-blocks/bb-data';
 export { sql } from '@aws-blocks/bb-data';
