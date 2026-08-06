@@ -6,8 +6,6 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { Template, Match } from 'aws-cdk-lib/assertions';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksStack, Scope } from './index.js';
 
@@ -81,9 +79,12 @@ describe('legacy side-effect mode (no default export)', () => {
 });
 
 describe('shared execution role (BlocksStack)', () => {
-  const MARKER_ACTION = 'blocks-test:StackMarkerAction';
-
-  test('BlocksStack exposes executionRole and the handler assumes it', async () => {
+  // The role synth shape (assume-role principal, AWSLambdaBasicExecutionRole,
+  // handler-assumes-role) and the tree-walk grant landing on the role's inline
+  // policy come from shared code (setupBlocksInfra + the Scope.executionRole
+  // getter) and are covered in blocks-backend.test.ts. Here we only cover what
+  // is BlocksStack-specific: that the stack wires + resolves the role.
+  test('BlocksStack exposes executionRole and a nested block resolves to it', async () => {
     const app = new cdk.App();
     const stack = await BlocksStack.create(app, 'StackRoleStack', {
       backendHandlerPath: handlerPath,
@@ -92,40 +93,10 @@ describe('shared execution role (BlocksStack)', () => {
 
     assert.ok(stack.executionRole, 'BlocksStack should expose .executionRole');
 
-    const template = Template.fromStack(stack);
-    const roles = template.findResources('AWS::IAM::Role');
-    const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
-    assert.ok(blocksRoleId, 'expected a role from the BlocksRole construct');
-    assert.ok(
-      JSON.stringify(roles[blocksRoleId].Properties.ManagedPolicyArns ?? []).includes('AWSLambdaBasicExecutionRole'),
-      'BlocksRole should attach AWSLambdaBasicExecutionRole',
-    );
-    template.hasResourceProperties('AWS::Lambda::Function', {
-      Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
-    });
-  });
-
-  test('a nested block resolves executionRole to the BlocksStack role', async () => {
-    const app = new cdk.App();
-    const stack = await BlocksStack.create(app, 'StackRoleResolveStack', {
-      backendHandlerPath: handlerPath,
-      backendCDKPath: sideEffectBackendPath,
-    });
-
-    const outer = new Scope('outer');
-    const inner = new Scope('inner', { parent: outer });
+    // Getter resolves through a BlocksStack owner (the backend test covers the
+    // BlocksBackend owner arm).
+    const inner = new Scope('inner', { parent: new Scope('outer') });
     assert.strictEqual(inner.executionRole, stack.executionRole, 'resolves up to the BlocksStack role');
-
-    inner.executionRole.addToPrincipalPolicy(
-      new PolicyStatement({ actions: [MARKER_ACTION], resources: ['*'] }),
-    );
-
-    const template = Template.fromStack(stack);
-    template.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: {
-        Statement: Match.arrayWith([Match.objectLike({ Action: MARKER_ACTION })]),
-      },
-    });
   });
 });
 
