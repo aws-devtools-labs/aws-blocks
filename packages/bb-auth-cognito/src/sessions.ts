@@ -217,15 +217,34 @@ export interface SessionRecord {
  */
 export class SessionStore {
 	private kv: KVStore<SessionRecord>;
+	private ttlSeconds?: number;
 
-	constructor(scope: ScopeParent, id = 'sessions') {
+	/**
+	 * @param ttlSeconds - When set, every write stamps the record with a DynamoDB
+	 * TTL of `now + ttlSeconds` so abandoned sessions are reaped instead of
+	 * retaining Cognito refresh tokens at rest forever. Callers pass the session
+	 * lifetime, keeping the record's ceiling aligned with the session cookie's
+	 * `Max-Age`. Authorization itself is still decided by token revalidation on
+	 * every request — this only bounds retention.
+	 */
+	constructor(scope: ScopeParent, id = 'sessions', ttlSeconds?: number) {
 		this.kv = new KVStore<SessionRecord>(scope, id);
+		this.ttlSeconds = ttlSeconds !== undefined && ttlSeconds > 0 ? ttlSeconds : undefined;
+	}
+
+	/**
+	 * Expiry options for a write, or `undefined` when no TTL is configured.
+	 * Recomputed per write so refreshing a session slides its expiry forward,
+	 * matching how the session cookie's `Max-Age` is re-issued on refresh.
+	 */
+	private writeOptions(): { ttlSeconds: number } | undefined {
+		return this.ttlSeconds === undefined ? undefined : { ttlSeconds: this.ttlSeconds };
 	}
 
 	/** Insert a new session record; returns the generated session ID. */
 	async createSession(record: SessionRecord): Promise<string> {
 		const sessionId = crypto.randomBytes(24).toString('base64url');
-		await this.kv.put(sessionId, record);
+		await this.kv.put(sessionId, record, this.writeOptions());
 		return sessionId;
 	}
 
@@ -242,7 +261,7 @@ export class SessionStore {
 	async updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void> {
 		const existing = await this.kv.get(sessionId);
 		if (!existing) return;
-		await this.kv.put(sessionId, { ...existing, ...update });
+		await this.kv.put(sessionId, { ...existing, ...update }, this.writeOptions());
 	}
 
 	/**
