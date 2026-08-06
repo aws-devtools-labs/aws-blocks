@@ -15,7 +15,7 @@ import {
   errorResponseFromCatch,
   methodNotFoundResponse,
 } from './rpc.js';
-import { getCorsPatterns, isOriginAllowed, corsRejection } from './cors.js';
+import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders } from './cors.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -38,21 +38,6 @@ export const requestCookies = new AsyncLocalStorage<string>();
 export const EventSourceMapping = {
   SQS: 'aws:sqs',
 } as const;
-
-// ── CORS helpers (private to handler) ───────────────────────────────────────
-
-function buildCorsHeaders(origin: string): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (isOriginAllowed(origin)) {
-    headers['Access-Control-Allow-Origin'] = origin;
-    headers['Access-Control-Allow-Credentials'] = 'true';
-  } else if (origin) {
-    console.warn(
-      `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$`
-    );
-  }
-  return headers;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

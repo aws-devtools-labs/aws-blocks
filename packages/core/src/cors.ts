@@ -73,6 +73,30 @@ export function isOriginAllowed(origin: string): boolean {
 }
 
 /**
+ * Build the CORS response headers for a request origin.
+ *
+ * Only reflects the origin when it matches the configured allowlist. When no
+ * allowlist is configured, or the origin is configured-but-not-allowed, no
+ * `Access-Control-Allow-Origin` / `Access-Control-Allow-Credentials` headers
+ * are emitted, so a disallowed origin is never reflected back.
+ *
+ * @param origin - The `Origin` header value from the request (may be empty)
+ * @returns The CORS headers to merge into the response (empty when not allowed)
+ */
+export function buildCorsHeaders(origin: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (isOriginAllowed(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  } else if (origin) {
+    console.warn(
+      `[CORS] Origin "${origin}" is not allowed. Set the CORS_ALLOWED_ORIGINS environment variable to allow this origin. Example: CORS_ALLOWED_ORIGINS=https://myapp\\.com,^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$`
+    );
+  }
+  return headers;
+}
+
+/**
  * Build a 403 Forbidden response for cross-origin requests from disallowed origins.
  */
 export function corsRejection(): { statusCode: number; headers: Record<string, string>; body: string } {

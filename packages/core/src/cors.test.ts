@@ -3,7 +3,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
+import { parseCorsPatterns, _resetCorsPatterns, buildCorsHeaders } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 
@@ -56,6 +56,47 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://anything.example.org'));
     assert.ok(patterns[0].test('http://localhost:9999'));
+  });
+});
+
+// ── buildCorsHeaders unit tests ─────────────────────────────────────────────
+
+describe('buildCorsHeaders', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('reflects an origin that matches the configured allowlist', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const headers = buildCorsHeaders('https://myapp.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Origin'], 'https://myapp.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Credentials'], 'true');
+  });
+
+  it('never reflects an origin that is not on a configured allowlist', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const headers = buildCorsHeaders('https://evil.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(headers['Access-Control-Allow-Credentials'], undefined);
+    assert.deepStrictEqual(headers, {});
+  });
+
+  it('never reflects an origin when no allowlist is configured', () => {
+    const headers = buildCorsHeaders('https://evil.example.com');
+    assert.deepStrictEqual(headers, {});
+  });
+
+  it('returns no headers when there is no origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    assert.deepStrictEqual(buildCorsHeaders(''), {});
   });
 });
 

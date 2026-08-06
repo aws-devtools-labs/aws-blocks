@@ -668,6 +668,37 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
     delete process.env.CORS_ALLOWED_ORIGINS;
     _resetCorsPatterns();
   });
+
+  it('disallowed origin with a configured allowlist is rejected with 403 before the timeout path', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return {};
+        },
+      }),
+    };
+
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+
+    const event = makeEvent({
+      headers: {
+        'Content-Type': 'application/json',
+        origin: 'https://evil.example.com',
+      },
+    });
+    const ctx = makeLambdaContext(50);
+    const result = await invokeWithContext(backend, event, ctx);
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.strictEqual(result.headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], undefined);
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
+  });
 });
 
 describe('createLambdaHandler — async events bypass timeout guard', () => {
