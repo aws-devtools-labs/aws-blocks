@@ -23,6 +23,7 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs DistributedDatabase",
     "build": "tsc --build",
     "test": "node --test 'dist/**/*.test.js'"
   },

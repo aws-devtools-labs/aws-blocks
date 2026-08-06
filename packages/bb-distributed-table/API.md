@@ -60,6 +60,7 @@ export interface DistributedTableOptions<T, K extends TableKeyConfig<T> = TableK
     indexes?: Indexes;
     key: K;
     logger?: ChildLogger;
+    readValidation?: ReadValidationMode;
     schema: StandardSchemaV1<T>;
     table?: ExternalTableRef;
     ttl?: keyof T & string;
@@ -112,6 +113,9 @@ export type QueryOptions<T, K extends TableKeyConfig<T>, Indexes extends Record<
     limit?: number;
     order?: 'asc' | 'desc';
 };
+
+// @public
+export type ReadValidationMode = 'off' | 'coerce' | 'strict';
 
 // @public (undocumented)
 export interface ScanOptions {
