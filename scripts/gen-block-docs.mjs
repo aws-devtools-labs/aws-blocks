@@ -4,8 +4,9 @@
 
 /**
  * Generates the gitignored, shipped `docs/` artifact for @aws-blocks/blocks. Runs
- * as the packages/blocks `prebuild` hook so the published package always carries
- * fresh docs without dirtying any tracked file.
+ * as the packages/blocks `prebuild` AND `prepack` hooks so the published package
+ * always carries fresh docs — even when packing without a preceding build —
+ * without dirtying any tracked file.
  *
  * It produces three things under packages/blocks/docs/:
  *   1. Per-block folders docs/<pkg>/ — mirror every root-level *.md of each
@@ -29,8 +30,13 @@
  * as a harmless alias for the same behavior.
  *
  * Inclusion rule: every package under packages/ that has a README.md and is not in
- * EXCLUDED. (The package-discovery logic is intentionally duplicated from
- * sync-catalog.mjs — the two scripts are kept independent on purpose.)
+ * EXCLUDED.
+ *
+ * NOTE: EXCLUDED + getPackages() are intentionally duplicated in this file and in
+ * sync-catalog.mjs so each script stays dependency-free and independently
+ * runnable (no shared module to resolve, no build step). They MUST agree on the
+ * block set — keep the two in sync when editing. If this pair grows further,
+ * extract a shared module instead.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, statSync, rmSync, cpSync } from 'node:fs';

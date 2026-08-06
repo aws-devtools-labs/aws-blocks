@@ -9,7 +9,7 @@
  * leaves the rest of the README (the static decision-tree prose, etc.) untouched
  * and does NOT generate the shipped `docs/` artifact. That artifact (per-block
  * docs/<pkg>/ folders + docs/README.md copy) is produced by
- * scripts/gen-block-docs.mjs, run as the packages/blocks `prebuild` hook.
+ * scripts/gen-block-docs.mjs, run as the packages/blocks `prebuild` and `prepack` hooks.
  *
  * Two modes:
  *
@@ -23,8 +23,13 @@
  *     markers are missing; exit 0 if in sync. Writes nothing.
  *
  * Inclusion rule: every package under packages/ that has a README.md and is not in
- * EXCLUDED. (The package-discovery logic is intentionally duplicated in
- * gen-block-docs.mjs — the two scripts are kept independent on purpose.)
+ * EXCLUDED.
+ *
+ * NOTE: EXCLUDED + getPackages() are intentionally duplicated in this file and in
+ * gen-block-docs.mjs so each script stays dependency-free and independently
+ * runnable (no shared module to resolve, no build step). They MUST agree on the
+ * block set — keep the two in sync when editing. If this pair grows further,
+ * extract a shared module instead.
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
@@ -103,8 +108,14 @@ function buildCatalog(pkgs) {
 }
 
 function renderCatalogTable(entries) {
-  const rows = entries.map((e) => `| ${e.pkg} | ${e.blurb || '—'} | ${e.keywords || '—'} |`);
+  const rows = entries.map(
+    (e) => `| ${e.pkg} | ${escapeCell(e.blurb) || '—'} | ${escapeCell(e.keywords) || '—'} |`,
+  );
   return ['| Block | What it does | Keywords |', '|-------|--------------|----------|', ...rows].join('\n');
+}
+
+function escapeCell(value) {
+  return (value || '').replace(/\|/g, '\\|');
 }
 
 // ─── Marker helpers ──────────────────────────────────────────────────────────

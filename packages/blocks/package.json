@@ -50,6 +50,7 @@
   },
   "scripts": {
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
+    "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
     "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js"
   },
