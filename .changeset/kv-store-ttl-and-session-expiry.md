@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-kv-store": minor
-"@aws-blocks/bb-auth-cognito": minor
+"@aws-blocks/bb-kv-store": patch
+"@aws-blocks/bb-auth-cognito": patch
 "@aws-blocks/blocks": patch
 ---
 
