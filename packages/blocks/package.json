@@ -58,6 +58,7 @@
     "@aws-blocks/bb-auth-basic": "^0.1.3",
     "@aws-blocks/bb-auth-cognito": "^0.1.5",
     "@aws-blocks/bb-auth-oidc": "^0.1.6",
+    "@aws-blocks/bb-auth-jwt": "^0.1.0",
     "@aws-blocks/bb-kv-store": "^0.1.4",
     "@aws-blocks/bb-distributed-table": "^0.1.3",
     "@aws-blocks/bb-realtime": "^0.1.3",
@@ -115,6 +116,9 @@
       ],
       "@aws-blocks/bb-auth-oidc": [
         "AuthOIDC"
+      ],
+      "@aws-blocks/bb-auth-jwt": [
+        "AuthBearerJwt"
       ],
       "@aws-blocks/bb-agent": [
         "Agent"

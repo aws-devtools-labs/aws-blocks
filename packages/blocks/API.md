@@ -37,6 +37,10 @@ import { AuthBasic } from '@aws-blocks/bb-auth-basic';
 import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
 import { AuthBasicOptions } from '@aws-blocks/bb-auth-basic';
 import { AuthBasicUser } from '@aws-blocks/bb-auth-basic';
+import { AuthBearerJwt } from '@aws-blocks/bb-auth-jwt';
+import { AuthBearerJwtErrors } from '@aws-blocks/bb-auth-jwt';
+import { AuthBearerJwtOptions } from '@aws-blocks/bb-auth-jwt';
+import { AuthBearerUser } from '@aws-blocks/bb-auth-jwt';
 import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import { AuthCognitoOptions } from '@aws-blocks/bb-auth-cognito';
@@ -148,6 +152,7 @@ import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
 import { RetentionDays } from '@aws-blocks/bb-logger';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
+import { SecretLike } from '@aws-blocks/bb-auth-jwt';
 import { Segment } from '@aws-blocks/bb-tracer';
 import { SendBatchResult } from '@aws-blocks/bb-email-client';
 import { SendResult } from '@aws-blocks/bb-email-client';
@@ -247,6 +252,14 @@ export { AuthBasicErrors }
 export { AuthBasicOptions }
 
 export { AuthBasicUser }
+
+export { AuthBearerJwt }
+
+export { AuthBearerJwtErrors }
+
+export { AuthBearerJwtOptions }
+
+export { AuthBearerUser }
 
 export { AuthCognito }
 
@@ -558,6 +571,8 @@ export { RetentionDays }
 export { RetrieveOptions }
 
 export { RetrieveResult }
+
+export { SecretLike }
 
 export { Segment }
 

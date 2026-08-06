@@ -18,6 +18,7 @@ import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
 import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
+import { bearerJwtAuthTests } from './bearer-jwt-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
@@ -220,6 +221,9 @@ authCognitoAdminTests(() => api);
 
 // AuthOIDC tests (separate file)
 oidcAuthTests(() => api);
+
+// AuthBearerJwt tests (separate file)
+bearerJwtAuthTests(() => api);
 
 // Database tests (separate file)
 databaseTests(() => api);

@@ -18,6 +18,7 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+import { createLocalJwt } from '@aws-blocks/bb-auth-jwt/mock';
 import { z } from 'zod';
 
 
@@ -262,6 +263,16 @@ const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
   allowedRelayOrigins: [
     relayOrigin('testapp://auth'),
   ],
+});
+
+// AuthBearerJwt — stateless bearer-token verifier. Sign-in is owned elsewhere;
+// this only verifies the forwarded JWT. Local dev uses the ./mock helper, which
+// generates an in-process ES256 key + in-memory JWKS and a `mint()` factory, so
+// e2e tests can obtain a real, verifiable token without a live issuer. The
+// dev-only `bearerJwtMint` method below hands a minted token to the test client;
+// `bearerJwtRequired` is the gated method that calls requireAuth(context).
+const { auth: bearerJwt, mint: mintBearerJwt } = createLocalJwt(scope, 'bearer-jwt', {
+  audience: 'authenticated',
 });
 
 // DistributedTable - Structured data with indexes
@@ -979,6 +990,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async authRequired() {
     const user = await auth.requireAuth(context);
     return { user: { username: user.username } };
+  },
+
+  // AuthBearerJwt — dev-only token factory. Unauthenticated on purpose: it hands
+  // the e2e test a real token minted by the same in-memory key the verifier
+  // trusts (local dev only; a production app never mints its own bearer tokens).
+  async bearerJwtMint(sub: string, email?: string) {
+    return { token: await mintBearerJwt({ sub, email }) };
+  },
+
+  // Gated by the bearer verifier — exercises requireAuth(context) end-to-end.
+  async bearerJwtRequired() {
+    const user = await bearerJwt.requireAuth(context);
+    return { user: { userId: user.userId, username: user.username } };
   },
 
   async authResetPassword(username: string) {

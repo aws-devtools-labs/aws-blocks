@@ -31,6 +31,8 @@ export type {
 } from '@aws-blocks/bb-auth-cognito';
 export { AuthOIDC, AuthOIDCErrors, google, github, customOidc, customOauth2, stubIdp, cognitoFederated, relayOrigin } from '@aws-blocks/bb-auth-oidc';
 export type { AuthOIDCErrorName, OIDCUser, MappedClaims, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
+export { AuthBearerJwt, AuthBearerJwtErrors } from '@aws-blocks/bb-auth-jwt';
+export type { AuthBearerUser, AuthBearerJwtOptions, SecretLike } from '@aws-blocks/bb-auth-jwt';
 export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aws-blocks/auth-common';
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
