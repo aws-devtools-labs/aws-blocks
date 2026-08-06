@@ -377,7 +377,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         // Timeout won the race — build a 504 response. Format depends on
         // whether the request targeted an RPC endpoint (structured JSON-RPC
         // error envelope) or a plain HTTP path (simple error JSON).
-        const origin = event.headers?.origin || event.headers?.Origin || '*';
+        const origin = event.headers?.origin || event.headers?.Origin || '';
         const requestPath = getRequestPath(event);
         const isRpcPath = requestPath === BLOCKS_RPC_PREFIX || requestPath.startsWith(BLOCKS_RPC_PREFIX + '/');
         const body = isRpcPath
@@ -387,8 +387,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
           statusCode: 504,
           headers: {
             'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': origin,
-            'Access-Control-Allow-Credentials': 'true',
+            ...buildCorsHeaders(origin),
           },
           body,
         };
@@ -472,7 +471,7 @@ function createHandler(backend: any) {
           ...corsHeaders,
           'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '86400',
+          'Access-Control-Max-Age': '7200',
         },
         body: '',
       };

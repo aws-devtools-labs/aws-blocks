@@ -159,7 +159,7 @@ describe('createLambdaHandler — CORS origin validation', () => {
     assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], 'true');
     assert.ok(result.headers['Access-Control-Allow-Methods']);
     assert.ok(result.headers['Access-Control-Allow-Headers']);
-    assert.strictEqual(result.headers['Access-Control-Max-Age'], '86400');
+    assert.strictEqual(result.headers['Access-Control-Max-Age'], '7200');
   });
 
   it('OPTIONS preflight with rejected origin returns 403', async () => {

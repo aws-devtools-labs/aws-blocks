@@ -859,7 +859,7 @@ export async function startDevServer(options: DevServerOptions) {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Max-Age', '86400');
+    res.setHeader('Access-Control-Max-Age', '7200');
 
     if (method === 'OPTIONS') {
       res.writeHead(200);
