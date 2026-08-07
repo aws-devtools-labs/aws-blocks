@@ -104,3 +104,33 @@ describe('assertCdkConditionActive', () => {
     }
   });
 });
+
+describe('assertStackNameNotReserved', () => {
+  test('rejects stackId starting with "aws" (any case) with actionable error', async () => {
+    const app = new cdk.App();
+
+    for (const name of ['aws-my-project', 'AWS-MyProject', 'AwsSomething']) {
+      await assert.rejects(
+        BlocksStack.create(app, name, {
+          backendHandlerPath: handlerPath,
+          backendCDKPath: sideEffectBackendPath,
+        }),
+        (err: Error) => {
+          assert.ok(
+            err.message.includes(`Invalid stackId "${name}"`),
+            `Should include the invalid name, got: ${err.message}`,
+          );
+          assert.ok(
+            err.message.includes('reserved by AWS'),
+            `Should say reserved by AWS, got: ${err.message}`,
+          );
+          assert.ok(
+            err.message.includes('.blocks/config.json'),
+            `Should mention config.json, got: ${err.message}`,
+          );
+          return true;
+        },
+      );
+    }
+  });
+});

@@ -41,6 +41,24 @@ export function assertCdkConditionActive(): void {
   }
 }
 
+/**
+ * Validate that a stack/backend name does not start with "aws" (case-insensitive).
+ *
+ * Without this check, deployment fails at the AWS::ResourceGroups::Group resource with:
+ *   Resource handler returned message: "Group name must not start with 'AWS'"
+ *   (HandlerErrorCode: InvalidRequest)
+ * That error is unhelpful because it doesn't indicate which config to fix.
+ */
+export function assertStackNameNotReserved(name: string): void {
+  if (/^aws/i.test(name)) {
+    throw new Error(
+      `Invalid stackId "${name}": names beginning with "aws" (case-insensitive) are reserved ` +
+      `by AWS and cannot be used for CloudFormation stacks or resource names. ` +
+      `Rename your stackId in .blocks/config.json (e.g., remove the "aws-" prefix).`,
+    );
+  }
+}
+
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -230,6 +248,7 @@ export class BlocksBackend extends Construct {
 
   static async create(scope: Construct, id: string, props: BlocksBackendProps) {
     assertCdkConditionActive();
+    assertStackNameNotReserved(id);
     const backend = new BlocksBackend(scope, id, props);
     // file:// URL (not a raw path) so the cache-busting query works on Windows,
     // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
