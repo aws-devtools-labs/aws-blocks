@@ -57,15 +57,15 @@ The project has multiple documentation layers at different levels. Use these can
 | Canonical Name | Location (in repo) | Location (for customers) | Audience |
 |---|---|---|---|
 | App README | Customer's own `<app>/README.md` (scaffolded from templates) | `./README.md` | App developers |
-| App AGENTS | Customer's own `<app>/AGENTS.md` (injected from `create-blocks-app/resources/AGENTS.md`) | `./AGENTS.md` | AI agents building the app |
-| Package README | `packages/blocks/README.md` | `node_modules/@aws-blocks/blocks/README.md` | Developers/agents needing framework docs |
-| Block docs | `packages/blocks/docs/<pkg>/` (compiled) | `node_modules/@aws-blocks/blocks/docs/<pkg>/` | Deep-dive on specific BBs |
+| App AGENTS file | Customer's own `<app>/AGENTS.md` (injected from `create-blocks-app/resources/AGENTS.md`) | `./AGENTS.md` | AI agents building the app |
+| Blocks README | `packages/blocks/README.md` | `node_modules/@aws-blocks/blocks/README.md` | Developers/agents needing framework docs |
+| Individual block docs | `packages/blocks/docs/<pkg>/` (compiled) | `node_modules/@aws-blocks/blocks/docs/<pkg>/` | Deep-dive on specific BBs |
 | Repo README | Root `README.md` | GitHub repo landing page | GitHub visitors, potential contributors |
-| Contributor AGENTS | Root `AGENTS.md` | GitHub repo | AI agents and humans contributing to the framework |
+| Contributor AGENTS file | Root `AGENTS.md` | GitHub repo | AI agents and humans contributing to the framework |
 
-- **Package README** is the primary reference for customers and agents working in an app. It ships with the npm package.
-- **Block docs** provide per-BB API details and are compiled into `packages/blocks/docs/` by the build.
-- **Contributor AGENTS** (root `AGENTS.md`) is for contributors to the framework itself — not for app developers.
+- **Blocks README** is the primary reference for customers and agents working in an app. It ships with the npm package.
+- **Individual block docs** provide per-BB API details and are compiled into `packages/blocks/docs/` by the build.
+- **Contributor AGENTS file** (root `AGENTS.md`) is for contributors to the framework itself — not for app developers.
 - When adding docs, consider which audience you're writing for and place the file accordingly.
 
 
