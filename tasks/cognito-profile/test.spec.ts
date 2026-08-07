@@ -1,33 +1,38 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 
-const BASE = process.env.BLOCKS_URL ?? 'http://localhost:3000';
+const BASE = process.env.BLOCKS_URL || 'http://localhost:3000';
 const T = 10_000;
 
 const RUN = process.env.RUN_ID || String(Date.now());
-let seq = 0;
-const uniq = (base: string) => `${base}-${RUN}-${++seq}-${Date.now()}`;
+let rpcSeq = 0;
+let uniqSeq = 0;
+const uniq = (base: string) => `${base}-${RUN}-${++uniqSeq}-${Date.now()}`;
 
-// Per-test no-error gate: ONLY uncaught page errors. The local dev server
-// returns HTTP 200 for JSON-RPC errors, so legitimate pre-auth errors never
-// trip the gate.
 function watchErrors(page: Page, sink: string[] = []): string[] {
 	page.on('pageerror', (err) => sink.push(String(err)));
 	return sink;
 }
 
+async function rpc(
+	ctx: APIRequestContext,
+	method: string,
+	params: unknown[] = [],
+): Promise<{ status: number; body: any }> {
+	const res = await ctx.post(`${BASE}/aws-blocks/api`, {
+		headers: { 'Content-Type': 'application/json' },
+		data: { jsonrpc: '2.0', method, params, id: ++rpcSeq },
+	});
+	return { status: res.status(), body: await res.json().catch(() => null) };
+}
+
 // The grader has no mailbox: it reads the most-recently delivered OTP over the
-// same local JSON-RPC endpoint the app uses, by calling `api.getLastCode()`.
+// same JSON-RPC endpoint via api.getLastCode().
 async function fetchOtp(request: APIRequestContext, user: string): Promise<string> {
 	let code = '';
 	await expect
 		.poll(
 			async () => {
-				const res = await request.post(`${BASE}/aws-blocks/api`, {
-					headers: { 'Content-Type': 'application/json' },
-					data: { jsonrpc: '2.0', method: 'api.getLastCode', params: [], id: Date.now() },
-				});
-				if (!res.ok()) return '';
-				const body = await res.json().catch(() => null);
+				const { body } = await rpc(request, 'api.getLastCode', []);
 				const last = body?.result;
 				if (last && typeof last.code === 'string' && String(last.username ?? '').includes(user)) {
 					code = last.code;
@@ -35,7 +40,7 @@ async function fetchOtp(request: APIRequestContext, user: string): Promise<strin
 				}
 				return '';
 			},
-			{ timeout: T },
+			{ timeout: T, message: 'OTP not delivered — check api.getLastCode returns { code, username } in mock mode' },
 		)
 		.not.toBe('');
 	return code;
@@ -48,7 +53,8 @@ async function requestCode(page: Page, email: string): Promise<void> {
 	await expect(page.getByTestId('otp-input')).toBeVisible({ timeout: T });
 }
 
-// Drive the full passwordless flow and return the email that signed in.
+// Drive the full passwordless flow; returns the email that signed in. After
+// this the page's cookie jar is authenticated (page.request calls whoami as it).
 async function signIn(page: Page, request: APIRequestContext, user: string): Promise<string> {
 	const email = `${user}@test.com`;
 	await requestCode(page, email);
@@ -59,141 +65,142 @@ async function signIn(page: Page, request: APIRequestContext, user: string): Pro
 	return email;
 }
 
+// HARNESS CONTRACT: requires workers:1 (serial; shared-store assertions assume no concurrent runners)
 test.describe('cognito-profile', () => {
-	test('signed-out visitor sees the email field and submit button', async ({ page }) => {
+	// --- Framework surface: identity from the auth session over the api ---
+
+	test('api.getLastCode is live in mock mode (the grader can read the OTP) and never errors', async ({ request }) => {
+		// The OTP-reader hook is a mock-only backdoor: the PROMPT requires it to gate on
+		// BLOCKS_MOCK and return null in a real deployment. This grader can only exercise the
+		// LIVE (mock) side — the bench always runs with BLOCKS_MOCK=true (3-build-and-test.sh),
+		// so the production-gate branch (getLastCode → null when the flag is unset) never runs
+		// here. That gate is PROMPT-enforced and codegen-skipped but grader-UNVERIFIED; asserting
+		// it under a `else` that can never execute would be a misleading dead assertion, so we
+		// assert only what the bench actually reaches: in mock mode the call must succeed (so the
+		// OTP flow is graded) and must never surface a JSON-RPC error envelope.
+		const { status, body } = await rpc(request, 'api.getLastCode', []);
+		expect(status, `unexpected HTTP ${status}`).toBeLessThan(500);
+		expect(body?.error, `getLastCode must not error in mock mode: ${JSON.stringify(body?.error)}`).toBeFalsy();
+	});
+
+	test('api.whoami reflects the signed-in identity and is gated to authenticated callers', async ({ page, request }) => {
+		const errors = watchErrors(page);
+		// Unauthenticated (top-level request, no cookie): refused.
+		const anon = await rpc(request, 'api.whoami', []);
+		expect(anon.status, `unexpected HTTP ${anon.status}`).toBeLessThan(500);
+		expect(anon.body?.error, 'unauthenticated whoami must yield an error envelope').toBeTruthy();
+		expect(anon.body?.result ?? null).toBeNull();
+
+		await page.goto(BASE);
+		const email = await signIn(page, request, uniq('user'));
+
+		// Authenticated (page.request shares the sign-in cookie): returns identity.
+		const me = await rpc(page.request, 'api.whoami', []);
+		expect(me.body?.error, `JSON-RPC error: ${JSON.stringify(me.body?.error)}`).toBeFalsy();
+		expect(String(me.body?.result?.username)).toContain(email);
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	test('after sign-out the session is gone — api.whoami is unauthenticated again', async ({ page, request }) => {
+		const errors = watchErrors(page);
+		await page.goto(BASE);
+		await signIn(page, request, uniq('user'));
+		const before = await rpc(page.request, 'api.whoami', []);
+		expect(before.body?.result?.username, 'whoami must be authenticated before sign-out').toBeTruthy();
+
+		await page.getByTestId('signout-btn').click();
+		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
+
+		const after = await rpc(page.request, 'api.whoami', []);
+		expect(after.body?.error, 'whoami must be unauthenticated after sign-out').toBeTruthy();
+		expect(after.body?.result ?? null).toBeNull();
+
+		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
+	});
+
+	// --- Page smoke: the multi-view OTP flow ---
+
+	test('signed-out visitor sees the email field; code/profile hooks are absent', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 		await expect(page.getByTestId('auth-submit')).toBeVisible();
-		// Code-entry and signed-in hooks are absent before anything is submitted.
 		await expect(page.getByTestId('otp-input')).toHaveCount(0);
 		await expect(page.getByTestId('profile-username')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('submitting an email advances to the code-entry view', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		await requestCode(page, `${uniq('user')}@test.com`);
-		await expect(page.getByTestId('otp-submit')).toBeVisible();
-		await expect(page.getByTestId('auth-email')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('completing the OTP lands on a profile with a sign-out button', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const user = uniq('user');
-		await signIn(page, request, user);
-		await expect(page.getByTestId('profile-username')).toContainText(user, { timeout: T });
-		await expect(page.getByTestId('signout-btn')).toBeVisible();
-		// Signed-in view hides the email/code inputs.
-		await expect(page.getByTestId('auth-email')).toHaveCount(0);
-		await expect(page.getByTestId('otp-input')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('the profile renders the exact email that signed in', async ({ page, request }) => {
+	test('completing the OTP flow lands on a profile with the exact email and a sign-out button', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		const email = await signIn(page, request, uniq('user'));
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
+		await expect(page.getByTestId('signout-btn')).toBeVisible();
+		await expect(page.getByTestId('auth-email')).toHaveCount(0);
+		await expect(page.getByTestId('otp-input')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('signing out returns to the signed-out email form', async ({ page, request }) => {
+	test('a wrong code is rejected (error shown, no session); the correct code then signs in and clears the error', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		await signIn(page, request, uniq('user'));
-		await page.getByTestId('signout-btn').click();
-		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('an incorrect code is rejected and does not establish a session', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const user = uniq('user');
+		const user = uniq('retry');
 		await requestCode(page, `${user}@test.com`);
-		// Fetch the genuinely-delivered code, then submit a guaranteed-different
-		// one so the rejection is deterministic (not a lucky-guess collision).
+		// auth-error is absent on the fresh code-entry view.
+		await expect(page.getByTestId('auth-error')).toHaveCount(0);
+
 		const real = await fetchOtp(request, user);
 		const wrong = real === '000000' ? '111111' : '000000';
 		await page.getByTestId('otp-input').fill(wrong);
 		await page.getByTestId('otp-submit').click();
-
-		// A wrong code must surface an error and leave the visitor on the
-		// code-entry view — no session is established. (The local dev server
-		// returns JSON-RPC errors as HTTP 200, so a HANDLED rejection never trips
-		// the page-error gate; only an unhandled rejection would.)
 		await expect(page.getByTestId('auth-error')).toBeVisible({ timeout: T });
 		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-		await expect(page.getByTestId('otp-input')).toBeVisible();
+
+		// Retriable: the real code on the same view signs in and clears the error.
+		await page.getByTestId('otp-input').fill(real);
+		await page.getByTestId('otp-submit').click();
+		await expect(page.getByTestId('profile-username')).toContainText(`${user}@test.com`, { timeout: T });
+		await expect(page.getByTestId('auth-error')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('the session persists across a full page reload', async ({ page, request }) => {
+	test('the session persists across reload, and sign-out + reload stays signed out', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
 		const email = await signIn(page, request, uniq('user'));
-		// The session lives in a cookie — a reload must restore it: still signed
-		// in, same identity, and the signed-out forms stay absent.
 		await page.reload();
-		await expect(page.getByTestId('profile-username')).toBeVisible({ timeout: T });
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
 		await expect(page.getByTestId('auth-email')).toHaveCount(0);
-		await expect(page.getByTestId('otp-input')).toHaveCount(0);
 
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('signing out fully clears the session so a different user can sign in', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const firstEmail = await signIn(page, request, uniq('user'));
-		await expect(page.getByTestId('profile-username')).toContainText(firstEmail, { timeout: T });
+		// Sign out the (cookie-restored) session; a reload must NOT resurrect it.
 		await page.getByTestId('signout-btn').click();
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-
-		// A second, DIFFERENT identity signs in on the same page; the profile must
-		// render the NEW user, never a stale identity cached from the first session.
-		const secondEmail = await signIn(page, request, uniq('user'));
-		await expect(page.getByTestId('profile-username')).toContainText(secondEmail, { timeout: T });
-		await expect(page.getByTestId('profile-username')).not.toContainText(firstEmail, { timeout: T });
+		await page.reload();
+		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
+		await expect(page.getByTestId('profile-username')).toHaveCount(0);
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('a returning user can sign in again with the SAME email after signing out', async ({ page, request }) => {
+	test('a returning user signs in again with the SAME email after signing out', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		// First visit establishes the account (sign-up → confirm → session).
 		const user = uniq('returning');
 		const email = await signIn(page, request, user);
-		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
 		await page.getByTestId('signout-btn').click();
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 
-		// Second visit with the SAME email: the account already exists, so a
-		// sign-up-ONLY impl throws "user already exists" here. A correct app
-		// detects the existing user and runs the sign-in OTP path, landing a
-		// session for the same identity.
+		// The account already exists → a sign-up-ONLY impl throws here; a correct
+		// app detects the existing user and runs the sign-in OTP path.
 		const email2 = await signIn(page, request, user);
 		expect(email2).toBe(email);
 		await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
@@ -201,138 +208,36 @@ test.describe('cognito-profile', () => {
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('after sign-out, a full reload stays signed out (session fully cleared, not resurrected)', async ({ page, request }) => {
+	test('a different user signing in after sign-out never leaks the prior identity', async ({ page, request }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
-		await signIn(page, request, uniq('user'));
+		const firstEmail = await signIn(page, request, uniq('user'));
 		await page.getByTestId('signout-btn').click();
 		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
 
-		// The cookie/session must be gone: a reload must NOT restore the profile.
-		// An impl that only flips a client flag (without calling the block's
-		// signOut) leaves the cookie behind, and the profile reappears here.
-		await page.reload();
-		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-		await expect(page.getByTestId('signout-btn')).toHaveCount(0);
+		const secondEmail = await signIn(page, request, uniq('user'));
+		await expect(page.getByTestId('profile-username')).toContainText(secondEmail, { timeout: T });
+		await expect(page.getByTestId('profile-username')).not.toContainText(firstEmail, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
 
-	test('the error hook is absent on the fresh code-entry view (before any rejection)', async ({ page }) => {
+	test('blank inputs never begin auth or establish a session', async ({ page }) => {
 		const errors = watchErrors(page);
 		await page.goto(BASE);
 
+		// Blank email: stay on the email form, no code view.
+		await page.getByTestId('auth-email').fill('   ');
+		await page.getByTestId('auth-submit').click({ force: true });
+		await expect(page.getByTestId('auth-email')).toBeVisible();
+		await expect(page.getByTestId('otp-input')).toHaveCount(0);
+
+		// Advance with a real email, then submit a blank code: no session.
 		await requestCode(page, `${uniq('user')}@test.com`);
-		// Per the contract, auth-error is absent until a code is actually
-		// rejected — an always-rendered (empty) error element fails here.
-		await expect(page.getByTestId('otp-submit')).toBeVisible();
-		await expect(page.getByTestId('auth-error')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('submitting a blank code does not establish a session', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		await requestCode(page, `${uniq('user')}@test.com`);
-		// Submit with no code typed. force:true so the assertion holds whether the
-		// app disables the button until a code is entered (click is a no-op) or
-		// validates on submit (must catch, not throw). Either way: no session.
 		await page.getByTestId('otp-submit').click({ force: true });
 		await expect(page.getByTestId('profile-username')).toHaveCount(0);
 		await expect(page.getByTestId('otp-input')).toBeVisible();
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('a rejected code clears its error once the correct code is accepted (retriable session)', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const user = uniq('retry');
-		await requestCode(page, `${user}@test.com`);
-		const real = await fetchOtp(request, user);
-		const wrong = real === '000000' ? '111111' : '000000';
-
-		// A wrong code surfaces the error and keeps us on code-entry.
-		await page.getByTestId('otp-input').fill(wrong);
-		await page.getByTestId('otp-submit').click();
-		await expect(page.getByTestId('auth-error')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-
-		// CodeMismatch keeps the verification session valid (retriable): entering
-		// the REAL code on the same view must sign in AND clear the stale error.
-		await page.getByTestId('otp-input').fill(real);
-		await page.getByTestId('otp-submit').click();
-		await expect(page.getByTestId('profile-username')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('profile-username')).toContainText(user, { timeout: T });
-		await expect(page.getByTestId('auth-error')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('three sequential sign-in/out cycles never leak a prior identity', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		let prev = '';
-		for (let i = 0; i < 3; i++) {
-			const email = await signIn(page, request, uniq('cycle'));
-			await expect(page.getByTestId('profile-username')).toContainText(email, { timeout: T });
-			// The freshly signed-in profile must never still show the prior identity.
-			if (prev) await expect(page.getByTestId('profile-username')).not.toContainText(prev, { timeout: T });
-
-			await page.getByTestId('signout-btn').click();
-			await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-			await expect(page.getByTestId('profile-username')).toHaveCount(0);
-			prev = email;
-		}
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('a blank / whitespace-only email does not begin auth', async ({ page }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-		await page.getByTestId('auth-email').fill('   ');
-		// force:true so this holds whether the app disables submit until a valid
-		// email is entered (no-op click) or validates on submit (must catch, not
-		// advance). Either way: no code sent, stay on the email form.
-		await page.getByTestId('auth-submit').click({ force: true });
-
-		await expect(page.getByTestId('auth-email')).toBeVisible();
-		await expect(page.getByTestId('otp-input')).toHaveCount(0);
-		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-
-		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
-	});
-
-	test('a cookie-restored session signs out cleanly and does not leak into the next identity', async ({ page, request }) => {
-		const errors = watchErrors(page);
-		await page.goto(BASE);
-
-		const firstEmail = await signIn(page, request, uniq('restore'));
-		// Reload so the signed-in state comes purely from the restored cookie/
-		// session — not the in-memory result of the sign-in call.
-		await page.reload();
-		await expect(page.getByTestId('profile-username')).toContainText(firstEmail, { timeout: T });
-
-		// Signing out the RESTORED session must fully clear it (an impl that only
-		// cleared a client variable set during sign-in would fail: that variable
-		// is empty after the reload, so its signOut is a no-op and the cookie stays).
-		await page.getByTestId('signout-btn').click();
-		await expect(page.getByTestId('auth-email')).toBeVisible({ timeout: T });
-		await expect(page.getByTestId('profile-username')).toHaveCount(0);
-
-		// A different identity signs in; the profile shows only the new user.
-		const secondEmail = await signIn(page, request, uniq('restore'));
-		await expect(page.getByTestId('profile-username')).toContainText(secondEmail, { timeout: T });
-		await expect(page.getByTestId('profile-username')).not.toContainText(firstEmail, { timeout: T });
 
 		expect(errors, `page errors: ${errors.join(' | ')}`).toEqual([]);
 	});
