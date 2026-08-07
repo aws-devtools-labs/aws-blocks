@@ -305,6 +305,51 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('stackId does not start with "aws" when project name has aws prefix (fresh scaffold)', () => {
+    const tmpDir = join(__dirname, '../.test-aws-prefix-fresh/aws-my-project');
+    try {
+      const result = run([tmpDir, '--template', 'bare', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.doesNotMatch(config.stackId, /^aws/i, 'stackId must not start with "aws" — AWS reserves that prefix');
+      assert.ok(config.stackId.startsWith('my-project-'), 'stackId should strip the aws- prefix and keep the rest');
+    } finally {
+      rmSync(join(__dirname, '../.test-aws-prefix-fresh'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('stackId does not start with "aws" when existing project name has aws prefix', () => {
+    const tmpDir = join(__dirname, '../.test-aws-prefix-existing');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'aws-my-project', version: '1.0.0' }));
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.doesNotMatch(config.stackId, /^aws/i, 'stackId must not start with "aws" — AWS reserves that prefix');
+      assert.ok(config.stackId.startsWith('my-project-'), 'stackId should strip the aws- prefix and keep the rest');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('stackId preserves names starting with "aws" as part of a word (e.g., awesome)', () => {
+    const tmpDir = join(__dirname, '../.test-aws-prefix-awesome');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'awesome-app', version: '1.0.0' }));
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const config = JSON.parse(readFileSync(join(tmpDir, '.blocks', 'config.json'), 'utf-8'));
+      assert.ok(config.stackId, '.blocks/config.json should have a stackId');
+      assert.ok(config.stackId.startsWith('awesome-app-'), 'stackId should preserve "awesome" (aws is part of the word)');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('honors --template when adding to an existing project (nextjs uses next dev)', () => {
     const tmpDir = join(__dirname, '../.test-existing-nextjs-template');
     mkdirSync(tmpDir, { recursive: true });

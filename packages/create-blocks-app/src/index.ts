@@ -13,13 +13,20 @@ import { trackCommand } from './telemetry.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function generateStackId(name: string): string {
-  const sanitized = name
+  let sanitized = name
     .replace(/[^A-Za-z0-9-]/g, '-')
     .replace(/^[^A-Za-z]+/, 'app-')
     .replace(/-+/g, '-')
     .replace(/-$/, '')
     .slice(0, 16)
     .replace(/-$/, '') || 'blocks-app';
+  // AWS reserves the "aws" prefix for resource names (Resource Groups, IAM, etc.)
+  // — strip it so CloudFormation deployments don't fail.
+  // Only strip when "aws" is a distinct prefix (followed by hyphen or end), not
+  // when it's part of a longer word like "awesome".
+  if (/^aws(-|$)/i.test(sanitized)) {
+    sanitized = sanitized.replace(/^aws-?/i, '') || 'blocks-app';
+  }
   return `${sanitized}-${randomBytes(4).toString('hex').slice(0, 6)}`;
 }
 
