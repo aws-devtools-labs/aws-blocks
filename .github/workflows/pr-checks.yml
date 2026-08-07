@@ -80,6 +80,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Release PRs consume changesets — the files are already gone. Skip.
+          if [[ "$GITHUB_HEAD_REF" == "changeset-release/main" ]]; then
+            echo "✅ Skipping — release PR (changesets already consumed into version bumps)"
+            exit 0
+          fi
+
           # sync-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
           # (docs/ is gitignored, built at publish time). We compare the packed
           # @aws-blocks/blocks tarball at THIS PR's head against the PR base branch —
