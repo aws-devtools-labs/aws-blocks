@@ -141,7 +141,7 @@ export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField, AuthAction
  * Full docs: `README.md` in the package directory above.
  */
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as KVPutOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
 
 /**
  * **Structured data storage with secondary indexes backed by DynamoDB.**

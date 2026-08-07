@@ -111,6 +111,7 @@ import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
+import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
@@ -485,6 +486,8 @@ export { KnowledgeBase }
 export { KnowledgeBaseErrors }
 
 export { KnowledgeBaseOptions }
+
+export { KVPutOptions }
 
 export { KVStore }
 
