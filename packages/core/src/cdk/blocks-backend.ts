@@ -4,6 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +13,12 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import type {
+  ComputeApiOrigin,
+  ComputeBindContext,
+  ComputePrincipal,
+  ComputeTarget,
+} from './compute-target.js';
 
 /**
  * Validate that the Node.js process was started with `--conditions=cdk`.
@@ -44,16 +51,56 @@ export function assertCdkConditionActive(): void {
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Optional container compute target (e.g. ECS Fargate, EKS). When set, the
+   * HTTP front door is served by load-balanced containers running the same
+   * bundle instead of API Gateway + Lambda; the Lambda is still created as a
+   * companion for event-source triggers (SQS, EventBridge Scheduler,
+   * WebSocket) and remains the attachment point for Building Block grants.
+   * When omitted, the synthesized template is unchanged from previous releases.
+   */
+  compute?: ComputeTarget;
 }
 
-/** Shared infra setup — creates Lambda + API Gateway on the given scope. */
+/**
+ * Map a compute principal to its IAM principal for the shared role's trust
+ * policy. EKS Pod Identity requires `sts:TagSession` alongside `sts:AssumeRole`.
+ */
+function toIamPrincipal(principal: ComputePrincipal): iam.IPrincipal {
+  const servicePrincipal = new iam.ServicePrincipal(principal);
+  return principal === 'pods.eks.amazonaws.com'
+    ? servicePrincipal.withSessionTags()
+    : servicePrincipal;
+}
+
+/** Shared infra setup — creates the Lambda plus the HTTP front door (API Gateway by default, or a container compute target). */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+  const compute = props.compute;
+
+  // The shared execution role only exists in container-compute mode. Creating
+  // it unconditionally would replace the Lambda's implicit role in every
+  // existing deployment; gating it keeps the default template byte-identical.
+  let sharedRole: iam.Role | undefined;
+  if (compute) {
+    sharedRole = new iam.Role(scope, 'BackendSharedRole', {
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('lambda.amazonaws.com'),
+        ...compute.requiredPrincipals.map(toIamPrincipal),
+      ),
+      description: 'Shared execution role for the Blocks backend Lambda and container compute',
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+  }
+
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'handler',
     memorySize: 2048,
     timeout: cdk.Duration.seconds(60 * 15),
+    role: sharedRole,
     environment: {
       NODE_ENV: 'production',
       /**
@@ -82,23 +129,45 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
   }
 
-  const api = new apigateway.RestApi(scope, 'API', {
-    restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
-  });
+  let gateway: apigateway.RestApi | undefined;
+  let apiUrl: string;
+  let apiOrigin: ComputeApiOrigin | undefined;
+  let computeCtx: ComputeBindContext | undefined;
 
-  const integration = new apigateway.LambdaIntegration(handler);
+  if (compute && sharedRole) {
+    computeCtx = {
+      scope,
+      id: id ?? cdk.Stack.of(scope).stackName,
+      handler,
+      sharedRole,
+      backendHandlerPath: props.backendHandlerPath,
+      isSandbox,
+    };
+    const bound = compute.bind(computeCtx);
+    apiUrl = bound.apiUrl;
+    apiOrigin = bound.apiOrigin;
+  } else {
+    const api = new apigateway.RestApi(scope, 'API', {
+      restApiName: 'Blocks API',
+      deployOptions: { cachingEnabled: false },
+    });
 
-  // Build the nested resource tree for /aws-blocks/api.
-  // Intermediate resource gets a proxy so sub-paths (RawRoutes) still reach Lambda.
-  const awsBlocksResource = api.root.addResource(BLOCKS_NAMESPACE.slice(1));
-  awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
-  
-  const apiResource = awsBlocksResource.addResource('api');
-  apiResource.addMethod('POST', integration);
-  apiResource.addMethod('OPTIONS', integration);
+    const integration = new apigateway.LambdaIntegration(handler);
 
-  api.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+    // Build the nested resource tree for /aws-blocks/api.
+    // Intermediate resource gets a proxy so sub-paths (RawRoutes) still reach Lambda.
+    const awsBlocksResource = api.root.addResource(BLOCKS_NAMESPACE.slice(1));
+    awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
+
+    const apiResource = awsBlocksResource.addResource('api');
+    apiResource.addMethod('POST', integration);
+    apiResource.addMethod('OPTIONS', integration);
+
+    api.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+
+    gateway = api;
+    apiUrl = `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
+  }
 
   // ── Resource Groups ────────────────────────────────────────────────────
   let rootStack = cdk.Stack.of(scope);
@@ -152,7 +221,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
   registerBuiltinRoutes();
 
-  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}` };
+  return { handler, gateway, apiUrl, apiOrigin, computeCtx };
 }
 
 /**
@@ -174,9 +243,31 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  */
 export class BlocksBackend extends Construct {
   public readonly apiUrl: string;
-  public readonly gateway: apigateway.RestApi;
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /**
+   * Structured HTTP origin for the API. Only set in container-compute mode,
+   * where `apiUrl` has no API Gateway stage segment for consumers to parse.
+   */
+  public readonly apiOrigin?: ComputeApiOrigin;
+  private readonly _gateway?: apigateway.RestApi;
+  private readonly _compute?: ComputeTarget;
+  private readonly _computeCtx?: ComputeBindContext;
+
+  /**
+   * The API Gateway REST API fronting the Lambda. Not available when a
+   * container compute target is configured — the container's load balancer
+   * is the front door and no REST API is created.
+   */
+  public get gateway(): apigateway.RestApi {
+    if (!this._gateway) {
+      throw new Error(
+        'BlocksBackend.gateway is not available: this backend uses a container compute target, ' +
+        'so no API Gateway is created. Use `apiUrl` / `apiOrigin` for the HTTP front door.',
+      );
+    }
+    return this._gateway;
+  }
 
   /**
    * The fullId used by child Scopes to compute their env var names,
@@ -219,8 +310,11 @@ export class BlocksBackend extends Construct {
 
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;
-    this.gateway = infra.gateway;
+    this._gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
+    this.apiOrigin = infra.apiOrigin;
+    this._compute = props.compute;
+    this._computeCtx = infra.computeCtx;
 
     // Override BLOCKS_STACK_NAME to include the parent stack name so runtime
     // resource lookups (DynamoDB table names) match the CDK-time fullId
@@ -247,6 +341,13 @@ export class BlocksBackend extends Construct {
 
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(backend, backend.handler);
+
+    // Late hook: every Building Block has attached env vars and grants by now,
+    // so the compute target can mirror the handler environment into its
+    // container definition and sequence container boot after the config upload.
+    if (backend._compute && backend._computeCtx) {
+      backend._compute.finalize(backend._computeCtx);
+    }
 
     return backend;
   }

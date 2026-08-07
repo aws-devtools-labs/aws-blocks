@@ -12,6 +12,7 @@ const REGISTRY_KEY = Symbol.for('BLOCKS_CONFIG_REGISTRY');
 interface ConfigRegistryState {
 	entries: Map<string, unknown>;
 	finalized: boolean;
+	deployment?: s3deploy.BucketDeployment;
 }
 
 /**
@@ -88,6 +89,7 @@ export function finalizeConfigRegistry(
 		destinationBucket: configBucket,
 		prune: false,
 	});
+	registry.deployment = deployment;
 
 	(handler as cdk.aws_lambda.Function).addEnvironment(
 		'BLOCKS_CONFIG_BUCKET',
@@ -103,4 +105,18 @@ export function finalizeConfigRegistry(
 		actions: ['s3:GetObject'],
 		resources: [`${configBucket.bucketArn}/${configKey}`],
 	}));
+}
+
+/**
+ * The config-file BucketDeployment for a stack, if one was created by
+ * {@link finalizeConfigRegistry}. Container compute targets depend on it so
+ * tasks never boot before `blocks-config.json` exists in S3.
+ *
+ * Only meaningful after `finalizeConfigRegistry` ran (i.e. inside a compute
+ * target's `finalize()` hook); returns `undefined` before that or when no
+ * Building Block registered any config.
+ */
+export function getConfigDeployment(scope: Construct): s3deploy.BucketDeployment | undefined {
+	const stack = cdk.Stack.of(scope);
+	return ((stack as any)[REGISTRY_KEY] as ConfigRegistryState | undefined)?.deployment;
 }

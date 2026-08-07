@@ -8,7 +8,14 @@ export { EventSourceMapping } from './lambda-handler.js';
 export { BlocksStackProps } from './common/index.js';
 export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
 export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';
-export { BlocksStack, Scope, SandboxDisableDeletionProtection, BlocksBackend, registerConfig, finalizeConfigRegistry, synthGuard, DEFAULT_NODE_RUNTIME, type BlocksBackendProps } from './cdk/index.js';
+export { BlocksStack, Scope, SandboxDisableDeletionProtection, BlocksBackend, registerConfig, finalizeConfigRegistry, getConfigDeployment, synthGuard, DEFAULT_NODE_RUNTIME, type BlocksBackendProps } from './cdk/index.js';
+export type {
+  ComputeTarget,
+  ComputeBindContext,
+  ComputeBindResult,
+  ComputeApiOrigin,
+  ComputePrincipal,
+} from './cdk/index.js';
 export {
   Hosting,
   type HostingProps,
