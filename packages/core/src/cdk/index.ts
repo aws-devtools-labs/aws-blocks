@@ -86,46 +86,76 @@ export class Scope extends Construct {
   readonly bbName?: string;
   readonly bbVersion?: string;
 
+  /**
+   * The owning stack/backend, resolved once at construction: the nearest
+   * BlocksStack/BlocksBackend up the construct tree, or the ambient
+   * `globalThis.CURRENT_BLOCKS_STACK` fallback. All owner-derived accessors
+   * below read from this instead of each repeating the tree walk.
+   */
+  private readonly owner: BlocksStack | BlocksBackend;
+
   constructor(id: string, options?: ScopeOptions) {
     const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
     super(parent, id);
     this.id = id;
     this.parent = parent;
+    this.owner = this.resolveOwner();
   }
 
-  get handler() {
-    // Walk up the construct tree to find the owning BlocksStack/BlocksBackend
+  /**
+   * Walk up the construct tree to the nearest owning BlocksStack/BlocksBackend;
+   * fall back to the ambient `globalThis.CURRENT_BLOCKS_STACK`. Called once from
+   * the constructor; the result is cached in {@link owner}.
+   */
+  private resolveOwner(): BlocksStack | BlocksBackend {
     let current: Construct = this;
     while (current.node.scope) {
         current = current.node.scope as Construct;
         if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-            return current.handler;
+            return current;
         }
     }
-    // Fallback to globalThis for backward compatibility
-    return ((globalThis as any).CURRENT_BLOCKS_STACK as { handler: cdk.aws_lambda_nodejs.NodejsFunction }).handler;
+    // Fallback to the ambient stack. In production this is always a real
+    // BlocksStack/BlocksBackend; the cast also admits the test doubles that set
+    // globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
+    return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
+  }
+
+  get handler() {
+    return this.owner.handler;
   }
 
   /**
    * The shared IAM role assumed by all Blocks compute. Building Blocks grant
-   * their permissions to this role instead of to an individual function's
-   * auto-role. CDK's `grant*()` / `addToPrincipalPolicy()` route those grants
-   * to the role's default (inline) policy — exactly where they landed on the
-   * auto-generated role before.
-   *
-   * Resolves the same way as {@link handler}: walk up to the owning
-   * BlocksStack/BlocksBackend, falling back to the ambient stack.
+   * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
+   * route those grants to the role's default (inline) policy.
    */
   get executionRole(): cdk.aws_iam.IRole {
-    let current: Construct = this;
-    while (current.node.scope) {
-        current = current.node.scope as Construct;
-        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-            return current.executionRole;
-        }
+    return this.owner.executionRole;
+  }
+
+  /**
+   * The backend entry file the owning BlocksStack/BlocksBackend runs — the
+   * single handler entry shared across the whole app.
+   */
+  get backendHandlerPath(): string {
+    return this.owner.backendHandlerPath;
+  }
+
+  /**
+   * The owning stack/backend's token-free root identity. This is the value the
+   * runtime receives as `BLOCKS_STACK_NAME` and rebuilds `fullId` from, so
+   * physical resource names (DynamoDB tables, env-var keys, IAM ARNs) derived
+   * from `fullId` match byte-for-byte between synth and runtime — otherwise the
+   * runtime looks up names that were never created. `BlocksBackend` exposes this
+   * as `fullId` ({@link BlocksBackend.fullId}); `BlocksStack` as `id`.
+   */
+  get backendStackName(): string {
+    const name = this.owner instanceof BlocksBackend ? this.owner.fullId : this.owner.id;
+    if (!name) {
+      throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
     }
-    // Fallback to globalThis for backward compatibility
-    return ((globalThis as any).CURRENT_BLOCKS_STACK as { executionRole: cdk.aws_iam.IRole }).executionRole;
+    return name;
   }
 
   get fullId(): string {
