@@ -178,6 +178,7 @@ export async function createStrandsModel(config?: ModelConfig, log?: ChildLogger
 				maxTokens: config.inferenceConfig.maxTokens,
 				stopSequences: config.inferenceConfig.stopSequences,
 			}),
+			...(config.cacheConfig && { cacheConfig: config.cacheConfig }),
 		});
 	}
 
