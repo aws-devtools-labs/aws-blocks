@@ -305,6 +305,23 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('stamps @aws-blocks/blocks dep with caret version or file: path at scaffold time', () => {
+    const tmpDir = join(__dirname, '../.test-version-stamp');
+    try {
+      const result = run([tmpDir, '--template', 'default', '--skip-install']);
+      assert.strictEqual(result.exitCode, 0);
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      const blocksVer = pkg.dependencies?.['@aws-blocks/blocks'] ?? pkg.devDependencies?.['@aws-blocks/blocks'];
+      assert.ok(blocksVer, 'should have @aws-blocks/blocks dep');
+      assert.notStrictEqual(blocksVer, '*', 'should not be a wildcard');
+      // In the monorepo, file: rewriting kicks in. From a published CLI,
+      // blocksVersion is stamped as a caret range.
+      assert.match(blocksVer, /^\^|^file:/, 'should be a caret range or file: path');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('honors --template when adding to an existing project (nextjs uses next dev)', () => {
     const tmpDir = join(__dirname, '../.test-existing-nextjs-template');
     mkdirSync(tmpDir, { recursive: true });
