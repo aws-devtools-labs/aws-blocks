@@ -24,4 +24,10 @@ export const AppSettingErrors = {
 	ParameterNotFound: 'ParameterNotFoundException',
 	/** Thrown when schema validation fails, value exceeds 4 KB, or options are invalid. */
 	ValidationFailed: 'ValidationFailedException',
+	/**
+	 * Thrown when an AppSetting data method (`get`/`put`) is called in the
+	 * browser. AppSetting is server-only; the browser build has no store or
+	 * credentials. Expose the value through your own API method instead.
+	 */
+	BrowserNotSupported: 'BrowserNotSupportedException',
 } as const;
