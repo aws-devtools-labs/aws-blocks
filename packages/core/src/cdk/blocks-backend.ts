@@ -44,6 +44,16 @@ export function assertCdkConditionActive(): void {
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Request throttle applied to the API Gateway stage.
+   *
+   * Defaults to 200 requests/second with a 400 request burst — ample for
+   * typical application traffic while capping cost amplification from abuse.
+   * Without it the stage inherits the AWS account default of 10,000 rps /
+   * 5,000 burst, so a single hot endpoint can drive unbounded Lambda,
+   * DynamoDB and Bedrock spend. Raise it for high-traffic deployments.
+   */
+  throttling?: { rateLimit: number; burstLimit: number };
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
@@ -82,9 +92,15 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
   }
 
+  const throttling = props.throttling ?? { rateLimit: 200, burstLimit: 400 };
+
   const api = new apigateway.RestApi(scope, 'API', {
     restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
+    deployOptions: {
+      cachingEnabled: false,
+      throttlingRateLimit: throttling.rateLimit,
+      throttlingBurstLimit: throttling.burstLimit,
+    },
   });
 
   const integration = new apigateway.LambdaIntegration(handler);
