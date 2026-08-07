@@ -41,13 +41,47 @@ export function assertCdkConditionActive(): void {
   }
 }
 
+/**
+ * Validate that a stack/backend name does not start with "aws" (case-insensitive).
+ *
+ * AWS Blocks creates Resource Groups named `{stackId}-resources` and
+ * `{stackId}-settings` inside setupBlocksInfra() (shared by BlocksStack and
+ * BlocksBackend). The AWS Resource Groups API rejects group names starting with
+ * "aws" in any capitalization. Without this check, `cdk deploy` fails with:
+ *
+ *   aws-my-app | ... | CREATE_FAILED | AWS::ResourceGroups::Group | StackResources
+ *   Resource handler returned message: "The group name 'aws-my-app-resources'
+ *   is not valid. A resource group name cannot start with 'AWS' or 'aws'."
+ *   (Service: ResourceGroups, Status Code: 400, HandlerErrorCode: InvalidRequest)
+ *
+ * Catching it at synth time gives the user a clear, actionable message.
+ */
+export function assertStackNameNotReserved(name: string): void {
+	if (/^aws/i.test(name)) {
+		throw new Error(
+			`Invalid stackId "${name}": names beginning with "aws" (case-insensitive) are reserved ` +
+			`by AWS and cannot be used for CloudFormation stacks or resource names. ` +
+			`Rename your stackId in .blocks/config.json (e.g., "${name.replace(/^aws[-_]?/i, '')}").`,
+		);
+	}
+}
+
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
 }
 
-/** Shared infra setup — creates Lambda + API Gateway on the given scope. */
+/**
+ * Shared infra setup — creates Lambda, API Gateway, and Resource Groups on the given scope.
+ * Called by both BlocksStack and BlocksBackend; centralizes all infrastructure creation
+ * including the aws-prefix validation (which guards the Resource Groups naming constraint).
+ */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+  // Validate before creating any constructs. The Resource Groups created below
+  // derive their name from the stack/backend id; the 'aws' prefix is reserved.
+  const stackName = id ?? cdk.Stack.of(scope).stackName;
+  assertStackNameNotReserved(stackName);
+
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
