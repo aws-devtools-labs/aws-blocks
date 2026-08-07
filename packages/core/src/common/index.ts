@@ -322,7 +322,27 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
   return scope.id;
 }
 
-export interface BlocksStackProps extends StackProps {
+/**
+ * Shared throttle configuration, mixed into both `BlocksStackProps` and
+ * `BlocksBackendProps` so the override is reachable from either entry point.
+ */
+export interface BlocksThrottlingProps {
+  /**
+   * Request throttle applied to the API Gateway stage.
+   *
+   * Defaults to 200 requests/second with a 400 request burst — ample for
+   * typical application traffic while capping cost amplification from abuse.
+   * Without it the stage inherits the AWS account default of 10,000 rps /
+   * 5,000 burst, so a single hot endpoint can drive unbounded Lambda,
+   * DynamoDB and Bedrock spend. Raise it for high-traffic deployments.
+   *
+   * Both values must be greater than zero; synth fails otherwise, since a
+   * zero or negative limit throttles every request to the API.
+   */
+  throttling?: { rateLimit: number; burstLimit: number };
+}
+
+export interface BlocksStackProps extends StackProps, BlocksThrottlingProps {
   backendHandlerPath: string;
   backendCDKPath: string;
 }

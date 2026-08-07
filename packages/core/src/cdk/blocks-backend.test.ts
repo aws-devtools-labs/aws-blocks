@@ -122,6 +122,37 @@ describe('API Gateway stage throttling', () => {
       ]),
     });
   });
+
+  test('rejects limits that would throttle all traffic', async () => {
+    const invalidCases = [
+      { name: 'zero rate limit', throttling: { rateLimit: 0, burstLimit: 400 } },
+      { name: 'zero burst limit', throttling: { rateLimit: 200, burstLimit: 0 } },
+      { name: 'negative rate limit', throttling: { rateLimit: -1, burstLimit: 400 } },
+      { name: 'both zero', throttling: { rateLimit: 0, burstLimit: 0 } },
+    ];
+
+    for (const [i, { name, throttling }] of invalidCases.entries()) {
+      const app = new cdk.App();
+      const stack = new cdk.Stack(app, `ThrottleInvalidStack${i}`);
+
+      await assert.rejects(
+        BlocksBackend.create(stack, 'Blocks', {
+          backendHandlerPath: handlerPath,
+          backendCDKPath: sideEffectBackendPath,
+          throttling,
+        }),
+        (err: Error) => {
+          assert.match(
+            err.message,
+            /must both be greater than 0/,
+            `Expected throttling validation error for ${name}, got: ${err.message}`,
+          );
+          return true;
+        },
+        `Expected ${name} to be rejected at synth time`,
+      );
+    }
+  });
 });
 
 describe('factory function support', () => {
