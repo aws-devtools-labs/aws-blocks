@@ -13,6 +13,7 @@ import { ApiError } from '../errors.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_SANDBOX_PREFIX } from '../constants.js';
 import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
+import { CORS_MAX_AGE } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import {
   parseRpcRequest,
@@ -43,6 +44,24 @@ export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
  */
 export function resolveDevCorsOrigin(origin: string): string {
   return LOCALHOST_PATTERN.test(origin) ? origin : 'http://localhost:3000';
+}
+
+/**
+ * Build the CORS response headers the dev server sets on every request.
+ *
+ * Mirrors the Lambda path's cache posture — same {@link CORS_MAX_AGE} and the
+ * same `Vary: Origin` — so the reflected `Access-Control-Allow-Origin` can't be
+ * served across origins by a shared cache, and so the two sites can't drift.
+ */
+export function buildDevCorsHeaders(requestOrigin: string): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': resolveDevCorsOrigin(requestOrigin),
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Max-Age': CORS_MAX_AGE,
+  };
 }
 
 /** Shape of the client runtime config the browser fetches to discover the API URL. */
@@ -854,12 +873,9 @@ export async function startDevServer(options: DevServerOptions) {
 
     // CORS headers
     const requestOrigin = req.headers.origin || '';
-    const allowedOrigin = resolveDevCorsOrigin(requestOrigin);
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Max-Age', '86400');
+    for (const [name, value] of Object.entries(buildDevCorsHeaders(requestOrigin))) {
+      res.setHeader(name, value);
+    }
 
     if (method === 'OPTIONS') {
       res.writeHead(200);
