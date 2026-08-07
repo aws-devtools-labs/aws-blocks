@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { BlocksBackend } from './blocks-backend.js';
+import { BlocksBackend, assertStackNameNotReserved } from './blocks-backend.js';
 import { BlocksStack } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
@@ -106,31 +106,40 @@ describe('assertCdkConditionActive', () => {
 });
 
 describe('assertStackNameNotReserved', () => {
-  test('rejects stackId starting with "aws" (any case) with actionable error', async () => {
-    const app = new cdk.App();
+  // Validation is centralized in assertStackNameNotReserved() and called from both
+  // BlocksStack.create() and BlocksBackend.create(). Test it directly here.
 
+  test('rejects names starting with "aws" (case-insensitive) with actionable message', () => {
     for (const name of ['aws-my-project', 'AWS-MyProject', 'AwsSomething']) {
-      await assert.rejects(
-        BlocksStack.create(app, name, {
-          backendHandlerPath: handlerPath,
-          backendCDKPath: sideEffectBackendPath,
-        }),
+      assert.throws(
+        () => assertStackNameNotReserved(name),
         (err: Error) => {
-          assert.ok(
-            err.message.includes(`Invalid stackId "${name}"`),
-            `Should include the invalid name, got: ${err.message}`,
-          );
-          assert.ok(
-            err.message.includes('reserved by AWS'),
-            `Should say reserved by AWS, got: ${err.message}`,
-          );
-          assert.ok(
-            err.message.includes('.blocks/config.json'),
-            `Should mention config.json, got: ${err.message}`,
-          );
+          assert.ok(err.message.includes(`Invalid stackId "${name}"`), `Should include the name, got: ${err.message}`);
+          assert.ok(err.message.includes('.blocks/config.json'), 'Should tell user where to fix');
+          assert.ok(err.message.includes('reserved'), 'Should explain why');
           return true;
         },
       );
     }
+  });
+
+  test('allows names that merely contain "aws" elsewhere', () => {
+    for (const name of ['my-awesome-project', 'drawsome-app', 'not-aws-prefixed']) {
+      assert.doesNotThrow(() => assertStackNameNotReserved(name));
+    }
+  });
+
+  test('BlocksStack.create() wires the check', async () => {
+    const app = new cdk.App();
+    await assert.rejects(
+      BlocksStack.create(app, 'aws-test', {
+        backendHandlerPath: handlerPath,
+        backendCDKPath: sideEffectBackendPath,
+      }),
+      (err: Error) => {
+        assert.ok(err.message.includes('Invalid stackId'));
+        return true;
+      },
+    );
   });
 });

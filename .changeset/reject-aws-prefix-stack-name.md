@@ -2,4 +2,4 @@
 "@aws-blocks/core": patch
 ---
 
-Reject stack names starting with "aws" (case-insensitive) at CDK synth time with a clear, actionable error message. AWS reserves this prefix for resource names across Resource Groups, IAM, and other services — a stack name starting with "aws" causes a cryptic CloudFormation deployment failure. The new build-time validation catches this early and tells users exactly what to change (the `stackId` in `.blocks/config.json`).
+Reject stack names starting with "aws" (case-insensitive) at CDK synth time with a clear, actionable error message. AWS reserves this prefix for Resource Group names — deploying a stack named "aws-..." fails when CloudFormation creates the stack's Resource Groups. The new build-time check catches this immediately and directs users to rename the stackId in `.blocks/config.json`.

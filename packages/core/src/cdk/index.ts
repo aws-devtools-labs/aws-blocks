@@ -12,7 +12,7 @@ import {
   type ScopeOptions,
   computeScopeFullId,
 } from '../common/index.js';
-import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive, assertStackNameNotReserved } from './blocks-backend.js';
+import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 
@@ -47,7 +47,6 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
   static async create(scope: Construct, id: string, props: BlocksStackProps) {
     assertCdkConditionActive();
-    assertStackNameNotReserved(id);
 
     // Detect ambient pipeline stage scope set by Pipeline appFile imports
     const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
