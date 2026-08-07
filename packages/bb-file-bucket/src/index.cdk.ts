@@ -46,10 +46,21 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// In sandbox mode, default to DESTROY + autoDeleteObjects so
 		// `cdk destroy` can fully clean up without manual bucket emptying.
 		// Explicit `removalPolicy` from the customer takes precedence.
-		// `autoDeleteObjects: true` is only valid paired with DESTROY (CDK
-		// validates this at construct time), so we tie the two together.
 		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 		const destroy = options?.removalPolicy === 'destroy' || (isSandbox && options?.removalPolicy === undefined);
+
+		// `autoDeleteObjects` defaults to sandbox-only — never in a prod stack,
+		// even with an explicit `removalPolicy: 'destroy'`, unless the caller
+		// deliberately opts in via `options.autoDeleteObjects: true`. CDK's L2
+		// `s3.Bucket` implements auto-delete via a hidden
+		// `Custom::S3AutoDeleteObjects` Lambda with a hardcoded delete behavior
+		// that stack-level retention Aspects (`RemovalPolicies.of(stack).retain()`)
+		// cannot override. Attaching it to a prod bucket would silently empty the
+		// bucket on `cdk destroy` even when the stack intends to retain it, so the
+		// safe default is sandbox-only. It only ever applies when the bucket is
+		// actually being destroyed (`destroy`), preserving CDK's construct-time
+		// invariant that auto-delete requires DESTROY.
+		const autoDeleteObjects = destroy && (options?.autoDeleteObjects ?? isSandbox);
 
 		// Bucket name is derived from the scope chain. Validate against S3's
 		// naming rules at synth so an invalid name fails here rather than at
@@ -66,7 +77,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 				: options?.removalPolicy === 'retain'
 					? RemovalPolicy.RETAIN
 					: undefined,
-			autoDeleteObjects: destroy,
+			autoDeleteObjects,
 			cors: options?.corsRules?.map((rule: CorsRule) => ({
 				allowedOrigins: rule.allowedOrigins,
 				allowedMethods: rule.allowedMethods.map(m => httpMethodMap[m]),
