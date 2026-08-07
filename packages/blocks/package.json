@@ -61,7 +61,7 @@
     "prebuild": "node ../../scripts/gen-block-docs.mjs",
     "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
-    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js"
+    "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js && node --conditions=cdk --test dist/umbrella-compute.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "^0.1.18",

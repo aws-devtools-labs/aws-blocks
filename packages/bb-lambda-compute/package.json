@@ -25,7 +25,7 @@
   },
   "scripts": {
     "build": "tsc --build",
-    "test": "node --test dist/index.cdk.test.js"
+    "test": "node --test dist/index.cdk.test.js dist/compute-resolution.test.js"
   },
   "dependencies": {
     "@aws-blocks/core": "*"

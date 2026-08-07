@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -13,7 +13,9 @@ export type { LambdaComputeProps } from './types.js';
 
 /**
  * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
- * Gateway REST API. The compute *owns* these resources.
+ * Gateway REST API. The compute *owns* these resources — a BlocksStack /
+ * BlocksBackend's `handler` / `gateway` / `apiUrl` delegate to its default
+ * compute's.
  *
  * The function assumes the shared execution role (`this.executionRole`), so
  * Building Block grants reach it via that role. The handler entry and
@@ -29,6 +31,8 @@ export class LambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
 	/** The API Gateway REST API fronting {@link fn}. */
 	readonly apiGateway: apigateway.RestApi;
+	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
+	readonly apiUrl: string;
 
 	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
 		super(id, { parent: scope });
@@ -54,6 +58,14 @@ export class LambdaCompute extends Compute {
 			},
 		});
 
+		// In sandbox mode, allow localhost origins so the local dev frontend can
+		// reach the deployed Lambda API via CORS.
+		const isSandbox =
+			this.node.tryGetContext('sandboxMode') === 'true' || this.node.tryGetContext('sandboxMode') === true;
+		if (isSandbox) {
+			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
+		}
+
 		this.apiGateway = new apigateway.RestApi(this, 'API', {
 			restApiName: 'Blocks API',
 			deployOptions: { cachingEnabled: false },
@@ -71,6 +83,8 @@ export class LambdaCompute extends Compute {
 		apiResource.addMethod('OPTIONS', integration);
 
 		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+
+		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {

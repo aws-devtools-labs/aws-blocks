@@ -16,6 +16,8 @@ import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blo
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
+import type { Compute } from './compute/compute.js';
+import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -32,14 +34,33 @@ export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '.
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
-  public readonly apiUrl: string;
-  public readonly gateway: cdk.aws_apigateway.RestApi;
-  public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: cdk.aws_iam.IRole;
   /** Infrastructure defaults for Building Blocks created under this stack. */
   public readonly defaults: BlocksDefaults;
+  /** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+  _defaultCompute?: Compute;
+
+  /** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+  get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
+    return this.requireDefaultCompute().fn;
+  }
+  /** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+  get gateway(): cdk.aws_apigateway.RestApi {
+    return this.requireDefaultCompute().apiGateway;
+  }
+  /** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+  get apiUrl(): string {
+    return this.requireDefaultCompute().apiUrl;
+  }
+
+  private requireDefaultCompute(): LambdaShapedCompute {
+    if (!this._defaultCompute) {
+      throw new Error('Blocks stack not fully initialized — access .handler/.gateway/.apiUrl after BlocksStack.create() resolves.');
+    }
+    return this._defaultCompute as LambdaShapedCompute;
+  }
 
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
@@ -51,13 +72,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
 
     const infra = setupBlocksInfra(this, props, id);
-    this.handler = infra.handler;
-    this.gateway = infra.gateway;
-    this.apiUrl = infra.apiUrl;
     this.executionRole = infra.executionRole;
   }
 
-  static async create(scope: Construct, id: string, props: BlocksStackProps) {
+  static async create(scope: Construct, id: string, props: BlocksStackProps, defaultComputeFactory: DefaultComputeFactory) {
     assertCdkConditionActive();
 
     // Detect ambient pipeline stage scope set by Pipeline appFile imports
@@ -65,6 +83,13 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     const actualScope = pipelineScope || scope;
 
     const stack = new BlocksStack(actualScope, id, props);
+    // Create the default compute before importing the backend: it OWNS the
+    // Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+    // a block reading `this.compute` in its constructor (during that import)
+    // must resolve to it. The factory is supplied by the umbrella
+    // @aws-blocks/blocks (which injects LambdaCompute), so core never imports
+    // the concrete compute class.
+    stack._defaultCompute = defaultComputeFactory(stack);
     // file:// URL (not a raw path) so the cache-busting query works on Windows,
     // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
     const backendUrl = pathToFileURL(props.backendCDKPath);
@@ -104,6 +129,15 @@ export class Scope extends Construct {
    */
   private readonly root: BlocksStack | BlocksBackend;
 
+  /**
+   * Compute assigned at this node. Applies to this block and is inherited by
+   * descendants (a nearer assignment wins). Covers both a handler assigned to a
+   * specific compute and a scope-level default for its subtree. Internal until
+   * the customer-facing surface exists.
+   * @internal
+   */
+  _compute?: Compute;
+
   constructor(id: string, options?: ScopeOptions) {
     const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
     super(parent, id);
@@ -142,6 +176,27 @@ export class Scope extends Construct {
    */
   get executionRole(): cdk.aws_iam.IRole {
     return this.root.executionRole;
+  }
+
+  /**
+   * The compute this block runs on: the nearest `_compute` assigned on this
+   * block or an ancestor scope, else the owning stack/backend's default compute.
+   *
+   * For any app that doesn't assign a compute, this always resolves to the
+   * default — so reads are a no-op refactor. `_compute` is internal
+   * (test/framework) until the customer-facing surface exists; there is no
+   * public option to set it yet.
+   */
+  get compute(): Compute {
+    for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {
+      const assigned = (current as Scope)._compute;
+      if (assigned) return assigned;
+    }
+    const defaultCompute = this.root._defaultCompute;
+    if (!defaultCompute) {
+      throw new Error('Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `compute`.');
+    }
+    return defaultCompute;
   }
 
   /**
