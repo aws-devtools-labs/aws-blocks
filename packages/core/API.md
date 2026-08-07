@@ -4,6 +4,14 @@
 
 ```ts
 
+import { getSecret } from '@aws-blocks/hosting/secret';
+import { isSecret } from '@aws-blocks/hosting/secret';
+import { secret } from '@aws-blocks/hosting/secret';
+import { secretEnvVarName } from '@aws-blocks/hosting/secret';
+import { SecretOptions } from '@aws-blocks/hosting/secret';
+import { secretParameterName } from '@aws-blocks/hosting/secret';
+import { SecretValue } from '@aws-blocks/hosting/secret';
+
 // @public
 export class ApiError extends Error {
     constructor(message: string, status: number, options?: {
@@ -78,6 +86,8 @@ export function getSdkIdentifiers(bb: {
     fullId: string;
 }): Record<string, string>;
 
+export { getSecret }
+
 // @public
 export function hasAuthError<T extends {
     errorName?: string;
@@ -92,6 +102,8 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 
 export function isBlocksError<N extends string>(e: unknown, name: N): e is Error & {
     name: N;
 };
+
+export { isSecret }
 
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;
@@ -194,6 +206,16 @@ export interface ScopeOptions {
 export type ScopeParent = Scope | {
     id: string;
 };
+
+export { secret }
+
+export { secretEnvVarName }
+
+export { SecretOptions }
+
+export { secretParameterName }
+
+export { SecretValue }
 
 // @public
 export function unlockRouteRegistry(): void;

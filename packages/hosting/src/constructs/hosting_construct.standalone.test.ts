@@ -8,6 +8,7 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostingConstruct } from './hosting_construct.js';
 import { DeployManifest } from '../manifest/types.js';
+import { secret } from '../secret.js';
 
 // ---- Test helpers ----
 
@@ -477,6 +478,87 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       // SSR is fronted by API Gateway REST API, not by a Function URL,
       // so 'default' is intentionally absent from computeFunctionUrls.
       assert.ok(!construct.computeFunctionUrls.has('default'));
+    });
+  });
+
+  // ---- secret() markers in environment (any framework-neutral consumer) ----
+  void describe('environment secret() markers', () => {
+    void it('wires a runtime secret marker on the DEFAULT store (SSM): param name + ssm:GetParameter, no _STORE hint, no value leak', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+        secretsConfig: { prefix: '/blocks/secrets' },
+        skipRegionValidation: true,
+      });
+      const t = Template.fromStack(stack);
+      // SSM (default) keeps the leading-slash path form and injects no _STORE hint.
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
+          }),
+        },
+      });
+      t.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([Match.objectLike({ Action: 'ssm:GetParameter' })]),
+        },
+      });
+      const json = JSON.stringify(t.toJSON());
+      // No _STORE hint for the SSM default, and the marker value never appears.
+      assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'), 'ssm default injects no _STORE hint');
+      assert.ok(!json.includes('"STRIPE_KEY":'), 'secret value must not be a plaintext env var');
+    });
+
+    void it('wires a runtime secret marker on the Secrets Manager opt-in store: slash-free locator + _STORE hint + grants', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+        secretsConfig: { prefix: '/blocks/secrets', store: 'secrets-manager' },
+        skipRegionValidation: true,
+      });
+      const t = Template.fromStack(stack);
+      // Secrets Manager uses the slash-free name + sets the _STORE hint.
+      t.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
+            HOSTING_SECRET_PARAM_STRIPE_KEY_STORE: 'secrets-manager',
+          }),
+        },
+      });
+      t.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([Match.objectLike({ Action: 'secretsmanager:GetSecretValue' })]),
+        },
+      });
+    });
+
+    void it('uses the neutral /hosting/secrets prefix by default (SSM keeps the leading slash)', () => {
+      const stack = createEnvStack();
+      new HostingConstruct(stack, 'Hosting', {
+        manifest: makeSsrManifest(),
+        environment: { API_KEY: secret('API_KEY') },
+        skipRegionValidation: true,
+      });
+      const json = JSON.stringify(Template.fromStack(stack).toJSON());
+      // Default store is SSM → locator keeps the leading-slash path form.
+      assert.ok(json.includes('/hosting/secrets/API_KEY'), 'neutral default prefix');
+    });
+
+    void it('rejects an unresolved deploy-time (resolveAt: deploy) marker at construct level', () => {
+      const stack = createEnvStack();
+      assert.throws(
+        () =>
+          new HostingConstruct(stack, 'Hosting', {
+            manifest: makeSsrManifest(),
+            environment: { LEGACY: secret('LEGACY', { resolveAt: 'deploy' }) },
+            skipRegionValidation: true,
+          }),
+        /unresolved|UnresolvedSecret|create\(\)/,
+      );
     });
   });
 });
