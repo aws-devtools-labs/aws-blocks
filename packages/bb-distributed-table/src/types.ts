@@ -58,6 +58,85 @@ export interface DistributedTableOptions<
 	 */
 	ttl?: keyof T & string;
 	/**
+	 * Enable DynamoDB Point-in-Time Recovery (continuous backups).
+	 *
+	 * PITR lets you restore the table to any second within the retention
+	 * window (see {@link pointInTimeRecoveryDays}), protecting against
+	 * accidental writes/deletes and logical corruption.
+	 *
+	 * Defaults to **`true` on production deploys** and **`false` in sandbox
+	 * mode** (`--context sandboxMode=true`) to keep throwaway sandboxes cheap.
+	 * Set explicitly to override that default in either environment.
+	 *
+	 * Note: PITR bills for continuous-backup storage (per GB-month of table
+	 * size), so it is not free on large tables.
+	 */
+	pointInTimeRecovery?: boolean;
+	/**
+	 * The recovery window, in days, that Point-in-Time Recovery keeps
+	 * continuous backups for — you can restore to any second within this many
+	 * preceding days.
+	 *
+	 * Accepts **1–35**; defaults to **35** (the maximum) when omitted. Only
+	 * meaningful when PITR is enabled; ignored when `pointInTimeRecovery` is
+	 * `false`. A shorter window reduces backup-storage cost at the expense of
+	 * how far back you can restore.
+	 */
+	pointInTimeRecoveryDays?: number;
+	/**
+	 * How hard the table is to destroy — a single knob spanning DynamoDB
+	 * deletion protection and the CloudFormation removal policy, which together
+	 * answer one question: "can this table be destroyed?"
+	 *
+	 * - `'disposable'`: `RemovalPolicy.DESTROY`, deletion protection **off**.
+	 *   Deleting the stack deletes the table. The **sandbox default** — keeps
+	 *   `sandbox:destroy` a one-command teardown.
+	 * - `'retained'`: `RemovalPolicy.RETAIN`, deletion protection **off**.
+	 *   Deleting the stack orphans (keeps) the table, but a direct
+	 *   `DeleteTable`/console delete still works. Use when you want the data to
+	 *   survive stack teardown without blocking intentional deletes.
+	 * - `'locked'`: `RemovalPolicy.RETAIN` **and** deletion protection **on**.
+	 *   The table survives stack deletion and DynamoDB refuses a direct delete
+	 *   until protection is turned off. The **production default**.
+	 *
+	 * Defaults to **`'locked'` on production deploys** and **`'disposable'` in
+	 * sandbox mode** (`--context sandboxMode=true`). Set explicitly to override
+	 * in either environment.
+	 *
+	 * Replaces the separate `deletionProtection` + `removalPolicy` booleans:
+	 * those two knobs could encode the contradictory `deletionProtection: true`
+	 * + `removalPolicy: 'destroy'` state, which wedges stack deletion (CFN
+	 * issues `DeleteTable`, DynamoDB refuses it, the stack lands in
+	 * `DELETE_FAILED`). A single enum makes that state unrepresentable.
+	 */
+	protection?: 'disposable' | 'retained' | 'locked';
+	/**
+	 * Server-side encryption at rest.
+	 *
+	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
+	 *   key. Auditable via CloudTrail with no per-key monthly charge.
+	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
+	 *   key (CMK) for this table, giving you full control over rotation and key
+	 *   policy. Incurs standard KMS key + request charges — and note this mints
+	 *   a **separate key per table**, so a dozen tables means a dozen keys.
+	 * - a {@link ExternalKmsKeyRef} from {@link DistributedTable.fromKmsKey}:
+	 *   uses an **existing** CMK you already own, so several tables can share one
+	 *   key (and one monthly charge) instead of each provisioning its own.
+	 *
+	 * DynamoDB is always encrypted at rest; this only selects the key.
+	 *
+	 * @example
+	 * ```ts
+	 * // Share one key across several tables
+	 * const key = DistributedTable.fromKmsKey(
+	 *   'arn:aws:kms:us-east-1:111122223333:key/abcd-1234',
+	 * );
+	 * new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * new DistributedTable(scope, 'events', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * ```
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
 	 * How reads (`get`, `getBatch`, `query`, `scan`) reconcile a stored item with
 	 * the configured `schema`. Writes (`put`/`putBatch`) always validate; this
 	 * governs the read side, which matters after a schema change: a row written
@@ -107,6 +186,17 @@ export interface DistributedTableOptions<
 export interface ExternalTableRef {
 	readonly __brand: 'ExternalTableRef';
 	readonly tableName: string;
+}
+
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link DistributedTable.fromKmsKey}. Pass it as the `encryption` option to
+ * encrypt the table with a CMK you already own — letting several tables share
+ * one key instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
 }
 
 // ── Key type for get/delete ─────────────────────────────────────────────────
