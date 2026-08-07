@@ -440,6 +440,102 @@ export class MyBlock {
 }
 ```
 
+## Agent Tool Support (`toAgentTools`)
+
+BBs can expose their operations as agent tools by implementing `toAgentTools()`. This lets users spread BB operations directly into an Agent's `tools` callback without writing manual tool definitions.
+
+### How to Implement
+
+1. Create a shared `agent-tools.ts` file with the tool registry (used by both mock and AWS runtimes):
+
+```typescript
+// my-bb/src/agent-tools.ts
+import { buildAgentTools } from '@aws-blocks/core';
+import type { AgentToolProviderOptions, ToolMethodDef } from '@aws-blocks/core';
+import type { Scope } from '@aws-blocks/core';
+
+interface MyBBLike {
+  get(key: string): Promise<unknown>;
+  put(key: string, value: unknown): Promise<void>;
+}
+
+export const MY_BB_TOOL_METHODS: Record<string, ToolMethodDef<MyBBLike>> = {
+  get: {
+    description: 'Retrieve a value by key',
+    parameters: { type: 'object', properties: { key: { type: 'string', description: 'The key' } }, required: ['key'] },
+    handler: (self) => async ({ input }) => self.get(input.key),
+  },
+  put: {
+    description: 'Store a value',
+    parameters: { type: 'object', properties: { key: { type: 'string' }, value: {} }, required: ['key', 'value'] },
+    needsApproval: true,
+    trustable: true,
+    handler: (self) => async ({ input }) => { await self.put(input.key, input.value); return { success: true }; },
+  },
+};
+
+export function myBBToAgentTools(self: Scope & MyBBLike, options?: AgentToolProviderOptions): Record<string, any> {
+  return buildAgentTools(self, MY_BB_TOOL_METHODS, options);
+}
+```
+
+If your BB can hold **per-user data** (it can be keyed or partitioned by a user id), pass `{ requiresScope: true }`. `buildAgentTools` then throws at construction unless the caller supplies `scope` (to lock operations to the current user) or `unscoped: true` (an explicit opt-out for shared stores) — so an accidental unscoped spread can't silently expose every user's data:
+
+```typescript
+export function myBBToAgentTools(self: Scope & MyBBLike, options?: AgentToolProviderOptions): Record<string, any> {
+  return buildAgentTools(self, MY_BB_TOOL_METHODS, options, { requiresScope: true });
+}
+```
+
+Mark any method whose handler **ignores the scoped fields** (e.g. a `scan` that lists the entire store) with `scopeSafe: false` in the registry. `buildAgentTools` throws if such a method is exposed under `scope`, since it would return data across users despite the scoping:
+
+```typescript
+scan: {
+  description: 'List all entries',
+  parameters: { type: 'object', properties: {} },
+  scopeSafe: false, // can't be scope-isolated — caller must exclude it on a scoped BB
+  handler: (self) => async () => { /* ... */ },
+},
+```
+
+2. Add `toAgentTools()` to both runtime classes (one-liner each):
+
+```typescript
+// In index.mock.ts and index.aws.ts
+import { myBBToAgentTools } from './agent-tools.js';
+import type { AgentToolProviderOptions } from '@aws-blocks/core';
+
+export class MyBB extends Scope {
+  // ... existing methods ...
+
+  toAgentTools(options?: AgentToolProviderOptions): Record<string, any> {
+    return myBBToAgentTools(this, options);
+  }
+}
+```
+
+### Guidelines
+
+- **Parameters use JSON Schema** — avoids adding zod as a dependency to your BB. Users can override with zod via the `overrides.schema` option.
+- **Read operations** set `needsApproval: false`; **write operations** set `needsApproval: true` (and optionally `trustable: true`); **delete operations** set `needsApproval: true` and `trustable: false` (each deletion requires explicit approval).
+- **Descriptions** should be concise and tell the LLM what the tool does and when to use it.
+- **Handlers** should return JSON-serializable values. For `AsyncIterable` results (like `scan`), collect into an array with a default limit.
+- **Tool names** are generated automatically as `{bbId}__{methodName}` by `buildAgentTools`.
+- **The interface** (`MyBBLike`) ensures the tool registry stays in sync with the BB's public API.
+- **Scoping** — decide whether your BB can hold per-user data. If so, pass `{ requiresScope: true }` and mark any list-all method `scopeSafe: false`. Shared BBs (a knowledge base, app-wide config) leave both unset so scoping stays optional.
+
+### What `buildAgentTools` Handles
+
+The `buildAgentTools` helper from `@aws-blocks/core` handles:
+- `include`/`exclude` filtering
+- `overrides` (description, needsApproval, trustable, schema, fixed)
+- `scope` injection (merges context fields into handler input; overwrites model-supplied values)
+- The scoping requirement (`requiresScope`) and the `scopeSafe: false` gate — throwing at construction when a per-user BB isn't scoped or a scope-unsafe method is exposed under `scope`
+- Stripping `scope`/`fixed` fields from the JSON Schema the model sees, so the model can't supply a server-injected parameter
+- Tool naming (`{bbId}__{methodName}`)
+
+You only need to define the tool registry and delegate.
+
 ## Best Practices
 
 1. **Keep interfaces consistent** - Runtime and mock should export the same interface
