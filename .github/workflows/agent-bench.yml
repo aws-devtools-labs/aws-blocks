@@ -256,12 +256,17 @@ jobs:
       - name: 4b. Analyze cell (best-effort)
         if: always()
         continue-on-error: true
-        timeout-minutes: 6
+        timeout-minutes: 20
         run: node scripts/agent-bench/steps/analyze-cell.mjs
         env:
           RESULT_PATH: /tmp/result.json
           TRACE: /tmp/trace.json
           METRICS: /tmp/metrics.json
+          # Deep-failure evidence, staged to stable /tmp paths by step "3. Build and test". Missing files
+          # degrade to null in analyze-cell.mjs (the deep pass simply has less to work with).
+          PW_RESULTS: /tmp/pw-results.json
+          DEV_LOG: /tmp/dev.log
+          BUILD_LOG: /tmp/build.log
           # BENCH_JUDGE_MODEL and AWS_REGION are inherited from the job-level env.
 
       - name: 5. Upload result
