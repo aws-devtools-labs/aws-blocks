@@ -14,10 +14,12 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -63,7 +65,7 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: Scope): SharedInfra {
+function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
 	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
 	if (existing) return existing;
 
@@ -123,9 +125,16 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
  * Same constructor signature as the mock — `new Realtime(scope, id, options)` —
  * so the user's backend code works unchanged under `--conditions=cdk`.
  */
-export class Realtime extends Scope {
+export class Realtime extends BuildingBlockScope {
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope });
+
 		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
 	}
 

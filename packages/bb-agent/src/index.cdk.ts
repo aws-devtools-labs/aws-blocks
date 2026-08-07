@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Scope } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
@@ -19,7 +21,7 @@ const jobPayloadSchema = z.object({
 	conversationId: z.string().optional(),
 });
 
-export class Agent extends Scope {
+export class Agent extends BuildingBlockScope {
 	/**
 	 * CDK layer for the Agent BB.
 	 * Mirrors the runtime's BB creation so CDK discovers and provisions all resources.
@@ -27,6 +29,13 @@ export class Agent extends Scope {
 	 * TODO: scope Bedrock IAM grant to specific modelId from config
 	 * TODO: guardrails CDK provisioning
 	 */
+
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, config?: any) {
 		super(id, { parent: scope });
 

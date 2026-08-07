@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
@@ -15,6 +16,8 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { initializeVpc, finalizeVpc } from './vpc.js';
+import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -23,6 +26,8 @@ export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+export { getVpcContext } from './vpc.js';
+export type { BlocksVpcOptions, VpcRequirements, VpcContext, SubnetRole } from './vpc-types.js';
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
@@ -31,18 +36,32 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
 
+  private _vpcOptions?: BlocksVpcOptions;
+
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
     this.id = id;
     this.backendHandlerPath = props.backendHandlerPath;
+    this._vpcOptions = props.vpc;
 
     // Set globalThis so Building Blocks attach directly to this stack
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
 
-    const infra = setupBlocksInfra(this, props, id);
-    this.handler = infra.handler;
-    this.gateway = infra.gateway;
-    this.apiUrl = infra.apiUrl;
+    // Initialize VPC context before BBs are constructed (so BBs can discover it)
+    if (props.vpc) {
+      const vpcContext = initializeVpc(this, props.vpc);
+      // Apply VPC placement to the Lambda handler after infra is set up
+      // (infra setup happens next)
+      const infra = setupBlocksInfra(this, props, id, vpcContext);
+      this.handler = infra.handler;
+      this.gateway = infra.gateway;
+      this.apiUrl = infra.apiUrl;
+    } else {
+      const infra = setupBlocksInfra(this, props, id);
+      this.handler = infra.handler;
+      this.gateway = infra.gateway;
+      this.apiUrl = infra.apiUrl;
+    }
   }
 
   static async create(scope: Construct, id: string, props: BlocksStackProps) {
@@ -67,6 +86,11 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     }
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(stack, stack.handler);
+
+    // Finalize VPC: pull requirements from BBs → deduplicate → provision endpoints
+    if (stack._vpcOptions) {
+      finalizeVpc(stack, stack._vpcOptions);
+    }
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
@@ -117,4 +141,21 @@ export class Scope extends Construct {
   registerLambdaEventHandler(_eventSource: string, _identifier: string, _handler: (record: any) => Promise<void>): void {}
   get clientMiddleware(): readonly string[] { return []; }
   get devAttachments(): readonly string[] { return []; }
+}
+
+/**
+ * Abstract base class for Building Block CDK constructs that declare VPC requirements.
+ *
+ * BBs extend this instead of `Scope` directly. The framework calls
+ * `getVpcRequirements()` at finalization time (only when a VPC is configured)
+ * to collect gateway/interface endpoint needs and provision them centrally.
+ */
+export abstract class BuildingBlockScope extends Scope {
+  /**
+   * Declare what VPC resources this BB needs when deployed in a VPC.
+   * Called at finalization time ONLY when a VPC is configured.
+   *
+   * Return an empty object `{}` if no VPC-specific resources are needed.
+   */
+  abstract getVpcRequirements(): VpcRequirements;
 }
