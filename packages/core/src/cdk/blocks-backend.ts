@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import { type HardeningDefaults, registerStackHardeningDefaults } from './hardening-defaults.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -44,10 +45,22 @@ export function assertCdkConditionActive(): void {
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure-hardening defaults applied to every Building
+   * Block. See {@link HardeningDefaults}. A per-block option always overrides
+   * the corresponding stack default; omit to accept the framework's secure
+   * defaults.
+   */
+  hardening?: HardeningDefaults;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+  // Publish stack-wide hardening defaults before any Building Block is
+  // constructed, so blocks can read them at synth time via
+  // getStackHardeningDefaults()/resolve*().
+  registerStackHardeningDefaults(scope, props.hardening);
+
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,

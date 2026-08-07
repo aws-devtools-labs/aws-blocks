@@ -20,6 +20,16 @@ export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export {
+  type HardeningDefaults,
+  FRAMEWORK_HARDENING_DEFAULTS,
+  registerStackHardeningDefaults,
+  getStackHardeningDefaults,
+  resolveLogRetention,
+  resolveApiThrottle,
+  resolveApiAccessLogs,
+  resolvePointInTimeRecovery,
+} from './hardening-defaults.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
