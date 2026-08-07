@@ -12,6 +12,7 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import type { BlocksThrottlingProps } from '../common/index.js';
 
 /**
  * Validate that the Node.js process was started with `--conditions=cdk`.
@@ -41,9 +42,36 @@ export function assertCdkConditionActive(): void {
   }
 }
 
-export interface BlocksBackendProps {
+export interface BlocksBackendProps extends BlocksThrottlingProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+}
+
+export const DEFAULT_THROTTLING = { rateLimit: 200, burstLimit: 400 } as const;
+
+/**
+ * Resolve the stage throttle, rejecting limits that would throttle all traffic.
+ *
+ * API Gateway treats a zero or negative limit as "deny everything", which only
+ * surfaces as 429s after deploy — so fail at synth time instead.
+ */
+function resolveThrottling(throttling: BlocksThrottlingProps['throttling']) {
+  if (!throttling) return DEFAULT_THROTTLING;
+
+  const { rateLimit, burstLimit } = throttling;
+  const invalid = Object.entries({ rateLimit, burstLimit })
+    .filter(([, value]) => !Number.isFinite(value) || value <= 0)
+    .map(([key, value]) => `${key}=${value}`);
+
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid throttling prop (${invalid.join(', ')}): rateLimit and burstLimit must both be greater than 0.\n\n` +
+      'API Gateway throttles every request when a limit is 0 or negative, so the API would return 429 for all traffic.\n' +
+      `Omit the \`throttling\` prop to use the default (${DEFAULT_THROTTLING.rateLimit} rps / ${DEFAULT_THROTTLING.burstLimit} burst), or pass positive values.`,
+    );
+  }
+
+  return throttling;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
@@ -82,9 +110,15 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
   }
 
+  const throttling = resolveThrottling(props.throttling);
+
   const api = new apigateway.RestApi(scope, 'API', {
     restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
+    deployOptions: {
+      cachingEnabled: false,
+      throttlingRateLimit: throttling.rateLimit,
+      throttlingBurstLimit: throttling.burstLimit,
+    },
   });
 
   const integration = new apigateway.LambdaIntegration(handler);

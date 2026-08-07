@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksStack } from './index.js';
 
@@ -74,6 +75,55 @@ describe('legacy side-effect mode (no default export)', () => {
     assert.ok(
       marker,
       'Side-effect-only module should register construct via globalThis.CURRENT_BLOCKS_STACK',
+    );
+  });
+});
+
+describe('API Gateway stage throttling', () => {
+  test('BlocksStack.create() defaults to 200 rps / 400 burst', async () => {
+    const app = new cdk.App();
+
+    const stack = await BlocksStack.create(app, 'StackThrottleDefault', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
+      ]),
+    });
+  });
+
+  test('BlocksStack.create() forwards an explicit throttling override', async () => {
+    const app = new cdk.App();
+
+    const stack = await BlocksStack.create(app, 'StackThrottleOverride', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      throttling: { rateLimit: 2500, burstLimit: 5000 },
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 2500, ThrottlingBurstLimit: 5000 }),
+      ]),
+    });
+  });
+
+  test('BlocksStack.create() rejects a throttle that would block all traffic', async () => {
+    const app = new cdk.App();
+
+    await assert.rejects(
+      BlocksStack.create(app, 'StackThrottleInvalid', {
+        backendHandlerPath: handlerPath,
+        backendCDKPath: sideEffectBackendPath,
+        throttling: { rateLimit: 0, burstLimit: 0 },
+      }),
+      (err: Error) => {
+        assert.match(err.message, /must both be greater than 0/, `Unexpected error: ${err.message}`);
+        return true;
+      },
     );
   });
 });

@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BlocksBackend } from './blocks-backend.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
@@ -86,6 +86,72 @@ describe('synth shape (drop into existing stack)', () => {
 
     const template = Template.fromStack(parent);
     template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
+  });
+});
+
+describe('API Gateway stage throttling', () => {
+  test('defaults to 200 rps / 400 burst instead of inheriting the account limit', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ThrottleDefaultStack');
+
+    await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
+      ]),
+    });
+  });
+
+  test('explicit throttling prop overrides the default', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ThrottleOverrideStack');
+
+    await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      throttling: { rateLimit: 2500, burstLimit: 5000 },
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 2500, ThrottlingBurstLimit: 5000 }),
+      ]),
+    });
+  });
+
+  test('rejects limits that would throttle all traffic', async () => {
+    const invalidCases = [
+      { name: 'zero rate limit', throttling: { rateLimit: 0, burstLimit: 400 } },
+      { name: 'zero burst limit', throttling: { rateLimit: 200, burstLimit: 0 } },
+      { name: 'negative rate limit', throttling: { rateLimit: -1, burstLimit: 400 } },
+      { name: 'both zero', throttling: { rateLimit: 0, burstLimit: 0 } },
+    ];
+
+    for (const [i, { name, throttling }] of invalidCases.entries()) {
+      const app = new cdk.App();
+      const stack = new cdk.Stack(app, `ThrottleInvalidStack${i}`);
+
+      await assert.rejects(
+        BlocksBackend.create(stack, 'Blocks', {
+          backendHandlerPath: handlerPath,
+          backendCDKPath: sideEffectBackendPath,
+          throttling,
+        }),
+        (err: Error) => {
+          assert.match(
+            err.message,
+            /must both be greater than 0/,
+            `Expected throttling validation error for ${name}, got: ${err.message}`,
+          );
+          return true;
+        },
+        `Expected ${name} to be rejected at synth time`,
+      );
+    }
   });
 });
 
