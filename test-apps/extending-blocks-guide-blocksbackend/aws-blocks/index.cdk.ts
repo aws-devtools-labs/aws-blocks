@@ -11,7 +11,7 @@
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { BlocksBackend, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksBackend, SandboxDisableDeletionProtection, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -53,9 +53,9 @@ class MyExistingStack extends cdk.Stack {
       backendCDKPath: join(__dirname, 'index.ts'),
     });
 
-    // Wire IAM + env on the BlocksBackend's handler — same surface as BlocksStack.
+    // Wire IAM and runtime configuration on the BlocksBackend — same surface as BlocksStack.
     stack.externalQueue.grantSendMessages(stack.blocks.handler);
-    stack.blocks.handler.addEnvironment('EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
+    registerConfig(stack.blocks, 'EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.blocks.apiUrl });
     new cdk.CfnOutput(stack, 'ExternalQueueUrl', { value: stack.externalQueue.queueUrl });
