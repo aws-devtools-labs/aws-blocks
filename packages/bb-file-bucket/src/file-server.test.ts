@@ -427,4 +427,14 @@ describe('file-server: CORS', () => {
 		assert.strictEqual(res.status, 200);
 		assert.ok(res.headers.get('access-control-allow-methods')?.includes('PUT'));
 	});
+
+	test('CORS response does not credential a reflected/wildcard origin', async () => {
+		// The dev file-server reflects the request Origin (falling back to `*`).
+		// Pairing that with `Access-Control-Allow-Credentials: true` is the
+		// permissive-CORS pattern a security scanner flags. Presigned-token auth
+		// is a query param, not a cookie, so credentials are never needed.
+		const url = `http://localhost:${port}/.bb-file-bucket/any/path?token=x`;
+		const res = await fetch(url, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
+		assert.strictEqual(res.headers.get('access-control-allow-credentials'), null);
+	});
 });

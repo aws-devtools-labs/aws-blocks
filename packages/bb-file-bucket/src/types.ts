@@ -37,6 +37,22 @@ export interface FileBucketOptions {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Enable Amazon S3 server access logging. When `true`, a dedicated,
+	 * private log bucket is provisioned alongside the file bucket and every
+	 * request is logged to it under the `access-logs/` prefix. Default: `false`.
+	 *
+	 * CDK-only — ignored by the mock and browser runtimes (no AWS resource to
+	 * log against).
+	 */
+	accessLogging?: boolean;
+	/**
+	 * Days to retain server access logs before they expire. Only applies when
+	 * `accessLogging` is `true`. Default: 90.
+	 *
+	 * CDK-only — ignored by the mock and browser runtimes.
+	 */
+	logRetentionDays?: number;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }

@@ -68,12 +68,17 @@ export function attach(httpServer: Server) {
 			return;
 		}
 
-		// CORS for browser uploads/downloads
+		// CORS for browser uploads/downloads. This is localhost-only dev tooling
+		// (the `bb dev` Node http server) and is never deployed to AWS. We reflect
+		// the request origin so a frontend on any local port can upload/download,
+		// but we deliberately do NOT set `Access-Control-Allow-Credentials`:
+		// presigned-URL auth is carried in a query-string token, not a cookie, so
+		// credentials are never needed — and pairing credentials with a reflected/
+		// wildcard origin is the permissive-CORS pattern security scanners flag.
 		const origin = req.headers.origin || '*';
 		res.setHeader('Access-Control-Allow-Origin', origin);
 		res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
 		res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-		res.setHeader('Access-Control-Allow-Credentials', 'true');
 
 		if (req.method === 'OPTIONS') {
 			res.writeHead(200);
