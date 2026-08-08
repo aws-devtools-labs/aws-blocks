@@ -97,6 +97,28 @@ describe('params decoding', () => {
   });
 });
 
+describe('-32602 Invalid Params validation', () => {
+  for (const params of ['abc', 42, true, false, null]) {
+    it(`rejects ${JSON.stringify(params)} params`, () => {
+      const result = parseRpcRequest(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'api.echo',
+        params,
+        id: 'request-1',
+      }));
+
+      assert.strictEqual(result.ok, false);
+      if (!result.ok) {
+        const response = JSON.parse(result.response);
+        assert.strictEqual(response.error.code, RpcErrorCode.InvalidParams);
+        assert.strictEqual(response.error.data.name, 'InvalidParams');
+        assert.ok(response.error.message.includes('expected an array or object'));
+        assert.strictEqual(response.id, 'request-1');
+      }
+    });
+  }
+});
+
 describe('batch requests (top-level JSON array body)', () => {
   it('rejects an array body as Invalid Request with a null id', () => {
     const result = parseRpcRequest(JSON.stringify([
