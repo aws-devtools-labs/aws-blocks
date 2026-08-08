@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Template, Match } from 'aws-cdk-lib/assertions';
 import { BlocksBackend } from './blocks-backend.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
@@ -86,6 +86,43 @@ describe('synth shape (drop into existing stack)', () => {
 
     const template = Template.fromStack(parent);
     template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
+  });
+});
+
+describe('API Gateway throttling + access logging', () => {
+  test('stage enforces throttle limits and writes JSON access logs to a retained log group', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'ThrottleStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+    });
+
+    const template = Template.fromStack(parent);
+
+    // Stage carries the stage-wide throttle defaults (100 req/s steady, 200 burst)
+    // applied to all methods/resources ('*' / '/*').
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({
+          HttpMethod: '*',
+          ResourcePath: '/*',
+          ThrottlingRateLimit: 100,
+          ThrottlingBurstLimit: 200,
+        }),
+      ]),
+      // Access logging is wired to a destination with a non-empty (JSON) format.
+      AccessLogSetting: Match.objectLike({
+        DestinationArn: Match.anyValue(),
+        Format: Match.anyValue(),
+      }),
+    });
+
+    // A dedicated access-log group exists with 1-month (30-day) retention.
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      RetentionInDays: 30,
+    });
   });
 });
 
