@@ -54,10 +54,12 @@
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"
-    }
+    },
+    "./docs/*": "./docs/*"
   },
   "scripts": {
-    "prebuild": "node ../../scripts/sync-block-docs.mjs",
+    "prebuild": "node ../../scripts/gen-block-docs.mjs",
+    "prepack": "node ../../scripts/gen-block-docs.mjs",
     "build": "tsc --build",
     "test": "node --test dist/conditional-exports.test.js dist/vendorize-map.test.js"
   },
