@@ -30,6 +30,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly gateway: cdk.aws_apigateway.RestApi;
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+  public readonly executionRole: cdk.aws_iam.IRole;
 
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
@@ -43,6 +45,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     this.handler = infra.handler;
     this.gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
+    this.executionRole = infra.executionRole;
   }
 
   static async create(scope: Construct, id: string, props: BlocksStackProps) {
@@ -101,6 +104,28 @@ export class Scope extends Construct {
     }
     // Fallback to globalThis for backward compatibility
     return ((globalThis as any).CURRENT_BLOCKS_STACK as { handler: cdk.aws_lambda_nodejs.NodejsFunction }).handler;
+  }
+
+  /**
+   * The shared IAM role assumed by all Blocks compute. Building Blocks grant
+   * their permissions to this role instead of to an individual function's
+   * auto-role. CDK's `grant*()` / `addToPrincipalPolicy()` route those grants
+   * to the role's default (inline) policy — exactly where they landed on the
+   * auto-generated role before.
+   *
+   * Resolves the same way as {@link handler}: walk up to the owning
+   * BlocksStack/BlocksBackend, falling back to the ambient stack.
+   */
+  get executionRole(): cdk.aws_iam.IRole {
+    let current: Construct = this;
+    while (current.node.scope) {
+        current = current.node.scope as Construct;
+        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+            return current.executionRole;
+        }
+    }
+    // Fallback to globalThis for backward compatibility
+    return ((globalThis as any).CURRENT_BLOCKS_STACK as { executionRole: cdk.aws_iam.IRole }).executionRole;
   }
 
   get fullId(): string {
