@@ -568,7 +568,7 @@ tools: (tool) => ({
 
 ## Headless Usage (No UI)
 
-The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client Hook — useChat](#client-hook--usechat).
+The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client API — createChat](#client-api--createchat-recommended).
 
 ### Without tool approval
 
@@ -710,7 +710,56 @@ tools: (tool) => ({
 ```
 
 
-## Client Hook — `useChat`
+## Client API — `createChat` (recommended)
+
+Import from `@aws-blocks/bb-agent/client`. `createChat` is the **compute-agnostic** client API: the runtime (Lambda + Realtime today, others later) is hidden behind a single **transport**, so your call sites never name it. The common case is one call — `chat.sendMessage('Hello')` — with no channel dance and no subscribe-before-send race (subscribe and run are fused).
+
+You configure the transport **once**. For the current Lambda + Realtime runtime, use `realtimeTransport` — copy-paste this wiring and only change your API method names:
+
+```typescript
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
+
+const transport = realtimeTransport({
+  // Subscribe to a Realtime channel — the hydrated channel handle comes from your getChannel RPC.
+  subscribe: async (channelId, handler) => {
+    const { channel } = await api.agentGetChannel(channelId);
+    return channel.subscribe(handler);
+  },
+  // Start a new turn (submits the backend job that publishes chunks).
+  sendMessage: (channelId, message, conversationId) =>
+    api.agentStream(message, conversationId ?? undefined, channelId),
+  // Resume a paused turn with the user's interrupt responses.
+  resume: (channelId, responses, conversationId) =>
+    api.agentResume(channelId, responses, conversationId ?? undefined),
+});
+
+const chat = createChat({
+  transport,                                          // the one runtime-specific piece
+  api: {                                              // conversation CRUD — plain RPC, same across runtimes
+    createConversation:   () => api.agentCreateConversationId(),
+    getConversation:      (id) => api.agentGetConversation(id),
+    getPendingInterrupts: (id) => api.agentGetPendingInterrupts(id),
+  },
+  onMessagesChange: (msgs) => renderMessages(msgs),
+  onLoadingChange:  (loading) => updateSpinner(loading),
+  onInterrupt: async (interrupts) => {
+    const decisions = await showApprovalUI(interrupts);       // e.g. [{ interruptId, approved: true }]
+    await chat.sendMessage({ interruptResponses: decisions }); // same call resumes the turn
+  },
+});
+
+await chat.sendMessage('Hello!');
+```
+
+**Human-in-the-loop is the same `sendMessage`.** When a turn pauses, `onInterrupt` fires; continue the turn by calling `chat.sendMessage({ interruptResponses })` — there is no separate resume method.
+
+**Flexible primitives.** `sendMessage` is sugar over two primitives you can drop to for power cases: `chat.run(message)` produces a turn (returns `{ channelId }`, streams to subscribers) and `chat.subscribe({ channelId, observer })` attaches a consumer. Together they enable fan-out (several clients watching one channel), observer-only attach, and decoupled produce/consume. The easy default uses neither — it fuses them so the common case is correct by construction.
+
+**Note:** `createChat` is a factory, not a React hook — call it **once** (outside a component or in a ref). Message history only surfaces `user`, `assistant`, and `approval` messages; use `getConversation()` for the full history.
+
+## Client Hook — `useChat` (deprecated)
+
+> **Deprecated — prefer [`createChat`](#client-api--createchat-recommended).** `useChat` couples call sites to the Realtime channel mechanism (you hand-write a `subscribe` callback and an `api` adapter). `createChat` replaces the `subscribe` callback with a single `transport` and fuses subscribe + run. `useChat` remains for backward compatibility and is unchanged.
 
 Import from `@aws-blocks/bb-agent/client`. Manages conversation state, streaming subscriptions, and interrupt handling. Handles the subscribe-before-send ordering automatically.
 

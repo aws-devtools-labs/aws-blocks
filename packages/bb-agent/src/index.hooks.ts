@@ -18,6 +18,21 @@ import type { AgentStreamChunk } from './types.js';
 
 export type { AgentStreamChunk } from './types.js';
 
+// The compute-agnostic client API. Prefer these over useChat() — see createChat().
+export {
+	createChat,
+	realtimeTransport,
+} from './index.chat.js';
+export type {
+	CreateChatOptions,
+	ChatController,
+	ChatConversationApi,
+	SendInput,
+	ChatTransport,
+	ChunkStream,
+	TurnRequest,
+} from './index.chat.js';
+
 /** A message in the conversation (for UI rendering). */
 export interface ChatMessage {
 	id: string;
@@ -78,6 +93,13 @@ function nextId(): string {
 
 /**
  * Create a chat instance for managing agent conversations.
+ *
+ * @deprecated Prefer {@link createChat}, which is compute-agnostic and takes a
+ * single `transport` instead of a hand-written `subscribe` callback. `useChat`
+ * couples call sites to the Realtime channel mechanism and requires the app to
+ * assemble the `api` adapter + `subscribe` bridge by hand. `createChat` fuses
+ * subscribe + run so the subscribe-before-send race can't surface. This remains
+ * for backward compatibility and is unchanged.
  *
  * @example
  * ```typescript
