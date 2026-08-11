@@ -3,6 +3,10 @@
 
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
+import { rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -41,6 +45,60 @@ function synth(build: (stack: cdk.Stack) => void) {
 /** The CDK `Stack` has a `.id` property exactly like a BlocksStack, so `ScopeParent` accepts it once cast. */
 function scope(stack: cdk.Stack): ScopeParent {
 	return stack as unknown as ScopeParent;
+}
+
+/**
+ * Synth `AuthCognito` in a child process started with `--conditions=cdk` and
+ * return every DynamoDB table in the resulting template.
+ *
+ * Needed because this test file imports `./index.cdk.js` directly, which leaves
+ * nested blocks (`KVStore`, `AppSetting`) resolving to their mock entry points —
+ * those emit no CloudFormation. Only the real condition-based resolution shows
+ * the nested infrastructure a customer actually deploys.
+ *
+ * Runs against the built `dist/`, which the package's own test script requires
+ * anyway (`node --test dist/**\/*.test.js`).
+ */
+function synthUnderCdkConditions(): { id: string; timeToLive: unknown }[] {
+	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
+	writeFileSync(probe, `
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { Template } from 'aws-cdk-lib/assertions';
+import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+
+const app = new cdk.App();
+const stack = new cdk.Stack(app, 'TestStack');
+const handler = new lambda.Function(stack, 'Handler', {
+	runtime: DEFAULT_NODE_RUNTIME,
+	handler: 'index.handler',
+	code: lambda.Code.fromInline('exports.handler = async () => {};'),
+});
+stack.handler = handler;
+globalThis.CURRENT_BLOCKS_STACK = stack;
+new AuthCognito(stack, 'auth');
+finalizeConfigRegistry(stack, handler);
+
+const resources = Template.fromStack(stack).toJSON().Resources;
+const tables = Object.entries(resources)
+	.filter(([, r]) => r.Type === 'AWS::DynamoDB::Table')
+	.map(([id, r]) => ({ id, timeToLive: r.Properties.TimeToLiveSpecification }));
+console.log('__TABLES__' + JSON.stringify(tables));
+`);
+	try {
+		const result = spawnSync(process.execPath, ['--conditions=cdk', probe], { encoding: 'utf8' });
+		assert.strictEqual(
+			result.status,
+			0,
+			`real-CDK probe failed (build dist first: npm run build -w packages/bb-auth-cognito)\n${result.stderr}`,
+		);
+		const marker = result.stdout.split('__TABLES__')[1];
+		assert.ok(marker, `probe produced no table report\n${result.stdout}\n${result.stderr}`);
+		return JSON.parse(marker.trim());
+	} finally {
+		rmSync(probe, { force: true });
+	}
 }
 
 // ─── User Pool ──────────────────────────────────────────────────────────────
@@ -132,6 +190,15 @@ describe('AuthCognito (CDK) — user pool client', () => {
 		});
 	});
 
+	test('client enables PreventUserExistenceErrors (no username enumeration oracle)', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth');
+		});
+		template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+			PreventUserExistenceErrors: 'ENABLED',
+		});
+	});
+
 	test('hosted-UI / OAuth flows are disabled (no implicit grant, no placeholder callback)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth');
@@ -203,6 +270,20 @@ describe('AuthCognito (CDK) — session store', () => {
 		const customResources = template.findResources('Custom::CDKBucketDeployment');
 		const crKeys = Object.keys(customResources);
 		assert.ok(crKeys.length >= 1, 'Should have a BucketDeployment for config');
+	});
+
+	// Session records hold live Cognito refresh tokens, so the table must carry a
+	// TTL. That assertion needs the real CDK resolution, which this file cannot
+	// use (see the note above) — so synth it in a child process started with
+	// `--conditions=cdk`, exactly how a customer's `cdk synth` resolves it.
+	test('sessions table is provisioned with DynamoDB TTL enabled (real CDK resolution)', () => {
+		const tables = synthUnderCdkConditions();
+		assert.strictEqual(tables.length, 1, `expected exactly one DynamoDB table, got ${JSON.stringify(tables)}`);
+		assert.deepStrictEqual(
+			tables[0].timeToLive,
+			{ AttributeName: 'ttl', Enabled: true },
+			'the sessions table must expire session records instead of retaining refresh tokens forever',
+		);
 	});
 });
 

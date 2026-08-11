@@ -1,6 +1,6 @@
 name: blocks_runtime
 description: Runtime library for Blocks client SDK — JSON-RPC 2.0 HTTP client, WebSocket realtime, and file transferables.
-version: 0.1.0
+version: 0.1.1
 homepage: https://docs.aws.amazon.com/blocks/latest/devguide
 repository: https://github.com/aws-devtools-labs/aws-blocks
 issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
