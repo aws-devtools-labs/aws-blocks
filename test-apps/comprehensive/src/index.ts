@@ -277,7 +277,7 @@ console.log('[Comprehensive Test App] Loaded — all Building Blocks wired up');
 // Agent Chat
 // ============================================================================
 
-import { useChat } from '@aws-blocks/bb-agent/client';
+import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 
 const chatMessages = document.getElementById('chat-messages')!;
 const chatInput = document.getElementById('chat-input') as HTMLInputElement;
@@ -285,7 +285,7 @@ const chatStatus = document.getElementById('chat-status')!;
 const chatConvos = document.getElementById('chat-convos')!;
 
 const conversations: { conversationId: string; name: string }[] = [];
-let activeChat: ReturnType<typeof useChat> | null = null;
+let activeChat: ReturnType<typeof createChat> | null = null;
 let activeConvoId: string | null = null;
 
 function renderConvoList() {
@@ -317,21 +317,23 @@ function createChatForConvo(conversationId: string) {
 	if (activeChat) activeChat.destroy();
 
 	activeConvoId = conversationId;
-	activeChat = useChat({
-		api: {
-			sendMessage: async (convId, message, channelId) => {
-				await api.agentStream(message, convId, channelId);
+	activeChat = createChat({
+		transport: realtimeTransport({
+			subscribe: async (channelId, handler) => {
+				const { channel } = await api.agentGetChannel(channelId);
+				return channel.subscribe(handler);
 			},
+			sendMessage: async (channelId, message, convId) => {
+				await api.agentStream(message, convId ?? undefined, channelId);
+			},
+			resume: async (channelId, responses, convId) => {
+				await api.agentResume(channelId, responses.map(r => ({ interruptId: r.interruptId, approved: r.approved ?? false, trust: r.trust, toolName: r.toolName, input: r.input })), convId ?? undefined);
+			},
+		}),
+		api: {
 			createConversation: async () => ({ conversationId }),
 			getConversation: async (id) => await api.agentGetConversation(id),
-			resume: async (channelId, responses, convId) => {
-				await api.agentResume(channelId, responses, convId);
-			},
 			getPendingInterrupts: async (id) => await api.agentGetPendingInterrupts(id),
-		},
-		subscribe: async (channelId, handler) => {
-			const result: any = await api.agentGetChannel(channelId);
-			return result.channel.subscribe(handler);
 		},
 		onMessagesChange: (msgs) => {
 			chatMessages.innerHTML = msgs.map(m => {
@@ -400,7 +402,7 @@ w.approveInterrupt = async (interruptId: string, approved: boolean, toolName: st
 		box.style.background = approved ? '#e8f5e9' : '#ffebee';
 		box.innerHTML = `<strong style="color:${approved ? '#388e3c' : '#c62828'};">${approved ? '✓' : '✗'} ${toolName}: ${label}</strong>`;
 	}
-	await activeChat.respondToInterrupt([{ interruptId, approved, trust, toolName }]);
+	await activeChat.sendMessage({ interruptResponses: [{ interruptId, approved, trust, toolName }] });
 };
 
 w.respondInterrupt = async (interruptId: string, response: string, toolName: string) => {
@@ -412,7 +414,7 @@ w.respondInterrupt = async (interruptId: string, response: string, toolName: str
 		box.style.background = approved ? '#e8f5e9' : '#ffebee';
 		box.innerHTML = `<strong style="color:${approved ? '#388e3c' : '#c62828'};">${approved ? '✓' : '✗'} ${toolName}: ${response}</strong>`;
 	}
-	await activeChat.respondToInterrupt([{ interruptId, approved: response === 'yes', toolName }]);
+	await activeChat.sendMessage({ interruptResponses: [{ interruptId, approved: response === 'yes', toolName }] });
 };
 
 w.chatNew = async () => {
