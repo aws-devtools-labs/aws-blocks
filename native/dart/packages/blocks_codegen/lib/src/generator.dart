@@ -69,8 +69,10 @@ class DartCodeGenerator {
     buf.writeln();
     for (final entry in model.types.entries) {
       if (emittedTypes.contains(entry.key)) continue;
-      if (!schemaTypes.contains(entry.key) && typeUsage.containsKey(entry.key))
+      if (!schemaTypes.contains(entry.key) &&
+          typeUsage.containsKey(entry.key)) {
         continue;
+      }
       final code = _emitType(entry.value, model.types, emittedTypes);
       if (code.isNotEmpty) {
         buf.writeln(code);
@@ -276,8 +278,9 @@ class DartCodeGenerator {
             .map((p) => p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1))
             .join();
     // Ensure it starts with a letter
-    if (result.isEmpty || !RegExp(r'^[a-zA-Z_]').hasMatch(result))
+    if (result.isEmpty || !RegExp(r'^[a-zA-Z_]').hasMatch(result)) {
       return '_$result';
+    }
     return result;
   }
 
@@ -874,7 +877,7 @@ class DartCodeGenerator {
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
       SealedClassType(name: final name) =>
         '$accessor == null ? null : $name.fromJson($accessor as Map<String, dynamic>)',
-      _ => '$accessor',
+      _ => accessor,
     };
   }
 
@@ -945,8 +948,9 @@ class DartCodeGenerator {
     final cast = '$accessor as Map<String, dynamic>';
     return switch (blocksType) {
       'realtime/channel' => () {
-          if (typeArgs.isEmpty)
+          if (typeArgs.isEmpty) {
             return 'RealtimeChannel.fromJson($cast, (json) => json)';
+          }
           final argType = _dartTypeStr(typeArgs[0], allTypes);
           return 'RealtimeChannel.fromJson($cast, (json) => $argType.fromJson(json))';
         }(),

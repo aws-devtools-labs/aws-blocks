@@ -313,7 +313,7 @@ class CodegenModelBuilder {
       [String? path]) {
     if (ref is InlineObjectRef) {
       // Resolve fields first, then check for structural match
-      final tempName = hint != null ? '${hint}Message' : '_Anon${_anonCounter}';
+      final tempName = hint != null ? '${hint}Message' : '_Anon$_anonCounter';
       final childPath = path == null ? null : '$path>message';
       final fields = ref.properties.entries.map((e) {
         return RecordField(
@@ -523,7 +523,7 @@ class CodegenModelBuilder {
       SealedClassType? embeddedUnion;
       if (group.length == 1 && group.first.embeddedUnion != null) {
         final nestedName =
-            '${className}${_capitalize(group.first.embeddedUnion!.discriminant)}';
+            '$className${_capitalize(group.first.embeddedUnion!.discriminant)}';
         final resolved = _resolveDiscriminatedUnion(
             group.first.embeddedUnion!, nestedName, variantPath);
         embeddedUnion = resolved is SealedClassType ? resolved : null;

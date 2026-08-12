@@ -36,7 +36,7 @@ class _BlocksCodegenBuilder extends Builder {
     // .spec.json → .blocks.dart (strip both extensions)
     final path = inputId.path;
     final outputPath =
-        path.substring(0, path.length - '.spec.json'.length) + '.blocks.dart';
+        '${path.substring(0, path.length - '.spec.json'.length)}.blocks.dart';
     final outputId = AssetId(inputId.package, outputPath);
     await buildStep.writeAsString(outputId, output);
   }
