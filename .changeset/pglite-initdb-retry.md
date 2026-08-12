@@ -2,6 +2,7 @@
 "@aws-blocks/data-common": patch
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-distributed-data": patch
+"@aws-blocks/blocks": patch
 ---
 
 Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
