@@ -4,7 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, SandboxDisableDeletionProtection, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -49,10 +49,11 @@ const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: BlocksPresets.sandbox,
   vpc: {
     // Use fromLookup with the stack's own env — CDK will resolve it at synth.
     // This works because BlocksStack IS a Stack, satisfying CDK's scope requirement.
-    vpc: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
+    network: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
     provisionEndpoints: false,
   },
 });

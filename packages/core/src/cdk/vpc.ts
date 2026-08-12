@@ -48,7 +48,7 @@ function hasBuildingBlockProtocol(construct: Construct): construct is Construct 
  * @internal
  */
 export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcContext {
-  const { vpc, subnets } = options;
+  const { network: vpc, subnets } = options;
 
   const resolvedSubnets = subnets ?? { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
 
@@ -90,7 +90,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
     return;
   }
 
-  const { vpc } = options;
+  const { network: vpc } = options;
 
   const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
   const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];

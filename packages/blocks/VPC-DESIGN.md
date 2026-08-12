@@ -22,7 +22,7 @@ Place an AWS Blocks application in a VPC with a single prop on `BlocksStack`/`Bl
 ```typescript
 interface BlocksVpcOptions {
   /** The VPC to place Lambdas and VPC-resident resources into. */
-  vpc: ec2.IVpc;
+  network: ec2.IVpc;
 
   /**
    * Subnet selection for Lambda and all Blocks-managed compute placement.
@@ -50,7 +50,7 @@ const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { vpc },
+  vpc: { network: vpc },
 });
 
 // Bring existing VPC with pre-provisioned endpoints
@@ -58,7 +58,7 @@ const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { vpc: sharedVpc, provisionEndpoints: false },
+  vpc: { network: sharedVpc, provisionEndpoints: false },
 });
 ```
 
@@ -151,7 +151,7 @@ This avoids:
 test-apps/vpc-smoke/
 ├── aws-blocks/
 │   ├── index.ts          # Instantiates KVStore, DistributedTable, FileBucket, AsyncJob, AppSetting, Realtime, AuthCognito, Database, Logger, Metrics, Tracer
-│   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { vpc, provisionEndpoints: true }
+│   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances
 └── package.json
 ```

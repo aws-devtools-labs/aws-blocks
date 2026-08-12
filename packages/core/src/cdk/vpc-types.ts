@@ -18,7 +18,7 @@ export type SubnetRole = 'private-with-egress' | 'isolated' | 'public';
  * await BlocksStack.create(app, stackName, {
  *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
  *   backendCDKPath: join(__dirname, 'index.ts'),
- *   vpc: { vpc },
+ *   vpc: { network: vpc },
  * });
  * ```
  */
@@ -32,7 +32,7 @@ export interface BlocksVpcOptions {
    * // or
    * const vpc = ec2.Vpc.fromLookup(stack, 'SharedVpc', { vpcId: 'vpc-abc123' });
    */
-  vpc: ec2.IVpc;
+  network: ec2.IVpc;
 
   /**
    * Subnet selection for Lambda and Blocks-managed compute placement.

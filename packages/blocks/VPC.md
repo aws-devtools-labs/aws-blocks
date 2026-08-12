@@ -44,7 +44,7 @@ const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { vpc },
+  vpc: { network: vpc },
 });
 ```
 
@@ -61,7 +61,7 @@ For a shared or separately managed VPC:
 const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
 await BlocksStack.create(app, stackName, {
   ...,
-  vpc: { vpc: sharedVpc },  // Blocks provisions endpoints automatically
+  vpc: { network: sharedVpc },  // Blocks provisions endpoints automatically
 });
 ```
 
@@ -72,7 +72,7 @@ If VPC endpoints are managed separately (e.g., in another stack or by another te
 ```typescript
 await BlocksStack.create(app, stackName, {
   ...,
-  vpc: { vpc: sharedVpc, provisionEndpoints: false },
+  vpc: { network: sharedVpc, provisionEndpoints: false },
 });
 ```
 
@@ -81,7 +81,7 @@ await BlocksStack.create(app, stackName, {
 ```typescript
 interface BlocksVpcOptions {
   /** The VPC to place Lambdas and VPC-resident resources into. */
-  vpc: ec2.IVpc;
+  network: ec2.IVpc;
 
   /**
    * Subnet selection for Lambda and all Blocks-managed compute placement.

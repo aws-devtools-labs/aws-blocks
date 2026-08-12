@@ -1,5 +1,7 @@
 ---
 "@aws-blocks/core": minor
+"@aws-blocks/blocks": patch
+"@aws-blocks/create-blocks-app": patch
 "@aws-blocks/bb-kv-store": patch
 "@aws-blocks/bb-distributed-table": patch
 "@aws-blocks/bb-file-bucket": patch
@@ -15,4 +17,4 @@
 "@aws-blocks/bb-auth-oidc": patch
 ---
 
-Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ vpc, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.
+Simplify VPC implementation: replace `registerVpcEndpoint` (instanceof-based) with two explicit methods (`registerVpcGatewayEndpoint` / `registerVpcInterfaceEndpoint`), simplify `BlocksVpcOptions` to `{ network, subnets?, provisionEndpoints? }`, and strip persistent test VPC to bare minimum.

@@ -346,7 +346,7 @@ export interface BlocksStackProps extends StackProps {
    * await BlocksStack.create(app, stackName, {
    *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
    *   backendCDKPath: join(__dirname, 'index.ts'),
-   *   vpc: { vpc },
+   *   vpc: { network: vpc },
    * });
    * ```
    */
