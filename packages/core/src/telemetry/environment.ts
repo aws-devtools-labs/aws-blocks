@@ -31,7 +31,6 @@ export function isCI(): boolean {
     process.env.BITBUCKET_BUILD_NUMBER ||
     process.env.BUILDKITE ||
     process.env.RENDER ||
-    process.env.TASK_ID ||
     process.env.TASKCLUSTER_ROOT_URL
   );
 }
