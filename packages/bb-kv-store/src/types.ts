@@ -15,6 +15,62 @@ export interface ConditionalWriteOptions<T = unknown> {
 	ifValueEquals?: T;
 }
 
+/**
+ * Options accepted by `put`. A superset of {@link ConditionalWriteOptions} —
+ * every existing `put(key, value, { ifNotExists })` call remains valid.
+ *
+ * `ttlSeconds` and `expiresAt` are mutually exclusive; passing both throws
+ * `ValidationFailedException`. Both require the store to be constructed with
+ * `{ ttl: true }` for DynamoDB to actually reap the item (reads filter expired
+ * items regardless).
+ */
+export interface PutOptions<T = unknown> extends ConditionalWriteOptions<T> {
+	/**
+	 * Expire this item `ttlSeconds` from now (relative). Must be a finite
+	 * number greater than zero; fractional values round up to the next second.
+	 *
+	 * @example
+	 * ```typescript
+	 * await cache.put('otp:alice', code, { ttlSeconds: 300 }); // 5 minutes
+	 * ```
+	 */
+	ttlSeconds?: number;
+	/**
+	 * Expire this item at an absolute point in time — either a `Date` or a Unix
+	 * epoch timestamp **in seconds** (the DynamoDB TTL unit). Values that look
+	 * like epoch milliseconds are rejected rather than silently stored as a
+	 * year-5138 expiry.
+	 *
+	 * @example
+	 * ```typescript
+	 * await sessions.put(id, record, { expiresAt: new Date(jwt.exp * 1000) });
+	 * ```
+	 */
+	expiresAt?: Date | number;
+}
+
+/**
+ * Options accepted by `scan`.
+ */
+export interface ScanOptions {
+	/**
+	 * Yield items whose `ttl` has passed but which DynamoDB's reaper has not
+	 * deleted yet. Defaults to `false`, so a scan sees only live items.
+	 *
+	 * Enable this only for maintenance sweeps that must act on every row still
+	 * physically present — deleting the remains of expired items, for example.
+	 * Reads that answer "is this still valid?" must leave it off.
+	 *
+	 * @example
+	 * ```typescript
+	 * for await (const { key } of sessions.scan({ includeExpired: true })) {
+	 *   await sessions.delete(key);
+	 * }
+	 * ```
+	 */
+	includeExpired?: boolean;
+}
+
 export interface ConditionalDeleteOptions<T = unknown> {
 	/** Only delete if the key exists. Throws ConditionalCheckFailedException otherwise. */
 	ifExists?: boolean;
@@ -56,6 +112,25 @@ export interface KVStoreOptions<T = string> {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Enable DynamoDB Time-to-Live on the underlying table so items written with
+	 * `put(key, value, { ttlSeconds })` (or `{ expiresAt }`) are deleted
+	 * automatically once they expire. The attribute name is fixed to `ttl`.
+	 *
+	 * Defaults to `false`. Opt-in because turning TTL on for a table that
+	 * already exists is a CloudFormation update to the live table.
+	 *
+	 * DynamoDB's reaper is asynchronous (typically within 48 hours of expiry),
+	 * so `get` and `scan` also filter expired items on read in every runtime —
+	 * an expired item is never returned even while it is still on disk.
+	 *
+	 * @example
+	 * ```typescript
+	 * const sessions = new KVStore<Session>(scope, 'sessions', { ttl: true });
+	 * await sessions.put(id, record, { ttlSeconds: 3600 });
+	 * ```
+	 */
+	ttl?: boolean;
 }
 
 export interface ExternalTableRef {

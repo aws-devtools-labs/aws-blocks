@@ -12,7 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME, registerStackBlocksDefaults, BlocksPresets } from '@aws-blocks/core/cdk';
 import { KVStore } from './index.cdk.js';
 
@@ -102,4 +102,47 @@ test('CDK: calling a runtime data method throws an actionable error (not a crypt
       `${method}() should throw the actionable synth-time error`,
     );
   }
+});
+
+// TTL is opt-in: switching it on for a table that already exists is an update
+// to the live table, so the default must never emit a TimeToLiveSpecification.
+
+test('CDK: TTL is off by default', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions');
+  Template.fromStack(stack).hasResourceProperties('AWS::DynamoDB::Table', {
+    TimeToLiveSpecification: Match.absent(),
+  });
+});
+
+test('CDK: { ttl: false } does not enable TTL', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { ttl: false });
+  Template.fromStack(stack).hasResourceProperties('AWS::DynamoDB::Table', {
+    TimeToLiveSpecification: Match.absent(),
+  });
+});
+
+test('CDK: { ttl: true } enables TTL on the ttl attribute', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { ttl: true });
+  Template.fromStack(stack).hasResourceProperties('AWS::DynamoDB::Table', {
+    TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+  });
+});
+
+test('CDK: TTL composes with removalPolicy', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { ttl: true, removalPolicy: 'destroy' });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: true },
+  });
+  template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
+});
+
+test('CDK: fromExisting + ttl still provisions nothing (no table to configure)', () => {
+  const { stack, parent } = setup();
+  new KVStore(parent, 'sessions', { ttl: true, table: KVStore.fromExisting('preexisting-table-123') });
+  Template.fromStack(stack).resourceCountIs('AWS::DynamoDB::Table', 0);
 });

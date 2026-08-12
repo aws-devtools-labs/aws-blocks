@@ -1,5 +1,87 @@
 # @aws-blocks/core
 
+## 0.1.18
+
+### Patch Changes
+
+- cb779c8: feat(core): add a shared Blocks execution role and `Scope.executionRole` getter
+
+  The Blocks stack/backend now provisions one explicit IAM role (with
+  `AWSLambdaBasicExecutionRole` attached) that the handler assumes, and exposes it
+  as `executionRole`. A new `Scope.executionRole` getter resolves the role from
+  any Building Block. Additive and non-breaking: the same handler is created, now
+  backed by an explicit role instead of an auto-generated one, with block grants
+  sitting on the role's default policy exactly as before.
+
+  Migration note: on an existing deployed stack, upgrading replaces the Lambda
+  execution role — CloudFormation deletes the old auto-generated role and creates
+  the new `BlocksRole`. This is runtime-equivalent (the same grants re-attach to
+  the new role) and needs no action, but a change-set diff will show a role
+  delete+create rather than a no-op.
+
+## 0.1.17
+
+### Patch Changes
+
+- b48aaec: Route the 504 timeout response's CORS headers through the allowlist-validated `buildCorsHeaders` helper instead of reflecting the request `Origin` (with a `'*'` fallback) alongside `Access-Control-Allow-Credentials: true`. Disallowed origins now get no CORS grant on timeout. Also lowers `Access-Control-Max-Age` from `86400` to `7200` on OPTIONS preflights and in the dev server, since browsers cap preflight caching well below 86400.
+
+  Adds `Vary: Origin` to every CORS response (Lambda and dev server) so shared caches key on the request origin and can't serve one origin's `Access-Control-Allow-Origin` grant to another. The `7200` value is now the single exported `CORS_MAX_AGE` constant, and the disallowed-origin warning logs once per distinct origin instead of once per request.
+
+- ac0966a: docs: correct default local dev port to :3000/aws-blocks/api
+- 9de27dd: fix(core): stream CloudFormation progress to stdout and stop a stray SIGTERM from killing an in-flight deploy
+
+  `npm run deploy` wrote nothing to stdout for the whole CloudFormation phase, and
+  a backgrounded deploy was killed (exit 143) while CloudFormation kept going and
+  finished server-side. Callers had no progress signal, could not tell success from
+  failure, and re-ran deploys that had actually worked.
+
+  Two causes, both fixed:
+
+  - The CDK CLI picks its log stream as `isCI ? stdout : stderr`, so every
+    CloudFormation event went to stderr and `npm run deploy > deploy.log` captured
+    zero bytes. The deploy now passes `--ci` (log lines on stdout, errors still on
+    stderr) and `--progress events` (one line per resource transition instead of a
+    progress bar that needs a TTY).
+  - The deploy ran `cdk deploy` through a blocking synchronous spawn with the child
+    in this process's group, so signals could not be handled and the default
+    SIGTERM disposition killed the CLI mid-deploy. The CDK CLI is now spawned in
+    its own process group with its output piped and relayed line by line as it
+    arrives, plus an idle heartbeat while a slow resource is converging. A single
+    SIGTERM, or any SIGHUP, no longer abandons a converging deploy: it logs and
+    keeps streaming. Ctrl-C, or a second SIGTERM, aborts and reaps the CDK process
+    tree. Repeat deliveries of the same signal inside the coalescing window log one
+    line instead of one per delivery.
+
+  Worth knowing before you upgrade:
+
+  - **The signal resilience is POSIX-only.** It needs process groups (`detached` is
+    passed only when `process.platform !== 'win32'`) and real signal delivery, and
+    Windows has neither: nothing outside the process delivers SIGTERM/SIGHUP there,
+    so a kill on the process tree still ends the deploy and the abort path reaps by
+    pid. Streaming, the heartbeat and the `--ci` argv apply on every platform.
+  - **The `❌ Deployment failed.` banner moved from stderr to stdout**
+    (`console.error` → `console.log`), so a caller capturing only stdout can tell a
+    failed deploy from a killed process. Anything grepping _stderr_ for that exact
+    string will no longer match it. The failure _reason_ has not moved: the CDK CLI
+    keeps error-level output on stderr even under `--ci`, and the deploy entrypoint
+    still prints the error itself with `console.error`, so stderr remains the place
+    to grep for why a deploy failed. Both halves of that split are now covered by
+    tests, including one against the real CDK CLI.
+
+- 8e96d87: Return a JSON usage hint instead of an empty body when a dev-server request doesn't match `POST /aws-blocks/api`. Opening the endpoint in a browser (a GET) or hitting a REST-style URL previously returned a bare 404 with no body; it now responds with `{ error, expected: { method: 'POST', path: '/aws-blocks/api' } }`, and says so explicitly when the path was right but the method was wrong.
+- 58f77dd: Document four things people were reverse-engineering from compiled output.
+
+  - **Runtime config resolution.** The client config is served at the dotted path `/.blocks-sandbox/config.json`; `/config.json` is not a route, so a 404 there means nothing. `{"_placeholder":true}` in the frontend build output is the Hosting construct's synth-time stub (the real `apiUrl` is still an unresolved CloudFormation token), so it is expected pre-deploy rather than a broken config. Covers the resolution order, what each environment should actually return, and what a genuine failure looks like.
+  - **`RawRoute`.** Full section in the core README: constructor signature, a `GET` example that sets status, `Content-Type` and body, what you can read off `ctx.request` and write to `ctx.response`, path/parameter/wildcard syntax, and the registration rules (reserved paths, duplicate routes, register-during-load). Also added a "serve a raw HTTP endpoint" entry to the block catalog decision tree, which had no pointer to it.
+  - **Server-initiated OIDC sign-in.** New section in the `bb-auth-oidc` README for `GET /aws-blocks/auth/signin/<provider>`: the redirect chain through the IdP and the callback, the pending-auth and session cookies, the JSON error shape, a runnable `curl` walkthrough, when to use it instead of the client PKCE API, and a pointer to the integration tests that assert each response. One route is mounted per configured provider, so an undeclared provider name 404s instead of reporting `ProviderNotConfiguredException`, which comes from `getSignInUrl()`.
+  - **Error and RPC semantics.** `ApiError`'s constructor arguments (including `cause` staying server-side and `retriable`), how its `status` becomes the JSON-RPC error code and decodes back into an `ApiError` on the client, `hasAuthError`'s signature and when it applies instead of `isBlocksError`, how `params` is read as positional args vs a named object, that a top-level JSON array body (a batch) is rejected with `-32600`, and that `broadcastAuthChange` comes from `@aws-blocks/blocks/ui` rather than the package root.
+
+  Docs only, plus tests locking in the documented `ApiError`, `params` and batch-rejection behaviour, and the documented `404`s on the OIDC sign-in and sign-out routes.
+
+- 2d3dfdc: Remove the redundant `--hotswap` flag from the `cdk watch` invocation in `npm run sandbox`. `cdk watch` already performs hotswap deployments by default, so passing the flag explicitly was redundant and emitted a duplicate-option warning on some `aws-cdk` CLI versions.
+- Updated dependencies [0284e5b]
+  - @aws-blocks/hosting@0.1.8
+
 ## 0.1.16
 
 ### Patch Changes

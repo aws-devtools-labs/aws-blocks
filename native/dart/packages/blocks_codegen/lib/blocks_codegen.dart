@@ -1,5 +1,5 @@
 /// Blocks Codegen — reads OpenRPC specs and generates typed Dart clients.
-library blocks_codegen;
+library;
 
 export 'src/parser.dart';
 export 'src/builder.dart';

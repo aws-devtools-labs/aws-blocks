@@ -72,7 +72,7 @@ jobs:
       - run: npm ci
 
       - name: Sync block docs (prebuild step)
-        run: node scripts/sync-block-docs.mjs
+        run: node scripts/gen-block-docs.mjs
 
       - name: Check blocks docs-sync integrity
         env:
@@ -80,14 +80,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          # sync-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
+          # Release PRs consume changesets — the files are already gone. Skip.
+          if [[ "$GITHUB_HEAD_REF" == "changeset-release/main" ]]; then
+            echo "✅ Skipping — release PR (changesets already consumed into version bumps)"
+            exit 0
+          fi
+
+          # gen-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
           # (docs/ is gitignored, built at publish time). We compare the packed
           # @aws-blocks/blocks tarball at THIS PR's head against the PR base branch —
           # like-for-like (same algo, same build state), so only a change introduced by
           # THIS PR trips the check. A PR that doesn't alter what ships needs no bump.
+          # The base pack falls back to the pre-rename sync-block-docs.mjs so this job works
+          # against bases from either side of the gen-block-docs.mjs rename.
           pack_blocks() {
             local dest="$1"
-            node scripts/sync-block-docs.mjs >/dev/null
+            node scripts/gen-block-docs.mjs >/dev/null
             # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null )
             set -- "$dest"/*.tgz
@@ -103,7 +111,7 @@ jobs:
           mkdir -p /tmp/base-pack
           BASE_INTEGRITY=$(
             cd /tmp/blocks-base
-            node scripts/sync-block-docs.mjs >/dev/null
+            node scripts/gen-block-docs.mjs >/dev/null 2>/dev/null || node scripts/sync-block-docs.mjs >/dev/null
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null )
             set -- /tmp/base-pack/*.tgz
             [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }

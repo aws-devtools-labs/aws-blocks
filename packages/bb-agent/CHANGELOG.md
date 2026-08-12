@@ -1,5 +1,26 @@
 # @aws-blocks/bb-agent
 
+## 0.3.3
+
+### Patch Changes
+
+- feb5be4: Regenerate the API report to match the current `BedrockModels` source (the committed `API.md` had drifted from the model-id constants). No source or runtime change.
+- Updated dependencies [5b2aede]
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [bd59e60]
+- Updated dependencies [f583c75]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/bb-distributed-table@0.1.4
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/bb-file-bucket@0.1.3
+  - @aws-blocks/bb-async-job@0.1.3
+  - @aws-blocks/bb-logger@0.1.3
+
 ## 0.3.2
 
 ### Patch Changes

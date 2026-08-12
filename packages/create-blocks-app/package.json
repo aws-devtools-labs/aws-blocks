@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/create-blocks-app",
-  "version": "0.1.17",
+  "version": "0.1.19",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/create-blocks-app"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/create-blocks-app#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",

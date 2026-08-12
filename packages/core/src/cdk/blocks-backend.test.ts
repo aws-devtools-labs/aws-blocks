@@ -6,9 +6,11 @@ import assert from 'node:assert';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Template, Match } from 'aws-cdk-lib/assertions';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
+import { Scope } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
 before(() => {
@@ -20,6 +22,7 @@ const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backend.js');
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const fullIdConstructBackendPath = join(__dirname, '__fixtures__', 'fullid-construct-backend.js');
+const EXECUTION_ROLE_MARKER_ACTION = 'blocks-test:MarkerAction';
 
 describe('ESM cache-busting (multi-stage)', () => {
   test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -92,6 +95,95 @@ describe('synth shape (drop into existing stack)', () => {
 
     const template = Template.fromStack(parent);
     template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
+  });
+});
+
+describe('shared execution role', () => {
+  test('exposes executionRole on the backend', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'RoleSurfaceStack');
+
+    const backend = await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    assert.ok(backend.executionRole, 'BlocksBackend should expose .executionRole');
+  });
+
+  test('synth produces a Lambda-assumable role with basic execution, and the handler uses it', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'RoleSynthStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    const template = Template.fromStack(parent);
+
+    // The shared role (logical id derived from the 'BlocksRole' construct id)
+    // is assumable by Lambda and carries AWSLambdaBasicExecutionRole (so
+    // CloudWatch Logs keep working after swapping off the auto-role). Other
+    // roles exist (API Gateway CloudWatch role, config BucketDeployment role),
+    // so we target ours by logical id.
+    const roles = template.findResources('AWS::IAM::Role');
+    const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
+    assert.ok(blocksRoleId, 'expected a role from the BlocksRole construct');
+    const blocksRole = roles[blocksRoleId];
+    assert.deepStrictEqual(blocksRole.Properties.AssumeRolePolicyDocument.Statement[0], {
+      Action: 'sts:AssumeRole',
+      Effect: 'Allow',
+      Principal: { Service: 'lambda.amazonaws.com' },
+    });
+    assert.ok(
+      JSON.stringify(blocksRole.Properties.ManagedPolicyArns ?? []).includes('AWSLambdaBasicExecutionRole'),
+      'BlocksRole should attach AWSLambdaBasicExecutionRole',
+    );
+
+    // The Blocks handler references the shared role, not an auto-generated one.
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
+    });
+  });
+
+  test('a nested block resolves executionRole via the construct-tree walk', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'RoleResolveStack');
+
+    const backend = await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // Build nested Scopes under the backend (outer → inner), the same shape a
+    // real Building Block tree has, and grant a uniquely-named marker action to
+    // `this.executionRole` from the innermost scope. If the getter's tree-walk
+    // failed, it would resolve the wrong role (or throw), and the marker would
+    // not land on the backend's shared role.
+    // `create()` sets globalThis.CURRENT_BLOCKS_STACK = backend, so a parent-less
+    // Scope attaches under the backend (the same way a real backend module's
+    // top-level blocks do); `inner` is then nested one level deeper.
+    const outer = new Scope('outer');
+    const inner = new Scope('inner', { parent: outer });
+
+    // Resolves to the backend's shared role from two levels deep.
+    assert.strictEqual(inner.executionRole, backend.executionRole);
+
+    inner.executionRole.addToPrincipalPolicy(
+      new PolicyStatement({ actions: [EXECUTION_ROLE_MARKER_ACTION], resources: ['*'] }),
+    );
+
+    // The grant lands on the shared role's default inline policy (AWS::IAM::Policy).
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([Match.objectLike({ Action: EXECUTION_ROLE_MARKER_ACTION })]),
+      },
+    });
   });
 });
 

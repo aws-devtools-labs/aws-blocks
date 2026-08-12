@@ -6,10 +6,11 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import { Scope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KVStoreOptions, ExternalTableRef } from './types.js';
+import { TTL_ATTRIBUTE } from './ttl.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
 
 export class KVStore extends Scope {
 	private table: ITable;
@@ -49,6 +50,9 @@ export class KVStore extends Scope {
 				billingMode: BillingMode.PAY_PER_REQUEST,
 				removalPolicy,
 				deletionProtection: this.defaults.deletionProtection,
+				// Opt-in: enabling TTL on an already-deployed table is a live table
+				// update, so it must never happen implicitly.
+				timeToLiveAttribute: options?.ttl ? TTL_ATTRIBUTE : undefined,
 			});
 		}
 
