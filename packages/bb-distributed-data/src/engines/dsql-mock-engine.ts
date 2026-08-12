@@ -86,7 +86,20 @@ export class DsqlMockEngine implements DatabaseEngine {
         // Pin this.db to the settled instance explicitly (not just via the recreate closure).
         .then((db) => (this.db = db))
         .catch((error) => {
+          // Init retry is exhausted; initializePgliteWithRetry has already closed
+          // the last trapped instance, so this.db now points at a dead handle.
+          // Reset readiness AND swap in a fresh, un-probed instance. Without the
+          // swap, the next call would re-probe the CLOSED handle, whose error is a
+          // "closed" error (not an `unreachable` trap) and is therefore classified
+          // non-retryable — permanently wedging the engine and defeating the
+          // "a later query can retry" recovery documented above. Recreating here
+          // is best effort; if it throws we keep propagating the original init error.
           this.ready = undefined;
+          try {
+            this.db = this.createDb();
+          } catch {
+            // Leave the dead handle in place; the original init error is more useful.
+          }
           throw error;
         });
     }
