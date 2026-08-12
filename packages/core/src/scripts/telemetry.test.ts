@@ -27,6 +27,8 @@ const NO_CI_ENV: Record<string, string> = {
   BITBUCKET_BUILD_NUMBER: '',
   BUILDKITE: '',
   RENDER: '',
+  TASK_ID: '',
+  TASKCLUSTER_ROOT_URL: '',
   AWS_BLOCKS_DISABLE_TELEMETRY: '',
 };
 
