@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { BlocksBackend } from './blocks-backend.js';
-import { BlocksStack } from './index.js';
+import { BlocksStack, BlocksPresets } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
 before(() => {
@@ -26,11 +26,13 @@ describe('ESM cache-busting (multi-stage)', () => {
     const stack1 = await BlocksStack.create(app, 'PipelineStage1', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const stack2 = await BlocksStack.create(app, 'PipelineStage2', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const findMarker = (scope: any) => scope.node.tryFindChild('SideEffectMarker');
@@ -53,6 +55,7 @@ describe('factory function support', () => {
     const stack = await BlocksStack.create(app, 'FactoryBlocksStack', {
       backendHandlerPath: handlerPath,
       backendCDKPath: factoryBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = stack.node.tryFindChild('FactoryMarker');
@@ -68,6 +71,7 @@ describe('legacy side-effect mode (no default export)', () => {
     const backend = await BlocksBackend.create(stack, 'LegacyStage', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = backend.node.tryFindChild('SideEffectMarker');
@@ -92,6 +96,7 @@ describe('assertCdkConditionActive', () => {
         BlocksStack.create(app, 'MissingConditionStack', {
           backendHandlerPath: handlerPath,
           backendCDKPath: sideEffectBackendPath,
+          defaults: BlocksPresets.production,
         }),
         (err: Error) => {
           assert.ok(err.message.includes('Missing --conditions=cdk'), `Expected condition error, got: ${err.message}`);

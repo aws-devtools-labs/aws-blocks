@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
-import { type HardeningDefaults, registerStackHardeningDefaults } from './hardening-defaults.js';
+import { type BlocksDefaults, registerStackBlocksDefaults } from './blocks-defaults.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -46,20 +46,21 @@ export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
   /**
-   * Stack-wide infrastructure-hardening defaults applied to every Building
-   * Block. See {@link HardeningDefaults}. A per-block option always overrides
-   * the corresponding stack default; omit to accept the framework's secure
-   * defaults.
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
+   * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
+   * individual fields as needed. A per-block option always wins over the
+   * corresponding stack default.
    */
-  hardening?: HardeningDefaults;
+  defaults: BlocksDefaults;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
-  // Publish stack-wide hardening defaults before any Building Block is
-  // constructed, so blocks can read them at synth time via
-  // getStackHardeningDefaults()/resolve*().
-  registerStackHardeningDefaults(scope, props.hardening);
+  // Publish stack-wide infrastructure defaults before any Building Block is
+  // constructed, so blocks can read them at synth time via `scope.defaults`
+  // (getStackBlocksDefaults()).
+  registerStackBlocksDefaults(scope, props.defaults);
 
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,

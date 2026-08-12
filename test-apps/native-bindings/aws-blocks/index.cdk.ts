@@ -11,8 +11,7 @@
 // Minimal variant of the comprehensive app's index.cdk.ts (no sandbox-id salt).
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -33,6 +32,7 @@ const stackName =
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: BlocksPresets.sandbox,
 });
 
 // Tag for the scheduled stack janitor (cleanup-stacks.yml). It only deletes
@@ -40,8 +40,3 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // (failed `npm run destroy`) matches the bb-test- prefix but is skipped and
 // accumulates forever. Mirrors every other e2e test-app's index.cdk.ts.
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-native-bindings');
-
-// E2E stacks must be fully deletable so the CI teardown (`npm run destroy`)
-// can't leave a stuck DELETE_FAILED stack or deletion-protected resources behind.
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());

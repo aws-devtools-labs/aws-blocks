@@ -13,7 +13,7 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, registerStackBlocksDefaults, BlocksPresets } from '@aws-blocks/core/cdk';
 import { KVStore } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
@@ -62,6 +62,34 @@ test('CDK: KVStore.fromExisting returns a branded ref', () => {
   const ref = KVStore.fromExisting('foo');
   assert.strictEqual(ref.tableName, 'foo');
   assert.strictEqual(ref.__brand, 'ExternalTableRef');
+});
+
+test('CDK: table adopts the stack sandbox defaults (DESTROY, deletion protection off)', () => {
+  const { stack, parent } = setup();
+  registerStackBlocksDefaults(stack, BlocksPresets.sandbox);
+  new KVStore(parent, 'sessions');
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
+  template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: false });
+});
+
+test('CDK: table adopts the stack production defaults (RETAIN, deletion protection on)', () => {
+  const { stack, parent } = setup();
+  registerStackBlocksDefaults(stack, BlocksPresets.production);
+  new KVStore(parent, 'sessions');
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+  template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
+});
+
+test('CDK: per-block removalPolicy overrides the stack default', () => {
+  const { stack, parent } = setup();
+  registerStackBlocksDefaults(stack, BlocksPresets.production);
+  new KVStore(parent, 'sessions', { removalPolicy: 'destroy' });
+  const template = Template.fromStack(stack);
+  // Per-block 'destroy' wins over the production RETAIN default; deletion
+  // protection still follows the stack default (no per-block option for it).
+  template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
 });
 
 test('CDK: calling a runtime data method throws an actionable error (not a cryptic TypeError)', () => {

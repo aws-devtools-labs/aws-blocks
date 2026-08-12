@@ -15,21 +15,18 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { type BlocksDefaults, getStackBlocksDefaults } from './blocks-defaults.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
 export {
-  type HardeningDefaults,
-  FRAMEWORK_HARDENING_DEFAULTS,
-  registerStackHardeningDefaults,
-  getStackHardeningDefaults,
-  resolveLogRetention,
-  resolveApiThrottle,
-  resolveApiAccessLogs,
-  resolvePointInTimeRecovery,
-} from './hardening-defaults.js';
+  type BlocksDefaults,
+  BlocksPresets,
+  registerStackBlocksDefaults,
+  getStackBlocksDefaults,
+} from './blocks-defaults.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
@@ -115,6 +112,20 @@ export class Scope extends Construct {
 
   get fullId(): string {
     return computeScopeFullId(this);
+  }
+
+  /**
+   * The stack-wide infrastructure {@link BlocksDefaults} registered by
+   * `BlocksStack.create` / `BlocksBackend.create`. Read these in a Building
+   * Block's CDK constructor to resolve a durability value, letting a per-block
+   * option override:
+   *
+   * ```ts
+   * const removalPolicy = options?.removalPolicy ?? this.defaults.removalPolicy;
+   * ```
+   */
+  get defaults(): BlocksDefaults {
+    return getStackBlocksDefaults(this);
   }
 
   protected buildUserAgentChain(): [string, string][] {

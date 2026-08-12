@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { BlocksBackend } from './blocks-backend.js';
+import { BlocksPresets } from './blocks-defaults.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
 before(() => {
@@ -28,11 +29,13 @@ describe('ESM cache-busting (multi-stage)', () => {
     const backend1 = await BlocksBackend.create(stack, 'Stage1', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const backend2 = await BlocksBackend.create(stack, 'Stage2', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const findMarker = (scope: cdk.aws_lambda_nodejs.NodejsFunction | any) =>
@@ -57,6 +60,7 @@ describe('synth shape (drop into existing stack)', () => {
     const backend = await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // Public surface mirrors BlocksStack.
@@ -78,10 +82,12 @@ describe('synth shape (drop into existing stack)', () => {
     await BlocksBackend.create(parent, 'BackendA', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
     await BlocksBackend.create(parent, 'BackendB', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(parent);
@@ -97,6 +103,7 @@ describe('factory function support', () => {
     const backend = await BlocksBackend.create(stack, 'FactoryStage', {
       backendHandlerPath: handlerPath,
       backendCDKPath: factoryBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = backend.node.tryFindChild('FactoryMarker');
@@ -112,6 +119,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(stack, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     assert.strictEqual(backend.fullId, 'TopLevelStack-blocks');
@@ -136,6 +144,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     assert.ok(
@@ -156,6 +165,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: fullIdConstructBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // The construct ID is `${scope.fullId}Marker` → `ParentStack-blocks-blocks-dbMarker`.
@@ -183,6 +193,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(nested);
