@@ -1,5 +1,6 @@
 /// Intermediate representation produced by the parser.
 /// TypeRef is a sealed class representing unresolved type references from the spec.
+library;
 
 class Constraints {
   final String? format;

@@ -139,9 +139,10 @@ class OpenRpcParser {
       }
       // Regular array (or array-form items as tuple)
       final items = schema['items'];
-      if (items == null)
+      if (items == null) {
         return ArrayRef(PrimitiveRef('dynamic'),
             constraints: _parseConstraints(schema));
+      }
       if (items is List<dynamic>) {
         final tupleItems = items
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
@@ -150,9 +151,10 @@ class OpenRpcParser {
         return TupleRef(tupleItems);
       }
       final itemsMap = items as Map<String, dynamic>;
-      if (itemsMap.isEmpty)
+      if (itemsMap.isEmpty) {
         return ArrayRef(PrimitiveRef('dynamic'),
             constraints: _parseConstraints(schema));
+      }
       return ArrayRef(_parseTypeRef(itemsMap),
           constraints: _parseConstraints(schema));
     }
