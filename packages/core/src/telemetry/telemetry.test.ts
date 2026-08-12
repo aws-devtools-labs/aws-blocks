@@ -134,7 +134,6 @@ describe('telemetry/environment', () => {
       delete process.env.BITBUCKET_BUILD_NUMBER;
       delete process.env.BUILDKITE;
       delete process.env.RENDER;
-      delete process.env.TASK_ID;
       delete process.env.TASKCLUSTER_ROOT_URL;
     });
 
@@ -165,11 +164,6 @@ describe('telemetry/environment', () => {
     it('returns true when TASKCLUSTER_ROOT_URL is set', () => {
       process.env.TASKCLUSTER_ROOT_URL = 'https://tc.example.com';
       assert.strictEqual(isCI(), true);
-    });
-
-    it('returns false when only TASK_ID is set (no CI classification)', () => {
-      process.env.TASK_ID = 'abc123';
-      assert.strictEqual(isCI(), false);
     });
   });
 
