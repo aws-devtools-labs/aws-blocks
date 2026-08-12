@@ -5,9 +5,8 @@ name: Release
 # and no changesets remain, publishes to npm. Merging the PR is the release gate.
 # Canary publishes live in publish-canary.yml.
 #
-# NOTE: The Version Packages PR is created by GITHUB_TOKEN, so it does NOT
-# auto-trigger PR check workflows (GitHub platform limitation). To run checks
-# before merging, close and reopen the PR — this fires a real event and CI runs.
+# NOTE: The Version Packages PR does not start its PR checks automatically.
+# Approve the workflow runs at the bottom of the PR. Then merge the PR.
 
 on:
   push:
@@ -66,10 +65,13 @@ jobs:
           INSTRUCTIONS="## Release Instructions
 
           > **To complete this release:**
-          > 1. Review the version bumps and changelogs below
-          > 2. **Close and reopen this PR** to trigger CI checks (required due to GitHub token limitations)
-          > 3. Once all checks pass, merge the PR
-          > 4. The merge triggers npm publish automatically
+          > 1. Read the version bumps and changelogs below.
+          > 2. Go to the bottom of this PR.
+          > 3. **Approve the workflow runs.**
+          > 4. Wait until all checks pass.
+          > 5. Merge the PR.
+          >
+          > The merge starts the npm publish.
 
           ---
 
