@@ -67,7 +67,6 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
     delete process.env.RENDER;
-    delete process.env.TASK_ID;
     delete process.env.TASKCLUSTER_ROOT_URL;
     process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
 
@@ -104,7 +103,6 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
     delete process.env.RENDER;
-    delete process.env.TASK_ID;
     delete process.env.TASKCLUSTER_ROOT_URL;
     process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
 
@@ -144,7 +142,6 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
     delete process.env.RENDER;
-    delete process.env.TASK_ID;
     delete process.env.TASKCLUSTER_ROOT_URL;
     process.env.BLOCKS_TELEMETRY_ENDPOINT = 'http://127.0.0.1:1/noop';
 
@@ -205,7 +202,6 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     delete process.env.BITBUCKET_BUILD_NUMBER;
     delete process.env.BUILDKITE;
     delete process.env.RENDER;
-    delete process.env.TASK_ID;
     delete process.env.TASKCLUSTER_ROOT_URL;
     process.env.BLOCKS_TELEMETRY_ENDPOINT = `http://127.0.0.1:${addr.port}/collect`;
 
