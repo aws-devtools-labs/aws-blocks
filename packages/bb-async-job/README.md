@@ -60,7 +60,6 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 | `maxRetries` | 3 | Maximum attempts before sending to the dead-letter queue |
 | `batchSize` | 10 | Messages per Lambda invocation |
 | `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
-| `reportBatchItemFailures` | `true` | Retry only the failed messages of a batch. Can only be disabled together with `batchSize: 1` |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
 | `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
 

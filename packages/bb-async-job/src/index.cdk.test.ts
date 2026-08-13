@@ -96,24 +96,3 @@ test('CDK: maxBatchingWindowSeconds 0 renders an explicit zero window (no batchi
 	const props = eventSourceMapping(Template.fromStack(stack));
 	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 0);
 });
-
-test('CDK: disabling reportBatchItemFailures with a batch is rejected at synth time', () => {
-	const { parent } = setup();
-	assert.throws(
-		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, reportBatchItemFailures: false }),
-		/reportBatchItemFailures cannot be disabled with batchSize 10/
-	);
-});
-
-test('CDK: reportBatchItemFailures can be disabled when batchSize is 1', () => {
-	const { stack, parent } = setup();
-	new AsyncJob(parent, 'jobs', {
-		handler: async () => {},
-		batchSize: 1,
-		reportBatchItemFailures: false,
-	});
-
-	const props = eventSourceMapping(Template.fromStack(stack));
-	assert.strictEqual(props.BatchSize, 1);
-	assert.strictEqual(props.FunctionResponseTypes, undefined);
-});

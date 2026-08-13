@@ -35,15 +35,6 @@ export interface AsyncJobOptions<T> {
 	 */
 	maxBatchingWindowSeconds?: number;
 	/**
-	 * Report per-message failures back to SQS ([partial batch
-	 * responses](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html))
-	 * so only the failed messages are retried. Default: true, and it can only be
-	 * disabled together with `batchSize: 1` — otherwise one failing record would
-	 * silently discard the rest of its batch, so the construct rejects the
-	 * combination at synth time.
-	 */
-	reportBatchItemFailures?: boolean;
-	/**
 	 * Record every job's state transitions so they can be read back with
 	 * `getStatus()` / `waitUntilComplete()`. Default: `false`.
 	 *

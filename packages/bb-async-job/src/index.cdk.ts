@@ -40,16 +40,6 @@ export class AsyncJob<T = unknown> extends Scope {
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
-		const reportBatchItemFailures = options.reportBatchItemFailures ?? true;
-
-		if (!reportBatchItemFailures && batchSize > 1) {
-			throw new Error(
-				`AsyncJob '${id}': reportBatchItemFailures cannot be disabled with batchSize ${batchSize}. ` +
-					'Without partial batch responses SQS deletes every message in a batch as soon as the ' +
-					'invocation returns, so one failing record discards the rest. Set batchSize: 1 if the ' +
-					'batch really is all-or-nothing.'
-			);
-		}
 
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),
@@ -83,14 +73,14 @@ export class AsyncJob<T = unknown> extends Scope {
 			this.queue.queueUrl
 		);
 
-		// `reportBatchItemFailures` enables SQS partial batch responses. It MUST stay
-		// on for any batchSize > 1: without it a single failing record makes SQS treat
-		// the whole batch as handled and delete every message in it (silent loss).
-		// The runtime handler already returns `{ batchItemFailures }`.
+		// Partial batch responses MUST stay on for any batchSize > 1: without them a
+		// single failing record makes SQS treat the whole batch as handled and delete
+		// every message in it (silent loss). The runtime handler already returns
+		// `{ batchItemFailures }`, so this is never configurable.
 		this.handler.addEventSource(
 			new SqsEventSource(this.queue, {
 				batchSize,
-				reportBatchItemFailures,
+				reportBatchItemFailures: true,
 				maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
 			})
 		);

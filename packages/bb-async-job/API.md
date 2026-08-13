@@ -49,7 +49,6 @@ export interface AsyncJobOptions<T> {
     logger?: ChildLogger;
     maxBatchingWindowSeconds?: number;
     maxRetries?: number;
-    reportBatchItemFailures?: boolean;
     schema?: StandardSchemaV1<T>;
     trackStatus?: boolean;
 }
