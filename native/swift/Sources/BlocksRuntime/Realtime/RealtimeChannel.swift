@@ -79,11 +79,24 @@ public class RealtimeChannel<T> {
     ///
     /// Expected JSON shape:
     /// ```json
-    /// { "channel": "...", "wsUrl": "wss://...", "token": "..." }
+    /// { "channel": "...", "wsUrl": "wss://...", "connectToken": "...", "token": "..." }
     /// ```
     ///
+    /// The descriptor carries two distinct credentials, and they are not
+    /// interchangeable:
+    ///
+    /// - `connectToken` authenticates the WebSocket *handshake*. It is appended
+    ///   to `wsUrl` as a `token` query parameter, because API Gateway's
+    ///   `$connect` route reads it from `queryStringParameters.token`. Without
+    ///   it the handshake is rejected before the socket opens, which surfaces on
+    ///   Apple platforms as `NSURLErrorDomain` code -1011 ("bad response from
+    ///   the server"). It is optional so a descriptor that omits it still
+    ///   hydrates.
+    /// - `token` authorizes the per-channel *subscribe* message sent after the
+    ///   socket is open, and is kept separate on the instance.
+    ///
     /// - Parameters:
-    ///   - json: Dictionary with `channel`, `wsUrl`, and `token` keys.
+    ///   - json: Dictionary with `channel`, `wsUrl`, and `token` keys, plus an optional `connectToken`.
     ///   - baseHost: Host to replace `localhost` with (for device testing). Pass `nil` to skip.
     ///   - deserializer: Function to convert raw payload bytes into instances of T.
     public static func fromJSON(
@@ -101,7 +114,23 @@ public class RealtimeChannel<T> {
             wsUrlStr = wsUrlStr.replacingOccurrences(of: "://localhost", with: "://\(host)")
         }
 
+        if let connectToken = json["connectToken"] as? String, !connectToken.isEmpty {
+            wsUrlStr = Self.appendingConnectToken(to: wsUrlStr, connectToken)
+        }
+
         return RealtimeChannel(channel: channelName, wsUrl: wsUrlStr, token: tokenValue, deserializer: deserializer)
+    }
+
+    /// Appends `connectToken` to a WebSocket URL as a `token` query parameter,
+    /// preserving any query parameters the URL already carries.
+    ///
+    /// Returns the URL unchanged when it cannot be parsed, so a malformed
+    /// descriptor fails later at connect time with a URL in the error rather
+    /// than being dropped silently here.
+    private static func appendingConnectToken(to wsUrl: String, _ connectToken: String) -> String {
+        guard var components = URLComponents(string: wsUrl) else { return wsUrl }
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "token", value: connectToken)]
+        return components.string ?? wsUrl
     }
 
     /// Returns an `AsyncThrowingStream` that emits typed messages received on this channel.

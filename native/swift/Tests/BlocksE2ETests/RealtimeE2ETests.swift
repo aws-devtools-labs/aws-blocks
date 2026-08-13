@@ -13,6 +13,15 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
     func testGetChannelDescriptor() async throws {
         let channel = try await api.realtimeGetChannel(channel: nil)
         XCTAssertNotNil(channel)
+        // API Gateway's $connect route authenticates the handshake from the
+        // query string. A descriptor that hydrates without the connect token
+        // still passes every non-socket assertion, then fails only once
+        // something opens a socket — so check it here, where no socket is
+        // needed and the failure names the cause.
+        XCTAssertTrue(
+            channel.wsUrl.contains("token="),
+            "hydrated wsUrl carries no connect token: \(channel.wsUrl)"
+        )
     }
 
     func testPublishCursor() async throws {
