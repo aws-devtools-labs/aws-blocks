@@ -34,20 +34,39 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
         let channel = try await api.realtimeGetChannel(channel: "swift-sub-test")
         let stream = channel.subscribe()
 
-        try await Task.sleep(nanoseconds: 500_000_000)
-
-        let published = Cursor(color: "#00ff00", userId: "swift-sub-test", x: 42, y: 99)
-        _ = try await api.realtimePublish(cursor: published, channel: "swift-sub-test")
-
-        let deadline = Date().addingTimeInterval(5)
-        for try await msg in stream {
-            XCTAssertEqual(msg.userId, "swift-sub-test")
-            XCTAssertEqual(msg.x, 42)
-            XCTAssertEqual(msg.y, 99)
-            XCTAssertEqual(msg.color, "#00ff00")
-            break
+        // Consume the stream on its own task. Iterating inline cannot fail this
+        // test: `for try await` blocks until a message arrives, so the old
+        // `deadline` below the loop was unreachable and a message that never
+        // came hung the test until the job timeout killed it, 17 minutes later.
+        let received = XCTestExpectation(description: "cursor received on channel")
+        let consumer = Task {
+            for try await msg in stream {
+                XCTAssertEqual(msg.userId, "swift-sub-test")
+                XCTAssertEqual(msg.x, 42)
+                XCTAssertEqual(msg.y, 99)
+                XCTAssertEqual(msg.color, "#00ff00")
+                received.fulfill()
+                break
+            }
         }
-        XCTAssertTrue(Date() < deadline, "Timed out waiting for message")
+
+        // Publish repeatedly rather than once after a fixed sleep. Subscribing
+        // is asynchronous end to end — the handshake runs the $connect Lambda
+        // and the subscribe frame is only registered after a DynamoDB write, so
+        // on a cold sandbox that takes longer than any single sleep worth
+        // hard-coding. A publish that lands before registration is delivered to
+        // nobody and is not retried by the server.
+        let published = Cursor(color: "#00ff00", userId: "swift-sub-test", x: 42, y: 99)
+        let publisher = Task {
+            for _ in 0 ..< 20 {
+                _ = try? await api.realtimePublish(cursor: published, channel: "swift-sub-test")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+
+        await fulfillment(of: [received], timeout: 25)
+        publisher.cancel()
+        consumer.cancel()
         channel.close()
     }
 

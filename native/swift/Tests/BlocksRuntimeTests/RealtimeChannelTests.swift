@@ -84,7 +84,9 @@ final class RealtimeChannelTests: XCTestCase {
                 "wsUrl": "wss://example.com/ws",
                 "token": "tok"
             ]
-            if let value { json["connectToken"] = value }
+            if let value {
+                json["connectToken"] = value
+            }
 
             let channel = RealtimeChannel<String>.fromJSON(json) { String(data: $0, encoding: .utf8) ?? "" }
 
