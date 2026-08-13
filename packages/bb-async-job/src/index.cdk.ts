@@ -51,6 +51,7 @@ function validateEventSourceOptions(
 	batchSize: number,
 	maxBatchingWindowSeconds: number
 ): void {
+	// Validate the window first: the batchSize ceiling below depends on it.
 	if (
 		!Number.isInteger(maxBatchingWindowSeconds) ||
 		maxBatchingWindowSeconds < 0 ||
