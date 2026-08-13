@@ -460,6 +460,9 @@ jobs:
           - framework: astro-default404
             app-dir: test-apps/hosting-ssr-astro-default404
             script: test:e2e:hosting-ssr-astro-default404
+          - framework: sveltekit
+            app-dir: test-apps/hosting-ssr-sveltekit
+            script: test:e2e:hosting-ssr-sveltekit
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
