@@ -64,6 +64,9 @@ export class Agent extends Scope {
 
 		new AsyncJob(this, 'job', {
 			schema: jobPayloadSchema,
+			// Interactive/HITL path: immediate delivery, no batching latency; batchSize 1 also isolates failures for this non-idempotent handler.
+			batchSize: 1,
+			maxBatchingWindowSeconds: 0,
 			handler: async () => {},
 		});
 	}

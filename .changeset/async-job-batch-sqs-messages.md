@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/bb-async-job": patch
+"@aws-blocks/bb-agent": patch
 "@aws-blocks/blocks": patch
 ---
 
@@ -24,3 +25,12 @@ meaning at any batch size.
 
 The umbrella `@aws-blocks/blocks` gets a patch bump because it re-exports
 `AsyncJob` and `AsyncJobOptions`.
+
+`bb-agent` opts out of the new defaults with `batchSize: 1` and
+`maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent
+turn (plus a second on HITL resume) and the caller is blocked on that job
+starting, so a batching window would add up to 5s of latency to a human-facing
+path; `batchSize: 1` also keeps one failing turn from sharing a batch with
+others, which matters because the handler is not idempotent. Both the runtime
+and CDK construction sites set the same options so they synthesize an identical
+event source mapping.
