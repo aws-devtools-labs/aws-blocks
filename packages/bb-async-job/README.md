@@ -58,7 +58,9 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 | `handler` | (required) | Async function that processes each job |
 | `schema` | — | StandardSchemaV1 (Zod, Valibot, etc.) for payload validation on submit |
 | `maxRetries` | 3 | Maximum attempts before sending to the dead-letter queue |
-| `batchSize` | 1 | Messages per Lambda invocation |
+| `batchSize` | 10 | Messages per Lambda invocation |
+| `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
+| `reportBatchItemFailures` | `true` | Retry only the failed messages of a batch. Disabling this with `batchSize > 1` drops messages |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
 | `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
 

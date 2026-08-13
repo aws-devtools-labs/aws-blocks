@@ -1072,3 +1072,77 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
   });
 });
+
+// ── SQS partial batch failure tests ─────────────────────────────────────────
+
+/**
+ * These pin the runtime half of the bb-async-job BatchSize fix: with a batch
+ * larger than 1, failing records must be reported individually via
+ * `batchItemFailures` so SQS retries only those messages. If this response
+ * shape regresses, every successful sibling message in a partially-failing
+ * batch would be redelivered (or, worse, the failures silently dropped).
+ */
+function makeSqsBatchEvent(count: number) {
+  return {
+    Records: Array.from({ length: count }, (_, i) => ({
+      eventSource: 'aws:sqs',
+      eventSourceARN: 'arn:aws:sqs:us-east-1:123456789012:my-queue',
+      messageId: `msg-${i}`,
+      body: JSON.stringify({ n: i }),
+    })),
+  };
+}
+
+describe('handleEventSourceRecords — SQS partial batch responses', () => {
+  it('reports only the failed records of a mixed-success 10-record batch', async () => {
+    const processed: number[] = [];
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async (record: any) => {
+      const { n } = JSON.parse(record.body);
+      if (n % 3 === 0) throw new Error(`boom on ${n}`);
+      processed.push(n);
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+
+      assert.deepStrictEqual(
+        result.batchItemFailures.map((f: any) => f.itemIdentifier).sort(),
+        ['msg-0', 'msg-3', 'msg-6', 'msg-9']
+      );
+      assert.deepStrictEqual(processed.sort((a, b) => a - b), [1, 2, 4, 5, 7, 8]);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('returns no batchItemFailures when every record in the batch succeeds', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => {});
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.deepStrictEqual(result, {});
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('reports all records when the whole batch fails (no silent drop)', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => { throw new Error('always'); });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.strictEqual(result.batchItemFailures.length, 10);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+});
