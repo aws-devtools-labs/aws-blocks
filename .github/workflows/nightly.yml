@@ -1,0 +1,178 @@
+name: Nightly
+
+# Runs the full JS test surface against main every night, with no path gating.
+#
+# PR CI in pr-checks.yml is change-gated: the e2e and hosting jobs only run when
+# `packages/` or `test-apps/` changed, and the guide synth/mock suites run in no
+# workflow at all. A suite whose path is not touched therefore stays unexercised,
+# and a bug in it is found only when someone next edits that path. This workflow
+# runs every JS suite unconditionally so that drift surfaces within a day.
+#
+# It is a canary, not a gate. It does not block any PR. When it goes red, a
+# dormant suite has broken; open an issue and fix it.
+#
+# The native SDK suites (Swift, Kotlin, Dart) have the same schedule trigger in
+# native-sdk-e2e.yml, which reuses that workflow's leak-hardened deploy jobs.
+#
+# Cost note: the e2e and hosting jobs deploy real CloudFormation. Each self-
+# manages teardown, and a belt-and-suspenders cleanup step runs on failure.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 14:00 UTC, against the default branch.
+    - cron: '0 14 * * *'
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  NODE_OPTIONS: '--test-reporter=spec'
+
+jobs:
+  # No AWS. Full unit suite plus the guide synth/mock suites, which run in no
+  # other workflow. Each guide step uses `if: always()` so one failure does not
+  # hide the others.
+  unit-and-guide:
+    name: Unit + Guide Suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Unit Tests
+        run: npm run test:unit
+
+      - name: Guide (extending-blocks-guide) mock
+        if: always()
+        run: npm run test:mock -w test-apps/extending-blocks-guide
+
+      - name: Guide (extending-blocks-guide) synth
+        if: always()
+        run: npm run test:synth -w test-apps/extending-blocks-guide
+
+      - name: Guide (extending-blocks-guide-blocksbackend) synth
+        if: always()
+        run: npm run test:synth -w test-apps/extending-blocks-guide-blocksbackend
+
+  e2e-sandbox:
+    name: E2E Sandbox (comprehensive)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: publish
+    env:
+      BLOCKS_STACK_SUFFIX: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - uses: ./.github/actions/seed-telemetry-id
+      - run: npm ci
+      - run: npm run build
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: E2E Test Sandbox
+        run: npm run test:e2e:sandbox
+
+  e2e-sandbox-vpc:
+    name: E2E Sandbox (VPC Smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: publish
+    env:
+      BLOCKS_STACK_SUFFIX: nightly-vpc-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - uses: ./.github/actions/seed-telemetry-id
+      - run: npm ci
+      - run: npm run build
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: E2E Test Sandbox (VPC Smoke)
+        run: npm run test:e2e:sandbox:vpc
+
+  e2e-hosting:
+    name: E2E Hosting (${{ matrix.framework }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        # sveltekit is added once #349 lands its matrix leg and root script on
+        # main. The other five exist on main today.
+        include:
+          - framework: spa
+            app-dir: test-apps/hosting-spa
+            script: test:e2e:hosting-spa
+          - framework: nextjs
+            app-dir: test-apps/hosting-ssr
+            script: test:e2e:hosting-ssr
+          - framework: nuxt
+            app-dir: test-apps/hosting-ssr-nuxt
+            script: test:e2e:hosting-ssr-nuxt
+          - framework: astro
+            app-dir: test-apps/hosting-ssr-astro
+            script: test:e2e:hosting-ssr-astro
+          - framework: astro-default404
+            app-dir: test-apps/hosting-ssr-astro-default404
+            script: test:e2e:hosting-ssr-astro-default404
+    env:
+      BLOCKS_STACK_SUFFIX: nightly-${{ github.run_id }}-${{ matrix.framework }}
+      E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - uses: ./.github/actions/seed-telemetry-id
+      - run: npm ci
+      - run: npm run build
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+      - name: E2E Test Hosting (${{ matrix.framework }})
+        run: npm run ${{ matrix.script }}
+      - name: Cleanup sandbox
+        if: always()
+        run: |
+          cd ${{ matrix.app-dir }}
+          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true

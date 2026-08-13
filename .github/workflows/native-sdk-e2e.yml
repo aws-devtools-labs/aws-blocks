@@ -10,6 +10,12 @@ on:
   pull_request:
     branches: ['*']
   workflow_dispatch:
+  # Nightly canary. PR runs are path-gated (a Swift-only change does not run
+  # Kotlin), so a bug in a platform whose path was untouched stays hidden until
+  # someone next changes that path. The schedule runs every platform against
+  # main so drift surfaces within a day. See also nightly.yml for the JS suites.
+  schedule:
+    - cron: '0 15 * * *'
 
 concurrency:
   group: native-e2e-${{ github.event.pull_request.number || github.run_id }}
@@ -37,7 +43,8 @@ jobs:
           fetch-depth: 0
       - id: check
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            # workflow_dispatch and the nightly schedule run every platform.
             dart=true; swift=true; kotlin=true
           else
             CHANGED="$(git diff --name-only origin/main...HEAD)"
@@ -349,7 +356,7 @@ jobs:
     needs: [detect-changes, dart-e2e]
     if: >-
       needs.detect-changes.outputs.dart-changed == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     # Deploy sandbox alone is ~21 min (sequential DynamoDB GSI custom-resource
@@ -487,7 +494,7 @@ jobs:
     needs: [detect-changes, swift-e2e]
     if: >-
       needs.detect-changes.outputs.swift-changed == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15
     # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
@@ -585,7 +592,7 @@ jobs:
     needs: [detect-changes, kotlin-e2e]
     if: >-
       needs.detect-changes.outputs.kotlin-changed == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
