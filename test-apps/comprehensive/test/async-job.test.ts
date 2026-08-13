@@ -16,6 +16,11 @@ const RESULT_POLL_INTERVAL_MS = 100;
 const RESULT_POLL_BUDGET_MS = BATCHING_WINDOW_MS + 5_000;
 const RESULT_POLL_ATTEMPTS = RESULT_POLL_BUDGET_MS / RESULT_POLL_INTERVAL_MS;
 
+/**
+ * Polls `fetch` until it resolves to a truthy value or the attempt budget is spent.
+ * Any falsy value counts as "not ready", so callers whose ready state could legitimately
+ * be falsy (`0`, `false`, `[]`) must wrap it in a truthy sentinel.
+ */
 async function pollForResult<T>(
   fetch: () => Promise<T | null>,
   attempts: number = RESULT_POLL_ATTEMPTS
@@ -29,6 +34,11 @@ async function pollForResult<T>(
   return result;
 }
 
+/**
+ * Budget for a delayed job: the delay itself, then the same window + margin allowance as
+ * RESULT_POLL_BUDGET_MS. Note the delaySeconds tests only assert non-execution at t~=0,
+ * not continuously throughout the delay window.
+ */
 function delayedPollAttempts(delaySeconds: number): number {
   return (delaySeconds * 1000 + BATCHING_WINDOW_MS + 3_000) / RESULT_POLL_INTERVAL_MS;
 }
