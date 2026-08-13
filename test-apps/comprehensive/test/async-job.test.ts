@@ -6,41 +6,47 @@ import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
 import type { api as apiType } from 'aws-blocks';
 
-/**
- * SQS event sources are created with maxBatchingWindowSeconds=5, so on real AWS a
- * message can sit in the queue for up to 5s before the handler is invoked. Poll
- * budgets must therefore exceed that window plus submit/DynamoDB overhead.
- */
-const BATCHING_WINDOW_MS = 5_000;
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isDeployed = ENV === 'sandbox' || ENV === 'production';
+
 const RESULT_POLL_INTERVAL_MS = 100;
-const RESULT_POLL_BUDGET_MS = BATCHING_WINDOW_MS + 5_000;
-const RESULT_POLL_ATTEMPTS = RESULT_POLL_BUDGET_MS / RESULT_POLL_INTERVAL_MS;
 
 /**
- * Polls `fetch` until it resolves to a truthy value or the attempt budget is spent.
- * Any falsy value counts as "not ready", so callers whose ready state could legitimately
- * be falsy (`0`, `false`, `[]`) must wrap it in a truthy sentinel.
+ * Wall-clock budget, deliberately not an attempt count: a fixed number of
+ * fetch+sleep iterations spends less real time the faster the environment reads,
+ * so the effective budget would shrink exactly where it is needed most. Deployed
+ * runs pay for the SQS maxBatchingWindowSeconds=5 window, delivery, and a Lambda
+ * cold start before the handler even begins.
+ */
+const RESULT_POLL_BUDGET_MS = isDeployed ? 60_000 : 15_000;
+
+/**
+ * Polls `fetch` until it resolves to a truthy value or the wall-clock budget expires.
+ * Always fetches at least once. Any falsy value counts as "not ready", so callers whose
+ * ready state could legitimately be falsy (`0`, `false`, `[]`) must wrap it in a truthy
+ * sentinel.
  */
 async function pollForResult<T>(
   fetch: () => Promise<T | null>,
-  attempts: number = RESULT_POLL_ATTEMPTS
+  budgetMs: number = RESULT_POLL_BUDGET_MS
 ): Promise<T | null> {
+  const deadline = Date.now() + budgetMs;
   let result: T | null = null;
-  for (let i = 0; i < attempts; i++) {
+  do {
     result = await fetch();
     if (result) break;
     await setTimeout(RESULT_POLL_INTERVAL_MS);
-  }
+  } while (Date.now() < deadline);
   return result;
 }
 
 /**
- * Budget for a delayed job: the delay itself, then the same window + margin allowance as
- * RESULT_POLL_BUDGET_MS. Note the delaySeconds tests only assert non-execution at t~=0,
- * not continuously throughout the delay window.
+ * Budget for a delayed job: the delay itself plus the full standard budget. Note the
+ * delaySeconds tests only assert non-execution at t~=0, not continuously throughout the
+ * delay window.
  */
-function delayedPollAttempts(delaySeconds: number): number {
-  return (delaySeconds * 1000 + BATCHING_WINDOW_MS + 3_000) / RESULT_POLL_INTERVAL_MS;
+function delayedPollBudgetMs(delaySeconds: number): number {
+  return delaySeconds * 1000 + RESULT_POLL_BUDGET_MS;
 }
 
 export function asyncJobTests(getApi: () => typeof apiType) {
@@ -148,7 +154,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
 
       const result = await pollForResult(
         () => api.asyncJobGetResult(key),
-        delayedPollAttempts(2)
+        delayedPollBudgetMs(2)
       );
 
       assert.ok(result, 'handler should have run after delay');
@@ -174,7 +180,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       for (const item of items) {
         const result = await pollForResult(
           () => api.asyncJobGetResult(item.key),
-          delayedPollAttempts(2)
+          delayedPollBudgetMs(2)
         );
         assert.ok(result, `handler should have run for ${item.key}`);
         assert.strictEqual(result.value, item.value);
