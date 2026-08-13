@@ -90,9 +90,9 @@ CREATE INDEX ASYNC idx_users_email ON users(email);
 
 Migrations are validated at dev time — unsupported features (FK, SERIAL, TRUNCATE, etc.) are caught before deploy.
 
-> **Pass `migrationsPath` as a path relative to your project root** (e.g. `'./aws-blocks/dsql-migrations'`). It's resolved from the directory you run `cdk` / `npm run deploy` in.
+> **Set `migrationsPath` to a path relative to your project root** (e.g. `'./aws-blocks/dsql-migrations'`); it's resolved at synth from the directory you run `cdk` / `npm run deploy` in. That's the simplest reliable pattern.
 >
-> **Do not** derive an absolute path with `fileURLToPath(import.meta.url)`. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty — so `fileURLToPath(import.meta.url)` becomes `fileURLToPath(undefined)` and throws at Lambda load, and every request 502s. (`cdk synth` now fails fast if bundled handler code uses `import.meta.url`, so you'll catch this at build time rather than in production.) If you genuinely need the current directory in bundled runtime code, use `__dirname` — esbuild provides it correctly in the CommonJS bundle.
+> You don't need `fileURLToPath(import.meta.url)` for this. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty. AWS Blocks shims `import.meta.url` / `import.meta.dirname` in the bundle so it won't crash at load — but at runtime those resolve to the **bundled output** location, not your source tree. So don't use `import.meta.url` to read a file relative to your source at request time; inline the data or ship it as a Lambda asset instead.
 
 ## DSQL Limitations
 

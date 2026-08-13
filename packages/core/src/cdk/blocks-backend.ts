@@ -88,9 +88,9 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
        */
       BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
     },
-    // blocksNodejsBundling hardens the esbuild config (promotes the empty-import-meta
-    // warning to an error) so a CJS-bundled `import.meta.url` fails synth instead of
-    // crashing at Lambda load. See ./bundling.ts.
+    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+    // CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing at
+    // Lambda load. See ./bundling.ts.
     bundling: blocksNodejsBundling({
       minify: true,
       esbuildArgs: { '--conditions': 'aws-runtime' },

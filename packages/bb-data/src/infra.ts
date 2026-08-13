@@ -206,7 +206,7 @@ export function materialize(
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          afterBundling: (inputDir: string, outputDir: string) => [
+          afterBundling: (_inputDir: string, outputDir: string) => [
             `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
           ],
         },

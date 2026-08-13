@@ -4,10 +4,10 @@
 // Repro fixture for the "handler bundles to CJS but uses import.meta.url" bug.
 //
 // The handler is bundled to CJS by NodejsFunction. In a CJS bundle `import.meta`
-// is empty, so this top-level `fileURLToPath(import.meta.url)` becomes
-// `fileURLToPath(undefined)` and throws at Lambda load. esbuild only warns about
-// this unless the bundling config promotes the `empty-import-meta` warning to an
-// error — which is exactly what setupBlocksInfra now does.
+// is empty, so this top-level `fileURLToPath(import.meta.url)` would become
+// `fileURLToPath(undefined)` and throw at Lambda load. blocksNodejsBundling shims
+// `import.meta.url` to a CommonJS equivalent, so the bundle loads and resolves a
+// real path instead of crashing — see bundling.test.ts.
 import { fileURLToPath } from 'node:url';
 
 export const moduleDir = fileURLToPath(import.meta.url);

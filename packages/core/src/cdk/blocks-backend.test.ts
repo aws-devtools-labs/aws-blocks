@@ -179,40 +179,22 @@ describe('shared execution role', () => {
   });
 });
 
-describe('CJS bundle guard: import.meta.url in the handler fails synth (not at Lambda load)', () => {
-  test('bundling a handler that uses import.meta.url throws at synth instead of shipping a broken Lambda', async () => {
-    // The handler is bundled to CJS, where `import.meta` is empty. Without the
-    // guard, `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)`
-    // — esbuild only warns, so the broken bundle deploys and throws at Lambda load.
-    // setupBlocksInfra promotes the `empty-import-meta` warning to an esbuild error,
-    // so construction (which runs bundling synchronously) fails loudly at build time.
-    // Positive control: an otherwise-identical handler WITHOUT import.meta bundles
-    // fine through the same guarded config. This proves esbuild bundling works in
-    // this environment, so the rejection below is attributable to the import.meta.url
-    // usage — not a missing esbuild binary, a bad fixture path, or an unrelated CDK
-    // failure (all of which would fail this control too).
-    await assert.doesNotReject(() =>
-      BlocksBackend.create(new cdk.Stack(new cdk.App(), 'CleanControlStack'), 'blocks', {
-        backendHandlerPath: handlerPath,
-        backendCDKPath: sideEffectBackendPath,
-      }),
-    );
-
+describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load crash)', () => {
+  test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
+    // The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
+    // `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
+    // throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
+    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
+    // (which runs synchronously during construction) succeeds. The runtime behaviour
+    // of the emitted shim is verified directly in bundling.test.ts.
     const app = new cdk.App();
     const stack = new cdk.Stack(app, 'ImportMetaStack');
 
-    await assert.rejects(
-      () =>
-        BlocksBackend.create(stack, 'blocks', {
-          backendHandlerPath: importMetaHandlerPath,
-          backendCDKPath: sideEffectBackendPath,
-        }),
-      // Tie the rejection to THIS fixture's bundling failure, not any construction
-      // error. esbuild's "empty-import-meta" diagnostic is written to stderr, not the
-      // thrown message, so match on cdk's bundling-failure error that names the
-      // offending fixture in its command echo.
-      (err: unknown) => err instanceof Error && /import-meta-handler/.test(err.message),
-      'expected esbuild bundling to fail because the handler uses import.meta.url in a CJS bundle',
+    await assert.doesNotReject(() =>
+      BlocksBackend.create(stack, 'blocks', {
+        backendHandlerPath: importMetaHandlerPath,
+        backendCDKPath: sideEffectBackendPath,
+      }),
     );
   });
 });
