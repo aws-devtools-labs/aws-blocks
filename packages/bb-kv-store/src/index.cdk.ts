@@ -49,7 +49,7 @@ export class KVStore extends Scope {
 				partitionKey: { name: 'pk', type: AttributeType.STRING },
 				billingMode: BillingMode.PAY_PER_REQUEST,
 				removalPolicy,
-				deletionProtection: this.defaults.deletionProtection,
+				deletionProtection: options?.deletionProtection ?? this.defaults.deletionProtection,
 				// Opt-in: enabling TTL on an already-deployed table is a live table
 				// update, so it must never happen implicitly.
 				timeToLiveAttribute: options?.ttl ? TTL_ATTRIBUTE : undefined,

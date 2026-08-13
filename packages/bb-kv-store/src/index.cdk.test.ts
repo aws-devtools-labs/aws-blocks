@@ -90,8 +90,19 @@ test('CDK: per-block removalPolicy overrides the resolved default', () => {
   new KVStore(parent, 'sessions', { removalPolicy: 'destroy' });
   const template = Template.fromStack(stack);
   // Per-block 'destroy' wins over the production RETAIN default; deletion
-  // protection still follows the stack default (no per-block option for it).
+  // protection still follows the default (no per-block option given for it).
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
+  template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
+});
+
+test('CDK: per-block deletionProtection overrides the resolved default', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
+  new KVStore(parent, 'sessions', { deletionProtection: false });
+  const template = Template.fromStack(stack);
+  // Per-block false wins over the production (protected) default; removal
+  // policy still follows the default (RETAIN).
+  template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: false });
+  template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
 });
 
 test('CDK: calling a runtime data method throws an actionable error (not a cryptic TypeError)', () => {
