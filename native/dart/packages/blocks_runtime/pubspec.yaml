@@ -6,7 +6,7 @@ repository: https://github.com/aws-devtools-labs/aws-blocks
 issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
 
 environment:
-  sdk: ^3.3.0
+  sdk: ^3.11.0
 
 dependencies:
   crypto: ^3.0.0

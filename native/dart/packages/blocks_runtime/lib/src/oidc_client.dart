@@ -325,7 +325,7 @@ class OidcClient implements AuthProvider {
         'nonce': nonce,
         // RFC 9207 issuer forwarding — only sent when the relay callback
         // provided it.
-        if (iss != null) 'iss': iss,
+        'iss': ?iss,
       }),
     );
 
@@ -436,7 +436,7 @@ class OidcClient implements AuthProvider {
     final cookie = sessionStore.cookieHeader;
     return {
       'Content-Type': 'application/json',
-      if (cookie != null) 'cookie': cookie,
+      'cookie': ?cookie,
     };
   }
 
