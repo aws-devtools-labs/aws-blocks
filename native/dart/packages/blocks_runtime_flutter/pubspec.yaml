@@ -7,13 +7,14 @@ issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
 
 environment:
   sdk: ^3.3.0
-  flutter: '>=3.0.0'
+  flutter: '>=3.19.0'
 
 dependencies:
   flutter:
     sdk: flutter
   blocks_runtime: ^0.1.1
-  flutter_secure_storage: ^9.0.0
+  # 10.x dropped the `dart:io` import that made this package Web/WASM-incompatible.
+  flutter_secure_storage: ^10.0.0
   url_launcher: ^6.2.0
   app_links: ^6.0.0
 
