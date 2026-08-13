@@ -40,6 +40,7 @@ export const AsyncJobErrors: {
     readonly BatchSubmitFailed: "BatchSubmitFailedException";
     readonly Timeout: "AsyncJobTimeoutException";
     readonly StatusNotTracked: "StatusNotTrackedException";
+    readonly InvalidOption: "InvalidOptionException";
 };
 
 // @public

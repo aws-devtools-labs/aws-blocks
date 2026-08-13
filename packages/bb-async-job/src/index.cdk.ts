@@ -30,6 +30,51 @@ export type {
 	WaitUntilCompleteOptions,
 } from './types.js';
 
+/** SQS event source limits: a batch may exceed 10 only when a batching window is set. */
+const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
+const MAX_BATCH_SIZE_WITH_WINDOW = 10000;
+const MAX_BATCHING_WINDOW_SECONDS = 300;
+
+function blocksError(name: string, message: string): Error {
+	const err = new Error(`${name}: ${message}`);
+	err.name = name;
+	return err;
+}
+
+/**
+ * Reject event source options AWS would refuse at deploy time, so the failure
+ * names the offending option at the AsyncJob call site instead of surfacing as
+ * a CloudFormation error minutes into a deployment.
+ */
+function validateEventSourceOptions(
+	id: string,
+	batchSize: number,
+	maxBatchingWindowSeconds: number
+): void {
+	if (
+		!Number.isInteger(maxBatchingWindowSeconds) ||
+		maxBatchingWindowSeconds < 0 ||
+		maxBatchingWindowSeconds > MAX_BATCHING_WINDOW_SECONDS
+	) {
+		throw blocksError(
+			AsyncJobErrors.InvalidOption,
+			`AsyncJob "${id}": maxBatchingWindowSeconds must be an integer between 0 and ` +
+				`${MAX_BATCHING_WINDOW_SECONDS}, got: ${maxBatchingWindowSeconds}`
+		);
+	}
+
+	const maxBatchSize =
+		maxBatchingWindowSeconds > 0 ? MAX_BATCH_SIZE_WITH_WINDOW : MAX_BATCH_SIZE_WITHOUT_WINDOW;
+	if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > maxBatchSize) {
+		throw blocksError(
+			AsyncJobErrors.InvalidOption,
+			`AsyncJob "${id}": batchSize must be an integer between 1 and ${maxBatchSize} ` +
+				`${maxBatchingWindowSeconds > 0 ? `with a ${maxBatchingWindowSeconds}s batching window` : 'when maxBatchingWindowSeconds is 0'}` +
+				`, got: ${batchSize}`
+		);
+	}
+}
+
 export class AsyncJob<T = unknown> extends Scope {
 	public readonly queue: Queue;
 	public readonly dlq: Queue;
@@ -40,6 +85,7 @@ export class AsyncJob<T = unknown> extends Scope {
 		const maxRetries = options.maxRetries ?? 3;
 		const batchSize = options.batchSize ?? 10;
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
+		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),

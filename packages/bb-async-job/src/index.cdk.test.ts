@@ -16,7 +16,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { AsyncJob } from './index.cdk.js';
+import { AsyncJob, AsyncJobErrors } from './index.cdk.js';
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
@@ -95,4 +95,93 @@ test('CDK: maxBatchingWindowSeconds 0 renders an explicit zero window (no batchi
 
 	const props = eventSourceMapping(Template.fromStack(stack));
 	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 0);
+});
+
+// ── Option guards ───────────────────────────────────────────────────────────
+// AWS rejects these ranges when the event source mapping is created, which
+// surfaces as an opaque CloudFormation failure mid-deployment. The constructor
+// checks them at synth time instead, naming the offending option and value.
+
+function assertInvalidOption(fn: () => void, option: RegExp, value: RegExp): void {
+	assert.throws(fn, (err: Error) => {
+		assert.strictEqual(err.name, AsyncJobErrors.InvalidOption);
+		assert.match(err.message, option);
+		assert.match(err.message, value);
+		assert.match(err.message, /AsyncJob "/);
+		return true;
+	});
+}
+
+test('CDK guard: batchSize 0 is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, batchSize: 0 }),
+		/batchSize/,
+		/got: 0/
+	);
+});
+
+test('CDK guard: batchSize 11 is rejected when there is no batching window', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() =>
+			new AsyncJob(parent, 'jobs', {
+				handler: async () => {},
+				batchSize: 11,
+				maxBatchingWindowSeconds: 0,
+			}),
+		/batchSize/,
+		/got: 11/
+	);
+});
+
+test('CDK guard: batchSize above 10 is accepted with a batching window', () => {
+	const { stack, parent } = setup();
+	new AsyncJob(parent, 'jobs', {
+		handler: async () => {},
+		batchSize: 500,
+		maxBatchingWindowSeconds: 30,
+	});
+
+	const props = eventSourceMapping(Template.fromStack(stack));
+	assert.strictEqual(props.BatchSize, 500);
+	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 30);
+});
+
+test('CDK guard: batchSize 10001 is rejected even with a batching window', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() =>
+			new AsyncJob(parent, 'jobs', {
+				handler: async () => {},
+				batchSize: 10001,
+				maxBatchingWindowSeconds: 30,
+			}),
+		/batchSize/,
+		/got: 10001/
+	);
+});
+
+test('CDK guard: maxBatchingWindowSeconds 301 is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() =>
+			new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 301 }),
+		/maxBatchingWindowSeconds/,
+		/got: 301/
+	);
+});
+
+test('CDK guard: a valid batchSize + window combination still synthesizes', () => {
+	const { stack, parent } = setup();
+	new AsyncJob(parent, 'jobs', {
+		handler: async () => {},
+		batchSize: 10,
+		maxBatchingWindowSeconds: 300,
+	});
+
+	const props = eventSourceMapping(Template.fromStack(stack));
+	assert.strictEqual(props.BatchSize, 10);
+	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 300);
+	assert.deepStrictEqual(props.FunctionResponseTypes, ['ReportBatchItemFailures']);
 });
