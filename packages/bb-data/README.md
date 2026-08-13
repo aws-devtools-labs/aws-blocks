@@ -64,6 +64,10 @@ Migrations run automatically:
 
 Applied migrations are tracked in a `_migrations` table. Each file runs once.
 
+> **Pass `migrationsPath` as a path relative to your project root** (as in the Quick Start — `'./aws-blocks/migrations'`). It's resolved from the directory you run `cdk` / `npm run deploy` in.
+>
+> **Do not** derive an absolute path with `fileURLToPath(import.meta.url)`. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty — so `fileURLToPath(import.meta.url)` becomes `fileURLToPath(undefined)` and throws at Lambda load, and every request 502s. (`cdk synth` now fails fast if bundled handler code uses `import.meta.url`, so you'll catch this at build time rather than in production.) If you genuinely need the current directory in bundled runtime code, use `__dirname` — esbuild provides it correctly in the CommonJS bundle.
+
 ## Kysely Query Builder
 
 For type-safe queries without raw SQL:
