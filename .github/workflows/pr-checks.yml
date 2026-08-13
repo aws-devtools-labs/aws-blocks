@@ -72,7 +72,7 @@ jobs:
       - run: npm ci
 
       - name: Sync block docs (prebuild step)
-        run: node scripts/sync-block-docs.mjs
+        run: node scripts/gen-block-docs.mjs
 
       - name: Check blocks docs-sync integrity
         env:
@@ -80,14 +80,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          # sync-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
+          # Release PRs consume changesets — the files are already gone. Skip.
+          if [[ "$GITHUB_HEAD_REF" == "changeset-release/main" ]]; then
+            echo "✅ Skipping — release PR (changesets already consumed into version bumps)"
+            exit 0
+          fi
+
+          # gen-block-docs.mjs regenerates packages/blocks/docs/ from sibling READMEs
           # (docs/ is gitignored, built at publish time). We compare the packed
           # @aws-blocks/blocks tarball at THIS PR's head against the PR base branch —
           # like-for-like (same algo, same build state), so only a change introduced by
           # THIS PR trips the check. A PR that doesn't alter what ships needs no bump.
+          # The base pack falls back to the pre-rename sync-block-docs.mjs so this job works
+          # against bases from either side of the gen-block-docs.mjs rename.
           pack_blocks() {
             local dest="$1"
-            node scripts/sync-block-docs.mjs >/dev/null
+            node scripts/gen-block-docs.mjs >/dev/null
             # --ignore-scripts intentionally packs source + synced docs, NOT a freshly built dist/ — this diffs shipped content, not the published build.
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination "$dest" >/dev/null )
             set -- "$dest"/*.tgz
@@ -103,7 +111,7 @@ jobs:
           mkdir -p /tmp/base-pack
           BASE_INTEGRITY=$(
             cd /tmp/blocks-base
-            node scripts/sync-block-docs.mjs >/dev/null
+            node scripts/gen-block-docs.mjs >/dev/null 2>/dev/null || node scripts/sync-block-docs.mjs >/dev/null
             ( cd packages/blocks && npm pack --ignore-scripts --pack-destination /tmp/base-pack >/dev/null )
             set -- /tmp/base-pack/*.tgz
             [ $# -eq 1 ] || { echo "expected exactly one .tgz in /tmp/base-pack, found $#" >&2; exit 1; }
@@ -172,13 +180,31 @@ jobs:
         run: npm run check:api
 
       - name: Unit Tests
+        env:
+          # The real-CDK stream-routing probe in packages/core guards the issue #222
+          # root cause (`--ci` is what moves CloudFormation progress off stderr).
+          # Require it here so a runner that cannot resolve the CDK CLI fails
+          # instead of skipping, and have it drop a marker file the next step
+          # checks — a probe that stops running must not read as green.
+          BLOCKS_REQUIRE_CDK_PROBE: '1'
+          BLOCKS_CDK_PROBE_MARKER: ${{ runner.temp }}/cdk-routing-probe.marker
         run: npm run test:unit
+
+      - name: Verify the real-CDK stream-routing probe ran
+        run: |
+          set -euo pipefail
+          marker='${{ runner.temp }}/cdk-routing-probe.marker'
+          if [ ! -s "$marker" ]; then
+            echo "::error::the real-CDK --ci stream-routing probe did not run (no marker at $marker). It is the only test that verifies the CDK CLI still routes deploy logs to stdout under --ci and keeps failures on stderr (issue #222); a silent skip is a regression."
+            exit 1
+          fi
+          cat "$marker"
 
       - name: E2E Test Local
         run: npm run test:e2e:local
 
       - name: Pack for local registry
-        run: npm run publish:dry-run
+        run: npm run publish:local
 
       - name: Upload registry artifact
         uses: actions/upload-artifact@v5
@@ -474,13 +500,62 @@ jobs:
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
 
+  e2e-telemetry:
+    name: Telemetry E2E
+    needs: [build-and-test-local, detect-changes]
+    if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      BLOCKS_STACK_SUFFIX: telemetry-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Seed fixed e2e telemetry installation ID
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.blocks/telemetry"
+          printf '%s' '00000000-0000-0000-0000-000000000e2e' > "$HOME/.blocks/telemetry/installation-id"
+
+      - name: Telemetry E2E Tests
+        run: npm run test:telemetry
+
+      - name: Cleanup stacks
+        if: always()
+        run: |
+          cd test-apps/telemetry
+          npx tsx aws-blocks/scripts/sandbox-destroy.ts || true
+          npx tsx aws-blocks/scripts/destroy.ts || true
+
   # Gate job — matches the branch protection required check name.
   # Skipped E2E jobs (no source changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.
   build-and-test:
     name: Build and Test
-    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting]
+    needs: [blocks-integrity, build-and-test-local, e2e-templates, e2e-sandbox, e2e-sandbox-vpc, e2e-production, e2e-supabase, e2e-hosting, e2e-telemetry]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -502,7 +577,8 @@ jobs:
              [[ "${{ needs.e2e-sandbox-vpc.result }}" != "success" && "${{ needs.e2e-sandbox-vpc.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-production.result }}" != "success" && "${{ needs.e2e-production.result }}" != "skipped" ]] ||
              [[ "${{ needs.e2e-supabase.result }}" != "success" && "${{ needs.e2e-supabase.result }}" != "skipped" ]] ||
-             [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]]; then
+             [[ "${{ needs.e2e-hosting.result }}" != "success" && "${{ needs.e2e-hosting.result }}" != "skipped" ]] ||
+             [[ "${{ needs.e2e-telemetry.result }}" != "success" && "${{ needs.e2e-telemetry.result }}" != "skipped" ]]; then
             echo "One or more E2E jobs failed"
             exit 1
           fi

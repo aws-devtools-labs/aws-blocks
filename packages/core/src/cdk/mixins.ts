@@ -6,13 +6,30 @@ import type { IConstruct } from 'constructs';
 import type { IMixin } from 'constructs';
 
 /**
- * Disables deletion protection on any construct that has a `deletionProtection`
- * property (e.g. RDS clusters, RDS instances). Uses duck-typing so it
- * automatically covers current and future resource types.
+ * Property names used across CloudFormation resources to express deletion
+ * protection. L2 constructs and most L1s use `deletionProtection` (e.g. RDS
+ * clusters and instances, ELBv2 load balancers), while others spell it
+ * `deletionProtectionEnabled` (e.g. the DynamoDB `CfnTable` behind an L2
+ * `Table`, Aurora DSQL clusters).
+ */
+const DELETION_PROTECTION_PROPERTIES = ['deletionProtection', 'deletionProtectionEnabled'] as const;
+
+/**
+ * Disables deletion protection on any construct that exposes a deletion
+ * protection property (e.g. RDS clusters, RDS instances, DynamoDB tables).
+ * Uses duck-typing so it automatically covers current and future resource
+ * types, matching both the `deletionProtection` and
+ * `deletionProtectionEnabled` spellings.
+ *
+ * Note that a DynamoDB L2 `Table` only accepts `deletionProtection` as a prop
+ * and does not re-expose it, so tables are matched through their underlying
+ * L1 `CfnTable.deletionProtectionEnabled`.
  *
  * Intended for sandbox teardown — use in the CDK layer alongside
  * `RemovalPolicies.of(stack).destroy()` to ensure `sandbox:destroy` can
- * delete the entire stack without manual cleanup.
+ * delete the entire stack without manual cleanup. DynamoDB refuses
+ * `DeleteTable` while deletion protection is enabled, regardless of the
+ * CloudFormation `DeletionPolicy`.
  *
  * @example
  * ```ts
@@ -27,15 +44,17 @@ import type { IMixin } from 'constructs';
  */
 export class SandboxDisableDeletionProtection extends Mixin implements IMixin {
   supports(construct: any): boolean {
-    return 'deletionProtection' in construct;
+    return DELETION_PROTECTION_PROPERTIES.some((property) => property in construct);
   }
   applyTo(node: IConstruct): void {
     // Only flip explicitly-enabled protection. When undefined (the default),
     // deletion protection is already off — setting it to false would emit the
     // property in the CloudFormation template, which breaks Aurora DB instances
     // (RDS rejects DeletionProtection on cluster members).
-    if ((node as any).deletionProtection === true) {
-      (node as any).deletionProtection = false;
+    for (const property of DELETION_PROTECTION_PROPERTIES) {
+      if ((node as any)[property] === true) {
+        (node as any)[property] = false;
+      }
     }
   }
 }

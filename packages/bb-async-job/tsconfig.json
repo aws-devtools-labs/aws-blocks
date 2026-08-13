@@ -10,6 +10,9 @@
   "references": [
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-distributed-table"
     }
   ]
 }

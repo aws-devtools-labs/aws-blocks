@@ -1,5 +1,52 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.19
+
+### Patch Changes
+
+- 1e37c67: docs: per-block docs folders + committed BB catalog with CI sync check; CLAUDE/agents docs resolved via require.resolve
+
+  `@aws-blocks/blocks` now ships one docs folder per Building Block under `docs/<block>/`
+  (`README.md` / `API.md` / `DESIGN.md`), plus a committed, marker-delimited Building Block
+  catalog in the package README that a `sync-docs --check` CI gate keeps in sync. The README's
+  catalog section and the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`) now direct
+  tools and agents to locate docs programmatically via
+  `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (and
+  `require.resolve('@aws-blocks/blocks/docs/README.md')` for the catalog) rather than assuming a
+  `node_modules/` path or following the human-facing relative links. Also adds a Security
+  Considerations section to the package README.
+
+## 0.1.18
+
+### Patch Changes
+
+- 75f5446: Add optional `fallback` parameter to `AuthenticatedContent` for rendering alternative content when the user is not authenticated.
+- 8264dd0: Add the missing `vendorize` script to the `auth-cognito` template. Every other deployable template shipped `"vendorize": "blocks-vendorize"`, but auth-cognito omitted it, so `npm run vendorize` (used to inline a Building Block's source for customization) didn't work in scaffolded auth-cognito apps. Also adds a regression test asserting every deployable template carries the standard `vendorize` script.
+
+## 0.1.17
+
+### Patch Changes
+
+- 50dbd0e: Include the local dev-server script and use public AWS Blocks imports when adding AWS Blocks to an Amplify Gen 2 project.
+
+## 0.1.16
+
+### Patch Changes
+
+- fc33428: fix(telemetry): inherit worker stderr in debug mode; enable telemetry in CI for create-blocks-app
+
+  - When `NODE_DEBUG=blocks-telemetry` is set, the telemetry worker subprocess
+    inherits the parent's stderr so delivery confirmation is observable. Silent
+    by default.
+  - Remove CI telemetry suppression from create-blocks-app to match core behavior.
+    Telemetry is now enabled in CI (same as all other CLI commands).
+  - Make `console` cross-platform and headless-safe: pick the OS browser opener
+    (`open`/`xdg-open`/`start`), resolve the region from the environment, and treat
+    a missing opener (CI / remote shells) as best-effort success instead of failing.
+  - Add an isolated E2E telemetry test suite (`test-apps/telemetry`) that verifies
+    payload structure, delivery to the real endpoint, disable mechanisms, and
+    per-command success/failure events.
+
 ## 0.1.15
 
 ### Patch Changes
