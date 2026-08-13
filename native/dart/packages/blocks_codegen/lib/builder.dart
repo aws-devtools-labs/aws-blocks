@@ -6,7 +6,8 @@ import 'src/generator.dart';
 
 /// Factory for the build_runner builder.
 Builder blocksCodegenBuilder(BuilderOptions options) => _BlocksCodegenBuilder(
-    options.config['fail_on_collision'] as bool? ?? false);
+  options.config['fail_on_collision'] as bool? ?? false,
+);
 
 class _BlocksCodegenBuilder extends Builder {
   /// When true, collisions are a hard error instead of auto-suffixed + warned.
