@@ -13,11 +13,8 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
     func testGetChannelDescriptor() async throws {
         let channel = try await api.realtimeGetChannel(channel: nil)
         XCTAssertNotNil(channel)
-        // API Gateway's $connect route authenticates the handshake from the
-        // query string. A descriptor that hydrates without the connect token
-        // still passes every non-socket assertion, then fails only once
-        // something opens a socket — so check it here, where no socket is
-        // needed and the failure names the cause.
+        // A descriptor with no connect token passes every non-socket assertion
+        // and fails only when a socket opens. Check it here, with no socket.
         XCTAssertTrue(
             channel.wsUrl.contains("token="),
             "hydrated wsUrl carries no connect token: \(channel.wsUrl)"
@@ -34,10 +31,8 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
         let channel = try await api.realtimeGetChannel(channel: "swift-sub-test")
         let stream = channel.subscribe()
 
-        // Consume the stream on its own task. Iterating inline cannot fail this
-        // test: `for try await` blocks until a message arrives, so the old
-        // `deadline` below the loop was unreachable and a message that never
-        // came hung the test until the job timeout killed it, 17 minutes later.
+        // Consume the stream on its own task. `for try await` blocks until a
+        // message arrives, so an inline loop hangs the test when none comes.
         let received = XCTestExpectation(description: "cursor received on channel")
         let consumer = Task {
             for try await msg in stream {
@@ -50,12 +45,10 @@ final class RealtimeE2ETests: BlocksE2ETestCase {
             }
         }
 
-        // Publish repeatedly rather than once after a fixed sleep. Subscribing
-        // is asynchronous end to end — the handshake runs the $connect Lambda
-        // and the subscribe frame is only registered after a DynamoDB write, so
-        // on a cold sandbox that takes longer than any single sleep worth
-        // hard-coding. A publish that lands before registration is delivered to
-        // nobody and is not retried by the server.
+        // Publish once a second, not once after a fixed sleep. The subscribe
+        // frame is live only after a DynamoDB write, and a cold sandbox takes
+        // longer than any fixed sleep. The server drops a publish that lands
+        // before the frame is live and does not retry it.
         let published = Cursor(color: "#00ff00", userId: "swift-sub-test", x: 42, y: 99)
         let publisher = Task {
             for _ in 0 ..< 20 {

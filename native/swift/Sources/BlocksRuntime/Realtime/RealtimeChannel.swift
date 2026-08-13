@@ -82,18 +82,11 @@ public class RealtimeChannel<T> {
     /// { "channel": "...", "wsUrl": "wss://...", "connectToken": "...", "token": "..." }
     /// ```
     ///
-    /// The descriptor carries two distinct credentials, and they are not
-    /// interchangeable:
-    ///
-    /// - `connectToken` authenticates the WebSocket *handshake*. It is appended
-    ///   to `wsUrl` as a `token` query parameter, because API Gateway's
-    ///   `$connect` route reads it from `queryStringParameters.token`. Without
-    ///   it the handshake is rejected before the socket opens, which surfaces on
-    ///   Apple platforms as `NSURLErrorDomain` code -1011 ("bad response from
-    ///   the server"). It is optional so a descriptor that omits it still
-    ///   hydrates.
-    /// - `token` authorizes the per-channel *subscribe* message sent after the
-    ///   socket is open, and is kept separate on the instance.
+    /// The descriptor carries two credentials. They are not interchangeable.
+    /// `connectToken` authenticates the handshake. It goes on `wsUrl` as a
+    /// `token` query parameter, because API Gateway `$connect` reads
+    /// `queryStringParameters.token`. It is optional. `token` authenticates the
+    /// per-channel subscribe message and stays on the instance.
     ///
     /// - Parameters:
     ///   - json: Dictionary with `channel`, `wsUrl`, and `token` keys, plus an optional `connectToken`.
@@ -121,12 +114,9 @@ public class RealtimeChannel<T> {
         return RealtimeChannel(channel: channelName, wsUrl: wsUrlStr, token: tokenValue, deserializer: deserializer)
     }
 
-    /// Appends `connectToken` to a WebSocket URL as a `token` query parameter,
-    /// preserving any query parameters the URL already carries.
-    ///
-    /// Returns the URL unchanged when it cannot be parsed, so a malformed
-    /// descriptor fails later at connect time with a URL in the error rather
-    /// than being dropped silently here.
+    /// Appends `connectToken` to `wsUrl` as a `token` query parameter. Keeps any
+    /// existing query parameters. Returns `wsUrl` unchanged if it does not parse,
+    /// so a bad URL fails at connect time with the URL in the error.
     private static func appendingConnectToken(to wsUrl: String, _ connectToken: String) -> String {
         guard var components = URLComponents(string: wsUrl) else { return wsUrl }
         components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "token", value: connectToken)]

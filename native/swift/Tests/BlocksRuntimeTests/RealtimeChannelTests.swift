@@ -53,10 +53,9 @@ final class RealtimeChannelTests: XCTestCase {
         XCTAssertEqual(channel.wsUrl, "ws://localhost:3001/ws")
     }
 
-    // API Gateway's $connect route authenticates the handshake from
-    // queryStringParameters.token. Dropping connectToken makes every subscribe
-    // fail at the handshake with NSURLErrorDomain -1011, while every non-socket
-    // realtime call keeps working — so these guard the whole WebSocket path.
+    // API Gateway `$connect` reads the handshake credential from
+    // queryStringParameters.token. If fromJSON drops connectToken, every
+    // subscribe fails at the handshake. These tests guard that path.
 
     func testFromJSONAppendsConnectTokenAsQueryParam() {
         let json: [String: Any] = [
@@ -72,8 +71,7 @@ final class RealtimeChannelTests: XCTestCase {
             channel.wsUrl,
             "wss://abc123.execute-api.us-east-1.amazonaws.com/rt?token=connect-abc"
         )
-        // The channel token authorizes the later subscribe message and must not
-        // be the value placed on the URL.
+        // The channel token stays off the URL. It is for the subscribe message.
         XCTAssertEqual(channel.token, "channel-xyz")
     }
 
@@ -108,10 +106,9 @@ final class RealtimeChannelTests: XCTestCase {
     }
 
     func testFromJSONKeepsARealConnectTokenIntact() {
-        // mintConnectToken emits `<base64url payload>.<base64url hmac>`, so the
-        // alphabet is A-Za-z0-9-_ plus the '.' separator. Every one of those is
-        // query-safe, and the token must reach the server byte-for-byte or the
-        // HMAC comparison fails.
+        // mintConnectToken emits base64url plus a '.' separator. Every character
+        // is query-safe, and the token must reach the server unchanged or the
+        // HMAC check fails.
         let token = "eyJjaGFubmVsIjoiYXBwLXJ0JGNvbm5lY3QiLCJleHAiOjF9.s0me-Sig_123"
         let json: [String: Any] = [
             "channel": "cursors",
@@ -126,9 +123,8 @@ final class RealtimeChannelTests: XCTestCase {
     }
 
     func testFromJSONEncodesAmpersandSoTheTokenCannotBeTruncated() {
-        // Defensive: base64url never contains '&', but if the token format ever
-        // changes a raw '&' would split into a second query parameter and the
-        // server would validate a truncated token.
+        // base64url has no '&', but if the format changes, a raw '&' would split
+        // the query and the server would read a truncated token.
         let json: [String: Any] = [
             "channel": "cursors",
             "wsUrl": "wss://example.com/rt",
