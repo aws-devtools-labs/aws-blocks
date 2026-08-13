@@ -22,6 +22,7 @@ const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backe
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const fullIdConstructBackendPath = join(__dirname, '__fixtures__', 'fullid-construct-backend.js');
 const EXECUTION_ROLE_MARKER_ACTION = 'blocks-test:MarkerAction';
+const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handler.js');
 
 describe('ESM cache-busting (multi-stage)', () => {
   test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -175,6 +176,27 @@ describe('shared execution role', () => {
         Statement: Match.arrayWith([Match.objectLike({ Action: EXECUTION_ROLE_MARKER_ACTION })]),
       },
     });
+  });
+});
+
+describe('CJS bundle guard: import.meta.url in the handler fails synth (not at Lambda load)', () => {
+  test('bundling a handler that uses import.meta.url throws at synth instead of shipping a broken Lambda', async () => {
+    // The handler is bundled to CJS, where `import.meta` is empty. Without the
+    // guard, `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)`
+    // — esbuild only warns, so the broken bundle deploys and throws at Lambda load.
+    // setupBlocksInfra promotes the `empty-import-meta` warning to an esbuild error,
+    // so construction (which runs bundling synchronously) fails loudly at build time.
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ImportMetaStack');
+
+    await assert.rejects(
+      () =>
+        BlocksBackend.create(stack, 'blocks', {
+          backendHandlerPath: importMetaHandlerPath,
+          backendCDKPath: sideEffectBackendPath,
+        }),
+      'expected esbuild bundling to fail because the handler uses import.meta.url in a CJS bundle',
+    );
   });
 });
 

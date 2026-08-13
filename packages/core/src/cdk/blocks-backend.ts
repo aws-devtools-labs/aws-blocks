@@ -89,7 +89,17 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     },
     bundling: {
       minify: true,
-      esbuildArgs: { '--conditions': 'aws-runtime' },
+      esbuildArgs: {
+        '--conditions': 'aws-runtime',
+        // NodejsFunction bundles the handler to CJS. In a CJS bundle `import.meta`
+        // is empty, so any bundled code that does `fileURLToPath(import.meta.url)`
+        // (a customer handler, a Building Block's aws-runtime code, or a dependency)
+        // becomes `fileURLToPath(undefined)` and throws at Lambda load. esbuild only
+        // *warns* about this ("empty-import-meta"), so a broken bundle deploys and
+        // fails on first invocation. Promote the warning to an error so `cdk synth`
+        // fails loudly at build time, pointing at the exact offending file/line.
+        '--log-override': 'empty-import-meta=error',
+      },
     },
   });
 
