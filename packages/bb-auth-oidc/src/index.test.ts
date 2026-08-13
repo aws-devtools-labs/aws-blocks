@@ -474,6 +474,46 @@ describe('stub IdP /authorize', () => {
 		assert.strictEqual(cap.status, 400);
 	});
 
+	test('rejects redirect_uri whose query carries the reserved `scope` param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/spa-callback?scope=openid',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: contains reserved response param scope',
+		});
+	});
+
+	test('rejects redirect_uri whose query carries the reserved `state` param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/callback?State=abc',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: contains reserved response param state',
+		});
+	});
+
+	test('accepts redirect_uri with a non-reserved query param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?tenant=acme',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 302);
+		assert.match(cap.headers.get('Location')!, /tenant=acme/);
+		assert.match(cap.headers.get('Location')!, /code=/);
+	});
+
 	test('login-form submit issues a code for the picked user', async () => {
 		const provider = stubIdp({ name: 'google' });
 		const form = new URLSearchParams({ ...baseParams, scope: 'openid email', sub: 'stub-google-user' });
