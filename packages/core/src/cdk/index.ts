@@ -16,7 +16,7 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
-import { type BlocksDefaults, BlocksPresets, getStackBlocksDefaults } from './blocks-defaults.js';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { initializeVpc, finalizeVpc } from './vpc.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 

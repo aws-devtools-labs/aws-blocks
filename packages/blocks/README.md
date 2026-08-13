@@ -247,7 +247,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 ## VPC Support
 
-AWS Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources (e.g., ElastiCache, an existing RDS cluster). When enabled, Blocks handles Lambda placement, VPC endpoint provisioning, and security group wiring automatically.
+AWS Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources. You can let Blocks manage endpoint provisioning and security groups automatically, or bring a fully-configured VPC and handle networking yourself.
 
 See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guidance on when a VPC is appropriate.
 

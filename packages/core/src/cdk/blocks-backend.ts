@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
-import { type BlocksDefaults, registerStackBlocksDefaults } from './blocks-defaults.js';
+import type { BlocksDefaults } from './blocks-defaults.js';
 import { initializeVpc, finalizeVpc } from './vpc.js';
 import type { BlocksVpcOptions, VpcContext } from './vpc-types.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
@@ -68,11 +68,6 @@ export interface BlocksBackendProps {
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string, vpcContext?: VpcContext) {
-  // Publish stack-wide infrastructure defaults before any Building Block is
-  // constructed, so blocks can read them at synth time via `scope.defaults`
-  // (getStackBlocksDefaults()).
-  registerStackBlocksDefaults(scope, props.defaults);
-
   // ── Shared execution role ──────────────────────────────────────────────
   // A single IAM role that every Building Block grants to. Provisioned here so
   // it exists before the backend module is imported (Building Blocks reach it
@@ -88,6 +83,8 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      // When Lambda is placed in a VPC it needs ENI management permissions
+      ...(vpcContext ? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')] : []),
     ],
   });
 
