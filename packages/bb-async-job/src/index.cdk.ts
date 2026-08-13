@@ -42,6 +42,15 @@ export class AsyncJob<T = unknown> extends Scope {
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
 		const reportBatchItemFailures = options.reportBatchItemFailures ?? true;
 
+		if (!reportBatchItemFailures && batchSize > 1) {
+			throw new Error(
+				`AsyncJob '${id}': reportBatchItemFailures cannot be disabled with batchSize ${batchSize}. ` +
+					'Without partial batch responses SQS deletes every message in a batch as soon as the ' +
+					'invocation returns, so one failing record discards the rest. Set batchSize: 1 if the ' +
+					'batch really is all-or-nothing.'
+			);
+		}
+
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),
 			retentionPeriod: Duration.days(14),
@@ -56,6 +65,10 @@ export class AsyncJob<T = unknown> extends Scope {
 			queueName: `${this.fullId}`.substring(0, 80),
 			visibilityTimeout: Duration.seconds(visibilityTimeout),
 			deadLetterQueue: {
+				// Batching does not change per-message retry accounting: SQS tracks
+				// ApproximateReceiveCount per message, and partial batch responses
+				// redeliver only the failed records — so maxRetries still means
+				// "attempts for this message", exactly as it did at batchSize 1.
 				queue: this.dlq,
 				maxReceiveCount: maxRetries,
 			},

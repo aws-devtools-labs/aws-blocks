@@ -89,21 +89,31 @@ test('CDK: maxBatchingWindowSeconds is overridable', () => {
 	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 30);
 });
 
-test('CDK: maxBatchingWindowSeconds 0 disables the batching window', () => {
+test('CDK: maxBatchingWindowSeconds 0 renders an explicit zero window (no batching wait)', () => {
 	const { stack, parent } = setup();
 	new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 0 });
 
 	const props = eventSourceMapping(Template.fromStack(stack));
-	assert.ok(
-		props.MaximumBatchingWindowInSeconds === undefined || props.MaximumBatchingWindowInSeconds === 0,
-		`expected no batching window, got ${props.MaximumBatchingWindowInSeconds}`
+	assert.strictEqual(props.MaximumBatchingWindowInSeconds, 0);
+});
+
+test('CDK: disabling reportBatchItemFailures with a batch is rejected at synth time', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, reportBatchItemFailures: false }),
+		/reportBatchItemFailures cannot be disabled with batchSize 10/
 	);
 });
 
-test('CDK: reportBatchItemFailures can be opted out of explicitly', () => {
+test('CDK: reportBatchItemFailures can be disabled when batchSize is 1', () => {
 	const { stack, parent } = setup();
-	new AsyncJob(parent, 'jobs', { handler: async () => {}, reportBatchItemFailures: false });
+	new AsyncJob(parent, 'jobs', {
+		handler: async () => {},
+		batchSize: 1,
+		reportBatchItemFailures: false,
+	});
 
 	const props = eventSourceMapping(Template.fromStack(stack));
+	assert.strictEqual(props.BatchSize, 1);
 	assert.strictEqual(props.FunctionResponseTypes, undefined);
 });
