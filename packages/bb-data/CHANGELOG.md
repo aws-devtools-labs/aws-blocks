@@ -1,5 +1,51 @@
 # @aws-blocks/bb-data
 
+## 0.2.4
+
+### Patch Changes
+
+- 49b3bd9: Make the unconfigured-connection error in the Database runtime intent-aware. When neither an Aurora cluster is provisioned nor an external `connectionString` connection is supplied, the error now names both paths — the provisioned Aurora database (`BLOCKS_*_CLUSTER_ARN` / `SECRET_ARN`) and `Database.fromExisting({ connectionString })` for external databases (Supabase/Neon/etc.) — instead of surfacing an Aurora-only message.
+- a584007: fix(data-common): defer getEngine() in createKyselyAdapter so adapters are safe at module scope
+
+  `createKyselyAdapter()` eagerly called `db.getEngine()` at construction. Backend
+  `index.ts` is also loaded during `cdk synth`, where the infra-only (cdk) builds of
+  `DistributedDatabase` / `Database` expose no engine — so creating the adapter at
+  module scope crashed synth with `db.getEngine is not a function`.
+
+  - **data-common** — the adapter now passes a thunk (`() => db.getEngine()`) into
+    the Kysely dialect and resolves the engine lazily on the first query (still
+    memoized per connection, preserving the one-engine-per-transaction guarantee
+    the handle-based transaction API relies on). Adapter creation is now
+    side-effect free and safe at module scope. Public API and runtime behavior are
+    unchanged.
+  - **bb-distributed-data / bb-data** — the cdk builds gain a `getEngine()` that
+    throws a clear, actionable message if a query is ever reached during synth,
+    replacing the cryptic "is not a function".
+
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [a584007]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/data-common@0.1.3
+  - @aws-blocks/bb-logger@0.1.3
+
+## 0.2.3
+
+### Patch Changes
+
+- 09b94b8: Bump the Database block's Aurora PostgreSQL engine version from the retired `16.4` to `16.13`, and make the engine version configurable.
+
+  AWS retired Aurora PostgreSQL `16.4` in us-east-1, after which `CreateDBCluster` failed with `Cannot find version 16.4 for aurora-postgresql`, blocking every deployment of a `Database` block. The default now points at the latest available `16.x` minor (`16.13`) for the longest deprecation runway.
+
+  A new optional `postgresVersion` option on `DatabaseOptions` lets callers override the engine version (e.g. `postgresVersion: '16.13'`), so the next AWS retirement is a configuration change rather than a framework code fix. Overrides are validated at synth time (must be `MAJOR.MINOR`, e.g. `16.13`), so a malformed value fails fast with a clear error instead of an opaque `CreateDBCluster` failure.
+
+  The `@aws-blocks/blocks` umbrella package receives a `patch` because its published `docs/` folder is assembled from sibling block READMEs at build time (`scripts/sync-block-docs.mjs`), so this `bb-data` README update changes `@aws-blocks/blocks` packaged content.
+
 ## 0.2.2
 
 ### Patch Changes

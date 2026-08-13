@@ -37,6 +37,13 @@ void describe('spaAdapter', () => {
     assert.deepStrictEqual(manifest.compute, {});
   });
 
+  void it('marks Vite `assets/*` hashed bundles immutable', () => {
+    // Content-hashed SPA bundles must be cached forever with `immutable`,
+    // not fall into the default revalidation-only tier (issue #6).
+    const manifest = spaAdapter(tmpDir);
+    assert.deepStrictEqual(manifest.staticAssets.immutablePaths, ['assets/*']);
+  });
+
   // ── spaFallback comes from the framework contract, NOT filesystem sniffing ──
   // Sniffing misclassified both a SPA shipping a nested index.html and a
   // flat-file SSG. The routing model is now declared by the `framework`

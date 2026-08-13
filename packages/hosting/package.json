@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/hosting",
-  "version": "0.1.4",
+  "version": "0.1.8",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/hosting"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/hosting#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",

@@ -16,10 +16,12 @@ import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
 import { authCognitoTests } from './auth-cognito.test.js';
 import { authCognitoSandboxTests } from './auth-cognito-sandbox.test.js';
+import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
+import { asyncJobStatusTests } from './async-job-status.test.js';
 import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -213,6 +215,9 @@ authCognitoTests(() => api);
 // AuthCognito Sandbox tests (separate file)
 authCognitoSandboxTests(() => api);
 
+// AuthCognito admin-surface sandbox tests (separate file)
+authCognitoAdminTests(() => api);
+
 // AuthOIDC tests (separate file)
 oidcAuthTests(() => api);
 
@@ -221,6 +226,9 @@ databaseTests(() => api);
 
 // AsyncJob tests (separate file)
 asyncJobTests(() => api);
+
+// AsyncJob status tracking tests (separate file)
+asyncJobStatusTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);

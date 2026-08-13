@@ -40,6 +40,7 @@ const table = new DistributedTable(scope, id, options)
 | `key` | `TableKeyConfig<T>` | Yes | Primary key configuration: `{ partitionKey, sortKey? }`. Field names must exist in the schema. |
 | `indexes` | `Record<string, TableKeyConfig<T>>` | No | Global secondary index definitions. |
 | `ttl` | `keyof T & string` | No | Enable DynamoDB TTL on the specified attribute. The field should contain a Unix epoch timestamp in seconds. |
+| `readValidation` | `'off' \| 'coerce' \| 'strict'` | No | How reads (`get`/`getBatch`/`query`/`scan`) reconcile a stored item with `schema`. `'coerce'` (**default**) returns the coerced value and, on failure, the raw value + a warning (never throws); `'strict'` throws `ValidationFailed` on a non-conforming item; `'off'` returns the raw value with no validation. See [Reads and schema evolution](#reads-and-schema-evolution). |
 | `table` | `ExternalTableRef` | No | Wrap an existing DynamoDB table instead of creating one. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
@@ -128,6 +129,45 @@ await table.delete(key, { ifFieldEquals: { status: 'archived' } });
 All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed`.
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
+
+### Reads and schema evolution
+
+Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T` — a newly added field is **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a **required, no-default** field makes the read-modify-write cycle above **fail on the write** as `put()` rejects the legacy shape.
+
+`readValidation` has three modes:
+
+| Mode | On read | On a non-conforming item |
+|---|---|---|
+| **`'coerce'`** (default) | returns the schema's coerced output (defaults filled, types narrowed) | returns the **raw** value + logs a warning — **never throws** |
+| **`'strict'`** | validates against the schema | **throws** `ValidationFailed` |
+| **`'off'`** | returns the raw stored value, no validation | returns it as-is |
+
+The default `'coerce'` closes the schema-evolution gap so a legacy row round-trips cleanly:
+
+```typescript
+const orderSchema = z.object({
+  orderId: z.string(),
+  total: z.number(),
+  currency: z.string().default('USD'),   // added in a later release
+});
+
+const orders = new DistributedTable(scope, 'orders', {
+  schema: orderSchema,
+  key: { partitionKey: 'orderId' },
+  // readValidation: 'coerce' is the default
+});
+
+const order = await orders.get({ orderId: 'o1' }); // legacy row → { …, currency: 'USD' }
+await orders.put({ ...order, total: 20 });          // round-trips without ValidationFailed
+```
+
+**`'coerce'` never throws:** a value that genuinely can't be coerced (e.g. a required field with no default) is returned **as-is** with a warning, so unrecoverable rows stay readable for migration and `get()` never throws for a bad row.
+
+> **Best-effort coercion (validator-dependent).** Coercion depends on the schema *transforming* its input. Zod fills defaults and casts; a check-only Standard Schema validator (some Valibot/ArkType schemas) validates without transforming, so `'coerce'` returns the value unchanged for those — it never invents data.
+
+> **`'coerce'` preserves stored keys not in the schema.** Many schemas discard unrecognized keys when they validate (Zod object schemas `.strip()` by default), which would drop attributes a stored row carries beyond the current schema — and a read-modify-write would then persist the loss. To avoid that, `'coerce'` deep-merges the coerced output **over the raw stored item**: schema output wins per key (defaults filled, types narrowed), while attributes the schema doesn't declare — from an older schema version, or columns another writer owns — are **kept**. Arrays are replaced wholesale (the coerced array wins), and nested unknown keys are preserved too. So a routine read-modify-write never silently deletes a field you didn't touch. (Use **`'strict'`** if you instead want a schema mismatch to be rejected, or **`'off'`** to skip the schema pass entirely.)
+
+Choose **`'strict'`** for tables where a schema mismatch should be treated as corruption and rejected (note: one bad row then fails the whole `query`/`scan`/`getBatch`). Choose **`'off'`** for hot paths, data you trust was written through this schema, or to read (and preserve) rows you can't yet coerce during a migration.
 
 ### Error Handling
 

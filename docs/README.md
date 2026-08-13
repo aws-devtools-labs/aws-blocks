@@ -4,6 +4,10 @@
 
 - **[guides/extending-with-existing-aws-resources.md](./guides/extending-with-existing-aws-resources.md)** — Brownfield interop: `BlocksStack`, `BlocksBackend`, `fromExisting`, custom BBs, vendorize
 
+## Design
+
+- **[design/API-DESIGN.md](./design/API-DESIGN.md)** — Building Block API design guidelines (G1–G18) and preliminary design document template
+
 ## Decisions
 
 - **[DECISIONS.md](./DECISIONS.md)** — Architectural decisions and rationale

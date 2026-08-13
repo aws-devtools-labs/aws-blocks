@@ -8,13 +8,15 @@ import {
   hasExistingMiddlewareManifest,
   nextjsAdapter,
   patchEdgeBundlesForLambdaEdge,
-  patchImageOptimizerForNext155,
+  patchImageOptimizerForNext16,
+  patchImageOptimizerSvgStatus,
   patchStreamingWrapperForApiGateway,
   projectHasEdgeRuntimeRoutes,
   stripNextInternalLocale,
   stripBasePathPrefix,
   stripBakedBasePath,
   nextPatternToCloudFront,
+  normalizeTrailingNamedWildcard,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -1138,7 +1140,14 @@ void describe('patchStreamingWrapperForApiGateway — brittleness gating', () =>
   });
 });
 
-void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () => {
+// NOTE: these tests validate the patch's SHAPE LOGIC against hand-written,
+// friendly-named fixtures (e.g. `Pc.fetchInternalImage`, `Pl`/`VX`). Real
+// OpenNext minified output may rename these to single identifiers, in which
+// case the structural regexes match nothing and the patch no-ops — yet these
+// units still pass. Green here proves the rewrite is correct GIVEN the shape;
+// it does NOT prove the patch fires on a production bundle. That coverage
+// comes from the integration deploy (the /_next/image e2e image tests).
+void describe('patchImageOptimizerForNext16 — fetchInternalImage arity', () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -1156,16 +1165,29 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
     return bundle;
   };
 
+  // Write a fake project whose node_modules/next reports `version`, so the
+  // adapter's version gate (semver.major(next) < 16 ⇒ skip) can be exercised.
+  const writeProjectWithNext = (version: string): string => {
+    const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-proj-'));
+    const nextPkgDir = path.join(projectDir, 'node_modules', 'next');
+    fs.mkdirSync(nextPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(nextPkgDir, 'package.json'),
+      JSON.stringify({ name: 'next', version }),
+    );
+    return projectDir;
+  };
+
   void it('returns silently when the image-optimization-function dir is absent', () => {
     // image optimization disabled for this app → nothing to patch
-    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
   });
 
   void it('inserts `void 0` so the request handler lands in the 5th slot', () => {
     const bundle = writeBundle(
       'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i),o=await Pc.imageOptimizer(x);',
     );
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const out = fs.readFileSync(bundle, 'utf-8');
     assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
   });
@@ -1174,9 +1196,9 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
     const bundle = writeBundle(
       'await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
     );
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const once = fs.readFileSync(bundle, 'utf-8');
-    patchImageOptimizerForNext155(tmp);
+    patchImageOptimizerForNext16(tmp);
     const twice = fs.readFileSync(bundle, 'utf-8');
     assert.equal(once, twice);
     // exactly one `void 0` inserted into the call
@@ -1185,7 +1207,137 @@ void describe('patchImageOptimizerForNext155 — fetchInternalImage arity', () =
 
   void it('warns (does not throw) when no matching call is present', () => {
     writeBundle('export const handler = async () => ({}); // already adapted\n');
-    assert.doesNotThrow(() => patchImageOptimizerForNext155(tmp));
+    assert.doesNotThrow(() => patchImageOptimizerForNext16(tmp));
+  });
+
+  // ── Version gate (regression: Next 15.x must NOT be patched) ──────────
+  // The maximumResponseBody arg was added in Next 16, not 15.5. On Next 15.x
+  // OpenNext's 4-arg call is already correct; inserting `void 0` there broke
+  // every local image (500 TypeError). See patchImageOptimizerForNext16.
+
+  void it('does NOT patch on Next 15.x (4-arg signature is already correct)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('15.5.15');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // untouched — no `void 0` shoved into the call
+    assert.doesNotMatch(out, /\{\},void 0,/);
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('DOES patch on Next 16.x (5-arg signature needs the extra slot)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    const projectDir = writeProjectWithNext('16.2.9');
+    patchImageOptimizerForNext16(tmp, projectDir);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  void it('patches when the Next version is unknown (default to Next 16 behavior)', () => {
+    const bundle = writeBundle(
+      'var x=await(0,Pc.fetchInternalImage)(n,{headers:e},{},i);',
+    );
+    // projectDir points at an empty dir → no resolvable `next` → default patch
+    const emptyProject = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-empty-'));
+    patchImageOptimizerForNext16(tmp, emptyProject);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    assert.match(out, /fetchInternalImage\)\(n,\{headers:e\},\{\},void 0,i\)/);
+    fs.rmSync(emptyProject, { recursive: true, force: true });
+  });
+});
+
+void describe('patchImageOptimizerSvgStatus — disallowed type fails closed (issue #4)', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-patch-svg-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const writeBundle = (contents: string): string => {
+    const dir = path.join(tmp, 'image-optimization-function');
+    fs.mkdirSync(dir, { recursive: true });
+    const bundle = path.join(dir, 'index.mjs');
+    fs.writeFileSync(bundle, contents);
+    return bundle;
+  };
+
+  // The minified catch shape OpenNext emits around the optimizer call.
+  const CATCH =
+    'async function opt(t,n){try{return await run(t,n)}catch(s){return Pl("Failed to optimize image",s),VX("Internal server error",t?.streamCreator)}}';
+
+  void it('returns silently when the image-optimization-function dir is absent', () => {
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  void it('rewrites the catch to forward a client-error (4xx) status + message', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // A 4xx caught error now drives the status + message, not a blanket 500.
+    assert.match(out, /__blocksStatus/);
+    assert.match(out, /s\.statusCode>=400&&s\.statusCode<500/);
+    assert.match(out, /s\.message\|\|"Bad Request"/);
+    // The streamCreator arg is preserved.
+    assert.match(out, /t\?\.streamCreator,__blocksStatus/);
+  });
+
+  void it('is idempotent — a second run does not double-patch', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const once = fs.readFileSync(bundle, 'utf-8');
+    patchImageOptimizerSvgStatus(tmp);
+    const twice = fs.readFileSync(bundle, 'utf-8');
+    assert.equal(once, twice);
+    // Exactly one catch was rewritten (the marker's `var` declaration appears once).
+    assert.equal((twice.match(/var __blocksStatus=/g) || []).length, 1);
+  });
+
+  void it('warns (does not throw) when the catch shape is absent', () => {
+    writeBundle('export const handler = async () => ({}); // no optimizer catch\n');
+    assert.doesNotThrow(() => patchImageOptimizerSvgStatus(tmp));
+  });
+
+  // Behavioral check: evaluate the patched catch to prove a 400 error → 400,
+  // and a generic error → 500. We stub Pl/VX and run the patched function.
+  void it('patched catch yields 400 for a 4xx error and 500 for a generic error', () => {
+    const bundle = writeBundle(CATCH);
+    patchImageOptimizerSvgStatus(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    // Extract just the patched `opt` function body and wrap it with stubs.
+    const m = out.match(/async function opt\(t,n\)\{[\s\S]*?\}\}/);
+    assert.ok(m, 'patched opt function present');
+    const harness = `
+      let captured;
+      const Pl = () => {};
+      const VX = (msg, _stream, status) => { captured = { msg, status }; return captured; };
+      ${m![0]}
+      // run(): first call throws a 4xx (SVG), second throws a generic error.
+      let mode;
+      async function run() { if (mode === 'svg') { const e = new Error('"url" parameter is valid but image type is not allowed'); e.statusCode = 400; throw e; } throw new Error('boom'); }
+      return (async () => {
+        mode = 'svg'; await opt({}, null); const svg = captured;
+        mode = 'other'; await opt({}, null); const other = captured;
+        return { svg, other };
+      })();
+    `;
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const fn = new Function(harness);
+    return (fn() as Promise<{ svg: { status: number; msg: string }; other: { status: number } }>).then(
+      ({ svg, other }) => {
+        assert.equal(svg.status, 400, 'SVG (4xx) rejection → 400');
+        assert.match(svg.msg, /image type is not allowed/);
+        assert.equal(other.status, 500, 'generic error → 500');
+      },
+    );
   });
 });
 
@@ -1914,6 +2066,59 @@ void describe('stripBakedBasePath', () => {
     ];
     stripBakedBasePath(m);
     assert.strictEqual(m.headers[0].source, '/secure-headers');
+  });
+});
+
+void describe('normalizeTrailingNamedWildcard — issue #5 (:path* literal leak)', () => {
+  void it('converts a trailing /:name* to /*', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path*'),
+      '/r/legacy/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/modern/:path*'),
+      '/r/modern/*',
+    );
+  });
+
+  void it('handles multi-char param names', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/api/:rest*'),
+      '/api/*',
+    );
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/proxy/:segments_123*'),
+      '/proxy/*',
+    );
+  });
+
+  void it('leaves exact paths unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/about'),
+      '/about',
+    );
+    assert.strictEqual(normalizeTrailingNamedWildcard('/'), '/');
+  });
+
+  void it('leaves a plain trailing /* unchanged', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/old/*'),
+      '/old/*',
+    );
+  });
+
+  void it('does NOT convert mid-pattern :name (not trailing)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/users/:id/posts'),
+      '/users/:id/posts',
+    );
+  });
+
+  void it('does NOT convert :name+ (one-or-more, not catch-all *)', () => {
+    assert.strictEqual(
+      normalizeTrailingNamedWildcard('/r/legacy/:path+'),
+      '/r/legacy/:path+',
+    );
   });
 });
 

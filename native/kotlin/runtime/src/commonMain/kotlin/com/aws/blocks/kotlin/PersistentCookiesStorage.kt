@@ -22,5 +22,9 @@ internal class PersistentCookiesStorage(
             .mapNotNull { (_, value) -> parseServerSetCookieHeader(value) }
     }
 
+    fun clear() {
+        store.getAll().keys.forEach { store.remove(it) }
+    }
+
     override fun close() {}
 }

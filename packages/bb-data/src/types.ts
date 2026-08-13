@@ -34,6 +34,16 @@ export interface DatabaseOptions {
    * @default 'retain'
    */
   removalPolicy?: 'destroy' | 'retain' | 'snapshot';
+  /**
+   * Aurora PostgreSQL engine version, e.g. `'16.13'`.
+   *
+   * Configurable because AWS periodically retires older Aurora PostgreSQL minor
+   * versions: 16.4 was retired in us-east-1, after which `CreateDBCluster` began
+   * failing with `Cannot find version 16.4 for aurora-postgresql`. Surfacing this
+   * as an option means the next retirement is a config change, not a framework fix.
+   * @default '16.13'
+   */
+  postgresVersion?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
