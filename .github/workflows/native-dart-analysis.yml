@@ -50,7 +50,7 @@ jobs:
         if: matrix.tool == 'dart'
         uses: dart-lang/setup-dart@v1
         with:
-          sdk: '3.11.0'
+          sdk: '3.13.0'
 
       - name: Setup Flutter
         if: matrix.tool == 'flutter'
@@ -77,7 +77,7 @@ jobs:
 
       # Blocking. `dart format` is provided by both the Dart and Flutter SDKs.
       # Run after `pub get` so the resolved package_config pins the language
-      # version (3.3, from each package's sdk: ^3.3.0), making the result
+      # version (3.11, from each package's sdk: ^3.11.0), making the result
       # deterministic and matching local runs.
       - name: Check formatting
         working-directory: ${{ matrix.working-directory }}
