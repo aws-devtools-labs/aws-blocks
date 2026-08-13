@@ -8,7 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -202,7 +202,7 @@ export function materialize(
         DATABASE_NAME: databaseName,
         MIGRATIONS_DIR: '/var/task/migrations',
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
@@ -211,7 +211,7 @@ export function materialize(
           ],
         },
         externalModules: ['@aws-sdk/*'],
-      },
+      }),
     });
     grantDataApi(migrationFn);
 

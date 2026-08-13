@@ -9,6 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
+import { blocksNodejsBundling } from './bundling.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
@@ -87,20 +88,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
        */
       BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
     },
-    bundling: {
+    // blocksNodejsBundling hardens the esbuild config (promotes the empty-import-meta
+    // warning to an error) so a CJS-bundled `import.meta.url` fails synth instead of
+    // crashing at Lambda load. See ./bundling.ts.
+    bundling: blocksNodejsBundling({
       minify: true,
-      esbuildArgs: {
-        '--conditions': 'aws-runtime',
-        // NodejsFunction bundles the handler to CJS. In a CJS bundle `import.meta`
-        // is empty, so any bundled code that does `fileURLToPath(import.meta.url)`
-        // (a customer handler, a Building Block's aws-runtime code, or a dependency)
-        // becomes `fileURLToPath(undefined)` and throws at Lambda load. esbuild only
-        // *warns* about this ("empty-import-meta"), so a broken bundle deploys and
-        // fails on first invocation. Promote the warning to an error so `cdk synth`
-        // fails loudly at build time, pointing at the exact offending file/line.
-        '--log-override': 'empty-import-meta=error',
-      },
-    },
+      esbuildArgs: { '--conditions': 'aws-runtime' },
+    }),
   });
 
   // In sandbox mode, allow localhost origins so the local dev frontend can

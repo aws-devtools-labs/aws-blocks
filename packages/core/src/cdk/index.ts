@@ -18,6 +18,7 @@ import { finalizeConfigRegistry } from './config-registry.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
+export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
 export { synthGuard } from './synth-guard.js';
