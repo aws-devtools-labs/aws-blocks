@@ -31,16 +31,29 @@ test('isPgliteUnreachableTrap matches an unreachable message', () => {
   assert.strictEqual(isPgliteUnreachableTrap(new Error('RuntimeError: unreachable')), true);
 });
 
-test('isPgliteUnreachableTrap matches unreachable found only in the stack', () => {
-  const err = new Error('Aborted()');
-  err.stack = 'Error: Aborted()\n  at _pg_initdb (wasm://wasm/0001)\n  RuntimeError: unreachable';
+test('isPgliteUnreachableTrap matches the Emscripten Aborted() and wasm trap signatures', () => {
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('Aborted(). Build with -sASSERTIONS for more info.')), true);
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('wasm trap: unreachable')), true);
+});
+
+test('isPgliteUnreachableTrap matches a trap signature found only in the stack', () => {
+  const err = new Error('initdb boot failed');
+  err.stack = 'Error: initdb boot failed\n  at _pg_initdb (wasm://wasm/0001)\n  RuntimeError: unreachable';
   assert.strictEqual(isPgliteUnreachableTrap(err), true);
 });
 
 test('isPgliteUnreachableTrap walks the cause chain', () => {
-  const root = new Error('unreachable');
+  const root = new Error('RuntimeError: unreachable');
   const wrapper = new Error('initdb failed', { cause: root });
   assert.strictEqual(isPgliteUnreachableTrap(wrapper), true);
+});
+
+test('isPgliteUnreachableTrap ignores a bare "unreachable" without a trap signature', () => {
+  // The classifier must fire on a real WASM trap signature, not the word alone —
+  // otherwise an unrelated failure whose text/stack merely contains "unreachable"
+  // (an assertUnreachable helper, an "unreachable host" message) would be retried.
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('assertUnreachable: unhandled case')), false);
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('connect ETIMEDOUT: host unreachable')), false);
 });
 
 test('isPgliteUnreachableTrap matches non-Error values', () => {
@@ -165,6 +178,37 @@ test('rethrows a non-retryable error immediately without recreating', async () =
   );
   assert.strictEqual(recreated, 0);
   assert.strictEqual(initial.closed, false);
+});
+
+test('maxAttempts=1 with a non-retryable error does not close the instance', async () => {
+  // Regression for the reorder: retryability is classified BEFORE the attempt
+  // budget, so a single-attempt run no longer closes an instance whose failure
+  // was never diagnosed as a WASM trap.
+  const initial = new FakePglite(1, new Error('syntax error'));
+  await assert.rejects(
+    () => initializePgliteWithRetry(initial, () => new FakePglite(0), { backoffMs: 0, maxAttempts: 1 }),
+    /syntax error/,
+  );
+  assert.strictEqual(initial.closed, false);
+});
+
+test('maxAttempts=1 with a trap closes the instance and does not recreate', async () => {
+  const initial = new FakePglite(99);
+  let recreated = 0;
+  await assert.rejects(
+    () =>
+      initializePgliteWithRetry(
+        initial,
+        () => {
+          recreated++;
+          return new FakePglite(0);
+        },
+        { backoffMs: 0, maxAttempts: 1 },
+      ),
+    /unreachable/,
+  );
+  assert.strictEqual(initial.closed, true, 'a trapped instance is still closed even with no retries left');
+  assert.strictEqual(recreated, 0, 'no recreate once the attempt budget is exhausted');
 });
 
 test('invokes onRetry with the failed attempt number before each recreate', async () => {

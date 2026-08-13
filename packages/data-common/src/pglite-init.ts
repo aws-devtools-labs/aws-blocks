@@ -22,13 +22,24 @@
  * `@electric-sql/pglite`.
  */
 
-/** Minimal structural view of a PGlite instance used by the init retry. */
+/**
+ * Minimal structural view of a PGlite instance used by the init retry. Kept
+ * pglite-agnostic so `data-common` need not depend on `@electric-sql/pglite`.
+ *
+ * @internal
+ */
 export interface PgliteLike {
+  /** Run a SQL statement; used only for the `SELECT 1` init probe. */
   query(sql: string, params?: unknown[]): Promise<unknown>;
+  /** Release the instance and its underlying WASM resources. */
   close(): Promise<void>;
 }
 
-/** Tuning options for {@link initializePgliteWithRetry}. */
+/**
+ * Tuning options for {@link initializePgliteWithRetry}.
+ *
+ * @internal
+ */
 export interface PgliteInitRetryOptions {
   /** Maximum init attempts, including the first. Default 3. */
   maxAttempts?: number;
@@ -46,19 +57,31 @@ export interface PgliteInitRetryOptions {
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Matches the specific ways a PGlite WASM `_pg_initdb` abort surfaces:
+ *  - V8/Node:            `RuntimeError: unreachable` (optionally `... executed`)
+ *  - other engines:      `wasm trap: unreachable`
+ *  - Emscripten runtime: `Aborted()` (e.g. `Aborted(). Build with -sASSERTIONS ...`)
+ *
+ * Deliberately narrower than a bare `/unreachable/i`: the word "unreachable" is
+ * common (helpers like `assertUnreachable`, "unreachable host" messages), so we
+ * require it next to a trap-context token. This keeps a stray "unreachable" in
+ * an unrelated failure's message or stack from being misclassified as retryable.
+ */
+const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(\)/i;
+
+/**
  * Return true when an error looks like a PGlite WASM `unreachable` init trap.
  *
- * The trap surfaces with an "unreachable" message (often wrapped as
- * `RuntimeError: unreachable` or an `Aborted()` error), sometimes only visible
- * in the stack or a nested `cause`. This walks the message, stack, and cause
- * chain, guarding against cyclic causes.
+ * The trap surfaces as one of the {@link PGLITE_INIT_TRAP_RE} signatures,
+ * sometimes only visible in the stack or a nested `cause`. This walks the
+ * message, stack, and cause chain, guarding against cyclic causes.
  *
- * Scope: the `/unreachable/i` substring match is intentionally broad and is
- * ONLY valid for the init-probe path — the fixed `SELECT 1` probe inside
- * {@link initializePgliteWithRetry}, where the sole plausible source of
- * "unreachable" is a WASM `_pg_initdb` trap. It must NOT be reused to classify
- * arbitrary user-query errors, whose text could contain "unreachable"
- * incidentally (e.g. a message about an unreachable host).
+ * Scope: this classifier is ONLY valid for the init-probe path — the fixed
+ * `SELECT 1` probe inside {@link initializePgliteWithRetry}, where the sole
+ * plausible source of a trap signature is a WASM `_pg_initdb` abort. It must
+ * NOT be reused to classify arbitrary user-query errors.
+ *
+ * @internal
  */
 export function isPgliteUnreachableTrap(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -66,12 +89,12 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
   while (current != null && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error) {
-      if (/unreachable/i.test(current.message) || (current.stack != null && /unreachable/i.test(current.stack))) {
+      if (PGLITE_INIT_TRAP_RE.test(current.message) || (current.stack != null && PGLITE_INIT_TRAP_RE.test(current.stack))) {
         return true;
       }
       current = (current as { cause?: unknown }).cause;
     } else {
-      return /unreachable/i.test(String(current));
+      return PGLITE_INIT_TRAP_RE.test(String(current));
     }
   }
   return false;
@@ -96,6 +119,8 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
  * @returns the initialized instance (differs from `initial` if it was recreated)
  * @throws the last error once attempts are exhausted, or immediately for a
  *   non-retryable error
+ *
+ * @internal
  */
 export async function initializePgliteWithRetry<T extends PgliteLike>(
   initial: T,
@@ -112,24 +137,21 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
       await instance.query('SELECT 1');
       return instance;
     } catch (error) {
-      if (attempt >= maxAttempts) {
-        // Retries exhausted: a recreated instance is unreachable to the caller,
-        // so close the last trapped instance here to free its WASM memory before
-        // giving up. Best effort, mirroring the between-attempts close below.
-        try {
-          await instance.close();
-        } catch {
-          // A trapped WASM instance may itself fail to close cleanly; ignore.
-        }
-        throw error;
-      }
+      // Classify BEFORE consulting the attempt budget, so cleanup is uniform:
+      // a non-retryable error is always rethrown untouched (we never close an
+      // instance we haven't diagnosed as a dead WASM trap). This also means
+      // maxAttempts === 1 no longer closes on an unrelated, non-trap failure.
       if (!isRetryable(error)) throw error;
-      options.onRetry?.(attempt, error);
+      // Retryable init trap: the WASM instance is aborted and unrecoverable, so
+      // close it (best effort) to free its memory — whether or not we retry.
       try {
         await instance.close();
       } catch {
         // A trapped WASM instance may itself fail to close cleanly; ignore.
       }
+      // Out of attempts: give up after having closed the dead instance above.
+      if (attempt >= maxAttempts) throw error;
+      options.onRetry?.(attempt, error);
       if (backoffMs > 0) await delay(backoffMs * attempt);
       instance = await recreate();
     }
