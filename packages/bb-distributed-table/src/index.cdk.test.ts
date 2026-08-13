@@ -27,16 +27,21 @@ const userSchema = z.object({
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
+	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly id: string;
 	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
+		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+		});
 		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'index.handler',
 			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+			role: this.executionRole,
 		});
 	}
 }

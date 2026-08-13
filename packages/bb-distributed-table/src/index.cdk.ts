@@ -42,8 +42,8 @@ export class DistributedTable<T = any> extends Scope {
 			// We deliberately skip the GSI custom resource — the customer owns the
 			// table's index lifecycle when they bring their own.
 			this.table = Table.fromTableName(this, 'table', config.table.tableName);
-			this.table.grantReadWriteData(this.handler);
-			this.handler.addToRolePolicy(new PolicyStatement({
+			this.table.grantReadWriteData(this.executionRole);
+			this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 				actions: ['dynamodb:Query'],
 				resources: [`${this.table.tableArn}/index/*`],
 			}));
@@ -90,10 +90,10 @@ export class DistributedTable<T = any> extends Scope {
 			deletionProtection: this.defaults.deletionProtection,
 		});
 
-		this.table.grantReadWriteData(this.handler);
+		this.table.grantReadWriteData(this.executionRole);
 
 		// Explicit index query permissions
-		this.handler.addToRolePolicy(new PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			actions: ['dynamodb:Query'],
 			resources: [`${this.table.tableArn}/index/*`],
 		}));
