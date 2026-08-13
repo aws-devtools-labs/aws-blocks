@@ -194,14 +194,15 @@ export class KnowledgeBase extends Scope {
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────
 
-		// In sandbox mode, default to DESTROY + autoDeleteObjects so a teardown
-		// can fully clean up without manual bucket emptying. An explicit
-		// `removalPolicy` from the customer always takes precedence. Computed
-		// up-front because it also drives the S3 Vectors resources' deletion
-		// policy (section 2) — keeping the data bucket and the vector store in
-		// sync on teardown.
-		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-		const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
+		// Removal: an explicit `removalPolicy` from the customer always takes
+		// precedence; otherwise follow the stack-wide `defaults` (sandbox →
+		// DESTROY + autoDeleteObjects so a teardown fully cleans up without
+		// manual bucket emptying; production → RETAIN). Computed up-front because
+		// it also drives the S3 Vectors resources' deletion policy (section 2) —
+		// keeping the data bucket and the vector store in sync on teardown.
+		const destroy =
+			options.removalPolicy === 'destroy' ||
+			(options.removalPolicy === undefined && this.defaults.removalPolicy === cdk.RemovalPolicy.DESTROY);
 
 		let dataBucket: s3.IBucket;
 		let inclusionPrefixes: string[] | undefined;
