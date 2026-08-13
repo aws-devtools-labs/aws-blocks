@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": minor
+"@aws-blocks/blocks": minor
 "@aws-blocks/bb-kv-store": patch
 ---
 
