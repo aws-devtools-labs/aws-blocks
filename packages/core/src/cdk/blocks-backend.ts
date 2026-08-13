@@ -12,6 +12,7 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 /**
@@ -169,6 +170,14 @@ export class BlocksBackend extends Construct {
   /** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
   _defaultCompute?: Compute;
 
+  /**
+   * The computes in this backend.
+   * @internal
+   */
+  get computes(): readonly Compute[] {
+    return getComputes(this);
+  }
+
   /** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
   get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
     return this.requireDefaultCompute().fn;
@@ -264,7 +273,7 @@ export class BlocksBackend extends Construct {
     addBlocksStackMetadata(cdk.Stack.of(backend));
 
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(backend, backend.handler);
+    finalizeConfigRegistry(backend, backend.executionRole, backend.computes);
 
     return backend;
   }

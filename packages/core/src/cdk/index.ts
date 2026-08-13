@@ -17,6 +17,7 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
@@ -41,6 +42,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly defaults: BlocksDefaults;
   /** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
   _defaultCompute?: Compute;
+
+  /**
+   * The computes in this stack.
+   * @internal
+   */
+  get computes(): readonly Compute[] {
+    return getComputes(this);
+  }
 
   /** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
   get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
@@ -103,7 +112,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
       }
     }
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(stack, stack.handler);
+    finalizeConfigRegistry(stack, stack.executionRole, stack.computes);
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
