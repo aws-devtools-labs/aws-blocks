@@ -1,20 +1,10 @@
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:blocks_runtime/blocks_runtime.dart';
+/// Exports the platform-appropriate [FlutterSecureStore] implementation.
+///
+/// Native platforms use `flutter_secure_storage` (iOS Keychain / Android
+/// Keystore). That package transitively imports `dart:io`, which is not
+/// WASM-compatible, so the web/WASM build selects a stub instead — keeping this
+/// package importable and WASM-compatible on the web.
+library;
 
-/// Persistent [TokenStore] backed by iOS Keychain / Android Keystore.
-class FlutterSecureStore implements TokenStore {
-  final FlutterSecureStorage _storage;
-
-  FlutterSecureStore({FlutterSecureStorage? storage})
-    : _storage = storage ?? const FlutterSecureStorage();
-
-  @override
-  Future<String?> get(String key) => _storage.read(key: key);
-
-  @override
-  Future<void> set(String key, String value) =>
-      _storage.write(key: key, value: value);
-
-  @override
-  Future<void> delete(String key) => _storage.delete(key: key);
-}
+export 'flutter_secure_store_io.dart'
+    if (dart.library.js_interop) 'flutter_secure_store_web.dart';
