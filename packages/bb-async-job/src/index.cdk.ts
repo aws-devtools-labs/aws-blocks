@@ -38,7 +38,9 @@ export class AsyncJob<T = unknown> extends Scope {
 		super(id, { parent: scope });
 
 		const maxRetries = options.maxRetries ?? 3;
-		const batchSize = options.batchSize ?? 1;
+		const batchSize = options.batchSize ?? 10;
+		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
+		const reportBatchItemFailures = options.reportBatchItemFailures ?? true;
 
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),
@@ -68,7 +70,17 @@ export class AsyncJob<T = unknown> extends Scope {
 			this.queue.queueUrl
 		);
 
-		this.handler.addEventSource(new SqsEventSource(this.queue, { batchSize }));
+		// `reportBatchItemFailures` enables SQS partial batch responses. It MUST stay
+		// on for any batchSize > 1: without it a single failing record makes SQS treat
+		// the whole batch as handled and delete every message in it (silent loss).
+		// The runtime handler already returns `{ batchItemFailures }`.
+		this.handler.addEventSource(
+			new SqsEventSource(this.queue, {
+				batchSize,
+				reportBatchItemFailures,
+				maxBatchingWindow: Duration.seconds(maxBatchingWindowSeconds),
+			})
+		);
 
 		// Same child id and options as the runtime entry points, so the provisioned
 		// table is the one JobStatusTracker resolves at request time.

@@ -26,8 +26,22 @@ export interface AsyncJobOptions<T> {
 	schema?: StandardSchemaV1<T>;
 	/** Maximum retry attempts before sending to the DLQ. Default: 3. */
 	maxRetries?: number;
-	/** Number of messages the Lambda trigger receives per invocation. Default: 1. */
+	/** Number of messages the Lambda trigger receives per invocation. 1–10 (up to 10000 with a batching window). Default: 10. */
 	batchSize?: number;
+	/**
+	 * How long SQS waits to accumulate a full batch before invoking the Lambda,
+	 * in seconds. 0–300. Higher values fill batches more completely (lower cost)
+	 * at the price of added latency. Default: 5.
+	 */
+	maxBatchingWindowSeconds?: number;
+	/**
+	 * Report per-message failures back to SQS (partial batch responses) so only
+	 * the failed messages are retried. Default: true. Disabling this with a
+	 * `batchSize` above 1 causes messages to be silently dropped whenever any
+	 * record in the batch fails — do not turn it off unless the whole batch is
+	 * genuinely all-or-nothing.
+	 */
+	reportBatchItemFailures?: boolean;
 	/**
 	 * Record every job's state transitions so they can be read back with
 	 * `getStatus()` / `waitUntilComplete()`. Default: `false`.

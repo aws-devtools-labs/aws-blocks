@@ -47,7 +47,9 @@ export interface AsyncJobOptions<T> {
     batchSize?: number;
     handler: (payload: T, context: AsyncJobContext) => Promise<void>;
     logger?: ChildLogger;
+    maxBatchingWindowSeconds?: number;
     maxRetries?: number;
+    reportBatchItemFailures?: boolean;
     schema?: StandardSchemaV1<T>;
     trackStatus?: boolean;
 }
