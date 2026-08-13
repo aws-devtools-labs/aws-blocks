@@ -247,47 +247,9 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 
 ## VPC Support
 
-A VPC is useful when you need network-level isolation or need to connect to VPC-bound resources (e.g., ElastiCache, an existing RDS cluster). See [Amazon VPC overview](https://docs.aws.amazon.com/vpc/latest/userguide/what-is-amazon-vpc.html).
+AWS Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources (e.g., ElastiCache, an existing RDS cluster). When enabled, Blocks handles Lambda placement, VPC endpoint provisioning, and security group wiring automatically.
 
-Place your app in a VPC by passing a standard CDK VPC to `BlocksStack` or `BlocksBackend`:
-
-```typescript
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-
-const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
-
-await BlocksStack.create(app, stackName, {
-  backendHandlerPath: join(__dirname, 'index.handler.ts'),
-  backendCDKPath: join(__dirname, 'index.ts'),
-  vpc: { network: vpc },
-});
-```
-
-Blocks handles:
-- **Lambda placement** in private subnets (configurable via `subnets`)
-- **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, etc.)
-- **Security group wiring** (e.g., Lambda → Aurora on port 5432)
-
-For a shared or separately managed VPC:
-
-```typescript
-const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
-await BlocksStack.create(app, stackName, {
-  ...,
-  vpc: { network: sharedVpc },  // Blocks provisions endpoints automatically
-});
-```
-
-If VPC endpoints are also managed separately (e.g., in another stack, via the AWS console, or by another team entirely):
-
-```typescript
-await BlocksStack.create(app, stackName, {
-  ...,
-  vpc: { network: sharedVpc, provisionEndpoints: false },
-});
-```
-
-See [VPC.md](./VPC.md) for cost details, guidance on when to use a VPC, and configuration options.
+See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guidance on when a VPC is appropriate.
 
 ## Reference
 

@@ -3,8 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -58,13 +57,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   },
 });
 
-// Make the vpc-ref stack depend on nothing and have no resources — it's just
-// a context lookup container. Tag it for cleanup.
-const refStack = app.node.findChild(`${stackName}-vpc-ref`) as cdk.Stack;
-RemovalPolicies.of(refStack).destroy();
-
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
+// The vpc-ref stack is a pure context-lookup container with no stateful
+// resources — no removal policy or defaults needed.
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'vpc-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
