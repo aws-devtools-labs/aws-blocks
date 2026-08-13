@@ -15,6 +15,29 @@ private enum RealtimeChannelWebSocketSession {
     static let shared = WebSocketSession()
 }
 
+/// Parsing of server WebSocket frames. Non-generic and internal so tests can
+/// exercise it without a socket.
+enum RealtimeFrame {
+    /// Returns the payload bytes of a `message` frame for `channel`, or nil for
+    /// any other frame (control frames such as `subscribe_success`, a different
+    /// channel, or non-JSON).
+    ///
+    /// The AWS server names the payload field `data`; the local mock names it
+    /// `payload`. Read `data` first and fall back, as the Kotlin and Dart
+    /// clients do. Reading only `payload` drops every message from AWS, which is
+    /// why subscribe worked against the mock but not a deployed backend.
+    static func payload(from text: String, channel: String) -> Data? {
+        guard let raw = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              let type = json["type"] as? String, type == "message",
+              let msgChannel = json["channel"] as? String, msgChannel == channel,
+              let payload = json["data"] ?? json["payload"] else {
+            return nil
+        }
+        return try? JSONSerialization.data(withJSONObject: payload)
+    }
+}
+
 /// A live client-side object backed by a WebSocket connection that exposes
 /// an `AsyncThrowingStream` for receiving typed messages on a channel.
 ///
@@ -235,22 +258,8 @@ private class ChannelWebSocketDelegate: WebSocketDelegate {
 
     func onMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
         logger.debug("WS message: \(text)")
-
-        guard let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
-        }
-
-        guard let type = json["type"] as? String, type == "message" else { return }
-        guard let msgChannel = json["channel"] as? String, msgChannel == channelName else { return }
-        guard let payload = json["payload"] else { return }
-
-        do {
-            let payloadData = try JSONSerialization.data(withJSONObject: payload)
-            onPayload(payloadData)
-        } catch {
-            onError(error)
-        }
+        guard let payloadData = RealtimeFrame.payload(from: text, channel: channelName) else { return }
+        onPayload(payloadData)
     }
 
     func onFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {

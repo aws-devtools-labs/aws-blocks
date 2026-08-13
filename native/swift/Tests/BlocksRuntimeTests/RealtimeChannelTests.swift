@@ -10,6 +10,42 @@ import XCTest
 
 final class RealtimeChannelTests: XCTestCase {
 
+    // Server frame parsing. The AWS server sends the payload under `data`; the
+    // mock sends `payload`. Reading only `payload` drops every AWS message, so
+    // subscribe worked against the mock and silently received nothing from a
+    // deployed backend.
+
+    private func decoded(_ data: Data?) -> [String: Int]? {
+        guard let data else { return nil }
+        return try? JSONDecoder().decode([String: Int].self, from: data)
+    }
+
+    func testFramePayloadReadsAwsDataField() {
+        let text = #"{"type":"message","channel":"c","data":{"x":42}}"#
+        XCTAssertEqual(decoded(RealtimeFrame.payload(from: text, channel: "c")), ["x": 42])
+    }
+
+    func testFramePayloadReadsMockPayloadField() {
+        let text = #"{"type":"message","channel":"c","payload":{"x":7}}"#
+        XCTAssertEqual(decoded(RealtimeFrame.payload(from: text, channel: "c")), ["x": 7])
+    }
+
+    func testFramePayloadIgnoresControlFrames() {
+        // subscribe_success arrives first on every subscribe; it must not reach
+        // the deserializer.
+        let text = #"{"type":"subscribe_success","channel":"c"}"#
+        XCTAssertNil(RealtimeFrame.payload(from: text, channel: "c"))
+    }
+
+    func testFramePayloadIgnoresOtherChannels() {
+        let text = #"{"type":"message","channel":"other","data":{"x":1}}"#
+        XCTAssertNil(RealtimeFrame.payload(from: text, channel: "c"))
+    }
+
+    func testFramePayloadIgnoresNonJSON() {
+        XCTAssertNil(RealtimeFrame.payload(from: "not json", channel: "c"))
+    }
+
     func testFromJSONParsesDescriptor() {
         let json: [String: Any] = [
             "channel": "cursors",
