@@ -12,8 +12,6 @@ export { BlocksStack, Scope, SandboxDisableDeletionProtection, BlocksBackend, re
 export {
   type BlocksDefaults,
   BlocksPresets,
-  registerStackBlocksDefaults,
-  getStackBlocksDefaults,
 } from './cdk/index.js';
 export {
   Hosting,

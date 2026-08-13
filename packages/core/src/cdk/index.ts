@@ -15,7 +15,7 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
-import { type BlocksDefaults, getStackBlocksDefaults } from './blocks-defaults.js';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 
 export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -24,8 +24,6 @@ export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
 export {
   type BlocksDefaults,
   BlocksPresets,
-  registerStackBlocksDefaults,
-  getStackBlocksDefaults,
 } from './blocks-defaults.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
@@ -39,11 +37,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: cdk.aws_iam.IRole;
+  /** Infrastructure defaults for Building Blocks created under this stack. */
+  public readonly defaults: BlocksDefaults;
 
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
     this.id = id;
     this.backendHandlerPath = props.backendHandlerPath;
+    this.defaults = props.defaults;
 
     // Set globalThis so Building Blocks attach directly to this stack
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -150,7 +151,19 @@ export class Scope extends Construct {
    * ```
    */
   get defaults(): BlocksDefaults {
-    return getStackBlocksDefaults(this);
+    // Resolve the same way as handler/executionRole: walk up to the owning
+    // BlocksStack/BlocksBackend and read its defaults, so several backends in
+    // one stack each keep their own posture. Falls back to the ambient stack,
+    // then to the production preset when none was registered.
+    let current: Construct = this;
+    while (current.node.scope) {
+        current = current.node.scope as Construct;
+        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+            return current.defaults;
+        }
+    }
+    return ((globalThis as any).CURRENT_BLOCKS_STACK as { defaults?: BlocksDefaults } | undefined)?.defaults
+      ?? BlocksPresets.production;
   }
 
   protected buildUserAgentChain(): [string, string][] {

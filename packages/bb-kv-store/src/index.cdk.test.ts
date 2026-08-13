@@ -13,16 +13,20 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME, registerStackBlocksDefaults, BlocksPresets } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { KVStore } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
 // which exposes `handler` on a Lambda that lives inside a `cdk.Stack`. We
 // reproduce that here so KVStore can call grantReadWriteData(this.handler)
-// and still synth into a real stack.
+// and still synth into a real stack. It also carries `defaults` — Building
+// Blocks resolve `scope.defaults` by walking up to the owning
+// BlocksStack/BlocksBackend, falling back to `globalThis.CURRENT_BLOCKS_STACK`,
+// which is this stub in these tests.
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
   public readonly id: string;
+  public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
@@ -35,9 +39,10 @@ class StubBlocksStack extends cdk.Stack {
   }
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
   const app = new cdk.App();
   const stack = new StubBlocksStack(app, 'TestStack');
+  stack.defaults = defaults;
   const parent = new Scope('app');
   return { stack, parent };
 }
@@ -64,27 +69,24 @@ test('CDK: KVStore.fromExisting returns a branded ref', () => {
   assert.strictEqual(ref.__brand, 'ExternalTableRef');
 });
 
-test('CDK: table adopts the stack sandbox defaults (DESTROY, deletion protection off)', () => {
-  const { stack, parent } = setup();
-  registerStackBlocksDefaults(stack, BlocksPresets.sandbox);
+test('CDK: table adopts the sandbox defaults (DESTROY, deletion protection off)', () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
   new KVStore(parent, 'sessions');
   const template = Template.fromStack(stack);
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
   template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: false });
 });
 
-test('CDK: table adopts the stack production defaults (RETAIN, deletion protection on)', () => {
-  const { stack, parent } = setup();
-  registerStackBlocksDefaults(stack, BlocksPresets.production);
+test('CDK: table adopts the production defaults (RETAIN, deletion protection on)', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
   new KVStore(parent, 'sessions');
   const template = Template.fromStack(stack);
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
 });
 
-test('CDK: per-block removalPolicy overrides the stack default', () => {
-  const { stack, parent } = setup();
-  registerStackBlocksDefaults(stack, BlocksPresets.production);
+test('CDK: per-block removalPolicy overrides the resolved default', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
   new KVStore(parent, 'sessions', { removalPolicy: 'destroy' });
   const template = Template.fromStack(stack);
   // Per-block 'destroy' wins over the production RETAIN default; deletion

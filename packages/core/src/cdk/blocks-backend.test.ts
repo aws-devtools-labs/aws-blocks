@@ -308,3 +308,43 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     }
   });
 });
+
+describe('infrastructure defaults (backend-anchored)', () => {
+  test('each backend exposes its own defaults', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'TwoBackendsStack');
+
+    const a = await BlocksBackend.create(stack, 'A', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+    const b = await BlocksBackend.create(stack, 'B', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    // Two backends in one stack must NOT clobber each other — defaults are
+    // anchored on the backend, not the shared stack.
+    assert.strictEqual(a.defaults, BlocksPresets.production);
+    assert.strictEqual(b.defaults, BlocksPresets.sandbox);
+  });
+
+  test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
+
+    const backend = await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    // A Scope under the backend resolves scope.defaults by walking up to it.
+    const outer = new Scope('outer');
+    const inner = new Scope('inner', { parent: outer });
+    assert.strictEqual(inner.defaults, backend.defaults);
+    assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+  });
+});
