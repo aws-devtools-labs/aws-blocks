@@ -5,7 +5,6 @@ import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/co
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
-import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -20,17 +19,25 @@ import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
-/** Payload submitted to the internal AsyncJob BB. */
-const jobPayloadSchema = z.object({
-	message: z.string(),
-	conversationId: z.string().optional(),
-	channelId: z.string(),
-	userId: z.string(),
-	resume: z.boolean().optional(), // Resume fields (for HITL interrupt responses)
-	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
+/**
+ * A single agent turn to dispatch (initial message or HITL resume). Passed to
+ * {@link AgentBase.dispatchTurn} — run in-process locally, or shipped to the AgentCore Runtime
+ * on AWS as the `InvokeAgentRuntime` payload.
+ */
+export interface AgentTurnPayload<TContext = DefaultToolContext> {
+	/** User prompt. Empty on resume (interruptResponses drive the turn instead). */
+	message: string;
+	/** Conversation to persist to / restore the session from (undefined for inferenceOnly). */
+	conversationId?: string;
+	/** Realtime channel the client subscribes to for this turn's chunks. */
+	channelId: string;
+	/** Conversation owner. */
+	userId: string;
+	/** HITL resume: approval responses to apply instead of a new prompt. */
+	interruptResponses?: Array<{ interruptId: string; response: string }>;
 	/** Per-call tool context, forwarded to tool invocations. JSON-serializable. */
-	context: z.any().optional(),
-});
+	context?: TContext;
+}
 
 /** Key under which the per-call tool context is threaded through Strands `invocationState`. */
 const TOOL_CONTEXT_KEY = '__bbAgentToolContext';
@@ -53,6 +60,26 @@ function loadStrands(): Promise<typeof import('@strands-agents/sdk')> {
 		return Promise.reject(err);
 	});
 	return strandsModulePromise;
+}
+
+// ── Agent instance registry ──────────────────────────────────────────────────
+// A module-singleton map of fullId → live Agent instance. The AgentCore Runtime
+// entrypoint (agentcore-entry.ts) imports the app backend (which constructs the
+// Agent, registering it here) and then looks it up by the BB_AGENT_ID the CDK
+// Runtime construct injected, to drive its loop. Because it's a module singleton,
+// the entrypoint and the backend MUST be co-bundled into one module graph (see
+// agentcore-bundle.ts) — otherwise the Agent registers in one copy's map and the
+// lookup reads another's.
+const agentRegistry = new Map<string, AgentBase<any>>();
+
+/** @internal Register a live Agent instance so the AgentCore entrypoint can find it by fullId. */
+export function registerAgentInstance(fullId: string, agent: AgentBase<any>): void {
+	agentRegistry.set(fullId, agent);
+}
+
+/** @internal Look up a registered Agent instance by fullId (used by the AgentCore entrypoint). */
+export function getAgentInstance(fullId: string): AgentBase<any> | undefined {
+	return agentRegistry.get(fullId);
 }
 
 /**
@@ -101,12 +128,14 @@ async function createConversationManager(config?: ConversationManagerConfig) {
 /**
  * Base class for the Agent BB. Extended by agent.mock.ts (model.local) and agent.aws.ts (model.deployed).
  *
- * Creates up to 4 internal BBs depending on mode:
+ * Creates internal BBs depending on mode:
  * - FileBucket: session snapshot storage for Strands SessionManager (always)
  * - DistributedTable: frontend message history (when inferenceOnly = false)
- * - Realtime: streaming chunks to browser + AsyncJob result delivery (always)
- * - AsyncJob: runs Strands agent asynchronously (always)
- * - TODO logging
+ * - Realtime: streaming chunks to browser (always)
+ *
+ * The agent loop runs via {@link dispatchTurn}: in-process locally (mock), and on the
+ * AgentCore Runtime on AWS (the deployed subclass overrides dispatchTurn to invoke it). The
+ * AgentCore Runtime itself is provisioned by the CDK layer (index.cdk.ts → AgentCoreRuntime).
  */
 export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/** Developer-facing agent configuration. */
@@ -119,8 +148,6 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	private messages?: DistributedTable<z.infer<typeof messageSchema>, { partitionKey: 'conversationId'; sortKey: 'messageId' }>;
 	/** Realtime pub/sub — streams chunks to browser. */
 	private rt: InstanceType<typeof Realtime>;
-	/** Internal async job — runs the Strands agent in a separate execution context. */
-	private job: AsyncJob<z.infer<typeof jobPayloadSchema>>;
 	/** Which model provider to use. */
 	private modelConfig: ModelConfig | ModelConfig[] | undefined;
 	/** Where to persist Strands agent state (snapshots). */
@@ -165,28 +192,6 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			},
 		});
 
-		this.job = new AsyncJob(this, 'job', {
-			schema: jobPayloadSchema,
-			handler: async (payload) => {
-				try {
-					await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
-				} catch (err) {
-					const errorMessage = err instanceof Error ? err.message : String(err);
-					this.log.error('runAgent error', { error: errorMessage });
-					// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
-					try {
-						if (payload.conversationId && this.messages) {
-							await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: errorMessage }) });
-						}
-					} catch (persistErr) {
-						this.log.error('Failed to persist error to history', { error: persistErr });
-					}
-					// Publish error chunk so the client doesn't hang. Don't re-throw — AsyncJob would retry a non-idempotent operation.
-					await this.rt.publish('chunks', payload.channelId, { type: 'error', error: errorMessage });
-				}
-			},
-		});
-
 		const identifiers: Record<string, string> = {};
 		if (this.conversations) {
 			identifiers.conversationsTableName = getSdkIdentifiers(this.conversations).tableName;
@@ -197,17 +202,62 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		identifiers.sessionBucketName = getSdkIdentifiers(this.sessionBucket).bucketName;
 		identifiers.realtimeWsUrl = getSdkIdentifiers(this.rt).wsUrl;
 		identifiers.realtimeCallbackUrl = getSdkIdentifiers(this.rt).callbackUrl;
-		identifiers.jobQueueUrl = getSdkIdentifiers(this.job).queueUrl;
 		registerSdkIdentifiers(this.fullId, identifiers);
+
+		// Register this instance so the AgentCore Runtime entrypoint (agentcore-entry.ts)
+		// can find it by fullId and drive its loop. Harmless in the Lambda/mock paths.
+		registerAgentInstance(this.fullId, this);
+	}
+
+	/**
+	 * Run one agent turn (initial message or HITL resume) and publish its chunks to Realtime.
+	 *
+	 * This is the single execution entry the compute layer invokes: the AgentCore Runtime
+	 * entrypoint (agentcore-entry.ts) calls it as a background async task on AWS, and locally
+	 * {@link dispatchTurn} calls it in-process. Errors are caught and published as an `error`
+	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
+	 *
+	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
+	 */
+	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+		try {
+			await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);
+		} catch (err) {
+			const errorMessage = err instanceof Error ? err.message : String(err);
+			this.log.error('runAgent error', { error: errorMessage });
+			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
+			try {
+				if (payload.conversationId && this.messages) {
+					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: errorMessage }) });
+				}
+			} catch (persistErr) {
+				this.log.error('Failed to persist error to history', { error: persistErr });
+			}
+			// Publish error chunk so the client doesn't hang. Don't re-throw — a non-idempotent turn shouldn't be retried.
+			await this.rt.publish('chunks', payload.channelId, { type: 'error', error: errorMessage });
+		}
+	}
+
+	/**
+	 * Dispatch a turn to wherever the agent loop runs, returning promptly so `stream()`/`resume()`
+	 * hand the client a `channelId` without waiting for the turn to finish.
+	 *
+	 * Base (local/mock): run the loop IN-PROCESS, fire-and-forget — chunks flow to the mock
+	 * Realtime as the turn progresses. The deployed (AWS) subclass overrides this to invoke the
+	 * AgentCore Runtime, which runs the loop as a background task and publishes to Realtime.
+	 */
+	protected async dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+		// invokeTurn catches and publishes its own errors, so the floating promise can't reject.
+		void this.invokeTurn(payload);
 	}
 
 	/**
 	 * Executes the Strands agent, publishes chunks to Realtime, persists messages to DynamoDB.
 	 *
-	 * Called by: AsyncJob consumer.
-	 * NOT called directly — stream() submits to AsyncJob, which invokes this.
+	 * Called by {@link invokeTurn} (wherever the loop runs — locally in-process, or inside the
+	 * AgentCore Runtime container on AWS). Publishes each event to the Realtime `chunks` channel.
 	 *
-	 * Flow: AsyncJob handler → runAgent() → Strands agent.stream() → publishes chunks to Realtime BB
+	 * Flow: invokeTurn() → runAgent() → Strands agent.stream() → publishes chunks to Realtime BB
 	 * TODO add comments for args
 	 */
 	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext): Promise<void> {
@@ -416,9 +466,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	/**
 	 * Submit a message to the agent. Returns immediately with a channelId.
 	 *
-	 * Flow: stream() → AsyncJob.submit() → returns { channelId }
-	 * The AsyncJob consumer calls runAgent() separately.
-	 * Chunks are published to Realtime on the returned channelId.
+	 * Flow: stream() → dispatchTurn() → returns { channelId }
+	 * dispatchTurn runs the loop where the compute lives (in-process locally; on the AgentCore
+	 * Runtime on AWS) and publishes chunks to Realtime on the returned channelId.
 	 *
 	 * Subscribe to chunks via result.channel, or await result.complete() for the final response.
 	 */
@@ -428,7 +478,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
 		const userId = options?.userId ?? 'anonymous';
 		const context = this.resolveContext(options?.context);
-		await this.job.submit({ message, conversationId, channelId, userId, context });
+		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
 		return {
 			channelId,
 			/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
@@ -455,7 +505,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 	/**
 	 * Resume an interrupted agent with user's responses.
-	 * Submits a new AsyncJob that loads the session and continues from the interrupt point.
+	 * Dispatches a new turn that loads the session and continues from the interrupt point.
 	 * Chunks are published to the same channelId — use the existing subscription or call complete() again to wait for the result.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
@@ -491,7 +541,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
 		const context = this.resolveContext(options?.context);
-		await this.job.submit({ message: '', conversationId, channelId, userId, resume: true, interruptResponses: translated, context });
+		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
 	}
 
 	/**
