@@ -3,7 +3,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { createLambdaHandler, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
+import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { decodeRpcResponse } from './rpc.js';
@@ -607,7 +607,7 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
     assert.strictEqual(body.error.code, 504);
   });
 
-  it('504 response includes CORS headers from event origin', async () => {
+  it('504 response includes CORS headers for an allowed origin', async () => {
     const backend = {
       api: () => ({
         async echo() {
@@ -616,6 +616,10 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
         },
       }),
     };
+
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
 
     const event = makeEvent({
       headers: {
@@ -629,6 +633,71 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
     assert.strictEqual(result.statusCode, 504);
     assert.strictEqual(result.headers['Access-Control-Allow-Origin'], 'https://myapp.example.com');
     assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], 'true');
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('504 response omits CORS headers when no allowlist is configured', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return {};
+        },
+      }),
+    };
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+
+    const event = makeEvent({
+      headers: {
+        'Content-Type': 'application/json',
+        origin: 'https://evil.example.com',
+      },
+    });
+    const ctx = makeLambdaContext(50);
+    const result = await invokeWithContext(backend, event, ctx);
+
+    assert.strictEqual(result.statusCode, 504);
+    assert.strictEqual(result.headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], undefined);
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('disallowed origin with a configured allowlist is rejected with 403 before the timeout path', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return {};
+        },
+      }),
+    };
+
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+
+    const event = makeEvent({
+      headers: {
+        'Content-Type': 'application/json',
+        origin: 'https://evil.example.com',
+      },
+    });
+    const ctx = makeLambdaContext(50);
+    const result = await invokeWithContext(backend, event, ctx);
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.strictEqual(result.headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], undefined);
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
   });
 });
 

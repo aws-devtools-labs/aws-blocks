@@ -12,6 +12,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 // @public (undocumented)
 export class AsyncJob<T = unknown> extends Scope {
     constructor(scope: ScopeParent, id: string, options: AsyncJobOptions<T>);
+    getStatus(jobId: string): Promise<AsyncJobStatus | null>;
     // @internal
     protected log: ChildLogger;
     // (undocumented)
@@ -20,6 +21,7 @@ export class AsyncJob<T = unknown> extends Scope {
     }>;
     // (undocumented)
     submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult>;
+    waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus>;
 }
 
 // @public
@@ -36,6 +38,8 @@ export const AsyncJobErrors: {
     readonly BatchTooLarge: "BatchTooLargeException";
     readonly ValidationFailed: "ValidationFailedException";
     readonly BatchSubmitFailed: "BatchSubmitFailedException";
+    readonly Timeout: "AsyncJobTimeoutException";
+    readonly StatusNotTracked: "StatusNotTrackedException";
 };
 
 // @public
@@ -45,6 +49,28 @@ export interface AsyncJobOptions<T> {
     logger?: ChildLogger;
     maxRetries?: number;
     schema?: StandardSchemaV1<T>;
+    trackStatus?: boolean;
+}
+
+// @public
+export type AsyncJobState = 'queued' | 'processing' | 'complete' | 'failed';
+
+// @public
+export interface AsyncJobStatus {
+    attempts: number;
+    error?: string;
+    jobId: string;
+    state: AsyncJobState;
+    submittedAt: string;
+    transitions: AsyncJobTransition[];
+    updatedAt: string;
+}
+
+// @public
+export interface AsyncJobTransition {
+    at: string;
+    attempt: number;
+    state: AsyncJobState;
 }
 
 // @public
@@ -60,6 +86,13 @@ export interface BatchSubmitResult {
 // @public
 export interface SubmitOptions {
     delaySeconds?: number;
+}
+
+// @public
+export interface WaitUntilCompleteOptions {
+    pollIntervalMs?: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
 }
 
 // (No @packageDocumentation comment for this package)

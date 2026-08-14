@@ -24,9 +24,11 @@ export class KnowledgeBase extends Scope {
     constructor(scope: ScopeParent, id: string, _options: KnowledgeBaseOptions);
     // (undocumented)
     readonly bbName = "KnowledgeBase";
+    isSynced(): Promise<boolean>;
     // @internal
     protected log: ChildLogger;
     retrieve(query: string, options?: RetrieveOptions): Promise<RetrieveResult[]>;
+    waitUntilSynced(options?: WaitUntilSyncedOptions): Promise<void>;
 }
 
 // @public
@@ -37,6 +39,8 @@ export const KnowledgeBaseErrors: {
     readonly InvalidFilter: "InvalidFilterException";
     readonly ValidationError: "KnowledgeBaseValidationError";
     readonly BrowserNotSupported: "BrowserNotSupportedException";
+    readonly IngestionFailed: "IngestionFailedException";
+    readonly Timeout: "KnowledgeBaseTimeoutException";
 };
 
 // @public
@@ -70,6 +74,14 @@ export interface RetrieveResult {
 
 // @public
 export type SourceConfig = string;
+
+// @public
+export interface WaitUntilSyncedOptions {
+    maxConsecutiveTransientErrors?: number;
+    pollIntervalMs?: number;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+}
 
 // (No @packageDocumentation comment for this package)
 

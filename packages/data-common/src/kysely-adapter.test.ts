@@ -141,3 +141,45 @@ test('Kysely transaction rollback uses the engine rollback API', async () => {
     `expected engine.rollbackTransaction() on failure; saw calls: ${JSON.stringify(engine.calls)}`,
   );
 });
+
+test('createKyselyAdapter defers getEngine() until the first query (safe during CDK synth)', async () => {
+  // The CDK-build blocks (DistributedDatabase/Database index.cdk.ts) define
+  // infrastructure only and expose no usable engine — their getEngine() throws.
+  // Creating the adapter at module scope (this file is loaded during `cdk synth`)
+  // must NOT invoke getEngine(), otherwise synth crashes before it can run.
+  let calls = 0;
+  const db = {
+    getEngine(): DatabaseEngine {
+      calls++;
+      throw new Error('getEngine() is unavailable during CDK synth');
+    },
+  };
+
+  // Construction must not touch getEngine().
+  const kysely = createKyselyAdapter<Schema>(db);
+  assert.strictEqual(calls, 0, 'getEngine() must not be called when the adapter is created');
+
+  // getEngine() is only reached when a query actually runs (never at synth).
+  await assert.rejects(() => kysely.selectFrom('t').selectAll().execute());
+  assert.strictEqual(calls, 1, 'getEngine() should be invoked lazily on first query');
+});
+
+test('getEngine() is called once per EngineConnection across begin/execute/commit', async () => {
+  // begin(), executeQuery() and commit() each resolve the engine; memoization
+  // must collapse them into a single getEngine() call per connection so the
+  // one-engine-per-transaction guarantee holds.
+  let calls = 0;
+  const engine = new RecordingEngine();
+  const kysely = createKyselyAdapter<Schema>({
+    getEngine: () => {
+      calls++;
+      return engine;
+    },
+  });
+
+  await kysely.transaction().execute(async (trx) => {
+    await trx.insertInto('t').values({ id: 'a', value: 'one' }).execute();
+  });
+
+  assert.strictEqual(calls, 1, `expected a single memoized getEngine() call, saw ${calls}`);
+});

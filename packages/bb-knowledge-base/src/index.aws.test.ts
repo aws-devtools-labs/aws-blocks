@@ -4,12 +4,18 @@
 import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
+import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
 import { KnowledgeBaseErrors, KnowledgeBase } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────
 
 function mockRuntimeSend(fn: (cmd: unknown) => unknown) {
 	return mock.method(BedrockAgentRuntimeClient.prototype, 'send', fn);
+}
+
+// Control-plane client used by isSynced()/waitUntilSynced().
+function mockAgentSend(fn: (cmd: { constructor: { name: string }; input: any }) => unknown) {
+	return mock.method(BedrockAgentClient.prototype, 'send', fn as (cmd: unknown) => unknown);
 }
 
 afterEach(() => {
@@ -21,6 +27,23 @@ function setKbEnv(scopeId: string, instanceId: string, kbId = 'kb-test-123') {
 	process.env[`${prefix}_KB_ID`] = kbId;
 	return () => {
 		delete process.env[`${prefix}_KB_ID`];
+	};
+}
+
+// Sets KB_ID and (unless dataSourceId is null) DATA_SOURCE_ID, mirroring the
+// two config values the CDK layer registers. Used by the sync tests.
+function setSyncEnv(
+	scopeId: string,
+	instanceId: string,
+	opts: { kbId?: string; dataSourceId?: string | null } = {},
+) {
+	const { kbId = 'kb-test-123', dataSourceId = 'ds-test-123' } = opts;
+	const prefix = `BLOCKS_${scopeId}_${instanceId}`.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+	process.env[`${prefix}_KB_ID`] = kbId;
+	if (dataSourceId !== null) process.env[`${prefix}_DATA_SOURCE_ID`] = dataSourceId;
+	return () => {
+		delete process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_DATA_SOURCE_ID`];
 	};
 }
 
@@ -515,6 +538,624 @@ describe('error classification — other SDK exceptions', () => {
 					return true;
 				},
 			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+// ── Sync — isSynced() ────────────────────────────────────────────────────────
+//
+// Ingestion runs asynchronously after deploy, so isSynced() inspects the data
+// source's most recent ingestion job: COMPLETE → synced, FAILED → throws,
+// anything else (or no jobs / no data source) → not-synced (or synced when there
+// is nothing to track).
+
+describe('isSynced', () => {
+	test('returns true when the latest ingestion job is COMPLETE', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY1');
+		mockAgentSend((cmd) => {
+			assert.strictEqual(cmd.constructor.name, 'ListIngestionJobsCommand');
+			return { ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy1', { source: './knowledge' });
+			assert.strictEqual(await kb.isSynced(), true);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when the latest ingestion job is IN_PROGRESS', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY2');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'job-1', status: 'IN_PROGRESS' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy2', { source: './knowledge' });
+			assert.strictEqual(await kb.isSynced(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when no ingestion jobs exist yet (empty list)', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY3');
+		mockAgentSend(() => ({ ingestionJobSummaries: [] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3', { source: './knowledge' });
+			assert.strictEqual(await kb.isSynced(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns false when ingestionJobSummaries is undefined', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY3B');
+		mockAgentSend(() => ({}));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy3b', { source: './knowledge' });
+			assert.strictEqual(await kb.isSynced(), false);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('returns true (without calling the control plane) when no data source id is configured', async () => {
+		// A deployment that predates the sync API: KB_ID present, but no
+		// DATA_SOURCE_ID was injected, so there is no ingestion job to track. (The
+		// CDK layer now always registers a DATA_SOURCE_ID for both folder and
+		// imported s3:// sources — see DESIGN.md, the "Source coverage (folder and
+		// imported s3://)" note — so this is purely the pre-feature case, not a
+		// source-type distinction.)
+		const cleanup = setSyncEnv('TEST', 'RDY4', { dataSourceId: null });
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy4', { source: './knowledge' });
+			assert.strictEqual(await kb.isSynced(), true);
+			assert.strictEqual(sendCalled, false, 'should not query the control plane when there is no data source to track');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws NotReady when KB_ID env var is not set', async () => {
+		const prefix = 'BLOCKS_TEST_RDY5';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy5', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isSynced(),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	test('throws IngestionFailed (with failureReasons) when the latest job FAILED', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY6');
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-x', status: 'FAILED' }] };
+			}
+			// GetIngestionJobCommand → failure detail
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['boom one', 'boom two'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy6', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isSynced(),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					assert.ok(err.message.includes('boom one'), 'message should include failure reasons');
+					assert.ok(err.message.includes('boom two'));
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('queries ListIngestionJobs with the configured ids, sorted by STARTED_AT desc, maxResults 1', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY7', { kbId: 'kb-aaa', dataSourceId: 'ds-bbb' });
+		let captured: any;
+		mockAgentSend((cmd) => {
+			captured = cmd.input;
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy7', { source: './knowledge' });
+			await kb.isSynced();
+			assert.strictEqual(captured.knowledgeBaseId, 'kb-aaa');
+			assert.strictEqual(captured.dataSourceId, 'ds-bbb');
+			assert.strictEqual(captured.maxResults, 1);
+			assert.strictEqual(captured.sortBy.attribute, 'STARTED_AT');
+			assert.strictEqual(captured.sortBy.order, 'DESCENDING');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('maps control-plane ResourceNotFoundException to NotReady', async () => {
+		const cleanup = setSyncEnv('TEST', 'RDY8');
+		const err = new Error('No knowledge base with ID kb-test-123 exists');
+		err.name = 'ResourceNotFoundException';
+		mockAgentSend(() => { throw err; });
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy8', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isSynced(),
+				(e: Error) => {
+					assert.strictEqual(e.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+});
+
+// ── Sync — waitUntilSynced() ─────────────────────────────────────────────────
+
+describe('waitUntilSynced', () => {
+	test('resolves immediately when ingestion is already COMPLETE', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR1');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur1', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 1000, pollIntervalMs: 10 });
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('polls until the ingestion job becomes COMPLETE', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR2');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const status = calls < 3 ? 'IN_PROGRESS' : 'COMPLETE';
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur2', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 5 });
+			assert.ok(calls >= 3, `expected at least 3 polls before COMPLETE, got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws IngestionFailed (with failureReasons) when ingestion FAILED', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR3');
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-fail', status: 'FAILED' }] };
+			}
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['S3 access denied'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur3', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 1000, pollIntervalMs: 10 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					assert.ok(err.message.includes('S3 access denied'), 'should surface failure reasons');
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws Timeout when the job never completes within the budget', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR4');
+		mockAgentSend(() => ({ ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] }));
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur4', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
+					// Every poll was a clean IN_PROGRESS (no transient errors), so the
+					// message stays the plain form — no transient detail appended.
+					assert.ok(
+						!err.message.includes('last transient error'),
+						'a clean (non-transient) timeout must not claim a transient error',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('Timeout message surfaces the last transient error when the budget runs out mid-streak', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR16');
+		// Every poll throws a transient (throttling → RetrievalFailed) error, but the
+		// tolerance is high enough that the deadline — not the transient budget — ends
+		// the wait. The Timeout message must then surface the last transient error so a
+		// caller can't mistake it for a healthy KB that merely never finished ingesting.
+		mockAgentSend(() => {
+			const e = new Error('Rate exceeded');
+			e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur16', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5, maxConsecutiveTransientErrors: 1000 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(err.message.includes('30ms'), 'timeout message should include the budget');
+					assert.ok(
+						err.message.includes('last transient error'),
+						'timeout message should flag that the final polls were failing transiently',
+					);
+					assert.ok(
+						err.message.includes('Rate exceeded'),
+						'timeout message should include the underlying transient detail',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('Timeout message stays plain when an early transient blip was cleared by later clean polls', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR17');
+		// Inverse of the mid-streak case (WUR16): the transient blip happens on the
+		// FIRST poll, but every later poll is a clean IN_PROGRESS, so the streak (and
+		// the remembered error) reset well before the deadline. The Timeout that
+		// eventually fires must read as a plain "still ingesting" timeout — the stale
+		// transient from the already-cleared streak must never be folded into it.
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on the first poll only
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur17', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 40, pollIntervalMs: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.Timeout);
+					assert.ok(calls >= 2, `expected clean polls after the initial blip, got ${calls} call(s)`);
+					assert.ok(
+						!err.message.includes('last transient error'),
+						'a transient blip cleared by later clean polls must not leak into the timeout message',
+					);
+					assert.ok(
+						!err.message.includes('Rate exceeded'),
+						'the stale transient detail from the cleared streak must not appear',
+					);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('resolves immediately when no data source id is configured', async () => {
+		// Pre-sync-API deployment: no DATA_SOURCE_ID injected, so there is
+		// nothing to poll. (Not a source-type distinction — the CDK layer registers
+		// DATA_SOURCE_ID for folder and imported s3:// sources alike; see DESIGN.md,
+		// the "Source coverage (folder and imported s3://)" note.)
+		const cleanup = setSyncEnv('TEST', 'WUR5', { dataSourceId: null });
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur5', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 30, pollIntervalMs: 5 });
+			assert.strictEqual(sendCalled, false, 'should not poll the control plane when there is nothing to track');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('tolerates a transient control-plane error, then resolves once COMPLETE', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR6');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				// Unrecognized SDK error → mapSdkError classifies it as RetrievalFailed (transient).
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur6', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1 });
+			assert.ok(calls >= 2, `expected a retry after the transient blip, got ${calls} call(s)`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws once consecutive transient errors exceed the tolerance', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR7');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const e = new Error('Rate exceeded');
+			e.name = 'ThrottlingException'; // → RetrievalFailed (transient) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur7', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.RetrievalFailed);
+					return true;
+				},
+			);
+			// tolerance 2 → polls 1 & 2 absorbed, poll 3 exceeds the limit and rethrows.
+			assert.strictEqual(calls, 3, `expected 3 polls (2 tolerated + 1 over the limit), got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('short-circuits immediately on IngestionFailed (never retried as transient)', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR8');
+		let listCalls = 0;
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				listCalls += 1;
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-fail', status: 'FAILED' }] };
+			}
+			return { ingestionJob: { status: 'FAILED', failureReasons: ['boom'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur8', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					return true;
+				},
+			);
+			assert.strictEqual(listCalls, 1, 'a FAILED job is terminal — it must short-circuit, not poll again');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('short-circuits immediately on NotReady (unset KB_ID is not retried forever)', async () => {
+		const prefix = 'BLOCKS_TEST_WUR9';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur9', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'a missing-KB config error fails before any poll and must not be retried');
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	test('resets the transient-error counter after a clean poll', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR10');
+		// transient → clean (IN_PROGRESS) → transient → COMPLETE. With tolerance 1 this
+		// only succeeds if the counter resets after the clean poll — otherwise the second
+		// transient error would be the 2nd consecutive failure and exceed the limit.
+		const seq = ['throw', 'IN_PROGRESS', 'throw', 'COMPLETE'];
+		let i = 0;
+		mockAgentSend(() => {
+			const step = seq[i++] ?? 'COMPLETE';
+			if (step === 'throw') {
+				const e = new Error('Rate exceeded');
+				e.name = 'ThrottlingException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: step }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur10', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 1 });
+			assert.strictEqual(i, 4, 'should consume the full transient/clean/transient/complete sequence');
+		} finally {
+			cleanup();
+		}
+	});
+
+	// Cause-based transient classification: a control-plane ResourceNotFoundException
+	// (the KB/data source not yet visible in the post-deploy window) maps to NotReady
+	// WITH a `cause`, and is tolerated as transient — whereas an unset-KB_ID NotReady
+	// (thrown directly by ensureKbId, no `cause`) stays terminal.
+
+	test('tolerates a transient control-plane ResourceNotFoundException (KB not yet visible), then resolves once COMPLETE', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR11');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			if (calls === 1) {
+				// Post-deploy window: the freshly-created KB/data source has not
+				// propagated yet, so the control plane 404s. mapSdkError maps this to
+				// NotReady with cause.name === 'ResourceNotFoundException' → transient.
+				const e = new Error('No knowledge base with ID kb-test-123 exists');
+				e.name = 'ResourceNotFoundException';
+				throw e;
+			}
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'COMPLETE' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur11', { source: './knowledge' });
+			await kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1 });
+			assert.ok(calls >= 2, `expected a retry after the not-yet-visible blip, got ${calls} call(s)`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('throws once consecutive control-plane ResourceNotFound errors exceed the tolerance', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR12');
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			const e = new Error('No knowledge base with ID kb-test-123 exists');
+			e.name = 'ResourceNotFoundException'; // → NotReady (transient, carries cause) on every poll
+			throw e;
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur12', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 2 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					assert.strictEqual(
+						(err.cause as Error | undefined)?.name,
+						'ResourceNotFoundException',
+						'the rethrown NotReady should still carry the originating SDK error as cause',
+					);
+					return true;
+				},
+			);
+			// tolerance 2 → polls 1 & 2 absorbed, poll 3 exceeds the limit and rethrows.
+			assert.strictEqual(calls, 3, `expected 3 polls (2 tolerated + 1 over the limit), got ${calls}`);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('does NOT retry an unset-KB_ID NotReady (config error has no cause → terminal)', async () => {
+		const prefix = 'BLOCKS_TEST_WUR13';
+		const orig = process.env[`${prefix}_KB_ID`];
+		delete process.env[`${prefix}_KB_ID`];
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur13', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 1, maxConsecutiveTransientErrors: 5 }),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.NotReady);
+					// The cause-based classification hinges on this: ensureKbId() throws
+					// NotReady directly, so there is no `cause` (unlike a not-yet-visible
+					// ResourceNotFoundException) — which keeps the config error terminal.
+					assert.strictEqual(err.cause, undefined, 'a config NotReady must carry no cause');
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'a missing-KB config error fails before any poll and must not be retried');
+		} finally {
+			if (orig !== undefined) process.env[`${prefix}_KB_ID`] = orig;
+		}
+	});
+
+	// Cancellation via AbortSignal — checked before each poll and during the inter-poll sleep.
+
+	test('rejects immediately when the signal is already aborted (no polling)', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR14');
+		let sendCalled = false;
+		mockAgentSend(() => {
+			sendCalled = true;
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur14', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 5000, pollIntervalMs: 5, signal: AbortSignal.abort() }),
+				(err: Error) => {
+					assert.strictEqual(err.name, 'AbortError', 'default abort reason is a DOMException named AbortError');
+					return true;
+				},
+			);
+			assert.strictEqual(sendCalled, false, 'an already-aborted signal must reject before any poll');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('aborts during the inter-poll delay and rejects with the supplied abort reason', async () => {
+		const cleanup = setSyncEnv('TEST', 'WUR15');
+		const controller = new AbortController();
+		let calls = 0;
+		mockAgentSend(() => {
+			calls += 1;
+			// Always "not synced yet" so the wait reaches the inter-poll sleep, where
+			// the abort fired below interrupts it.
+			return { ingestionJobSummaries: [{ ingestionJobId: 'j', status: 'IN_PROGRESS' }] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'wur15', { source: './knowledge' });
+			const reason = new Error('caller cancelled');
+			setTimeout(() => controller.abort(reason), 20).unref?.();
+			await assert.rejects(
+				() => kb.waitUntilSynced({ timeoutMs: 60_000, pollIntervalMs: 50, signal: controller.signal }),
+				(err: Error) => {
+					assert.strictEqual(err, reason, 'should reject with the exact reason passed to abort()');
+					return true;
+				},
+			);
+			assert.ok(calls >= 1, 'should have polled at least once before being aborted');
 		} finally {
 			cleanup();
 		}

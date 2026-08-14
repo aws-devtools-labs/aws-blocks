@@ -304,8 +304,26 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
-### Known limitation — TLS verification on the DDL/baseline path
-The host-side migration, baseline (`pg_dump`), and `--url` CLI connections currently use `ssl: { rejectUnauthorized: false }` — the same posture the runtime engine has historically used for `fromExisting`. #806 is enforcing verify-by-default (with an `ssl: { ca }` override to pin a provider CA) on the runtime/dev paths; this PR's DDL paths do not consume that override yet. **Accepted interim risk:** unverified TLS to the pooler on the deploy/CI host. **Fast-follow:** have these paths adopt #806's `ssl`/CA override (verify, or explicitly pin the CA) once it lands, rather than introducing a separate mechanism here.
+### TLS verification on the external-DB paths — see D-013
+
+> The full TLS posture (verify-by-default, the `ssl` option, committed-CA delivery, and the
+> fail-closed-in-CI/Lambda policy) is recorded as its own decision, **D-013**. The notes below are
+> retained for context on the DDL/baseline path specifically.
+The host-side migration, baseline (`pg_dump`), and `--url` CLI connections originally used
+`ssl: { rejectUnauthorized: false }` — the same posture the runtime engine historically used for
+`fromExisting`. **Resolved (fast-follow landed):** `fromExisting` now accepts an `ssl` option and the
+runtime verifies by default; the DDL/baseline/`--url` paths now resolve TLS through the shared
+`externalDbSsl()` helper, which pins a CA from `DATABASE_CA_CERT` (inline PEM or file path) and strips
+`sslmode` so the CA takes effect. **Residual:** when `DATABASE_CA_CERT` is not set, these
+operator-host, ephemeral connections fall back to `rejectUnauthorized: false` in an interactive run
+(the operator is connecting to a database they own with a string they just supplied) — but in a
+**non-interactive run** (`CI` set, excluding `CI=false`/`0`) they now **fail closed** rather than run a
+privileged DDL/migration unverified. First-pull `db pull` introspection is the one exception (it runs
+before a CA is captured) and opts into the unverified fallback explicitly. Limitation: this gate keys
+off the conventional `CI` env var, so a pipeline or deploy host that does not set `CI` is treated as
+interactive — set `DATABASE_CA_CERT` to guarantee verification in any automated run. Unlike the
+deployed runtime — which pins the CA committed in `database.ca.ts` by `db pull` and fails closed when
+it is absent — the operational paths read the CA from the environment only.
 
 ## D-010: `--telemetry-file` flag writes regardless of opt-out status
 
@@ -430,3 +448,215 @@ Both helpers (`getStackId`, `getSandboxId`) are exported from `@aws-blocks/block
 
 ### Migration scope
 This scheme applies to **newly scaffolded apps only**. Existing apps that adopt the new `index.cdk.ts` must set `stackId` in `.blocks/config.json` to their current production stack name **with the `-prod` suffix removed** — since the template appends `-prod` automatically. For example, if your existing stack is `my-blocks-stack-prod`, set `stackId` to `my-blocks-stack`.
+
+
+## D-013: External-DB connections verify TLS by default; CA committed via `db pull`
+
+**Date:** 2026-06-29
+**Authors:** mehrishi
+
+### Context
+
+`fromExisting({ connectionString })` historically hardcoded `ssl: { rejectUnauthorized: false }` on
+every path (runtime, mock, CLI, migrations, introspection) — encrypted but with **no** server-
+certificate verification (CWE-295), exposing the connection (including the JWT claims forwarded for
+RLS) to an active man-in-the-middle. There was also no supported way for a caller to configure TLS.
+Managed providers (Supabase, Neon, RDS) present a certificate signed by a private CA not in Node's
+trust store, so "just flip the default to verify" breaks connectivity unless the CA is supplied.
+
+### Decision
+
+1. **Verify by default.** The runtime engine defaults to `{ rejectUnauthorized: true }`; no path
+   hardcodes `false`. A TLS 1.2 floor is enforced on every connection.
+2. **Public `ssl` option as a discriminated union.** `ExternalDatabaseRef`'s connection-string
+   variant gains `ssl?: ExternalSslOptions` = `{ rejectUnauthorized?: true; ca?: string } | { rejectUnauthorized: false }`,
+   so the misleading `{ ca, rejectUnauthorized: false }` (a pinned CA `pg` would ignore) is a
+   compile-time error. The same union is reused by `PgClientEngineConfig` and the generated wiring.
+3. **CA delivered by committing it.** `db pull` prompts for the provider CA and writes it to a
+   generated, committed `database.ca.ts` (a public cert — public key + issuer metadata, no private
+   key). The generated `resolveDbSsl()` pins it. Because it is a bundled JS import (not a runtime
+   file/env read), verification works in the deployed Lambda with no env/SSM/CDK plumbing.
+   `DATABASE_CA_CERT` (inline PEM or path) overrides it.
+4. **Fail closed where a silent downgrade is dangerous; fail open where it is safe.**
+   - Deployed Lambda with no CA → **throws** (a missing CA in prod is a misconfiguration).
+   - Non-interactive (`CI` set) CLI/migration/baseline runs with no CA → **throw** (privileged DDL
+     must not run unverified). First-pull introspection is the one explicit exception (it runs before
+     a CA exists).
+   - Interactive operator runs with no CA → encrypted-but-unverified fallback, with a warning.
+   - Local dev (mock) defaults to unverified (self-signed local DBs are common) but warns when `ssl`
+     is omitted, so the dev/deploy asymmetry surfaces locally.
+5. **`sslmode` is stripped centrally in `PgClientEngine`** so a programmatic `ssl.ca` is never
+   silently ignored (node `pg` drops `ssl.ca` when `sslmode` is present in the URL).
+
+Released as a `minor` with an upgrade note: a hand-written `fromExisting` with no `ssl` now verifies;
+private-CA providers require pinning via `ssl: { ca }`, or `ssl: { rejectUnauthorized: false }` to opt
+out explicitly. `db pull`-generated apps are unaffected in default connectivity.
+
+### Rationale
+
+- The CA is **not secret** (it is presented to every client on every handshake and is freely
+  downloadable), so committing + bundling it is the simplest mechanism that verifies in production. An
+  env-var-only CA was rejected: `.env.*` is loaded on the deploy host, never injected into the Lambda,
+  so it would leave the highest-exposure path (deployed runtime) unverified.
+- A discriminated union shifts the `{ ca, rejectUnauthorized: false }` mistake to compile time (T1).
+
+### Alternatives Considered
+
+1. **Hardcode a "universal" provider root CA** — rejected (region/rotation variance can't be assumed;
+   use the customer's actual downloaded cert). For the Supabase pooler the cert is in fact a wildcard
+   over a shared root (verified empirically), but per-customer capture stays the safe default.
+2. **Route the CA through SSM / AppSetting** — rejected: extra provisioning for a non-secret value.
+3. **Flip the engine default to verify without delivering a CA** — rejected: breaks the generated
+   path (private CA not in the trust store); the server-side enforce-SSL toggle does not help.
+
+### Known limitation
+
+The non-interactive gate keys off the conventional `CI` env var (excluding `CI=false`/`0`). A pipeline
+or deploy host (e.g. CodeBuild/CodePipeline) that does not set `CI` is treated as interactive, so a
+privileged migration there can fall back to unverified — set `DATABASE_CA_CERT` to guarantee
+verification in any automated run. A more robust signal (verify-unless-TTY, or an explicit opt-in env)
+is a candidate follow-up.
+
+### References
+
+- PR #107 (this change). Supersedes the SSL posture of D-009's TLS note.
+- Code: `packages/bb-data/src/{types.ts, external-ssl.ts, index.aws.ts, index.mock.ts}`,
+  `engines/pg-client-engine.ts`, `db-pull/{templates.ts, introspect.ts, pull.ts}`,
+  `migrations/baseline.ts`.
+
+
+## D-014: External-DB connection-string SSM parameter is stack-scoped via a single shared `getStackName`
+
+**Date**: 2026-06-26
+**Authors:** mehrishi
+
+### Context
+
+The external-database connection string was stored in an SSM parameter named only
+by stage (`/blocks/{stage}/db-connection-string`). With no app identity in the
+name, two Blocks apps deployed to the same account + region + stage computed the
+same name and silently overwrote each other's credentials — the second app's
+Lambda then read the wrong database with no error. An earlier attempt to add a
+discriminator derived from the connection string / database ref broke silently,
+because the write side (live environment) and the read side (a ref captured at
+`db pull` time) derived it differently and diverged.
+
+D-012 (PR #51) made the deployment's stack name deterministic and committed
+(`.blocks/config.json`), so it is computable **before** `cdk synth`, not only
+inside the construct tree.
+
+### Decision
+
+The parameter name is stack-scoped: `/<stackName>-db-url`, where `stackName` comes
+from a single new `getStackName({ sandbox, projectRoot })` helper. That helper is
+also the one place the CDK templates compute the stack name (the `-prod` / sandbox
+suffix assembly that D-012 left duplicated inline across templates is removed).
+
+`dbConnectionParameterName(stackName)` derives the parameter name from a stack name
+the caller computes via `getStackName({ sandbox, projectRoot })`. Both the
+pre-deploy writer (`ensureSecrets`) and the `db pull` generated wiring at synth
+compute the stack name the same way, with identical inputs supplied by the same
+deploy/sandbox orchestrator (`projectRoot` + stage), so the written name and the
+read name cannot diverge. At runtime the app reads the synth-stamped
+`BLOCKS_SSM_PARAM_DB_URL` and never recomputes.
+
+### Rationale
+
+- **Uniqueness (no collision):** the name embeds the per-app `stackId`, so two
+  apps never share a name.
+- **Write == read by construction:** one function, one set of inputs from one
+  orchestrator. The dual-derivation divergence that broke the earlier ref-based
+  attempt cannot recur.
+- **Discriminator is stack identity, not the connection string:** the name is
+  independent of which database the app points at, derived from committed config.
+- **No post-deploy machinery:** because the name is computable pre-synth (D-012),
+  the writer writes directly to the final name before deploy. No CfnOutput
+  round-trip, no after-deploy write-back, no in-stack staging-copy custom resource.
+- **Fail fast, not silent:** `getStackName` throws an actionable error when
+  `.blocks/config.json` is missing, rather than falling back to a guessed name.
+
+### Alternatives Considered
+
+- **Post-deploy write via CfnOutput** (PR #39's first design): synth emits the
+  resolved name, the writer reads it from stack outputs after `cdk deploy`.
+  Rejected as unnecessary once D-012 makes the name pre-computable; it also adds a
+  first-deploy window and ordering complexity.
+- **In-stack staging-copy (`copyFrom`)** (PR #39 spike): mint a staging parameter,
+  copy it to the final name inside the CloudFormation transaction. Rejected for
+  the same reason — it solves "the name is unknown pre-synth," which is no longer
+  true. It is the correct fallback only if external DB ever runs inside a nested /
+  Amplify Gen2 stack, where the stack name is tokenized at synth.
+
+### Tradeoff
+
+Writing before deploy means the connection string is persisted to SSM even if the
+deploy later fails. Accepted: it is the customer's own value, the write is
+idempotent and overwritten on the next deploy, and this matches pre-existing
+behavior. The staging-copy spike was the only variant that made the write atomic
+with the stack; that property is consciously traded for the removal of all
+write-back/staging machinery.
+
+### Compatibility
+
+- **Breaking signature change:** `dbConnectionParameterName` now takes a
+  `stackName` string (was `(stage: string)`). `getStackName` now takes a single
+  options object `{ sandbox, projectRoot? }` (was `(projectRoot, { sandbox })`).
+  The package is pre-1.0 (preview) and no external consumer has committed old-form
+  wiring, so this ships as a patch. Apps with stale generated `supabase.ts` must
+  run `npx bb-data pull` to regenerate.
+- **Prerequisite (D-012):** `getStackName` reads `stackId` from
+  `.blocks/config.json`; it throws if absent. Pre-PR #51 apps migrating to this
+  version must first set `stackId` in `.blocks/config.json` (see D-012 "Migration
+  scope" for instructions) or deploys will fail at the `ensureSecrets` step.
+- The previous stage-only parameter (`/blocks/{stage}/db-connection-string`) is
+  orphaned and self-heals on the next deploy — the old value remains in SSM but is
+  no longer read or written.
+
+### References
+
+- Supersedes the stage-only `dbConnectionParameterName(stage)`.
+- Builds on D-012 (PR #51, committed `stackId`).
+- Code: `packages/core/src/scripts/stack-id.ts` (`getStackName`),
+  `packages/core/src/db-naming.ts`, `packages/core/src/scripts/ensure-secrets.ts`,
+  `packages/bb-data/src/db-pull/generate.ts`.
+
+## D-015: `DistributedTable` reads default to `readValidation: 'coerce'` (not `'off'`)
+
+**Date**: 2026-08-03
+**Authors:** osama-rizk
+
+### Context
+
+`DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
+
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-9).
+
+### Decision
+
+Reads default to **`'coerce'`**:
+
+- **`'coerce'`** (default) — return the schema's coerced output (defaults filled, types narrowed for transform-bearing schemas). On a value that cannot be coerced, return the **raw** value and log a `warn` — **never throws**.
+- **`'strict'`** — throw `ValidationFailed` on any non-conforming item (opt-in reject).
+- **`'off'`** — return the raw stored value with no validation (matches the prior behavior).
+
+### Rationale
+
+- **The bug is the default read violating `T`.** A fix only reachable via an opt-in flag would leave the reported default broken for anyone who doesn't discover the flag; the default itself must return schema-conformant data.
+- **Precedent from comparable typed data layers.** Schema-on-read peers reconcile on read and don't throw: Mongoose fills defaults/casts on hydrate; ElectroDB returns schema-shaped items via getters; Rails ActiveRecord type-casts on load; Postgres materializes `ADD COLUMN … DEFAULT` at read time (coerce-on-read in all but name). None default to raw passthrough once a schema is declared. (SQL ORMs like Prisma/Drizzle *do* pass raw through — but only because the engine enforces schema on write, a guarantee DynamoDB lacks, so their behavior is not transferable.)
+- **Non-throwing keeps the read contract.** A read that threw on a bad row would make legacy/corrupt rows unreadable (you couldn't fetch them to migrate) and violate the project rule that reads return data or `null` and throw only for violated preconditions. Every surveyed library that ships a strict read (DynamoDB-Toolbox `format()`, `zod-firebase`) also ships an escape hatch — so `'strict'` is offered, not defaulted.
+
+### Alternatives Considered
+
+- **`'off'` as the default (coercion opt-in).** Lossless and fully backward-compatible, but ships the original bug as the default and only helps users who find the flag. Rejected as the default; retained as the explicit opt-out.
+- **`'strict'` as the default.** Rejected: turns one bad row into a whole-`scan`/`getBatch` outage, blocks migration reads, and breaks the reads-don't-throw contract.
+- **A `validateOnRead: boolean` instead of the three-mode enum.** Cannot express three distinct behaviors (raw / coerce / throw); the enum is required to offer both a strict-reject mode and a raw escape hatch.
+
+### `'coerce'` is lossless — it preserves unknown stored keys
+
+Most validators discard unrecognized keys when they produce their output (Zod `.strip()` by default), so returning the bare validator output on read would drop attributes a stored row carries beyond the current schema — older-schema fields, or columns another writer owns — and a read-modify-write would then persist that loss as silent data deletion. `'coerce'` therefore **deep-merges the coerced value over the raw stored item**: schema output wins per key, while undeclared keys, including nested ones, are preserved. Arrays are replaced wholesale (the coerced array wins). This closes #1007 (reads conform to `T`) *and* preserves data — the two are not in tension. It is implemented with `defu` (`createDefu`) rather than a hand-rolled merge, because treating arrays as leaves requires custom config in every merge library regardless, and defu is maintained, prototype-safe, zero-dependency, and ESM. The one residual: a schema whose *transform* intentionally removes a key has it resurrected by the merge, so transform-heavy schemas should use `'strict'` or `'off'`. Coercion is also best-effort/validator-dependent for *type* transforms: check-only Standard Schema validators (some Valibot/ArkType schemas) don't fill defaults.
+
+### References
+
+- Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
+- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-9.
+- Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.

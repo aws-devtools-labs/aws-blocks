@@ -25,7 +25,7 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, validateChannelPath, validatePublishSize } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelPath, validatePublishSize } from './utils.js';
 import { getBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -147,6 +147,7 @@ export const Realtime: {
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		const token = mintChannelToken(fullChannel, LOCAL_TOKEN_SECRET);
+		const connectToken = mintConnectToken(this.fullId, LOCAL_TOKEN_SECRET);
 		return {
 			subscribe(handlerOrOptions: ((message: unknown) => void) | SubscribeOptions, _options?: never): RealtimeSubscription {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
@@ -161,6 +162,7 @@ export const Realtime: {
 					__blocks: 'realtime/channel' as const,
 					channel: fullChannel,
 					wsUrl: (globalThis as any).__BLOCKS_REALTIME_WS_URL__,
+					connectToken,
 					token,
 				};
 			},

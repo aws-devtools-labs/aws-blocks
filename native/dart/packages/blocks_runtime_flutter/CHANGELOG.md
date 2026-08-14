@@ -1,3 +1,11 @@
+## 0.1.2
+
+- Bump dependencies and minimal Dart version
+
+## 0.1.1
+
+- Minor bug fixes and improvements
+
 ## 0.1.0
 
 - Initial release

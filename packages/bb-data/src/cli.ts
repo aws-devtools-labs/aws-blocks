@@ -22,6 +22,7 @@
 
 import { PGliteEngine } from './engines/pglite-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
+import { externalDbSsl } from './external-ssl.js';
 import { generateTypes } from './type-generator.js';
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import { runExternalMigrations, toSessionPortUrl } from './migrations/external-migrations.js';
@@ -200,7 +201,7 @@ async function status(args: string[], url: string | undefined) {
   if (!url && await detectExternalDb()) refuseExternalWithoutUrl('status');
 
   const engine = url
-    ? new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: { rejectUnauthorized: false }, poolSize: 1 })
+    ? new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 })
     : new PGliteEngine('.bb-data');
   try {
     const migrations = await loadMigrationsFromDir(migrationsDir);
@@ -234,7 +235,7 @@ async function genTypes(args: string[], url: string | undefined) {
 
   const engine = url
     ? (console.log('Connecting to external database...'),
-       new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: { rejectUnauthorized: false }, poolSize: 1 }))
+       new PgClientEngine({ connectionString: toSessionPortUrl(url), ssl: externalDbSsl(), poolSize: 1 }))
     : (console.log('Connecting to local database (.bb-data)...'), new PGliteEngine('.bb-data'));
 
   try {

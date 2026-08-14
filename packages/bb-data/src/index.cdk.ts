@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -76,6 +76,7 @@ export class Database extends Scope {
       databaseName,
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
+      postgresVersion: options?.postgresVersion,
     });
 
     // Inject config so DataApiEngine can read them at runtime
@@ -85,6 +86,16 @@ export class Database extends Scope {
 
     // Grant Data API permissions to the Lambda handler
     infra.grantDataApi(this.handler);
+  }
+
+  /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed database.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope).
+   */
+  getEngine(): never {
+    return synthGuard('Database', 'getEngine');
   }
 
   /**
@@ -99,4 +110,4 @@ export { fromExisting } from './from-existing.js';
 export { DatabaseErrors } from './errors.js';
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
-export type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';

@@ -1,5 +1,122 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.19
+
+### Patch Changes
+
+- 1e37c67: docs: per-block docs folders + committed BB catalog with CI sync check; CLAUDE/agents docs resolved via require.resolve
+
+  `@aws-blocks/blocks` now ships one docs folder per Building Block under `docs/<block>/`
+  (`README.md` / `API.md` / `DESIGN.md`), plus a committed, marker-delimited Building Block
+  catalog in the package README that a `sync-docs --check` CI gate keeps in sync. The README's
+  catalog section and the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`) now direct
+  tools and agents to locate docs programmatically via
+  `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (and
+  `require.resolve('@aws-blocks/blocks/docs/README.md')` for the catalog) rather than assuming a
+  `node_modules/` path or following the human-facing relative links. Also adds a Security
+  Considerations section to the package README.
+
+## 0.1.18
+
+### Patch Changes
+
+- 75f5446: Add optional `fallback` parameter to `AuthenticatedContent` for rendering alternative content when the user is not authenticated.
+- 8264dd0: Add the missing `vendorize` script to the `auth-cognito` template. Every other deployable template shipped `"vendorize": "blocks-vendorize"`, but auth-cognito omitted it, so `npm run vendorize` (used to inline a Building Block's source for customization) didn't work in scaffolded auth-cognito apps. Also adds a regression test asserting every deployable template carries the standard `vendorize` script.
+
+## 0.1.17
+
+### Patch Changes
+
+- 50dbd0e: Include the local dev-server script and use public AWS Blocks imports when adding AWS Blocks to an Amplify Gen 2 project.
+
+## 0.1.16
+
+### Patch Changes
+
+- fc33428: fix(telemetry): inherit worker stderr in debug mode; enable telemetry in CI for create-blocks-app
+
+  - When `NODE_DEBUG=blocks-telemetry` is set, the telemetry worker subprocess
+    inherits the parent's stderr so delivery confirmation is observable. Silent
+    by default.
+  - Remove CI telemetry suppression from create-blocks-app to match core behavior.
+    Telemetry is now enabled in CI (same as all other CLI commands).
+  - Make `console` cross-platform and headless-safe: pick the OS browser opener
+    (`open`/`xdg-open`/`start`), resolve the region from the environment, and treat
+    a missing opener (CI / remote shells) as best-effort success instead of failing.
+  - Add an isolated E2E telemetry test suite (`test-apps/telemetry`) that verifies
+    payload structure, delivery to the real endpoint, disable mechanisms, and
+    per-command success/failure events.
+
+## 0.1.15
+
+### Patch Changes
+
+- f6a7fc7: Fix two security defects in the `demo` template:
+
+  - **Set-Cookie header (CRLF) injection**: the public `setCookie` / `deleteCookie` API methods wrote a user-controlled cookie name/value directly into the `Set-Cookie` response header. Cookie name/value components containing CR (`\r`) or LF (`\n`) are now rejected, preventing HTTP response-header injection / response splitting.
+  - **Incomplete HTML escaping (XSS)**: the frontend `escapeHtml` helper escaped `&`, `<`, `>`, and `"` but not the single quote (`'`), leaving an XSS gap when interpolating user-controlled values into single-quoted JS/HTML attribute contexts (e.g. `onchange="toggleTodo('...')"`). Single quotes are now escaped to `&#39;`.
+
+- 919d38c: Env-gate the `getLastCode` OTP helper in the `auth-cognito` template so a verification code can never be captured, logged, or returned from a deployed environment.
+
+  The passwordless-OTP demo exposes `api.getLastCode()` (tagged `@blocksSkipCodegen`) so the local UI can read the emailed code without a real mailbox. Its behavior was documented as "no-op in Sandbox/Production" but nothing enforced it — the `codeDelivery` hook captured the code and the method returned it unconditionally, so a live OTP could leak in a deployed environment. Both the capture and the read are now gated inline on `!process.env.BLOCKS_STACK_NAME` — the marker BlocksBackend injects into every deployed Blocks Lambda and leaves unset in local/mock dev, matching how the framework's generated DB connection resolver distinguishes deployed vs. local. The code is returned in local/mock dev and `null` in a deployed environment.
+
+## 0.1.14
+
+### Patch Changes
+
+- a1de3b8: Fix + polish for `create-blocks-app`:
+
+  - Reject `--template amplify` on a fresh directory up front with a
+    helpful message pointing at `--template default` (for a fresh app)
+    or the no-arg command (to integrate Blocks into an existing Amplify
+    Gen 2 project). The `amplify` template is an overlay auto-selected
+    when the CLI detects `amplify/backend.ts`, not a scaffoldable
+    starter. Previously the fresh-scaffold path with `--template amplify`
+    crashed mid-copy on missing template files.
+  - Correct two template descriptions that misstated the frontend:
+    `auth-cognito` and `demo` were labeled "Vite + lit-html" but both
+    ship a Vite + vanilla-DOM frontend. Descriptions now read
+    "Vite + vanilla-DOM frontend with Cognito passwordless email-OTP
+    auth end-to-end" and "Fuller example — AuthBasic + KVStore +
+    DynamoDB priority-sorted todo (Vite, vanilla-DOM)" respectively.
+
+- 3c365e3: Sanitize user-controlled values in demo template innerHTML assignments
+- a1de3b8: Improve `--help` output for `create-blocks-app`:
+
+  - Template discovery is now filesystem-driven — drop a folder under `templates/` with a `package.json` and it auto-registers.
+  - `--help` now lists every template with a one-line description, sourced from each template's `blocksTemplateDescription` field.
+  - Added `--yes --template nextjs` to the Examples section.
+
+## 0.1.13
+
+### Patch Changes
+
+- e839301: fix: stack-scope the external-DB connection-string SSM parameter to prevent multi-app collision
+
+  The external-database connection string was stored in an SSM parameter named only
+  by stage (`/blocks/{stage}/db-connection-string`), so two Blocks apps deployed to
+  the same AWS account + region + stage computed the same name and silently
+  overwrote each other's credentials.
+
+  The parameter name is now stack-scoped (`/<stackName>-db-url`), derived from a
+  single new `getStackName({ sandbox, projectRoot })` helper that is also the one
+  place the CDK templates compute the stack name (replacing logic duplicated across
+  templates). The same `dbConnectionParameterName(stackName)` — fed the stack name
+  from `getStackName({ sandbox, projectRoot })` — is used
+  by the pre-deploy writer (`ensureSecrets`) and by the `db pull` generated wiring at
+  synth, so the written name and the read name are derived once, from committed
+  config (`.blocks/config.json`) — never from the connection string — and cannot
+  diverge. The name is computable before synth (enabled by the committed stackId from
+  PR #51), so no post-deploy write-back or staging-copy machinery is needed.
+
+  The previous stage-only parameter is orphaned and self-heals on the next deploy.
+
+## 0.1.12
+
+### Patch Changes
+
+- ec1fc6c: Fix multi-tenant data leak in demo template: `listTodos()` no longer falls back to `scan()` when no `sortBy` is provided. All paths now use `query()` with a `userId` filter, ensuring users only see their own todos.
+
 ## 0.1.11
 
 ### Patch Changes

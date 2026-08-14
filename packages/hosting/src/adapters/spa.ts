@@ -143,6 +143,15 @@ export const spaAdapter = (
     staticAssets: {
       directory: staticDir,
       spaFallback,
+      // Content-hashed bundles. Vite (the dominant SPA bundler) emits
+      // immutable, content-hashed files under `assets/` by default — the
+      // filename changes whenever the contents change, so they're safe to
+      // cache forever with `immutable`. Without this the construct's default
+      // (HTML-like, revalidation-only) cache tier applies and the browser
+      // needlessly revalidates every hashed chunk on each load. Mirrors the
+      // per-framework immutablePaths in the Next (`_next/static/*`), Nuxt
+      // (`_nuxt/*`), and Astro (`_astro/*`) adapters.
+      immutablePaths: ['assets/*'],
     },
     routes: [
       {

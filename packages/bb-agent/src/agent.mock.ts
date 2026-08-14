@@ -9,7 +9,7 @@ import type { AgentConfig, DefaultToolContext } from './types.js';
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>) {
 		// Canned provider is appended as implicit last fallback for local dev
-		const local = config.model.local;
+		const local = config.model?.local;
 		const candidates = local ? (Array.isArray(local) ? [...local, { provider: 'canned' as const }] : [local, { provider: 'canned' as const }]) : [{ provider: 'canned' as const }];
 		super(scope, id, config, candidates, (bucket) => new FileBucketSnapshotStorage(bucket));
 	}
