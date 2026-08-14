@@ -29,9 +29,9 @@ class RealtimeChannel<T>(
             val obj = element.jsonObject
             val ch = obj["channel"]!!.jsonPrimitive.content
             val baseWsUrl = obj["wsUrl"]!!.jsonPrimitive.content
-            val connectToken = obj["connectToken"]!!.jsonPrimitive.content
+            val connectToken = obj["connectToken"]?.jsonPrimitive?.content
             val token = obj["token"]!!.jsonPrimitive.content
-            val wsUrl = "$baseWsUrl?token=${connectToken}"
+            val wsUrl = if (connectToken != null) "$baseWsUrl?token=$connectToken" else baseWsUrl
             return RealtimeChannel(channel = ch, wsUrl = wsUrl, token = token, deserializer = deserializer)
         }
     }
@@ -60,7 +60,9 @@ class RealtimeChannel<T>(
                         if (type != "message") return@mapNotNull null
                         val msgChannel = obj["channel"]?.let { (it as? JsonPrimitive)?.content }
                         if (msgChannel != channel) return@mapNotNull null
-                        val payload = obj["payload"] ?: return@mapNotNull null
+                        // AWS API Gateway emits the body under `data`; the mock/dev
+                        // server uses `payload`. Accept both.
+                        val payload = obj["data"] ?: obj["payload"] ?: return@mapNotNull null
                         deserializer(payload)
                     }.collect { emit(it) }
                 } finally {

@@ -3,6 +3,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Require changeset
@@ -14,8 +17,31 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
-          cache: npm
-      - run: npm ci
-      - run: npx @changesets/cli status --since=origin/main
+
+      # Guards import only Node built-ins, so Node type-strips and runs the TS
+      # directly.
+      # The guards decide whether a release can go out, so they are unit-tested
+      # first, against throwaway git repos in a temp dir. A regression shows up
+      # here instead of as a wrong verdict in the steps below.
+      - name: Test the changeset guards
+        run: node --test scripts/changeset-guard.test.mjs
+      # Catches malformed changesets (broken frontmatter, unknown package,
+      # invalid bump type) that the regex parser silently ignores and would
+      # otherwise fail post-merge at `changeset version`. Validates only the
+      # changesets on disk, so the release PR (no changesets left) passes.
+      - name: Validate changeset structure
+        run: node --experimental-strip-types scripts/changeset-guard.ts validate-structure
       - name: Verify changeset covers all changed packages
-        run: npx tsx scripts/verify-changeset-coverage.ts
+        run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+      - name: Block major version bumps (pre-release)
+        run: node --experimental-strip-types scripts/changeset-guard.ts block-major
+      # The umbrella re-exports its siblings and ships docs/ assembled from their
+      # READMEs, but caret ranges keep a sibling's new version in range, so
+      # `changeset version` never bumps the umbrella on its own. Its packed
+      # content still moves and publish then aborts the whole release run
+      # (#273, previously #212), so require the umbrella entry up front, and
+      # treat removing an existing one as the same failure.
+      - name: Verify the umbrella is bumped with its siblings
+        run: node --experimental-strip-types scripts/changeset-guard.ts verify-umbrella

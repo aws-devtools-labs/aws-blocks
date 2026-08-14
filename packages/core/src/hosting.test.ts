@@ -1428,4 +1428,190 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
   });
+
+  // ── basePath prop (caller-declared source of truth) ─────────
+  // Under KVS edge routing, basePath is no longer expressed as a per-behavior
+  // PathPattern prefix — it lives in the KVS route table's `meta.bp`, which the
+  // edge router uses for the canonical 308 + static strip. So these tests read
+  // the basePath out of the RouteStoreKeys custom resource's Entries.
+  describe('basePath prop', () => {
+    const metaBasePath = (root: string, basePath?: string): string => {
+      const app = new App();
+      const stack = new Stack(app, 'BasePathStack', {
+        env: { account: '123456789012', region: 'us-east-1' },
+      });
+      new Hosting(stack, 'Web', {
+        root,
+        framework: 'spa',
+        buildOutputDir: 'dist',
+        ...(basePath !== undefined ? { basePath } : {}),
+      });
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; Properties?: any }>;
+      };
+      const kvKeys = Object.entries(tpl.Resources).find(
+        ([id, r]) =>
+          r.Type === 'AWS::CloudFormation::CustomResource' &&
+          /RouteStoreKeys/.test(id),
+      );
+      assert.ok(kvKeys, 'expected a RouteStoreKeys custom resource');
+      const entries = JSON.parse(kvKeys![1].Properties.Entries);
+      const meta = JSON.parse(entries.meta);
+      return meta.bp as string;
+    };
+
+    it('records basePath in the KVS route table when set (SPA, no framework base)', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/app'), '/app');
+    });
+
+    it('normalizes a trailing slash (/app/ → /app)', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/app/'), '/app');
+    });
+
+    it('treats "/" as no base path', () => {
+      createSpaBuildOutput(tmpDir);
+      assert.strictEqual(metaBasePath(tmpDir, '/'), '');
+    });
+  });
+
+  // ── P0.4: config.json ordering dependency ────────────────────
+  describe('config.json deploy ordering (P0.4)', () => {
+    it('BlocksConfigDeployment depends on the asset deployments', () => {
+      // The asset deployments upload the whole static dir — including the
+      // placeholder `.blocks-sandbox/config.json` — to the same key the
+      // resolved config writes to. Without an ordering dependency the
+      // placeholder can clobber the real config. The previous
+      // `tryFindChild('AssetDeployment')` never matched the real child ids
+      // (AssetDeploymentImmutable/Html/Mutable), so the dep was never wired.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'ConfigOrderStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const tpl = Template.fromStack(stack).toJSON() as {
+        Resources: Record<string, { Type: string; DependsOn?: string[] }>;
+      };
+      const configId = Object.keys(tpl.Resources).find(
+        (id) => /BlocksConfigDeployment/.test(id) && /CustomResource/.test(id),
+      );
+      assert.ok(configId, 'expected a BlocksConfigDeployment custom resource');
+
+      const dependsOn = tpl.Resources[configId].DependsOn ?? [];
+      const assetDeps = dependsOn.filter((d) => /AssetDeployment/.test(d));
+      assert.ok(
+        assetDeps.length >= 1,
+        `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
+          `found DependsOn=${JSON.stringify(dependsOn)}`,
+      );
+    });
+  });
+
+  describe('config.json stale-placeholder guard (#173)', () => {
+    // Helper: pull every BucketDeployment custom resource's Properties.
+    const bucketDeployments = (stack: Stack) => {
+      const crs = Template.fromStack(stack).findResources(
+        'Custom::CDKBucketDeployment',
+      );
+      return Object.values(crs).map(
+        (cr) => (cr as { Properties: Record<string, unknown> }).Properties,
+      );
+    };
+
+    it('uploads the placeholder config.json with a no-cache directive, never the 1-year mutable cache-control', () => {
+      // The build-time placeholder (`{_placeholder:true}`) is written into the
+      // static dir. If it inherits the mutable asset tier's
+      // `s-maxage=31536000` and an edge caches it during the deploy window, the
+      // edge serves the placeholder for up to a year — breaking every client
+      // API call. It must instead be uploaded as a no-cache path so the edge
+      // never caches it long-term.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'PlaceholderCacheStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      const deployments = bucketDeployments(stack);
+      const cc = (p: Record<string, unknown>) =>
+        (p.SystemMetadata as Record<string, string> | undefined)?.['cache-control'];
+      const includes = (p: Record<string, unknown>) =>
+        (p.Include as string[] | undefined) ?? [];
+      const excludes = (p: Record<string, unknown>) =>
+        (p.Exclude as string[] | undefined) ?? [];
+
+      // A deployment must upload `.blocks-sandbox/config.json` with the
+      // no-cache directive (this is the placeholder upload).
+      const noCacheDeploy = deployments.find(
+        (p) =>
+          includes(p).includes('.blocks-sandbox/config.json') &&
+          cc(p) === 'no-cache, no-store, must-revalidate',
+      );
+      assert.ok(
+        noCacheDeploy,
+        'placeholder .blocks-sandbox/config.json must be uploaded with ' +
+          '"no-cache, no-store, must-revalidate"',
+      );
+
+      // No deployment may cover the placeholder with the 1-year mutable
+      // cache-control: the mutable/other tier must EXCLUDE it.
+      const leaks = deployments.filter((p) => {
+        const directive = cc(p);
+        return (
+          typeof directive === 'string' &&
+          directive.includes('s-maxage=31536000') &&
+          !excludes(p).includes('.blocks-sandbox/config.json')
+        );
+      });
+      assert.strictEqual(
+        leaks.length,
+        0,
+        'no mutable-tier deployment may apply s-maxage=31536000 to ' +
+          '.blocks-sandbox/config.json',
+      );
+    });
+
+    it('registers the placeholder as a no-cache path even for a static-only site (no api)', () => {
+      // The placeholder is always written (step 5), so its no-cache
+      // registration must not depend on `props.api`. This guards against a
+      // regression that moves the registration inside an `if (props.api)`
+      // block, which would reopen the stale-placeholder window for
+      // static-only sites.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'StaticOnlyPlaceholderStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir });
+
+      Template.fromStack(stack).hasResourceProperties(
+        'Custom::CDKBucketDeployment',
+        Match.objectLike({
+          Include: Match.arrayWith(['.blocks-sandbox/config.json']),
+          SystemMetadata: Match.objectLike({
+            'cache-control': 'no-cache, no-store, must-revalidate',
+          }),
+        }),
+      );
+    });
+
+    it('invalidates the post-rewrite cache key (/builds/<id>/.blocks-sandbox/*)', () => {
+      // The viewer-request skew-protection function rewrites the URI to
+      // `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the cache
+      // lookup, so the real edge cache key lives under `/builds/<id>/`.
+      // Invalidating only `/.blocks-sandbox/*` never matches it.
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'InvalidationPathStack');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+
+      // Assert via Template + Match so a CDK property rename fails loudly here
+      // rather than silently skipping a structural-heuristic lookup.
+      Template.fromStack(stack).hasResourceProperties(
+        'Custom::CDKBucketDeployment',
+        Match.objectLike({
+          DistributionPaths: Match.arrayWith([
+            Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$'),
+          ]),
+        }),
+      );
+    });
+  });
 });

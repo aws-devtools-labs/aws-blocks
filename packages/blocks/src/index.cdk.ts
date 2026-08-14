@@ -33,9 +33,9 @@ export { AuthOIDC, AuthOIDCErrors, google, github, customOidc, customOauth2, stu
 export type { AuthOIDCErrorName, OIDCUser, MappedClaims, RelayOrigin } from '@aws-blocks/bb-auth-oidc';
 export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aws-blocks/auth-common';
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as KVPutOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
+export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 export { Realtime } from '@aws-blocks/bb-realtime';
 export { Database, DatabaseErrors, fromExisting } from '@aws-blocks/bb-data';
 export { sql } from '@aws-blocks/bb-data';
@@ -43,7 +43,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
+export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AgentConfig, AgentResult, AgentStreamChunk, ToolDefinition, ToolCallRecord, ModelConfig, StreamOptions, TokenUsage } from '@aws-blocks/bb-agent';
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
@@ -53,7 +53,7 @@ export type { FileBucketOptions, PutOptions as FBPutOptions, GetUrlOptions, PutU
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy } from '@aws-blocks/bb-knowledge-base';
+export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 export { Tracer } from '@aws-blocks/bb-tracer';
 export type { TracerOptions, Segment, AnnotationValue } from '@aws-blocks/bb-tracer';
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';

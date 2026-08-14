@@ -25,9 +25,9 @@ class BlocksClient {
     SessionStore? sessionStore,
     TokenStore? tokenStore,
     this.authProvider,
-  })  : _httpClient = client ?? http.Client(),
-        sessionStore = sessionStore ?? InMemorySessionStore(),
-        tokenStore = tokenStore ?? InMemoryTokenStore();
+  }) : _httpClient = client ?? http.Client(),
+       sessionStore = sessionStore ?? InMemorySessionStore(),
+       tokenStore = tokenStore ?? InMemoryTokenStore();
 
   /// Calls a JSON-RPC method with the given params and returns the result.
   Future<dynamic> call(String method, Map<String, dynamic> params) async {
@@ -42,7 +42,10 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<http.Response> _doCall(String method, Map<String, dynamic> params) async {
+  Future<http.Response> _doCall(
+    String method,
+    Map<String, dynamic> params,
+  ) async {
     final id = _nextId++;
     final body = jsonEncode({
       'jsonrpc': '2.0',
@@ -51,9 +54,7 @@ class BlocksClient {
       'id': id,
     });
 
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-    };
+    final headers = <String, String>{'Content-Type': 'application/json'};
 
     // Bearer token takes priority
     if (authProvider != null) {
@@ -68,11 +69,7 @@ class BlocksClient {
       }
     }
 
-    return _httpClient.post(
-      Uri.parse(baseUrl),
-      headers: headers,
-      body: body,
-    );
+    return _httpClient.post(Uri.parse(baseUrl), headers: headers, body: body);
   }
 
   dynamic _parseResponse(http.Response response) {

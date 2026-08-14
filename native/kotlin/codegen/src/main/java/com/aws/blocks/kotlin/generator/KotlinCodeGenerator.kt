@@ -538,7 +538,7 @@ class KotlinCodeGenerator(
             val serializerName = "${name}Serializer"
             sealedBuilder.addAnnotation(
                 AnnotationSpec.builder(ClassNames.serializable)
-                    .addMember("with = %L::class", serializerName)
+                    .addMember("with = %T::class", ClassName("", name, serializerName))
                     .build()
             )
             sealedBuilder.addType(generateBooleanDiscriminatorSerializer(name, serializerName, discriminator, union.variants))

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -119,11 +126,11 @@ public final class BlocksClient {
         if let errorObj = responseJson["error"] as? [String: Any] {
             let message = errorObj["message"] as? String ?? "Unknown error"
             let code = errorObj["code"] as? Int ?? -1
-            throw RPCError(message: message)
+            throw RPCError(message: "Error occured with code: \(code) message: \(message)")
         }
 
         // Check HTTP status
-        if let httpResponse = response as? HTTPURLResponse, !(200..<300).contains(httpResponse.statusCode) {
+        if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode) {
             throw RPCError(message: "HTTP Error: \(httpResponse.statusCode)")
         }
 
@@ -225,17 +232,17 @@ public final class BlocksClient {
                 guard let nameValuePart = segments.first else { continue }
                 guard let eqIdx = nameValuePart.firstIndex(of: "=") else { continue }
 
-                let name = String(nameValuePart[nameValuePart.startIndex..<eqIdx])
+                let name = String(nameValuePart[nameValuePart.startIndex ..< eqIdx])
                     .trimmingCharacters(in: .whitespaces)
-                let val_ = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
+                let cookieValue = String(nameValuePart[nameValuePart.index(after: eqIdx)...])
                     .trimmingCharacters(in: .whitespaces)
 
                 let cookieKey = "\(host)|\(name)"
                 let attrs = segments.count > 1 ? String(segments[1]).lowercased() : ""
-                if val_.isEmpty || attrs.contains("max-age=0") {
+                if cookieValue.isEmpty || attrs.contains("max-age=0") {
                     BlocksClient.cookieStore.remove(name: cookieKey)
                 } else {
-                    BlocksClient.cookieStore.set(name: cookieKey, value: val_)
+                    BlocksClient.cookieStore.set(name: cookieKey, value: cookieValue)
                 }
             }
         }
@@ -250,8 +257,8 @@ public final class BlocksClient {
             let semiIndex = segment.firstIndex(of: ";")
 
             let isNewCookie: Bool
-            if let eq = eqIndex {
-                isNewCookie = (semiIndex == nil || eq < semiIndex!)
+            if let equals = eqIndex {
+                isNewCookie = (semiIndex == nil || equals < semiIndex!)
             } else {
                 isNewCookie = false
             }

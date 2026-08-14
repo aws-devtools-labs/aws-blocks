@@ -30,8 +30,15 @@ class ParentAuthBB extends Scope {
 	}
 }
 
-/** A grandparent Building Block for deep nesting tests */
-class GrandparentPlatformBB extends Scope {
+/** An official grandparent Building Block (in OFFICIAL_BB_NAMES) for deep nesting tests */
+class GrandparentAgentBB extends Scope {
+	constructor(parent: ScopeParent, id: string) {
+		super(id, { parent, bbName: 'Agent', bbVersion: '2.0.0' });
+	}
+}
+
+/** A custom (non-official) grandparent BB — its name must never appear in user-agent telemetry */
+class GrandparentCustomBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
 		super(id, { parent, bbName: 'Platform', bbVersion: '2.0.0' });
 	}
@@ -69,16 +76,34 @@ describe('KVStore user-agent integration (real KVStore)', () => {
 		]);
 	});
 
-	test('KVStore deeply nested (Platform > AuthBasic > KVStore) includes full chain', () => {
+	test('KVStore deeply nested under two official BBs (Agent > AuthBasic > KVStore) includes full chain', () => {
 		const root = { id: 'my-app' };
-		const platform = new GrandparentPlatformBB(root, 'platform');
-		const auth = new ParentAuthBB(platform, 'auth');
+		const agent = new GrandparentAgentBB(root, 'agent');
+		const auth = new ParentAuthBB(agent, 'auth');
 		const store = new KVStore(auth, 'deep-store');
 
 		const ua = getCustomUserAgent(store);
 		assert.deepStrictEqual(ua, [
 			['aws-blocks', CORE_VERSION],
-			['bb', 'Platform/2.0.0'],
+			['bb', 'Agent/2.0.0'],
+			['bb', 'AuthBasic/1.0.1'],
+			['bb', `${BB_NAME}/${BB_VERSION}`],
+		]);
+	});
+
+	test('custom (non-official) ancestor BB is excluded from the user-agent chain', () => {
+		// buildUserAgentChain only reports BBs whose name is in OFFICIAL_BB_NAMES,
+		// so customer-chosen names never leak into user-agent telemetry. A custom
+		// "Platform" BB wraps an official AuthBasic which wraps KVStore — only the
+		// official BBs (AuthBasic, KVStore) should appear; "Platform" is dropped.
+		const root = { id: 'my-app' };
+		const custom = new GrandparentCustomBB(root, 'platform');
+		const auth = new ParentAuthBB(custom, 'auth');
+		const store = new KVStore(auth, 'deep-store');
+
+		const ua = getCustomUserAgent(store);
+		assert.deepStrictEqual(ua, [
+			['aws-blocks', CORE_VERSION],
 			['bb', 'AuthBasic/1.0.1'],
 			['bb', `${BB_NAME}/${BB_VERSION}`],
 		]);

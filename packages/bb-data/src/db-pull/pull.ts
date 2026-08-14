@@ -15,6 +15,8 @@ import type { DbPullOptions, TableInfo } from './types.js';
 import { introspect } from './introspect.js';
 import {
   generateIndexFile,
+  generateCaFile,
+  resolveCaFileWrite,
   generateMigrationGuide,
   readExistingSingulars,
   selectEligibleTables,
@@ -38,7 +40,7 @@ function grantStatement(tableName: string): string {
 
 export async function dbPull(opts: DbPullOptions): Promise<void> {
   console.log('✓ Connecting to database...');
-  const { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims } = await introspect(opts.connectionString);
+  const { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims } = await introspect(opts.connectionString, opts.caCert);
 
   if (allTables.length === 0) {
     console.error('✗ No tables found in public schema.');
@@ -167,6 +169,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   // dev-loop type refresh uses, so the two stay consistent).
   writeTypesAndMeta(outputDir, tables, existingSingulars);
 
+  // database.ca.ts — the project CA pinned by the generated wiring for TLS
+  // verification. Write it when a CA is provided (also refreshes a rotated CA);
+  // preserve an existing one when none is supplied (so a routine re-pull doesn't
+  // downgrade a verified app); emit the empty stub on first pull so the import
+  // resolves. Decision logic is `resolveCaFileWrite` (unit-tested).
+  const caFilePath = path.join(outputDir, 'database.ca.ts');
+  const caFileContent = resolveCaFileWrite(opts.caCert, fs.existsSync(caFilePath));
+  if (caFileContent !== null) {
+    fs.writeFileSync(caFilePath, caFileContent);
+  }
+
   const indexContent = generateIndexFile(tables, { projectRef: opts.projectRef, runtimeConnString: connString });
   const guideContent = generateMigrationGuide(tables, nonStandardClaims, existingSingulars);
 
@@ -192,9 +205,10 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     // (current generator) or pins a static list (older generator / hand-edited).
     // Only the data-driven form auto-wires tables added or removed on re-pull.
     const wiringIsDataDriven = existingSupabaseTs.includes('Object.keys(tableMeta)');
-    console.log(`✓ Generated 3 files in ${outputDir}/`);
+    console.log(`✓ Generated 4 files in ${outputDir}/`);
     console.log(`    database.types.ts`);
     console.log(`    database.meta.ts`);
+    console.log(`    database.ca.ts`);
     console.log(`    MIGRATION_GUIDE.md`);
     console.warn(`⚠ Skipped ${dbFile} — it already exists and may contain custom code.`);
     if (wiringIsDataDriven) {
@@ -207,9 +221,10 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       console.warn(`    file and re-run to regenerate it (newer wiring tracks database.meta.ts).`);
     }
   } else {
-    console.log(`✓ Generated 4 files in ${outputDir}/`);
+    console.log(`✓ Generated 5 files in ${outputDir}/`);
     console.log(`    database.types.ts`);
     console.log(`    database.meta.ts`);
+    console.log(`    database.ca.ts`);
     console.log(`    ${dbFile}`);
     console.log(`    MIGRATION_GUIDE.md`);
   }
@@ -235,7 +250,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   // pull finish — existing environments still work without the baseline.
   const migrationsDir = path.join(path.dirname(outputDir), 'migrations');
   try {
-    let baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir });
+    let baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir, caCert: opts.caCert });
     while (baseline.warning) {
       console.warn(`\n⚠️  Schema baseline not generated: ${baseline.warning}`);
       console.warn(`    New/empty environments can't be built from migrations until the baseline exists.`);
@@ -245,7 +260,7 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       }
       const choice = await prompt('\n  [U]pgrade pg_dump in another terminal, then retry / [C]ontinue without baseline (u/C) ');
       if (choice.toLowerCase() === 'u') {
-        baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir });
+        baseline = await generateBaseline({ connectionString: opts.connectionString, migrationsDir, caCert: opts.caCert });
         continue;
       }
       break;
@@ -501,7 +516,41 @@ async function dbPullDevInteractive(outputDir: string): Promise<void> {
   }
   console.log('  Detected provider: Supabase\n');
 
-  await dbPull({ connectionString, outputDir, projectRef });
+  // Optional: capture the project's CA certificate so the generated connection
+  // verifies the server's TLS identity (otherwise it connects encrypted but
+  // unverified). The CA is a public, non-secret cert; it is committed to
+  // database.ca.ts and bundled into the deployed function.
+  const caFilePath = path.join(outputDir, 'database.ca.ts');
+  const hasExistingCa = fs.existsSync(caFilePath) && fs.readFileSync(caFilePath, 'utf-8').includes('-----BEGIN CERTIFICATE-----');
+  console.log('TLS verification (recommended): download your CA certificate from the Supabase');
+  console.log('dashboard → Database Settings → SSL Configuration (prod-ca-2021.crt).');
+  const promptText = hasExistingCa
+    ? '  Path to CA certificate [Enter to keep the existing one]: '
+    : '  Path to CA certificate [Enter to skip]: ';
+  const caPath = (await prompt(promptText)).trim();
+  let caCert: string | undefined;
+  if (caPath) {
+    try {
+      caCert = fs.readFileSync(caPath, 'utf-8');
+      const caRel = path.join(path.basename(outputDir), 'database.ca.ts');
+      console.log(`  ✓ CA captured. It will be written to ${caRel} (a public cert, committed with`);
+      console.log(`    your app). The generated connection (resolveDbSsl in supabase.ts) pins it, so`);
+      console.log(`    your database's TLS certificate is verified — both with \`npm run dev\` and in the`);
+      console.log(`    deployed function (the file is bundled). Re-run \`bb-data pull\` to refresh a`);
+      console.log(`    rotated CA. Details: MIGRATION_GUIDE.md → "Securing the connection (TLS)".\n`);
+    } catch (e) {
+      console.warn(`  ⚠ Could not read CA at "${caPath}": ${(e as Error).message}`);
+      console.warn('    Continuing without it — the connection will be encrypted but UNVERIFIED.');
+      console.warn('    Re-run `npx bb-data pull` with a valid path to enable verification.\n');
+    }
+  } else if (hasExistingCa) {
+    console.log('  ✓ Keeping the CA already configured in database.ca.ts.\n');
+  } else {
+    console.log('  ⚠ Skipped — the connection will be encrypted but UNVERIFIED (no MITM protection).');
+    console.log('    Re-run `npx bb-data pull` and provide the CA to enable verification.\n');
+  }
+
+  await dbPull({ connectionString, outputDir, projectRef, caCert });
 }
 
 // ── Interactive flow (prod) ────────────────────────────────────────────

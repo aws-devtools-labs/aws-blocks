@@ -26,6 +26,7 @@ import {
 import {
   detectFramework,
   getAdapter,
+  normalizeBasePath,
   type FrameworkAdapterFn,
 } from '@aws-blocks/hosting/adapters';
 import type {
@@ -34,6 +35,7 @@ import type {
   FrameworkType,
 } from '@aws-blocks/hosting';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
+import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getRegisteredRoutes } from './raw-route.js';
 
@@ -71,8 +73,29 @@ export type ComputeConfig = {
    * ```
    */
   timeout?: cdk.Duration | number;
-  /** Reserved concurrent executions. Default: undefined (no reservation). */
+  /** Reserved concurrent executions for the SSR Lambda. Default: undefined (no reservation). */
   reservedConcurrency?: number;
+  /**
+   * Overrides for the image-optimization Lambda.
+   *
+   * `reservedConcurrency` defaults to undefined (no reservation). It is left
+   * unreserved so deploys succeed on fresh AWS accounts, whose default
+   * account-level unreserved-concurrency limit is 10 — reserving any
+   * concurrency there can drop the account below its required minimum and
+   * cause Lambda to reject the stack with a 400. Set this only if you have
+   * headroom and want to cap image-opt throughput.
+   *
+   * @example
+   * ```ts
+   * compute: {
+   *   imageOptimization: { reservedConcurrency: 5 },
+   * }
+   * ```
+   */
+  imageOptimization?: {
+    /** Reserved concurrent executions. Default: undefined (no reservation). */
+    reservedConcurrency?: number;
+  };
   /** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
   logRetention?: cdk.aws_logs.RetentionDays;
 };
@@ -129,6 +152,27 @@ export interface HostingProps {
   /** Supply a custom adapter when using an unsupported framework. */
   customAdapter?: FrameworkAdapterFn;
 
+  /**
+   * URL prefix the whole site is served under (Next.js `basePath`, Astro
+   * `base`, Nuxt `app.baseURL`). When set, CloudFront behaviors are prefixed
+   * with it and the bare root issues a 308 redirect to `/<basePath>/`.
+   *
+   * Declaring it here is the recommended source of truth: the value is
+   * caller-provided rather than reverse-engineered from build output, so it
+   * can't drift with framework/bundler internals. When omitted, the adapter
+   * falls back to detecting the framework's own base-path config from the
+   * build output.
+   *
+   * Format: leading slash, no trailing slash (e.g. `'/app'`). A trailing
+   * slash or bare `'/'` is normalized/ignored.
+   *
+   * @example
+   * ```ts
+   * new Hosting(stack, 'Web', { root, framework: 'nuxt', basePath: '/app' });
+   * ```
+   */
+  basePath?: string;
+
   // ── Blocks backend integration ────────────────────────────────────
   /**
    * The Blocks backend stack (or any object with `apiUrl`).
@@ -181,6 +225,46 @@ export interface HostingProps {
   geoRestriction?: {
     type: 'whitelist' | 'blacklist';
     countries: string[];
+  };
+
+  /**
+   * Overrides for the adjustable AWS Service Quotas the CloudFront
+   * distribution draws on. Each field maps to a named AWS quota you can
+   * request an increase on:
+   *
+   *   - `cacheBehaviors` — "Cache behaviors per distribution" (default 25).
+   *     Consumed by routed paths, prerendered pages, per-pattern header
+   *     rules, assetPrefix, and the error-page behavior.
+   *   - `edgeFunctions` — Lambda@Edge associations per distribution
+   *     (default 25). Consumed by `runtime: 'edge'` routes.
+   *   - `headerPolicies` — "Response headers policies per AWS account"
+   *     (default 20, account-wide).
+   *
+   * Omitted fields use the AWS default. Set a field ONLY to match a quota
+   * increase AWS has actually granted — synth cannot verify your real quota,
+   * so an over-set value does not raise the AWS ceiling; it just moves the
+   * failure from a clear synth error to an opaque CloudFormation rollback.
+   *
+   * @example
+   * ```ts
+   * // After AWS grants "Cache behaviors per distribution" = 50:
+   * new Hosting(stack, 'Web', { root, quotas: { cacheBehaviors: 50 } });
+   * ```
+   */
+  quotas?: {
+    cacheBehaviors?: number;
+    edgeFunctions?: number;
+    headerPolicies?: number;
+    /**
+     * Max chunks per KVS edge route table (routes / redirects / headers);
+     * ~25 entries per chunk, default 64 (≈1600 entries). Not an AWS quota —
+     * a self-imposed guard (KVS ≤5 MB + the edge function reads chunks
+     * sequentially per request). Raise only after measuring edge-function
+     * compute headroom (e.g. a very large `trailingSlash: true` site with
+     * many canonical-form redirects); lowering it fails synth sooner.
+     * @default 64
+     */
+    maxRouteChunks?: number;
   };
 
   /**
@@ -258,6 +342,7 @@ export interface HostingProps {
 
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
+  sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
 };
@@ -380,6 +465,23 @@ export class Hosting extends Construct {
       manifest.buildId = generateBuildId();
     }
 
+    // ── 4b'. basePath: prop is the source of truth ───────────────
+    //    A caller-declared `basePath` overrides whatever the adapter
+    //    detected from build output. This is the robust path: the value
+    //    is provided rather than reverse-engineered from framework/bundler
+    //    internals (which drift across versions). When the prop is omitted,
+    //    the adapter's detected `manifest.basePath` (if any) stands.
+    if (props.basePath !== undefined) {
+      const normalized = normalizeBasePath(props.basePath);
+      if (normalized) {
+        manifest.basePath = normalized;
+      } else {
+        // Explicit '/' (or empty) means "no base path" — clear any value
+        // the adapter may have detected so the prop genuinely wins.
+        delete manifest.basePath;
+      }
+    }
+
     // ── 4c. Prevent duplicate error pages ────────────────────────
     //    The adapter may auto-detect error pages (e.g. SPA adapter finds
     //    404.html in build output and sets manifest.errorPages). When the
@@ -408,6 +510,19 @@ export class Hosting extends Construct {
       join(blocksSandboxDir, 'config.json'),
       JSON.stringify({ _placeholder: true }),
     );
+
+    // ── 5a. Mark config.json as a no-cache path ─────────────────────
+    //    config.json is a fixed-name, mutable runtime-config file: it must
+    //    NOT inherit the content-hashed mutable-asset cache-control
+    //    (`s-maxage=31536000`) applied to `/assets/<hash>.js`. Registering it
+    //    as a no-cache path uploads the build-time placeholder with
+    //    `no-cache, no-store, must-revalidate` so an edge never caches it
+    //    long-term; the real config is deployed in step 8 with `max-age=60`.
+    const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
+    const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
+    manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
+      ? existingNoCachePaths
+      : [...existingNoCachePaths, configNoCachePath];
 
     // ── 5b. Inject static route for .blocks-sandbox config ──────────
     //    Insert a static route for /.blocks-sandbox/* so CloudFront
@@ -449,11 +564,12 @@ export class Hosting extends Construct {
       storage: props.retainOnDelete != null
         ? { retainOnDelete: props.retainOnDelete }
         : undefined,
-      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction)
+      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas)
         ? {
             contentSecurityPolicy: props.contentSecurityPolicy,
             priceClass: props.priceClass,
             geoRestriction: props.geoRestriction,
+            quotas: props.quotas,
           }
         : undefined,
       logging: props.logging,
@@ -471,17 +587,26 @@ export class Hosting extends Construct {
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
-    const primaryFunction = hosting.computeFunctions.values().next().value as cdk.aws_lambda.Function | undefined;
+    // Lambda@Edge functions (edge-runtime routes) do NOT support environment
+    // variables — they surface in computeFunctions as EdgeFunction/IVersion
+    // without an `addEnvironment` method. Skip any function that can't take
+    // env vars instead of crashing (`fn.addEnvironment is not a function`).
+    const canAddEnv = (
+      fn: unknown,
+    ): fn is cdk.aws_lambda.Function =>
+      typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
+
+    const primaryFunction = [...hosting.computeFunctions.values()].find(
+      canAddEnv,
+    );
 
     for (const [, fn] of hosting.computeFunctions) {
+      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
       if (props.api) {
-        (fn as cdk.aws_lambda.Function).addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
+        fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
       }
       if (props.backendConfig) {
-        (fn as cdk.aws_lambda.Function).addEnvironment(
-          'BLOCKS_CONFIG',
-          JSON.stringify(props.backendConfig),
-        );
+        fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
       }
     }
 
@@ -496,15 +621,40 @@ export class Hosting extends Construct {
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
         distribution: hosting.distribution,
-        distributionPaths: ['/.blocks-sandbox/*'],
+        // The skew-protection viewer-request CloudFront function rewrites the
+        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
+        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
+        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
+        // a no-op for config.json. Invalidate the post-rewrite key too. (The
+        // primary guard against staleness is step 5a's no-cache placeholder;
+        // this is defense-in-depth so a post-deploy invalidation actually
+        // clears any edge entry at its real key.)
+        distributionPaths: [
+          `/builds/${buildId}/.blocks-sandbox/*`,
+          '/.blocks-sandbox/*',
+        ],
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
-      // Ensure config deployment runs after the hosting construct's
-      // asset deployment so the resolved config.json is not overwritten.
-      const assetDeployment = hosting.node.tryFindChild('AssetDeployment') as Construct | undefined;
-      if (assetDeployment) {
-        configDeployment.node.addDependency(assetDeployment);
+      // Ensure the config deployment runs AFTER the hosting construct's
+      // asset deployments. Those deployments upload the whole static dir —
+      // which includes the *placeholder* `.blocks-sandbox/config.json`
+      // (`{_placeholder:true}`) written during synth — to the same
+      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
+      // the resolved config to. Without an ordering dependency the
+      // placeholder can land last and clobber the real config.
+      //
+      // We depend on EVERY BucketDeployment under the hosting construct
+      // rather than a single hard-coded child id: the real children are
+      // `AssetDeploymentImmutable` / `AssetDeploymentHtml` / `...Mutable`
+      // (and vary by deploy shape), so the previous
+      // `tryFindChild('AssetDeployment')` never matched and the dependency
+      // was silently never wired.
+      const assetDeployments = hosting.node
+        .findAll()
+        .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+      for (const dep of assetDeployments) {
+        configDeployment.node.addDependency(dep);
       }
     }
 

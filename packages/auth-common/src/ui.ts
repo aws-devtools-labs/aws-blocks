@@ -148,11 +148,19 @@ async function ensureState(api: AuthStateApi): Promise<AuthState> {
 	const cache = getCache(api);
 	if (cache.state) return cache.state;
 	if (cache.hydrating) return cache.hydrating;
-	cache.hydrating = api.getAuthState().then((s) => {
-		cache.state = s;
-		cache.hydrating = null;
-		return s;
-	});
+	cache.hydrating = api.getAuthState()
+		.then((s) => {
+			cache.state = s;
+			cache.hydrating = null;
+			return s;
+		})
+		.catch((e) => {
+			// Clear the in-flight marker on failure so the next ensureState()
+			// retries the network instead of replaying a stale rejected
+			// promise forever. Re-throw so callers' .catch() still fires.
+			cache.hydrating = null;
+			throw e;
+		});
 	return cache.hydrating;
 }
 
@@ -189,10 +197,34 @@ export function broadcastAuthChange(user: AuthUser | null): void {
 }
 
 /**
+ * Shallow structural equality for cached auth users. Used to suppress a
+ * redundant repaint when the async hydration resolves to the same user that
+ * was already emitted synchronously. Returns true for two `null`s and for the
+ * same object reference (the warm-cache fast path).
+ */
+function sameAuthUser(a: AuthUser | null, b: AuthUser | null): boolean {
+	if (a === b) return true;
+	if (a === null || b === null) return false;
+	const ra = a as unknown as Record<string, unknown>;
+	const rb = b as unknown as Record<string, unknown>;
+	const aKeys = Object.keys(ra);
+	const bKeys = Object.keys(rb);
+	if (aKeys.length !== bKeys.length) return false;
+	return aKeys.every((k) => ra[k] === rb[k]);
+}
+
+/**
  * Subscribe to auth state changes from any source (same window + other tabs).
  *
- * Calls `callback` immediately with the current user, then again whenever
- * auth state changes anywhere. Uses the shared state cache — only one
+ * Invokes `callback` **synchronously** with the last-known user from the
+ * shared cache so the UI can paint a first frame without waiting on the
+ * network, then again once the async hydration settles and on every later
+ * change. A warm cache emits the cached user immediately (and skips the
+ * redundant refresh); a cold cache emits `null` synchronously and refreshes
+ * when `getAuthState()` resolves — unless a hydration is already in flight,
+ * in which case the synchronous `null` is skipped to avoid a signed-out
+ * flash. A rejected `getAuthState()` keeps the synchronous first frame
+ * rather than stranding the UI. Uses the shared state cache — only one
  * network call is made regardless of how many subscribers exist.
  *
  * @returns An unsubscribe function.
@@ -213,8 +245,27 @@ export function onAuthChange(
 	};
 	window.addEventListener(AUTH_LOCAL_EVENT, localHandler);
 
-	// Initial state from shared cache (single network call)
-	ensureState(api).then((s) => callback(s.user ?? null));
+	// Synchronous first frame from the shared cache, then an async refresh.
+	// Skip the sync emit only when the cache is cold AND a hydration is
+	// already in flight — the pending promise will deliver the real value,
+	// so emitting a throwaway `null` now would just flash signed-out.
+	const cache = getCache(api);
+	let emitted: AuthUser | null | undefined;
+	if (cache.state || !cache.hydrating) {
+		emitted = cache.state?.user ?? null;
+		callback(emitted);
+	}
+	ensureState(api)
+		.then((s) => {
+			const user = s.user ?? null;
+			// Don't repaint if the hydrated value matches the sync emit.
+			if (emitted !== undefined && sameAuthUser(user, emitted)) return;
+			callback(user);
+		})
+		.catch(() => {
+			// getAuthState() rejected — keep the last-known frame; never
+			// strand the UI on an unresolved subscribe.
+		});
 
 	return () => {
 		getChannel().removeEventListener('message', channelHandler);
@@ -229,11 +280,12 @@ export function onAuthChange(
 /**
  * Container that renders content only when the user is signed in.
  * Automatically re-renders when auth state changes (same window + cross-tab).
- * Shows nothing when signed out.
+ * Shows the optional `fallback` when signed out, or nothing if no fallback is provided.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param render - Called with the authenticated user. Return the content to display.
- * @returns An HTMLElement that shows content when signed in, empty when signed out.
+ * @param fallback - Optional. A DOM node to display when the user is NOT signed in.
+ * @returns An HTMLElement that shows content when signed in, the fallback (or nothing) when signed out.
  *
  * @example
  * ```typescript
@@ -245,17 +297,34 @@ export function onAuthChange(
  *   })
  * );
  * ```
+ *
+ * @example
+ * ```typescript
+ * // With a fallback for unauthenticated users
+ * const loginPrompt = document.createElement('p');
+ * loginPrompt.textContent = 'Please sign in to continue.';
+ *
+ * document.body.appendChild(
+ *   AuthenticatedContent(authApi, (user) => {
+ *     const el = document.createElement('div');
+ *     el.textContent = `Welcome, ${user.username}`;
+ *     return el;
+ *   }, loginPrompt)
+ * );
+ * ```
  */
 export function AuthenticatedContent(
 	api: AuthStateApi,
 	render: (user: AuthUser) => Node,
+	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'authenticated-content');
 	onAuthChange(api, (user) => {
 		if (user) {
 			container.replaceChildren(render(user));
 		} else {
-			container.replaceChildren();
+			container.replaceChildren(...(fallback ? [fallback] : []));
 		}
 	});
 	return container;
@@ -388,6 +457,13 @@ export interface AuthenticatorOptions {
  * - Broadcasts auth changes via `broadcastAuthChange()` so other components
  *   (`AuthenticatedContent`, `onAuthChange` subscribers) react automatically
  * - Listens for auth changes from other tabs and re-renders
+ * - Renders stable `data-testid` hooks on every interactive element
+ *   (`authenticator`, `authenticator-action-<action>`, `authenticator-<field>`,
+ *   `authenticator-submit`, `authenticator-error`, `authenticator-signed-in`)
+ *   for e2e suites. Federated action names keep their provider suffix, so
+ *   `signIn:google` gives `authenticator-action-signIn:google`. Presentational
+ *   markup (hint text, layout wrappers) carries no hook. The full contract is
+ *   in CUSTOMIZING-AUTH-UI.md; treat the names as public API.
  *
  * @param api - The state machine API from `auth.createApi()`
  * @param options - Optional customization. See {@link AuthenticatorOptions}.
@@ -420,6 +496,7 @@ export interface AuthenticatorOptions {
  */
 export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'authenticator');
 	container.style.cssText = 'max-width: 400px; font-family: system-ui, sans-serif;';
 
 	const opts: AuthenticatorOptions = options ?? {};
@@ -457,8 +534,28 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 		}
 	}
 
-	// Initial render from shared cache
-	ensureState(api).then(rerender);
+	// Paint a synchronous first frame from the last-known cache so the
+	// component isn't a blank <div> until the network round-trip lands. A
+	// cold cache has no actions to render yet (they arrive with the async
+	// state), so the sync paint only fires once a prior hydration populated
+	// the cache; the async refresh below covers the cold first load.
+	const cached = getCache(api).state;
+	if (cached) rerender(cached);
+
+	// Refresh from the (async) hydrated state. Skip the repaint when the
+	// resolved state is the very object we already painted synchronously
+	// (warm-cache fast path — `ensureState` returns the cached object), so a
+	// warm load renders exactly once. .catch() so a rejected getAuthState()
+	// doesn't surface as an unhandled rejection or leave the component
+	// stranded.
+	ensureState(api)
+		.then((s) => {
+			if (s === cached) return;
+			rerender(s);
+		})
+		.catch(() => {
+			// keep the last-known frame
+		});
 
 	// Re-render when state is updated (by setAuthState or external changes)
 	subscribe(api, rerender);
@@ -493,6 +590,7 @@ function renderState(
 
 	if (state.state === 'signedIn') {
 		const heading = document.createElement('h3');
+		heading.setAttribute('data-testid', 'authenticator-signed-in');
 		heading.style.cssText = 'margin-top: 0;';
 		heading.textContent = `Signed in as: ${state.user!.username}`;
 		div.appendChild(heading);
@@ -508,6 +606,7 @@ function renderState(
 			: undefined;
 		const stateHeading = options.headings?.[state.state];
 		const heading = document.createElement('h3');
+		heading.setAttribute('data-testid', 'authenticator-heading');
 		heading.style.cssText = 'margin-top: 0;';
 		heading.textContent = actionHeading ?? stateHeading ?? 'Authentication';
 		div.appendChild(heading);
@@ -515,6 +614,7 @@ function renderState(
 
 	if (state.error) {
 		const err = document.createElement('div');
+		err.setAttribute('data-testid', 'authenticator-error');
 		err.style.cssText = 'color: red; font-size: 14px; margin-bottom: 12px;';
 		err.textContent = state.error;
 		div.appendChild(err);
@@ -566,6 +666,7 @@ function renderInternalAction(
 	override?: AuthActionOverride,
 ): Node {
 	const wrapper = document.createElement('div');
+	wrapper.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	wrapper.style.cssText = 'margin-bottom: 16px;';
 
 	const inputs: Record<string, HTMLInputElement> = {};
@@ -620,6 +721,7 @@ function renderInternalAction(
 			hidden.type = 'hidden';
 			hidden.name = field.name;
 			hidden.value = field.defaultValue ?? '';
+			hidden.setAttribute('data-testid', `authenticator-${field.name}`);
 			inputs[field.name] = hidden;
 			wrapper.appendChild(hidden);
 			continue;
@@ -634,6 +736,7 @@ function renderInternalAction(
 				hidden.type = 'hidden';
 				hidden.name = field.name;
 				hidden.value = field.defaultValue;
+				hidden.setAttribute('data-testid', `authenticator-${field.name}`);
 				inputs[field.name] = hidden;
 				wrapper.appendChild(hidden);
 			}
@@ -649,6 +752,7 @@ function renderInternalAction(
 		input.name = field.name;
 		input.placeholder = placeholder;
 		input.type = inputType;
+		input.setAttribute('data-testid', `authenticator-${field.name}`);
 		// `autocomplete` is typed as `AutoFill` (a literal-union) in lib.dom
 		// but the override accepts an arbitrary string for forward-compat
 		// with future hint values. Cast at the assignment boundary.
@@ -667,6 +771,7 @@ function renderInternalAction(
 	}
 
 	const btn = document.createElement('button');
+	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.textContent = override?.submitLabel ?? action.label;
 	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; margin-right: 8px;';
 
@@ -885,6 +990,7 @@ function b64urlToBuf(s: string): ArrayBuffer {
 
 function renderExternalAction(action: AuthAction): Node {
 	const form = document.createElement('form');
+	form.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	form.method = action.method ?? 'GET';
 	form.action = action.url!;
 	form.style.cssText = 'margin-bottom: 8px;';
@@ -894,10 +1000,12 @@ function renderExternalAction(action: AuthAction): Node {
 		input.type = 'hidden';
 		input.name = field.name;
 		input.value = field.defaultValue ?? '';
+		input.setAttribute('data-testid', `authenticator-${field.name}`);
 		form.appendChild(input);
 	}
 
 	const btn = document.createElement('button');
+	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.type = 'submit';
 	btn.textContent = action.label;
 	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; width: 100%;';
@@ -931,6 +1039,7 @@ function renderExternalAction(action: AuthAction): Node {
  */
 export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 	const container = document.createElement('div');
+	container.setAttribute('data-testid', 'account-menu');
 
 	function render(user: AuthUser | null) {
 		const bar = document.createElement('div');
@@ -938,10 +1047,12 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 
 		if (user) {
 			const username = document.createElement('span');
+			username.setAttribute('data-testid', 'account-menu-username');
 			username.textContent = `👤 ${user.username}`;
 			username.style.cssText = 'font-size: 14px;';
 
 			const signOutBtn = document.createElement('button');
+			signOutBtn.setAttribute('data-testid', 'account-menu-signout');
 			signOutBtn.textContent = 'Sign Out';
 			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 			signOutBtn.addEventListener('click', async () => {
@@ -954,17 +1065,20 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			bar.appendChild(signOutBtn);
 		} else {
 			const signInBtn = document.createElement('button');
+			signInBtn.setAttribute('data-testid', 'account-menu-signin');
 			signInBtn.textContent = 'Sign In';
 			signInBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
 
 			signInBtn.addEventListener('click', () => {
 				const modal = document.createElement('div');
+				modal.setAttribute('data-testid', 'account-menu-modal');
 				modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
 
 				const content = document.createElement('div');
 				content.style.cssText = 'background: white; border-radius: 8px; padding: 20px; max-width: 400px; position: relative;';
 
 				const closeBtn = document.createElement('button');
+				closeBtn.setAttribute('data-testid', 'account-menu-modal-close');
 				closeBtn.textContent = '✕';
 				closeBtn.style.cssText = 'position: absolute; top: 8px; right: 8px; border: none; background: none; font-size: 20px; cursor: pointer; padding: 0; width: 24px; height: 24px;';
 				closeBtn.addEventListener('click', () => modal.remove());

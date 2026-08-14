@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 // MARK: - Stage 3: Swift Code Generator
@@ -56,7 +63,12 @@ public struct SwiftCodeGenerator {
                 apiLines.append("")
                 let opKey = "\(namespace.name).\(operation.name)"
                 let opQualified = operationQualifiedNames[opKey] ?? [:]
-                emitOperation(operation, namespace: namespace.name, prefixNamespace: false, lines: &apiLines, emitted: &emittedTypes, modelLines: &modelLines, qualifiedNames: opQualified)
+                emitOperation(
+                    operation, namespace: namespace.name,
+                    prefixNamespace: false, lines: &apiLines,
+                    emitted: &emittedTypes, modelLines: &modelLines,
+                    qualifiedNames: opQualified
+                )
             }
 
             // Emit nested types as operation enums inside the class
@@ -81,7 +93,7 @@ public struct SwiftCodeGenerator {
         apiLines.append("}")
 
         // Only include models file content if there are actual type definitions
-        let hasTypes = model.typeDefinitions.count > 0
+        let hasTypes = !model.typeDefinitions.isEmpty
         let modelsContent = hasTypes ? modelLines.joined(separator: "\n") : ""
         let apiContent = apiLines.joined(separator: "\n")
         return (models: modelsContent, api: apiContent)
@@ -101,7 +113,12 @@ public struct SwiftCodeGenerator {
     private func emitNestedTypeNode(_ node: NestedTypeNode, indent: String, lines: inout [String]) {
         switch node.type {
         case .record(_, let fields, let additionalPropertiesType, let embeddedUnion):
-            emitNestedRecordStruct(name: node.name, fields: fields, additionalPropertiesType: additionalPropertiesType, embeddedUnion: embeddedUnion, children: node.children, indent: indent, lines: &lines)
+            emitNestedRecordStruct(
+                name: node.name, fields: fields,
+                additionalPropertiesType: additionalPropertiesType,
+                embeddedUnion: embeddedUnion,
+                children: node.children, indent: indent, lines: &lines
+            )
         case .enum(_, let values):
             lines.append("")
             lines.append("\(indent)public enum \(node.name): String, Codable {")
@@ -258,9 +275,18 @@ public struct SwiftCodeGenerator {
     private func emitNestedUnion(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?, children: [NestedTypeNode], indent: String, lines: inout [String]) {
         // Emit variant structs before the enum
         for variant in variants {
-            guard !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil || !variant.nestedTypes.isEmpty else { continue }
+            guard !variant.fields.isEmpty
+                    || variant.additionalPropertiesType != nil
+                    || variant.embeddedUnion != nil
+                    || !variant.nestedTypes.isEmpty else { continue }
             if variant.payloadTypeName != nil { continue }
-            emitNestedRecordStruct(name: variant.name, fields: variant.fields, additionalPropertiesType: variant.additionalPropertiesType, embeddedUnion: variant.embeddedUnion, children: variant.nestedTypes, indent: indent, lines: &lines)
+            emitNestedRecordStruct(
+                name: variant.name, fields: variant.fields,
+                additionalPropertiesType: variant.additionalPropertiesType,
+                embeddedUnion: variant.embeddedUnion,
+                children: variant.nestedTypes, indent: indent,
+                lines: &lines
+            )
         }
 
         lines.append("")
@@ -275,9 +301,6 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)    case \(caseName)")
             }
         }
-        // TODO: Full Codable emission for nested unions (discriminated + transparent)
-        // For now, emit a minimal stub — the full logic from emitDiscriminatedCoding/emitTransparentUnionCoding
-        // will be needed for complete correctness.
         if let disc = discriminator {
             emitDiscriminatedCodingNested(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
         } else {
@@ -323,10 +346,10 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)        switch disc {")
         var byTag: [String: [UnionVariant]] = [:]
         var tagOrder: [String] = []
-        for v in variants {
-            guard let tag = v.discriminatorValue else { continue }
+        for variant in variants {
+            guard let tag = variant.discriminatorValue else { continue }
             if byTag[tag] == nil { tagOrder.append(tag) }
-            byTag[tag, default: []].append(v)
+            byTag[tag, default: []].append(variant)
         }
         for tag in tagOrder {
             let group = byTag[tag] ?? []
@@ -349,12 +372,24 @@ public struct SwiftCodeGenerator {
                     lines.append("\(indent)                return")
                 }
                 lines.append("\(indent)            } else {")
-                lines.append("\(indent)                throw DecodingError.dataCorruptedError(forKey: .\(escapedSwiftName(discriminator.fieldName)), in: container, debugDescription: \"No \(name) variant matched for tag '\\(disc)'\")")
+                let nDiscKey = escapedSwiftName(discriminator.fieldName)
+                let nErrMsg = "No \(name) variant matched for tag '\\(disc)'"
+                lines.append(
+                    "\(indent)                throw DecodingError"
+                    + ".dataCorruptedError(forKey: .\(nDiscKey),"
+                    + " in: container, debugDescription: \"\(nErrMsg)\")"
+                )
                 lines.append("\(indent)            }")
             }
         }
+        let nDefKey = escapedSwiftName(discriminator.fieldName)
+        let nDefErr = "Unknown value: \\(disc)"
         lines.append("\(indent)        default:")
-        lines.append("\(indent)            throw DecodingError.dataCorruptedError(forKey: .\(escapedSwiftName(discriminator.fieldName)), in: container, debugDescription: \"Unknown value: \\(disc)\")")
+        lines.append(
+            "\(indent)            throw DecodingError"
+            + ".dataCorruptedError(forKey: .\(nDefKey),"
+            + " in: container, debugDescription: \"\(nDefErr)\")"
+        )
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
     }
@@ -390,10 +425,20 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)        } catch { lastError = error }")
             }
         }
-        if let fieldlessFirst = variants.first(where: { $0.fields.isEmpty && $0.payloadTypeName == nil && $0.additionalPropertiesType == nil && $0.embeddedUnion == nil }) {
-            lines.append("\(indent)        self = .\(camelCase(fieldlessFirst.name))")
+        let nestedFieldless = variants.first(where: {
+            $0.fields.isEmpty && $0.payloadTypeName == nil
+                && $0.additionalPropertiesType == nil
+                && $0.embeddedUnion == nil
+        })
+        if let nestedFieldless {
+            lines.append("\(indent)        self = .\(camelCase(nestedFieldless.name))")
         } else {
-            lines.append("\(indent)        throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: \"No \(name) variant matched\"))")
+            let errDesc = "No \(name) variant matched"
+            lines.append(
+                "\(indent)        throw lastError"
+                + " ?? DecodingError.dataCorrupted(.init(codingPath:"
+                + " decoder.codingPath, debugDescription: \"\(errDesc)\"))"
+            )
         }
         lines.append("\(indent)    }")
         lines.append("")
@@ -727,9 +772,9 @@ public struct SwiftCodeGenerator {
     /// formattedType, and list carry them). Walks one level of nullable.
     private func typeConstraints(_ type: ResolvedType) -> Constraints {
         switch type {
-        case .primitive(_, let c): return c
-        case .formattedType(_, let c): return c
-        case .list(_, let c): return c
+        case .primitive(_, let constraints): return constraints
+        case .formattedType(_, let constraints): return constraints
+        case .list(_, let constraints): return constraints
         case .nullable(let inner): return typeConstraints(inner)
         default: return .empty
         }
@@ -751,43 +796,88 @@ public struct SwiftCodeGenerator {
         switch field.type {
         case .primitive(.string, _), .formattedType:
             if let min = constraints.minLength {
-                checks.append("guard \(valueVar).count >= \(min) else { throw CodegenError.validation(\"\(field.name) must be at least \(min) characters\") }")
+                let minErr = "\(field.name) must be at least \(min) characters"
+                checks.append(
+                    "guard \(valueVar).count >= \(min)"
+                    + " else { throw CodegenError.validation(\"\(minErr)\") }"
+                )
             }
             if let max = constraints.maxLength {
-                checks.append("guard \(valueVar).count <= \(max) else { throw CodegenError.validation(\"\(field.name) must be at most \(max) characters\") }")
+                let maxErr = "\(field.name) must be at most \(max) characters"
+                checks.append(
+                    "guard \(valueVar).count <= \(max)"
+                    + " else { throw CodegenError.validation(\"\(maxErr)\") }"
+                )
             }
             if let pattern = constraints.pattern {
                 // JSON Schema `pattern` uses ECMA-262 semantics (unanchored match).
                 // `range(of:options:.regularExpression)` matches this — it succeeds
                 // if the pattern matches anywhere in the string, not just the full string.
-                let escaped = pattern.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-                checks.append("guard \(valueVar).range(of: \"\(escaped)\", options: .regularExpression) != nil else { throw CodegenError.validation(\"\(field.name) must match pattern \(escaped)\") }")
+                let escaped = pattern
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+                let patternErr = "\(field.name) must match pattern \(escaped)"
+                checks.append(
+                    "guard \(valueVar).range(of: \"\(escaped)\","
+                    + " options: .regularExpression) != nil"
+                    + " else { throw CodegenError.validation(\"\(patternErr)\") }"
+                )
             }
         case .primitive(.integer, _), .primitive(.number, _):
             let isInt = { if case .primitive(.integer, _) = field.type { return true } else { return false } }()
-            let cast: (Double) -> String = { v in isInt ? String(Int(v)) : String(v) }
-            if let v = constraints.minimum {
-                checks.append("guard \(valueVar) >= \(cast(v)) else { throw CodegenError.validation(\"\(field.name) must be >= \(cast(v))\") }")
+            let cast: (Double) -> String = { num in isInt ? String(Int(num)) : String(num) }
+            if let limit = constraints.minimum {
+                let err = "\(field.name) must be >= \(cast(limit))"
+                checks.append(
+                    "guard \(valueVar) >= \(cast(limit))"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-            if let v = constraints.maximum {
-                checks.append("guard \(valueVar) <= \(cast(v)) else { throw CodegenError.validation(\"\(field.name) must be <= \(cast(v))\") }")
+            if let limit = constraints.maximum {
+                let err = "\(field.name) must be <= \(cast(limit))"
+                checks.append(
+                    "guard \(valueVar) <= \(cast(limit))"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-            if let v = constraints.exclusiveMinimum {
-                checks.append("guard \(valueVar) > \(cast(v)) else { throw CodegenError.validation(\"\(field.name) must be > \(cast(v))\") }")
+            if let limit = constraints.exclusiveMinimum {
+                let err = "\(field.name) must be > \(cast(limit))"
+                checks.append(
+                    "guard \(valueVar) > \(cast(limit))"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-            if let v = constraints.exclusiveMaximum {
-                checks.append("guard \(valueVar) < \(cast(v)) else { throw CodegenError.validation(\"\(field.name) must be < \(cast(v))\") }")
+            if let limit = constraints.exclusiveMaximum {
+                let err = "\(field.name) must be < \(cast(limit))"
+                checks.append(
+                    "guard \(valueVar) < \(cast(limit))"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-            if let v = constraints.multipleOf {
-                let mod = isInt ? "\(valueVar) % \(Int(v))" : "\(valueVar).truncatingRemainder(dividingBy: \(v))"
-                checks.append("guard \(mod) == 0 else { throw CodegenError.validation(\"\(field.name) must be a multiple of \(cast(v))\") }")
+            if let limit = constraints.multipleOf {
+                let mod = isInt
+                    ? "\(valueVar) % \(Int(limit))"
+                    : "\(valueVar).truncatingRemainder(dividingBy: \(limit))"
+                let err = "\(field.name) must be a multiple of \(cast(limit))"
+                checks.append(
+                    "guard \(mod) == 0"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-        case .list(_, _):
-            if let v = constraints.minItems {
-                checks.append("guard \(valueVar).count >= \(v) else { throw CodegenError.validation(\"\(field.name) must have at least \(v) items\") }")
+        case .list:
+            if let limit = constraints.minItems {
+                let err = "\(field.name) must have at least \(limit) items"
+                checks.append(
+                    "guard \(valueVar).count >= \(limit)"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
-            if let v = constraints.maxItems {
-                checks.append("guard \(valueVar).count <= \(v) else { throw CodegenError.validation(\"\(field.name) must have at most \(v) items\") }")
+            if let limit = constraints.maxItems {
+                let err = "\(field.name) must have at most \(limit) items"
+                checks.append(
+                    "guard \(valueVar).count <= \(limit)"
+                    + " else { throw CodegenError.validation(\"\(err)\") }"
+                )
             }
         default:
             break
@@ -796,7 +886,7 @@ public struct SwiftCodeGenerator {
         if checks.isEmpty { return [] }
 
         if isOptional {
-            var out: [String] = ["if let v = \(accessor) {"]
+            var out = ["if let v = \(accessor) {"]
             out.append(contentsOf: checks.map { "    \($0)" })
             out.append("}")
             return out
@@ -902,10 +992,10 @@ public struct SwiftCodeGenerator {
         // shape in order and take the first that parses successfully.
         var byTag: [String: [UnionVariant]] = [:]
         var tagOrder: [String] = []
-        for v in variants {
-            guard let tag = v.discriminatorValue else { continue }
+        for variant in variants {
+            guard let tag = variant.discriminatorValue else { continue }
             if byTag[tag] == nil { tagOrder.append(tag) }
-            byTag[tag, default: []].append(v)
+            byTag[tag, default: []].append(variant)
         }
         for tag in tagOrder {
             let group = byTag[tag] ?? []
@@ -930,12 +1020,22 @@ public struct SwiftCodeGenerator {
                     lines.append("                return")
                 }
                 lines.append("            } else {")
-                lines.append("                throw DecodingError.dataCorruptedError(forKey: .\(escapedSwiftName(discriminator.fieldName)), in: container, debugDescription: \"No \(name) variant matched for tag '\\(disc)'\")")
+                let discKey2 = escapedSwiftName(discriminator.fieldName)
+                let errMsg2 = "No \(name) variant matched for tag '\\(disc)'"
+                lines.append(
+                    "                throw DecodingError.dataCorruptedError("
+                    + "forKey: .\(discKey2), in: container, debugDescription: \"\(errMsg2)\")"
+                )
                 lines.append("            }")
             }
         }
+        let defKey = escapedSwiftName(discriminator.fieldName)
+        let defErr = "Unknown value: \\(disc)"
         lines.append("        default:")
-        lines.append("            throw DecodingError.dataCorruptedError(forKey: .\(escapedSwiftName(discriminator.fieldName)), in: container, debugDescription: \"Unknown value: \\(disc)\")")
+        lines.append(
+            "            throw DecodingError.dataCorruptedError("
+            + "forKey: .\(defKey), in: container, debugDescription: \"\(defErr)\")"
+        )
         lines.append("        }")
         lines.append("    }")
     }
@@ -978,10 +1078,20 @@ public struct SwiftCodeGenerator {
                 lines.append("        } catch { lastError = error }")
             }
         }
-        if let fieldlessFirst = variants.first(where: { $0.fields.isEmpty && $0.payloadTypeName == nil && $0.additionalPropertiesType == nil && $0.embeddedUnion == nil }) {
+        let fieldlessFirst = variants.first(where: {
+            $0.fields.isEmpty && $0.payloadTypeName == nil
+                && $0.additionalPropertiesType == nil
+                && $0.embeddedUnion == nil
+        })
+        if let fieldlessFirst {
             lines.append("        self = .\(camelCase(fieldlessFirst.name))")
         } else {
-            lines.append("        throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: \"No \(name) variant matched\"))")
+            let errDesc = "No \(name) variant matched"
+            lines.append(
+                "        throw lastError ?? DecodingError.dataCorrupted("
+                + ".init(codingPath: decoder.codingPath,"
+                + " debugDescription: \"\(errDesc)\"))"
+            )
         }
         lines.append("    }")
         lines.append("")
@@ -1007,14 +1117,14 @@ public struct SwiftCodeGenerator {
         }
     }
 
-    private func emitOperation(_ op: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
-        let fullMethodName = namespace == "_default" ? op.name : "\(namespace).\(op.name)"
-        let returnType = qualifiedSwiftTypeName(op.result.type, qualifiedNames: qualifiedNames)
-        let isTransferable = isTransferableType(op.result.type)
+    private func emitOperation(_ operation: Operation, namespace: String, prefixNamespace: Bool, lines: inout [String], emitted: inout Set<String>, modelLines: inout [String], qualifiedNames: [String: String] = [:]) {
+        let fullMethodName = namespace == "_default" ? operation.name : "\(namespace).\(operation.name)"
+        let returnType = qualifiedSwiftTypeName(operation.result.type, qualifiedNames: qualifiedNames)
+        let isTransferable = isTransferableType(operation.result.type)
 
         // Build parameter list
         var paramList: [String] = []
-        for param in op.parameters {
+        for param in operation.parameters {
             let swType = qualifiedSwiftTypeName(param.type, qualifiedNames: qualifiedNames)
             let safeName = escapedSwiftName(param.name)
             let alreadyOptional = swType.hasSuffix("?")
@@ -1028,24 +1138,24 @@ public struct SwiftCodeGenerator {
 
         let funcName: String
         if prefixNamespace && namespace != "_default" {
-            funcName = escapedSwiftName("\(namespace)\(pascalCase(op.name))")
+            funcName = escapedSwiftName("\(namespace)\(pascalCase(operation.name))")
         } else {
-            funcName = escapedSwiftName(op.name)
+            funcName = escapedSwiftName(operation.name)
         }
 
         lines.append("    /// Calls `\(fullMethodName)`.")
         lines.append("    public func \(funcName)(\(paramStr)) async throws -> \(returnType) {")
 
         // Build request
-        if op.parameters.isEmpty {
+        if operation.parameters.isEmpty {
             lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [], id: BlocksRequest.nextId())")
         } else {
-            let hasTrailingOptionals = !op.parameters.last!.required
+            let hasTrailingOptionals = !operation.parameters.last!.required
             if hasTrailingOptionals {
                 // Find the boundary: required params come first, then optional trailing ones
-                let lastRequiredIdx = op.parameters.lastIndex(where: { $0.required }) ?? -1
-                let requiredParams = op.parameters.prefix(through: max(lastRequiredIdx, -1))
-                let optionalParams = op.parameters.suffix(from: lastRequiredIdx + 1)
+                let lastRequiredIdx = operation.parameters.lastIndex(where: { $0.required }) ?? -1
+                let requiredParams = operation.parameters.prefix(through: max(lastRequiredIdx, -1))
+                let optionalParams = operation.parameters.suffix(from: lastRequiredIdx + 1)
 
                 if requiredParams.isEmpty {
                     lines.append("        var _params: [any Encodable] = []")
@@ -1062,7 +1172,7 @@ public struct SwiftCodeGenerator {
                 }
                 lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: _params, id: BlocksRequest.nextId())")
             } else {
-                let arrayElements = op.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
+                let arrayElements = operation.parameters.map { escapedSwiftName($0.name) }.joined(separator: ", ")
                 lines.append("        let request = BlocksRequest(method: \"\(fullMethodName)\", params: [\(arrayElements)], id: BlocksRequest.nextId())")
             }
         }
@@ -1072,7 +1182,7 @@ public struct SwiftCodeGenerator {
 
         if isTransferable {
             // Hydrate transferable from the raw JSON descriptor
-            if case .transferable(let blocksType, let typeArgs) = op.result.type {
+            if case .transferable(let blocksType, let typeArgs) = operation.result.type {
                 switch blocksType {
                 case "realtime/channel":
                     let messageType = typeArgs.first.map { qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames) } ?? "JSONValue"

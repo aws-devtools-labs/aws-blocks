@@ -10,7 +10,7 @@ npm run test:e2e     # Run API tests
 npm run sandbox      # Deploy to AWS sandbox
 ```
 
-Open http://localhost:5173 after `npm run dev`.
+Open http://localhost:3000 after `npm run dev`. The dev server serves the React frontend and the backend (`/aws-blocks/*`) from a single origin, so browser-navigation auth flows (e.g. OIDC redirects) work locally.
 
 ## Project Structure
 
@@ -32,11 +32,17 @@ Open http://localhost:5173 after `npm run dev`.
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Backend + React dev server (concurrent) |
+| `npm run dev` | Backend + React dev server on a single origin (http://localhost:3000) |
 | `npm run test:e2e` | Test API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run deploy` | Full production deploy |
+
+## Stack naming
+
+Your CloudFormation stack names are derived from the `stackId` in `.blocks/config.json` — generated at scaffold time from your project name plus a random suffix (e.g., `my-app-a3x9kf`). Production deploys as `<stackId>-prod` and sandbox as `<stackId>-<username>-<random>`, where the sandbox identifier is per-machine and stored in `.blocks-sandbox/sandbox-id.txt` (gitignored). This lets multiple developers share a testing account without colliding.
+
+To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic naming logic, modify `aws-blocks/index.cdk.ts` directly.
 
 ## For Agents
 

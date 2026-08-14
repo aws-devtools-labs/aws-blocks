@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -13,8 +20,8 @@ final class OIDCMockURLProtocol: URLProtocol {
         requests = []
     }
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override class func canInit(with request: URLRequest) -> Bool { true } // swiftlint:disable:this static_over_final_class
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request } // swiftlint:disable:this static_over_final_class
 
     override func startLoading() {
         OIDCMockURLProtocol.requests.append(request)
@@ -102,7 +109,7 @@ final class OIDCClientTests: XCTestCase {
             let body: [String: Any] = [
                 "accessToken": "access-1",
                 "refreshToken": "refresh-1",
-                "expiresIn": 3600,
+                "expiresIn": 3_600,
                 "user": ["userId": "u1", "username": "alice", "groups": ["admins"]]
             ]
             let data = try JSONSerialization.data(withJSONObject: body)
@@ -326,15 +333,19 @@ final class OIDCClientTests: XCTestCase {
 
         let client = makeClient(session: makeMockSession())
 
-        let s1 = await client.authStateChanges()
-        let s2 = await client.authStateChanges()
+        let stream1 = await client.authStateChanges()
+        let stream2 = await client.authStateChanges()
 
-        let c1 = Task<OIDCAuthState?, Never> {
-            for await e in s1 { return e }
+        let collector1 = Task<OIDCAuthState?, Never> {
+            for await event in stream1 {
+                return event
+            }
             return nil
         }
-        let c2 = Task<OIDCAuthState?, Never> {
-            for await e in s2 { return e }
+        let collector2 = Task<OIDCAuthState?, Never> {
+            for await event in stream2 {
+                return event
+            }
             return nil
         }
 
@@ -342,11 +353,11 @@ final class OIDCClientTests: XCTestCase {
             code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
         )
 
-        let e1 = await c1.value
-        let e2 = await c2.value
-        XCTAssertNotNil(e1)
-        XCTAssertEqual(e1, e2)
-        if case .signedIn = e1 {} else { XCTFail("Expected signedIn") }
+        let event1 = await collector1.value
+        let event2 = await collector2.value
+        XCTAssertNotNil(event1)
+        XCTAssertEqual(event1, event2)
+        if case .signedIn = event1 {} else { XCTFail("Expected signedIn") }
     }
 
     // MARK: - fromJSON

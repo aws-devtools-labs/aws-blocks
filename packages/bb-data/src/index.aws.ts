@@ -66,7 +66,13 @@ export class Database extends Scope {
       const connStr = typeof conn.connectionString === 'string'
         ? conn.connectionString
         : await conn.connectionString.get();
-      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: { rejectUnauthorized: false } }));
+      // Verify the server's TLS certificate by default (PgClientEngine defaults to
+      // rejectUnauthorized: true when ssl is undefined). The `db pull`-generated
+      // wiring supplies an ssl config that pins the provider CA; callers using
+      // fromExisting() directly can pass `ssl` to pin a CA or opt out. Previously
+      // this hardcoded rejectUnauthorized:false, leaving the deployed Lambda's
+      // connection to external DBs (Supabase/Neon/etc.) unauthenticated (MITM-exposed).
+      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: conn.ssl }));
     }
     return new RLSEnabledDatabase(this.createDataApiEngine(envName, conn));
   }
@@ -85,9 +91,16 @@ export class Database extends Scope {
     const database = conn?.database || this.options?.databaseName || process.env[`${ENV_VAR_PREFIX}_${envName}_DATABASE`] || envName;
 
     if (!resourceArn || !resolvedSecretArn) {
+      // This branch is the Aurora Data API path — reached only when no external
+      // `connectionString` connection was configured (those route to PgClientEngine
+      // in `_initBase`). The message covers both intents so a user who *meant* to
+      // connect to an external database (Supabase/Neon/etc.) but whose wiring never
+      // reached this class isn't left staring at an Aurora-only error.
       throw new Error(
-        `Missing environment variables: ${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN and/or ${ENV_VAR_PREFIX}_${envName}_SECRET_ARN. ` +
-        `These are injected by the CDK layer — ensure the Database is provisioned.`
+        `Database is not configured. For a provisioned Aurora database, the CDK layer ` +
+        `injects ${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN and ${ENV_VAR_PREFIX}_${envName}_SECRET_ARN — ` +
+        `ensure the Database is provisioned. For an external database (Supabase/Neon/etc.), ` +
+        `pass a connection via Database.fromExisting({ connectionString }).`
       );
     }
 
@@ -189,6 +202,6 @@ export { PgClientEngine } from './engines/pg-client-engine.js';
 export type { PgClientEngineConfig } from './engines/pg-client-engine.js';
 export type { SqlQuery } from '@aws-blocks/data-common';
 export type { RLSContext } from './rls.js';
-export type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
 export type { Transaction } from '@aws-blocks/data-common';
 export type { TableSchema, TableMetaEntry, CrudOptions, CrudMethods, QueryOpts, TableTypeMeta, CrudAuthResult } from './crud/types.js';

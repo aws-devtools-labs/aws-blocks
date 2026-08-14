@@ -1,6 +1,9 @@
 name: Publish Kotlin to Maven Central
 
 on:
+  pull_request:
+    types: [closed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -10,10 +13,19 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
+
+concurrency:
+  group: publish-kotlin-maven
+  cancel-in-progress: false
 
 jobs:
   publish:
+    # Publish on a manual dispatch, or when a release/kotlin-* PR is merged.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       startsWith(github.event.pull_request.head.ref, 'release/kotlin-'))
     runs-on: macos-latest
     environment: publish-maven
     defaults:
@@ -21,6 +33,12 @@ jobs:
         working-directory: native/kotlin
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # For the merge event, check out main (the merged commit). For a manual
+          # dispatch, fall back to the dispatched ref (empty ref => default). Use a
+          # token that can push the release tag.
+          ref: ${{ github.event_name == 'pull_request' && 'main' || '' }}
+          token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
@@ -58,6 +76,9 @@ jobs:
             printf 'signingInMemoryKey=%s\n' "$(printf '%s' "$SIGNING_SECRET" | jq -r .inMemoryKey)"
           } >> "$PROPS"
 
+      - name: Build and test (pre-publish gate)
+        run: ./gradlew build
+
       - name: Publish to Maven Central
         if: inputs.dry_run != true
         run: ./gradlew publishAllPublicationsToMavenCentralRepository
@@ -65,3 +86,39 @@ jobs:
       - name: Publish dry-run
         if: inputs.dry_run == true
         run: ./gradlew publishToMavenLocal
+
+      - name: Tag and create GitHub Release
+        # Only on a real publish (not dry-run). Runs after a successful publish,
+        # so a failed Maven upload never creates an orphan tag.
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          TAG="kotlin@${VERSION}"
+
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping tag/release (safe re-run)."
+            exit 0
+          fi
+
+          # Extract release notes BEFORE pushing the tag, so a missing/malformed
+          # changelog entry fails here rather than stranding a tag with no release.
+          NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"
+
+          PRERELEASE=""
+          MAJOR="${VERSION%%.*}"
+          if [ "$MAJOR" = "0" ]; then
+            PRERELEASE="--prerelease"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          gh release create "$TAG" \
+            --title "Kotlin SDK ${VERSION}" \
+            --notes "$NOTES" \
+            $PRERELEASE

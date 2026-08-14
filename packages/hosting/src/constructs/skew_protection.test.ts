@@ -18,6 +18,10 @@ import {
   generateSkewProtectionViewerRequestCode,
   generateSkewProtectionViewerResponseCode,
 } from './skew_protection.js';
+import {
+  buildKvsEntries,
+  generateKvsRouterRequestCode,
+} from './kvs_router.js';
 
 // ---- Test helpers ----
 
@@ -426,7 +430,7 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
   });
 
   void describe('SPA mode without skew protection', () => {
-    void it('uses simple build ID rewrite (no cookie logic)', () => {
+    void it('does not SET the skew cookie when skew protection is off', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -435,15 +439,13 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
         bucket,
         manifest: spaManifest,
         securityHeadersPolicy: policy,
+        skewProtection: { enabled: false },
       });
 
       const template = Template.fromStack(stack);
-      // Should have simple rewrite function
-      template.hasResourceProperties('AWS::CloudFront::Function', {
-        FunctionCode: Match.stringLikeRegexp('test-spa-1'),
-      });
-
-      // Should NOT have cookie logic
+      // The KVS edge router always ships both router functions. The request
+      // function always READS the __dpl cookie (to honor a pinned build), but
+      // when skew is off the response function must NOT SET it.
       const functions = template.findResources('AWS::CloudFront::Function');
       /* eslint-disable @typescript-eslint/naming-convention */
       const functionCodes = Object.values(functions).map(
@@ -452,13 +454,17 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
             .FunctionCode,
       );
       /* eslint-enable @typescript-eslint/naming-convention */
-      const hasCookieLogic = functionCodes.some((code) =>
-        code.includes('__dpl'),
+      const setsCookie = functionCodes.some((code) =>
+        code.includes("response.cookies['__dpl']"),
       );
-      assert.strictEqual(hasCookieLogic, false);
+      assert.strictEqual(
+        setsCookie,
+        false,
+        'response function must not set the __dpl cookie when skew is disabled',
+      );
     });
 
-    void it('does not create viewer-response function', () => {
+    void it('still associates both router functions (request + response) to the default behavior', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -467,39 +473,24 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
         bucket,
         manifest: spaManifest,
         securityHeadersPolicy: policy,
+        skewProtection: { enabled: false },
       });
 
       const template = Template.fromStack(stack);
-      /* eslint-disable @typescript-eslint/naming-convention */
+      // The single-behavior KVS router ALWAYS wires viewer-request (origin
+      // selection + build-id rewrite) and viewer-response (per-pattern
+      // headers). The response function exists regardless of skew; only the
+      // cookie-set logic inside it is gated.
       template.hasResourceProperties('AWS::CloudFront::Distribution', {
         DistributionConfig: Match.objectLike({
           DefaultCacheBehavior: Match.objectLike({
             FunctionAssociations: Match.arrayWith([
               Match.objectLike({ EventType: 'viewer-request' }),
+              Match.objectLike({ EventType: 'viewer-response' }),
             ]),
           }),
         }),
       });
-
-      // Verify no viewer-response association
-      const dist = template.findResources('AWS::CloudFront::Distribution');
-      const distConfig = Object.values(dist)[0] as {
-        Properties: {
-          DistributionConfig: {
-            DefaultCacheBehavior: {
-              FunctionAssociations: Array<{ EventType: string }>;
-            };
-          };
-        };
-      };
-      const associations =
-        distConfig.Properties.DistributionConfig.DefaultCacheBehavior
-          .FunctionAssociations;
-      const hasViewerResponse = associations.some(
-        (a) => a.EventType === 'viewer-response',
-      );
-      /* eslint-enable @typescript-eslint/naming-convention */
-      assert.strictEqual(hasViewerResponse, false);
     });
   });
 
@@ -554,7 +545,7 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
       });
     });
 
-    void it('creates exactly 3 CloudFront Functions (request, response, forwarded-host)', () => {
+    void it('creates exactly 2 KVS-associated router functions (KvsRouterRequest + KvsRouterResponse)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -570,13 +561,34 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
       });
 
       const template = Template.fromStack(stack);
+      // The single KVS edge router replaces the per-event functions
+      // (request/response/forwarded-host) with two build-independent
+      // functions: KvsRouterRequest and KvsRouterResponse. Forwarded-host and
+      // build-id rewrite are folded into the request function. Both use the
+      // cloudfront-js-2.0 runtime with a KeyValueStore association. A third
+      // function (SentinelGuard) exists ONLY on compute deploys to 403 direct
+      // hits to the origin-binding sentinel behaviors — it has NO KVS
+      // association, which is exactly how we discriminate it here.
       const functions = template.findResources('AWS::CloudFront::Function');
-      assert.strictEqual(Object.keys(functions).length, 3);
+      const kvsRouterFns = Object.values(functions).filter((fnRes) => {
+        const config = (fnRes as { Properties: { FunctionConfig: Record<string, unknown> } })
+          .Properties.FunctionConfig;
+        return (
+          Array.isArray(config.KeyValueStoreAssociations) &&
+          (config.KeyValueStoreAssociations as unknown[]).length === 1
+        );
+      });
+      assert.strictEqual(kvsRouterFns.length, 2);
+      for (const fnRes of kvsRouterFns) {
+        const config = (fnRes as { Properties: { FunctionConfig: Record<string, unknown> } })
+          .Properties.FunctionConfig;
+        assert.strictEqual(config.Runtime, 'cloudfront-js-2.0');
+      }
     });
   });
 
   void describe('skewProtection: { enabled: false }', () => {
-    void it('behaves same as no skewProtection prop', () => {
+    void it('does not set the skew cookie (same as omitting the prop)', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -597,15 +609,17 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
             .FunctionCode,
       );
       /* eslint-enable @typescript-eslint/naming-convention */
-      const hasCookieLogic = functionCodes.some((code) =>
-        code.includes('__dpl'),
+      // The router functions always exist; the discriminator for "skew off" is
+      // that the response function does not SET the __dpl cookie.
+      const setsCookie = functionCodes.some((code) =>
+        code.includes("response.cookies['__dpl']"),
       );
-      assert.strictEqual(hasCookieLogic, false);
+      assert.strictEqual(setsCookie, false);
     });
   });
 
   void describe('Skew protection with manifest redirects', () => {
-    void it('includes redirect handling in skew protection function code', () => {
+    void it('stores redirects in the KVS route table (d-keys), not baked into the function', () => {
       const stack = createStack();
       const bucket = new Bucket(stack, 'Bucket');
       const policy = createSecurityHeadersPolicy(stack, 'SH', {});
@@ -623,56 +637,40 @@ void describe('Skew Protection — CdnConstruct Integration', () => {
       });
 
       const template = Template.fromStack(stack);
-      const functions = template.findResources('AWS::CloudFront::Function');
-      /* eslint-disable @typescript-eslint/naming-convention */
-      const functionCodes = Object.values(functions).map(
-        (f: Record<string, unknown>) =>
-          (f as { Properties: { FunctionCode: string } }).Properties
-            .FunctionCode,
-      );
-      /* eslint-enable @typescript-eslint/naming-convention */
-      const skewFn = functionCodes.find(
-        (code) => code.includes('__dpl') && code.includes('__redirects'),
-      );
-      assert.ok(skewFn, 'Skew protection function must include redirect logic');
-      assert.ok(skewFn.includes('/old'));
-      assert.ok(skewFn.includes('/new'));
-    });
-
-    void it('skew protection function handles redirects before cookie logic', () => {
-      const stack = createStack();
-      const bucket = new Bucket(stack, 'Bucket');
-      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
-
-      const manifestWithRedirects: DeployManifest = {
-        ...spaManifest,
-        redirects: [
-          { source: '/legacy', destination: '/modern', statusCode: 302 },
-        ],
-      };
-
-      new CdnConstruct(stack, 'Cdn', {
-        bucket,
-        manifest: manifestWithRedirects,
-        securityHeadersPolicy: policy,
-        skewProtection: { enabled: true },
+      // Redirects are now KVS data (d0..dN chunks) evaluated by the router's
+      // viewer-request function — carried by the RouteStoreKeys custom
+      // resource, not baked into the function source.
+      template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
+        Entries: Match.stringLikeRegexp('/old'),
       });
 
-      const template = Template.fromStack(stack);
-      const functions = template.findResources('AWS::CloudFront::Function');
-      /* eslint-disable @typescript-eslint/naming-convention */
-      const functionCodes = Object.values(functions).map(
-        (f: Record<string, unknown>) =>
-          (f as { Properties: { FunctionCode: string } }).Properties
-            .FunctionCode,
-      );
-      /* eslint-enable @typescript-eslint/naming-convention */
-      const skewFn = functionCodes.find((code) => code.includes('__dpl'))!;
-      const redirectIdx = skewFn.indexOf('__redirects');
-      const cookieIdx = skewFn.indexOf('__dpl');
+      const entries = buildKvsEntries({
+        manifest: manifestWithRedirects,
+        buildId: 'test-spa-1',
+        hasServer: false,
+        hasImage: false,
+      });
+      const redirectJson = Object.entries(entries)
+        .filter(([k]) => /^d\d+$/.test(k))
+        .map(([, v]) => v)
+        .join('');
+      assert.match(redirectJson, /\/old/);
+      assert.match(redirectJson, /\/new/);
+      assert.match(redirectJson, /301/);
+    });
+
+    void it('the router request function evaluates redirects before the build-id cookie read', () => {
+      // Ordering is now a property of the (build-independent) router function:
+      // it scans redirect chunks before resolving the build-id from the __dpl
+      // cookie. Assert on the generated source ordering directly.
+      const code = generateKvsRouterRequestCode();
+      const redirectIdx = code.indexOf("getJson('d'");
+      const cookieIdx = code.indexOf("request.cookies['__dpl']");
+      assert.ok(redirectIdx >= 0, 'request function must read redirect chunks');
+      assert.ok(cookieIdx >= 0, 'request function must read the __dpl cookie');
       assert.ok(
         redirectIdx < cookieIdx,
-        'Redirect check must appear before cookie logic in generated code',
+        'redirect evaluation must precede the build-id cookie read',
       );
     });
   });

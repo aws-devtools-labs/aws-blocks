@@ -58,6 +58,19 @@ const SECURITY_HEADER_NAMES: SecurityHeaderName[] = [
   'content-security-policy',
 ];
 
+/**
+ * True if `headers` contains any security-relevant header (case-insensitive).
+ * Used to decide whether silently dropping a header rule (e.g. when the
+ * CloudFront behavior cap is hit) is safe (cosmetic header → warn) or must
+ * fail the build (a lost CSP/HSTS looks like a successful deploy).
+ */
+export const containsSecurityHeader = (
+  headers: Record<string, string>,
+): boolean => {
+  const names = new Set<string>(SECURITY_HEADER_NAMES);
+  return Object.keys(headers).some((h) => names.has(h.toLowerCase()));
+};
+
 const isOverridden = (
   customHeaders: Record<string, string> | undefined,
   name: SecurityHeaderName,

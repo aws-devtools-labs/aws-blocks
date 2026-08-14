@@ -9,6 +9,7 @@ import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Gradle task that parses the configured OpenRPC spec file and prints
@@ -19,6 +20,7 @@ import org.gradle.api.tasks.TaskAction
  *
  * Not cacheable because output goes to stdout, not a file.
  */
+@DisableCachingByDefault(because = "Output goes to stdout, not a file — nothing to cache")
 abstract class AwsBlocksDumpModelTask : DefaultTask() {
 
     /** The OpenRPC JSON spec file to parse and dump. */

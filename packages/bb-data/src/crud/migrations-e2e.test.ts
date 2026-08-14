@@ -28,13 +28,24 @@ import { regenerateTypesAndMeta } from '../db-pull.js';
 const env = { dbUrl: process.env.SUPABASE_DB_URL };
 const skip = !env.dbUrl;
 
+/**
+ * SSL for the e2e connections. When `DATABASE_CA_CERT` is set (always in CI — the
+ * e2e-supabase workflow pins the committed Supabase Root CA) connections run
+ * verify-full, exercising the TLS feature under test; falls back to unverified
+ * only for ad-hoc local runs without a CA. The `runExternalMigrations` path
+ * resolves SSL via `externalDbSsl()` internally, which reads the same env var.
+ */
+const E2E_SSL = process.env.DATABASE_CA_CERT
+  ? { ca: fs.readFileSync(process.env.DATABASE_CA_CERT, 'utf8'), rejectUnauthorized: true as const }
+  : { rejectUnauthorized: false as const };
+
 describe('runMigrations E2E — Supabase', { skip }, () => {
   let engine: PgClientEngine;
 
   before(async () => {
     engine = new PgClientEngine({
       connectionString: env.dbUrl!,
-      ssl: { rejectUnauthorized: false },
+      ssl: E2E_SSL,
     });
   });
 
@@ -138,7 +149,7 @@ describe('external migrate + type refresh E2E — Supabase', { skip }, () => {
   const ALTER_FILE = '9991_add_regen_e2e_priority.sql';
 
   before(async () => {
-    engine = new PgClientEngine({ connectionString: env.dbUrl!, ssl: { rejectUnauthorized: false } });
+    engine = new PgClientEngine({ connectionString: env.dbUrl!, ssl: E2E_SSL });
     migrationsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'regen-e2e-migrations-'));
     outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'regen-e2e-out-'));
     // Clean slate so the CREATE migration is genuinely pending.
@@ -262,7 +273,7 @@ describe('external migrate run-all baseline (empty target) E2E — Supabase', { 
     engine.execute(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`).catch(() => {});
 
   before(async () => {
-    engine = new PgClientEngine({ connectionString: sessionUrl(), ssl: { rejectUnauthorized: false }, poolSize: 1 });
+    engine = new PgClientEngine({ connectionString: sessionUrl(), ssl: E2E_SSL, poolSize: 1 });
     migrationsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'runall-e2e-'));
     await dropSchema();
     await engine.execute(`DELETE FROM _migrations WHERE name = $1`, [BASELINE_FILE]).catch(() => {});

@@ -6,6 +6,8 @@ Authentication backed by Amazon Cognito User Pools. Ships with username/password
 
 **When NOT to use:** Prototypes or internal tools that just need username/password without Cognito — use `AuthBasic`. Direct OIDC federation without Cognito in the middle — use `AuthOIDC`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -149,6 +151,51 @@ Requires `enablePasskeys: true` and a WebAuthn-configured pool (`webAuthnRelying
 | `listPasskeys(context)` | `Promise<PasskeyDescription[]>` | List the signed-in user's registered passkeys (paginates internally). |
 | `deletePasskey(context, credentialId)` | `Promise<void>` | Remove a registered passkey by `credentialId`. |
 
+## Admin surface (`auth.admin`)
+
+Server-side admin operations — group membership and user lifecycle — that act on **any** user by `username` (unlike the client methods above, which act on the signed-in user via `context`). These are **opt-in**: pass an `admin` options object to enable the `auth.admin` handle and grant the matching `Admin*` / `List*` IAM. A pool that never opts in has no admin grant — its synthesized role is identical to today.
+
+```typescript
+const auth = new AuthCognito(scope, 'auth', {
+  groups: ['admins'],
+  admin: { actions: ['groups'] },   // enable auth.admin; grant only group Admin* actions
+});
+
+// Always gate admin routes behind requireRole — these methods do NOT self-gate.
+await auth.requireRole(ctx, 'admins');
+await auth.admin.addUserToGroup('alice', 'admins');   // group narrowed via GroupOf<O>
+```
+
+- **Compile-time gate.** Without an `admin` options object, `auth.admin` is typed `AdminDisabled` and any access is a compile error whose message names the fix (`construct AuthCognito with { admin: {} }`). The getter also throws at runtime for untyped JS callers.
+- **`actions` scopes both the IAM grant and the typed method set.** `actions: ['groups']` grants only the group `Admin*` actions and makes only the group methods typecheck; `['lifecycle']` only the user-lifecycle actions/methods; omitted grants both. The method gate lives in a trailing parameter position (`AdminActionGate`), so calling a method whose action wasn't granted is a **compile error** while `AuthCognito<O>` stays covariant in `O`. Untyped JS callers that reach past the gate additionally fast-fail at runtime with a clear error rather than a cryptic AWS `AccessDenied`.
+- **Not an access boundary.** Like every block on the shared backend Lambda, client and admin run under one role. Separation is by API surface + lint, not IAM — gate every admin route with `requireRole`.
+
+**Group membership** (`actions: 'groups'`):
+
+| Method | Returns | Description |
+|---|---|---|
+| `admin.addUserToGroup(username, group)` | `Promise<void>` | Add a user to a seeded group. `group` narrows to `GroupOf<O>`. Throws `GroupNotFound` for an unseeded group, `UserNotFound` for a missing user. |
+| `admin.removeUserFromGroup(username, group)` | `Promise<void>` | Remove a user from a group. |
+| `admin.listGroupsForUser(username)` | `Promise<GroupOf<O>[]>` | Groups the user belongs to. |
+| `admin.listUsersInGroup(group)` | `Promise<AdminUser[]>` | Members of a group (paginates internally). |
+
+**User lifecycle** (`actions: 'lifecycle'`):
+
+| Method | Returns | Description |
+|---|---|---|
+| `admin.createUser(username, init?)` | `Promise<AdminUser>` | Create a user. `init`: `{ temporaryPassword?, attributes?, suppressInvite? }`. Conflicts with `UserAlreadyExists`. |
+| `admin.deleteUser(username)` | `Promise<void>` | Delete a user (also strips them from every group). |
+| `admin.disableUser(username)` / `admin.enableUser(username)` | `Promise<void>` | Toggle sign-in. A disabled user's `signIn` is rejected with `NotAuthorizedException`. |
+| `admin.resetUserPassword(username)` | `Promise<void>` | Force the user to set a new password on next sign-in. |
+| `admin.setUserPassword(username, password, { permanent })` | `Promise<void>` | Set a password. `permanent: true` clears the force-change flag. |
+| `admin.getUser(username)` | `Promise<AdminUser \| null>` | Look up a user, or `null` if absent. |
+| `admin.scan()` | `AsyncIterable<AdminUser>` | Enumerate all users (paginates internally). |
+| `admin.revokeUserSessions(username)` | `Promise<void>` | Revoke the user's refresh tokens (AWS: `AdminUserGlobalSignOut`; mock: delete session records). New tokens can no longer be minted; see the session-freshness note for when this takes effect. |
+
+> **Session freshness.** A group change does not affect a user's **existing** session until their token refreshes — `requireRole` reads the `cognito:groups` claim, not live state. This is inherent Cognito behavior. The change applies on the next sign-in or `fetchAuthSession({ forceRefresh: true })`.
+>
+> `admin.revokeUserSessions(username)` revokes the user's **refresh tokens** so no new access tokens can be minted, but it does **not** invalidate an already-issued access token — a Blocks session whose access token is still valid keeps passing `checkAuth` / `requireAuth` until that token expires (verified against live Cognito). It is not an instant kill-switch on AWS. (The mock deletes the session record outright, so it *does* flip immediately there — a known mock-vs-AWS parity difference.) For a hard cap, lower `sessionTtlSeconds` / the access-token validity.
+
 ## Options
 
 ```typescript
@@ -204,7 +251,15 @@ The `signInWith` option controls what end users sign in with. It maps to Cognito
 
 ## Using AuthCognito generically (literal-narrowing with `as const`)
 
-`AuthCognito<O extends AuthCognitoOptions>` is generic on its options literal. When you pass the options object `as const`, TypeScript narrows method signatures to the exact values you configured — typos on group names, custom attributes, and MFA factors become compile errors instead of runtime surprises.
+`AuthCognito<const O extends AuthCognitoOptions>` is generic on its options literal. Because the generic is a **`const` type parameter**, TypeScript narrows method signatures to the exact values you configured for **options passed inline** — typos on group names, custom attributes, and MFA factors become compile errors instead of runtime surprises, with no `as const` needed:
+
+```typescript
+const auth = new AuthCognito(scope, 'auth', { groups: ['admins', 'readers'] });
+await auth.requireRole(ctx, 'admins');   // ✅ narrowed inline — no `as const`
+await auth.requireRole(ctx, 'admin');    // ❌ compile error (typo)
+```
+
+For an options object **declared separately** in a variable, add `as const` so its literals don't widen before reaching the constructor. The example below uses `as const` for that reason; the narrowing it produces is identical.
 
 ```typescript
 const options = {
@@ -332,7 +387,57 @@ try {
 }
 ```
 
-Error names match Cognito's wire-format exceptions (`NotAuthorizedException`, `UserNotFoundException`, `CodeMismatchException`, `AliasExistsException`, `InternalErrorException`, etc.). See `AuthCognitoErrors` in `src/types.ts` for the full list.
+Error names match Cognito's wire-format exceptions, so customers familiar with AWS encounter the same strings. `AuthCognitoErrors` maps an ergonomic constant to each wire-format `error.name` — match on the constant with `isBlocksError`, never on the raw string.
+
+| Constant | Wire-format `error.name` | Thrown when |
+|---|---|---|
+| `AuthCognitoErrors.NotAuthenticated` | `NotAuthenticatedException` | No valid session — surfaced by `requireAuth` (401). |
+| `AuthCognitoErrors.NotAuthorized` | `NotAuthorizedException` | Bad credentials, or the user is not in the group required by `requireRole` (403). |
+| `AuthCognitoErrors.UserNotFound` | `UserNotFoundException` | No user with that username/alias. |
+| `AuthCognitoErrors.UserAlreadyExists` | `UsernameExistsException` | Username already taken on sign-up. |
+| `AuthCognitoErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't satisfy the pool policy. |
+| `AuthCognitoErrors.InvalidParameter` | `InvalidParameterException` | Malformed input or an unsupported request shape. |
+| `AuthCognitoErrors.CodeMismatch` | `CodeMismatchException` | Wrong confirmation/MFA code on `RespondToAuthChallenge`. Session stays valid; retriable. |
+| `AuthCognitoErrors.ExpiredCode` | `ExpiredCodeException` | Confirmation/MFA code expired. |
+| `AuthCognitoErrors.LimitExceeded` | `LimitExceededException` | Per-user attempt limit exceeded (e.g. too many code requests). |
+| `AuthCognitoErrors.TooManyRequests` | `TooManyRequestsException` | Request rate-limited by Cognito. |
+| `AuthCognitoErrors.TooManyFailedAttempts` | `TooManyFailedAttemptsException` | Too many failed verification attempts. |
+| `AuthCognitoErrors.PasswordResetRequired` | `PasswordResetRequiredException` | Sign-in blocked — an admin requires a password reset. |
+| `AuthCognitoErrors.UserNotConfirmed` | `UserNotConfirmedException` | User hasn't confirmed sign-up yet. |
+| `AuthCognitoErrors.MFAMethodNotFound` | `MFAMethodNotFoundException` | Requested MFA method isn't configured for the user. |
+| `AuthCognitoErrors.SoftwareTokenMFANotFound` | `SoftwareTokenMFANotFoundException` | TOTP MFA isn't enabled for the user. |
+| `AuthCognitoErrors.GroupNotFound` | `ResourceNotFoundException` | Referenced user-pool group doesn't exist. **Note the non-1:1 mapping — see below.** |
+| `AuthCognitoErrors.UnsupportedUserState` | `UnsupportedUserStateException` | Operation invalid for the user's current state (e.g. force-change-password). |
+| `AuthCognitoErrors.AliasExists` | `AliasExistsException` | Email or phone alias already in use on another user in this pool. |
+| `AuthCognitoErrors.InvalidLambdaResponse` | `InvalidLambdaResponseException` | Cognito Lambda trigger returned a malformed response. |
+| `AuthCognitoErrors.UserLambdaValidation` | `UserLambdaValidationException` | Cognito Lambda trigger threw; error wrapped by Cognito. |
+| `AuthCognitoErrors.InternalError` | `InternalErrorException` | Rare Cognito-side failure. Safe to retry with backoff. |
+| `AuthCognitoErrors.EnableSoftwareTokenMFA` | `EnableSoftwareTokenMFAException` | TOTP code mismatch during `VerifySoftwareToken` (MFA setup). Distinct from `CodeMismatchException`; retriable on the same session. |
+| `AuthCognitoErrors.WebAuthnNotEnabled` | `WebAuthnNotEnabledException` | Pool has no `WebAuthnConfiguration` — passkeys disabled. |
+| `AuthCognitoErrors.WebAuthnOriginNotAllowed` | `WebAuthnOriginNotAllowedException` | Browser submitted a passkey assertion from a non-allow-listed origin. |
+| `AuthCognitoErrors.WebAuthnRelyingPartyMismatch` | `WebAuthnRelyingPartyMismatchException` | Submitted credential's rpId does not match the pool's relying-party config. |
+| `AuthCognitoErrors.WebAuthnChallengeNotFound` | `WebAuthnChallengeNotFoundException` | WebAuthn challenge expired or session lost — caller must restart. |
+| `AuthCognitoErrors.WebAuthnCredentialNotSupported` | `WebAuthnCredentialNotSupportedException` | Submitted credential type / algorithm not supported by the pool config. |
+| `AuthCognitoErrors.WebAuthnClientMismatch` | `WebAuthnClientMismatchException` | Cognito refused the assertion because the client ID does not match. |
+| `AuthCognitoErrors.WebAuthnConfigurationMissing` | `WebAuthnConfigurationMissingException` | Pool is missing required `WebAuthnConfiguration` (rpId / origins). |
+
+> **Non-obvious mapping:** `AuthCognitoErrors.GroupNotFound` resolves to `'ResourceNotFoundException'`, **not** a `GroupNotFound*` string. Cognito has no dedicated "group not found" exception, so a missing user-pool group surfaces as the generic `ResourceNotFoundException`. Always match with `isBlocksError(e, AuthCognitoErrors.GroupNotFound)` rather than the literal string so the intent stays clear.
+
+### Branching on the `setAuthState` client path
+
+`isBlocksError` works on a **thrown** error. The recommended client path (`createApi()` → `setAuthState()`) does not throw — it returns an `AuthState` whose `errorName` carries the same structured name. Use `hasAuthError` to branch on the returned state:
+
+```typescript
+import { hasAuthError } from '@aws-blocks/core';
+import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+
+const next = await authApi.setAuthState({ action: 'signIn', username, password });
+if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
+  // wrong username or password
+}
+```
+
+Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
 ## UI Components
 
@@ -415,6 +520,8 @@ Cognito scales automatically. Default quotas: 40 sign-ups/sec, 120 sign-ins/sec 
 ## Security Model
 
 AWS Blocks auth follows the BFF pattern: the browser sends `{username, password}` to the customer's Lambda over TLS; Lambda forwards to Cognito. The customer's Lambda is inside the user's trust boundary by design — same as `AuthBasic`, `AuthOIDC`, NextAuth, Devise, and every server-mediated auth library. Cognito tokens never reach the browser — instead, the BB issues an opaque HMAC-signed session cookie that maps to a server-side `SessionRecord` in a nested `KVStore`.
+
+The user pool client sets `PreventUserExistenceErrors: ENABLED`, so sign-in and forgot-password responses return a uniform error whether or not the username exists — closing the account-enumeration oracle Cognito exposes by default.
 
 See the auth-cognito technical design (see source repo) for the full architecture and mock-vs-AWS parity notes.
 

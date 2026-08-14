@@ -28,7 +28,7 @@ if [[ "${1:-}" == "--skip-publish" ]] && [[ -d "$ROOT/dist-registry" ]]; then
 else
   echo "=== Step 1: Publish to local registry ==="
   cd "$ROOT"
-  npm run publish:dry-run 2>&1
+  npm run publish:local 2>&1
 fi
 
 echo ""
@@ -70,7 +70,7 @@ cd "$TEST_DIR"
 npm install @aws-blocks/create-blocks-app@latest 2>&1
 CREATE_CMD="$TEST_DIR/node_modules/.bin/create-blocks-app"
 
-TEMPLATES=("default" "demo")
+TEMPLATES=("default" "demo" "backend" "bare")
 FAILED=0
 
 for TEMPLATE in "${TEMPLATES[@]}"; do

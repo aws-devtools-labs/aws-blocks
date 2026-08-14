@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 import Foundation
 @testable import BlocksRuntime
@@ -6,14 +13,10 @@ import Foundation
 /// Reads BLOCKS_URL from the environment (defaults to localhost dev server).
 /// Uses the generated typed `Api` client.
 class BlocksE2ETestCase: XCTestCase {
-    static let blocksUrl: String = {
-        ProcessInfo.processInfo.environment["BLOCKS_URL"]
+    static let blocksUrl: String = ProcessInfo.processInfo.environment["BLOCKS_URL"]
             ?? "http://localhost:3001/aws-blocks/api"
-    }()
 
-    static let server: BlocksServer = {
-        BlocksServer(name: "e2e", url: blocksUrl)
-    }()
+    static let server: BlocksServer = .init(name: "e2e", url: blocksUrl)
 
     var api: Api!
 

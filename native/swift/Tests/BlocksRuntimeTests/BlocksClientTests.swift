@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 @testable import BlocksRuntime
 
@@ -16,9 +23,9 @@ final class BlocksClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
 
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":"hello","id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -38,9 +45,9 @@ final class BlocksClientTests: XCTestCase {
 
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":{"name":"Alice","age":30},"id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -50,7 +57,9 @@ final class BlocksClientTests: XCTestCase {
 
         XCTAssertNotNil(result)
         // Should be decodable as a struct
-        struct User: Decodable { let name: String; let age: Int }
+        struct User: Decodable { let name: String
+        let age: Int
+        }
         let user = try JSONDecoder().decode(User.self, from: result!)
         XCTAssertEqual(user.name, "Alice")
         XCTAssertEqual(user.age, 30)
@@ -63,9 +72,9 @@ final class BlocksClientTests: XCTestCase {
 
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":null,"id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -83,9 +92,9 @@ final class BlocksClientTests: XCTestCase {
 
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":"hello world","id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -107,9 +116,9 @@ final class BlocksClientTests: XCTestCase {
 
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request"},"id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -120,7 +129,7 @@ final class BlocksClientTests: XCTestCase {
             _ = try await client.execute(request)
             XCTFail("Expected error")
         } catch let error as RPCError {
-            XCTAssertEqual(error.message, "Invalid request")
+            XCTAssertEqual(error.message, "Error occured with code: -32600 message: Invalid request")
         } catch {
             XCTFail("Expected RPCError, got \(error)")
         }
@@ -133,9 +142,9 @@ final class BlocksClientTests: XCTestCase {
 
         MockURLProtocol.handler = { _ in
             let response = HTTPURLResponse(url: URL(string: "http://localhost")!, statusCode: 500, httpVersion: nil, headerFields: nil)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":null,"id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 
@@ -176,9 +185,9 @@ final class BlocksClientTests: XCTestCase {
         MockURLProtocol.handler = { _ in
             let headers = ["Set-Cookie": "auth_session=token123; Max-Age=3600; Secure"]
             let response = HTTPURLResponse(url: URL(string: "http://localhost:3001/api")!, statusCode: 200, httpVersion: nil, headerFields: headers)!
-            let data = """
+            let data = Data("""
             {"jsonrpc":"2.0","result":true,"id":1}
-            """.data(using: .utf8)!
+            """.utf8)
             return (response, data)
         }
 

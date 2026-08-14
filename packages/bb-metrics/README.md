@@ -6,6 +6,8 @@ Custom application metrics backed by Amazon CloudWatch (via Embedded Metric Form
 
 **When NOT to use:** If you need structured log output, use `Logging`. If you need distributed request tracing, use `Tracing`. If you need to store time-series data for querying, use `Database` or `DistributedTable`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript

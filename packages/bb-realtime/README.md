@@ -8,6 +8,8 @@ Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 
 **Scaling envelope:** Best suited for channels with tens to low-thousands of concurrent subscribers. Publish latency scales linearly with subscriber count (~100ms for 1,000 subscribers). For channels with 10K+ subscribers, use explicit fan-out patterns (e.g., sharded `AsyncJob`). For 100K+ broadcast audiences, consider a dedicated WebSocket fleet.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript

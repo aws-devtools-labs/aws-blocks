@@ -75,6 +75,13 @@ const BRIDGE_CONFIG_FILE = 'config-bridge.mjs';
 const ASTROJS_NODE_PIN = '@astrojs/node@^9';
 
 /**
+ * `sharp` version installed into the SSR bundle for Astro's default image
+ * service (`/_image`). Matches the range the IPX image-opt bundle uses so
+ * both image paths ship the same native libvips. See installSharpForAstroSsr.
+ */
+const ASTRO_SHARP_VERSION = '^0.34.0';
+
+/**
  * Verified Astro version range. Exported for the X.1 cross-adapter
  * version-pin test that asserts CI doesn't ship with the adapters
  * outside their verified ranges.
@@ -94,14 +101,6 @@ const ASTROJS_NODE_PIN = '@astrojs/node@^9';
  * stays a parseable range with an explicit upper bound.
  */
 export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
-
-/**
- * Maximum redirects lifted from astro.config to the CloudFront viewer
- * Function. Matches the cap applied to Next.js's lifted redirects so the
- * compiled CFF stays under the 10 KB limit; anything past this stays in
- * the SSR Lambda where Astro evaluates it natively.
- */
-const REDIRECT_LIFT_CAP = 100;
 
 /**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
@@ -204,23 +203,44 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
           output,
         });
 
+  // Astro's `/_image` endpoint runs INSIDE the SSR Lambda (no separate image
+  // Lambda — see buildSsrManifest note). Astro's default image service is
+  // `sharp`, which does `await import('sharp')` at runtime and needs the
+  // native linux-x64 binary. The Vite SSR build (`noExternal`) can't bundle a
+  // native `.node` module, so unless we ship sharp the app is forced onto the
+  // `noop` passthrough service — which emits `content-type: image/null` and
+  // never resizes (issue #3). Install a linux-x64 sharp into the server
+  // bundle's node_modules AFTER the build so the runtime import resolves.
+  // Skipped for static output (no SSR Lambda) and when the app explicitly
+  // opted out of the sharp service (noop/passthrough/custom).
+  if (output !== 'static' && !skipBuild && astroUsesSharpService(config)) {
+    installSharpForAstroSsr(serverDir);
+    // Astro core fetches a remote image source with `redirect: "manual"` and
+    // throws on any 3xx, so an allowlisted host that 302-redirects to its CDN
+    // (e.g. picsum.photos → fastly) makes `/_image` 500. Patch the built
+    // server bundle to FOLLOW redirects — but re-validate every hop's host
+    // against the same `image.domains`/`remotePatterns` allowlist, so a
+    // redirect can't bounce past the allowlist (SSRF-safe).
+    patchAstroRemoteImageRedirects(serverDir);
+  }
+
   // Lift the user's astro.config `redirects:` table out of the SSR
-  // Lambda and onto the CloudFront viewer-request Function. Capped at
-  // 100 to keep the compiled CFF under the 10 KB limit (matches the
-  // Next.js redirect-lift cap in liftSimpleRoutesManifest).
+  // Lambda and onto the CloudFront viewer-request Function.
+  //
+  // No count cap: under KVS edge routing redirects are DATA (chunked `d{n}`
+  // KVS entries the viewer-request function reads at runtime), not literals
+  // inlined into the function source — so the old 10 KB-CloudFront-Function
+  // code limit that motivated the cap no longer applies. The authoritative
+  // bound is the KVS store/chunk budget enforced centrally in
+  // `buildKvsEntries` (kvs_router.ts), which throws a friendly
+  // `TooManyRoutesError` / `RouteTableTooLargeError` if the tables genuinely
+  // exceed the safe per-request read budget.
   if (liftedRedirects.length > 0) {
-    if (liftedRedirects.length > REDIRECT_LIFT_CAP) {
-      process.stderr.write(
-        `⚠️  Astro config has ${liftedRedirects.length} redirects; lifting only the first ${REDIRECT_LIFT_CAP} ` +
-          `to the CloudFront edge. The rest will be evaluated by Astro at runtime.\n`,
-      );
-    }
-    manifest.redirects = liftedRedirects.slice(0, REDIRECT_LIFT_CAP);
+    manifest.redirects = liftedRedirects;
   }
 
   // Trailing-slash canonical redirects. Append AFTER user-declared lifts
-  // so explicit redirects win the precedence in the CF Function and the
-  // overflow (if any) drops trailing-slash entries first.
+  // so explicit redirects win the precedence in the CF Function.
   if (trailingSlash !== 'ignore') {
     const staticPaths = collectStaticPathsForRedirects(
       output === 'static' ? distDir : clientDir,
@@ -231,24 +251,7 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
     );
     if (tsRedirects.length > 0) {
       const existing = manifest.redirects ?? [];
-      const remainingCap = REDIRECT_LIFT_CAP - existing.length;
-      if (remainingCap <= 0) {
-        process.stderr.write(
-          `⚠️  ${tsRedirects.length} trailing-slash redirect(s) skipped — ` +
-            `redirect cap of ${REDIRECT_LIFT_CAP} already filled by user-declared redirects.\n`,
-        );
-      } else {
-        if (tsRedirects.length > remainingCap) {
-          process.stderr.write(
-            `⚠️  ${tsRedirects.length} trailing-slash redirects requested; only ${remainingCap} fit ` +
-              `under the ${REDIRECT_LIFT_CAP}-redirect CloudFront Function cap.\n`,
-          );
-        }
-        manifest.redirects = [
-          ...existing,
-          ...tsRedirects.slice(0, remainingCap),
-        ];
-      }
+      manifest.redirects = [...existing, ...tsRedirects];
     }
   }
 
@@ -321,6 +324,13 @@ type AstroConfigShape = {
     remotePatterns?: unknown;
     dangerouslyAllowSVG?: boolean;
     minimumCacheTTL?: number;
+    /**
+     * The image service. Astro's DEFAULT (unset) is the `sharp` service,
+     * which needs the native `sharp` binary at runtime. We read the
+     * `entrypoint` to decide whether the SSR Lambda must ship sharp — see
+     * {@link astroUsesSharpService}.
+     */
+    service?: { entrypoint?: string; config?: unknown };
   };
 };
 
@@ -722,6 +732,236 @@ const buildStaticManifest = (distDir: string): DeployManifest => {
     routes: [{ pattern: '/*', target: 'static' }],
     ...(Object.keys(errorPages).length > 0 ? { errorPages } : {}),
   };
+};
+
+/**
+ * Decide whether the SSR Lambda must ship the native `sharp` binary.
+ *
+ * Astro's DEFAULT image service is `sharp` (config `image.service` unset).
+ * The app opts OUT by pointing `image.service.entrypoint` at a non-sharp
+ * service — `astro/assets/services/noop` (passthrough) or a custom service.
+ * We ship sharp UNLESS the app explicitly chose such a service, so a default
+ * Astro SSR app gets working `/_image` optimization automatically, while an
+ * app that deliberately picked noop/custom is respected (and not bloated with
+ * ~19 MB of libvips it won't call).
+ * @internal
+ */
+export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
+  const entry = config.image?.service?.entrypoint;
+  // Unset → Astro default → sharp. Explicit sharp entrypoint → sharp.
+  if (entry === undefined || entry === null) return true;
+  if (typeof entry !== 'string') return true;
+  // Matches the built-in `astro/assets/services/sharp` and any custom entry
+  // ending in `/sharp` (or bare `sharp`).
+  return /(^|\/)sharp$/.test(entry);
+};
+
+/**
+ * Install a **linux-x64 glibc** `sharp` into the Astro SSR server bundle's
+ * `node_modules/` so the runtime `await import('sharp')` in Astro's sharp
+ * image service resolves against the Lambda's platform (Node 20, linux-x64).
+ *
+ * Why post-build + into the server dir: the Astro Vite build (`noExternal`)
+ * can't bundle a native `.node` module, so sharp stays an external runtime
+ * import. `entry.mjs` lives in `dist/server/`, so Node resolves `import('sharp')`
+ * from `dist/server/node_modules/sharp` — that's the install target. The whole
+ * `dist/` tree (server/ + client/) is what the L3 zips for the Lambda, so a
+ * binary installed here ships with the function.
+ *
+ * Forces `--os=linux --cpu=x64 --libc=glibc --include=optional` (a plain
+ * `npm install` on a macOS build host fetches darwin-arm64 and crashes the
+ * Lambda with MissingSharp — the exact trap that pushed this app onto `noop`),
+ * then prunes the `@img/sharp-wasm32` fallback (~8.7 MB, never used on
+ * linux-x64) and other dead weight. Net add ≈ 19.5 MB unzipped — ~8% of
+ * Lambda's 250 MB unzipped limit. Mirrors the Nitro adapter's IPX bundle.
+ * @internal
+ */
+export const installSharpForAstroSsr = (serverDir: string): void => {
+  // Idempotent: skip if a linux-x64 sharp is already present.
+  const existing = path.join(
+    serverDir,
+    'node_modules',
+    '@img',
+    'sharp-linux-x64',
+  );
+  if (fs.existsSync(existing)) return;
+
+  fs.mkdirSync(serverDir, { recursive: true });
+  // A minimal package.json so `npm install <pkg>` writes into THIS dir's
+  // node_modules and doesn't walk up to the project root.
+  const pkgJsonPath = path.join(serverDir, 'package.json');
+  const hadPkgJson = fs.existsSync(pkgJsonPath);
+  if (!hadPkgJson) {
+    fs.writeFileSync(
+      pkgJsonPath,
+      JSON.stringify(
+        { name: 'astro-ssr-server-bundle', private: true, type: 'module' },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+  }
+
+  process.stderr.write(
+    '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
+  );
+  try {
+    // `spawn.sync` here is the local ./spawn.js wrapper, which THROWS on a
+    // non-zero exit (spawn.ts: `if (result.status !== 0) throw`) as well as on
+    // a spawn error (ENOENT/EACCES). So a failed `npm install` (network,
+    // registry timeout, resolution conflict) does NOT return silently — it
+    // lands in the catch below and fails the build loudly.
+    spawn.sync(
+      'npm',
+      [
+        'install',
+        `sharp@${ASTRO_SHARP_VERSION}`,
+        '--no-audit',
+        '--no-fund',
+        '--silent',
+        '--include=optional',
+        '--omit=dev',
+        '--os=linux',
+        '--cpu=x64',
+        '--libc=glibc',
+      ],
+      { cwd: serverDir, stdio: 'inherit' },
+    );
+  } catch (error) {
+    // Best-effort: if we created the package.json for this install and the
+    // install failed, remove it so a subsequent build isn't fooled by a stale
+    // `hadPkgJson === true` on retry.
+    if (!hadPkgJson) {
+      try {
+        fs.unlinkSync(pkgJsonPath);
+      } catch {
+        // best-effort
+      }
+    }
+    throw new HostingError(
+      'AstroSharpInstallError',
+      {
+        message:
+          'Failed to install a linux-x64 `sharp` into the Astro SSR bundle for `/_image` optimization.',
+        resolution:
+          'Ensure `npm` is on PATH and the build host can reach the npm registry. ' +
+          'To ship without native image optimization, set `image.service` to ' +
+          '`astro/assets/services/noop` in astro.config (the SSR endpoint then ' +
+          'passes images through without resizing).',
+      },
+      error as Error,
+    );
+  }
+
+  // Drop the wasm fallback (never used on linux-x64) — it's ~8.7 MB of dead
+  // weight in the Lambda zip.
+  const wasm = path.join(serverDir, 'node_modules', '@img', 'sharp-wasm32');
+  try {
+    fs.rmSync(wasm, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+};
+
+/**
+ * Marker injected into a patched Astro assets chunk (idempotency + tests).
+ * @internal
+ */
+export const ASTRO_REDIRECT_PATCH_MARKER = '__blocksFetchAllowedRedirects';
+
+/**
+ * Injected helper source. Follows up to `MAX` redirects, re-validating EACH
+ * hop's URL against Astro's own `isRemoteAllowed(url, allowlistConfig)` before
+ * requesting it — so a redirect can never escape the `image.domains` /
+ * `remotePatterns` allowlist (SSRF-safe). On a disallowed hop it returns the
+ * 3xx response unchanged, letting Astro's existing 3xx-throw reject it. Uses
+ * `redirect: "manual"` per hop so we see each Location.
+ * @internal
+ */
+const ASTRO_REDIRECT_HELPER = `async function ${ASTRO_REDIRECT_PATCH_MARKER}(startUrl, allowlistConfig, isAllowed) {
+  let current = startUrl;
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(current, { redirect: "manual" });
+    if (res.status < 300 || res.status >= 400) return res;
+    const loc = res.headers.get("location");
+    if (!loc) return res;
+    const next = new URL(loc, current).toString();
+    // Re-check the redirect TARGET against the allowlist — never follow past it.
+    if (allowlistConfig && isAllowed && !isAllowed(next, allowlistConfig)) return res;
+    current = next;
+  }
+  return await fetch(current, { redirect: "manual" });
+}
+`;
+
+/**
+ * Patch Astro's built server bundle so the remote-image endpoint FOLLOWS
+ * redirects (re-validated per hop — see {@link ASTRO_REDIRECT_HELPER}) instead
+ * of throwing on the first 3xx.
+ *
+ * Astro core does `const response = await fetch(url, { redirect: "manual" })`
+ * then throws on `status >= 300 && < 400`. An allowlisted host that 302s to
+ * its CDN (picsum.photos → fastly) therefore 500s `/_image`. We replace ONLY
+ * the `fetch(url, { redirect: "manual" })` call sites with the injected helper,
+ * which resolves allowed redirects to a 2xx (so the existing 3xx-throw no
+ * longer fires) while a disallowed redirect still returns a 3xx that Astro
+ * rejects. Best-effort + idempotent: silent no-op if the shape isn't found (a
+ * future Astro refactor) or the patch already ran.
+ * @internal
+ */
+export const patchAstroRemoteImageRedirects = (serverDir: string): void => {
+  if (!fs.existsSync(serverDir)) return;
+  const chunks = fg.sync('**/*.mjs', {
+    cwd: serverDir,
+    absolute: true,
+    ignore: ['**/node_modules/**'],
+  });
+  // Match `fetch(<urlVar>, { redirect: "manual" })` where <urlVar> is a bare
+  // identifier (Astro passes the source URL variable). Whitespace-tolerant.
+  const callRe =
+    /await\s+fetch\(\s*([A-Za-z_$][\w$]*)\s*,\s*\{\s*redirect:\s*["']manual["']\s*\}\s*\)/g;
+
+  let filesPatched = 0;
+  for (const chunk of chunks) {
+    let src: string;
+    try {
+      src = fs.readFileSync(chunk, 'utf-8');
+    } catch {
+      continue;
+    }
+    // Only touch the chunk that actually fetches remote images (has the
+    // allowlist symbol + the manual-redirect fetch).
+    if (!/isRemoteAllowed/.test(src)) continue;
+    if (src.includes(ASTRO_REDIRECT_PATCH_MARKER)) continue; // idempotent
+    if (!callRe.test(src)) continue;
+    callRe.lastIndex = 0;
+    // Replace each `fetch(u,{redirect:"manual"})` with the helper, threading
+    // the local `allowlistConfig` + imported `isRemoteAllowed`.
+    let next = src.replace(
+      callRe,
+      `await ${ASTRO_REDIRECT_PATCH_MARKER}($1, typeof allowlistConfig !== "undefined" ? allowlistConfig : void 0, isRemoteAllowed)`,
+    );
+    // Prepend the helper once at the top of the chunk. It lands BEFORE the
+    // chunk's import statements, which is fine: ESM `import`s hoist regardless
+    // of textual position, and the helper has no import dependency of its own.
+    next = `${ASTRO_REDIRECT_HELPER}\n${next}`;
+    fs.writeFileSync(chunk, next, 'utf-8');
+    filesPatched++;
+  }
+
+  if (filesPatched === 0) {
+    process.stderr.write(
+      '⚠️  Astro remote-image redirect patch found no matching fetch(…{redirect:"manual"}); ' +
+        'a redirecting allowlisted remote source may 500 on /_image ' +
+        '(see patchAstroRemoteImageRedirects).\n',
+    );
+    return;
+  }
+  process.stderr.write(
+    `\u{1F527} Patched Astro remote-image fetch to follow allowlisted redirects ` +
+      `(${filesPatched} chunk${filesPatched > 1 ? 's' : ''}).\n`,
+  );
 };
 
 const buildSsrManifest = (input: {

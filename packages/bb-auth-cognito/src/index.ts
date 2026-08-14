@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import {
 	ApiError,
 	ApiNamespace,
+	DEFAULT_API_ERROR_NAME,
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
@@ -48,6 +49,13 @@ import {
 	AuthCognitoErrors,
 	isRetriableAuthError,
 	makeExternalUserPoolRef,
+	type AdminCreateInit,
+	type AdminGetterOf,
+	type AdminUser,
+	type AdminUserFilter,
+	type GroupAdmin,
+	type LifecycleAdmin,
+	type AuthCognitoOptions,
 	type AuthCognitoMockOptions,
 	type AttrOf,
 	type AuthSession,
@@ -196,7 +204,7 @@ interface PersistedState {
  * in a nested DynamoDB table provisioned by this BB via KVStore — single-
  * digit ms reads, pay-per-request billing.
  */
-export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptions>
+export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMockOptions>
 	extends Scope
 	implements BlocksAuth
 {
@@ -207,6 +215,14 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 	private readonly crossDomain: boolean;
 	private state: PersistedState;
 	private challenges: Map<string, ChallengeRecord>;
+	/**
+	 * The full admin surface, built once against the live `this.state`. Typed
+	 * against the wide base so the single cast in `get admin()` is the only
+	 * place the generic projection is applied. `actions` scoping is a
+	 * compile-time concern (the type hides ungranted methods); at runtime
+	 * every method exists.
+	 */
+	private readonly adminSurface: GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions>;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -232,12 +248,218 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 		}
 		this.sessionDuration = this.options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
 		this.crossDomain = this.options.crossDomain ?? false;
-		this.sessions = new SessionStore(this, 'sessions');
+		this.sessions = new SessionStore(this, 'sessions', this.sessionDuration);
 		this.stateFile = join(getMockDataDir(this), 'state.json');
 		this.state = this.loadFromDisk();
 		this.challenges = new Map(Object.entries(this.state.challenges));
 		this.seedGroups();
+		this.adminSurface = this.buildAdminSurface();
 		registerSdkIdentifiers(this.fullId, { userPoolId: `mock-pool-${this.fullId}`, clientId: `mock-client-${this.fullId}` });
+	}
+
+	/**
+	 * Opt-in server-side admin surface (group membership + user lifecycle).
+	 *
+	 * Returns `AdminDisabled` (any member access is a compile error) unless the
+	 * pool was constructed with an `admin` options object, and throws at
+	 * runtime for untyped JS callers that reach past the type system. The set
+	 * of methods is narrowed by `admin.actions`; the runtime object always
+	 * carries every method (the type hides the ungranted ones).
+	 *
+	 * Because the mock holds a single in-memory `state`, every admin mutation
+	 * is immediately visible to this same instance's `signIn` / `requireRole`.
+	 *
+	 * @category admin
+	 */
+	get admin(): AdminGetterOf<O> {
+		if (!this.options.admin) {
+			throw new Error("admin not enabled: construct AuthCognito with { admin: {} }");
+		}
+		// The only cast: the concrete surface is typed against the wide base;
+		// `AdminGetterOf<O>` is a compile-time projection over `O` that the
+		// runtime object cannot express. Consumer-side narrowing is unaffected
+		// (verified by admin.types-test.ts).
+		return this.adminSurface as AdminGetterOf<O>;
+	}
+
+	/**
+	 * Throw a clear error when an admin method's action group wasn't granted by
+	 * `admin.actions` — the runtime half of the {@link AdminActionGate} compile
+	 * gate, so untyped JS callers (or widened generics) fast-fail here instead
+	 * of getting a cryptic AWS `AccessDenied` from Cognito.
+	 */
+	private assertAdminAction(action: 'groups' | 'lifecycle'): void {
+		const actions = this.options.admin?.actions;
+		if (actions && !actions.includes(action)) {
+			throw new ApiError(
+				`admin.${action} actions not granted: construct AuthCognito with admin: { actions: [..., '${action}'] }`,
+				403,
+				{ name: AuthCognitoErrors.NotAuthorized },
+			);
+		}
+	}
+
+	/**
+	 * Build the mock admin surface against the live `this.state`. All mutators
+	 * call the existing private `flushToDisk()` so changes persist and are seen
+	 * by the next request on this instance.
+	 */
+	private buildAdminSurface(): GroupAdmin<AuthCognitoOptions> & LifecycleAdmin<AuthCognitoOptions> {
+		const requireUser = (username: string): MockUserRecord => {
+			const user = this.state.users[username];
+			if (!user) {
+				throw new ApiError(`User '${username}' not found`, 404, { name: AuthCognitoErrors.UserNotFound });
+			}
+			return user;
+		};
+		const requireGroup = (group: string): string[] => {
+			const members = this.state.groups[group];
+			if (!members) {
+				throw new ApiError(`Group '${group}' not found`, 404, { name: AuthCognitoErrors.GroupNotFound });
+			}
+			return members;
+		};
+		const toAdminUser = (username: string, user: MockUserRecord): AdminUser => ({
+			username,
+			userSub: user.userSub,
+			enabled: !user.disabled,
+			attributes: { ...user.attributes },
+			groups: Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username)),
+		});
+		// Apply a scan filter in memory, mirroring Cognito's ListUsers Filter.
+		const matchesFilter = (user: AdminUser, filter?: AdminUserFilter): boolean => {
+			if (!filter) return true;
+			const candidate =
+				filter.attribute === 'username' ? user.username
+				: filter.attribute === 'status' ? (user.enabled ? 'Enabled' : 'Disabled')
+				: (user.attributes as Record<string, string>)[filter.attribute];
+			if (candidate == null) return false;
+			return filter.match === 'startsWith' ? candidate.startsWith(filter.value) : candidate === filter.value;
+		};
+
+		return {
+			// ── GroupAdmin ───────────────────────────────────────────────────
+			addUserToGroup: async (username, group) => {
+				this.assertAdminAction('groups');
+				requireUser(username);
+				const members = requireGroup(group);
+				if (!members.includes(username)) members.push(username);
+				this.flushToDisk();
+			},
+			removeUserFromGroup: async (username, group) => {
+				this.assertAdminAction('groups');
+				requireUser(username);
+				const members = requireGroup(group);
+				this.state.groups[group] = members.filter((u) => u !== username);
+				this.flushToDisk();
+			},
+			listGroupsForUser: async (username) => {
+				this.assertAdminAction('groups');
+				requireUser(username);
+				return Object.keys(this.state.groups).filter((g) => this.state.groups[g].includes(username));
+			},
+			listUsersInGroup: async (group) => {
+				this.assertAdminAction('groups');
+				const members = requireGroup(group);
+				return members.map((u) => toAdminUser(u, requireUser(u)));
+			},
+
+			// ── LifecycleAdmin ───────────────────────────────────────────────
+			createUser: async (username, init) => {
+				this.assertAdminAction('lifecycle');
+				if (this.state.users[username]) {
+					throw new ApiError('User already exists', 409, { name: AuthCognitoErrors.UserAlreadyExists });
+				}
+				const password = init?.temporaryPassword ?? this.generateTemporaryPassword();
+				this.enforcePasswordPolicy(password);
+				const attrs = this.prefixCustomAttrs(init?.attributes);
+				const aliasAttr = this.usernameAliasAttr();
+				if (aliasAttr && !attrs[aliasAttr]) attrs[aliasAttr] = username;
+				const userSub = crypto.randomUUID();
+				const record: MockUserRecord & { forcePasswordChange?: boolean } = {
+					userSub,
+					password,
+					confirmed: true,
+					disabled: false,
+					attributes: attrs,
+					mfaPreference: { enabled: [] },
+					totpVerified: false,
+					devices: {},
+					// Admin-created users must change the temp password on first
+					// sign-in — mirrors Cognito's FORCE_CHANGE_PASSWORD status.
+					forcePasswordChange: true,
+				};
+				this.state.users[username] = record;
+				this.flushToDisk();
+				return toAdminUser(username, record);
+			},
+			deleteUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				requireUser(username);
+				delete this.state.users[username];
+				for (const group of Object.keys(this.state.groups)) {
+					this.state.groups[group] = this.state.groups[group].filter((u) => u !== username);
+				}
+				this.flushToDisk();
+			},
+			disableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				requireUser(username).disabled = true;
+				this.flushToDisk();
+			},
+			enableUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				requireUser(username).disabled = false;
+				this.flushToDisk();
+			},
+			resetUserPassword: async (username) => {
+				this.assertAdminAction('lifecycle');
+				const user = requireUser(username) as MockUserRecord & { forcePasswordChange?: boolean };
+				user.forcePasswordChange = true;
+				this.flushToDisk();
+			},
+			setUserPassword: async (username, password, options) => {
+				this.assertAdminAction('lifecycle');
+				this.enforcePasswordPolicy(password);
+				const user = requireUser(username) as MockUserRecord & { forcePasswordChange?: boolean };
+				user.password = password;
+				if (options?.permanent) {
+					delete user.forcePasswordChange;
+				} else {
+					user.forcePasswordChange = true;
+				}
+				this.flushToDisk();
+			},
+			getUser: async (username) => {
+				this.assertAdminAction('lifecycle');
+				const user = this.state.users[username];
+				return user ? toAdminUser(username, user) : null;
+			},
+			scan: (filter?: AdminUserFilter) => {
+				this.assertAdminAction('lifecycle');
+				const self = this;
+				return (async function* () {
+					// Snapshot keys so concurrent mutation during iteration is safe.
+					for (const username of Object.keys(self.state.users)) {
+						const user = self.state.users[username];
+						if (!user) continue;
+						const adminUser = toAdminUser(username, user);
+						if (matchesFilter(adminUser, filter)) yield adminUser;
+					}
+				})();
+			},
+			revokeUserSessions: async (username) => {
+				this.assertAdminAction('lifecycle');
+				requireUser(username);
+				await this.sessions.deleteByUsername(username);
+			},
+		};
+	}
+
+	/** Generate a policy-compliant temporary password for admin-created users. */
+	private generateTemporaryPassword(): string {
+		// Always satisfies the default policy (upper/lower/digit/symbol, len ≥ 8).
+		return `Aa1!${crypto.randomBytes(9).toString('base64url')}`;
 	}
 
 	// ── Framework hooks ────────────────────────────────────────────────────
@@ -1510,13 +1732,14 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 
 	createApi(): AuthStateApi {
 		const enablePasskeys = this.options.enablePasskeys === true;
-		const baseSignedOut = (error?: string): AuthState =>
+		const baseSignedOut = (error?: string, errorName?: string): AuthState =>
 			signedOut({
 				selfSignUp: this.options.selfSignUp ?? true,
 				userAttributes: this.options.userAttributes ?? [],
 				enablePasskeys,
 				signInWith: this.options.signInWith,
 				error,
+				errorName,
 			});
 		const baseSignedIn = (user: CognitoUser<O>): AuthState =>
 			signedInState(user, { enablePasskeys });
@@ -1649,14 +1872,21 @@ export class AuthCognito<O extends AuthCognitoMockOptions = AuthCognitoMockOptio
 					}
 				} catch (e: unknown) {
 					const message = e instanceof Error ? e.message : 'An error occurred';
+					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Match the AWS runtime: retriable failures (wrong MFA
 					// code, rejected shape) emit a thin signedOut shape with
 					// `retriable: true` so the client can preserve its current
 					// challenge form instead of tearing it down.
 					if (e instanceof ApiError && e.retriable) {
-						return { state: 'signedOut', actions: [], error: message, retriable: true };
+						return {
+							state: 'signedOut',
+							actions: [],
+							error: message,
+							retriable: true,
+							...(errorName ? { errorName } : {}),
+						};
 					}
-					return { ...baseSignedOut(message) };
+					return baseSignedOut(message, errorName);
 				}
 			},
 		}));

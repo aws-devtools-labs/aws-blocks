@@ -6,6 +6,8 @@ Simple key-value storage backed by DynamoDB.
 
 **When NOT to use:** If you need to query by multiple fields or secondary indexes, use `DistributedTable`. If you need full SQL, use `Database`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## API
 
 ```typescript
@@ -14,10 +16,10 @@ const store = new KVStore(scope, id, options?)
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent. |
-| `put(key, value, conditions?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set. |
+| `get(key)` | `Promise<T \| null>` | Retrieve a value. Returns `null` if absent or expired. |
+| `put(key, value, options?)` | `Promise<void>` | Store a value. Overwrites unless conditions are set; accepts an optional expiry. |
 | `delete(key, conditions?)` | `Promise<void>` | Remove a value. |
-| `scan()` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Expensive on large datasets. |
+| `scan(options?)` | `AsyncIterable<{ key, value }>` | Enumerate all entries. Skips expired items unless `{ includeExpired: true }`. Expensive on large datasets. |
 | `KVStore.fromExisting(tableName)` | `ExternalTableRef` | Wrap a pre-existing DynamoDB table. |
 
 **Runtime only.** Data methods (`get`, `put`, `delete`, `scan`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct (no data methods), so a top-level call throws `store.<method> is not a function` (throws `TypeError` at runtime if called during CDK synth). To seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
@@ -30,10 +32,37 @@ const store = new KVStore(scope, id, options?)
 | `table` | `ExternalTableRef` | Wrap an existing DynamoDB table instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying DynamoDB table. When omitted, CDK's default (RETAIN — data preserved on `cdk destroy`) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+| `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
+
+### Expiring Items (TTL)
+
+TTL is opt-in in two steps — turn it on for the table, then set an expiry per write:
+
+```typescript
+const cache = new KVStore(scope, 'cache', { ttl: true });
+
+// Relative expiry — delete 5 minutes from now
+await cache.put('otp:alice', code, { ttlSeconds: 300 });
+
+// Absolute expiry — a Date, or Unix epoch time in SECONDS
+await cache.put('session:1', record, { expiresAt: new Date('2027-01-01') });
+
+// No expiry — stored indefinitely (the default)
+await cache.put('config:theme', 'dark');
+```
+
+- **`ttl` defaults to `false`.** Enabling it on a table that already exists is a CloudFormation update to the live table, so it never happens implicitly.
+- **The attribute is named `ttl`.** It is written only when `ttlSeconds` or `expiresAt` is supplied, and it holds Unix epoch **seconds**.
+- **`ttlSeconds` and `expiresAt` are mutually exclusive.** Passing both — or a value that looks like epoch milliseconds — throws `ValidationFailedException` rather than silently storing a year-5138 expiry.
+- **Reads never return expired items.** DynamoDB's reaper is asynchronous (typically within 48 hours), so `get` returns `null` and `scan` skips an item as soon as its expiry passes, in every runtime.
+- **Expiry is per write.** Re-putting a key without expiry options clears any previous expiry; re-putting with them slides it forward.
+- TTL composes with conditional writes: `put(key, value, { ifNotExists: true, ttlSeconds: 60 })`.
+
+TTL is a retention control, not an authorization one. Anything security-sensitive (session validity, token revocation) must still be checked on read.
 
 ### Conditional Operations
 
-Both `put` and `delete` accept an optional conditions object:
+Both `put` and `delete` accept an optional options object:
 
 ```typescript
 // Only write if key doesn't exist (idempotent create)

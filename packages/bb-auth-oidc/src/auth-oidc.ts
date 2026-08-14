@@ -464,7 +464,7 @@ export class AuthOIDC<
 					authorizeParamsBasePath: `${basePath}/authorize-params`,
 				};
 				return {
-					signIn(_provider: ProviderName<P>, _opts?: { state?: string; redirectPath?: string }) { /* server-side no-op */ },
+					async signIn(_provider: ProviderName<P>, _opts?: { state?: string; redirectPath?: string }) { /* server-side no-op */ },
 					async handleRedirectCallback() { return null; },
 					async signOut() {},
 					onAuthStateChange(_handler: (user: OIDCUser | null, meta: { state?: string } | null) => void) { return () => {}; },

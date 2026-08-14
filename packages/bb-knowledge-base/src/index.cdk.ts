@@ -8,7 +8,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
 import * as path from 'node:path';
@@ -19,7 +19,7 @@ export type {
 	KnowledgeBaseOptions, SourceConfig,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
-	MetadataFilter,
+	MetadataFilter, WaitUntilSyncedOptions,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -176,9 +176,11 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  *
  * **Environment variables injected into the handler:**
  * - `BLOCKS_{FULLID}_KB_ID` — Bedrock Knowledge Base ID (used by the AWS runtime)
+ * - `BLOCKS_{FULLID}_DATA_SOURCE_ID` — Bedrock data source ID (used by `isSynced()` / `waitUntilSynced()`)
  *
  * **IAM grants to the handler:**
  * - `bedrock:Retrieve` — query the knowledge base at runtime
+ * - `bedrock:GetIngestionJob`, `bedrock:ListIngestionJobs` — poll ingestion-job sync status
  *
  * @param scope - Parent scope.
  * @param id - Unique identifier within the scope.
@@ -191,6 +193,15 @@ export class KnowledgeBase extends Scope {
 		const dimensions = options.embeddingDimensions ?? 1024;
 
 		// ── 1. S3 Data Bucket ──────────────────────────────────────────────
+
+		// In sandbox mode, default to DESTROY + autoDeleteObjects so a teardown
+		// can fully clean up without manual bucket emptying. An explicit
+		// `removalPolicy` from the customer always takes precedence. Computed
+		// up-front because it also drives the S3 Vectors resources' deletion
+		// policy (section 2) — keeping the data bucket and the vector store in
+		// sync on teardown.
+		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
+		const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
 
 		let dataBucket: s3.IBucket;
 		let inclusionPrefixes: string[] | undefined;
@@ -219,11 +230,6 @@ export class KnowledgeBase extends Scope {
 				inclusionPrefixes = [prefix.endsWith('/') ? prefix : prefix + '/'];
 			}
 		} else {
-			// In sandbox mode, default to DESTROY + autoDeleteObjects so
-			// `cdk destroy` can fully clean up without manual bucket emptying.
-			// Explicit `removalPolicy` from the customer takes precedence.
-			const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-			const destroy = options.removalPolicy === 'destroy' || (isSandbox && options.removalPolicy === undefined);
 			dataBucket = new s3.Bucket(this, 'Data', {
 				bucketName: cdk.PhysicalName.GENERATE_IF_NEEDED,
 				blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
@@ -255,6 +261,19 @@ export class KnowledgeBase extends Scope {
 				nonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'],
 			},
 		});
+
+		// Mirror the data bucket's teardown behavior on the S3 Vectors L1
+		// resources. Unlike the L2 s3.Bucket — which defaults to RETAIN and can
+		// auto-empty via autoDeleteObjects — these CfnVectorBucket/CfnIndex
+		// resources rely solely on their CloudFormation DeletionPolicy (default:
+		// Delete). Without an explicit policy they'd be inconsistent with the
+		// data bucket on teardown. applyRemovalPolicy sets both DeletionPolicy
+		// and UpdateReplacePolicy. RETAIN by default (parity with the data
+		// bucket); DELETE only when a `removalPolicy:'destroy'` / sandbox
+		// teardown is requested, so the vector store is dropped alongside it.
+		const vectorRemovalPolicy = destroy ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN;
+		vectorBucket.applyRemovalPolicy(vectorRemovalPolicy);
+		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
 		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
@@ -430,23 +449,44 @@ export class KnowledgeBase extends Scope {
 			startIngestion.node.addDependency(deployment);
 		}
 
-		// ── 8. Handler env vars ───────────────────────────────────────────
-		// The AWS runtime reads these to locate the Bedrock resources.
+		// ── 8. Handler config (read by the AWS runtime) ───────────────────
+		// Registered via registerConfig (not addEnvironment) so the runtime can
+		// locate the Bedrock resources. KB_ID drives retrieve(); DATA_SOURCE_ID
+		// drives the isSynced()/waitUntilSynced() ingestion-sync checks.
 
 		registerConfig(this, envKey(this.fullId, 'KB_ID'), knowledgeBase.attrKnowledgeBaseId);
+		registerConfig(this, envKey(this.fullId, 'DATA_SOURCE_ID'), dataSource.attrDataSourceId);
 
 		// ── 9. Handler IAM grants ─────────────────────────────────────────
 
+		const knowledgeBaseArn = cdk.Stack.of(this).formatArn({
+			service: 'bedrock',
+			resource: 'knowledge-base',
+			resourceName: knowledgeBase.attrKnowledgeBaseId,
+			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+		});
+
 		this.handler.addToRolePolicy(new iam.PolicyStatement({
 			actions: ['bedrock:Retrieve'],
-			resources: [
-				cdk.Stack.of(this).formatArn({
-					service: 'bedrock',
-					resource: 'knowledge-base',
-					resourceName: knowledgeBase.attrKnowledgeBaseId,
-					arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
-				}),
-			],
+			resources: [knowledgeBaseArn],
+		}));
+
+		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
+		// authorized at the knowledge-base resource level (the data source and
+		// ingestion jobs are sub-resources of the KB ARN).
+		this.handler.addToRolePolicy(new iam.PolicyStatement({
+			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
+			resources: [knowledgeBaseArn],
 		}));
 	}
+
+	// ── Runtime methods are not available during CDK synth ────────────────
+	// Under `--conditions=cdk` a KnowledgeBase resolves to this construct, which
+	// only provisions infrastructure. The data/sync methods (retrieve/
+	// isSynced/waitUntilSynced) live in the runtime build. Calling them at module
+	// top-level (which runs during synth) would otherwise fail with a cryptic
+	// `X is not a function`; these stubs turn that into an actionable message.
+	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
+	isSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isSynced'); }
+	waitUntilSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilSynced'); }
 }

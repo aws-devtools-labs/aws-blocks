@@ -2,6 +2,8 @@
 
 Transactional email sending via Amazon SES.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Usage
 
 ```typescript

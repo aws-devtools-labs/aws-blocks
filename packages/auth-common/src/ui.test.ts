@@ -50,7 +50,7 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, onAuthChange, broadcastAuthChange } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, AccountMenuBar, onAuthChange, broadcastAuthChange } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -493,6 +493,53 @@ describe('Authenticator', () => {
 		const inputs = el.querySelectorAll('input');
 		assert.ok(inputs.length >= 2);
 	});
+
+	// ---------------------------------------------------------------------
+	// Synchronous first paint (regression guards)
+	// ---------------------------------------------------------------------
+
+	test('paints the sign-in form synchronously from a warm cache (signed out)', async () => {
+		const api = mockApi(signedOutState());
+		// Warm the shared cache for this api (async hydration on first mount).
+		const warm = Authenticator(api);
+		await flush();
+		assert.ok(warm.querySelectorAll('input').length >= 2, 'warm element hydrated');
+
+		// A fresh Authenticator on the now-warm api must paint synchronously —
+		// no `await flush()` before these assertions.
+		const el = Authenticator(api);
+		const inputs = el.querySelectorAll('input');
+		assert.ok(inputs.length >= 2, 'sign-in inputs present synchronously on return');
+		const labels = Array.from(el.querySelectorAll('button')).map((b) => b.textContent);
+		assert.ok(labels.includes('Sign In'), 'Sign In button present synchronously');
+	});
+
+	test('paints the signed-in view synchronously from a warm cache', async () => {
+		const api = mockApi(signedInState());
+		const warm = Authenticator(api);
+		await flush();
+		assert.ok(warm.textContent?.includes('alice'), 'warm element hydrated');
+
+		const el = Authenticator(api);
+		// No `await flush()` — synchronous paint is the point.
+		assert.ok(el.textContent?.includes('alice'), 'signed-in view painted synchronously');
+	});
+
+	test('does not re-render on a warm-cache load (no double paint)', async () => {
+		const api = mockApi(signedInState());
+		const warm = Authenticator(api);
+		await flush();
+		assert.ok(warm.textContent?.includes('alice'));
+
+		const el = Authenticator(api);
+		const firstChild = el.firstElementChild;
+		assert.ok(firstChild, 'painted synchronously on return');
+
+		await flush();
+		// `rerender` replaces children with a fresh subtree, so if the async
+		// hydrate repainted, firstElementChild would be a different node.
+		assert.strictEqual(el.firstElementChild, firstChild, 'async hydrate must not repaint a warm load');
+	});
 });
 
 describe('AuthenticatedContent', () => {
@@ -520,6 +567,48 @@ describe('AuthenticatedContent', () => {
 
 		assert.strictEqual(el.children.length, 0);
 	});
+
+	test('renders fallback when signed out and fallback is provided', async () => {
+		const api = mockApi(signedOutState());
+		const fallback = document.createElement('div');
+		fallback.textContent = 'Please sign in';
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		}, fallback);
+		await flush();
+
+		assert.ok(el.textContent?.includes('Please sign in'));
+	});
+
+	test('renders content (not fallback) when signed in and fallback is provided', async () => {
+		const api = mockApi(signedInState());
+		const fallback = document.createElement('div');
+		fallback.textContent = 'Please sign in';
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		}, fallback);
+		await flush();
+
+		assert.ok(el.textContent?.includes('Hello alice'));
+		assert.ok(!el.textContent?.includes('Please sign in'));
+	});
+
+	test('renders nothing when signed out and no fallback is provided (backward compat)', async () => {
+		const api = mockApi(signedOutState());
+		const el = AuthenticatedContent(api, (user) => {
+			const span = document.createElement('span');
+			span.textContent = `Hello ${user.username}`;
+			return span;
+		});
+		await flush();
+
+		assert.strictEqual(el.children.length, 0);
+		assert.strictEqual(el.textContent, '');
+	});
 });
 
 describe('onAuthChange', () => {
@@ -542,6 +631,91 @@ describe('onAuthChange', () => {
 
 		assert.strictEqual(received, null);
 		unsub();
+	});
+
+	// Regression guard: the FIRST emit must be synchronous (no await). Before
+	// the fix the only emit was deferred behind `ensureState().then(...)`, so a
+	// signed-out UI never painted a first frame and CI harnesses timed out.
+	test('emits synchronously on subscribe (signed out)', () => {
+		const api = mockApi(signedOutState());
+		let called = false;
+		let received: any = 'sentinel';
+		const unsub = onAuthChange(api, (user) => { called = true; received = user; });
+		// No `await flush()` here — synchronous emission is the whole point.
+		assert.strictEqual(called, true, 'callback must fire synchronously on subscribe');
+		assert.strictEqual(received, null, 'cold signed-out load emits null synchronously');
+		unsub();
+	});
+
+	test('emits the signed-in user synchronously from a warm cache', async () => {
+		const api = mockApi(signedInState());
+		// Warm the shared cache (async hydration triggered by the first subscribe).
+		const unsubWarm = onAuthChange(api, () => {});
+		await flush();
+
+		// A subsequent subscribe must emit the known user synchronously, and must
+		// NOT flash null → user — the dedupe suppresses the redundant refresh.
+		const seen: any[] = [];
+		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		assert.strictEqual(seen.length, 1, 'warm-cache subscribe emits exactly once, synchronously');
+		assert.deepStrictEqual(seen[0], { userId: 'alice', username: 'alice' });
+
+		await flush();
+		assert.strictEqual(seen.length, 1, 'no redundant repaint after async refresh (no null → user flash)');
+
+		unsub();
+		unsubWarm();
+	});
+
+	test('does not throw or strand the UI when getAuthState rejects', async () => {
+		const api = mockApi(signedOutState());
+		api.getAuthState = async () => { throw new Error('network down'); };
+
+		const seen: any[] = [];
+		// Subscribing must not throw even though hydration will reject.
+		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+
+		// Synchronous first frame still painted from the (cold) cache.
+		assert.strictEqual(seen.length, 1, 'sync first frame emitted before the rejection');
+		assert.strictEqual(seen[0], null);
+
+		// Let the rejected hydration settle: no unhandled rejection, no throw,
+		// and the last-known frame is preserved (no extra emit).
+		await flush();
+		assert.strictEqual(seen.length, 1, 'rejection does not strand or re-emit');
+
+		unsub();
+	});
+
+	test('retries hydration after a rejected getAuthState (hydrating not stranded)', async () => {
+		const api = mockApi(signedOutState());
+		let calls = 0;
+		api.getAuthState = async () => {
+			calls += 1;
+			if (calls === 1) throw new Error('network down');
+			return signedInState();
+		};
+
+		// First subscribe: sync null frame, then the hydration rejects.
+		const seen1: any[] = [];
+		const unsub1 = onAuthChange(api, (user) => { seen1.push(user); });
+		await flush();
+		assert.strictEqual(calls, 1, 'first hydration attempted');
+
+		// Second subscribe must RETRY hydration — the rejected attempt cleared
+		// cache.hydrating instead of stranding a rejected promise — and resolve
+		// to the now-available signed-in user.
+		const seen2: any[] = [];
+		const unsub2 = onAuthChange(api, (user) => { seen2.push(user); });
+		await flush();
+		assert.strictEqual(calls, 2, 'rejected hydration is retried, not replayed');
+		assert.ok(
+			seen2.some((u) => u && u.userId === 'alice'),
+			'retry resolves to the signed-in user',
+		);
+
+		unsub1();
+		unsub2();
 	});
 
 	test('reacts to broadcastAuthChange', async () => {
@@ -571,5 +745,181 @@ describe('onAuthChange', () => {
 		await flush();
 
 		assert.strictEqual(callCount, countAfterInit, 'Should not receive events after unsubscribe');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// data-testid contract
+//
+// These hooks are documented in CUSTOMIZING-AUTH-UI.md and e2e suites depend
+// on them, so renaming one is a breaking change.
+// ---------------------------------------------------------------------------
+
+describe('test hooks', () => {
+
+	function testId(root: ParentNode, id: string) {
+		return root.querySelector(`[data-testid="${id}"]`);
+	}
+
+	test('Authenticator container and per-action wrappers are addressable', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+
+		assert.strictEqual(el.getAttribute('data-testid'), 'authenticator');
+		assert.ok(testId(el, 'authenticator-heading'), 'heading hook present');
+		assert.ok(testId(el, 'authenticator-action-signIn'), 'signIn wrapper hook present');
+		assert.ok(testId(el, 'authenticator-action-signUp'), 'signUp wrapper hook present');
+	});
+
+	test('field and submit hooks are unique within an action wrapper', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+
+		const signIn = testId(el, 'authenticator-action-signIn')!;
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-username"]').length, 1);
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-password"]').length, 1);
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-submit"]').length, 1);
+
+		const username = testId(signIn, 'authenticator-username') as HTMLInputElement;
+		const password = testId(signIn, 'authenticator-password') as HTMLInputElement;
+		assert.strictEqual(username.name, 'username');
+		assert.strictEqual(password.type, 'password');
+		assert.strictEqual(testId(signIn, 'authenticator-submit')!.textContent, 'Sign In');
+	});
+
+	test('field hooks follow the field names the BB emits, hidden fields included', async () => {
+		const api = mockApi({
+			state: 'confirmingPasswordReset',
+			actions: [{
+				name: 'confirmResetPassword',
+				label: 'Reset Password',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+					{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+					{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+				],
+			}],
+		});
+		const el = Authenticator(api);
+		await flush();
+
+		const wrapper = testId(el, 'authenticator-action-confirmResetPassword')!;
+		const hiddenUsername = testId(wrapper, 'authenticator-username') as HTMLInputElement;
+		assert.strictEqual(hiddenUsername.type, 'hidden');
+		assert.strictEqual(hiddenUsername.value, 'alice');
+		assert.ok(testId(wrapper, 'authenticator-code'), 'code hook present');
+		assert.ok(testId(wrapper, 'authenticator-newPassword'), 'newPassword hook present');
+	});
+
+	test('a scoped submit hook drives the state machine', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		api.nextState = signedInState();
+
+		const signIn = testId(el, 'authenticator-action-signIn')!;
+		(testId(signIn, 'authenticator-username') as HTMLInputElement).value = 'alice';
+		(testId(signIn, 'authenticator-password') as HTMLInputElement).value = 'secret';
+		(testId(signIn, 'authenticator-submit') as HTMLButtonElement).click();
+		await flush();
+
+		assert.deepStrictEqual(api.calls, [{ action: 'signIn', fields: { username: 'alice', password: 'secret' } }]);
+		assert.strictEqual(testId(el, 'authenticator-signed-in')?.textContent, 'Signed in as: alice');
+	});
+
+	test('error hook carries the error text', async () => {
+		const api = mockApi({ ...signedOutState(), error: 'Invalid password' });
+		const el = Authenticator(api);
+		await flush();
+
+		assert.strictEqual(testId(el, 'authenticator-error')?.textContent, 'Invalid password');
+	});
+
+	test('external actions expose the same wrapper, field and submit hooks', async () => {
+		const api = mockApi(signedOutState([{
+			name: 'signIn:google',
+			label: 'Sign in with Google',
+			url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
+			method: 'GET',
+			fields: [
+				{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
+			],
+		}]));
+		const el = Authenticator(api);
+		await flush();
+
+		const form = testId(el, 'authenticator-action-signIn:google');
+		assert.ok(form, 'external action wrapper hook present');
+		assert.strictEqual(form!.tagName, 'FORM');
+		assert.ok(testId(form!, 'authenticator-redirect_uri'), 'hidden field hook present');
+		assert.strictEqual(testId(form!, 'authenticator-submit')?.textContent, 'Sign in with Google');
+	});
+
+	// Federated action names carry a `<action>:<provider>` suffix, and the hook
+	// keeps it verbatim, so the documented name contains a colon. That is only a
+	// hazard where a locator would parse the value as selector grammar, so pin
+	// the quoted-attribute lookup and the exact-match behavior both here and in
+	// CUSTOMIZING-AUTH-UI.md.
+	test('provider-suffixed action names keep the suffix in the hook', async () => {
+		const api = mockApi(signedOutState([
+			{ name: 'signIn', label: 'Sign In', fields: [
+				{ name: 'username', label: 'Username', type: 'text', required: true },
+			]},
+			{ name: 'signIn:google', label: 'Sign in with Google', url: 'https://accounts.google.com/o/oauth2/auth', method: 'GET', fields: [] },
+			{ name: 'signIn:okta', label: 'Sign in with Okta', url: 'https://example.okta.com/oauth2/v1/authorize', method: 'POST', fields: [] },
+		]));
+		const el = Authenticator(api);
+		await flush();
+
+		const google = testId(el, 'authenticator-action-signIn:google');
+		const okta = testId(el, 'authenticator-action-signIn:okta');
+		assert.ok(google, 'colon-suffixed hook resolves through a quoted attribute selector');
+		assert.ok(okta, 'a second provider gets its own hook');
+		assert.notStrictEqual(google, okta, 'providers do not collide on one hook');
+		assert.strictEqual(testId(google!, 'authenticator-submit')?.textContent, 'Sign in with Google');
+
+		// The bare `signIn` hook matches exactly, not by prefix, or scoping a
+		// form-flow test would land on an OAuth button.
+		const bare = testId(el, 'authenticator-action-signIn');
+		assert.ok(bare, 'the internal signIn action keeps its own hook');
+		assert.ok(testId(bare!, 'authenticator-username'), 'scoping through the bare hook still works');
+		assert.strictEqual(
+			testId(bare!, 'authenticator-action-signIn:google'),
+			null,
+			'suffixed actions are siblings of the bare action, not children',
+		);
+	});
+
+	test('AuthenticatedContent container is addressable', async () => {
+		const api = mockApi(signedInState());
+		const el = AuthenticatedContent(api, () => document.createElement('span'));
+		await flush();
+
+		assert.strictEqual(el.getAttribute('data-testid'), 'authenticated-content');
+	});
+
+	test('AccountMenuBar exposes sign-in, sign-out and username hooks', async () => {
+		const signedOutApi = mockApi(signedOutState());
+		const bar = AccountMenuBar(signedOutApi);
+		await flush();
+
+		assert.strictEqual(bar.getAttribute('data-testid'), 'account-menu');
+		const signInBtn = testId(bar, 'account-menu-signin') as HTMLButtonElement;
+		assert.ok(signInBtn, 'sign-in hook present when signed out');
+
+		signInBtn.click();
+		await flush();
+		const modal = testId(document.body, 'account-menu-modal')!;
+		assert.ok(modal, 'modal hook present after clicking sign in');
+		assert.ok(testId(modal, 'authenticator'), 'modal hosts the Authenticator');
+		(testId(modal, 'account-menu-modal-close') as HTMLButtonElement).click();
+
+		const signedInApi = mockApi(signedInState());
+		const signedInBar = AccountMenuBar(signedInApi);
+		await flush();
+		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
+		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
 	});
 });

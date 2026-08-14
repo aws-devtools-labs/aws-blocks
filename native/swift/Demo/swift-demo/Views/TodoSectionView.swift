@@ -1,6 +1,8 @@
 //
-// TodoSectionView.swift
-// Todo list with add, toggle, edit title, change priority, delete, and sort.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI
@@ -11,7 +13,7 @@ struct TodoSectionView: View {
     @State private var todos: [Todo] = []
     @State private var newTitle = ""
     @State private var newPriority: Int = 2
-    @State private var sortBy: Api.ListTodos.SortBy? = nil
+    @State private var sortBy: Api.ListTodos.SortBy?
     @State private var error: String?
     @State private var isLoading = false
 

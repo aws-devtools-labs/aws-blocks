@@ -27,10 +27,21 @@
  */
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { PgClientEngine } from '../engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from '../database.js';
 import { createCrudHandlers } from './index.js';
 import type { TableSchema } from './types.js';
+
+/**
+ * SSL for the e2e connections. When `DATABASE_CA_CERT` is set (always in CI — see
+ * the e2e-supabase workflow job, which pins the committed Supabase Root CA) the
+ * connection runs verify-full, exercising the TLS feature under test. Falls back
+ * to unverified only for ad-hoc local runs without a CA.
+ */
+const E2E_SSL = process.env.DATABASE_CA_CERT
+  ? { ca: readFileSync(process.env.DATABASE_CA_CERT, 'utf8'), rejectUnauthorized: true as const }
+  : { rejectUnauthorized: false as const };
 
 const env = {
   projectRef: process.env.SUPABASE_PROJECT_REF,
@@ -71,7 +82,7 @@ describe('db.crud() E2E — Supabase', { skip }, () => {
   before(async () => {
     engine = new PgClientEngine({
       connectionString: env.dbUrl!,
-      ssl: { rejectUnauthorized: false },
+      ssl: E2E_SSL,
     });
     db = new RLSEnabledDatabase(engine);
 

@@ -2,6 +2,8 @@
 
 OIDC sign-in gate for AWS Blocks applications. Sessions are long-lived and refresh transparently — users stay signed in past the IdP's ~1-hour ID token TTL, and sign-out actually invalidates the session server-side. Works with Google, GitHub, Okta, Auth0, Microsoft Entra, and any OIDC-compliant identity provider. Pointing at an existing Cognito User Pool is a supported path too.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quickstart
 
 Backend (`aws-blocks/index.ts`):
@@ -61,11 +63,95 @@ auth.signIn('google', { redirectPath: '/auth-return' });
 
 `redirectPath` becomes the OAuth `redirect_uri`, so it must be a page your frontend serves **and** a redirect URI registered with the provider (the stub IdP accepts any HTTPS or localhost URL, so local/sandbox needs no registration).
 
+### Re-rendering your UI on sign-in (React SPA)
+
+`signIn()` and `handleRedirectCallback()` drive the OIDC exchange; to make your app re-render once it completes, subscribe to auth-state changes. Two complementary hooks are available:
+
+- **`auth.onAuthStateChange(cb)`** — this OIDC client's own listener. Fires for this client instance on `signIn()` kickoff, on a successful `handleRedirectCallback()`, and on `signOut()`.
+- **`onAuthChange(authApi, cb)`** from `@aws-blocks/blocks/ui` — the shared `@aws-blocks/auth-common` subscription that also backs `<AuthenticatedContent>`. It updates **across components and browser tabs**.
+
+A successful `handleRedirectCallback()` notifies **both**: it calls the local listeners *and* bridges into `@aws-blocks/auth-common` by calling `broadcastAuthChange(user)` for you, so `onAuthChange` consumers (and `<AuthenticatedContent>`) re-render on client-PKCE sign-in — not just on server-initiated sign-in. You don't call `broadcastAuthChange()` yourself for sign-in; the client does. Because it fires both, a component that subscribes to **both** `auth.onAuthStateChange()` and `onAuthChange()` will have its handler invoked twice on a single client-PKCE sign-in — harmless if your handler is idempotent, but prefer one per component.
+
+```tsx
+import { useEffect, useState } from 'react';
+import { authApi } from 'aws-blocks';
+import { onAuthChange } from '@aws-blocks/blocks/ui';
+
+// Dedicated callback route (e.g. /auth-return) — completes the PKCE exchange.
+export function AuthCallback() {
+	useEffect(() => {
+		authApi.getClient()
+			.then((auth) => auth.handleRedirectCallback())
+			.catch((err) => console.error('OIDC callback failed', err));
+	}, []);
+	return <p>Signing you in…</p>;
+}
+
+// Any component — re-renders when auth state changes (this tab + other tabs).
+export function useUser() {
+	const [user, setUser] = useState(null);
+	// onAuthChange returns an unsubscribe fn; returning it cleans up on unmount.
+	useEffect(() => onAuthChange(authApi, setUser), []);
+	return user;
+}
+
+export function SignInButton() {
+	const user = useUser();
+	if (user) return <span>Hi, {user.username}</span>;
+	return (
+		<button onClick={async () => (await authApi.getClient()).signIn('google')}>
+			Sign in with Google
+		</button>
+	);
+}
+```
+
+`onAuthChange` invokes your callback **synchronously** with the current user (from a shared cache) for the first paint, then again whenever auth state changes, and returns an unsubscribe function — return it from `useEffect` to wire up cleanup. The same broadcast also reaches other open tabs, so signing in (or out) in one tab updates them all. In the dedicated-callback pattern above, though, `handleRedirectCallback()` *broadcasts* the sign-in rather than priming that shared cache, so a `useUser()` that mounts **after** the callback fired starts from a cache miss: it paints once as signed-out, then self-corrects when its own async `getAuthState()` resolves — an expected, transient flash.
+
 ### Which flow to use
 
 - **Server-initiated** (`GET /aws-blocks/auth/signin/<provider>` — a link or the `<Authenticator>` button): the backend owns the callback and sets the session cookie. This is the default for **same-origin** apps (frontend and API on one origin: local dev, single deployed origin, or the sandbox front door).
 - **Client PKCE** (`auth.signIn()` above): the browser handles the callback and POSTs to `/aws-blocks/auth/exchange`. Use it for SPAs, and required when the frontend and API are on **different origins**. Same-origin SPAs can use it too, but must pass a frontend `redirectPath` (the default current-page redirect avoids the backend `/aws-blocks/auth/callback`).
 - **Relay** (native/CLI): see [Native sign-in](#relay-flow-for-native-sign-in).
+
+### Server-initiated sign-in (`GET /aws-blocks/auth/signin/<provider>`)
+
+One route per configured provider, mounted by the block. It needs no client-side code at all: no PKCE verifier, no `getClient()`, no callback component. Point a browser at it and the whole flow runs on server-side redirects:
+
+```html
+<a href="/aws-blocks/auth/signin/google">Sign in with Google</a>
+```
+
+1. `GET /aws-blocks/auth/signin/google` → `302` to the IdP's authorize URL, plus a `Set-Cookie` with the short-lived pending-auth cookie (it carries the PKCE verifier and nonce server-side).
+2. The IdP authenticates the user and redirects back to `GET /aws-blocks/auth/callback?code=…&state=…`.
+3. The callback sees the pending-auth cookie, exchanges the code, runs `onSignIn`, sets the session cookie, and `302`s to `postSignInPath` (default `/`).
+
+The provider name is URL-encoded, so a provider called `my provider` is at `/aws-blocks/auth/signin/my%20provider`. Because there is one route per *configured* provider, a name you never declared has no route at all and `404`s; the `ProviderNotConfiguredException` for an unknown provider surfaces from `getSignInUrl()` (the RPC path), not from here. A failure while building the authorize URL, IdP discovery for example, returns JSON (`{"error":"...","name":"..."}`) with the error's status instead of a redirect.
+
+This is the path the block's own integration tests drive, because it is scriptable end to end with nothing but `fetch` and manual redirects:
+
+```bash
+# 1. kickoff, keeping the pending-auth cookie
+curl -i -c cookies.txt http://localhost:3000/aws-blocks/auth/signin/google
+# → 302 Location: /aws-blocks/auth/idp/google/authorize?...   (stubIdp provider)
+
+# 2. follow the IdP redirect (stubIdp auto-approves)
+curl -i -b cookies.txt -c cookies.txt "<authorize URL from step 1>"
+# → 302 Location: /aws-blocks/auth/callback?code=...&state=...
+
+# 3. the callback sets the session cookie and sends you back to the app
+curl -i -b cookies.txt -c cookies.txt "<callback URL from step 2>"
+# → 302 Location: /   + Set-Cookie: oidc_<instance>_session=...
+
+# 4. the session cookie now authenticates RPC calls
+curl -b cookies.txt -X POST http://localhost:3000/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"api.whoami","params":[],"id":1}'
+```
+
+Every response above is asserted, not just described. `test-apps/comprehensive/test/oidc-auth.test.ts` walks the same three redirects in `full sign-in flow via HTTP redirects — google` (and again against a custom OIDC provider in the `corporate` variant), checking the `302` chain, the pending-auth and session cookies, the `Location: /` that `postSignInPath` produces, and the authenticated RPC call that follows. The `404`s for an undeclared provider and for a `GET` on the sign-out route are asserted in the same file; the default `postSignInPath` and the `%20` provider encoding are asserted by the `path configuration` tests in `packages/bb-auth-oidc/src/index.test.ts`.
+
+Use it for server-rendered and zero-JS pages, for `<a>`-tag sign-in, and for integration tests. Reach for the client PKCE API instead when the frontend and API are on different origins, or when an SPA wants to stay on its own route and handle the callback itself. Both flows write the same session cookie, so `requireAuth` / `getAuthState` don't care which one signed the user in. Sign-out is the same route either way: `POST /aws-blocks/auth/signout` (a `GET` is a 404), normally via `auth.signOut()`.
 
 ## What the BB provisions
 
@@ -233,6 +319,8 @@ catch (e) {
 `NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
+
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
 
 ## Cognito-mediated federation
 

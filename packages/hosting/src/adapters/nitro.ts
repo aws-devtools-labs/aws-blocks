@@ -37,6 +37,7 @@ import {
   IPX_LAMBDA_HANDLER_SOURCE,
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
+import { normalizeBasePath } from './shared/basepath.js';
 
 export type NitroAdapterOptions = {
   /** Project root directory (the directory containing the framework config) */
@@ -373,6 +374,8 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // from a path other than the default `/_ipx`. We need the same
   // value so the CloudFront cache behavior + Lambda strip match.
   const ipxBaseURL = imageOptBundle ? findIpxBaseURL(projectDir) : undefined;
+  // @nuxt/image `image.domains` → remote-source allowlist for the IPX Lambda.
+  const imageDomains = imageOptBundle ? findNuxtImageDomains(projectDir) : [];
 
   // Merge route rules from the user's nuxt.config.ts (visible in
   // nitro.json on some Nitro versions) with the rules Nitro itself
@@ -393,10 +396,33 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
   // Nuxt/Nitro projects can also carry a vercel.json with crons (e.g. set up
   // for a Vercel preview) — warn for parity with the Next/Astro path.
   warnIfVercelCron(projectDir);
-  // basePath: skipped for Nitro/Nuxt. The framework-side equivalent
-  // (`app.baseURL` in nuxt.config) is not exposed in `.output/nitro.json`,
-  // and reading it from `nuxt.config.ts` would require migrating off the
-  // regex-based config scanner — tracked as a separate follow-up PR.
+  // basePath: Nuxt's `app.baseURL` (parity with Next `basePath` / Astro
+  // `base`). It's not in `.output/nitro.json`, so we read it from the
+  // server bundle's baked runtime config. Without this the prefix is
+  // dropped: the framework emits `/<base>/_nuxt/*` asset URLs but no
+  // matching CloudFront behavior is created, so every hashed asset 404s
+  // and the app renders but never hydrates.
+  const basePath = normalizeBasePath(readBundledBaseURL(serverDir));
+
+  // Safety net: if the bundle scan found nothing but the prerendered HTML
+  // clearly references a non-root `/<prefix>/_nuxt/` asset path, the
+  // extraction missed a real baseURL (e.g. a future Nitro bundle-shape
+  // change). Fail loud rather than silently shipping a broken site.
+  if (!basePath) {
+    const htmlPrefix = detectBaseURLFromPrerenderedHtml(publicDir);
+    if (htmlPrefix) {
+      throw new HostingError('NuxtBaseURLDetectionError', {
+        message:
+          `Detected a non-root asset prefix "${htmlPrefix}/_nuxt/" in the ` +
+          `prerendered output, but could not read app.baseURL from the ` +
+          `Nitro server bundle to model it.`,
+        resolution:
+          'This is likely an unsupported Nitro/Nuxt version whose bundle ' +
+          'layout changed. Please report it; as a workaround, deploy without ' +
+          '`app.baseURL` until support catches up.',
+      });
+    }
+  }
 
   return buildManifest({
     preset: resolvedPreset,
@@ -406,6 +432,8 @@ export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    imageDomains,
+    basePath,
   });
 };
 
@@ -602,12 +630,92 @@ const readBundledRouteRules = (
     if (!blob) continue;
     try {
       return JSON.parse(blob) as Record<string, NitroRouteRule>;
-      
+
     } catch {
       // Malformed extraction — try next candidate.
     }
   }
   return {};
+};
+
+/**
+ * Extract Nuxt's `app.baseURL` from the built server bundle.
+ *
+ * `app.baseURL` (Next's `basePath` / Astro's `base` equivalent) is NOT
+ * surfaced in `.output/nitro.json`, but Nitro bakes it into the runtime
+ * config inside the server bundle as a single `"baseURL": "<value>"`
+ * entry. We read it from there (the same bundle-scan approach as
+ * {@link readBundledRouteRules}) rather than parsing `nuxt.config.ts`.
+ *
+ * Returns the raw value (e.g. `'/myapp/'`), or `undefined` when absent or
+ * the default `'/'` (which means "no base path").
+ * @internal
+ */
+const readBundledBaseURL = (serverDir: string): string | undefined => {
+  const candidates: string[] = [];
+  const bundlePath = resolveNitroBundlePath(serverDir);
+  if (bundlePath) candidates.push(bundlePath);
+  const indexPath = path.join(serverDir, 'index.mjs');
+  if (fs.existsSync(indexPath)) candidates.push(indexPath);
+
+  for (const candidate of candidates) {
+    const source = fs.readFileSync(candidate, 'utf-8');
+    // Scope to the `"app":{...}` block, then read ONLY its `baseURL`. The
+    // runtime config also carries `ipx.baseURL` (default `/_ipx`) under
+    // `_inlineRuntimeConfig`; a bare `/"baseURL"/` match over the whole source
+    // is order-dependent and would silently pick up `/_ipx` if the bundle ever
+    // serialized it before `app.baseURL` — setting basePath to `/_ipx` and
+    // 308-ing the whole site. Brace-scoping to the `app` object (same approach
+    // as readBundledRouteRules) removes that ambiguity. Try both `"app":` and
+    // `app:` (un-quoted key) since the inlined literal isn't always strict JSON.
+    //
+    // No whole-source fallback: a wrong prefix is worse than a missed one (the
+    // HTML safety net catches a MISSED app.baseURL, but not a WRONG one). If the
+    // app block isn't found, return undefined and let detectBaseURLFromPrerendered
+    // Html fail loud on a genuinely missed prefix.
+    const appBlock =
+      extractJsonObjectAfter(source, '"app":') ??
+      extractJsonObjectAfter(source, 'app:');
+    if (!appBlock) continue;
+    const match = appBlock.match(/"baseURL"\s*:\s*"([^"]*)"/);
+    if (match) {
+      const value = match[1];
+      return value === '/' ? undefined : value;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * Safety net for {@link readBundledBaseURL}: if the bundle scan came up
+ * empty but the prerendered HTML clearly shows a non-root asset prefix
+ * (e.g. `/myapp/_nuxt/...`), the extraction silently missed a real
+ * baseURL — a future Nitro bundle-shape change would otherwise re-open the
+ * "baseURL dropped → assets 404" bug. Fail loud instead.
+ *
+ * Returns the prefix detected in HTML (normalized, no `_nuxt`), or
+ * `undefined` when none (the common no-baseURL case).
+ * @internal
+ */
+const detectBaseURLFromPrerenderedHtml = (
+  publicDir: string,
+): string | undefined => {
+  const htmlFiles = fg.sync('**/*.html', {
+    cwd: publicDir,
+    absolute: true,
+    onlyFiles: true,
+  });
+  for (const file of htmlFiles.slice(0, 20)) {
+    const html = fs.readFileSync(file, 'utf-8');
+    // Match an absolute asset reference like `/myapp/_nuxt/abc.js`. The
+    // default (root) build emits `/_nuxt/...`, which yields prefix ''.
+    const m = html.match(/["'(](\/[^"'()]*?)\/_nuxt\//);
+    if (m) {
+      const prefix = m[1]; // '' for root, '/myapp' for a base path
+      return prefix === '' ? undefined : prefix;
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -1038,6 +1146,75 @@ const findIpxBaseURL = (projectDir: string): string | undefined => {
 };
 
 /**
+ * Read `@nuxt/image`'s `image.domains` allowlist from nuxt.config so the IPX
+ * Lambda can be configured to fetch remote source images (it default-denies
+ * remote fetches when the allowlist is empty, to avoid an SSRF primitive).
+ *
+ * `<NuxtImg src="https://host/…">` only optimizes a remote image when its
+ * hostname is in `image.domains`; we mirror that allowlist into
+ * `manifest.imageOptimization.domains` → the Lambda's `IMAGE_ALLOWED_HOSTNAMES`
+ * env. Conservative: matches a literal `domains: ['a', 'b']` array of string
+ * literals; anything dynamic yields an empty list (fails closed).
+ */
+/**
+ * Pure parser: extract `image.domains` string literals from a nuxt.config
+ * source. Exported for unit testing (esp. nested-object-before-domains).
+ */
+export const parseNuxtImageDomains = (source: string): string[] => {
+  // Scope to the `image: { … }` block. Use BRACE BALANCING (not a non-greedy
+  // `[\s\S]*?\}`, which stops at the first `}` and would truncate the scope
+  // when a nested object — e.g. `provider: { … }` — precedes `domains`,
+  // silently dropping the allowlist). Fall back to the whole source if the
+  // block can't be isolated.
+  const scope = extractImageBlock(source) ?? source;
+  const arr = scope.match(/\bdomains\s*:\s*\[([^\]]*)\]/);
+  if (!arr) return [];
+  return [...arr[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map((m) => m[1]);
+};
+
+const findNuxtImageDomains = (projectDir: string): string[] => {
+  for (const ext of ['ts', 'mjs', 'js', 'cjs']) {
+    const candidate = path.join(projectDir, `nuxt.config.${ext}`);
+    if (!fs.existsSync(candidate)) continue;
+    const source = fs.readFileSync(candidate, 'utf-8');
+    return parseNuxtImageDomains(source);
+  }
+  return [];
+};
+
+/**
+ * Return the full `image: { … }` object literal from a nuxt.config source,
+ * brace-balanced so nested objects (`provider: { … }`) don't truncate it.
+ * Returns undefined if no `image:` block is found or the braces don't balance
+ * (e.g. computed/spread config) — callers fall back to scanning the source.
+ *
+ * Note: skips `{`/`}` that appear inside string/template literals so a brace in
+ * a config value doesn't throw off the depth count.
+ */
+const extractImageBlock = (source: string): string | undefined => {
+  const m = source.match(/\bimage\s*:\s*\{/);
+  if (m?.index === undefined) return undefined;
+  const open = m.index + m[0].length - 1; // index of the opening `{`
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < source.length; i++) {
+    const c = source[i];
+    if (quote) {
+      if (c === '\\') i++; // skip escaped char
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') quote = c;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  return undefined; // unbalanced
+};
+
+/**
  * Build the DeployManifest from a known-good `.output/` layout.
  */
 const buildManifest = (input: {
@@ -1053,6 +1230,10 @@ const buildManifest = (input: {
    * `runtimeConfig.ipx.baseURL` in nuxt.config.
    */
   ipxBaseURL?: string;
+  /** `@nuxt/image` `image.domains` → IPX remote-source allowlist. */
+  imageDomains?: string[];
+  /** Normalized `app.baseURL` (Nuxt), if set. Maps to `manifest.basePath`. */
+  basePath?: string;
 }): DeployManifest => {
   const {
     preset,
@@ -1062,6 +1243,8 @@ const buildManifest = (input: {
     awsLambdaStreaming,
     imageOptBundle,
     ipxBaseURL,
+    imageDomains,
+    basePath,
   } = input;
 
   // Default the IPX base URL to @nuxt/image's `/_ipx` convention.
@@ -1106,6 +1289,16 @@ const buildManifest = (input: {
     manifest.headers = headers;
   }
 
+  // Nuxt `app.baseURL` → cross-framework `manifest.basePath`. The L3
+  // prefixes every CloudFront behavior with it (and 308-redirects the bare
+  // root to `/<base>/`), matching the Next/Astro path.
+  if (basePath) {
+    manifest.basePath = basePath;
+    process.stdout.write(
+      `🔗 Detected Nuxt app.baseURL=${basePath}; CloudFront behaviors will be prefixed.\n`,
+    );
+  }
+
   // If any route rule uses SWR / ISR / cache, ask the L3 to provision
   // a shared S3-backed cache. Nitro's `useStorage('cache')` reads/writes
   // through the S3 cache plugin we injected into the build.
@@ -1126,6 +1319,11 @@ const buildManifest = (input: {
       // the IPX runtime accepts any size requested in the URL anyway.
       formats: ['webp', 'avif'],
       sizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+      // @nuxt/image `image.domains` → IPX Lambda remote-source allowlist
+      // (IMAGE_ALLOWED_HOSTNAMES). Empty = default-deny (local images only).
+      ...(imageDomains && imageDomains.length > 0
+        ? { domains: imageDomains }
+        : {}),
       baseURL: effectiveIpxBaseURL,
       // Forward the user-configured base URL into the Lambda so its
       // prefix-stripping regex matches whatever path CloudFront
@@ -1252,36 +1450,44 @@ const buildRoutes = (
       addRoute({ pattern, target: 'static' });
     }
 
-    // Walk for prerendered HTML pages and emit a *subtree* route for each.
+    // Walk for prerendered HTML pages and emit BOTH the bare route and its
+    // subtree as static → S3:
+    //   - `/<route>`   → so the canonical bare URL serves the FROZEN prerendered
+    //     HTML from S3 (the build-id rewrite's directory-index branch appends
+    //     `/index.html` to any extensionless path → `builds/{id}/<route>/index.html`,
+    //     which is exactly how Nuxt prerenders `/about` → `about/index.html`).
+    //   - `/<route>/*` → so sibling assets the framework prefetches
+    //     (`_payload.json`, etc.) also resolve from S3.
     //
-    // We deliberately do NOT emit a bare `/<route>` static route — the
-    // CloudFront build-ID rewrite Function only appends `index.html` when
-    // the URI ends with `/`, so `/about` would resolve to the S3 key
-    // `builds/{id}/about` (no such object → 403). Instead we route
-    // `/<route>/*` to S3 (so `_payload.json` and other sibling assets the
-    // framework prefetches resolve), and let the bare `/<route>` flow
-    // through the catch-all to the SSR Lambda, which re-renders the page
-    // from the bundled component on demand.
+    // (Historically only `/<route>/*` was emitted and bare `/<route>` fell
+    // through to the SSR Lambda — which re-rendered a `prerender: true` page on
+    // every request, breaking the "frozen, served from S3, no Lambda" contract.
+    // The router's directory-index rewrite now handles bare extensionless paths,
+    // so the bare route resolves correctly from S3.)
     for (const htmlFile of walkHtmlFiles(publicDir)) {
       const rel = path.relative(publicDir, htmlFile).replace(/\\/g, '/');
       const urlPath = htmlFileToUrlPath(rel);
       if (urlPath === '/') continue;
+      addRoute({ pattern: urlPath, target: 'static' });
       addRoute({ pattern: `${urlPath}/*`, target: 'static' });
     }
   }
 
   // Honour route rules with `prerender: true` even if the build hasn't
-  // emitted a file at that path yet. We emit the subtree pattern only
-  // (e.g. `/about/*` not bare `/about`) for the same reason the
-  // filesystem walk above does — the build-ID rewriter can't resolve a
-  // bare prerendered path to its index.html.
+  // emitted a file at that path yet. Emit BOTH the bare route and its subtree
+  // as static (the router's directory-index rewrite resolves the bare
+  // extensionless path to its `index.html` on S3 — see the filesystem walk
+  // above), so a `prerender: true` page is served frozen from S3 rather than
+  // re-rendered by the SSR Lambda.
   for (const [routePattern, rule] of Object.entries(routeRules)) {
     if (rule.prerender) {
       const normalized = normalizeRulePattern(routePattern);
-      const subtree = normalized.endsWith('/*')
-        ? normalized
-        : `${normalized}/*`;
-      addRoute({ pattern: subtree, target: 'static' });
+      if (normalized.endsWith('/*')) {
+        addRoute({ pattern: normalized, target: 'static' });
+      } else {
+        addRoute({ pattern: normalized, target: 'static' });
+        addRoute({ pattern: `${normalized}/*`, target: 'static' });
+      }
     }
   }
 

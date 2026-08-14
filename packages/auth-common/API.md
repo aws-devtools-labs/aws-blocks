@@ -121,6 +121,7 @@ export interface AuthField {
 export interface AuthState {
     actions: AuthAction[];
     error?: string;
+    errorName?: string;
     retriable?: boolean;
     state: 'signedOut' | 'signedIn' | 'confirmingSignUp' | 'confirmingSignIn' | 'confirmingMfa' | 'confirmingPasswordReset';
     user?: AuthUser;

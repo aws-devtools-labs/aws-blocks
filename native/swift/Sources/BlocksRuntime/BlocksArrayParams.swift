@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 /// Encodes a fixed-order list of heterogeneous values as a JSON array.
@@ -23,7 +30,7 @@ private struct AnyEncodableValue: Encodable {
     private let _encode: (Encoder) throws -> Void
 
     init(_ value: any Encodable) {
-        _encode = { encoder in try value.encode(to: encoder) }
+        self._encode = { encoder in try value.encode(to: encoder) }
     }
 
     func encode(to encoder: Encoder) throws {

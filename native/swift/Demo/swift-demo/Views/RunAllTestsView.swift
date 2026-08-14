@@ -1,6 +1,8 @@
 //
-// RunAllTestsView.swift
-// Runs KV store and cookie integration tests.
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
 //
 
 import SwiftUI

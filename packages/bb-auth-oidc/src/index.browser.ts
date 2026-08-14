@@ -9,6 +9,8 @@
  */
 
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
+import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
+import type { AuthUser } from '@aws-blocks/auth-common';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -169,6 +171,27 @@ export type AuthStateHandler<U> = (user: U | null, meta: AuthStateMeta | null) =
 const subscribers = new Set<AuthStateHandler<unknown>>();
 let lastUser: unknown | null = null;
 
+/**
+ * In-flight `handleRedirectCallback` guard, keyed by `(exchangePath, code)`.
+ *
+ * Scoped to same-tab, in-process concurrency: a double invocation — e.g. React
+ * StrictMode's mount → unmount → mount, which fires the callback effect twice
+ * synchronously — shares this one promise instead of racing to exchange the
+ * single-use code twice. The second exchange would fail (or find the pending
+ * entry already consumed and return `null`), stranding the app on a signed-out
+ * screen despite a successful sign-in.
+ *
+ * This module variable does not survive a real page reload; cross-reload
+ * coordination falls back to the up-front `sessionStorage` removal in
+ * `_exchangeCallback` (a late caller finds no pending entry and resolves
+ * `null`). Keying on `exchangePath` keeps two clients with distinct exchange
+ * endpoints from sharing each other's in-flight exchange.
+ *
+ * The guard is released once the exchange settles (success or failure) so a
+ * genuinely new flow on the same page is never blocked.
+ */
+let _callbackInflight: { exchangePath: string; code: string; promise: Promise<unknown> } | null = null;
+
 function notify(user: unknown | null, meta: AuthStateMeta | null): void {
 	for (const sub of subscribers) {
 		try { sub(user, meta); } catch { /* swallow handler errors */ }
@@ -186,7 +209,7 @@ function notify(user: unknown | null, meta: AuthStateMeta | null): void {
  */
 export class AuthOIDCClient<
 	Provider extends string = string,
-	User = { userId: string; username: string },
+	User extends AuthUser = { userId: string; username: string },
 > {
 	readonly providers: readonly Provider[];
 
@@ -233,9 +256,13 @@ export class AuthOIDCClient<
 	 *   and that runs `handleRedirectCallback()`. Becomes the OAuth `redirect_uri`,
 	 *   so it must be a frontend-served page registered with the provider.
 	 *   Defaults to the current page.
+	 * @returns A promise that resolves once the browser has been navigated to the
+	 *   IdP. It **rejects** if the PKCE setup fails (e.g. the authorize-params
+	 *   fetch errors) — `await` it or attach a `.catch()` to surface the failure
+	 *   instead of letting it become a silent unhandled rejection.
 	 */
-	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): void {
-		void this._signInPKCE(provider, opts?.state, opts?.redirectPath);
+	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void> {
+		return this._signInPKCE(provider, opts?.state, opts?.redirectPath);
 	}
 
 	/**
@@ -292,67 +319,119 @@ export class AuthOIDCClient<
 	/**
 	 * Complete the IdP redirect callback. Reads `code`/`state` from the URL,
 	 * verifies state, and POSTs to `/aws-blocks/auth/exchange`.
+	 *
+	 * Idempotent under double invocation: a second call for the same PKCE
+	 * `code` while the exchange is in flight (e.g. React StrictMode's
+	 * double-mount) shares the first call's promise rather than replaying the
+	 * single-use code, so both callers resolve to the same user.
+	 *
 	 * @returns The authenticated user, or `null` if no pending PKCE flow.
+	 * @throws {Error} On state mismatch or a failed `/aws-blocks/auth/exchange` (both concurrent callers reject with the same Error).
 	 */
-	async handleRedirectCallback(): Promise<User | null> {
-		if (typeof window === 'undefined') return null;
-		const url = new URL(window.location.href);
-		const code = url.searchParams.get('code');
-		const returnedState = url.searchParams.get('state');
-		if (!code || !returnedState) return null;
-		// Forward RFC 9207 `iss` when present — the server-side exchange passes it
-		// to openid-client, which fails the exchange if the provider sent it and
-		// we drop it.
-		const iss = url.searchParams.get('iss') ?? undefined;
+	handleRedirectCallback(): Promise<User | null> {
+		if (typeof window === 'undefined') return Promise.resolve(null);
+		const { searchParams } = new URL(window.location.href);
+		const code = searchParams.get('code');
+		const returnedState = searchParams.get('state');
+		if (!code || !returnedState) return Promise.resolve(null);
 
-		const raw = sessionStorage.getItem(_PENDING_STORAGE_KEY);
-		if (!raw) return null;
+		// Share an in-flight exchange for this endpoint + code so a concurrent/
+		// double invocation can't consume the single-use code twice.
+		if (_callbackInflight && _callbackInflight.code === code && _callbackInflight.exchangePath === this.exchangePath) {
+			return _callbackInflight.promise as Promise<User | null>;
+		}
 
-		const pending = JSON.parse(raw) as {
-			provider: string;
-			verifier: string;
-			state: string;
-			nonce: string;
-			callbackUrl: string;
-			appState?: string;
-		};
+		// Forward RFC 9207 `iss` when present — the server-side exchange passes
+		// it to openid-client, which fails the exchange if the provider sent it
+		// and we drop it.
+		const iss = searchParams.get('iss') ?? undefined;
+		const promise = this._exchangeCallback(code, returnedState, iss);
+		_callbackInflight = { exchangePath: this.exchangePath, code, promise };
+		return promise;
+	}
 
-		if (returnedState !== pending.state) {
+	/**
+	 * Perform the one-shot PKCE code exchange. Consumes the pending entry up
+	 * front (so a late duplicate can't replay it) and releases the in-flight
+	 * guard once settled.
+	 *
+	 * @param iss - RFC 9207 issuer read from the callback URL (forwarded to the
+	 *   server-side exchange), or `undefined` when the provider sent none.
+	 */
+	private async _exchangeCallback(code: string, returnedState: string, iss: string | undefined): Promise<User | null> {
+		try {
+			// Consume the single-use pending PKCE entry up front. Removing it before
+			// the network round-trip (rather than after) means a duplicate call that
+			// somehow misses the in-flight guard still can't start a second exchange.
+			const raw = sessionStorage.getItem(_PENDING_STORAGE_KEY);
+			if (!raw) return null;
 			sessionStorage.removeItem(_PENDING_STORAGE_KEY);
-			throw new Error('AuthOIDC: state mismatch in callback');
+
+			const pending = JSON.parse(raw) as {
+				provider: string;
+				verifier: string;
+				state: string;
+				nonce: string;
+				callbackUrl: string;
+				appState?: string;
+			};
+
+			if (returnedState !== pending.state) {
+				throw new Error('AuthOIDC: state mismatch in callback');
+			}
+
+			const baseUrl = await _getBaseUrl();
+			const resp = await fetch(`${baseUrl}${this.exchangePath}`, {
+				method: 'POST',
+				credentials: 'include',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					code,
+					verifier: pending.verifier,
+					state: pending.state,
+					nonce: pending.nonce,
+					provider: pending.provider,
+					callbackUrl: pending.callbackUrl,
+					...(iss ? { iss } : {}),
+				}),
+			});
+
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({ error: 'Exchange failed' }));
+				throw new Error(`AuthOIDC exchange failed: ${(err as any).error ?? resp.status}`);
+			}
+
+			const body = await resp.json() as { user?: User } & Partial<User>;
+			// /aws-blocks/auth/exchange wraps the user (`{ user }`, or `{ user, accessToken, ... }`
+			// in bearer mode); unwrap to match the declared `User` return type. `?? body`
+			// guards a future engine path that returns a bare user.
+			const user = (body.user ?? body) as User;
+			lastUser = user;
+			notify(user, { state: pending.appState });
+			// Bridge into @aws-blocks/auth-common so its `onAuthChange` subscribers and
+			// `<AuthenticatedContent>` re-render on sign-in (same window AND other tabs),
+			// not just this client's own `onAuthStateChange` listeners.
+			//
+			// We broadcast rather than write auth-common's state directly — two known,
+			// non-blocking consequences:
+			//   - It doesn't prime auth-common's shared cache (keyed by AuthStateApi and
+			//     written via a private `updateState`; this client holds no such handle),
+			//     so a component that subscribes via `onAuthChange` *after* this fires
+			//     paints `null` for one frame, then self-corrects on its `getAuthState()`.
+			//   - A same-tab `<Authenticator>` listens only on the cross-tab
+			//     BroadcastChannel (which never fires in the originating tab), so it
+			//     won't react here; `onAuthChange` / `<AuthenticatedContent>` do.
+			// The `User` generic is constrained to `extends AuthUser`, so the exchange
+			// response is structurally a superset of AuthUser's { userId, username }.
+			broadcastAuthChange(user);
+			return user;
+		} finally {
+			// Release the guard once this exchange settles (success or failure) so a
+			// brand-new flow on the same page is never blocked by a stale entry.
+			if (_callbackInflight?.code === code && _callbackInflight?.exchangePath === this.exchangePath) {
+				_callbackInflight = null;
+			}
 		}
-
-		const baseUrl = await _getBaseUrl();
-		const resp = await fetch(`${baseUrl}${this.exchangePath}`, {
-			method: 'POST',
-			credentials: 'include',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				code,
-				verifier: pending.verifier,
-				state: pending.state,
-				nonce: pending.nonce,
-				provider: pending.provider,
-				callbackUrl: pending.callbackUrl,
-				...(iss ? { iss } : {}),
-			}),
-		});
-
-		sessionStorage.removeItem(_PENDING_STORAGE_KEY);
-
-		if (!resp.ok) {
-			const err = await resp.json().catch(() => ({ error: 'Exchange failed' }));
-			throw new Error(`AuthOIDC exchange failed: ${(err as any).error ?? resp.status}`);
-		}
-
-		const body = await resp.json() as { user?: User } & Partial<User>;
-		// /aws-blocks/auth/exchange wraps the user (`{ user }`, or `{ user, accessToken, ... }`
-		// in bearer mode); unwrap to match the declared `User` return type. `?? body`
-		// guards a future engine path that returns a bare user.
-		const user = (body.user ?? body) as User;
-		lastUser = user;
-		notify(user, { state: pending.appState });
-		return user;
 	}
 
 	/** Sign out and reload the page. */
@@ -361,7 +440,18 @@ export class AuthOIDCClient<
 		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
 		lastUser = null;
 		notify(null, null);
+		// Bridge the sign-out into @aws-blocks/auth-common too, symmetrically with
+		// handleRedirectCallback(). The reload below only repaints THIS tab, and
+		// BroadcastChannel.postMessage never fires in the originating tab, so other
+		// open tabs' onAuthChange / <AuthenticatedContent> consumers would keep
+		// rendering the signed-in user until their own next reload without this.
+		//
+		// broadcastAuthChange() opens a BroadcastChannel and dispatches a window
+		// event, so it needs the same browser globals as the reload — guard both
+		// together so a server-side sign-out (no window) doesn't throw a
+		// ReferenceError after the sign-out POST above has already succeeded.
 		if (typeof window !== 'undefined' && window.location) {
+			broadcastAuthChange(null);
 			window.location.reload();
 		}
 	}

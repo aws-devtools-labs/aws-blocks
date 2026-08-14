@@ -2,6 +2,8 @@
 
 Structured logging with consistent JSON format, log levels, and contextual metadata.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## When to Use
 
 - You need structured, queryable application logs

@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -27,7 +34,7 @@ public protocol WebSocketDelegate: AnyObject {
 /// registered delegates.
 ///
 /// When the last delegate is removed, the underlying WebSocket is closed.
-internal class WebSocketSession {
+class WebSocketSession {
 
     // MARK: - DispatchingListener
 
@@ -39,11 +46,11 @@ internal class WebSocketSession {
         func add(_ listener: WebSocketDelegate) {
             lock.lock()
             listeners.append(listener)
-            let ws = openWebSocket
+            let webSocket = openWebSocket
             lock.unlock()
 
-            if let ws = ws {
-                listener.onOpen(ws)
+            if let webSocket {
+                listener.onOpen(webSocket)
             }
         }
 
@@ -64,21 +71,27 @@ internal class WebSocketSession {
             openWebSocket = webSocket
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onOpen(webSocket) }
+            for delegate in snapshot {
+                delegate.onOpen(webSocket)
+            }
         }
 
         func dispatchMessage(_ webSocket: URLSessionWebSocketTask, text: String) {
             lock.lock()
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onMessage(webSocket, text: text) }
+            for delegate in snapshot {
+                delegate.onMessage(webSocket, text: text)
+            }
         }
 
         func dispatchFailure(_ webSocket: URLSessionWebSocketTask, error: Error) {
             lock.lock()
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onFailure(webSocket, error: error) }
+            for delegate in snapshot {
+                delegate.onFailure(webSocket, error: error)
+            }
         }
 
         func dispatchClosed(_ webSocket: URLSessionWebSocketTask, code: Int, reason: String) {
@@ -86,7 +99,9 @@ internal class WebSocketSession {
             openWebSocket = nil
             let snapshot = listeners
             lock.unlock()
-            for l in snapshot { l.onClosed(webSocket, code: code, reason: reason) }
+            for delegate in snapshot {
+                delegate.onClosed(webSocket, code: code, reason: reason)
+            }
         }
     }
 
@@ -121,27 +136,27 @@ internal class WebSocketSession {
 
     private func startReceiveLoop(entry: ConnectionEntry) {
         entry.receiveLoop = Task {
-            let ws = entry.task
+            let webSocket = entry.task
 
             // Notify delegates that connection is open
-            entry.dispatcher.dispatchOpen(ws)
+            entry.dispatcher.dispatchOpen(webSocket)
 
             while !Task.isCancelled {
                 do {
-                    let message = try await ws.receive()
+                    let message = try await webSocket.receive()
                     switch message {
                     case .string(let text):
-                        entry.dispatcher.dispatchMessage(ws, text: text)
+                        entry.dispatcher.dispatchMessage(webSocket, text: text)
                     case .data(let data):
                         if let text = String(data: data, encoding: .utf8) {
-                            entry.dispatcher.dispatchMessage(ws, text: text)
+                            entry.dispatcher.dispatchMessage(webSocket, text: text)
                         }
                     @unknown default:
                         break
                     }
                 } catch {
                     if !Task.isCancelled {
-                        entry.dispatcher.dispatchFailure(ws, error: error)
+                        entry.dispatcher.dispatchFailure(webSocket, error: error)
                     }
                     break
                 }
@@ -161,12 +176,12 @@ internal class WebSocketSession {
         }
 
         lock.lock()
-        let k = key(wsUrl, token)
+        let connectionKey = key(wsUrl, token)
 
-        if let existing = connections[k] {
+        if let existing = connections[connectionKey] {
             existing.dispatcher.add(listener)
             lock.unlock()
-            return WebSocketConnection(task: existing.task, key: k)
+            return WebSocketConnection(task: existing.task, key: connectionKey)
         }
 
         let dispatcher = DispatchingListener()
@@ -174,29 +189,29 @@ internal class WebSocketSession {
 
         let wsTask = session.webSocketTask(with: url)
         let entry = ConnectionEntry(task: wsTask, dispatcher: dispatcher)
-        connections[k] = entry
+        connections[connectionKey] = entry
         lock.unlock()
 
         wsTask.resume()
         startReceiveLoop(entry: entry)
 
-        return WebSocketConnection(task: wsTask, key: k)
+        return WebSocketConnection(task: wsTask, key: connectionKey)
     }
 
     /// Removes a delegate from the connection identified by the given endpoint and token.
     /// Closes the WebSocket when no delegates remain.
     func release(wsUrl: String, token: String, listener: WebSocketDelegate) {
         lock.lock()
-        let k = key(wsUrl, token)
-        guard let entry = connections[k] else {
+        let connectionKey = key(wsUrl, token)
+        guard let entry = connections[connectionKey] else {
             lock.unlock()
             return
         }
         entry.dispatcher.remove(listener)
         if entry.dispatcher.listenerCount() <= 0 {
             entry.receiveLoop?.cancel()
-            entry.task.cancel(with: .normalClosure, reason: "All channels released".data(using: .utf8))
-            connections.removeValue(forKey: k)
+            entry.task.cancel(with: .normalClosure, reason: Data("All channels released".utf8))
+            connections.removeValue(forKey: connectionKey)
         }
         lock.unlock()
     }

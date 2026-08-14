@@ -197,6 +197,7 @@ export const deployManifestSchema = z
         }),
       )
       .optional(),
+    invalidationPaths: z.array(z.string().min(1)).optional(),
     basePath: z
       .string()
       .regex(

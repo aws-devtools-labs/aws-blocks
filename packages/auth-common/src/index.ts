@@ -169,6 +169,16 @@ export interface AuthState {
 	error?: string;
 
 	/**
+	 * Machine-readable name of the error from the last action — mirrors the
+	 * `name` of the `ApiError` thrown on the imperative API path (e.g.
+	 * `'InvalidCredentialsException'`). Lets clients branch on error type via
+	 * `hasAuthError(state, name)` instead of matching the human-facing `error`
+	 * string. Absent when the action succeeded or the failure carried no
+	 * specific name (a generic `ApiError`).
+	 */
+	errorName?: string;
+
+	/**
 	 * Signals that the last action failed in a way the caller can recover
 	 * from by resubmitting on the **same** state without restarting the
 	 * flow — typical of challenge-response errors like a wrong MFA code

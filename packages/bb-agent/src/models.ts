@@ -3,35 +3,50 @@
 
 import type { ModelConfig } from './types.js';
 
+const BALANCED_MODEL_ID = 'global.anthropic.claude-sonnet-4-6';
+const SMART_MODEL_ID = 'global.anthropic.claude-opus-4-8';
+const FAST_MODEL_ID = 'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+
 /**
- * Pre-configured Bedrock model presets using cross-region inference profiles.
+ * Pre-configured Bedrock model presets using global inference profiles.
  * Names are capability-based so the underlying model can be upgraded without breaking user code.
+ *
+ * **Note:** Global inference profiles route requests to any supported AWS region for
+ * optimal throughput. If your workload has data residency requirements, specify a
+ * region-scoped inference profile explicitly.
+ * @see https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html
  */
 export const BedrockModels = {
-	/** Highest capability and best performance. Recommended default. Currently: Claude Opus 4.8. */
-	DEFAULT: {
-		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-opus-4-8-20250610-v1:0',
-	},
-	/** Strong quality/cost balance. Currently: Claude Sonnet 4. */
+	/** Great tool use, balanced cost — good middle tier for most workloads. Currently: Claude Sonnet 4.6. */
 	BALANCED: {
 		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+		modelId: BALANCED_MODEL_ID,
 	},
-	/** Fastest and lowest latency. Currently: Claude Haiku 4.5. */
+	/** Highest capability for the hardest tasks. Currently: Claude Opus 4.8. */
+	SMART: {
+		provider: 'bedrock',
+		modelId: SMART_MODEL_ID,
+	},
+	/** Lowest latency, still strong capabilities. Currently: Claude Haiku 4.5. */
 	FAST: {
 		provider: 'bedrock',
-		modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+		modelId: FAST_MODEL_ID,
 	},
-	/** Low cost per token with acceptable quality. Currently: Amazon Nova Pro. */
+
+	/** @deprecated Use `BedrockModels.BALANCED` instead. */
+	DEFAULT: {
+		provider: 'bedrock',
+		modelId: BALANCED_MODEL_ID,
+	},
+	/** @deprecated Use `BedrockModels.FAST` instead. */
 	BUDGET: {
 		provider: 'bedrock',
-		modelId: 'us.amazon.nova-pro-v1:0',
+		modelId: FAST_MODEL_ID,
 	},
-	/** Ultra-cheap for simple tasks. Currently: Amazon Nova Lite. */
+	/** @deprecated Use `BedrockModels.FAST` instead. */
 	MICRO: {
 		provider: 'bedrock',
-		modelId: 'us.amazon.nova-lite-v1:0',
+		modelId: FAST_MODEL_ID,
 	},
 } as const satisfies Record<string, ModelConfig>;
 
@@ -65,6 +80,7 @@ export const OllamaModels = {
 		apiKey: 'ollama',
 	},
 	/** Strong reasoning at moderate size. Currently: DeepSeek R1 14B (~9 GB, needs 16 GB VRAM). */
+	// TODO: DeepSeek R1 is strong at reasoning but weak at tool calling — swap to a more tool-capable model.
 	MEDIUM: {
 		provider: 'openai-api',
 		modelId: 'deepseek-r1:14b',

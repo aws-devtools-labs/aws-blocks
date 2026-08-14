@@ -1,0 +1,102 @@
+name: Prepare Kotlin Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-kotlin-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Version bump + release PR
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: native/kotlin
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # Use a PAT (not the default GITHUB_TOKEN) so the pushed branch and the
+          # PR it opens trigger downstream CI on the release PR.
+          token: ${{ secrets.OPS_GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: native/kotlin/package-lock.json
+
+      - run: npm ci
+
+      - name: Verify pending changesets exist
+        run: |
+          # `changeset status` exits non-zero when there is nothing to release.
+          if ! npx changeset status --since=origin/main; then
+            echo "::error::No pending changesets — nothing to release."
+            exit 1
+          fi
+
+      - name: Apply version bump
+        # @changesets/changelog-github calls the GitHub API to build changelog
+        # links, so `changeset version` needs a token (matches publish-packages.yml).
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx changeset version
+
+      - name: Sync Gradle version
+        run: ./scripts/sync-version.sh
+
+      - name: Read new version
+        id: ver
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Assert gradle.properties matches package.json
+        run: |
+          PKG="${{ steps.ver.outputs.version }}"
+          GRADLE=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
+          if [ "$PKG" != "$GRADLE" ]; then
+            echo "::error::Version mismatch: package.json=$PKG gradle.properties=$GRADLE"
+            exit 1
+          fi
+          echo "Versions match: $PKG"
+
+      - name: Guard against existing release branch
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          BRANCH="release/kotlin-${{ steps.ver.outputs.version }}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "::error::Branch $BRANCH already exists — a release for this version is already in flight."
+            exit 1
+          fi
+
+      - name: Create branch, commit, push
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          BRANCH="release/kotlin-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore(kotlin): Release ${VERSION}"
+          git push origin "$BRANCH"
+
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"
+          gh pr create \
+            --base main \
+            --head "release/kotlin-${VERSION}" \
+            --title "chore(kotlin): Release ${VERSION}" \
+            --body "$NOTES"

@@ -2,6 +2,16 @@ import { ApiNamespace, Scope, KVStore, AuthBasic, DistributedTable } from '@aws-
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
+/**
+ * Reject cookie name/value components that contain CR or LF characters.
+ * Prevents HTTP response-header (Set-Cookie) injection from user-controlled input.
+ */
+function assertNoCrlf(value: string, field: string): void {
+  if (/[\r\n]/.test(value)) {
+    throw new Error(`Invalid cookie ${field}: must not contain CR or LF characters`);
+  }
+}
+
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
@@ -80,6 +90,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   
   // ── Public — cookie round-trip demo ──────────────────────────────────
   async setCookie(name: string, value: string) {
+    assertNoCrlf(name, 'name');
+    assertNoCrlf(value, 'value');
     context.response.headers.set('set-cookie', `${name}=${value}; Max-Age=3600; Secure; SameSite=None; Partitioned`);
     return { success: true };
   },
@@ -91,6 +103,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
   
   async deleteCookie(name: string) {
+    assertNoCrlf(name, 'name');
     context.response.headers.set('set-cookie', `${name}=; Max-Age=0; Secure; SameSite=None; Partitioned`);
     return { success: true };
   },
@@ -101,33 +114,30 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     
     // ULID: timestamp-based sortable ID
-    const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
-    
-    const todo = {
-      userId: user.username,
-      todoId: ulid,
-      title,
-      completed: false,
-      priority,
-      createdAt: Date.now()
-    };
+    const now = Date.now();
+    const ulid = now.toString(36) + crypto.randomBytes(8).toString('hex');
+    const todo = { userId: user.username, todoId: ulid, title, completed: false, priority, createdAt: now };
     await todos.put(todo);
     return todo;
   },
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
     const user = await auth.requireAuth(context);
-    
-    const indexMap = { 
-      priority: 'byPriority', 
-      title: 'byTitle', 
-      createdAt: 'byCreatedAt' 
+
+    const indexMap = {
+      priority: 'byPriority',
+      title: 'byTitle',
+      createdAt: 'byCreatedAt'
     } as const;
-    
-    const iterator = sortBy 
-      ? todos.query(indexMap[sortBy], { userId: { equals: user.username } })
-      : todos.scan();
-    
+
+    // The default path queries the byCreatedAt GSI, which is eventually consistent:
+    // a todo just written by createTodo() may not appear in the immediately following call.
+    const iterator = todos.query({
+      index: sortBy ? indexMap[sortBy] : 'byCreatedAt',
+      where: { userId: { equals: user.username } }
+    });
+
+    // demo only: loads all todos into memory, no pagination. query() accepts a `limit` for real apps.
     return await Array.fromAsync(iterator);
   },
 

@@ -2,6 +2,8 @@
 
 Scheduled task execution backed by EventBridge Scheduler and Lambda.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Reference
 
 **Common Operations → Configuration**

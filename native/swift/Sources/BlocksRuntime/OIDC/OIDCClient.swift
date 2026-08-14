@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import CryptoKit
 
@@ -141,7 +148,7 @@ public actor OIDCClient: AuthProvider {
             URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
             URLQueryItem(name: "state", value: signedState),
             URLQueryItem(name: "code_challenge", value: challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "code_challenge_method", value: "S256")
         ])
         if let nonce { queryItems.append(URLQueryItem(name: "nonce", value: nonce)) }
         components.queryItems = queryItems
@@ -183,7 +190,7 @@ public actor OIDCClient: AuthProvider {
 
         // Step 5: Verify CSRF inside state envelope
         if let dotIndex = signedState.firstIndex(of: ".") {
-            let payloadB64 = String(signedState[signedState.startIndex..<dotIndex])
+            let payloadB64 = String(signedState[signedState.startIndex ..< dotIndex])
             if let payloadData = Data(base64URLDecoded: payloadB64),
                let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
                let returnedCsrf = payload["csrf"] as? String {
@@ -223,7 +230,7 @@ public actor OIDCClient: AuthProvider {
             "callbackUrl": callbackURL,
             "provider": provider,
             "state": state,
-            "nonce": nonce,
+            "nonce": nonce
         ]
         if let iss { body["iss"] = iss }
 
@@ -408,7 +415,7 @@ public actor OIDCClient: AuthProvider {
         guard let raw = await tokenStore.get("expires_at"),
               let expiry = Int64(raw)
         else { return true }
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
         return nowMs >= expiry
     }
 
@@ -419,17 +426,17 @@ public actor OIDCClient: AuthProvider {
     }
 
     private static func stringifyExpiry(_ value: Any?) -> String {
-        if let n = value as? NSNumber { return n.stringValue }
-        if let s = value as? String { return s }
+        if let number = value as? NSNumber { return number.stringValue }
+        if let str = value as? String { return str }
         return "0"
     }
 
     private static func decodeJWTPayload(_ segment: String) -> [String: Any]? {
-        var s = segment.replacingOccurrences(of: "-", with: "+")
+        var base64 = segment.replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
-        let padding = s.count % 4
-        if padding > 0 { s += String(repeating: "=", count: 4 - padding) }
-        guard let data = Data(base64Encoded: s),
+        let padding = base64.count % 4
+        if padding > 0 { base64 += String(repeating: "=", count: 4 - padding) }
+        guard let data = Data(base64Encoded: base64),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json

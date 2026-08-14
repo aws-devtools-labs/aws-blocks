@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 
 /// Protocol for all errors thrown by the Blocks runtime.
@@ -6,8 +13,8 @@ public protocol BlocksError: Error {
     var underlyingError: Error? { get }
 }
 
-extension BlocksError {
-    public var underlyingError: Error? { nil }
+public extension BlocksError {
+    var underlyingError: Error? { nil }
 }
 
 /// Errors thrown by generated code (models and API extensions).

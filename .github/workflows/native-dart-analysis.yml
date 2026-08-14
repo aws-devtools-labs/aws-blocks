@@ -1,0 +1,121 @@
+name: Native Dart Analysis
+
+# Static analysis for the native Dart SDK packages: format check, analyzer,
+# unit tests, and a pub.dev package score report. Path-filtered at the trigger
+# so it only runs for PRs that touch native/dart/packages/.
+#
+# No AWS / secrets needed — these run the same on fork PRs.
+
+on:
+  pull_request:
+    paths:
+      - 'native/dart/packages/**'
+      - '.github/workflows/native-dart-analysis.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: native-dart-analysis-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The floor from every pubspec's `environment:` block. Same floor, two numbering
+# schemes: Flutter 3.41.0 ships Dart 3.11.0.
+env:
+  MIN_DART: '3.11.0'
+  MIN_FLUTTER: '3.41.0'
+
+jobs:
+  analyze:
+    name: ${{ matrix.package-name }} (${{ matrix.sdk }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package-name: [blocks_runtime, blocks_codegen, blocks_runtime_flutter]
+        sdk: [min, stable]
+        include:
+          - package-name: blocks_runtime
+            working-directory: native/dart/packages/blocks_runtime
+            tool: dart
+            runtime-override: false
+          - package-name: blocks_codegen
+            working-directory: native/dart/packages/blocks_codegen
+            tool: dart
+            runtime-override: true
+          - package-name: blocks_runtime_flutter
+            working-directory: native/dart/packages/blocks_runtime_flutter
+            tool: flutter
+            runtime-override: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Setup Dart
+        if: matrix.tool == 'dart'
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk == 'min' && env.MIN_DART || 'stable' }}
+
+      # Empty flutter-version means latest of the channel.
+      - name: Setup Flutter
+        if: matrix.tool == 'flutter'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ matrix.sdk == 'min' && env.MIN_FLUTTER || '' }}
+          cache: true
+
+      # blocks_codegen and blocks_runtime_flutter depend on blocks_runtime,
+      # which is published on pub.dev — but in CI we want to analyze/test
+      # against the in-repo source, not the published version. A
+      # pubspec_overrides.yaml (gitignored in local dev) points the dependency
+      # at the sibling package. blocks_runtime sits at packages/blocks_runtime,
+      # so the relative path from each sibling is ../blocks_runtime.
+      - name: Add blocks_runtime path override
+        if: matrix.runtime-override
+        working-directory: ${{ matrix.working-directory }}
+        run: |
+          printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../blocks_runtime\n' > pubspec_overrides.yaml
+
+      - name: Get dependencies
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} pub get
+
+      # Blocking. `dart format` is provided by both the Dart and Flutter SDKs.
+      # Run after `pub get` so the resolved package_config pins the language
+      # version (3.11, from each package's sdk: ^3.11.0), making the result
+      # deterministic and matching local runs.
+      - name: Check formatting
+        if: matrix.sdk == 'stable'
+        working-directory: ${{ matrix.working-directory }}
+        run: dart format --output=none --set-exit-if-changed .
+
+      # Advisory for now — annotations only, non-blocking — matching the repo's
+      # existing "Lint (advisory)" convention in pr-checks.yml. Each package's
+      # analysis_options.yaml still reports pre-existing findings that a
+      # follow-up `dart fix` pass will clear; flip this to blocking once the
+      # tree analyzes clean.
+      - name: Analyze (advisory — annotations only, non-blocking)
+        if: matrix.sdk == 'stable'
+        continue-on-error: true
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} analyze .
+
+      # Blocking.
+      - name: Run tests
+        working-directory: ${{ matrix.working-directory }}
+        run: ${{ matrix.tool }} test
+
+      # Report-only: prints the pub.dev package score and uploads the report.
+      - name: Package score
+        if: matrix.sdk == 'stable'
+        continue-on-error: true
+        uses: ./.github/composite_actions/package_score
+        with:
+          working-directory: ${{ matrix.working-directory }}
+          package-name: ${{ matrix.package-name }}

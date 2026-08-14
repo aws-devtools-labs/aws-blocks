@@ -1,5 +1,140 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.1.7
+
+### Patch Changes
+
+- 58f77dd: Document four things people were reverse-engineering from compiled output.
+
+  - **Runtime config resolution.** The client config is served at the dotted path `/.blocks-sandbox/config.json`; `/config.json` is not a route, so a 404 there means nothing. `{"_placeholder":true}` in the frontend build output is the Hosting construct's synth-time stub (the real `apiUrl` is still an unresolved CloudFormation token), so it is expected pre-deploy rather than a broken config. Covers the resolution order, what each environment should actually return, and what a genuine failure looks like.
+  - **`RawRoute`.** Full section in the core README: constructor signature, a `GET` example that sets status, `Content-Type` and body, what you can read off `ctx.request` and write to `ctx.response`, path/parameter/wildcard syntax, and the registration rules (reserved paths, duplicate routes, register-during-load). Also added a "serve a raw HTTP endpoint" entry to the block catalog decision tree, which had no pointer to it.
+  - **Server-initiated OIDC sign-in.** New section in the `bb-auth-oidc` README for `GET /aws-blocks/auth/signin/<provider>`: the redirect chain through the IdP and the callback, the pending-auth and session cookies, the JSON error shape, a runnable `curl` walkthrough, when to use it instead of the client PKCE API, and a pointer to the integration tests that assert each response. One route is mounted per configured provider, so an undeclared provider name 404s instead of reporting `ProviderNotConfiguredException`, which comes from `getSignInUrl()`.
+  - **Error and RPC semantics.** `ApiError`'s constructor arguments (including `cause` staying server-side and `retriable`), how its `status` becomes the JSON-RPC error code and decodes back into an `ApiError` on the client, `hasAuthError`'s signature and when it applies instead of `isBlocksError`, how `params` is read as positional args vs a named object, that a top-level JSON array body (a batch) is rejected with `-32600`, and that `broadcastAuthChange` comes from `@aws-blocks/blocks/ui` rather than the package root.
+
+  Docs only, plus tests locking in the documented `ApiError`, `params` and batch-rejection behaviour, and the documented `404`s on the OIDC sign-in and sign-out routes.
+
+- Updated dependencies [75f5446]
+- Updated dependencies [2ed4177]
+- Updated dependencies [b48aaec]
+- Updated dependencies [ac0966a]
+- Updated dependencies [9de27dd]
+- Updated dependencies [8e96d87]
+- Updated dependencies [58f77dd]
+- Updated dependencies [b83aaba]
+- Updated dependencies [2d3dfdc]
+- Updated dependencies [3c56267]
+  - @aws-blocks/auth-common@0.1.4
+  - @aws-blocks/core@0.1.17
+  - @aws-blocks/bb-kv-store@0.1.5
+  - @aws-blocks/bb-logger@0.1.3
+
+## 0.1.6
+
+### Patch Changes
+
+- 53adfb8: fix(bb-auth-oidc): bridge a successful client callback into auth-common's onAuthChange
+
+  A successful client-PKCE `handleRedirectCallback()` only notified this OIDC
+  client's own `onAuthStateChange` listeners. Components subscribed via
+  `@aws-blocks/auth-common`'s `onAuthChange` — and `<AuthenticatedContent>` —
+  never heard about the sign-in, so a React SPA wouldn't re-render after
+  completing the redirect exchange (only server-initiated sign-in updated them).
+
+  `handleRedirectCallback()` now also calls `broadcastAuthChange(user)` on success,
+  and `signOut()` calls `broadcastAuthChange(null)`, firing the same-window
+  `blocks-auth-change` event and the cross-tab `BroadcastChannel`, so every
+  auth-common consumer (and other open tabs) re-render on both sign-in and sign-out.
+  The README documents the `onAuthChange`/`broadcastAuthChange` wiring and adds an
+  OIDC + React SPA example.
+
+## 0.1.5
+
+### Patch Changes
+
+- 607fe57: fix(bb-auth-oidc): make `handleRedirectCallback()` idempotent under double invocation
+
+  `handleRedirectCallback()` consumed the single-use PKCE pending entry from
+  `sessionStorage` and only removed it **after** the `/aws-blocks/auth/exchange`
+  round-trip. A second concurrent invocation — most commonly React StrictMode's
+  mount → unmount → mount, which fires the callback effect twice synchronously —
+  either replayed the already-consumed code (failing the second exchange) or
+  found the pending entry gone and resolved `null`, stranding the app on a
+  signed-out screen despite a successful sign-in.
+
+  The callback now guards on an in-flight promise keyed by the PKCE `code`:
+  concurrent/duplicate invocations for the same code share the first call's
+  promise instead of starting a second exchange, so both callers resolve to the
+  same user and subscribers are notified exactly once. The pending entry is also
+  consumed up front (before the network round-trip) so a late duplicate can't
+  replay it, and the guard is released once the exchange settles so a genuinely
+  new sign-in flow on the same page is never blocked.
+
+## 0.1.4
+
+### Patch Changes
+
+- 03b971a: fix(bb-auth-oidc): surface client `signIn()` failures instead of swallowing them
+
+  The browser client's `signIn()` kicked off the PKCE flow with
+  `void this._signInPKCE(...)`, discarding the promise. Any failure during
+  sign-in setup — most commonly the `authorize-params` discovery fetch
+  returning a non-2xx — became a silent unhandled rejection that callers
+  could neither `await` nor `.catch()`, so a broken sign-in looked like a
+  no-op to the app.
+
+  `signIn()` now returns `Promise<void>`, propagating the underlying
+  `_signInPKCE` promise. Callers can `await auth.signIn(provider)` (or attach
+  `.catch()`) to detect and handle failures. The return type is widened
+  consistently across the `OIDCClient` interface and the server-side no-op
+  stub returned by `getClient()`, so SSR/mock parity is preserved. Existing
+  fire-and-forget callers (e.g. `onClick={() => auth.signIn('google')}`)
+  are unaffected.
+
+- 1da34f1: fix(auth): propagate the structured error name through `setAuthState()`
+
+  The recommended client auth path is `createApi()` → `setAuthState()`. When an
+  action failed, `setAuthState()` caught the thrown `ApiError` and returned an
+  `AuthState` carrying only `error: e.message`, discarding the structured
+  `e.name` (e.g. `'InvalidCredentialsException'`). Because `AuthState` had no
+  field for an error name, a hand-rolled client could not branch on error type
+  (e.g. "try sign-in, fall back to sign-up for a brand-new user") without
+  brittle string-matching the human-facing message.
+
+  `AuthState` now carries an optional `errorName`, and the `bb-auth-basic` and
+  `bb-auth-cognito` `setAuthState` implementations populate it from the thrown
+  `ApiError.name` (skipping the generic `'ApiError'` default). A new
+  `hasAuthError(state, name)` type guard in `@aws-blocks/core` lets clients
+  branch on the returned state — `isBlocksError` only matches thrown `Error`
+  instances, so it cannot be used on the plain `AuthState` object. Rule of
+  thumb: throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.
+
+- Updated dependencies [f42c604]
+- Updated dependencies [1da34f1]
+- Updated dependencies [683bf49]
+  - @aws-blocks/core@0.1.6
+  - @aws-blocks/auth-common@0.1.3
+  - @aws-blocks/bb-kv-store@0.1.4
+
+## 0.1.3
+
+### Patch Changes
+
+- ba3bf7b: docs: add per-package DESIGN.md documents
+
+  Adds a `DESIGN.md` to each building-block package describing its architecture, API surface, mock implementation, and key design decisions.
+
+  - Each document is cross-checked against the current source so identifiers, environment variables, error names, and described behavior match the implementation.
+  - Each `DESIGN.md` is listed in its package's `files` array so it ships on npm alongside `README.md`.
+  - For consistency, `bb-auth-cognito`'s document lives at the package root like every other package.
+  - Bumps the umbrella `@aws-blocks/blocks` package so its bundled `docs/` — assembled from these block READMEs at build time — republishes with a fresh version. Its packed content changes whenever the READMEs change, but the version was previously left untouched, which tripped the publish integrity guard.
+
+- Updated dependencies [ba3bf7b]
+- Updated dependencies [d4a1390]
+  - @aws-blocks/auth-common@0.1.2
+  - @aws-blocks/bb-app-setting@0.1.3
+  - @aws-blocks/bb-kv-store@0.1.3
+  - @aws-blocks/bb-logger@0.1.2
+
 ## 0.1.2
 
 ### Patch Changes

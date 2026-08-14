@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.1.2",
+  "version": "0.1.18",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",

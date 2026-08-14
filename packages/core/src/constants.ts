@@ -29,3 +29,16 @@ export const BLOCKS_RPC_PREFIX = '/aws-blocks/api';
  * prefix; CloudFront forwards the subtree and the Lambda dispatches by path.
  */
 export const BLOCKS_AUTH_PREFIX = '/aws-blocks/auth';
+
+/**
+ * Reserved path for the client runtime config (`config.json`).
+ *
+ * In production CloudFront serves `${BLOCKS_SANDBOX_PREFIX}/*` from S3 as
+ * static assets (see hosting.ts) so the browser client can resolve its API
+ * URL. The local dev server mirrors this by serving the config from the front
+ * door itself, instead of proxying the request to the framework dev server —
+ * which only serves its own static dir (Next.js `public/`, etc.) and would 404
+ * on a project-root file. Keeping this symmetric with production is what makes
+ * the browser client work the same in `dev`, `sandbox`, and deployed.
+ */
+export const BLOCKS_SANDBOX_PREFIX = '/.blocks-sandbox';

@@ -55,8 +55,8 @@ class OidcClient implements AuthProvider {
     this.callbackPath = '/auth/callback',
     SessionStore? sessionStore,
     http.Client? httpClient,
-  })  : sessionStore = sessionStore ?? InMemorySessionStore(),
-        _httpClient = httpClient ?? http.Client();
+  }) : sessionStore = sessionStore ?? InMemorySessionStore(),
+       _httpClient = httpClient ?? http.Client();
 
   /// The framework's JSON-RPC mount prefix. Auth routes do NOT live under it.
   static const String _rpcPathPrefix = '/aws-blocks/api';
@@ -202,7 +202,11 @@ class OidcClient implements AuthProvider {
 
     // Step 2: build the authorize URL. redirect_uri = backend HTTPS callback.
     final callbackUrl = '$_authBaseUrl$callbackPath';
-    final authorizeUri = _buildRelayAuthorizeUrl(params, callbackUrl, challenge);
+    final authorizeUri = _buildRelayAuthorizeUrl(
+      params,
+      callbackUrl,
+      challenge,
+    );
 
     // Step 3: open the browser and wait for the relay custom-scheme redirect.
     final resultUri = await launcher.launch(
@@ -251,7 +255,8 @@ class OidcClient implements AuthProvider {
     String csrf,
     String relayTo,
   ) async {
-    final url = '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}';
+    final url =
+        '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}';
     final response = await _httpClient.post(
       Uri.parse(url),
       headers: _jsonHeaders(),
@@ -323,7 +328,7 @@ class OidcClient implements AuthProvider {
         'nonce': nonce,
         // RFC 9207 issuer forwarding — only sent when the relay callback
         // provided it.
-        if (iss != null) 'iss': iss,
+        'iss': ?iss,
       }),
     );
 
@@ -332,7 +337,9 @@ class OidcClient implements AuthProvider {
     sessionStore.setCookies(response.headers['set-cookie']);
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw OidcExchangeException('Exchange failed: HTTP ${response.statusCode}');
+      throw OidcExchangeException(
+        'Exchange failed: HTTP ${response.statusCode}',
+      );
     }
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
@@ -417,7 +424,8 @@ class OidcClient implements AuthProvider {
         Uri.parse('$_authBaseUrl$signOutPath'),
         headers: _jsonHeaders(),
         body: jsonEncode(
-            refreshToken != null ? {'refreshToken': refreshToken} : {}),
+          refreshToken != null ? {'refreshToken': refreshToken} : {},
+        ),
       );
     } catch (_) {
       // best-effort
@@ -431,10 +439,7 @@ class OidcClient implements AuthProvider {
   /// OIDC requests participate in the shared cookie session.
   Map<String, String> _jsonHeaders() {
     final cookie = sessionStore.cookieHeader;
-    return {
-      'Content-Type': 'application/json',
-      if (cookie != null) 'cookie': cookie,
-    };
+    return {'Content-Type': 'application/json', 'cookie': ?cookie};
   }
 
   // --- Restore session ---
@@ -462,9 +467,11 @@ class OidcClient implements AuthProvider {
     // Decode user from access token (JWT payload)
     final parts = (await tokenStore.get('access_token'))!.split('.');
     if (parts.length == 3) {
-      final payload = jsonDecode(
-        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-      ) as Map<String, dynamic>;
+      final payload =
+          jsonDecode(
+                utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+              )
+              as Map<String, dynamic>;
       final user = OidcUser(
         userId: payload['sub'] as String? ?? '',
         username: payload['username'] as String? ?? '',
@@ -515,12 +522,13 @@ class OidcClient implements AuthProvider {
     );
     return OidcClient(
       exchangePath: descriptor['exchangePath'] as String,
-      refreshPath: descriptor['refreshPath'] as String? ??
+      refreshPath:
+          descriptor['refreshPath'] as String? ??
           '${descriptor['exchangePath'] as String}/refresh',
       signOutPath: descriptor['signOutPath'] as String,
       authorizeParamsBasePath:
           descriptor['authorizeParamsBasePath'] as String? ??
-              '/auth/authorize-params',
+          '/auth/authorize-params',
       callbackPath: descriptor['callbackPath'] as String? ?? '/auth/callback',
       providers: providers,
       providerConfigs: providerConfigs,

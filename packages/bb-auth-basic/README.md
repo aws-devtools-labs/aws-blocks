@@ -6,6 +6,8 @@ Simple username/password authentication with JWT sessions, password policy, and 
 
 **When NOT to use:** For social sign-in (Google, GitHub), use `AuthOIDC`. For MFA, user groups, or custom user attributes, use `AuthCognito`.
 
+> Design & mock parity details: [DESIGN.md](./DESIGN.md)
+
 ## Quick Start
 
 ```typescript
@@ -58,7 +60,16 @@ const auth = new AuthBasic(scope, id, options?)
 
 **Action input shape:** `createApi()` returns the state-machine API. `setAuthState` takes a single FLAT discriminated input — `{ action, ...fields }`, never a nested `{ action, data: {...} }`. Examples: `{ action: 'signIn', username, password }`, `{ action: 'signUp', username, password }`, `{ action: 'confirmSignUp', username, code, password }`, `{ action: 'resetPassword', username }`, `{ action: 'confirmResetPassword', username, code, newPassword }`. See the `AuthActionInput` type in `@aws-blocks/auth-common`.
 
-**Note:** `buildApi()` is deprecated — use `createApi()`.
+### `buildApi()` (deprecated)
+
+> **Deprecated — use `createApi()`.** Retained for backward compatibility. Unlike `createApi()` (which exposes the `getAuthState`/`setAuthState` state machine), `buildApi()` returns an `ApiNamespace` with a flat RPC surface. Documented here so existing callers can find the shapes. The request `context` is captured by the namespace factory, so the exposed methods take no `context` argument:
+
+| Method | Signature | Returns |
+|---|---|---|
+| `signUp(username, password)` | `(username: string, password: string) => Promise<{ username: string }>` | `{ username }`. Also sets the session cookie immediately when `codeDelivery` is **not** configured. |
+| `signIn(username, password)` | `(username: string, password: string) => Promise<{ username: string }>` | `{ username }`. Sets the session cookie. |
+| `signOut()` | `() => Promise<{ success: true }>` | `{ success: true }`. Clears the session cookie. |
+| `getCurrentUser()` | `() => Promise<AuthBasicUser \| null>` | The signed-in user, or `null`. |
 
 ### Options
 
@@ -115,6 +126,23 @@ try {
 | `AuthBasicErrors.SessionExpired` | `SessionExpiredException` | `requireAuth` with no/expired session |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
 
+### Branching on the `setAuthState` client path
+
+`isBlocksError` works on a **thrown** error. The recommended client path (`createApi()` → `setAuthState()`) does not throw — it returns an `AuthState` whose `errorName` carries the same structured name. Use `hasAuthError` to branch on the returned state, e.g. to fall back to sign-up for a brand-new user:
+
+```typescript
+import { hasAuthError } from '@aws-blocks/core';
+import { AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
+
+let next = await authApi.setAuthState({ action: 'signIn', username, password });
+if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+  // unknown or wrong-credential user → offer sign-up instead
+  next = await authApi.setAuthState({ action: 'signUp', username, password });
+}
+```
+
+Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
+
 ## UI Components
 
 This package does not include UI components. Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui`:
@@ -137,6 +165,25 @@ Extends the common `AuthUser` with:
 | `userId` | `string` | Same as username |
 | `username` | `string` | The username |
 | `createdAt` | `string` | ISO 8601 creation timestamp |
+
+## Re-exported types
+
+These types from [`@aws-blocks/auth-common`](../auth-common/README.md) are re-exported by this package, so you can import them directly from `@aws-blocks/bb-auth-basic` without adding a dependency on `auth-common`:
+
+```typescript
+import type {
+  BlocksAuth, AuthUser, AuthState, AuthActionInput, AuthAction, AuthField,
+} from '@aws-blocks/bb-auth-basic';
+```
+
+| Type | Kind | Shape / purpose |
+|---|---|---|
+| `BlocksAuth` | interface | The common server-side auth contract `AuthBasic` implements: `requireAuth(context): Promise<AuthUser>`, `checkAuth(context): Promise<boolean>`, `getCurrentUser(context): Promise<AuthUser \| null>`. |
+| `AuthUser` | interface | Base user shape: `{ userId: string; username: string }`. `AuthBasicUser` extends it (adds `createdAt`). |
+| `AuthState` | interface | State returned by `getAuthState()` / `setAuthState()`: `{ state, user?, actions, error?, retriable? }`, where `state` is `'signedOut' \| 'signedIn' \| 'confirmingSignUp' \| 'confirmingSignIn' \| 'confirmingMfa' \| 'confirmingPasswordReset'`. |
+| `AuthAction` | interface | One action offered by a state: `{ name, label, fields: AuthField[], url?, method?: 'GET' \| 'POST', capability?: 'webauthn-get' \| 'webauthn-create' }`. |
+| `AuthField` | interface | A form field to render: `{ name, label, type: 'text' \| 'password' \| 'email' \| 'tel' \| 'number' \| 'hidden', required: boolean, defaultValue? }`. |
+| `AuthActionInput` | type | Discriminated union (keyed on `action`) passed to `setAuthState`. The variants AuthBasic handles are `signIn`, `signUp`, `confirmSignUp`, `signOut`, `resetPassword`, and `confirmResetPassword` (see the action-input note under [API](#api)). |
 
 ## Cookies and sessions
 

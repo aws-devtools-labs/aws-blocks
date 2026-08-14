@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import XCTest
 import Foundation
 @testable import BlocksRuntime
@@ -19,7 +26,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
 
     func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
         var current = authorizeURL
-        for _ in 0..<10 {
+        for _ in 0 ..< 10 {
             var request = URLRequest(url: current)
             request.httpShouldHandleCookies = false
 
@@ -28,7 +35,7 @@ final class HttpRelayLauncher: BrowserLauncher, @unchecked Sendable {
                 throw OIDCError.invalidResponse
             }
 
-            if (300..<400).contains(httpResponse.statusCode) {
+            if (300 ..< 400).contains(httpResponse.statusCode) {
                 guard let location = httpResponse.value(forHTTPHeaderField: "Location"),
                       let next = URL(string: location, relativeTo: current) else {
                     throw OIDCError.callbackError("Redirect without Location at \(current)")
@@ -89,9 +96,9 @@ final class OIDCE2ETests: BlocksE2ETestCase {
         let user = try await oidc.signIn(provider: provider, relayTo: relayTo, launcher: launcher)
         XCTAssertFalse(user.userId.isEmpty, "signInRelay returned a user")
 
-        let me = try await api.oidcRequireAuth()
-        XCTAssertFalse(me.userId.isEmpty)
-        XCTAssertEqual(me.userId, user.userId)
+        let currentUser = try await api.oidcRequireAuth()
+        XCTAssertFalse(currentUser.userId.isEmpty)
+        XCTAssertEqual(currentUser.userId, user.userId)
     }
 
     func testSignOut() async throws {

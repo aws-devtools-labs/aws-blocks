@@ -1,0 +1,621 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import { spawn } from 'node:child_process';
+import { createConnection, createServer } from 'node:net';
+import { readFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  evaluateFrontendRespawn,
+  DEFAULT_FRONTEND_RESPAWN_POLICY,
+  waitForPortFree,
+  shouldCreditFrontendReady,
+} from './dev-server.js';
+import {
+  killFrontendTree,
+  windowsTreeKill,
+  terminateProcessTree,
+  isProcessGroupAlive,
+  KILL_GRACE_MS,
+  type KillableProcess,
+  type AwaitableChild,
+} from './process-tree.js';
+
+const isWindows = process.platform === 'win32';
+// The real-process integration test spawns OS processes and depends on
+// wall-clock timing; gate it behind RUN_SLOW_TESTS so the default test run
+// stays deterministic and fast. The pure unit tests below always run.
+const runSlowTests = !!process.env.RUN_SLOW_TESTS;
+
+function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+function isPortOpen(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = createConnection({ port, host: '127.0.0.1' }, () => {
+      sock.destroy();
+      resolve(true);
+    });
+    sock.on('error', () => { sock.destroy(); resolve(false); });
+    sock.setTimeout(300, () => { sock.destroy(); resolve(false); });
+  });
+}
+
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return predicate();
+}
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Poll across a bounded window, returning false the instant the port closes.
+// More robust than a single post-`delay` snapshot on a busy/slow host: it
+// asserts the port stays bound for the whole window rather than at one moment.
+async function staysOpen(port: number, windowMs: number): Promise<boolean> {
+  const deadline = Date.now() + windowMs;
+  while (Date.now() < deadline) {
+    if (!(await isPortOpen(port))) return false;
+    await delay(50);
+  }
+  return true;
+}
+
+// ── evaluateFrontendRespawn ────────────────────────────────────────────────
+describe('evaluateFrontendRespawn — bounded auto-respawn policy', () => {
+  it('allows the first restart with the base backoff', () => {
+    const now = 1_000_000;
+    const d = evaluateFrontendRespawn([], now);
+    assert.strictEqual(d.restart, true);
+    assert.strictEqual(d.delayMs, DEFAULT_FRONTEND_RESPAWN_POLICY.backoffMs);
+    assert.deepStrictEqual(d.recent, [now]);
+  });
+
+  it('backs off exponentially with the number of recent restarts', () => {
+    const now = 1_000_000;
+    // one recent restart already → 500 * 2^1
+    assert.strictEqual(evaluateFrontendRespawn([now - 100], now).delayMs, 1000);
+    // three recent → 500 * 2^3
+    assert.strictEqual(evaluateFrontendRespawn([now - 30, now - 20, now - 10], now).delayMs, 4000);
+  });
+
+  it('caps the backoff at maxBackoffMs', () => {
+    const now = 1_000_000;
+    // four recent → 500 * 2^4 = 8000, capped to 5000
+    const d = evaluateFrontendRespawn([now - 4, now - 3, now - 2, now - 1], now);
+    assert.strictEqual(d.restart, true);
+    assert.strictEqual(d.delayMs, DEFAULT_FRONTEND_RESPAWN_POLICY.maxBackoffMs);
+  });
+
+  it('stops restarting once the budget within the window is exhausted', () => {
+    const now = 1_000_000;
+    const recent = [now - 5, now - 4, now - 3, now - 2, now - 1]; // 5 == maxRestarts
+    const d = evaluateFrontendRespawn(recent, now);
+    assert.strictEqual(d.restart, false);
+    assert.strictEqual(d.delayMs, 0);
+    assert.strictEqual(d.recent.length, DEFAULT_FRONTEND_RESPAWN_POLICY.maxRestarts);
+  });
+
+  it('forgets restarts that fall outside the sliding window', () => {
+    const now = 1_000_000;
+    const { windowMs } = DEFAULT_FRONTEND_RESPAWN_POLICY;
+    const recent = [
+      now - windowMs - 1, // stale
+      now - windowMs - 2, // stale
+      now - windowMs - 3, // stale
+      now - windowMs - 4, // stale
+      now - 100,          // in-window
+    ];
+    const d = evaluateFrontendRespawn(recent, now);
+    assert.strictEqual(d.restart, true);
+    // only the one in-window timestamp survives → backoff 500 * 2^1
+    assert.strictEqual(d.delayMs, 1000);
+    assert.deepStrictEqual(d.recent, [now - 100, now]);
+  });
+
+  it('honors a custom policy', () => {
+    const now = 0;
+    const policy = { maxRestarts: 1, windowMs: 1000, backoffMs: 100, maxBackoffMs: 200 };
+    assert.strictEqual(evaluateFrontendRespawn([], now, policy).delayMs, 100);
+    assert.strictEqual(evaluateFrontendRespawn([now], now, policy).restart, false);
+  });
+});
+
+// ── killFrontendTree (unit, injected spies) ─────────────────────────────────
+describe('killFrontendTree — signal routing', () => {
+  function makeChild(pid: number | undefined) {
+    const calls: Array<NodeJS.Signals | number | undefined> = [];
+    const child: KillableProcess = {
+      pid,
+      kill(signal) { calls.push(signal); return true; },
+    };
+    return { child, calls };
+  }
+
+  it('signals the whole process group on POSIX (negative pid)', () => {
+    const { child, calls } = makeChild(4242);
+    const groupCalls: Array<[number, NodeJS.Signals]> = [];
+    killFrontendTree(child, 'SIGTERM', 'linux', (pid, sig) => { groupCalls.push([pid, sig]); });
+    assert.deepStrictEqual(groupCalls, [[-4242, 'SIGTERM']]);
+    assert.deepStrictEqual(calls, []); // direct child.kill not used on POSIX
+  });
+
+  it('reaps the tree via taskkill on Windows (no POSIX group, no direct kill)', () => {
+    const { child, calls } = makeChild(4242);
+    let groupCalled = false;
+    const winPids: number[] = [];
+    killFrontendTree(child, 'SIGTERM', 'win32',
+      () => { groupCalled = true; },
+      (pid) => { winPids.push(pid); return true; });
+    assert.strictEqual(groupCalled, false);  // POSIX group kill not used on Windows
+    assert.deepStrictEqual(winPids, [4242]); // taskkill tree-kill invoked with the pid
+    assert.deepStrictEqual(calls, []);       // no direct child.kill once taskkill succeeded
+  });
+
+  it('falls back to a direct child kill on Windows when taskkill cannot run', () => {
+    const { child, calls } = makeChild(4242);
+    killFrontendTree(child, 'SIGTERM', 'win32',
+      () => {},
+      () => false); // taskkill unavailable → must degrade to child.kill
+    assert.deepStrictEqual(calls, ['SIGTERM']);
+  });
+
+  it('falls back to a direct child kill when the group signal throws', () => {
+    const { child, calls } = makeChild(4242);
+    killFrontendTree(child, 'SIGKILL', 'linux', () => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+    assert.deepStrictEqual(calls, ['SIGKILL']);
+  });
+
+  it('uses a direct child kill when there is no pid', () => {
+    const { child, calls } = makeChild(undefined);
+    let groupCalled = false;
+    killFrontendTree(child, 'SIGTERM', 'linux', () => { groupCalled = true; });
+    assert.strictEqual(groupCalled, false);
+    assert.deepStrictEqual(calls, ['SIGTERM']);
+  });
+
+  it('never group-signals pid <= 1 (defensive)', () => {
+    const { child, calls } = makeChild(1);
+    let groupCalled = false;
+    killFrontendTree(child, 'SIGTERM', 'linux', () => { groupCalled = true; });
+    assert.strictEqual(groupCalled, false);
+    assert.deepStrictEqual(calls, ['SIGTERM']);
+  });
+});
+
+// ── windowsTreeKill (unit, injected runner) ─────────────────────────────────
+describe('windowsTreeKill — taskkill tree-kill command', () => {
+  it('invokes `taskkill /T /F /PID <pid>` and reports success', () => {
+    const runs: Array<[string, readonly string[]]> = [];
+    const ok = windowsTreeKill(4242, (cmd, args) => { runs.push([cmd, args]); return { status: 0 }; });
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(runs, [['taskkill', ['/T', '/F', '/PID', '4242']]]);
+  });
+
+  it('treats an already-gone tree (non-zero exit, no spawn error) as handled', () => {
+    const ok = windowsTreeKill(4242, () => ({ status: 128 })); // 128 = "process not found"
+    assert.strictEqual(ok, true);
+  });
+
+  it('reports failure when taskkill cannot be spawned (caller then falls back)', () => {
+    const ok = windowsTreeKill(4242, () => ({ status: null, error: new Error('ENOENT') }));
+    assert.strictEqual(ok, false);
+  });
+
+  it('reports failure when taskkill runs but returns a non-zero, non-128 status', () => {
+    // taskkill spawned fine (no error) but FAILED to reap the tree — e.g. exit 1
+    // = access denied. It must NOT be treated as handled, or the caller skips
+    // its child.kill fallback and silently leaks the tree.
+    assert.strictEqual(windowsTreeKill(4242, () => ({ status: 1 })), false);
+    // A taskkill killed by a signal (status null, no spawn error) is likewise
+    // not a successful reap.
+    assert.strictEqual(windowsTreeKill(4242, () => ({ status: null })), false);
+  });
+
+  it('never throws even if the runner throws', () => {
+    const ok = windowsTreeKill(4242, () => { throw new Error('boom'); });
+    assert.strictEqual(ok, false);
+  });
+});
+
+// ── isProcessGroupAlive (unit, injected kill + platform) ────────────────────
+// Scopes the post-exit group SIGKILL: a `-pid` signal is only PID-reuse-safe
+// while a group member is still alive, so terminateProcessTree probes here and
+// skips the reap once the group has drained.
+describe('isProcessGroupAlive — group-liveness probe (signal 0)', () => {
+  const esrch = () => { throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }); };
+  const eperm = () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+
+  it('probes the GROUP with signal 0 (negative pid, no real signal) and reports alive on success', () => {
+    const calls: Array<[number, number]> = [];
+    const alive = isProcessGroupAlive(4242, 'linux', (pid, sig) => { calls.push([pid, sig]); });
+    assert.strictEqual(alive, true);
+    assert.deepStrictEqual(calls, [[-4242, 0]]); // group probe, signal 0 = existence check only
+  });
+
+  it('reports drained (false) when the group is gone (ESRCH)', () => {
+    assert.strictEqual(isProcessGroupAlive(4242, 'linux', esrch), false);
+  });
+
+  it('reports alive (true) when the group exists but is not ours to signal (EPERM)', () => {
+    assert.strictEqual(isProcessGroupAlive(4242, 'linux', eperm), true);
+  });
+
+  it('always reports alive on Windows (no process groups; taskkill is PID-tree-scoped)', () => {
+    let probed = false;
+    const alive = isProcessGroupAlive(4242, 'win32', () => { probed = true; });
+    assert.strictEqual(alive, true);
+    assert.strictEqual(probed, false); // never probes on Windows
+  });
+});
+
+// ── killFrontendTree (integration, real shell + grandchild) ─────────────────
+// Opt-in: spawns real OS processes and relies on wall-clock timing, so it is
+// gated behind RUN_SLOW_TESTS to keep the default `npm test` deterministic.
+// POSIX-only because it asserts process-group reaping.
+const integrationSkip = !runSlowTests
+  ? 'set RUN_SLOW_TESTS=1 to run (spawns real processes)'
+  : isWindows
+    ? 'POSIX-only (relies on process groups)'
+    : false;
+
+describe('killFrontendTree — reaps a real detached shell tree', { skip: integrationSkip }, () => {
+  it('frees a port held by a grandchild that survives a direct child kill',
+    { timeout: 30000 },
+    async () => {
+      const port = await getFreePort();
+      // getFreePort() closes its probe listener before this grandchild binds,
+      // so on a busy host another process can grab the port in that gap. Retry
+      // briefly on EADDRINUSE (creating a fresh server each attempt) instead of
+      // exiting on the first error, so the shell→node→port topology under test
+      // is reliably established; bail only on a non-transient error or once the
+      // retry budget (~5s) is exhausted.
+      const inner =
+        `const net=require('net');` +
+        `const port=${port};` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(port,'127.0.0.1');` +
+        `})();` +
+        `setInterval(()=>{},1e9);`;
+      // Run node as a backgrounded child of the shell (then `wait`): this gives
+      // the shell→node parent/grandchild topology of `shell: true` without any
+      // exec-optimization. SIGTERM to the shell does NOT propagate to the
+      // backgrounded node, so the node is orphaned and keeps the port — exactly
+      // the leak the fix must reap via a process-group kill.
+      const cmd = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inner)} & wait`;
+      const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });
+
+      try {
+        assert.ok(await waitFor(() => isPortOpen(port), 10000),
+          'frontend grandchild should bind the port');
+
+        // Direct kill of only the shell parent (what the old cleanup did): the
+        // backgrounded node grandchild is orphaned, survives, and keeps the
+        // port bound — this is exactly the :3100 502 leak.
+        child.kill('SIGTERM');
+        // Poll across a bounded window instead of a single post-`delay`
+        // snapshot so a slow/busy host can't race the assertion.
+        assert.ok(await staysOpen(port, 600),
+          'direct child kill must NOT free the port (demonstrates the orphan bug)');
+
+        // The shell parent is now gone, so the group kill below is exercised as
+        // a POST-EXIT reap — the exact case the reconciled kill policy relies on:
+        // the orphaned grandchild keeps the process group alive (pgid === the
+        // exited shell's pid), so `process.kill(-pid)` still targets our group.
+        assert.ok(
+          await waitFor(async () => child.exitCode !== null || child.signalCode !== null, 5000),
+          'shell parent should have exited after SIGTERM (sets up the post-exit reap)');
+
+        // Group kill reaps the entire tree and frees the port — the fix. It
+        // works even though the shell parent has already exited (asserted above).
+        killFrontendTree(child, 'SIGKILL');
+        assert.ok(await waitFor(async () => !(await isPortOpen(port)), 10000),
+          'group kill must free the port (the fix)');
+      } finally {
+        // Belt-and-suspenders: never leak the node grandchild if an assert throws.
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+      }
+    });
+});
+
+// ── terminateProcessTree (integration, detached NON-shell tree) ─────────────
+// Mirrors the sandbox `cdk watch` topology (npx → cdk → node, no shell) that
+// finding #1 switched from a bare `cdkWatch.kill()` to `terminateProcessTree`.
+// Opt-in + POSIX-only for the same reasons as the shell-tree test above.
+describe('terminateProcessTree — reaps a detached non-shell tree (cdk-watch shape)', { skip: integrationSkip }, () => {
+  it('group-reaps an npx-style parent whose grandchild holds a port, even post-exit',
+    { timeout: 30000 },
+    async () => {
+      const port = await getFreePort();
+      // Grandchild (stands in for cdk-watch's node): binds the port and idles.
+      // Retry on EADDRINUSE like the shell-tree test, since getFreePort()
+      // releases its probe listener before this grandchild can rebind.
+      const inner =
+        `const net=require('net');` +
+        `const port=${port};` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(port,'127.0.0.1');` +
+        `})();` +
+        `setInterval(()=>{},1e9);`;
+      // Parent (stands in for `npx`): spawns the port-binding grandchild as a
+      // normal (NON-detached) child, then idles. No shell anywhere — the
+      // cdk-watch shape. Spawning the PARENT `detached` makes it a process-group
+      // leader (pgid === parent.pid) that the grandchild inherits, so a single
+      // `process.kill(-pid)` reaches both.
+      const parent =
+        `const cp=require('child_process');` +
+        `cp.spawn(process.execPath,['-e',${JSON.stringify(inner)}],{stdio:'ignore'});` +
+        `setInterval(()=>{},1e9);`;
+      const child = spawn(process.execPath, ['-e', parent], { detached: true, stdio: 'ignore' });
+
+      try {
+        assert.ok(await waitFor(() => isPortOpen(port), 10000),
+          'grandchild should bind the port');
+
+        // A direct kill of ONLY the parent (what the old bare `cdkWatch.kill()`
+        // did) orphans the grandchild, which survives still holding the port —
+        // the exact shell/parent-only-kill leak finding #1 eliminates.
+        child.kill('SIGTERM');
+        assert.ok(await staysOpen(port, 600),
+          'direct parent kill must NOT free the port (demonstrates the orphan)');
+        assert.ok(
+          await waitFor(async () => child.exitCode !== null || child.signalCode !== null, 5000),
+          'parent should have exited after SIGTERM (sets up the post-exit reap)');
+
+        // terminateProcessTree now takes the post-exit branch (parent already
+        // gone) and issues a group SIGKILL via the shared killFrontendTree,
+        // reaping the orphaned grandchild and freeing the port — what the new
+        // `terminateProcessTree(cdkWatch, …)` call guarantees in sandbox.ts.
+        const reaped = await terminateProcessTree(child, 2000);
+        assert.strictEqual(reaped, true, 'post-exit terminateProcessTree resolves true');
+        assert.ok(await waitFor(async () => !(await isPortOpen(port)), 10000),
+          'group kill must free the port held by the grandchild (the fix)');
+      } finally {
+        // Belt-and-suspenders: never leak the grandchild if an assert throws.
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+      }
+    });
+});
+
+// ── group SIGTERM → nested node handler (sandbox dev-server teardown) ────────
+// Verifies the load-bearing claim in sandbox.ts: a *group* SIGTERM (what
+// killFrontendTree issues on POSIX, via terminateProcessTree) actually reaches
+// the nested node dev server so its OWN SIGTERM handler (the :3100 drain) runs —
+// not merely that the tree gets reaped. Opt-in + POSIX-only like the reaping
+// tests above.
+describe('group SIGTERM reaches a nested node child and runs its SIGTERM handler', { skip: integrationSkip }, () => {
+  it('delivers a group SIGTERM to a detached shell→node child whose node handler observes it',
+    { timeout: 30000 },
+    async () => {
+      const port = await getFreePort();
+      const marker = join(tmpdir(), `blocks-sigterm-${process.pid}-${Date.now()}.flag`);
+      // node grandchild: install a SIGTERM handler that RECORDS it observed the
+      // signal (writes the marker) before exiting, THEN bind the port to
+      // announce readiness. Installing the handler before binding guarantees the
+      // test never sends SIGTERM before the handler exists (which would
+      // default-terminate node and flake the assertion). Retry on EADDRINUSE
+      // like the reaping tests, since getFreePort() releases its probe listener.
+      const inner =
+        `const net=require('net'),fs=require('fs');` +
+        `process.on('SIGTERM',()=>{try{fs.writeFileSync(${JSON.stringify(marker)},'sigterm');}catch{}process.exit(0);});` +
+        `let tries=0;` +
+        `(function bind(){` +
+          `const s=net.createServer(c=>c.destroy());` +
+          `s.on('error',e=>{` +
+            `if(e.code==='EADDRINUSE'&&tries++<50){setTimeout(bind,100);return;}` +
+            `process.exit(1);` +
+          `});` +
+          `s.listen(${port},'127.0.0.1');` +
+        `})();` +
+        `setInterval(()=>{},1e9);`;
+      // shell → node grandchild, backgrounded with `& wait` so the shell stays
+      // the live group leader — the exact `shell: true` + detached topology the
+      // dev server uses, where a group signal must fan out to the nested node.
+      const cmd = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(inner)} & wait`;
+      const child = spawn(cmd, { shell: true, detached: true, stdio: 'ignore' });
+
+      try {
+        assert.ok(await waitFor(() => isPortOpen(port), 10000),
+          'nested node should install its SIGTERM handler then bind the port (ready)');
+        assert.ok(child.pid && child.pid > 1, 'child must have a real pid to group-signal');
+
+        // The group SIGTERM under test: exactly what killFrontendTree does on
+        // POSIX (`process.kill(-pid, 'SIGTERM')`) and what the sandbox dev-server
+        // teardown relies on to trigger the node's own terminateFrontend handler.
+        // The `if (child.pid)` guard (asserted above) narrows the type without a
+        // non-null assertion — matching the finally-block pattern used in this file.
+        if (child.pid) process.kill(-child.pid, 'SIGTERM');
+
+        // Assert the node handler OBSERVED the signal (wrote the marker) — i.e.
+        // the group SIGTERM reached the *nested* node, not just the shell.
+        const observed = await waitFor(async () => {
+          try { return readFileSync(marker, 'utf8') === 'sigterm'; } catch { return false; }
+        }, 10000);
+        assert.ok(observed, 'the nested node SIGTERM handler must run on a group SIGTERM');
+      } finally {
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+        try { unlinkSync(marker); } catch { /* never created */ }
+      }
+    });
+});
+
+// ── shouldCreditFrontendReady (unit) ────────────────────────────────────────
+// Guards the restart-budget reset: a liveness-only port probe must not credit a
+// foreign listener, or the maxRestarts cap is neutralized and Vite hot-loops.
+describe('shouldCreditFrontendReady — credit only our own live child', () => {
+  const liveChild = () => ({ exitCode: null as number | null, signalCode: null as NodeJS.Signals | null });
+
+  it('credits the probe when our spawned child is still the live frontend', () => {
+    const child = liveChild();
+    assert.strictEqual(shouldCreditFrontendReady(child, child), true);
+  });
+
+  it('does NOT credit a foreign listener (a different or absent current child)', () => {
+    const child = liveChild();
+    assert.strictEqual(shouldCreditFrontendReady(child, liveChild()), false);
+    assert.strictEqual(shouldCreditFrontendReady(child, null), false);
+  });
+
+  it('does NOT credit a child that already exited (lost the --strictPort bind race)', () => {
+    const exited = { exitCode: 1 as number | null, signalCode: null as NodeJS.Signals | null };
+    assert.strictEqual(shouldCreditFrontendReady(exited, exited), false);
+    const killed = { exitCode: null as number | null, signalCode: 'SIGKILL' as NodeJS.Signals | null };
+    assert.strictEqual(shouldCreditFrontendReady(killed, killed), false);
+  });
+
+  it('does NOT credit when there is no child', () => {
+    assert.strictEqual(shouldCreditFrontendReady(null, null), false);
+  });
+});
+
+// ── terminateProcessTree (unit, injected killTree + sleep) ──────────────────
+// The shared SIGTERM->SIGKILL escalation used by both the dev server and the
+// sandbox entrypoint. Dependencies are injected so the policy is exercised
+// without spawning real processes or real timers.
+describe('terminateProcessTree — escalation + post-exit reap', () => {
+  const immediate = (_ms: number): Promise<void> => Promise.resolve();
+  const never = (_ms: number): Promise<void> => new Promise<void>(() => {});
+
+  function makeAwaitableChild(
+    initial: { exitCode?: number | null; signalCode?: NodeJS.Signals | null } = {},
+  ): { child: AwaitableChild; fireExit: (code?: number | null, signal?: NodeJS.Signals | null) => void } {
+    let exitListener: (() => void) | null = null;
+    const child: AwaitableChild = {
+      pid: 4242,
+      exitCode: initial.exitCode ?? null,
+      signalCode: initial.signalCode ?? null,
+      kill() { return true; },
+      once(_event: 'exit', listener: () => void) { exitListener = listener; return child; },
+    };
+    const fireExit = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
+      child.exitCode = code;
+      child.signalCode = signal;
+      exitListener?.();
+    };
+    return { child, fireExit };
+  }
+
+  it('issues a single best-effort group SIGKILL when the child already exited and its group is still alive', async () => {
+    const { child } = makeAwaitableChild({ exitCode: 0 });
+    const sent: NodeJS.Signals[] = [];
+    // Group still has a live member (an orphaned grandchild) → reap it.
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never, () => true);
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(sent, ['SIGKILL']); // post-exit reap: no SIGTERM, no await
+  });
+
+  it('skips the post-exit group SIGKILL when the whole group has already drained', async () => {
+    const { child } = makeAwaitableChild({ exitCode: 0 });
+    const sent: NodeJS.Signals[] = [];
+    // The group has fully drained: a `-pid` SIGKILL risks signalling a recycled,
+    // unrelated group, and there is nothing of ours left to reap — so skip it.
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, never, () => false);
+    assert.strictEqual(ok, true);     // still resolves true (the child has exited)
+    assert.deepStrictEqual(sent, []); // no signal sent into the drained group
+  });
+
+  it('SIGTERMs the tree and resolves without escalating when it exits in time', async () => {
+    const { child, fireExit } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => {
+      sent.push(s);
+      if (s === 'SIGTERM') fireExit(0, null); // clean exit wins the grace race
+    }, never);
+    assert.strictEqual(ok, true);
+    assert.deepStrictEqual(sent, ['SIGTERM']);
+  });
+
+  it('escalates to a tree SIGKILL when the child lingers past the grace window', async () => {
+    const { child, fireExit } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => {
+      sent.push(s);
+      if (s === 'SIGKILL') fireExit(null, 'SIGKILL'); // dies only on SIGKILL
+    }, immediate);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    assert.strictEqual(ok, true);
+  });
+
+  it('reports false when the child is still alive after the SIGKILL grace', async () => {
+    const { child } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, immediate);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    assert.strictEqual(ok, false);
+  });
+
+  it('waits graceMs for the SIGTERM grace and the shorter KILL_GRACE_MS after SIGKILL', async () => {
+    const { child } = makeAwaitableChild();
+    const sent: NodeJS.Signals[] = [];
+    const slept: number[] = [];
+    // Resolve every sleep immediately (so both grace races resolve) but record
+    // the requested durations to prove which grace each escalation step uses.
+    const recordingSleep = (ms: number): Promise<void> => { slept.push(ms); return Promise.resolve(); };
+    const ok = await terminateProcessTree(child, 1500, (_c, s) => { sent.push(s); }, recordingSleep);
+    assert.deepStrictEqual(sent, ['SIGTERM', 'SIGKILL']);
+    // First grace == the injectable SIGTERM graceMs; second == the fixed,
+    // deliberately shorter post-SIGKILL grace constant.
+    assert.deepStrictEqual(slept, [1500, KILL_GRACE_MS]);
+    assert.ok(KILL_GRACE_MS < 1500, 'the post-SIGKILL grace must be shorter than the SIGTERM grace');
+    assert.strictEqual(ok, false); // child never fired exit
+  });
+});
+
+// ── waitForPortFree (real sockets, fast + deterministic) ────────────────────
+// Asserts the "wait for the port to free before exiting" invariant that the
+// post-exit terminate path used to drop.
+describe('waitForPortFree — waits for the listener to release the port', () => {
+  it('returns promptly when nothing holds the port', async () => {
+    const port = await getFreePort();
+    const t0 = Date.now();
+    await waitForPortFree(port, 2000);
+    assert.ok(Date.now() - t0 < 1000, 'should return quickly when the port is already free');
+  });
+
+  it('keeps polling while the port is held, then resolves once it closes', async () => {
+    const port = await getFreePort();
+    const srv = createServer((c) => c.destroy());
+    await new Promise<void>((res) => srv.listen(port, '127.0.0.1', () => res()));
+
+    // A short bounded wait must consume ~its whole budget while the port is held;
+    // it can only return early if it (wrongly) sees the held port as free.
+    const t0 = Date.now();
+    await waitForPortFree(port, 300);
+    assert.ok(Date.now() - t0 >= 250, 'must keep polling while the port is held');
+
+    await new Promise<void>((res) => srv.close(() => res()));
+
+    // Once free, a generous-timeout call returns promptly.
+    const t1 = Date.now();
+    await waitForPortFree(port, 3000);
+    assert.ok(Date.now() - t1 < 1500, 'should resolve soon after the port frees');
+  });
+});

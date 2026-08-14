@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -62,11 +69,11 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded \(body.count) bytes to \(self.url)")
+            logger.debug("Uploaded \(body.count) bytes to \(requestURL)")
         } catch let error as FileBucketError {
             throw error
         } catch {
@@ -97,11 +104,11 @@ public class FileUploadHandle {
                 throw FileBucketError.uploadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.uploadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(self.url)")
+            logger.debug("Uploaded file \(fileURL.lastPathComponent) to \(requestURL)")
         } catch let error as FileBucketError {
             throw error
         } catch {

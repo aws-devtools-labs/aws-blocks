@@ -1,3 +1,10 @@
+//
+// Copyright Amazon.com Inc. or its affiliates.
+// All Rights Reserved.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 import Foundation
 import os
 
@@ -51,11 +58,11 @@ public class FileDownloadHandle {
                 throw FileBucketError.downloadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
-            logger.debug("Downloaded \(data.count) bytes from \(self.url)")
+            logger.debug("Downloaded \(data.count) bytes from \(requestURL)")
             return data
         } catch let error as FileBucketError {
             throw error
@@ -80,16 +87,16 @@ public class FileDownloadHandle {
                 throw FileBucketError.downloadFailed("Invalid response", nil)
             }
 
-            guard (200..<300).contains(httpResponse.statusCode) else {
+            guard (200 ..< 300).contains(httpResponse.statusCode) else {
                 throw FileBucketError.downloadFailed("HTTP \(httpResponse.statusCode)", nil)
             }
 
             // Move temp file to destination
-            let fm = FileManager.default
-            if fm.fileExists(atPath: fileURL.path) {
-                try fm.removeItem(at: fileURL)
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: fileURL.path) {
+                try fileManager.removeItem(at: fileURL)
             }
-            try fm.moveItem(at: tempURL, to: fileURL)
+            try fileManager.moveItem(at: tempURL, to: fileURL)
 
             logger.debug("Downloaded to \(fileURL.path)")
         } catch let error as FileBucketError {
