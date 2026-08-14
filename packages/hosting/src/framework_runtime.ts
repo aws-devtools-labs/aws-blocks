@@ -8,7 +8,8 @@
  * `nodejs*.x` literal into the manifest, so a runtime bump is a one-line change.
  *
  * Scope: REGIONAL framework compute only. Lambda@Edge compute uses
- * {@link FRAMEWORK_EDGE_COMPUTE_RUNTIME}, which lags behind by design.
+ * {@link FRAMEWORK_EDGE_COMPUTE_RUNTIME}, which is tracked separately because
+ * Lambda@Edge can only associate a subset of Lambda's managed runtimes.
  */
 export const FRAMEWORK_COMPUTE_RUNTIME = 'nodejs24.x';
 
@@ -16,19 +17,23 @@ export const FRAMEWORK_COMPUTE_RUNTIME = 'nodejs24.x';
  * Runtime for framework compute placed at the edge (Lambda@Edge / CloudFront
  * `placement: 'global'`).
  *
- * Deliberately pinned to `nodejs20.x` and NOT bumped in lockstep with
- * {@link FRAMEWORK_COMPUTE_RUNTIME} for two reasons:
+ * Tracked as its own constant because Lambda@Edge supports only a subset of
+ * Lambda's managed runtimes (see
+ * https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-edge-function-restrictions.html);
+ * emitting an unsupported runtime fails the CloudFront association at deploy
+ * time, not at synth. For Node.js, Lambda@Edge draws from the same managed
+ * runtime table as regional Lambda: `nodejs24.x` is supported (deprecates
+ * 2028-04-30), while `nodejs20.x` is already past its 2026-04-30 deprecation
+ * and can no longer back newly-created edge functions.
  *
- * 1. Lambda@Edge supports only a subset of Lambda's managed runtimes (see
- *    https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-at-edge-function-restrictions.html)
- *    and trails the general Lambda runtime catalog. Emitting an unsupported
- *    runtime makes the CloudFront association fail at deploy time, not at synth.
- * 2. `patchEdgeBundlesForLambdaEdge` in the Next.js adapter rewrites the
- *    OpenNext `node:process` namespace-import banner specifically for the Node 20
- *    ESM semantics this runtime provides; bumping the runtime without revalidating
- *    that patch would risk a cold-start `TypeError` on `process.env` assignment.
+ * `patchEdgeBundlesForLambdaEdge` in the Next.js adapter, which rewrites the
+ * OpenNext `node:process` namespace-import banner, was revalidated against this
+ * runtime: the crash it fixes stems from ES Module namespace exports being
+ * non-writable per the ECMAScript spec — not from a Node 20 quirk — and its
+ * replacement relies only on top-level `await import(...)` plus the long-stable
+ * `node:process` default export. Both behave identically on Node 20/22/24.
  *
  * Bump only after confirming Lambda@Edge support AND re-validating the edge
  * bundle patch against the target Node version.
  */
-export const FRAMEWORK_EDGE_COMPUTE_RUNTIME = 'nodejs20.x';
+export const FRAMEWORK_EDGE_COMPUTE_RUNTIME = 'nodejs24.x';

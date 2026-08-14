@@ -167,7 +167,7 @@ export const nextjsAdapter = (
     patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
-    // nodejs20.x compatibility. See patchEdgeBundleForLambdaEdge.
+    // compatibility. See patchEdgeBundleForLambdaEdge.
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
     // Patch the image-optimization bundle for the Next.js 16 image-optimizer
@@ -1335,18 +1335,20 @@ export const patchStreamingWrapperForApiGateway = (
 };
 
 /**
- * Patch every OpenNext edge bundle so it runs on Lambda@Edge nodejs20.x.
+ * Patch every OpenNext edge bundle so it runs on Lambda@Edge.
  *
  * OpenNext prepends each edge bundle with `import * as process from "node:process";`
- * (banner injected by createEdgeBundle.ts). Under Node 20 ESM the resulting
- * Module namespace's `env` binding is non-writable. The next-emitted Next.js
+ * (banner injected by createEdgeBundle.ts). Per the ECMAScript spec a Module
+ * namespace object's bindings are non-writable, so the next-emitted Next.js
  * shim then runs `process.env = e.g.process.env` and crashes with:
  *
  * TypeError: Cannot assign to read only property 'env' of object '[object Module]'
  *
  * Replace the namespace import with a default import so `process` is the
  * live mutable singleton (default export of `node:process`). Idempotent —
- * re-running on an already-patched file finds no banner to swap.
+ * re-running on an already-patched file finds no banner to swap. Version-
+ * agnostic: it relies only on top-level `await import(...)` and the
+ * `node:process` default export, both stable across Node 18–24.
  *
  * Affects only edge functions (Lambda@Edge); the regional `default` bundle
  * uses a different banner and is unaffected.
@@ -1401,7 +1403,7 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
     });
   }
   process.stderr.write(
-    `\u{1F527} Patched ${total} edge bundle(s) for Lambda@Edge nodejs20.x compatibility.\n`,
+    `\u{1F527} Patched ${total} edge bundle(s) for Lambda@Edge compatibility.\n`,
   );
 };
 
