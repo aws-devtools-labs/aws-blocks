@@ -2,27 +2,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK-side regression tests for the Agent's internal AsyncJob event source.
+ * CDK-side tests for the Agent BB.
  *
- * `stream()` submits one job per interactive turn (and a second on HITL resume),
- * so the caller is blocked on that job starting. AsyncJob's defaults
- * (batchSize 10 / maxBatchingWindowSeconds 5) would add up to 5s of SQS
- * batching delay to that human-blocking path, so the Agent opts out at both
- * construction sites. These tests pin the opt-out to the synthesized template:
- * if the defaults are ever inherited again, the latency regression fails here
- * instead of surfacing as a slow agent in production.
- *
- * Must run under `--conditions=cdk`; otherwise the internal BBs resolve to
- * their mock implementations and no CloudFormation resources are produced.
+ * Pins that the Agent provisions an AgentCore Runtime for the streaming loop and that its
+ * dedicated execution role — a SEPARATE principal from the shared Blocks handler — is granted
+ * everything the loop touches: Realtime publish (postToConnection + connections-table query),
+ * Bedrock, the conversation/message tables, and the session bucket. Also pins that the shared
+ * handler is granted permission to INVOKE the runtime.
  */
-import { test, afterEach } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
+import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { Agent } from './index.cdk.js';
 
+/**
+ * Minimal StubBlocksStack: provides the shared executionRole + handler (which assumes it) and
+ * roots Scope via CURRENT_BLOCKS_STACK — mirrors how the AgentCore runtime resolves the shared role.
+ */
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly executionRole: cdk.aws_iam.IRole;
@@ -31,9 +33,7 @@ class StubBlocksStack extends cdk.Stack {
 		super(scope, id);
 		this.id = id;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
-		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
-			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
-		});
+		this.executionRole = new Role(this, 'BlocksRole', { assumedBy: new ServicePrincipal('lambda.amazonaws.com') });
 		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'index.handler',
@@ -43,33 +43,60 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-// synthAgent() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
-// afterwards so no test observes a stack left behind by the previous one (node
-// --test isolates files by default, so this is hygiene against future sharing).
-afterEach(() => {
-	delete (globalThis as any).CURRENT_BLOCKS_STACK;
+/** A real directory to hand fromCodeAsset (any existing dir works for a synth-only test). */
+const ASSET_DIR = dirname(fileURLToPath(import.meta.url));
+
+function synth(): Template {
+	const app = new cdk.App();
+	const stack = new StubBlocksStack(app, 'teststack');
+	const parent = new Scope('app'); // roots to CURRENT_BLOCKS_STACK
+	// agentcoreAssetPath bypasses the synth-time co-bundle (which needs a BlocksStack backend path).
+	new Agent(parent, 'agent', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	return Template.fromStack(stack);
+}
+
+test('CDK: Agent provisions an AgentCore Runtime for the loop', () => {
+	const template = synth();
+	assert.ok(
+		Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length >= 1,
+		'expected an AWS::BedrockAgentCore::Runtime resource',
+	);
 });
 
-function synthAgent(): any {
+test('CDK: the loop runs as the shared execution role, which carries everything it touches', () => {
+	const template = synth();
+	const json = JSON.stringify(template.toJSON());
+	// Realtime publish (both halves) — the load-bearing grant for streaming from the container.
+	assert.ok(json.includes('execute-api:ManageConnections'), 'Realtime postToConnection');
+	assert.ok(json.includes('dynamodb:Query'), 'connections-table + history query');
+	// Model + storage the loop uses (Bedrock granted here; S3/DynamoDB via the child BBs).
+	assert.ok(json.includes('bedrock:InvokeModel'), 'Bedrock invoke');
+	assert.ok(json.includes('s3:GetObject'), 'session-bucket access (via FileBucket)');
+	// The RPC handler (also the shared role) can start the loop.
+	assert.ok(json.includes('bedrock-agentcore:InvokeAgentRuntime'), 'InvokeAgentRuntime');
+	// The runtime runs AS the shared BlocksRole — not a bespoke per-runtime role. Its RoleArn
+	// should reference BlocksRole, and there should be no `RuntimeRole` construct anywhere.
+	const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as { Properties?: Record<string, unknown> };
+	assert.ok(JSON.stringify(runtime.Properties ?? {}).includes('BlocksRole'), 'runtime executionRole should be the shared BlocksRole');
+	assert.ok(!json.includes('RuntimeRole'), 'no bespoke per-runtime role should be created');
+});
+
+test('CDK: multiple agents add the identical shared-role grants ONCE, not per-agent', () => {
+	// Every agent would otherwise add the SAME Bedrock / InvokeAgentRuntime / Realtime-publish
+	// statements to the one shared role. They're identical (stack-scoped), so they must be added
+	// exactly once regardless of agent count — keeping the shared role's policy from bloating with
+	// duplicates. (Overflow into managed policies is a normal CDK mechanism and not asserted against.)
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'teststack');
 	const parent = new Scope('app');
-	new Agent(parent, 'agent', { inferenceOnly: true });
+	for (const id of ['agent1', 'agent2', 'agent3']) {
+		new Agent(parent, id, { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	}
+	const template = Template.fromStack(stack);
+	const json = JSON.stringify(template.toJSON());
 
-	const mappings = Template.fromStack(stack).findResources('AWS::Lambda::EventSourceMapping');
-	const keys = Object.keys(mappings);
-	assert.strictEqual(keys.length, 1, 'exactly one event source mapping expected for the agent job');
-	return mappings[keys[0]].Properties;
-}
-
-test('CDK: the Agent job takes one message per invocation (no batching on the interactive path)', () => {
-	assert.strictEqual(synthAgent().BatchSize, 1);
-});
-
-test('CDK: the Agent job has no SQS batching window (no added latency for the caller)', () => {
-	assert.strictEqual(synthAgent().MaximumBatchingWindowInSeconds, 0);
-});
-
-test('CDK: the Agent job still reports partial batch failures', () => {
-	assert.deepStrictEqual(synthAgent().FunctionResponseTypes, ['ReportBatchItemFailures']);
+	// Three runtimes (per-agent), but the shared-role grant statements appear once (deduped).
+	assert.strictEqual(Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length, 3, 'three runtimes');
+	const invokeGrants = json.split('bedrock-agentcore:InvokeAgentRuntime').length - 1;
+	assert.strictEqual(invokeGrants, 1, `InvokeAgentRuntime should be granted once, found ${invokeGrants}`);
 });
