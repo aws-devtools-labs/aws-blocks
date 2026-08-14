@@ -10,6 +10,7 @@
 
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { IGrantable } from 'aws-cdk-lib/aws-iam';
 
 // ── Namespace Types ─────────────────────────────────────────────────────────
 
@@ -129,6 +130,46 @@ export interface RealtimeServer<T extends NamespaceDefs> {
 	 * @returns A `RealtimeChannel<T>` Transferable.
 	 */
 	getChannel<K extends string & keyof T>(namespace: K, channel: string): Promise<RealtimeChannel<InferMessage<T[K]>>>;
+}
+
+// ── External-publisher grant (CDK) ──────────────────────────────────────────
+
+/**
+ * Runtime config an external (non-Blocks-handler) publisher needs to publish to
+ * Realtime channels. Returned by {@link RealtimePublisherGrants.grantPublish}.
+ *
+ * Publishing from outside the Blocks handler Lambda (e.g. an AgentCore Runtime
+ * container) can't use the in-process SDK-identifier registry or the Lambda's S3
+ * config bundle, so the publisher must receive the API Gateway Management endpoint in its process
+ * env as `BLOCKS_RT_CALLBACK_URL` (`publish()` posts to it). The connections table name is NOT
+ * returned: `publish()` resolves it in-process from the Realtime BB's own SDK identifiers (derived
+ * from its `fullId`), so returning it would create a second, drift-prone source of the same string.
+ */
+export interface RealtimePublishGrant {
+	/** API Gateway Management API endpoint. Inject as `BLOCKS_RT_CALLBACK_URL` on the publisher. */
+	callbackUrl: string;
+}
+
+/**
+ * CDK-only capability: grant an external IAM principal permission to publish to
+ * this Realtime's channels. Present on the type surface for all layers (the
+ * inverse of the `publish`/`subscribe`/`getChannel` synth-guards) but only
+ * implemented in the CDK build; the runtime/mock builds throw.
+ */
+export interface RealtimePublisherGrants {
+	/**
+	 * Grant an external principal (e.g. an AgentCore Runtime execution role) permission to
+	 * publish to this Realtime's channels: API Gateway Management (`postToConnection`) for
+	 * fan-out, plus read/query on the connections table to resolve subscribers. Returns the
+	 * runtime config the grantee must inject into its process env to publish.
+	 *
+	 * CDK-synth only — throws in the runtime/mock build.
+	 *
+	 * @param grantee - the IAM principal to grant (e.g. a Runtime's execution role).
+	 * @returns the `BLOCKS_RT_CALLBACK_URL` the grantee must inject (the connections table name is
+	 *   re-derived in-process by `publish()`, so it isn't returned — see {@link RealtimePublishGrant}).
+	 */
+	grantPublish(grantee: IGrantable): RealtimePublishGrant;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────────
