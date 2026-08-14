@@ -19,6 +19,10 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getPackageInfoSync } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import {
+  FRAMEWORK_COMPUTE_RUNTIME,
+  FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+} from '../framework_runtime.js';
 import type {
   ComputeResource,
   CustomHeader,
@@ -1945,7 +1949,7 @@ const translateOpenNextOutput = (
         handler: fn.handler ?? 'index.handler',
         placement: 'global',
         streaming: false,
-        runtime: 'nodejs20.x',
+        runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
       };
     }
   }
@@ -2076,7 +2080,7 @@ const mapOriginToCompute = (
       handler: origin.handler ?? 'index.handler',
       placement: 'regional',
       streaming: origin.streaming ?? true,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       memorySize: origin.memorySize,
       timeout: origin.timeout,
       environment: origin.environment,
@@ -2091,7 +2095,7 @@ const mapOriginToCompute = (
       port: origin.port ?? 3000,
       placement: 'regional',
       streaming: origin.streaming ?? false,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       environment: origin.environment,
     };
   }
@@ -2103,7 +2107,7 @@ const mapOriginToCompute = (
       handler: origin.handler ?? 'index.handler',
       placement: 'global',
       streaming: false,
-      runtime: origin.runtime ?? 'nodejs20.x',
+      runtime: origin.runtime ?? FRAMEWORK_EDGE_COMPUTE_RUNTIME,
       environment: origin.environment,
     };
   }
@@ -2115,7 +2119,7 @@ const mapOriginToCompute = (
     handler: 'index.handler',
     placement: 'regional',
     streaming: origin.streaming ?? true,
-    runtime: 'nodejs20.x',
+    runtime: FRAMEWORK_COMPUTE_RUNTIME,
   };
 };
 

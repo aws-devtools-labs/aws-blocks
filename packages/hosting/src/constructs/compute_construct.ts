@@ -342,16 +342,27 @@ export class ComputeConstruct extends Construct {
   }
 
   private resolveRuntime(runtime?: string): Runtime {
-    if (!runtime || runtime === 'nodejs20.x') {
-      return Runtime.NODEJS_20_X;
+    if (!runtime) {
+      return Runtime.NODEJS_24_X;
+    }
+    if (runtime === 'nodejs24.x') {
+      return Runtime.NODEJS_24_X;
     }
     if (runtime === 'nodejs22.x') {
       return Runtime.NODEJS_22_X;
     }
+    if (runtime === 'nodejs20.x') {
+      return Runtime.NODEJS_20_X;
+    }
     if (runtime === 'nodejs18.x') {
       return Runtime.NODEJS_18_X;
     }
-    return Runtime.NODEJS_20_X;
+    throw new HostingError('UnsupportedRuntimeError', {
+      message: `Unsupported compute runtime '${runtime}'.`,
+      resolution:
+        'Use one of: nodejs24.x, nodejs22.x, nodejs20.x, nodejs18.x. ' +
+        'Omit the runtime to use the default (nodejs24.x).',
+    });
   }
 
   private validateWebAdapterRegion(
