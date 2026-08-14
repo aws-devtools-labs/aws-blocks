@@ -115,6 +115,25 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     ],
   });
 
+  // The Agent BB's AgentCore Runtime runs AS this shared role, so its loop inherits every Building
+  // Block's grant (the same way any compute does) rather than needing a bespoke, under-granted role.
+  // Scope that trust to this account/region with aws:SourceAccount + aws:SourceArn — this is AWS's
+  // recommended AgentCore Runtime trust policy (the service sends both keys on AssumeRole), so it
+  // tightens the confused-deputy surface (only AgentCore runtimes in THIS account can assume the
+  // role) without breaking assumption. Added as its own trust statement so the condition applies
+  // only to AgentCore, not to the unconditioned lambda trust.
+  executionRole.assumeRolePolicy?.addStatements(
+    new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com')],
+      actions: ['sts:AssumeRole'],
+      conditions: {
+        StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
+        ArnLike: { 'aws:SourceArn': `arn:${cdk.Aws.PARTITION}:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*` },
+      },
+    }),
+  );
+
   // ── Resource Groups ───────────────────────────────────────────────────
   let rootStack = cdk.Stack.of(scope);
   while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
@@ -189,6 +208,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  */
 export class BlocksBackend extends Construct {
   public readonly backendHandlerPath: string;
+  /**
+   * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+   * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+   * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+   */
+  public readonly backendModulePath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: iam.IRole;
   /** Infrastructure defaults for Building Blocks created under this backend. */
@@ -255,6 +280,7 @@ export class BlocksBackend extends Construct {
     super(scope, id);
 
     this.backendHandlerPath = props.backendHandlerPath;
+    this.backendModulePath = props.backendCDKPath;
 
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
