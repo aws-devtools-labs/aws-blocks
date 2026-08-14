@@ -123,7 +123,7 @@ jobs:
 
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: '3.11.0'
+          sdk: '3.13.0'
 
       # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product
@@ -374,7 +374,7 @@ jobs:
 
       - uses: dart-lang/setup-dart@v1
         with:
-          sdk: '3.11.0'
+          sdk: '3.13.0'
 
       # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product

@@ -11,7 +11,10 @@ void main() async {
   group('Realtime: get channel descriptor');
   final channel = await blocks.api.realtimeGetChannel();
   check(channel.channel.isNotEmpty, 'channel name: ${channel.channel}');
-  check(channel.wsUrl.startsWith('ws'), 'wsUrl starts with ws: ${channel.wsUrl}');
+  check(
+    channel.wsUrl.startsWith('ws'),
+    'wsUrl starts with ws: ${channel.wsUrl}',
+  );
   check(channel.token.isNotEmpty, 'token is not empty');
 
   group('Realtime: publish cursor');
