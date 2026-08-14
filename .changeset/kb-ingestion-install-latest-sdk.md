@@ -16,5 +16,10 @@ sufficient and the install is pure overhead. Setting `installLatestAwsSdk: false
 also silences CDK's `installLatestAwsSdkNotSpecified` synth-time warning for this
 construct.
 
+The tradeoff being accepted: the provider now uses whichever SDK v3 the Lambda
+runtime bundles at deploy time rather than installing the newest one. That is safe
+here because `startIngestionJob` is a foundational Bedrock Agent operation present
+since the client's initial release, not a recent addition.
+
 Internal construct wiring only — no public API change. The synthesized
 `Custom::AWS` resource now renders `InstallLatestAwsSdk: false`.
