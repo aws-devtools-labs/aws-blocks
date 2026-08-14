@@ -1,6 +1,6 @@
 name: blocks_codegen
 description: Code generator for Blocks client SDK — reads OpenRPC spec and generates typed Dart clients.
-version: 0.1.1
+version: 0.1.2
 homepage: https://docs.aws.amazon.com/blocks/latest/devguide
 repository: https://github.com/aws-devtools-labs/aws-blocks
 issue_tracker: https://github.com/aws-devtools-labs/aws-blocks/issues
