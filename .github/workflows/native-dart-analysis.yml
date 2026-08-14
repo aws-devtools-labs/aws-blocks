@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - 'native/dart/packages/**'
+      - '.github/workflows/native-dart-analysis.yml'
   workflow_dispatch:
 
 concurrency:
@@ -19,14 +20,22 @@ concurrency:
 permissions:
   contents: read
 
+# The floor from every pubspec's `environment:` block. Same floor, two numbering
+# schemes: Flutter 3.41.0 ships Dart 3.11.0.
+env:
+  MIN_DART: '3.11.0'
+  MIN_FLUTTER: '3.41.0'
+
 jobs:
   analyze:
-    name: ${{ matrix.package-name }}
+    name: ${{ matrix.package-name }} (${{ matrix.sdk }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        package-name: [blocks_runtime, blocks_codegen, blocks_runtime_flutter]
+        sdk: [min, stable]
         include:
           - package-name: blocks_runtime
             working-directory: native/dart/packages/blocks_runtime
@@ -50,13 +59,15 @@ jobs:
         if: matrix.tool == 'dart'
         uses: dart-lang/setup-dart@v1
         with:
-          sdk: '3.13.0'
+          sdk: ${{ matrix.sdk == 'min' && env.MIN_DART || 'stable' }}
 
+      # Empty flutter-version means latest of the channel.
       - name: Setup Flutter
         if: matrix.tool == 'flutter'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: ${{ matrix.sdk == 'min' && env.MIN_FLUTTER || '' }}
           cache: true
 
       # blocks_codegen and blocks_runtime_flutter depend on blocks_runtime,
@@ -80,6 +91,7 @@ jobs:
       # version (3.11, from each package's sdk: ^3.11.0), making the result
       # deterministic and matching local runs.
       - name: Check formatting
+        if: matrix.sdk == 'stable'
         working-directory: ${{ matrix.working-directory }}
         run: dart format --output=none --set-exit-if-changed .
 
@@ -89,6 +101,7 @@ jobs:
       # follow-up `dart fix` pass will clear; flip this to blocking once the
       # tree analyzes clean.
       - name: Analyze (advisory — annotations only, non-blocking)
+        if: matrix.sdk == 'stable'
         continue-on-error: true
         working-directory: ${{ matrix.working-directory }}
         run: ${{ matrix.tool }} analyze .
@@ -100,6 +113,7 @@ jobs:
 
       # Report-only: prints the pub.dev package score and uploads the report.
       - name: Package score
+        if: matrix.sdk == 'stable'
         continue-on-error: true
         uses: ./.github/composite_actions/package_score
         with:
