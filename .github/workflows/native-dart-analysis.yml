@@ -20,6 +20,12 @@ concurrency:
 permissions:
   contents: read
 
+# The floor from every pubspec's `environment:` block. Same floor, two numbering
+# schemes: Flutter 3.41.0 ships Dart 3.11.0.
+env:
+  MIN_DART: '3.11.0'
+  MIN_FLUTTER: '3.41.0'
+
 jobs:
   analyze:
     name: ${{ matrix.package-name }} (${{ matrix.sdk }})
@@ -30,23 +36,19 @@ jobs:
       matrix:
         package-name: [blocks_runtime, blocks_codegen, blocks_runtime_flutter]
         sdk: [min, stable]
-        # min-version mirrors each pubspec's `environment:` floor — keep in sync.
         include:
           - package-name: blocks_runtime
             working-directory: native/dart/packages/blocks_runtime
             tool: dart
             runtime-override: false
-            min-version: '3.11.0'
           - package-name: blocks_codegen
             working-directory: native/dart/packages/blocks_codegen
             tool: dart
             runtime-override: true
-            min-version: '3.11.0'
           - package-name: blocks_runtime_flutter
             working-directory: native/dart/packages/blocks_runtime_flutter
             tool: flutter
             runtime-override: true
-            min-version: '3.41.0'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -57,7 +59,7 @@ jobs:
         if: matrix.tool == 'dart'
         uses: dart-lang/setup-dart@v1
         with:
-          sdk: ${{ matrix.sdk == 'min' && matrix.min-version || 'stable' }}
+          sdk: ${{ matrix.sdk == 'min' && env.MIN_DART || 'stable' }}
 
       # Empty flutter-version means latest of the channel.
       - name: Setup Flutter
@@ -65,7 +67,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: ${{ matrix.sdk == 'min' && matrix.min-version || '' }}
+          flutter-version: ${{ matrix.sdk == 'min' && env.MIN_FLUTTER || '' }}
           cache: true
 
       # blocks_codegen and blocks_runtime_flutter depend on blocks_runtime,
