@@ -176,6 +176,56 @@ describe('shared execution role', () => {
 		});
 	});
 
+	test('the shared role is assumable by BOTH Lambda and AgentCore (multi-compute trust)', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'RoleTrustStack');
+
+		await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		const template = Template.fromStack(parent);
+		const roles = template.findResources('AWS::IAM::Role');
+		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
+		assert.ok(blocksRoleId, 'expected a role from the BlocksRole construct');
+
+		// Collect every trusted service principal across all trust statements — robust to whether
+		// CDK renders the CompositePrincipal as one statement (Service: [..]) or one per principal.
+		const statements = roles[blocksRoleId].Properties.AssumeRolePolicyDocument.Statement as Array<{
+			Principal?: { Service?: string | string[] };
+			Condition?: Record<string, Record<string, unknown>>;
+		}>;
+		const servicesOf = (s: (typeof statements)[number]) => {
+			const svc = s.Principal?.Service;
+			return Array.isArray(svc) ? svc : svc ? [svc] : [];
+		};
+		const services = statements.flatMap(servicesOf);
+		// Lambda must remain trusted (the handler runs on it); AgentCore is added so the Agent BB's
+		// AgentCore Runtime can run AS this shared role and inherit every Building Block's grants.
+		assert.ok(services.includes('lambda.amazonaws.com'), 'shared role must stay Lambda-assumable');
+		assert.ok(
+			services.includes('bedrock-agentcore.amazonaws.com'),
+			'shared role must be assumable by the AgentCore Runtime',
+		);
+		// The AgentCore trust must be scoped to this account (aws:SourceAccount) — AWS's recommended
+		// AgentCore trust policy — so it isn't an account-wide confused-deputy surface.
+		const agentCoreStmt = statements.find((s) => servicesOf(s).includes('bedrock-agentcore.amazonaws.com'));
+		assert.ok(agentCoreStmt?.Condition, 'AgentCore trust statement must carry a scoping Condition');
+		assert.ok(
+			JSON.stringify(agentCoreStmt.Condition).includes('aws:SourceAccount'),
+			'AgentCore trust must be scoped by aws:SourceAccount',
+		);
+	});
+
+	test('exposes backendModulePath (props.backendCDKPath) for co-bundling BBs', async () => {
+		const app = new cdk.App();
+		const parent = new cdk.Stack(app, 'BackendPathStack');
+
+		const backend = await makeBackend(parent, 'Blocks', sideEffectBackendPath);
+
+		// Building Blocks that co-bundle the app backend at synth time (e.g. the Agent BB's AgentCore
+		// Runtime) discover it via globalThis.CURRENT_BLOCKS_STACK.backendModulePath.
+		assert.strictEqual(backend.backendModulePath, sideEffectBackendPath);
+	});
+
 	test('a nested block resolves executionRole via the construct-tree walk', async () => {
 		const app = new cdk.App();
 		const parent = new cdk.Stack(app, 'RoleResolveStack');
