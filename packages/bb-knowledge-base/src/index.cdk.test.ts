@@ -268,6 +268,15 @@ test('CDK (s3:// source): DATA_SOURCE_ID config is wired to the data source id (
   );
 });
 
+test('CDK: the ingestion AwsCustomResource opts out of installing the latest AWS SDK (InstallLatestAwsSdk: false)', () => {
+  const template = synth();
+
+  // startIngestionJob is a stable BedrockAgent API bundled in the Lambda
+  // runtime's SDK v3 — the provider must NOT npm-install the SDK at invoke time
+  // (the default true adds cold-start latency and bumps the provider to 512MB).
+  template.hasResourceProperties('Custom::AWS', Match.objectLike({ InstallLatestAwsSdk: false }));
+});
+
 test('CDK: calling a runtime method throws an actionable synth-time error (not a cryptic TypeError)', () => {
   const { kb } = buildStack();
   const construct = kb as unknown as Record<string, (...args: unknown[]) => unknown>;
