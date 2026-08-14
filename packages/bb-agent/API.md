@@ -17,10 +17,13 @@ import type { z } from 'zod';
 // @public (undocumented)
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>);
+    protected dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void>;
 }
 
 // @public (undocumented)
 export interface AgentConfig<TContext = DefaultToolContext> {
+    // @internal
+    agentcoreAssetPath?: string;
     // Warning: (ae-forgotten-export) The symbol "ConversationManagerConfig" needs to be exported by the entry point index.aws.d.ts
     //
     // (undocumented)
@@ -39,6 +42,7 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     // (undocumented)
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
+    runtime?: 'agentcore';
     streamingMode?: 'token' | 'block';
     // (undocumented)
     systemPrompt: string;
@@ -103,6 +107,19 @@ export interface AgentStreamResult {
 export type AgentTool<TContext = DefaultToolContext> = ToolDefinition<TContext, any> & {
     readonly [AGENT_TOOL_BRAND]: true;
 };
+
+// @public
+export interface AgentTurnPayload<TContext = DefaultToolContext> {
+    channelId: string;
+    context?: TContext;
+    conversationId?: string;
+    interruptResponses?: Array<{
+        interruptId: string;
+        response: string;
+    }>;
+    message: string;
+    userId: string;
+}
 
 // @public
 export const BedrockModels: {
