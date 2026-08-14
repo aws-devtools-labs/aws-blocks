@@ -588,7 +588,13 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 30
+    # Per-leg timeout: the sandbox deploy alone is ~21 min, and on macOS the iOS
+    # simulator build + test pushes the total past a flat 30 min, so this job had
+    # cancelled at the 30-min limit on every run for a week. The JVM leg finishes
+    # near 27 min and keeps the tighter budget; iOS gets 45, matching the Swift
+    # iOS sandbox job. Mirrors the per-leg `matrix.timeout` on the non-sandbox
+    # Kotlin job above.
+    timeout-minutes: ${{ matrix.timeout }}
     environment: publish
     strategy:
       fail-fast: false
@@ -598,10 +604,12 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
+            timeout: 30
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
+            timeout: 45
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
