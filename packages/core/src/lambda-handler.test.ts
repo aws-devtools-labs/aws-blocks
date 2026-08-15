@@ -5,7 +5,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
-import { registerRoute, clearRouteRegistry } from './raw-route.js';
+import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
 import { decodeRpcResponse } from './rpc.js';
 import type { BlocksContext } from './api.js';
 
@@ -273,6 +273,84 @@ describe('createLambdaHandler — RawRoute body handling', () => {
 });
 
 // ── Cookie extraction tests ─────────────────────────────────────────────────
+
+// ── Unmatched RawRoute diagnostics ──────────────────────────────────────────
+//
+// A request that matches no RawRoute used to return 404 without a trace in
+// CloudWatch, which is what made the duplicate-core-copy bug invisible.
+
+describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
+  /** Run `fn` with console.error captured; returns the collected lines. */
+  async function captureErrors(fn: () => Promise<void>): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((a) => String(a)).join(' '));
+    };
+    try {
+      await fn();
+    } finally {
+      console.error = original;
+    }
+    return lines;
+  }
+
+  it('logs method, path and route count when no RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    let result: any;
+    const logged = await captureErrors(async () => {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+    });
+
+    assert.strictEqual(result.statusCode, 404);
+    // The count must match the registry the dispatcher actually consulted —
+    // a "0 routes registered" line is the fingerprint of a split registry.
+    const expectedCount = getRegisteredRoutes().length;
+    assert.ok(expectedCount > 0, 'precondition: routes are registered');
+    assert.ok(
+      logged.some(
+        (line) =>
+          line.includes('No RawRoute matched GET /unknown') &&
+          line.includes(`${expectedCount} routes registered`),
+      ),
+      `expected a diagnostic for the unmatched route, got: ${JSON.stringify(logged)}`,
+    );
+  });
+
+  it('does not log when a RawRoute matches', async () => {
+    registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
+
+    const logged = await captureErrors(async () => {
+      const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/known', body: null }));
+      assert.strictEqual(result.statusCode, 200);
+    });
+
+    assert.deepStrictEqual(logged, []);
+  });
+
+  it('names duplicate core copies as the likely cause when more than one is loaded', async () => {
+    const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+    const state = (globalThis as typeof globalThis & { [REGISTRY_KEY]?: { copies: number } })[REGISTRY_KEY];
+    assert.ok(state, `route registry state must live on globalThis['${REGISTRY_KEY}']`);
+
+    const originalCopies = state.copies;
+    state.copies = 2;
+    try {
+      const logged = await captureErrors(async () => {
+        const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/unknown', body: null }));
+        assert.strictEqual(result.statusCode, 404);
+      });
+
+      assert.ok(
+        logged.some((line) => line.includes('2 copies of @aws-blocks/core are loaded')),
+        `expected the copy count in the diagnostic, got: ${JSON.stringify(logged)}`,
+      );
+    } finally {
+      state.copies = originalCopies;
+    }
+  });
+});
 
 describe('createLambdaHandler — cookie extraction', () => {
   it('extracts cookies from lowercase "cookie" header (API Gateway v2)', async () => {

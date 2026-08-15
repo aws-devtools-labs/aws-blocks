@@ -1,8 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, before, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 import {
   compilePath,
   registerRoute,
@@ -15,6 +21,7 @@ import {
   derivePathFromScope,
   resolveRoutePath,
 } from './raw-route.js';
+import type { RegisteredRoute } from './raw-route.js';
 import type { BlocksContext } from './api.js';
 
 const noop = async (_ctx: BlocksContext) => {};
@@ -815,5 +822,382 @@ describe('resolveRoutePath', () => {
     const child = { id: 'v1', parent: topScope };
     const path = resolveRoutePath(child, 'users', { method: 'GET', handler: noop });
     assert.strictEqual(path, '/v1/users');
+  });
+});
+
+// ── Cross-copy registry sharing ─────────────────────────────────────────────
+//
+// A bundle can contain more than one physical copy of @aws-blocks/core (an
+// unlucky dependency tree, no dedupe). With module-local registry state, every
+// copy gets its own route table: Building Blocks register into theirs, the
+// dispatcher reads its own, and the routes 404 silently.
+//
+// These tests stand in for a second copy: they poke the shared state directly
+// through globalThis, exactly as a second copy of the module would see it.
+// The key is spelled out as a literal on purpose — it IS the cross-copy
+// contract, so changing it must break a test.
+
+const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+
+interface SharedRegistryState {
+  routes: RegisteredRoute[];
+  locked: boolean;
+  copies: number;
+}
+
+type GlobalWithRegistry = typeof globalThis & { [REGISTRY_KEY]?: SharedRegistryState };
+
+/** Read the registry state that a second core copy would share with us. */
+function sharedState(): SharedRegistryState {
+  const state = (globalThis as GlobalWithRegistry)[REGISTRY_KEY];
+  assert.ok(state, `route registry state must live on globalThis['${REGISTRY_KEY}']`);
+  return state;
+}
+
+describe('registry state is shared across core copies', () => {
+  it('matchRoute() resolves a route registered by another core copy', () => {
+    const { pattern, paramNames } = compilePath('/from-other-copy');
+    sharedState().routes.push({
+      method: 'GET',
+      path: '/from-other-copy',
+      pattern,
+      paramNames,
+      handler: noop,
+    });
+
+    const result = matchRoute('GET', '/from-other-copy');
+    assert.ok(result, 'route registered by another copy must be dispatchable');
+    assert.strictEqual(result.route.path, '/from-other-copy');
+  });
+
+  it('getRegisteredRoutes() reports routes registered by another core copy', () => {
+    const { pattern, paramNames } = compilePath('/synth-visible');
+    sharedState().routes.push({
+      method: 'GET',
+      path: '/synth-visible',
+      pattern,
+      paramNames,
+      handler: noop,
+    });
+
+    // Synth-time consumers (CloudFront behaviors in hosting.ts) iterate this.
+    assert.ok(getRegisteredRoutes().some((r) => r.path === '/synth-visible'));
+  });
+
+  it('registerRoute() publishes the route into the shared state', () => {
+    registerRoute({ method: 'POST', path: '/published', handler: noop });
+
+    assert.ok(
+      sharedState().routes.some((r) => r.method === 'POST' && r.path === '/published'),
+      'another copy must be able to see routes we registered',
+    );
+  });
+
+  it('registerRoute() honours a lock set by another core copy', () => {
+    sharedState().locked = true;
+
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/after-foreign-lock', handler: noop }),
+      (err: Error) => {
+        assert.ok(err.message.includes('Cannot register routes after handler creation'));
+        return true;
+      },
+    );
+  });
+
+  it('lockRouteRegistry() locks the shared state, not a module-local flag', () => {
+    lockRouteRegistry();
+    assert.strictEqual(sharedState().locked, true);
+  });
+
+  it('clearRouteRegistry() clears the shared state and releases the shared lock', () => {
+    registerRoute({ method: 'GET', path: '/leftover', handler: noop });
+    lockRouteRegistry();
+
+    clearRouteRegistry();
+
+    assert.deepStrictEqual(sharedState().routes, []);
+    assert.strictEqual(sharedState().locked, false);
+  });
+
+  it('clearRouteRegistry() does not reset the copy counter', () => {
+    const before = sharedState().copies;
+    clearRouteRegistry();
+    assert.strictEqual(sharedState().copies, before, 'copies counts module loads, not routes');
+  });
+
+  // Behavior change, deliberately kept: with a shared registry, duplicate
+  // detection reaches across copies for the first time. An app with two core
+  // copies AND two instances of the same Building Block used to split the
+  // routes silently (half of them 404ing); it now fails loudly at startup.
+  // The app was already broken — this only makes it say so.
+  it('rejects a duplicate of a route another core copy registered', () => {
+    const { pattern, paramNames } = compilePath('/shared-path');
+    sharedState().routes.push({
+      method: 'GET',
+      path: '/shared-path',
+      pattern,
+      paramNames,
+      handler: noop,
+    });
+
+    assert.throws(
+      () => registerRoute({ method: 'GET', path: '/shared-path', handler: noop }),
+      (err: Error) => {
+        assert.strictEqual(err.name, RawRouteErrors.DuplicateRoute);
+        return true;
+      },
+    );
+  });
+});
+
+describe('duplicate core copies are announced', () => {
+  /**
+   * Use raw-route.js in a fresh process, optionally pre-seeding the shared
+   * state as an earlier copy would have left it, and return stderr.
+   *
+   * The copy must be *used*, not merely imported: the counter increments on
+   * first registry access, so a copy that never touches the registry is never
+   * counted — deliberately, since only routing copies matter here.
+   */
+  function useInFreshProcess(preSeededCopies: number | null): string {
+    const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
+    const seed =
+      preSeededCopies === null
+        ? ''
+        : `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: ${preSeededCopies} };`;
+    const script = `${seed}const m = await import(${JSON.stringify(moduleUrl)}); m.registerRoute({ method: 'GET', path: '/probe', handler: async () => {} });`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, `using raw-route.js failed: ${result.stderr}`);
+    return result.stderr;
+  }
+
+  it('warns when a second copy of @aws-blocks/core joins the shared registry', () => {
+    const stderr = useInFreshProcess(1);
+    assert.match(stderr, /2 copies of @aws-blocks\/core/);
+  });
+
+  it('stays silent for a healthy single-copy install', () => {
+    const stderr = useInFreshProcess(null);
+    assert.doesNotMatch(stderr, /copies of @aws-blocks\/core/);
+  });
+
+  it('warns once per copy, not once per registry access', () => {
+    const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
+    const script = `globalThis[${JSON.stringify(REGISTRY_KEY)}] = { routes: [], locked: false, copies: 1 };
+      const m = await import(${JSON.stringify(moduleUrl)});
+      m.registerRoute({ method: 'GET', path: '/a', handler: async () => {} });
+      m.registerRoute({ method: 'GET', path: '/b', handler: async () => {} });
+      m.matchRoute('GET', '/a');`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+
+    const warnings = result.stderr.split('\n').filter((line) => line.includes('copies of @aws-blocks/core'));
+    assert.strictEqual(warnings.length, 1, `expected exactly one warning, got: ${JSON.stringify(warnings)}`);
+  });
+});
+
+// ── A real duplicate install: two physical copies of the package ────────────
+//
+// Everything above stands in for a second core copy by writing to globalThis
+// directly. That pins the contract, but it cannot tell a working fix apart
+// from one that only appears to work because both "copies" were the same
+// module instance all along — which is precisely the mistake that produced the
+// original defect. This block loads two genuinely separate copies (two
+// directory trees, two module instances, the shape a bundler emits from a
+// nested `node_modules/@aws-blocks/core`) and replays the production sequence:
+// a Building Block registers its route through one copy, the dispatcher looks
+// it up through the other.
+//
+// Against the pre-fix implementation this returns no match and an empty route
+// table — the silent 404 reported in aws-blocks#355.
+
+interface TwoCopyProbe {
+  /** Whether the two imports really produced separate module instances. */
+  distinctInstances: boolean;
+  /** Path the dispatcher copy resolved, or null when nothing matched. */
+  matchedPath: string | null;
+  /** Size of the route table the dispatcher copy consulted. */
+  routesSeenByDispatcher: number;
+  /** Copy count the dispatcher copy reports, or null if it cannot report one. */
+  copiesReported: number | null;
+  /** Everything the probe wrote to stderr (carries the duplicate warning). */
+  stderr: string;
+  /** The bundled source, when the probe was bundled first; otherwise null. */
+  bundleText: string | null;
+}
+
+/**
+ * The probe itself: a Building Block registers its route through one copy of
+ * the package, the dispatcher looks it up through the other.
+ *
+ * Kept as a standalone ES module with static imports so the very same source
+ * can be run as-is and, in the test below, sent through a bundler first.
+ */
+const TWO_COPY_ENTRY = `
+import * as a from './copy-a/dist/raw-route.js';
+import * as b from './copy-b/dist/raw-route.js';
+
+a.registerRoute({ method: 'GET', path: '/aws-blocks/auth/signin/google', handler: async () => {} });
+const matched = b.matchRoute('GET', '/aws-blocks/auth/signin/google');
+
+const observed = {
+  distinctInstances: a !== b,
+  matchedPath: matched ? matched.route.path : null,
+  routesSeenByDispatcher: b.getRegisteredRoutes().length,
+  copiesReported: null,
+};
+// Report the routing facts even if the diagnostics helper is missing or
+// throws — whether the route resolves is what this probe is about, and a
+// build that lost the helper must not hide that behind a crashed child.
+try {
+  observed.copiesReported = b.getLoadedCoreCopies();
+} catch {}
+console.log(JSON.stringify(observed));
+`;
+
+/**
+ * Install two physical copies of this package and route a request across them.
+ *
+ * Runs in a child process so the copies start from a clean `globalThis` and
+ * cannot leak registry state into this test run. The whole directory is copied
+ * rather than the two files currently needed, so the probe keeps working when
+ * `raw-route.js` grows an import.
+ *
+ * With `bundle`, the probe is first bundled the way a deployed handler is —
+ * `NodejsFunction` runs esbuild with `--conditions=aws-runtime` — before it is
+ * executed.
+ */
+function runTwoCopyProbe({ bundle }: { bundle: boolean }): TwoCopyProbe {
+  const distDir = dirname(fileURLToPath(import.meta.url));
+  const packageDir = dirname(distDir);
+  const root = mkdtempSync(join(tmpdir(), 'aws-blocks-two-copies-'));
+  try {
+    // Copy A belongs to the Building Block, copy B to the dispatcher. Each is
+    // laid out as an installed package — `package.json` beside `dist/`, the
+    // shape npm produces for a nested `node_modules/@aws-blocks/core`. The
+    // manifest has to come along: a real install has one, and it is what a
+    // bundler reads for `type` and `sideEffects` — without it the bundle here
+    // would be built under different rules than the deployed one.
+    for (const copy of ['copy-a', 'copy-b']) {
+      cpSync(distDir, join(root, copy, 'dist'), { recursive: true });
+      cpSync(join(packageDir, 'package.json'), join(root, copy, 'package.json'));
+    }
+
+    const entry = join(root, 'entry.mjs');
+    writeFileSync(entry, TWO_COPY_ENTRY);
+
+    let script = entry;
+    let bundleText: string | null = null;
+    if (bundle) {
+      const outfile = join(root, 'bundle.mjs');
+      buildSync({
+        entryPoints: [entry],
+        outfile,
+        bundle: true,
+        format: 'esm',
+        platform: 'node',
+        conditions: ['aws-runtime'],
+        minify: true,
+        logLevel: 'silent',
+      });
+      bundleText = readFileSync(outfile, 'utf8');
+      script = outfile;
+    }
+
+    const result = spawnSync(process.execPath, [script], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, `two-copy probe failed: ${result.stderr}`);
+    return {
+      ...(JSON.parse(result.stdout) as Omit<TwoCopyProbe, 'stderr' | 'bundleText'>),
+      stderr: result.stderr,
+      bundleText,
+    };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe('two physical core copies share one registry', () => {
+  let probe: TwoCopyProbe;
+
+  before(() => {
+    probe = runTwoCopyProbe({ bundle: false });
+  });
+
+  it('loads two separate module instances', () => {
+    // Guards the probe itself: if this ever collapses to one instance, the
+    // tests below would pass without exercising anything.
+    assert.strictEqual(probe.distinctInstances, true);
+  });
+
+  it('dispatches a route the other copy registered', () => {
+    assert.strictEqual(
+      probe.matchedPath,
+      '/aws-blocks/auth/signin/google',
+      'the dispatcher copy must resolve a route registered through the other copy',
+    );
+  });
+
+  it('shows the route in the table the dispatcher consults', () => {
+    // A zero here is the fingerprint of the original defect: registration
+    // succeeded, and the dispatcher looked at an empty table.
+    assert.strictEqual(probe.routesSeenByDispatcher, 1);
+  });
+
+  it('counts and announces both copies', () => {
+    assert.strictEqual(probe.copiesReported, 2);
+    assert.match(probe.stderr, /2 copies of @aws-blocks\/core/);
+  });
+});
+
+// ── The same thing, but bundled ─────────────────────────────────────────────
+//
+// Duplicate copies are a bundling phenomenon: the reported defect was found in
+// a deployed bundle, not in a node_modules tree at rest. A deployed handler is
+// built by `NodejsFunction`, which runs esbuild with `--conditions=aws-runtime`
+// (see cdk/blocks-backend.ts), so this repeats that step and then runs the
+// result. Minified on purpose — it is the harsher case, and passing it implies
+// the unminified one.
+//
+// What this pins down that the unbundled probe cannot:
+//
+//   - that a bundler keeps two copies of the same file at different paths
+//     rather than collapsing them, i.e. that the failure mode reaches the
+//     deployed artifact at all;
+//   - that reaching the registry through `globalThis[<string key>]` survives
+//     minification, so the two copies still meet;
+//   - that the key stays a greppable literal, which is the documented way to
+//     diagnose a duplicate install in a deployed bundle (and the reason it is
+//     a plain string rather than a `Symbol.for()` key).
+//
+// What it deliberately does *not* claim: that counting copies on first use
+// rather than at module load is required to survive tree-shaking. That was
+// measured — with `sideEffects` honoured and `--minify` on, esbuild retains a
+// top-level counter here, because a module whose exports are used is kept
+// whole. Counting on first use stands on its other stated reason: it counts the
+// copies that take part in routing, not the ones merely imported.
+
+describe('the shared registry survives bundling', () => {
+  let probe: TwoCopyProbe;
+
+  before(() => {
+    probe = runTwoCopyProbe({ bundle: true });
+  });
+
+  it('keeps two participating copies in one bundle', () => {
+    // Also guards the test: were the two copies collapsed into one module
+    // scope, the assertions below would pass without ever crossing a copy
+    // boundary — and there would be no defect left to protect against.
+    assert.strictEqual(probe.copiesReported, 2, 'the bundle must still contain two participating copies');
+    assert.strictEqual(probe.distinctInstances, true);
+  });
+
+  it('dispatches a route the other copy registered', () => {
+    assert.strictEqual(probe.matchedPath, '/aws-blocks/auth/signin/google');
+    assert.strictEqual(probe.routesSeenByDispatcher, 1);
+  });
+
+  it('keeps the registry key greppable in the bundle', () => {
+    assert.ok(probe.bundleText?.includes('__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__'));
   });
 });
