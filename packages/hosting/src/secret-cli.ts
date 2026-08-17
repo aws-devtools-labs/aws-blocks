@@ -2,71 +2,57 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared secret CLI core — `set` / `list` / `remove` for hosting/pipeline
- * secrets. Relocated into the framework-neutral leaf so every consumer reuses
- * it: Blocks (`npm run secret`) and a standalone app (`npm run secret`). Each
- * consumer supplies its own SSM prefix and store via {@link SecretCliOptions};
- * the command surface is glue on top.
+ * Shared CLI core for the two value kinds — `secret …` (AWS Secrets Manager) and
+ * `config …` (SSM Parameter Store), each with `set` / `list` / `remove`. The kind
+ * selects the store (`storeForKind`), mirroring `secret()` / `config()` in code
+ * so the write and the read can't drift.
  *
- * The value is set OUT OF BAND (never in source). This module writes to the
- * store; deploy/runtime only READ. Store is pluggable: SSM SecureString
- * (default) or Secrets Manager.
+ * Values are set OUT OF BAND (never in source). This module writes to the store;
+ * deploy/runtime only READ.
  *
- * **Providing the value safely.** A value passed as a positional argument
- * (`set KEY sk_live_…`) lands in `process.argv`, which is visible in `ps`
- * output, `/proc/<pid>/cmdline`, and your shell history file. For a tool whose
- * whole point is keeping secrets out of source, prefer either:
- *   - `set KEY --value-stdin`  (pipe it: `cat key.txt | … set KEY --value-stdin`)
- *   - `set KEY`  with no value → an interactive hidden prompt (no echo)
- * The positional form still works (useful in trusted CI) but is documented as
- * the exposed path.
+ * **Providing a value safely.** A positional value lands in `argv` (visible in
+ * `ps`, `/proc`, shell history). Prefer `--value-stdin` (pipe it) or the
+ * interactive hidden prompt when no value is on the command line.
  *
  * @module
  */
 
-import {
-	DEFAULT_SECRET_PARAMETER_PREFIX,
-	DEFAULT_SECRET_STORE,
-	type SecretStore,
-	secretStoreLocator,
-} from './secret.js';
+import { defaultPrefixForKind, type SecretStore, secretStoreLocator, storeForKind, type ValueKind } from './secret.js';
 
 const KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Consumer-supplied configuration for the CLI (namespace + store + label). */
-export interface SecretCliOptions {
-	/** Path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
+/** Consumer-supplied CLI config. `kind` is fixed by a wrapper (e.g. the `secret`/`config` npm scripts). */
+export interface ValueCliOptions {
+	/** The value kind this invocation manages. If omitted, the first positional arg selects it. */
+	kind?: ValueKind;
+	/** Store path prefix (no trailing slash). Defaults to the kind's neutral prefix. */
 	prefix?: string;
-	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'ssm'`). */
-	store?: SecretStore;
-	/**
-	 * Optional environment segment. When set, the value is written under
-	 * `<prefix>/<stage>/<key>`; omit it to write the shared/fallback value at
-	 * `<prefix>/<key>`. The CLI passes this from `--stage <name>`.
-	 */
+	/** Optional environment segment (`<prefix>/<stage>/<key>`). */
 	stage?: string;
-	/** Command label shown in usage text (e.g. `'blocks secret'`, `'ampx hosting secret'`). */
+	/** Command label shown in usage text (e.g. `'blocks secret'`, `'hosting-config'`). */
 	label?: string;
 }
 
 function assertValidKey(key: string): void {
 	if (!key || !KEY_PATTERN.test(key)) {
 		throw new Error(
-			`Invalid secret key ${JSON.stringify(key)}. Keys must match ` +
-				`${KEY_PATTERN} (start with a letter or underscore, then letters, ` +
-				`digits, or underscores).`,
+			`Invalid key ${JSON.stringify(key)}. Keys must match ${KEY_PATTERN} ` +
+				`(start with a letter or underscore, then letters, digits, or underscores).`,
 		);
 	}
 }
 
-/** Set (create or overwrite) a secret value. */
-export async function setSecret(key: string, value: string, opts: SecretCliOptions = {}): Promise<void> {
+/** Set (create or overwrite) a value of `kind` in its store. */
+export async function setValue(
+	kind: ValueKind,
+	key: string,
+	value: string,
+	opts: { prefix?: string; stage?: string } = {},
+): Promise<void> {
 	assertValidKey(key);
-	if (value === undefined || value === null) {
-		throw new Error(`No value provided for secret '${key}'.`);
-	}
-	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = opts.store ?? DEFAULT_SECRET_STORE;
+	if (value === undefined || value === null) throw new Error(`No value provided for '${key}'.`);
+	const store = storeForKind(kind);
+	const prefix = opts.prefix ?? defaultPrefixForKind(kind);
 	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
 
 	if (store === 'secrets-manager') {
@@ -88,42 +74,28 @@ export async function setSecret(key: string, value: string, opts: SecretCliOptio
 		const client = new SSMClient({});
 		await client.send(new PutParameterCommand({ Name: name, Value: value, Type: 'SecureString', Overwrite: true }));
 	}
-	console.log(`🔐 Secret '${key}' set (${name}).`);
+	console.log(`${kind === 'secret' ? '🔐' : '⚙️ '} ${kind} '${key}' set (${name}).`);
 }
 
-/**
- * List secret keys under the prefix. Values are never returned. With a `stage`,
- * lists the stage's own secrets (`<prefix>/<stage>/…`); without one, lists the
- * shared secrets at `<prefix>/…` (stage-scoped ones live one level deeper and
- * are intentionally excluded from the shared view).
- */
-export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]> {
-	const basePrefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const prefix = opts.stage ? `${basePrefix}/${opts.stage}` : basePrefix;
-	const store = opts.store ?? DEFAULT_SECRET_STORE;
+/** List keys of `kind` under the prefix. Values are never returned. */
+export async function listValues(kind: ValueKind, opts: { prefix?: string; stage?: string } = {}): Promise<string[]> {
+	const store = storeForKind(kind);
+	const base = opts.prefix ?? defaultPrefixForKind(kind);
+	const scoped = opts.stage ? `${base}/${opts.stage}` : base;
 
 	if (store === 'secrets-manager') {
-		// SM names are the slash-free locator form (`hosting/secrets/<KEY>`).
-		const smPrefix = prefix.replace(/^\//, '');
+		const smPrefix = scoped.replace(/^\//, '');
 		const { SecretsManagerClient, ListSecretsCommand } = await import('@aws-sdk/client-secrets-manager');
 		const client = new SecretsManagerClient({});
 		const keys: string[] = [];
 		let nextToken: string | undefined;
 		do {
 			const result = await client.send(
-				new ListSecretsCommand({
-					Filters: [{ Key: 'name', Values: [`${smPrefix}/`] }],
-					NextToken: nextToken,
-				}),
+				new ListSecretsCommand({ Filters: [{ Key: 'name', Values: [`${smPrefix}/`] }], NextToken: nextToken }),
 			);
 			for (const s of result.SecretList ?? []) {
 				if (!s.Name?.startsWith(`${smPrefix}/`)) continue;
 				const rest = s.Name.slice(smPrefix.length + 1);
-				// The SM name filter is a plain prefix match with no depth control,
-				// so stage-scoped secrets (`<prefix>/<stage>/<key>`) also match. When
-				// listing the shared namespace, exclude anything one level deeper (a
-				// remaining `/` means it's stage-scoped) — mirrors the SSM path's
-				// `Recursive: false`. A stage listing has stage in smPrefix already.
 				if (!opts.stage && rest.includes('/')) continue;
 				keys.push(rest);
 			}
@@ -139,25 +111,27 @@ export async function listSecrets(opts: SecretCliOptions = {}): Promise<string[]
 	do {
 		const result = await client.send(
 			new GetParametersByPathCommand({
-				Path: prefix,
+				Path: scoped,
 				Recursive: false,
-				WithDecryption: false, // names only — never decrypt for a list
+				WithDecryption: false,
 				NextToken: nextToken,
 			}),
 		);
-		for (const p of result.Parameters ?? []) {
-			if (p.Name) keys.push(p.Name.slice(prefix.length + 1));
-		}
+		for (const p of result.Parameters ?? []) if (p.Name) keys.push(p.Name.slice(scoped.length + 1));
 		nextToken = result.NextToken;
 	} while (nextToken);
 	return keys.sort();
 }
 
-/** Remove a secret. Returns true if it existed, false if already absent. */
-export async function removeSecret(key: string, opts: SecretCliOptions = {}): Promise<boolean> {
+/** Remove a value of `kind`. Returns true if it existed, false if already absent. */
+export async function removeValue(
+	kind: ValueKind,
+	key: string,
+	opts: { prefix?: string; stage?: string } = {},
+): Promise<boolean> {
 	assertValidKey(key);
-	const prefix = opts.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = opts.store ?? DEFAULT_SECRET_STORE;
+	const store: SecretStore = storeForKind(kind);
+	const prefix = opts.prefix ?? defaultPrefixForKind(kind);
 	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
 
 	if (store === 'secrets-manager') {
@@ -165,11 +139,11 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
 		const client = new SecretsManagerClient({});
 		try {
 			await client.send(new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }));
-			console.log(`🗑️  Secret '${key}' removed.`);
+			console.log(`🗑️  ${kind} '${key}' removed.`);
 			return true;
 		} catch (error: unknown) {
 			if ((error as { name?: string })?.name === 'ResourceNotFoundException') {
-				console.log(`Secret '${key}' was not set — nothing to remove.`);
+				console.log(`${kind} '${key}' was not set — nothing to remove.`);
 				return false;
 			}
 			throw error;
@@ -180,11 +154,11 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
 	const client = new SSMClient({});
 	try {
 		await client.send(new DeleteParameterCommand({ Name: name }));
-		console.log(`🗑️  Secret '${key}' removed.`);
+		console.log(`🗑️  ${kind} '${key}' removed.`);
 		return true;
 	} catch (error: unknown) {
 		if ((error as { name?: string })?.name === 'ParameterNotFound') {
-			console.log(`Secret '${key}' was not set — nothing to remove.`);
+			console.log(`${kind} '${key}' was not set — nothing to remove.`);
 			return false;
 		}
 		throw error;
@@ -192,108 +166,75 @@ export async function removeSecret(key: string, opts: SecretCliOptions = {}): Pr
 }
 
 /**
- * CLI dispatcher for `<label> <subcommand> [...args]`. Thin argv parsing so a
- * template script (Blocks/standalone) can wire it in one line.
+ * CLI dispatcher. Two shapes:
+ *  - `kind` fixed by the wrapper → argv is `<subcommand> [...args]` (e.g. `secret set KEY`).
+ *  - `kind` not fixed → argv is `<secret|config> <subcommand> [...args]`.
  */
-export async function runSecretCli(argv: string[], opts: SecretCliOptions = {}): Promise<void> {
-	const label = opts.label ?? 'secret';
-	// Pull an optional `--stage <name>` (or `--stage=<name>`) out of argv; a
-	// CLI-supplied stage overrides any preset on `opts`. Everything else is
-	// positional, so set/list/remove parsing below stays unchanged.
-	const { stage, valueStdin, prefix, store, positional } = extractFlags(argv);
-	// A CLI-supplied flag overrides the same field preset on `opts` (a wrapper's
-	// defaults). Only spread when something was passed, so the plain case is a no-op.
-	const effectiveOpts: SecretCliOptions =
-		stage !== undefined || prefix !== undefined || store !== undefined
-			? {
-					...opts,
-					...(stage !== undefined ? { stage } : {}),
-					...(prefix !== undefined ? { prefix } : {}),
-					...(store !== undefined ? { store } : {}),
-				}
-			: opts;
-	const [subcommand, ...rest] = positional;
+export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
+	const { stage, valueStdin, prefix, positional } = extractFlags(argv);
+
+	let kind = opts.kind;
+	let rest = positional;
+	if (!kind) {
+		const first = positional[0];
+		if (first !== 'secret' && first !== 'config') {
+			throw new Error(`Expected 'secret' or 'config' as the first argument (got ${JSON.stringify(first)}).`);
+		}
+		kind = first;
+		rest = positional.slice(1);
+	}
+	const label = opts.label ?? kind;
+	const effPrefix = prefix ?? opts.prefix;
+	const effStage = stage ?? opts.stage;
+	const [subcommand, ...args] = rest;
+
 	switch (subcommand) {
 		case 'set': {
-			const [key, ...valueParts] = rest;
-			if (!key) {
+			const [key, ...valueParts] = args;
+			if (!key)
 				throw new Error(
-					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--store <ssm|secrets-manager>]`,
+					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]`,
 				);
-			}
-			// Value precedence: --value-stdin (piped) > positional > interactive
-			// hidden prompt. Prefer stdin/prompt: a positional value lands in
-			// argv (visible in `ps`, /proc, and shell history).
 			let value: string;
 			if (valueStdin) {
-				if (valueParts.length > 0) {
-					throw new Error('Pass the value via stdin OR as an argument, not both (`--value-stdin` was set).');
-				}
+				if (valueParts.length > 0) throw new Error('Pass the value via stdin OR as an argument, not both.');
 				value = await readStdin();
 			} else if (valueParts.length > 0) {
 				value = valueParts.join(' ');
 			} else {
-				value = await promptHidden(`Enter value for secret '${key}' (hidden): `);
+				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `);
 			}
-			if (value.length === 0) {
-				throw new Error(`No value provided for secret '${key}'.`);
-			}
-			await setSecret(key, value, effectiveOpts);
+			if (value.length === 0) throw new Error(`No value provided for '${key}'.`);
+			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage });
 			break;
 		}
 		case 'list': {
-			const keys = await listSecrets(effectiveOpts);
-			const scope = effectiveOpts.stage ? ` (stage '${effectiveOpts.stage}')` : '';
-			if (keys.length === 0) {
-				console.log(`No secrets set${scope}. Add one with: ${label} set <KEY> <value>`);
-			} else {
-				console.log(`Secrets${scope}:`);
+			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage });
+			const scope = effStage ? ` (stage '${effStage}')` : '';
+			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${label} set <KEY> <value>`);
+			else {
+				console.log(`${kind} values${scope}:`);
 				for (const key of keys) console.log(`  ${key}`);
 			}
 			break;
 		}
 		case 'remove':
 		case 'rm': {
-			const [key] = rest;
+			const [key] = args;
 			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--stage <name>]`);
-			await removeSecret(key, effectiveOpts);
+			await removeValue(kind, key, { prefix: effPrefix, stage: effStage });
 			break;
 		}
 		default:
-			throw new Error(
-				`Unknown secret subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
-			);
+			throw new Error(`Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`);
 	}
 }
 
-/**
- * Extract known flags from argv, returning the remaining positional args:
- * - `--stage <name>` / `--stage=<name>` — environment segment
- * - `--value-stdin` — read the value from stdin instead of argv
- * - `--prefix <path>` / `--prefix=<path>` — namespace (for the standalone bin,
- *   so it can target the app's own `secretsConfig: { prefix }` without a wrapper)
- * - `--store <ssm|secrets-manager>` / `--store=<…>` — backing store
- *
- * A flag always overrides the same field preset on `opts` by the caller.
- */
-function extractFlags(argv: string[]): {
-	stage?: string;
-	valueStdin: boolean;
-	prefix?: string;
-	store?: SecretStore;
-	positional: string[];
-} {
+function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; prefix?: string; positional: string[] } {
 	const positional: string[] = [];
 	let stage: string | undefined;
 	let valueStdin = false;
 	let prefix: string | undefined;
-	let store: SecretStore | undefined;
-	const readStore = (raw: string): SecretStore => {
-		if (raw !== 'ssm' && raw !== 'secrets-manager') {
-			throw new Error(`\`--store\` must be 'ssm' or 'secrets-manager' (got ${JSON.stringify(raw)}).`);
-		}
-		return raw;
-	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--stage') {
@@ -308,39 +249,28 @@ function extractFlags(argv: string[]): {
 			if (prefix === undefined) throw new Error('`--prefix` requires a value, e.g. --prefix /myapp/secrets');
 		} else if (arg.startsWith('--prefix=')) {
 			prefix = arg.slice('--prefix='.length);
-		} else if (arg === '--store') {
-			const raw = argv[++i];
-			if (raw === undefined) throw new Error('`--store` requires a value: ssm | secrets-manager');
-			store = readStore(raw);
-		} else if (arg.startsWith('--store=')) {
-			store = readStore(arg.slice('--store='.length));
 		} else {
 			positional.push(arg);
 		}
 	}
-	return { stage, valueStdin, prefix, store, positional };
+	return { stage, valueStdin, prefix, positional };
 }
 
-/** Read all of stdin as a UTF-8 string, trimming a single trailing newline. */
 async function readStdin(): Promise<string> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-	return Buffer.concat(chunks).toString('utf8').replace(/\r?\n$/, '');
+	return Buffer.concat(chunks)
+		.toString('utf8')
+		.replace(/\r?\n$/, '');
 }
 
-/**
- * Prompt for a secret value on an interactive TTY with the input hidden (no
- * echo), so it never appears on screen or in scrollback. Rejects if stdin is
- * not a TTY (use `--value-stdin` in that case).
- */
 async function promptHidden(prompt: string): Promise<string> {
 	if (!process.stdin.isTTY) {
 		throw new Error('No value provided and stdin is not a TTY. Pass `--value-stdin` and pipe the value instead.');
 	}
 	const { createInterface } = await import('node:readline');
 	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-	// Mute the output stream while the value is typed so it isn't echoed.
-	const output = rl as unknown as { output?: NodeJS.WriteStream; _writeToOutput?: (s: string) => void };
+	const output = rl as unknown as { _writeToOutput?: (s: string) => void };
 	let muted = false;
 	output._writeToOutput = (str: string) => {
 		if (!muted) process.stdout.write(str);

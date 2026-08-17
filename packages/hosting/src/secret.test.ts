@@ -4,131 +4,99 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
+	config,
+	configEnvVarName,
+	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
-	DEFAULT_SECRET_STORE,
+	fallbackEnvVarName,
+	isConfig,
+	isManagedValue,
 	isSecret,
-	SECRET_BRAND,
+	MANAGED_BRAND,
+	parameterName,
 	secret,
 	secretEnvVarName,
-	secretFallbackEnvVarName,
-	secretParameterName,
 	secretStoreLocator,
+	storeForKind,
 } from './secret.js';
 
-void describe('secret() marker', () => {
-	void it('returns a branded marker carrying the key', () => {
+void describe('secret() / config() markers', () => {
+	void it('secret() → branded marker, kind "secret"', () => {
 		const s = secret('STRIPE_KEY');
 		assert.strictEqual(s.key, 'STRIPE_KEY');
-		assert.strictEqual(s.resolveAt, 'runtime');
-		assert.strictEqual(s[SECRET_BRAND], true);
+		assert.strictEqual(s.kind, 'secret');
+		assert.strictEqual(s[MANAGED_BRAND], true);
 	});
 
-	void it('honors resolveAt', () => {
-		assert.strictEqual(secret('K', { resolveAt: 'deploy' }).resolveAt, 'deploy');
-		assert.strictEqual(secret('K', { resolveAt: 'runtime' }).resolveAt, 'runtime');
-		assert.strictEqual(secret('K').resolveAt, 'runtime'); // default
+	void it('config() → branded marker, kind "config"', () => {
+		const c = config('FEATURE_FLAGS');
+		assert.strictEqual(c.key, 'FEATURE_FLAGS');
+		assert.strictEqual(c.kind, 'config');
+		assert.strictEqual(c[MANAGED_BRAND], true);
 	});
 
-	void it('rejects invalid keys', () => {
-		assert.throws(() => secret(''), /invalid key/);
-		assert.throws(() => secret('1ABC'), /invalid key/); // can't start with digit
-		assert.throws(() => secret('a-b'), /invalid key/); // no dashes
-		assert.throws(() => secret('a b'), /invalid key/); // no spaces
-		assert.throws(() => secret('a/b'), /invalid key/); // no slashes
-		// valid keys do not throw
+	void it('rejects invalid keys (both functions)', () => {
+		for (const fn of [secret, config]) {
+			assert.throws(() => fn(''), /invalid key/);
+			assert.throws(() => fn('1ABC'), /invalid key/);
+			assert.throws(() => fn('a-b'), /invalid key/);
+			assert.throws(() => fn('a/b'), /invalid key/);
+		}
 		assert.ok(secret('_x'));
-		assert.ok(secret('DOMAIN_PROD'));
-		assert.ok(secret('a1_b2'));
+		assert.ok(config('a1_b2'));
 	});
 });
 
-void describe('isSecret()', () => {
-	void it('accepts only real markers', () => {
+void describe('type guards', () => {
+	void it('isSecret / isConfig / isManagedValue', () => {
 		assert.ok(isSecret(secret('K')));
-		assert.ok(!isSecret({ key: 'K', resolveAt: 'runtime' })); // look-alike, no brand
-		assert.ok(!isSecret(null));
-		assert.ok(!isSecret('K'));
-		assert.ok(!isSecret(undefined));
+		assert.ok(!isSecret(config('K')));
+		assert.ok(isConfig(config('K')));
+		assert.ok(!isConfig(secret('K')));
+		assert.ok(isManagedValue(secret('K')));
+		assert.ok(isManagedValue(config('K')));
+		assert.ok(!isManagedValue({ key: 'K', kind: 'secret' })); // look-alike, no brand
+		assert.ok(!isManagedValue(null));
+		assert.ok(!isManagedValue('K'));
 	});
 });
 
-void describe('secret path + env naming', () => {
-	void it('uses a framework-neutral default prefix (no Blocks branding in the leaf)', () => {
+void describe('storeForKind — kind → store (single source of truth)', () => {
+	void it('secret → Secrets Manager, config → SSM', () => {
+		assert.strictEqual(storeForKind('secret'), 'secrets-manager');
+		assert.strictEqual(storeForKind('config'), 'ssm');
+	});
+});
+
+void describe('paths, prefixes, env naming', () => {
+	void it('separate default prefixes per kind', () => {
 		assert.strictEqual(DEFAULT_SECRET_PARAMETER_PREFIX, '/hosting/secrets');
-		assert.strictEqual(secretParameterName('STRIPE_KEY'), '/hosting/secrets/STRIPE_KEY');
+		assert.strictEqual(DEFAULT_CONFIG_PARAMETER_PREFIX, '/hosting/config');
+		assert.strictEqual(parameterName('K', '/blocks/secrets'), '/blocks/secrets/K');
 	});
 
-	void it('accepts an injected prefix so consumers pin their own namespace', () => {
-		assert.strictEqual(secretParameterName('STRIPE_KEY', '/blocks/secrets'), '/blocks/secrets/STRIPE_KEY');
-	});
-
-	void it('builds a framework-neutral, collision-safe env var name', () => {
-		assert.strictEqual(secretEnvVarName('STRIPE_KEY'), 'HOSTING_SECRET_PARAM_STRIPE_KEY');
-	});
-});
-
-void describe('store default + store-aware locator', () => {
-	void it('defaults to SSM (ecosystem consistency: AppSetting + Amplify Gen2 are SSM; free at standard tier)', () => {
-		assert.strictEqual(DEFAULT_SECRET_STORE, 'ssm');
-	});
-
-	void it('the no-store locator matches the DEFAULT store form (guards the default flip)', () => {
-		// Assert against DEFAULT_SECRET_STORE rather than a hard-coded store, so
-		// this stays correct whichever way the default points.
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY'),
-			secretStoreLocator('STRIPE_KEY', { store: DEFAULT_SECRET_STORE }),
-		);
-	});
-
-	void it('SM locator is the slash-free name (matches created secret + IAM ARN resource)', () => {
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager' }),
-			'hosting/secrets/STRIPE_KEY',
-		);
+	void it('secret locator (Secrets Manager) is slash-free; config locator (SSM) keeps the slash', () => {
 		assert.strictEqual(
 			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'secrets-manager' }),
 			'blocks/secrets/STRIPE_KEY',
 		);
-	});
-
-	void it('SSM locator keeps the leading-slash path form', () => {
-		assert.strictEqual(secretStoreLocator('STRIPE_KEY', { store: 'ssm' }), '/hosting/secrets/STRIPE_KEY');
 		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' }),
-			'/blocks/secrets/STRIPE_KEY',
-		);
-	});
-});
-
-void describe('per-stage locator', () => {
-	void it('inserts the stage as a path segment between prefix and key', () => {
-		// SM (slash-free)
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager', stage: 'prod' }),
-			'hosting/secrets/prod/STRIPE_KEY',
-		);
-		// SSM (leading-slash path)
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { store: 'ssm', stage: 'beta' }),
-			'/hosting/secrets/beta/STRIPE_KEY',
-		);
-		// custom prefix + stage
-		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' }),
-			'/blocks/secrets/prod/STRIPE_KEY',
+			secretStoreLocator('FLAGS', { prefix: '/blocks/config', store: 'ssm' }),
+			'/blocks/config/FLAGS',
 		);
 	});
 
-	void it('omitting stage yields the shared/flat locator (the fallback target)', () => {
+	void it('stage inserts a segment between prefix and key', () => {
 		assert.strictEqual(
-			secretStoreLocator('STRIPE_KEY', { store: 'secrets-manager' }),
-			'hosting/secrets/STRIPE_KEY',
+			secretStoreLocator('K', { prefix: '/p', store: 'secrets-manager', stage: 'prod' }),
+			'p/prod/K',
 		);
+		assert.strictEqual(secretStoreLocator('K', { prefix: '/p', store: 'ssm', stage: 'beta' }), '/p/beta/K');
 	});
 
-	void it('fallback env var name derives from the primary env var name', () => {
-		assert.strictEqual(secretFallbackEnvVarName('STRIPE_KEY'), 'HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK');
-		assert.strictEqual(`${secretEnvVarName('X')}_FALLBACK`, secretFallbackEnvVarName('X'));
+	void it('separate env var prefixes per kind + fallback', () => {
+		assert.strictEqual(secretEnvVarName('K'), 'HOSTING_SECRET_PARAM_K');
+		assert.strictEqual(configEnvVarName('K'), 'HOSTING_CONFIG_PARAM_K');
+		assert.strictEqual(fallbackEnvVarName(secretEnvVarName('K')), 'HOSTING_SECRET_PARAM_K_FALLBACK');
 	});
 });

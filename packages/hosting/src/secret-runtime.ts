@@ -2,60 +2,47 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runtime resolver for secrets referenced via {@link secret} in
- * `compute.environment`. Inside the running compute (Lambda),
- * `getSecret('STRIPE_KEY')` fetches and decrypts the value and returns it.
+ * Runtime resolvers for values referenced via {@link secret} / {@link config}.
+ * Inside the running compute (Lambda):
  *
- * Resolution order for a key:
- *   1. `process.env[KEY]` — local dev (and the `resolveAt: 'deploy'` escape hatch),
- *      where the plaintext is already present. No AWS call, works offline.
- *   2. `process.env[HOSTING_SECRET_PARAM_<KEY>]` — the store LOCATOR the Hosting
- *      wiring injected. `process.env[HOSTING_SECRET_PARAM_<KEY>_STORE]` (if set)
- *      selects the store ('secrets-manager'); default is SSM. Fetch, then cache.
+ * - `getSecret('STRIPE_KEY')` fetches + decrypts from **AWS Secrets Manager**.
+ * - `getConfig('FEATURE_FLAGS')` fetches from **SSM Parameter Store**.
  *
- * The value is held only in process memory and only after the first call;
- * it never lands in git, the CloudFormation template, or the browser.
+ * Each reads its own injected locator env var (`HOSTING_SECRET_PARAM_<KEY>` vs
+ * `HOSTING_CONFIG_PARAM_<KEY>`), so the store is unambiguous per getter — no
+ * runtime store hint needed.
+ *
+ * **Resolution order** for a key:
+ *   1. `process.env[KEY]` — local dev; put the value in a `.env` file, no AWS call.
+ *   2. the injected store locator — fetch, then cache.
  *
  * **Cache lifetime.** By default a resolved value is cached for the life of the
- * process, so a rotated secret is only picked up on the next cold start — with
- * steady traffic or provisioned concurrency a warm compute can serve a stale
- * value for a long time. Configure `secrets.cacheTtlSeconds` on the Hosting
- * props to inject `HOSTING_SECRET_CACHE_TTL`; the resolver then re-fetches after
- * the TTL elapses, so rotation lands without a cold start (at the cost of a
- * periodic store read).
+ * process (rotation lands on the next cold start). Set `secretStore.cacheTtlSeconds`
+ * / `configStore.cacheTtlSeconds` on the construct to inject a per-kind TTL so a
+ * warm compute re-fetches after the TTL — rotation without a cold start.
  *
  * @module
  */
 
-import { secretEnvVarName, secretFallbackEnvVarName } from './secret.js';
+import { cacheTtlEnvVarName, envVarNameForKind, fallbackEnvVarName, storeForKind, type ValueKind } from './secret.js';
 
-/** True if a store error means "the secret/parameter does not exist". */
 function isNotFoundError(error: unknown): boolean {
 	const name = (error as { name?: string })?.name;
 	return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
 }
 
-/** A cached value plus the epoch-ms after which it is considered stale. */
 interface CacheEntry {
 	value: string;
-	/** Epoch ms when this entry expires; `Infinity` = cache forever (no TTL). */
+	/** Epoch ms when this entry expires; `Infinity` = cache for the process life. */
 	expiresAt: number;
 }
 
-/** Cache of resolved secret values, keyed by logical secret name. */
+/** Cache keyed by `${kind}:${key}` (secret and config namespaces are distinct). */
 const cache = new Map<string, CacheEntry>();
-/** In-flight fetches, so concurrent callers for the same key share one call. */
 const inFlight = new Map<string, Promise<string>>();
 
-/**
- * Cache lifetime in ms, from `HOSTING_SECRET_CACHE_TTL` (seconds), injected by
- * the Hosting wiring when a TTL is configured. Absent/invalid/`0` → `Infinity`
- * (cache for the life of the process, i.e. until cold start — the historical
- * behavior). A finite TTL lets a warm compute pick up a rotated value without
- * waiting for a cold start.
- */
-function cacheTtlMs(): number {
-	const raw = process.env.HOSTING_SECRET_CACHE_TTL;
+function cacheTtlMs(kind: ValueKind): number {
+	const raw = process.env[cacheTtlEnvVarName(kind)];
 	if (!raw) return Number.POSITIVE_INFINITY;
 	const seconds = Number(raw);
 	return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Number.POSITIVE_INFINITY;
@@ -76,7 +63,7 @@ async function defaultFetcher(locator: string, store: string): Promise<string> {
 		const result = await client.send(new GetSecretValueCommand({ SecretId: locator }));
 		const value = result.SecretString;
 		if (value === undefined || value === null) {
-			throw new Error(`[hosting] Secret "${locator}" has no string value.`);
+			throw new Error(`[hosting] secret "${locator}" has no string value.`);
 		}
 		return value;
 	}
@@ -90,90 +77,89 @@ async function defaultFetcher(locator: string, store: string): Promise<string> {
 	const result = await client.send(new GetParameterCommand({ Name: locator, WithDecryption: true }));
 	const value = result.Parameter?.Value;
 	if (value === undefined || value === null) {
-		throw new Error(
-			`[hosting] Secret parameter "${locator}" exists but has no value. ` +
-				`Set it with your secret CLI (e.g. \`secret set <KEY> <value>\`).`,
-		);
+		throw new Error(`[hosting] parameter "${locator}" exists but has no value.`);
 	}
 	return value;
 }
 
-/**
- * Resolve a secret value at runtime.
- *
- * **Local development.** `getSecret('KEY')` reads `process.env.KEY` first, so
- * locally you don't need AWS at all — put the value in a `.env` file (or export
- * it in your shell) and it's returned directly, with no store call. This is the
- * same path the `resolveAt: 'deploy'` escape hatch uses. On a deployed function
- * the plaintext env var isn't present, so it falls through to fetching the
- * wired secret from the store.
- *
- * @example
- * ```ts
- * // .env (local only — never commit real secrets)
- * //   STRIPE_KEY=sk_test_local_123
- * const key = await getSecret('STRIPE_KEY'); // local: from .env · deployed: from the store
- * ```
- *
- * @param key - The logical secret name, exactly as passed to `secret('<key>')`.
- * @returns The decrypted plaintext value.
- * @throws If the secret is neither present in `process.env` nor backed by an
- *   injected locator — i.e. the reference was never wired or never set.
- */
-export async function getSecret(key: string): Promise<string> {
-	const cached = cache.get(key);
+/** Shared resolver for both kinds. */
+async function resolveValue(kind: ValueKind, key: string): Promise<string> {
+	const cacheKey = `${kind}:${key}`;
+	const cached = cache.get(cacheKey);
 	if (cached !== undefined && Date.now() < cached.expiresAt) return cached.value;
 
-	// 1. Plaintext already in env (local dev, or resolveAt: 'deploy' escape hatch).
+	// 1. Plaintext already in env (local dev).
 	const direct = process.env[key];
 	if (direct !== undefined) {
-		// Env-var values can't rotate under a running process, so cache forever.
-		cache.set(key, { value: direct, expiresAt: Number.POSITIVE_INFINITY });
+		cache.set(cacheKey, { value: direct, expiresAt: Number.POSITIVE_INFINITY });
 		return direct;
 	}
 
 	// 2. Store locator injected by the Hosting wiring.
-	const envName = secretEnvVarName(key);
+	const envName = envVarNameForKind(kind, key);
 	const locator = process.env[envName];
 	if (!locator) {
+		const fn = kind === 'secret' ? 'secret' : 'config';
+		const getter = kind === 'secret' ? 'getSecret' : 'getConfig';
 		throw new Error(
-			`[hosting] getSecret(${JSON.stringify(key)}): no secret reference found. ` +
-				`Reference it in Hosting props with secret(${JSON.stringify(key)}) so the ` +
-				`parameter is wired, and set its value with your secret CLI ` +
-				`(e.g. \`secret set ${key} <value>\`).`,
+			`[hosting] ${getter}(${JSON.stringify(key)}): no ${kind} reference found. ` +
+				`Reference it in Hosting props with ${fn}(${JSON.stringify(key)}) so the store locator ` +
+				`is wired, and set its value with your CLI (e.g. \`${fn} set ${key} …\`).`,
 		);
 	}
-	const store = process.env[`${envName}_STORE`] ?? 'ssm';
-	// Optional shared/fallback locator, injected only for stage-scoped secrets.
-	const fallbackLocator = process.env[secretFallbackEnvVarName(key)];
+	const store = storeForKind(kind);
+	const fallbackLocator = process.env[fallbackEnvVarName(envName)];
 
-	const existing = inFlight.get(key);
+	const existing = inFlight.get(cacheKey);
 	if (existing) return existing;
 
 	const fetcher = fetcherOverride ?? defaultFetcher;
-	// Try the primary (stage-specific) locator; on not-found, fall back to the
-	// shared locator when one was wired. Cache whichever wins.
 	const promise = fetcher(locator, store)
 		.catch((error: unknown) => {
-			if (fallbackLocator && isNotFoundError(error)) {
-				return fetcher(fallbackLocator, store);
-			}
+			if (fallbackLocator && isNotFoundError(error)) return fetcher(fallbackLocator, store);
 			throw error;
 		})
 		.then((value) => {
-			const ttl = cacheTtlMs();
+			const ttl = cacheTtlMs(kind);
 			const expiresAt = ttl === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : Date.now() + ttl;
-			cache.set(key, { value, expiresAt });
+			cache.set(cacheKey, { value, expiresAt });
 			return value;
 		})
 		.finally(() => {
-			inFlight.delete(key);
+			inFlight.delete(cacheKey);
 		});
-	inFlight.set(key, promise);
+	inFlight.set(cacheKey, promise);
 	return promise;
 }
 
-/** Reset cached secrets and any fetcher override. **For testing only.** */
+/**
+ * Resolve a **secret** (AWS Secrets Manager) at runtime.
+ *
+ * **Local development.** Reads `process.env.KEY` first, so a `.env` file supplies
+ * the value with no AWS call. On a deployed function it falls through to fetching
+ * the wired secret from Secrets Manager.
+ *
+ * @param key - The logical name, exactly as passed to `secret('<key>')`.
+ * @returns The decrypted plaintext value.
+ * @throws If the key is neither in `process.env` nor backed by an injected locator.
+ */
+export function getSecret(key: string): Promise<string> {
+	return resolveValue('secret', key);
+}
+
+/**
+ * Resolve a **config** value (SSM Parameter Store) at runtime. Same resolution
+ * order as {@link getSecret} (env-first for local dev, then the injected locator).
+ *
+ * @param key - The logical name, exactly as passed to `config('<key>')`.
+ * @returns The value.
+ * @throws If the key is neither in `process.env` nor backed by an injected locator.
+ */
+export function getConfig(key: string): Promise<string> {
+	return resolveValue('config', key);
+}
+
+/** Reset cached values and any fetcher override. **For testing only.** */
 export function _resetSecretCache(): void {
 	cache.clear();
 	inFlight.clear();

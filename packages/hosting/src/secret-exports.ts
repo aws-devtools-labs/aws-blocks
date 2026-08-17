@@ -2,38 +2,46 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK-free entry point for the secret API (`@aws-blocks/hosting/secret`).
+ * CDK-free entry point for the value API (`@aws-blocks/hosting/secret`).
  *
  * The package's main `index.ts` re-exports CDK constructs, so importing from it
  * in a runtime/CLI context would pull all of CDK. This subpath exposes only the
- * dependency-free marker, the runtime resolver, and the set/list/remove CLI
- * core — so consumers (core's runtime index, or a standalone `npm run secret`
- * wrapper) can use them without dragging CDK into the Lambda bundle or a CLI
- * process.
+ * dependency-free markers (`secret`/`config`), the runtime resolvers
+ * (`getSecret`/`getConfig`), and the set/list/remove CLI core — usable without
+ * dragging CDK into the Lambda bundle or a CLI process.
  *
  * @module
  */
 
 export {
+	type ConfigValue,
+	cacheTtlEnvVarName,
+	config,
+	configEnvVarName,
+	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
-	DEFAULT_SECRET_STORE,
+	defaultPrefixForKind,
+	envVarNameForKind,
+	fallbackEnvVarName,
+	isConfig,
+	isManagedValue,
 	isSecret,
-	SECRET_BRAND,
-	type SecretOptions,
-	type SecretResolveAt,
+	MANAGED_BRAND,
+	type ManagedValue,
+	parameterName,
 	type SecretStore,
 	type SecretValue,
 	secret,
 	secretEnvVarName,
-	secretFallbackEnvVarName,
-	secretParameterName,
 	secretStoreLocator,
+	storeForKind,
+	type ValueKind,
 } from './secret.js';
 export {
-	listSecrets,
-	removeSecret,
-	runSecretCli,
-	type SecretCliOptions,
-	setSecret,
+	listValues,
+	removeValue,
+	runValueCli,
+	setValue,
+	type ValueCliOptions,
 } from './secret-cli.js';
-export { _resetSecretCache, _setSecretFetcher, getSecret } from './secret-runtime.js';
+export { _resetSecretCache, _setSecretFetcher, getConfig, getSecret } from './secret-runtime.js';

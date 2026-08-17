@@ -3,33 +3,29 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { secret } from '@aws-blocks/hosting';
+import { config, secret } from '@aws-blocks/hosting';
 import {
-	collectSynthSecretKeys,
+	collectSynthMarkers,
 	partitionEnvironment,
 	resolveDomainNames,
 	resolveSecretsAtSynth,
 } from './hosting-secrets.js';
 
 void describe('partitionEnvironment()', () => {
-	void it('splits plain / runtime-secret / deploy-time', () => {
-		const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment({
+	void it('splits plain / managed (secret+config)', () => {
+		const { plain, managed } = partitionEnvironment({
 			FLAG: 'on',
 			STRIPE_KEY: secret('STRIPE_KEY'),
-			LEGACY: secret('LEGACY', { resolveAt: 'deploy' }),
+			FEATURE_FLAGS: config('FEATURE_FLAGS'),
 		});
 		assert.deepStrictEqual(plain, { FLAG: 'on' });
-		assert.deepStrictEqual(
-			runtimeSecrets.map((s) => s.key),
-			['STRIPE_KEY'],
-		);
-		assert.deepStrictEqual(
-			exposeSecrets.map((s) => s.key),
-			['LEGACY'],
-		);
+		assert.deepStrictEqual(managed.map((m) => `${m.key}:${m.kind}`).sort(), [
+			'FEATURE_FLAGS:config',
+			'STRIPE_KEY:secret',
+		]);
 	});
 
-	void it('rejects env key / secret key mismatch', () => {
+	void it('rejects env key / marker key mismatch', () => {
 		assert.throws(
 			() => partitionEnvironment({ STRIPE_KEY: secret('OTHER') }),
 			/must match the environment variable name/,
@@ -37,47 +33,55 @@ void describe('partitionEnvironment()', () => {
 	});
 
 	void it('handles undefined', () => {
-		const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment(undefined);
+		const { plain, managed, byo } = partitionEnvironment(undefined);
 		assert.deepStrictEqual(plain, {});
-		assert.strictEqual(runtimeSecrets.length, 0);
-		assert.strictEqual(exposeSecrets.length, 0);
+		assert.strictEqual(managed.length, 0);
+		assert.strictEqual(byo.length, 0);
 	});
 });
 
-void describe('collectSynthSecretKeys()', () => {
-	void it('gathers domain + deploy-time keys, deduped', () => {
-		const keys = collectSynthSecretKeys(
-			['example.com', secret('DOMAIN_PROD')],
-			[secret('LEGACY', { resolveAt: 'deploy' }), secret('DOMAIN_PROD', { resolveAt: 'deploy' })],
+void describe('collectSynthMarkers()', () => {
+	void it('gathers domain markers, deduped by key', () => {
+		const markers = collectSynthMarkers(['example.com', config('DOMAIN_PROD'), config('DOMAIN_PROD')]);
+		assert.deepStrictEqual(
+			markers.map((m) => m.key),
+			['DOMAIN_PROD'],
 		);
-		assert.deepStrictEqual([...keys].sort(), ['DOMAIN_PROD', 'LEGACY']);
 	});
-
-	void it('returns nothing when no synth-time secrets exist', () => {
-		assert.deepStrictEqual(collectSynthSecretKeys('example.com', []), []);
-		assert.deepStrictEqual(collectSynthSecretKeys(undefined, []), []);
+	void it('returns nothing when no markers', () => {
+		assert.deepStrictEqual(collectSynthMarkers('example.com'), []);
+		assert.deepStrictEqual(collectSynthMarkers(undefined), []);
 	});
 });
 
-void describe('resolveSecretsAtSynth()', () => {
-	void it('fetches each referenced key with decryption', async () => {
+void describe('resolveSecretsAtSynth() — Blocks namespaces', () => {
+	void it('config marker resolves under /blocks/config (SSM leading-slash)', async () => {
 		const seen: string[] = [];
-		const resolved = await resolveSecretsAtSynth(['DOMAIN_PROD'], async (name) => {
+		const resolved = await resolveSecretsAtSynth([config('DOMAIN_PROD')], async (name) => {
 			seen.push(name);
 			return 'prod.example.com';
 		});
-		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
+		assert.deepStrictEqual(seen, ['/blocks/config/DOMAIN_PROD']);
 		assert.strictEqual(resolved.get('DOMAIN_PROD'), 'prod.example.com');
 	});
 
-	void it('throws an actionable error when a secret is not set', async () => {
+	void it('secret marker resolves under /blocks/secrets (Secrets Manager slash-free)', async () => {
+		const seen: string[] = [];
+		await resolveSecretsAtSynth([secret('API_KEY')], async (name) => {
+			seen.push(name);
+			return 'k';
+		});
+		assert.deepStrictEqual(seen, ['blocks/secrets/API_KEY']);
+	});
+
+	void it('throws an actionable error when a value is not set', async () => {
 		await assert.rejects(
-			resolveSecretsAtSynth(['DOMAIN_PROD'], async () => {
+			resolveSecretsAtSynth([config('DOMAIN_PROD')], async () => {
 				const e = new Error('not found');
 				e.name = 'ParameterNotFound';
 				throw e;
 			}),
-			/blocks secret set DOMAIN_PROD/,
+			/config 'DOMAIN_PROD' is referenced/,
 		);
 	});
 });
@@ -85,18 +89,15 @@ void describe('resolveSecretsAtSynth()', () => {
 void describe('resolveDomainNames()', () => {
 	void it('replaces markers with resolved literals, preserving shape', () => {
 		const resolved = new Map([['DOMAIN_PROD', 'prod.example.com']]);
-		assert.strictEqual(resolveDomainNames(secret('DOMAIN_PROD'), resolved), 'prod.example.com');
-		assert.deepStrictEqual(resolveDomainNames(['www.example.com', secret('DOMAIN_PROD')], resolved), [
+		assert.strictEqual(resolveDomainNames(config('DOMAIN_PROD'), resolved), 'prod.example.com');
+		assert.deepStrictEqual(resolveDomainNames(['www.example.com', config('DOMAIN_PROD')], resolved), [
 			'www.example.com',
 			'prod.example.com',
 		]);
 	});
 
 	void it('throws if a marker reached the sync path unresolved', () => {
-		assert.throws(
-			() => resolveDomainNames(secret('DOMAIN_PROD'), new Map()),
-			/requires async resolution.*Hosting\.create/s,
-		);
+		assert.throws(() => resolveDomainNames(config('DOMAIN_PROD'), new Map()), /requires async resolution/);
 	});
 
 	void it('passes literal domains through untouched', () => {

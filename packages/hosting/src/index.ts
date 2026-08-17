@@ -20,42 +20,55 @@ export {
 	Rewrite,
 	RouteBehavior,
 } from './manifest/types.js';
+// Two intent functions (I1, Approach B): secret() → Secrets Manager, config() → SSM.
 export {
+	type ConfigValue,
+	cacheTtlEnvVarName,
+	config,
+	configEnvVarName,
+	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
-	DEFAULT_SECRET_STORE,
+	defaultPrefixForKind,
+	envVarNameForKind,
+	fallbackEnvVarName,
+	isConfig,
+	isManagedValue,
 	isSecret,
-	SECRET_BRAND,
-	type SecretOptions,
-	type SecretResolveAt,
+	MANAGED_BRAND,
+	type ManagedValue,
+	parameterName,
 	type SecretStore,
 	type SecretValue,
 	secret,
 	secretEnvVarName,
-	secretFallbackEnvVarName,
-	secretParameterName,
 	secretStoreLocator,
+	storeForKind,
+	type ValueKind,
 } from './secret.js';
-// Shared secret CLI core (set/list/remove) — consumers wrap with their own label/prefix/store.
+// Shared CLI core (secret/config × set/list/remove) — consumers wrap with a fixed kind + label/prefix.
 export {
-	listSecrets,
-	removeSecret,
-	runSecretCli,
-	type SecretCliOptions,
-	setSecret,
+	listValues,
+	removeValue,
+	runValueCli,
+	setValue,
+	type ValueCliOptions,
 } from './secret-cli.js';
-// CDK-aware resolution engine — marker → infra wiring. Used by core.Hosting,
+// CDK-aware resolution engine — marker/BYO → infra wiring. Used by core.Hosting,
 // a standalone hosting app, and (synth helpers) pipeline.
 export {
 	_setSynthSecretFetcher,
-	collectSynthSecretKeys,
+	type ByoBinding,
+	collectSynthMarkers,
 	type DomainNameInput,
 	type EnvValue,
+	type KindStoreOptions,
 	partitionEnvironment,
 	resolveDomainNames,
 	resolveSecretsAtSynth,
 	type SecretFetcher,
-	type SecretResolveOptions,
-	wireRuntimeSecret,
+	type StoreConfig,
+	wireByo,
+	wireManagedValue,
 } from './secret-resolve.js';
-export { _resetSecretCache, _setSecretFetcher, getSecret } from './secret-runtime.js';
+export { _resetSecretCache, _setSecretFetcher, getConfig, getSecret } from './secret-runtime.js';
 export { FrameworkType, HostingProps, HostingResources } from './types.js';

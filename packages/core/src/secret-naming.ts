@@ -2,38 +2,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Blocks-owned SSM namespace for hosting secrets.
+ * Blocks-owned namespaces for hosting values.
  *
- * The secret *mechanism* (marker, runtime resolver, path/env naming) lives in
- * the framework-neutral `@aws-blocks/hosting` package, which defaults to a
- * neutral `/hosting/secrets` prefix so a non-Blocks consumer (a plain
- * framework app, a future standalone hosting package) never inherits Blocks
- * branding.
+ * The mechanism (markers, resolvers, path/env naming) lives in the
+ * framework-neutral `@aws-blocks/hosting` package, which defaults to neutral
+ * `/hosting/secrets` and `/hosting/config` prefixes so a non-Blocks consumer
+ * never inherits Blocks branding.
  *
- * This module is the ONE place Blocks pins its own namespace. Every Blocks-side
- * caller — the `secret` CLI (`scripts/secret.ts`) and the CDK wiring
- * (`hosting-secrets.ts`) — routes through {@link blocksSecretParameterName} so
- * Blocks secrets consistently land at `/blocks/secrets/<KEY>`, alongside the
- * existing `/blocks/{stage}/db-connection-string` convention. Keeping the prefix
- * here (not in the hosting leaf) is what makes the future extraction of the
- * secret mechanism into a standalone package a mechanical move rather than a
- * breaking SSM-path migration.
+ * This module is the ONE place Blocks pins its own namespaces — `/blocks/secrets`
+ * (Secrets Manager) and `/blocks/config` (SSM Parameter Store) — so every
+ * Blocks-side caller (the `secret`/`config` CLIs and the CDK wiring) is consistent.
  *
  * @module
  */
 
-import { secretParameterName } from '@aws-blocks/hosting/secret';
+import type { StoreConfig } from '@aws-blocks/hosting';
+import { parameterName } from '@aws-blocks/hosting/secret';
 
-/** Blocks SSM prefix for hosting secrets. Blocks pins `/blocks`; the leaf stays neutral. */
+/** Blocks prefix for `secret()` values (Secrets Manager). */
 export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
 
-/**
- * Blocks-namespaced SSM parameter name for a secret key.
- * Thin wrapper over the neutral {@link secretParameterName} that always injects
- * the Blocks prefix, so callers can't accidentally use the neutral default.
- *
- * @example blocksSecretParameterName('STRIPE_KEY') // '/blocks/secrets/STRIPE_KEY'
- */
+/** Blocks prefix for `config()` values (SSM Parameter Store). */
+export const BLOCKS_CONFIG_PARAMETER_PREFIX = '/blocks/config';
+
+/** Blocks-namespaced name for a secret key. @example '/blocks/secrets/STRIPE_KEY' */
 export function blocksSecretParameterName(key: string): string {
-	return secretParameterName(key, BLOCKS_SECRET_PARAMETER_PREFIX);
+	return parameterName(key, BLOCKS_SECRET_PARAMETER_PREFIX);
+}
+
+/** Blocks-namespaced name for a config key. @example '/blocks/config/FEATURE_FLAGS' */
+export function blocksConfigParameterName(key: string): string {
+	return parameterName(key, BLOCKS_CONFIG_PARAMETER_PREFIX);
+}
+
+/** The Blocks store config (pinned prefixes) passed to the shared hosting engine. */
+export function blocksStoreConfig(): StoreConfig {
+	return {
+		secretStore: { prefix: BLOCKS_SECRET_PARAMETER_PREFIX },
+		configStore: { prefix: BLOCKS_CONFIG_PARAMETER_PREFIX },
+	};
 }

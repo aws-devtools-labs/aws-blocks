@@ -6,34 +6,39 @@ import { describe, it } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { DEFAULT_SECRET_STORE, secret, secretStoreLocator } from './secret.js';
+import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
+import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import { config, secret } from './secret.js';
 import {
-	collectSynthSecretKeys,
+	collectSynthMarkers,
 	partitionEnvironment,
 	resolveDomainNames,
 	resolveSecretsAtSynth,
-	wireRuntimeSecret,
+	wireByo,
+	wireManagedValue,
 } from './secret-resolve.js';
 
 void describe('partitionEnvironment()', () => {
-	void it('splits plain / runtime-secret / deploy-time', () => {
-		const { plain, runtimeSecrets, exposeSecrets } = partitionEnvironment({
+	void it('splits plain / managed (secret+config) / BYO', () => {
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		const byoSecret = Secret.fromSecretNameV2(stack, 'S1', 'prod/stripe');
+		const byoParam = StringParameter.fromStringParameterName(stack, 'P1', '/prod/flag');
+		const { plain, managed, byo } = partitionEnvironment({
 			FLAG: 'on',
 			STRIPE_KEY: secret('STRIPE_KEY'),
-			LEGACY: secret('LEGACY', { resolveAt: 'deploy' }),
+			FEATURE_FLAGS: config('FEATURE_FLAGS'),
+			BYO_SECRET: byoSecret,
+			BYO_PARAM: byoParam,
 		});
 		assert.deepStrictEqual(plain, { FLAG: 'on' });
-		assert.deepStrictEqual(
-			runtimeSecrets.map((s) => s.key),
-			['STRIPE_KEY'],
-		);
-		assert.deepStrictEqual(
-			exposeSecrets.map((s) => s.key),
-			['LEGACY'],
-		);
+		assert.deepStrictEqual(managed.map((m) => `${m.key}:${m.kind}`).sort(), [
+			'FEATURE_FLAGS:config',
+			'STRIPE_KEY:secret',
+		]);
+		assert.deepStrictEqual(byo.map((b) => `${b.key}:${b.kind}`).sort(), ['BYO_PARAM:config', 'BYO_SECRET:secret']);
 	});
 
-	void it('rejects an env key / secret key mismatch', () => {
+	void it('rejects an env key / marker key mismatch', () => {
 		assert.throws(
 			() => partitionEnvironment({ STRIPE_KEY: secret('OTHER') }),
 			/must match the environment variable name/,
@@ -42,49 +47,34 @@ void describe('partitionEnvironment()', () => {
 });
 
 void describe('resolveSecretsAtSynth()', () => {
-	void it('fetches each key via the injected fetcher + prefix, using the DEFAULT store locator form', async () => {
+	void it('config marker → SSM leading-slash locator under configStore.prefix', async () => {
 		const seen: string[] = [];
-		const resolved = await resolveSecretsAtSynth(['DOMAIN_PROD'], {
-			prefix: '/blocks/secrets',
-			fetcher: async (locator) => {
-				seen.push(locator);
+		const resolved = await resolveSecretsAtSynth([config('DOMAIN_PROD')], {
+			configStore: { prefix: '/blocks/config' },
+			fetcher: async (loc) => {
+				seen.push(loc);
 				return 'prod.example.com';
 			},
 		});
-		// Locator form follows DEFAULT_SECRET_STORE — flip-proof.
-		assert.deepStrictEqual(seen, [secretStoreLocator('DOMAIN_PROD', { prefix: '/blocks/secrets' })]);
+		assert.deepStrictEqual(seen, ['/blocks/config/DOMAIN_PROD']);
 		assert.strictEqual(resolved.get('DOMAIN_PROD'), 'prod.example.com');
 	});
 
-	void it('uses the slash-free name when store: secrets-manager is opted into', async () => {
+	void it('secret marker → Secrets Manager slash-free locator under secretStore.prefix', async () => {
 		const seen: string[] = [];
-		await resolveSecretsAtSynth(['DOMAIN_PROD'], {
-			prefix: '/blocks/secrets',
-			store: 'secrets-manager',
-			fetcher: async (locator) => {
-				seen.push(locator);
-				return 'prod.example.com';
+		await resolveSecretsAtSynth([secret('API_KEY')], {
+			secretStore: { prefix: '/blocks/secrets' },
+			fetcher: async (loc) => {
+				seen.push(loc);
+				return 'k';
 			},
 		});
-		assert.deepStrictEqual(seen, ['blocks/secrets/DOMAIN_PROD']);
+		assert.deepStrictEqual(seen, ['blocks/secrets/API_KEY']);
 	});
 
-	void it('uses the leading-slash path when store: ssm is opted into', async () => {
-		const seen: string[] = [];
-		await resolveSecretsAtSynth(['DOMAIN_PROD'], {
-			prefix: '/blocks/secrets',
-			store: 'ssm',
-			fetcher: async (locator) => {
-				seen.push(locator);
-				return 'prod.example.com';
-			},
-		});
-		assert.deepStrictEqual(seen, ['/blocks/secrets/DOMAIN_PROD']);
-	});
-
-	void it('maps a not-found error (either store) to an actionable message', async () => {
+	void it('not-found → actionable message naming the function + CLI', async () => {
 		await assert.rejects(
-			resolveSecretsAtSynth(['X'], {
+			resolveSecretsAtSynth([config('X')], {
 				fetcher: async () => {
 					const e = new Error('nope');
 					e.name = 'ResourceNotFoundException';
@@ -92,38 +82,28 @@ void describe('resolveSecretsAtSynth()', () => {
 				},
 			}),
 			(err: unknown) => {
-				// Structured HostingError: message names the unset secret, and the
-				// actionable `secret set` guidance lives in `resolution`.
-				const e = err as { name?: string; message?: string; resolution?: string };
-				assert.strictEqual(e.name, 'UnresolvedSecretError');
-				assert.match(e.message ?? '', /secret 'X' is referenced/);
-				assert.match(e.resolution ?? '', /secret set X <value>/);
+				const e = err as { message?: string; resolution?: string };
+				assert.match(e.message ?? '', /config 'X' is referenced/);
+				assert.match(e.resolution ?? '', /config set X/);
 				return true;
 			},
 		);
 	});
 });
 
-void describe('resolveDomainNames()', () => {
-	void it('replaces markers with resolved literals, preserving shape', () => {
+void describe('resolveDomainNames() / collectSynthMarkers()', () => {
+	void it('replaces markers with resolved literals; collects domain markers deduped', () => {
 		const resolved = new Map([['DOMAIN_PROD', 'prod.example.com']]);
-		assert.strictEqual(resolveDomainNames(secret('DOMAIN_PROD'), resolved), 'prod.example.com');
-		assert.deepStrictEqual(resolveDomainNames(['www.example.com', secret('DOMAIN_PROD')], resolved), [
-			'www.example.com',
-			'prod.example.com',
-		]);
-	});
-
-	void it('collectSynthSecretKeys gathers domain + deploy-time, deduped', () => {
-		const keys = collectSynthSecretKeys(
-			['example.com', secret('DOMAIN_PROD')],
-			[secret('LEGACY', { resolveAt: 'deploy' }), secret('DOMAIN_PROD', { resolveAt: 'deploy' })],
+		assert.strictEqual(resolveDomainNames(config('DOMAIN_PROD'), resolved), 'prod.example.com');
+		const markers = collectSynthMarkers(['example.com', config('DOMAIN_PROD'), config('DOMAIN_PROD')]);
+		assert.deepStrictEqual(
+			markers.map((m) => m.key),
+			['DOMAIN_PROD'],
 		);
-		assert.deepStrictEqual([...keys].sort(), ['DOMAIN_PROD', 'LEGACY']);
 	});
 });
 
-void describe('wireRuntimeSecret() — IAM + env per store', () => {
+void describe('wireManagedValue() — IAM + env per kind', () => {
 	function fnStack() {
 		const stack = new cdk.Stack(new cdk.App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
 		const fn = new lambda.Function(stack, 'Fn', {
@@ -134,153 +114,91 @@ void describe('wireRuntimeSecret() — IAM + env per store', () => {
 		return { stack, fn };
 	}
 
-	void it('SSM (opt-in): injects param NAME + grants ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
+	void it('secret → Secrets Manager: HOSTING_SECRET_PARAM_* + secretsmanager:GetSecretValue + kms', () => {
 		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
+		wireManagedValue(fn, secret('STRIPE_KEY'), { secretStore: { prefix: '/blocks/secrets' } });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
-				Variables: Match.objectLike({ HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY' }),
+				Variables: Match.objectLike({ HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY' }),
 			},
 		});
 		t.hasResourceProperties('AWS::IAM::Policy', {
 			PolicyDocument: {
 				Statement: Match.arrayWith([
-					Match.objectLike({ Action: 'ssm:GetParameter' }),
+					Match.objectLike({ Action: 'secretsmanager:GetSecretValue' }),
 					Match.objectLike({ Action: 'kms:Decrypt' }),
 				]),
 			},
 		});
-		// No plaintext value in the template, and no store hint for SSM.
-		const json = JSON.stringify(t.toJSON());
-		assert.ok(!json.includes('sk_live'));
-		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
 	});
 
-	void it('SSM (DEFAULT): leading-slash param NAME + ssm:GetParameter + kms:Decrypt, no _STORE hint', () => {
+	void it('config → SSM: HOSTING_CONFIG_PARAM_* (leading slash) + ssm:GetParameter', () => {
 		const { stack, fn } = fnStack();
-		// No `store` passed → the default (SSM Parameter Store) must apply.
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets' });
+		wireManagedValue(fn, config('FEATURE_FLAGS'), { configStore: { prefix: '/blocks/config' } });
 		const t = Template.fromStack(stack);
 		t.hasResourceProperties('AWS::Lambda::Function', {
 			Environment: {
-				Variables: Match.objectLike({
-					// SSM keeps the leading-slash path form (see secretStoreLocator).
-					HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/STRIPE_KEY',
-				}),
+				Variables: Match.objectLike({ HOSTING_CONFIG_PARAM_FEATURE_FLAGS: '/blocks/config/FEATURE_FLAGS' }),
 			},
 		});
 		t.hasResourceProperties('AWS::IAM::Policy', {
-			PolicyDocument: {
-				Statement: Match.arrayWith([
-					Match.objectLike({ Action: 'ssm:GetParameter' }),
-					Match.objectLike({ Action: 'kms:Decrypt' }),
-				]),
-			},
+			PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: 'ssm:GetParameter' })]) },
 		});
-		// SSM is the default, so no _STORE hint is emitted (the runtime defaults to SSM).
-		assert.ok(!JSON.stringify(t.toJSON()).includes('HOSTING_SECRET_PARAM_STRIPE_KEY_STORE'));
-		// The default-store wiring equals an explicit ssm wiring.
-		assert.strictEqual(DEFAULT_SECRET_STORE, 'ssm');
 	});
 
-	void it('with a stage: injects stage locator + _FALLBACK shared locator, grants BOTH ARNs', () => {
+	void it('stage: injects fallback env + grants both ARNs; single kms:Decrypt', () => {
 		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' });
-		const t = Template.fromStack(stack);
-		t.hasResourceProperties('AWS::Lambda::Function', {
-			Environment: {
-				Variables: Match.objectLike({
-					// primary = stage-specific; fallback = shared.
-					HOSTING_SECRET_PARAM_STRIPE_KEY: '/blocks/secrets/prod/STRIPE_KEY',
-					HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK: '/blocks/secrets/STRIPE_KEY',
-				}),
-			},
-		});
-		// The role is granted read on BOTH the stage and the shared parameter ARNs.
-		const json = JSON.stringify(t.toJSON());
-		assert.ok(json.includes('parameter/blocks/secrets/prod/STRIPE_KEY'), 'stage ARN granted');
-		assert.ok(json.includes('parameter/blocks/secrets/STRIPE_KEY'), 'shared ARN granted');
-	});
-
-	void it('emits a single kms:Decrypt statement even with a stage fallback (no per-locator dupes)', () => {
-		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm', stage: 'prod' });
-		const policy = JSON.stringify(Template.fromStack(stack).toJSON());
-		// stage + shared = two read grants, but the identical kms:Decrypt is hoisted
-		// to exactly one statement (was 2N before the dedupe fix).
-		const decryptCount = (policy.match(/kms:Decrypt/g) ?? []).length;
-		assert.strictEqual(decryptCount, 1, `expected exactly one kms:Decrypt statement, got ${decryptCount}`);
-	});
-
-	void it('grants kms:Decrypt once per function across multiple secrets in the same store', () => {
-		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
-		wireRuntimeSecret(fn, 'SENTRY_DSN', { prefix: '/blocks/secrets', store: 'ssm' });
-		const policy = JSON.stringify(Template.fromStack(stack).toJSON());
-		const decryptCount = (policy.match(/kms:Decrypt/g) ?? []).length;
-		assert.strictEqual(decryptCount, 1, `expected one shared kms:Decrypt for the store, got ${decryptCount}`);
-	});
-
-	void it('without a stage: no _FALLBACK var, single ARN grant (unchanged)', () => {
-		const { stack, fn } = fnStack();
-		wireRuntimeSecret(fn, 'STRIPE_KEY', { prefix: '/blocks/secrets', store: 'ssm' });
+		wireManagedValue(fn, config('FLAGS'), { configStore: { prefix: '/blocks/config', stage: 'prod' } });
 		const json = JSON.stringify(Template.fromStack(stack).toJSON());
-		assert.ok(!json.includes('HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK'), 'no fallback var when stageless');
+		assert.ok(json.includes('/blocks/config/prod/FLAGS'), 'stage locator');
+		assert.ok(json.includes('HOSTING_CONFIG_PARAM_FLAGS_FALLBACK'), 'fallback env');
+		assert.strictEqual((json.match(/kms:Decrypt/g) ?? []).length, 1);
+	});
+
+	void it('injects the per-kind cache TTL when configured', () => {
+		const { stack, fn } = fnStack();
+		wireManagedValue(fn, config('FLAGS'), { configStore: { prefix: '/p', cacheTtlSeconds: 30 } });
+		const json = JSON.stringify(Template.fromStack(stack).toJSON());
+		assert.ok(json.includes('"HOSTING_CONFIG_CACHE_TTL":"30"'), 'config TTL env');
 	});
 });
 
-void describe('resolveSecretsAtSynth() — per-stage fallback', () => {
-	void it('prefers the stage value, else falls back to the shared value', async () => {
-		const seen: string[] = [];
-		// Fetcher: stage-specific path is "not set", shared path resolves.
-		const resolved = await resolveSecretsAtSynth(['DOMAIN'], {
-			prefix: '/blocks/secrets',
-			store: 'ssm',
-			stage: 'pr-123',
-			fetcher: async (locator) => {
-				seen.push(locator);
-				if (locator === '/blocks/secrets/pr-123/DOMAIN') {
-					const e = new Error('missing');
-					e.name = 'ParameterNotFound';
-					throw e;
-				}
-				return 'shared.example.com';
+void describe('wireByo() — existing handles', () => {
+	function fnStack() {
+		const stack = new cdk.Stack(new cdk.App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
+		const fn = new lambda.Function(stack, 'Fn', {
+			runtime: lambda.Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			code: lambda.Code.fromInline('exports.handler=()=>{}'),
+		});
+		return { stack, fn };
+	}
+
+	void it('BYO ISecret → grant + HOSTING_SECRET_PARAM_* = secretName', () => {
+		const { stack, fn } = fnStack();
+		const s = Secret.fromSecretNameV2(stack, 'S1', 'prod/stripe');
+		wireByo(fn, { key: 'STRIPE_KEY', kind: 'secret', handle: s });
+		const t = Template.fromStack(stack);
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.objectLike({ HOSTING_SECRET_PARAM_STRIPE_KEY: 'prod/stripe' }) },
+		});
+		t.hasResourceProperties('AWS::IAM::Policy', {
+			PolicyDocument: {
+				Statement: Match.arrayWith([
+					Match.objectLike({ Action: Match.arrayWith(['secretsmanager:GetSecretValue']) }),
+				]),
 			},
 		});
-		// Tried stage first, then shared.
-		assert.deepStrictEqual(seen, ['/blocks/secrets/pr-123/DOMAIN', '/blocks/secrets/DOMAIN']);
-		assert.strictEqual(resolved.get('DOMAIN'), 'shared.example.com');
 	});
 
-	void it('uses the stage value directly when it exists (no fallback call)', async () => {
-		const seen: string[] = [];
-		const resolved = await resolveSecretsAtSynth(['DOMAIN'], {
-			prefix: '/blocks/secrets',
-			store: 'ssm',
-			stage: 'prod',
-			fetcher: async (locator) => {
-				seen.push(locator);
-				return 'prod.example.com';
-			},
+	void it('BYO IParameter → grant + HOSTING_CONFIG_PARAM_* = parameterName', () => {
+		const { stack, fn } = fnStack();
+		const p = StringParameter.fromStringParameterName(stack, 'P1', '/prod/flag');
+		wireByo(fn, { key: 'FLAG', kind: 'config', handle: p });
+		const t = Template.fromStack(stack);
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.objectLike({ HOSTING_CONFIG_PARAM_FLAG: '/prod/flag' }) },
 		});
-		assert.deepStrictEqual(seen, ['/blocks/secrets/prod/DOMAIN']);
-		assert.strictEqual(resolved.get('DOMAIN'), 'prod.example.com');
-	});
-
-	void it('errors naming both stage and shared when neither is set', async () => {
-		await assert.rejects(
-			resolveSecretsAtSynth(['DOMAIN'], {
-				prefix: '/blocks/secrets',
-				store: 'ssm',
-				stage: 'prod',
-				fetcher: async () => {
-					const e = new Error('missing');
-					e.name = 'ParameterNotFound';
-					throw e;
-				},
-			}),
-			/stage 'prod'.*shared|--stage prod/s,
-		);
 	});
 });

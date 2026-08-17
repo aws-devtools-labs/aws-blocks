@@ -2,132 +2,148 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CDK-aware resolution glue for the `secret()` marker. This is the shared
- * engine that turns an inert {@link SecretValue} into wired infrastructure —
- * relocated here (from `@aws-blocks/core`) so ALL consumers reuse it: the
- * Blocks `Hosting` block, a standalone hosting app, and (the synth-time helpers)
- * `@aws-blocks/pipeline`.
+ * CDK-aware resolution glue for the `secret()` / `config()` markers, plus BYO
+ * (bring-your-own) `ISecret` / `IParameter` handles. Turns an inert marker (or an
+ * existing CDK handle) into wired infrastructure — reused by the Blocks `Hosting`
+ * block, a standalone hosting app, and `@aws-blocks/pipeline`.
  *
- * Two resolution strategies, chosen by where the marker appears:
- *   • `environment` runtime secret (secure default) — inject the store LOCATOR
- *     (never the value) as `HOSTING_SECRET_PARAM_<KEY>` + grant the compute role
- *     read+decrypt; `getSecret()` fetches at runtime.
- *   • `domain.domainName` / `resolveAt: 'deploy'` — resolved at SYNTH time via an SDK
- *     GetParameter/GetSecretValue call and inlined as a literal (SecureString
- *     dynamic refs can't go in CloudFront Aliases / Lambda env).
+ * The store is derived from the marker's kind ({@link storeForKind}): `secret`
+ * → Secrets Manager, `config` → SSM Parameter Store. Each kind uses its own
+ * runtime env prefix and its own per-construct namespace config
+ * (`secretStore` / `configStore`).
  *
- * The SSM namespace prefix and the backing store are BOTH injectable, so this
- * package hardcodes no framework branding and no single store.
+ * Two resolution strategies, by where the marker appears:
+ *   • `environment` — inject the store LOCATOR (never the value) + grant the
+ *     compute role read+decrypt; `getSecret()`/`getConfig()` fetch at runtime.
+ *   • `domain.domainName` — resolved at SYNTH via an SDK read and inlined (a
+ *     domain must be a literal before CloudFront/ACM are built).
  *
  * @module
  */
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
+import type { IParameter } from 'aws-cdk-lib/aws-ssm';
 import { HostingError } from './hosting_error.js';
 import {
-	DEFAULT_SECRET_PARAMETER_PREFIX,
-	DEFAULT_SECRET_STORE,
-	isSecret,
+	cacheTtlEnvVarName,
+	configEnvVarName,
+	defaultPrefixForKind,
+	envVarNameForKind,
+	fallbackEnvVarName,
+	isManagedValue,
+	type ManagedValue,
 	type SecretStore,
-	type SecretValue,
 	secretEnvVarName,
-	secretFallbackEnvVarName,
 	secretStoreLocator,
+	storeForKind,
+	type ValueKind,
 } from './secret.js';
 
 export type { SecretStore };
 
-/** A `compute.environment` value: a literal, or a deferred secret reference. */
-export type EnvValue = string | SecretValue;
-
-/** A custom-domain name: a literal, a secret, or a mix in an array. */
-export type DomainNameInput = string | SecretValue | Array<string | SecretValue>;
-
-/** Options shared by the resolve/wire helpers. */
-export interface SecretResolveOptions {
-	/** SSM path prefix (no trailing slash). Default {@link DEFAULT_SECRET_PARAMETER_PREFIX}. */
+/** Per-kind namespace/cache config (one for `secretStore`, one for `configStore`). */
+export interface KindStoreOptions {
+	/** Store path prefix (no trailing slash). Defaults to the kind's neutral prefix. */
 	prefix?: string;
-	/** Backing store. Default {@link DEFAULT_SECRET_STORE} (`'ssm'`). */
-	store?: SecretStore;
-	/**
-	 * Optional environment segment (e.g. `'prod'`, `'beta'`, a PR id). When set,
-	 * a secret resolves to `<prefix>/<stage>/<key>` and **falls back** to the
-	 * shared `<prefix>/<key>` if the stage-specific value is unset — so a value
-	 * can differ per environment while ephemeral/preview stages inherit a shared
-	 * default. Omit for a single flat namespace (no fallback, unchanged behavior).
-	 */
+	/** Optional environment segment; a value resolves to `<prefix>/<stage>/<key>` and falls back to `<prefix>/<key>`. */
 	stage?: string;
-	/**
-	 * Runtime cache lifetime in **seconds** for `getSecret()`. When set (and > 0),
-	 * a resolved value is re-fetched after this many seconds, so a rotated secret
-	 * is picked up by a warm compute without waiting for a cold start (at the cost
-	 * of a periodic store read). Omit (or `0`) to cache for the life of the
-	 * process — rotation then lands only on the next cold start (unchanged default).
-	 * Only affects runtime secrets; synth-time secrets are inlined at deploy.
-	 */
+	/** Runtime cache TTL (seconds) for this kind's getter; omit/`0` = cache for the process life. */
 	cacheTtlSeconds?: number;
 }
 
+/** Split construct config: separate namespace/cache settings per kind. */
+export interface StoreConfig {
+	/** Config for `secret()` values (AWS Secrets Manager). */
+	secretStore?: KindStoreOptions;
+	/** Config for `config()` values (SSM Parameter Store). */
+	configStore?: KindStoreOptions;
+}
+
+/** A `compute.environment` value: a literal, a managed marker, or a BYO CDK handle. */
+export type EnvValue = string | ManagedValue | ISecret | IParameter;
+
+/** A custom-domain name: a literal, a managed marker, or a mix in an array. */
+export type DomainNameInput = string | ManagedValue | Array<string | ManagedValue>;
+
+/** A BYO handle bound to a logical key, tagged with the kind it resolves as. */
+export interface ByoBinding {
+	key: string;
+	kind: ValueKind;
+	handle: ISecret | IParameter;
+}
+
+// ── BYO handle detection (duck-typed; cross-copy-safe) ──────────────────────
+
+function isCdkSecret(v: unknown): v is ISecret {
+	return typeof v === 'object' && v !== null && 'secretArn' in v && 'grantRead' in v;
+}
+function isCdkParameter(v: unknown): v is IParameter {
+	return typeof v === 'object' && v !== null && 'parameterArn' in v && 'grantRead' in v;
+}
+
+/** Resolve the effective per-kind options from the split store config. */
+function optsForKind(kind: ValueKind, cfg: StoreConfig): Required<Pick<KindStoreOptions, 'prefix'>> & KindStoreOptions {
+	const k = kind === 'secret' ? cfg.secretStore : cfg.configStore;
+	return { prefix: k?.prefix ?? defaultPrefixForKind(kind), stage: k?.stage, cacheTtlSeconds: k?.cacheTtlSeconds };
+}
+
 /**
- * Split an environment map into plain / runtime-secret / deploy-time buckets.
+ * Split an environment map into plain literals, managed markers, and BYO handles.
  */
 export function partitionEnvironment(environment: Record<string, EnvValue> | undefined): {
 	plain: Record<string, string>;
-	runtimeSecrets: SecretValue[];
-	exposeSecrets: SecretValue[];
+	managed: ManagedValue[];
+	byo: ByoBinding[];
 } {
 	const plain: Record<string, string> = {};
-	const runtimeSecrets: SecretValue[] = [];
-	const exposeSecrets: SecretValue[] = [];
+	const managed: ManagedValue[] = [];
+	const byo: ByoBinding[] = [];
 
-	for (const [key, value] of Object.entries(environment ?? {})) {
-		if (isSecret(value)) {
-			if (value.key !== key) {
+	for (const [key, val] of Object.entries(environment ?? {})) {
+		if (isManagedValue(val)) {
+			if (val.key !== key) {
 				throw new HostingError('SecretKeyMismatchError', {
-					message: `Hosting environment '${key}': secret key '${value.key}' must match the environment variable name.`,
-					resolution: `Use a matching key: ${key}: secret('${key}').`,
+					message: `Hosting environment '${key}': ${val.kind} key '${val.key}' must match the environment variable name.`,
+					resolution: `Use a matching key: ${key}: ${val.kind}('${key}').`,
 				});
 			}
-			(value.resolveAt === 'deploy' ? exposeSecrets : runtimeSecrets).push(value);
+			managed.push(val);
+		} else if (isCdkSecret(val)) {
+			byo.push({ key, kind: 'secret', handle: val });
+		} else if (isCdkParameter(val)) {
+			byo.push({ key, kind: 'config', handle: val });
 		} else {
-			plain[key] = value;
+			plain[key] = val;
 		}
 	}
-	return { plain, runtimeSecrets, exposeSecrets };
+	return { plain, managed, byo };
 }
 
-/** Every secret key that requires a synth-time fetch (domain + resolveAt: 'deploy'). */
-export function collectSynthSecretKeys(
-	domainName: DomainNameInput | undefined,
-	exposeSecrets: SecretValue[],
-): string[] {
-	const keys = new Set<string>();
+/** Every managed marker that requires a synth-time fetch (domain markers only). */
+export function collectSynthMarkers(domainName: DomainNameInput | undefined): ManagedValue[] {
+	const byKey = new Map<string, ManagedValue>();
 	for (const name of toDomainArray(domainName)) {
-		if (isSecret(name)) keys.add(name.key);
+		if (isManagedValue(name)) byKey.set(name.key, name);
 	}
-	for (const s of exposeSecrets) keys.add(s.key);
-	return [...keys];
+	return [...byKey.values()];
 }
 
-function toDomainArray(domainName: DomainNameInput | undefined): Array<string | SecretValue> {
+function toDomainArray(domainName: DomainNameInput | undefined): Array<string | ManagedValue> {
 	if (domainName === undefined) return [];
 	return Array.isArray(domainName) ? domainName : [domainName];
 }
 
 /**
- * Resolve secret keys to plaintext at synth time via the configured store.
- * Throws an actionable error if a referenced secret was never set.
+ * Resolve managed markers to plaintext at synth time via each marker's derived
+ * store + per-kind prefix. Throws an actionable error if a referenced value was
+ * never set.
  */
 export async function resolveSecretsAtSynth(
-	keys: string[],
-	options: SecretResolveOptions & { fetcher?: SecretFetcher } = {},
+	markers: ManagedValue[],
+	cfg: StoreConfig & { fetcher?: SecretFetcher } = {},
 ): Promise<Map<string, string>> {
-	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = options.store ?? DEFAULT_SECRET_STORE;
-	const stage = options.stage;
-	const fetcher = options.fetcher ?? synthFetcherOverride ?? defaultSynthFetcher(store);
-
 	const isNotFound = (error: unknown): boolean => {
 		const name = (error as { name?: string })?.name;
 		return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
@@ -135,8 +151,11 @@ export async function resolveSecretsAtSynth(
 
 	const resolved = new Map<string, string>();
 	await Promise.all(
-		keys.map(async (key) => {
-			// Stage-specific first; fall back to the shared value if unset.
+		markers.map(async (marker) => {
+			const key = marker.key;
+			const store = storeForKind(marker.kind);
+			const { prefix, stage } = optsForKind(marker.kind, cfg);
+			const fetcher = cfg.fetcher ?? synthFetcherOverride ?? defaultSynthFetcher(store);
 			const primary = secretStoreLocator(key, { prefix, store, stage });
 			const fallback = stage ? secretStoreLocator(key, { prefix, store }) : undefined;
 			try {
@@ -146,21 +165,18 @@ export async function resolveSecretsAtSynth(
 				if (!isNotFound(error)) throw error;
 				if (!fallback) {
 					throw new HostingError('UnresolvedSecretError', {
-						message: `secret '${key}' is referenced (domain or resolveAt: 'deploy') but not set.`,
-						resolution: `Set it before deploying:\n  secret set ${key} <value>`,
+						message: `${marker.kind} '${key}' is referenced (domain) but not set.`,
+						resolution: `Set it before deploying:\n  ${marker.kind} set ${key} …`,
 					});
 				}
 			}
-			// Fallback attempt (only reached when stage-specific was not found).
 			try {
 				resolved.set(key, await fetcher(fallback));
 			} catch (error: unknown) {
 				if (isNotFound(error)) {
 					throw new HostingError('UnresolvedSecretError', {
-						message: `secret '${key}' is referenced (domain or resolveAt: 'deploy') but set for neither stage '${stage}' nor the shared default.`,
-						resolution:
-							`Set it before deploying:\n` +
-							`  secret set ${key} <value> --stage ${stage}   # or the shared:  secret set ${key} <value>`,
+						message: `${marker.kind} '${key}' is referenced (domain) but set for neither stage '${stage}' nor the shared default.`,
+						resolution: `Set it:\n  ${marker.kind} set ${key} … --stage ${stage}   # or shared:  ${marker.kind} set ${key} …`,
 					});
 				}
 				throw error;
@@ -170,80 +186,69 @@ export async function resolveSecretsAtSynth(
 	return resolved;
 }
 
-/** Resolve domain markers to literals using the synth-resolved secret map. */
+/** Resolve domain markers to literals using the synth-resolved value map. */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {
 	const arr = toDomainArray(domainName).map((name) => {
-		if (!isSecret(name)) return name;
-		const value = resolved.get(name.key);
-		if (value === undefined) {
+		if (!isManagedValue(name)) return name;
+		const val = resolved.get(name.key);
+		if (val === undefined) {
 			throw new HostingError('UnresolvedSecretError', {
-				message: `domain secret('${name.key}') requires async resolution.`,
+				message: `domain ${name.kind}('${name.key}') requires async resolution.`,
 				resolution: 'Construct with the async create() path (e.g. Hosting.create).',
 			});
 		}
-		return value;
+		return val;
 	});
 	return Array.isArray(domainName) ? arr : arr[0];
 }
 
 /**
- * Inject the store LOCATOR (not the value) for a runtime secret and grant the
- * compute role read+decrypt access scoped to that one parameter/secret.
- *
- * With a `stage`, the primary locator is stage-specific (`<prefix>/<stage>/<key>`)
- * and a *fallback* (shared `<prefix>/<key>`) locator is also injected + granted,
- * so the runtime resolver can fall back to the shared value when the stage has
- * none set. Without a `stage`, only the single shared locator is wired
- * (unchanged behavior).
- *
- * ⚠️ **Shared-fallback trust model.** When a `stage` is set, the compute role is
- * granted standing `GetSecretValue`/`GetParameter` on the shared fallback ARN —
- * the two-try fallback is application logic, not an IAM boundary, so a handler
- * in *any* stage (including an ephemeral PR/preview deploy) can read the shared
- * value directly. Treat the shared slot as a **safe default for all stages**
- * (e.g. a test/sandbox credential), never a production secret. Give production
- * its own stage-scoped value (`secret set KEY <prod-value> --stage prod`) so it
- * is never reachable from a preview stage's role.
+ * Inject the store LOCATOR (not the value) for a runtime managed marker and grant
+ * the compute role read+decrypt scoped to that one parameter/secret. Store, env
+ * prefix, namespace, and cache TTL are all derived from the marker's kind.
  */
-export function wireRuntimeSecret(fn: cdk.aws_lambda.Function, key: string, options: SecretResolveOptions = {}): void {
-	const prefix = options.prefix ?? DEFAULT_SECRET_PARAMETER_PREFIX;
-	const store = options.store ?? DEFAULT_SECRET_STORE;
-	const stage = options.stage;
+export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, cfg: StoreConfig = {}): void {
+	const { key, kind } = marker;
+	const store = storeForKind(kind);
+	const { prefix, stage, cacheTtlSeconds } = optsForKind(kind, cfg);
+	const envName = envVarNameForKind(kind, key);
 
 	const primary = secretStoreLocator(key, { prefix, store, stage });
-	// Fallback (shared) locator only when a stage is in play and differs.
 	const fallback = stage ? secretStoreLocator(key, { prefix, store }) : undefined;
 
-	// Runtime resolver reads the primary locator; the _STORE hint tells it which
-	// API, and the _FALLBACK hint (when present) is the shared locator to try
-	// if the stage-specific value is not found.
-	fn.addEnvironment(secretEnvVarName(key), primary);
-	if (store !== 'ssm') fn.addEnvironment(`${secretEnvVarName(key)}_STORE`, store);
-	if (fallback) fn.addEnvironment(secretFallbackEnvVarName(key), fallback);
-
-	// Optional runtime cache TTL (global to the function, not per-key). Injected
-	// only when configured; the runtime treats absent/0 as "cache until cold start".
-	if (options.cacheTtlSeconds && options.cacheTtlSeconds > 0) {
-		fn.addEnvironment('HOSTING_SECRET_CACHE_TTL', String(Math.floor(options.cacheTtlSeconds)));
+	fn.addEnvironment(envName, primary);
+	if (fallback) fn.addEnvironment(fallbackEnvVarName(envName), fallback);
+	if (cacheTtlSeconds && cacheTtlSeconds > 0) {
+		fn.addEnvironment(cacheTtlEnvVarName(kind), String(Math.floor(cacheTtlSeconds)));
 	}
 
-	// Read grant on every locator the runtime might read (primary + fallback),
-	// deduped. The KMS Decrypt grant is emitted separately, once, by
-	// grantKmsDecrypt — it's identical for every secret in the same store, so
-	// per-locator statements would just be duplicates bloating the inline policy.
-	const locators = [...new Set([primary, ...(fallback ? [fallback] : [])])];
-	for (const locator of locators) {
-		grantSecretRead(fn, locator, store);
+	for (const locator of [...new Set([primary, ...(fallback ? [fallback] : [])])]) {
+		grantStoreRead(fn, locator, store);
 	}
 	grantKmsDecrypt(fn, store);
 }
 
-/** Grant a Lambda role least-priv READ on one secret locator (no KMS — see {@link grantKmsDecrypt}). */
-function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: SecretStore): void {
+/**
+ * Wire a BYO (existing) CDK handle: grant read via the handle's own `grantRead`
+ * (which also covers KMS for the handle's key) and inject its locator under the
+ * kind-appropriate env prefix, so `getSecret`/`getConfig` resolve it identically.
+ */
+export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, cfg: StoreConfig = {}): void {
+	const { key, kind, handle } = binding;
+	handle.grantRead(fn);
+	if (kind === 'secret') {
+		fn.addEnvironment(secretEnvVarName(key), (handle as ISecret).secretName);
+	} else {
+		fn.addEnvironment(configEnvVarName(key), (handle as IParameter).parameterName);
+	}
+	const { cacheTtlSeconds } = optsForKind(kind, cfg);
+	if (cacheTtlSeconds && cacheTtlSeconds > 0) {
+		fn.addEnvironment(cacheTtlEnvVarName(kind), String(Math.floor(cacheTtlSeconds)));
+	}
+}
+
+function grantStoreRead(fn: cdk.aws_lambda.Function, locator: string, store: SecretStore): void {
 	if (store === 'secrets-manager') {
-		// SM appends a random 6-char suffix to the ARN; match with `-??????`
-		// (Secrets Manager's own recommended wildcard) so the grant scopes to
-		// exactly this secret, not a prefix-collision sibling.
 		const secretArn = cdk.Stack.of(fn).formatArn({
 			service: 'secretsmanager',
 			resource: 'secret',
@@ -255,8 +260,6 @@ function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: Se
 		);
 		return;
 	}
-
-	// SSM SecureString (opt-in via store: 'ssm').
 	const parameterArn = cdk.Stack.of(fn).formatArn({
 		service: 'ssm',
 		resource: 'parameter',
@@ -265,24 +268,14 @@ function grantSecretRead(fn: cdk.aws_lambda.Function, locator: string, store: Se
 	fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [parameterArn] }));
 }
 
-/**
- * Grant `kms:Decrypt` for a store's service-default key, once per (function,
- * store). The statement is identical for every secret read through the same
- * store — `Resource: '*'` scoped by `kms:ViaService` — so emitting it per
- * locator would append 2N duplicate statements and push the inline policy
- * toward the 10 KB limit. Idempotent: tracks what it has already granted on the
- * function so repeat calls (multiple secrets, same store) are no-ops.
- */
 function grantKmsDecrypt(fn: cdk.aws_lambda.Function, store: SecretStore): void {
 	const region = cdk.Stack.of(fn).region;
 	const viaService =
 		store === 'secrets-manager' ? `secretsmanager.${region}.amazonaws.com` : `ssm.${region}.amazonaws.com`;
-
-	const granted = (kmsDecryptGranted.get(fn) ?? new Set<string>());
+	const granted = kmsDecryptGranted.get(fn) ?? new Set<string>();
 	if (granted.has(viaService)) return;
 	granted.add(viaService);
 	kmsDecryptGranted.set(fn, granted);
-
 	fn.addToRolePolicy(
 		new iam.PolicyStatement({
 			actions: ['kms:Decrypt'],
@@ -292,14 +285,11 @@ function grantKmsDecrypt(fn: cdk.aws_lambda.Function, store: SecretStore): void 
 	);
 }
 
-/** Per-function set of `kms:ViaService` values already granted (dedupe key). */
 const kmsDecryptGranted = new WeakMap<cdk.aws_lambda.Function, Set<string>>();
 
 // ── SDK seam (store-aware; overridable for tests) ───────────────────────────
 
 export type SecretFetcher = (locator: string) => Promise<string>;
-
-/** Global synth-fetcher override. **For testing only.** */
 let synthFetcherOverride: SecretFetcher | null = null;
 
 /** Override the synth-time fetcher. **For testing only.** */
@@ -316,9 +306,7 @@ async function ssmFetcher(name: string): Promise<string> {
 	const client = new SSMClient({});
 	const result = await client.send(new GetParameterCommand({ Name: name, WithDecryption: true }));
 	const value = result.Parameter?.Value;
-	if (value === undefined || value === null) {
-		throw new Error(`Secret "${name}" has no value.`);
-	}
+	if (value === undefined || value === null) throw new Error(`Value "${name}" has no value.`);
 	return value;
 }
 
@@ -327,8 +315,6 @@ async function secretsManagerFetcher(id: string): Promise<string> {
 	const client = new SecretsManagerClient({});
 	const result = await client.send(new GetSecretValueCommand({ SecretId: id }));
 	const value = result.SecretString;
-	if (value === undefined || value === null) {
-		throw new Error(`Secret "${id}" has no string value.`);
-	}
+	if (value === undefined || value === null) throw new Error(`Value "${id}" has no string value.`);
 	return value;
 }
