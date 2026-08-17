@@ -7,7 +7,7 @@ import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
 
@@ -1345,6 +1345,35 @@ void describe('HostingConstruct — Custom domain integration', () => {
 void describe('HostingConstruct — Error paths', () => {
   afterEach(() => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('rejects compute placement that the construct cannot honor', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const manifest: DeployManifest = {
+      ...ssrManifest(staticDir, bundleDir),
+      compute: {
+        default: {
+          type: 'handler',
+          bundle: bundleDir,
+          handler: 'index.handler',
+          placement: 'global',
+        },
+      },
+    };
+
+    assert.throws(
+      () => new HostingConstruct(stack, 'Hosting', { manifest }),
+      (err: unknown) => {
+        assert.ok(err instanceof HostingError);
+        assert.strictEqual(err.name, 'InvalidComputePlacementError');
+        assert.ok(err.message.includes("type 'handler'"));
+        assert.ok(err.message.includes("placement 'global'"));
+        return true;
+      },
+    );
   });
 
   void it('throws CacheComputeResourceNotFoundError when cache references non-existent compute', () => {
