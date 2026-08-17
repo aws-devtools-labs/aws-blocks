@@ -431,6 +431,10 @@ export class KnowledgeBase extends Scope {
 				},
 				physicalResourceId: cr.PhysicalResourceId.of(stableIngestId),
 			},
+			// Stable BedrockAgent API bundled in the Lambda runtime's SDK v3 — skip the
+			// npm-install at invoke time (avoids ~15-30s cold start). The shared provider
+			// only drops back off 512MB once every AwsCustomResource in the stack opts out.
+			installLatestAwsSdk: false,
 			policy: cr.AwsCustomResourcePolicy.fromStatements([
 				new iam.PolicyStatement({
 					actions: ['bedrock:StartIngestionJob'],

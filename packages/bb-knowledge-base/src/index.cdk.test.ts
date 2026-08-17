@@ -268,6 +268,17 @@ test('CDK (s3:// source): DATA_SOURCE_ID config is wired to the data source id (
   );
 });
 
+test('CDK: the ingestion AwsCustomResource opts out of installing the latest AWS SDK (InstallLatestAwsSdk: false)', () => {
+  const template = synth();
+
+  // StartIngestion is the only Custom::AWS resource in this template, so an
+  // unscoped match is unambiguous. Enforce that rather than assume it: without
+  // the count assertion a second opted-out AwsCustomResource would let this pass
+  // even if StartIngestion itself regressed to the default.
+  template.resourceCountIs('Custom::AWS', 1);
+  template.hasResourceProperties('Custom::AWS', Match.objectLike({ InstallLatestAwsSdk: false }));
+});
+
 test('CDK: calling a runtime method throws an actionable synth-time error (not a cryptic TypeError)', () => {
   const { kb } = buildStack();
   const construct = kb as unknown as Record<string, (...args: unknown[]) => unknown>;
