@@ -11,6 +11,7 @@
     "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
   },
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist",
     "README.md",
