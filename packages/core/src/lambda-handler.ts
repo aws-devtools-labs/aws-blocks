@@ -318,7 +318,18 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
 
   return async (event: any, context?: LambdaContext) => {
     if (!handler) {
-      if (!initPromise) initPromise = initialize();
+      // Retry init on failure instead of caching the rejection. If initialize() throws (most often
+      // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
+      // post-deploy window before it's readable), a memoized rejected promise would poison this
+      // container for its whole lifetime — every later request re-awaits the same rejection and 500s.
+      // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
+      // since it doesn't cache failures), so the handler self-heals once config is available.
+      if (!initPromise) {
+        initPromise = initialize().catch((err) => {
+          initPromise = null;
+          throw err;
+        });
+      }
       await initPromise;
     }
 
