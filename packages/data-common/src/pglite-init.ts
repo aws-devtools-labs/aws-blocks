@@ -60,14 +60,19 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Matches the specific ways a PGlite WASM `_pg_initdb` abort surfaces:
  *  - V8/Node:            `RuntimeError: unreachable` (optionally `... executed`)
  *  - other engines:      `wasm trap: unreachable`
- *  - Emscripten runtime: `Aborted()` (e.g. `Aborted(). Build with -sASSERTIONS ...`)
+ *  - Emscripten runtime: `Aborted(<reason>)` — the reason is often non-empty
+ *    under memory pressure (`Aborted(Cannot enlarge memory arrays…)`,
+ *    `Aborted(OOM)`), which is exactly the case this retry exists for, so we
+ *    match the `Aborted(` prefix rather than only the empty `Aborted()` form.
  *
  * Deliberately narrower than a bare `/unreachable/i`: the word "unreachable" is
  * common (helpers like `assertUnreachable`, "unreachable host" messages), so we
  * require it next to a trap-context token. This keeps a stray "unreachable" in
  * an unrelated failure's message or stack from being misclassified as retryable.
+ * (Matching the `Aborted(` prefix is safe here because this only ever runs
+ * against the fixed `SELECT 1` init probe, never arbitrary user-query errors.)
  */
-const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(\)/i;
+const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(/i;
 
 /**
  * Return true when an error looks like a PGlite WASM `unreachable` init trap.
@@ -127,7 +132,12 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
   recreate: () => T | Promise<T>,
   options: PgliteInitRetryOptions = {},
 ): Promise<T> {
-  const maxAttempts = Math.max(1, options.maxAttempts ?? 3);
+  // `?? 3` only defaults null/undefined, not NaN. Guard against NaN explicitly:
+  // `Math.max(1, NaN)` is `NaN` and `attempt >= NaN` is always false, which would
+  // turn a persistent trap into an unbounded close/recreate loop.
+  const maxAttempts = Number.isFinite(options.maxAttempts)
+    ? Math.max(1, Math.trunc(options.maxAttempts as number))
+    : 3;
   const backoffMs = options.backoffMs ?? 150;
   const isRetryable = options.isRetryable ?? isPgliteUnreachableTrap;
 
@@ -153,7 +163,21 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
       if (attempt >= maxAttempts) throw error;
       options.onRetry?.(attempt, error);
       if (backoffMs > 0) await delay(backoffMs * attempt);
-      instance = await recreate();
+      // The factory does real work (mkdirSync, new PGlite(...)), so it can throw
+      // (ENOSPC/EACCES/construction failure). If it does, surface it as a
+      // recreate failure while preserving the original init trap as the cause,
+      // so debugging reflects "PGlite kept trapping" rather than only the
+      // secondary recreate error.
+      try {
+        instance = await recreate();
+      } catch (recreateError) {
+        throw new Error(
+          `Failed to recreate PGlite after an init trap: ${
+            recreateError instanceof Error ? recreateError.message : String(recreateError)
+          }`,
+          { cause: error },
+        );
+      }
     }
   }
 }

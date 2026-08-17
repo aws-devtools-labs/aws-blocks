@@ -34,6 +34,10 @@ test('isPgliteUnreachableTrap matches an unreachable message', () => {
 test('isPgliteUnreachableTrap matches the Emscripten Aborted() and wasm trap signatures', () => {
   assert.strictEqual(isPgliteUnreachableTrap(new Error('Aborted(). Build with -sASSERTIONS for more info.')), true);
   assert.strictEqual(isPgliteUnreachableTrap(new Error('wasm trap: unreachable')), true);
+  // Emscripten aborts under memory pressure carry a reason — the case this
+  // retry exists for — so the non-empty `Aborted(<reason>)` form must match too.
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('Aborted(Cannot enlarge memory arrays)')), true);
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('Aborted(OOM)')), true);
 });
 
 test('isPgliteUnreachableTrap matches a trap signature found only in the stack', () => {
@@ -222,6 +226,46 @@ test('invokes onRetry with the failed attempt number before each recreate', asyn
     onRetry: (attempt) => attempts.push(attempt),
   });
   assert.deepStrictEqual(attempts, [1, 2]);
+});
+
+test('does not invoke onRetry on the final, exhausting attempt', async () => {
+  // Pins the reorder: onRetry must fire only for attempts that actually recreate,
+  // not the terminal give-up attempt. With maxAttempts=2 the trap on attempt 2 is
+  // the exhausting one, so onRetry should see [1] only. Guards against a future
+  // regression that moves onRetry back above the attempt-budget check.
+  const attempts: number[] = [];
+  await assert.rejects(
+    () =>
+      initializePgliteWithRetry(new FakePglite(99), () => new FakePglite(99), {
+        backoffMs: 0,
+        maxAttempts: 2,
+        onRetry: (a) => attempts.push(a),
+      }),
+    /unreachable/,
+  );
+  assert.deepStrictEqual(attempts, [1]);
+});
+
+test('wraps a recreate() failure while preserving the original trap as the cause', async () => {
+  const initial = new FakePglite(1);
+  const recreateError = new Error('ENOSPC: no space left on device');
+  await assert.rejects(
+    () =>
+      initializePgliteWithRetry(
+        initial,
+        () => {
+          throw recreateError;
+        },
+        NO_BACKOFF,
+      ),
+    (err: Error) => {
+      assert.match(err.message, /Failed to recreate PGlite after an init trap/);
+      assert.match(err.message, /ENOSPC/);
+      assert.ok(err.cause instanceof Error && /unreachable/.test(err.cause.message), 'original trap kept as cause');
+      return true;
+    },
+  );
+  assert.strictEqual(initial.closed, true, 'the trapped instance is still closed before recreate is attempted');
 });
 
 test('a custom isRetryable can broaden what is retried', async () => {
