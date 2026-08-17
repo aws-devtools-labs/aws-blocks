@@ -9,6 +9,7 @@ import { Realtime } from '@aws-blocks/bb-realtime';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { INTERACTIVE_JOB_EVENT_SOURCE } from './job-event-source.js';
 import { z } from 'zod';
 
 export { AgentErrors } from './errors.js';
@@ -64,9 +65,7 @@ export class Agent extends Scope {
 
 		new AsyncJob(this, 'job', {
 			schema: jobPayloadSchema,
-			// Interactive/HITL path: immediate delivery, no batching latency; batchSize 1 also isolates failures for this non-idempotent handler.
-			batchSize: 1,
-			maxBatchingWindowSeconds: 0,
+			...INTERACTIVE_JOB_EVENT_SOURCE,
 			handler: async () => {},
 		});
 	}

@@ -82,7 +82,8 @@ export const statusTableOptions = {
 	ttl: 'expiresAt',
 } as const;
 
-function blocksError(name: string, message: string): Error {
+/** Build a typed `AsyncJob` error whose `name` is one of `AsyncJobErrors`. */
+export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
 	return err;

@@ -10,7 +10,7 @@
  * ReportBatchItemFailures, SQS deletes an entire batch when any single record
  * fails. These tests pin both halves of the fix together.
  */
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
@@ -32,6 +32,12 @@ class StubBlocksStack extends cdk.Stack {
 		});
 	}
 }
+
+// Each setup() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
+// afterwards so the global does not leak into unrelated test files in the same process.
+afterEach(() => {
+	delete (globalThis as any).CURRENT_BLOCKS_STACK;
+});
 
 function setup(): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
@@ -170,6 +176,91 @@ test('CDK guard: maxBatchingWindowSeconds 301 is rejected', () => {
 		/maxBatchingWindowSeconds/,
 		/got: 301/
 	);
+});
+
+test('CDK guard: a negative maxBatchingWindowSeconds is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: -1 }),
+		/maxBatchingWindowSeconds/,
+		/got: -1/
+	);
+});
+
+test('CDK guard: a fractional maxBatchingWindowSeconds is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 2.5 }),
+		/maxBatchingWindowSeconds/,
+		/got: 2.5/
+	);
+});
+
+test('CDK guard: NaN maxBatchingWindowSeconds is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: NaN }),
+		/maxBatchingWindowSeconds/,
+		/got: NaN/
+	);
+});
+
+test('CDK guard: a fractional batchSize is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, batchSize: 2.5 }),
+		/batchSize/,
+		/got: 2.5/
+	);
+});
+
+test('CDK guard: NaN batchSize is rejected', () => {
+	const { parent } = setup();
+	assertInvalidOption(
+		() => new AsyncJob(parent, 'jobs', { handler: async () => {}, batchSize: NaN }),
+		/batchSize/,
+		/got: NaN/
+	);
+});
+
+// ── Visibility timeout ──────────────────────────────────────────────────────
+// A message becomes invisible when the poller receives it, which happens before
+// the batching window elapses and before the handler runs. The queue's
+// visibility timeout must therefore cover the window plus the handler's full
+// budget, or SQS redelivers a message that is still being processed.
+
+function jobQueueVisibilityTimeout(template: Template): number {
+	const queues = template.findResources('AWS::SQS::Queue');
+	const jobQueue = Object.values(queues).find(
+		(q: any) => q.Properties.RedrivePolicy !== undefined
+	) as any;
+	assert.ok(jobQueue, 'the job queue (the one with a redrive policy) should exist');
+	return jobQueue.Properties.VisibilityTimeout;
+}
+
+test('CDK: visibility timeout covers the Lambda timeout plus the batching window', () => {
+	const { stack, parent } = setup();
+	new AsyncJob(parent, 'jobs', { handler: async () => {} });
+
+	assert.strictEqual(jobQueueVisibilityTimeout(Template.fromStack(stack)), 905);
+});
+
+test('CDK: visibility timeout grows with a larger batching window', () => {
+	const { stack, parent } = setup();
+	new AsyncJob(parent, 'jobs', { handler: async () => {}, maxBatchingWindowSeconds: 300 });
+
+	assert.strictEqual(jobQueueVisibilityTimeout(Template.fromStack(stack)), 1200);
+});
+
+test('CDK: visibility timeout is the bare Lambda timeout with no batching window', () => {
+	const { stack, parent } = setup();
+	new AsyncJob(parent, 'jobs', {
+		handler: async () => {},
+		batchSize: 1,
+		maxBatchingWindowSeconds: 0,
+	});
+
+	assert.strictEqual(jobQueueVisibilityTimeout(Template.fromStack(stack)), 900);
 });
 
 test('CDK guard: a valid batchSize + window combination still synthesizes', () => {

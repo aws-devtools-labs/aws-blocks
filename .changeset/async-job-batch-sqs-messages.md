@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/bb-async-job": patch
+"@aws-blocks/bb-async-job": minor
 "@aws-blocks/bb-agent": patch
-"@aws-blocks/blocks": patch
+"@aws-blocks/blocks": minor
 ---
 
 feat(bb-async-job): batch SQS messages by default, with a configurable batching window
@@ -23,8 +23,16 @@ and partial batch responses redeliver only failed records, so `maxRetries` still
 means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
 meaning at any batch size.
 
-The umbrella `@aws-blocks/blocks` gets a patch bump because it re-exports
-`AsyncJob` and `AsyncJobOptions`.
+This is a `minor` bump, not a patch: every consumer that never set `batchSize`
+inherits batched invocations and up to 5s of added delivery latency without
+opting in, so it should not arrive through a patch-range update. The umbrella
+`@aws-blocks/blocks` gets the same bump because it re-exports `AsyncJob` and
+`AsyncJobOptions`.
+
+The main queue's visibility timeout is now `900 + maxBatchingWindowSeconds`
+seconds instead of a flat `900`. A message becomes invisible when the poller
+receives it, before the batching window elapses and before the handler runs, so
+a flat 900s let SQS redeliver a message whose invocation was still running.
 
 `bb-agent` opts out of the new defaults with `batchSize: 1` and
 `maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent

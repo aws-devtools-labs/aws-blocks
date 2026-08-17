@@ -16,7 +16,7 @@ import type {
 	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
-import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
+import { STATUS_TABLE_ID, statusTableOptions, blocksError } from './status.js';
 
 export { AsyncJobErrors } from './errors.js';
 export type {
@@ -34,12 +34,8 @@ export type {
 const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
 const MAX_BATCH_SIZE_WITH_WINDOW = 10000;
 const MAX_BATCHING_WINDOW_SECONDS = 300;
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
+/** Timeout of the shared Blocks Lambda, the ceiling on one handler invocation. */
+const LAMBDA_TIMEOUT_SECONDS = 900;
 
 /**
  * Reject event source options AWS would refuse at deploy time, so the failure
@@ -95,8 +91,13 @@ export class AsyncJob<T = unknown> extends Scope {
 			enforceSSL: true,
 		});
 
-		// Visibility timeout must be >= the shared Lambda's timeout (900s)
-		const visibilityTimeout = 900;
+		// A message's visibility clock starts when the poller receives it, which is
+		// before the batching window elapses and before the handler runs — so the
+		// worst-case invisibility a message needs is the window plus the handler's
+		// full budget. Anything less lets SQS redeliver a message that is still
+		// being processed. AWS's guidance is the same:
+		// visibilityTimeout >= maxBatchingWindow + functionTimeout.
+		const visibilityTimeout = LAMBDA_TIMEOUT_SECONDS + maxBatchingWindowSeconds;
 
 		this.queue = new Queue(this, 'queue', {
 			queueName: `${this.fullId}`.substring(0, 80),

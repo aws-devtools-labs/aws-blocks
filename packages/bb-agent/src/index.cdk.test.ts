@@ -15,7 +15,7 @@
  * Must run under `--conditions=cdk`; otherwise the internal BBs resolve to
  * their mock implementations and no CloudFormation resources are produced.
  */
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
@@ -37,6 +37,12 @@ class StubBlocksStack extends cdk.Stack {
 		});
 	}
 }
+
+// synthAgent() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
+// afterwards so the global does not leak into unrelated test files in the same process.
+afterEach(() => {
+	delete (globalThis as any).CURRENT_BLOCKS_STACK;
+});
 
 function synthAgent(): any {
 	const app = new cdk.App();

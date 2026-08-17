@@ -17,6 +17,7 @@ import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition } from './types.js';
 import { AgentErrors, blocksAgentError, InterruptError } from './errors.js';
+import { INTERACTIVE_JOB_EVENT_SOURCE } from './job-event-source.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
@@ -167,9 +168,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		this.job = new AsyncJob(this, 'job', {
 			schema: jobPayloadSchema,
-			// Interactive/HITL path: immediate delivery, no batching latency; batchSize 1 also isolates failures for this non-idempotent handler.
-			batchSize: 1,
-			maxBatchingWindowSeconds: 0,
+			...INTERACTIVE_JOB_EVENT_SOURCE,
 			handler: async (payload) => {
 				try {
 					await this.runAgent(payload.message, payload.conversationId, payload.channelId, payload.userId, payload.interruptResponses, payload.context);

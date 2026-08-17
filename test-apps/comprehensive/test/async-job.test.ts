@@ -49,6 +49,9 @@ function delayedPollBudgetMs(delaySeconds: number): number {
   return delaySeconds * 1000 + RESULT_POLL_BUDGET_MS;
 }
 
+/** Delay requested by the delaySeconds tests, and the basis for their poll budget. */
+const DELAY_SECONDS = 2;
+
 export function asyncJobTests(getApi: () => typeof apiType) {
   describe('AsyncJob BB', () => {
     test('AsyncJob - submit and verify handler execution', async () => {
@@ -146,7 +149,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const testId = Date.now().toString(36);
       const key = `delayed-${testId}`;
 
-      await api.asyncJobSubmitDelayed(key, 'delayed-value', 2);
+      await api.asyncJobSubmitDelayed(key, 'delayed-value', DELAY_SECONDS);
 
       // Should NOT be written yet
       const immediate = await api.asyncJobGetResult(key);
@@ -154,7 +157,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
 
       const result = await pollForResult(
         () => api.asyncJobGetResult(key),
-        delayedPollBudgetMs(2)
+        delayedPollBudgetMs(DELAY_SECONDS)
       );
 
       assert.ok(result, 'handler should have run after delay');
@@ -169,7 +172,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
         { key: `batch-delayed-${testId}-1`, value: 'b' },
       ];
 
-      await api.asyncJobSubmitBatchDelayed(items, 2);
+      await api.asyncJobSubmitBatchDelayed(items, DELAY_SECONDS);
 
       // Should NOT be written yet
       for (const item of items) {
@@ -180,7 +183,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       for (const item of items) {
         const result = await pollForResult(
           () => api.asyncJobGetResult(item.key),
-          delayedPollBudgetMs(2)
+          delayedPollBudgetMs(DELAY_SECONDS)
         );
         assert.ok(result, `handler should have run for ${item.key}`);
         assert.strictEqual(result.value, item.value);
