@@ -60,9 +60,13 @@ async function loadConfigFromS3(): Promise<Record<string, string>> {
 			|| error?.Code === 'NoSuchKey'
 			|| error?.$metadata?.httpStatusCode === 404;
 		if (isNotFound) {
-			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config`);
-			configCache = {};
-			return configCache;
+			// Do NOT cache the empty result: a 404 right after deploy is usually the config file
+			// not being readable yet (the transient window before the BucketDeployment settles), not
+			// a genuinely config-less app. Caching {} here would poison the container for its whole
+			// lifetime. Returning without caching lets the next invocation re-fetch and pick up the
+			// real config once it's present. (Apps that truly have no config just re-check cheaply.)
+			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`);
+			return {};
 		}
 		const msg = error instanceof Error ? error.message : String(error);
 		throw new Error(`[Blocks] Failed to load config from S3 (${bucket}/${key}): ${msg}`);
