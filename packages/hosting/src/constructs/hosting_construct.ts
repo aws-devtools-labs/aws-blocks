@@ -14,9 +14,9 @@ import {
 } from 'aws-cdk-lib';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import {
-  Distribution,
-  IResponseHeadersPolicy,
-  PriceClass,
+  type Distribution,
+  type IResponseHeadersPolicy,
+  type PriceClass,
   ResponseHeadersPolicy,
   experimental,
 } from 'aws-cdk-lib/aws-cloudfront';
@@ -29,25 +29,25 @@ import {
   Source,
 } from 'aws-cdk-lib/aws-s3-deployment';
 import {
-  Alias,
+  type Alias,
   Code,
-  FunctionUrl,
-  IVersion,
+  type FunctionUrl,
+  type IVersion,
   Function as LambdaFunction,
 } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { IHostedZone } from 'aws-cdk-lib/aws-route53';
-import { IKey } from 'aws-cdk-lib/aws-kms';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
-import { HostingResources } from '../types.js';
+import type { HostingResources } from '../types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
 import { StorageConstruct } from './storage_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
@@ -58,7 +58,7 @@ import { createSecurityHeadersPolicy } from './security_headers.js';
 import { CdnConstruct } from './cdn_construct.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 
 // Re-export build ID helpers for public API + tests
 export { generateBuildIdFunctionCode, generateBuildId } from '../defaults.js';
@@ -447,6 +447,18 @@ export class HostingConstruct extends Construct {
     const hasCompute = computeEntries.length > 0;
 
     for (const [name, resource] of computeEntries) {
+      const expectedPlacement = resource.type === 'edge' ? 'global' : 'regional';
+      if (resource.placement !== expectedPlacement) {
+        throw new HostingError('InvalidComputePlacementError', {
+          message:
+            `Compute resource '${name}' has type '${resource.type}' with placement '${resource.placement}'. ` +
+            `That type must use '${expectedPlacement}' placement.`,
+          resolution:
+            "Use placement: 'global' only with type: 'edge'. " +
+            "Use placement: 'regional' with type: 'handler' or type: 'http-server'.",
+        });
+      }
+
       if (resource.type === 'edge') {
         const edgeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
           name,
