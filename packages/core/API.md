@@ -4,6 +4,23 @@
 
 ```ts
 
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+
+// @public
+export interface AgentToolProvider {
+    // (undocumented)
+    toAgentTools<TContext = any>(options?: AgentToolProviderOptions<TContext>): Record<string, any>;
+}
+
+// @public (undocumented)
+export interface AgentToolProviderOptions<TContext = any> {
+    exclude?: string[];
+    include?: string[];
+    overrides?: Record<string, MethodOverrides>;
+    scope?: (context: TContext) => Record<string, unknown>;
+    unscoped?: boolean;
+}
+
 // @public
 export class ApiError extends Error {
     constructor(message: string, status: number, options?: {
@@ -46,6 +63,14 @@ export type BlocksContext = {
         send: (body: any) => void;
     };
 };
+
+// @public
+export function buildAgentTools<TSelf extends Scope>(self: TSelf, toolMethods: Record<string, ToolMethodDef<TSelf>>, options?: AgentToolProviderOptions<any>, config?: BuildAgentToolsConfig): Record<string, any>;
+
+// @public
+export interface BuildAgentToolsConfig {
+    requiresScope?: boolean;
+}
 
 // @public
 export interface BuildingBlockMeta {
@@ -104,6 +129,18 @@ export function matchRoute(method: string, path: string): {
     route: RegisteredRoute;
     params: Record<string, string>;
 } | null;
+
+// @public (undocumented)
+export interface MethodOverrides {
+    // (undocumented)
+    description?: string;
+    fixed?: Record<string, unknown>;
+    // (undocumented)
+    needsApproval?: boolean;
+    schema?: StandardSchemaV1;
+    // (undocumented)
+    trustable?: boolean;
+}
 
 // @public
 export function preloadConfig(): Promise<void>;
@@ -194,6 +231,24 @@ export interface ScopeOptions {
 export type ScopeParent = Scope | {
     id: string;
 };
+
+// @public
+export interface ToolMethodDef<TSelf = any> {
+    // (undocumented)
+    description: string;
+    // (undocumented)
+    handler: (self: TSelf) => (args: {
+        input: any;
+        context: any;
+    }) => Promise<unknown>;
+    // (undocumented)
+    needsApproval?: boolean;
+    // (undocumented)
+    parameters: unknown;
+    scopeSafe?: boolean;
+    // (undocumented)
+    trustable?: boolean;
+}
 
 // @public
 export function unlockRouteRegistry(): void;

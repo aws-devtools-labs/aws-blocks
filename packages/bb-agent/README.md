@@ -398,6 +398,8 @@ tools: (tool) => ({
 
 The callback form lets TypeScript infer each tool's `input` from its `parameters`. The Record key is the tool's name.
 
+> **Tip:** Some Building Blocks (e.g. KVStore) can expose their operations as agent tools automatically via `toAgentTools()` — no manual tool definitions needed. See [BB-Provided Tools](#bb-provided-tools-toagenttools) for details.
+
 ### Tool Context — Scoping Tools to the Caller
 
 Tools often need request-scoped information (e.g. the authenticated `userId`). Pass a `context` object on each `stream()`/`resume()` call; it's forwarded to every tool invocation:
@@ -672,6 +674,156 @@ await chat.respondToInterrupt([{ interruptId: 'x', approved: true }]);
 ```
 
 **Note:** `useChat` is a factory function, not a React hook. Call it **once** (e.g., outside a component or in a ref) — not on every render. It returns a mutable singleton. Message history only includes `user`, `assistant`, and `approval` messages — tool-call/tool-result internals are filtered for UI clarity. Use `getConversation()` directly if you need the full history.
+
+## BB-Provided Tools (`toAgentTools`)
+
+Building Blocks that support agent tools expose a `toAgentTools()` method. Each BB provides sensible defaults for tool descriptions, parameter schemas, and approval settings — you can use them as-is or override any value.
+
+### Basic Usage
+
+Spread `toAgentTools()` into the `tools` callback alongside manual tools:
+
+```typescript
+import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import { z } from 'zod';
+
+const store = new KVStore(scope, 'memory');
+
+const agent = new Agent(scope, 'assistant', {
+  model: { deployed: BedrockModels.BALANCED },
+  systemPrompt: 'You are a helpful assistant.',
+  tools: (tool) => ({
+    ...store.toAgentTools({ include: ['get', 'put'], unscoped: true }),
+    echo: tool({
+      description: 'Echo back the user message',
+      parameters: z.object({ message: z.string() }),
+      handler: async ({ input }) => ({ reply: input.message }),
+    }),
+  }),
+});
+```
+
+> A `KVStore` can hold per-user data, so `toAgentTools()` requires you to either pass `scope` (lock operations to the current user) or `unscoped: true` (opt out for a shared store) — otherwise it throws. See [Scoping](#scoping) below. The example above uses `unscoped: true` because it is a shared store.
+
+Tool names follow the convention `{bbId}__{methodName}` (e.g. `memory__get`, `memory__put`). The BB provides defaults for each tool:
+
+| Property | Default provided by BB | Overridable? |
+|---|---|---|
+| `description` | Describes the operation | Yes, via `overrides` |
+| `parameters` | Schema matching the BB method's input | Yes, via `overrides.schema` |
+| `needsApproval` | Read operations: `false`, write/delete: `true` | Yes, via `overrides` |
+| `trustable` | Write: `true` (agent may write without reasking); delete: `false` (each call needs approval) | Yes, via `overrides` |
+| `handler` | Calls the BB method directly | No (use a manual `tool()` for custom logic) |
+
+### Filtering
+
+Control which operations are exposed to the agent:
+
+```typescript
+// Only read operations (shared store)
+store.toAgentTools({ include: ['get', 'scan'], unscoped: true })
+
+// Everything except destructive operations (shared store)
+store.toAgentTools({ exclude: ['delete'], unscoped: true })
+
+// All operations, scoped to the current user (scan excluded — see Scoping)
+store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }), exclude: ['scan'] })
+```
+
+`include` and `exclude` are mutually exclusive.
+
+### Overrides
+
+Override any default per method. Each key in `overrides` is a method name:
+
+```typescript
+store.toAgentTools({
+  overrides: {
+    get: {
+      description: 'Look up a customer record by ID',
+    },
+    put: {
+      needsApproval: false,  // trust the agent to write without asking
+      trustable: false,
+    },
+    scan: {
+      schema: z.object({ limit: z.number() }),
+    },
+  },
+})
+```
+
+Available override fields:
+
+| Field | Effect |
+|---|---|
+| `description` | Replace the tool description the model sees |
+| `needsApproval` | Override whether the agent pauses for user approval |
+| `trustable` | Override whether the user can trust the tool after first approval |
+| `schema` | Replace the parameters schema the model sees |
+| `fixed` | Inject static values into the input (hidden from the model) |
+
+### Fixed Values
+
+Pin a parameter to a constant value — the model never sees it:
+
+```typescript
+store.toAgentTools({
+  overrides: {
+    get: {
+      fixed: { key: 'config:app-settings' },  // always reads this key
+    },
+  },
+})
+```
+
+The model's tool has no `key` parameter — it's injected server-side on every call.
+
+> **Precedence:** When the same key appears in multiple sources, `fixed` wins over `scope` which wins over model input.
+
+> **Note:** If a tool requires custom logic or many overrides, a manual `tool()` definition is often simpler and easier to read.
+
+### Scoping
+
+A BB that can hold per-user data will not expose itself to the agent unscoped. `toAgentTools()` throws at construction unless you pass one of:
+
+- **`scope`** — a callback that maps the request context to fields injected into every call, locking operations to the current user. The model never sees or controls a scoped field (it is stripped from the tool's parameters and overwritten server-side).
+- **`unscoped: true`** — an explicit opt-out for stores whose data is genuinely shared (a cache, feature flags, config).
+
+```typescript
+const agent = new Agent(scope, 'assistant', {
+  toolContextSchema: z.object({ userId: z.string() }),
+  tools: (tool) => ({
+    // every operation is locked to the caller's own key
+    // (scan is excluded — it can't be scope-isolated; see the note below)
+    ...store.toAgentTools({ scope: (ctx) => ({ key: ctx.userId }), exclude: ['scan'] }),
+  }),
+});
+
+// at call time, userId comes from the authenticated session:
+const user = await auth.getCurrentUser(requestContext);
+await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
+```
+
+> Some operations can't be scope-isolated (for example, one that lists an entire store). `toAgentTools()` throws if such a method is exposed under `scope`; exclude it, or use `unscoped: true` only when cross-user results are genuinely intended. See the BB's own README for which of its methods are affected.
+
+### Supported BBs
+
+| BB | Description |
+|---|---|
+| **KVStore** | Simple key-value storage — get, put, delete, and scan operations |
+
+More BBs will be added in future releases. Refer to each BB's README for details on its operations and configuration.
+
+#### KVStore
+
+| Method | Description | Parameters | `needsApproval` | `trustable` |
+|---|---|---|---|---|
+| `get` | Retrieve a value by key | `z.object({ key: z.string() })` | `false` | — |
+| `put` | Store a value at a key | `z.object({ key: z.string(), value: z.unknown() })` | `true` | `true` |
+| `delete` | Delete a key | `z.object({ key: z.string() })` | `true` | `false` |
+| `scan` | List keys and values (default limit: 100) | `z.object({ limit: z.number().optional() })` | `false` | — |
 
 ## Full Examples
 
