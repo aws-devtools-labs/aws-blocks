@@ -387,9 +387,11 @@ export async function handleToken(providerName: string, ctx: BlocksContext): Pro
 		ctx.response.send({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
 		return;
 	}
-	// Reject custom schemes at the token endpoint as defense in depth — if
-	// a code somehow slipped through with a bad redirect_uri, catch it here
-	// before issuing tokens.
+	// Unreachable via the current /authorize flow: a code is only minted after
+	// parseAuthorizeRequest validated pending.redirectUri with this same
+	// function, and the mismatch check above means redirectUri equals that
+	// validated value. Kept as a guard for any future path that mints a code
+	// without going through /authorize (e.g. a seeded-session test helper).
 	const tokenRejection = redirectUri ? redirectUriRejectionReason(redirectUri) : null;
 	if (tokenRejection) {
 		ctx.response.status = 400;
@@ -717,13 +719,7 @@ function renderLoginPage(providerName: string, users: StubUser[], req: Authorize
  * §7.3 and Google's OAuth implementation which accepts localhost for
  * development flows).
  */
-function isAllowedRedirectUri(uri: string): boolean {
-	let parsed: URL;
-	try {
-		parsed = new URL(uri);
-	} catch {
-		return false;
-	}
+function isAllowedRedirectUri(parsed: URL): boolean {
 	const scheme = parsed.protocol.slice(0, -1).toLowerCase();
 	if (scheme === 'https') return true;
 	if (scheme === 'http') {
@@ -738,12 +734,18 @@ function isAllowedRedirectUri(uri: string): boolean {
  * appends to the redirect_uri. Google rejects a registered or requested
  * redirect_uri whose query already contains any of these, because the IdP
  * would otherwise have to duplicate or clobber the parameter on the way back.
+ *
+ * Matching is case-sensitive: OAuth 2.0 parameter names (RFC 6749 Appendix B)
+ * and URI query keys are both case-sensitive, so `State` is a distinct key
+ * from the reserved `state` and a real IdP passes it through untouched.
  */
 const RESERVED_RESPONSE_PARAMS = new Set([
 	'scope',
 	'code',
 	'state',
 	'error',
+	'error_description',
+	'error_uri',
 	'response_type',
 	'access_token',
 	'token_type',
@@ -764,6 +766,9 @@ const RESERVED_RESPONSE_PARAMS = new Set([
  *    fails with "Invalid redirect_uri: contains reserved response param
  *    scope"; the stub mirrors that wording so a test failure here reads the
  *    same as the production failure.
+ * 3. No URI fragment — RFC 6749 §3.1.2 requires redirect_uri to be an
+ *    absolute URI without a fragment component, and real IdPs reject one
+ *    outright (the fragment is where an implicit-flow response would land).
  *
  * Known remaining permissiveness vs. Google (deliberate, documented gaps):
  * - No exact-match registration check: the stub has no registered
@@ -777,11 +782,17 @@ const RESERVED_RESPONSE_PARAMS = new Set([
  *   per-client registration policy.
  */
 function redirectUriRejectionReason(uri: string): string | null {
-	if (!isAllowedRedirectUri(uri)) return 'redirect_uri must be HTTPS or loopback HTTP';
-	const { searchParams } = new URL(uri);
-	for (const name of searchParams.keys()) {
-		if (RESERVED_RESPONSE_PARAMS.has(name.toLowerCase())) {
-			return `Invalid redirect_uri: contains reserved response param ${name.toLowerCase()}`;
+	let parsed: URL;
+	try {
+		parsed = new URL(uri);
+	} catch {
+		return 'redirect_uri must be HTTPS or loopback HTTP';
+	}
+	if (!isAllowedRedirectUri(parsed)) return 'redirect_uri must be HTTPS or loopback HTTP';
+	if (parsed.hash) return 'Invalid redirect_uri: must not contain a fragment';
+	for (const name of parsed.searchParams.keys()) {
+		if (RESERVED_RESPONSE_PARAMS.has(name)) {
+			return `Invalid redirect_uri: contains reserved response param ${name}`;
 		}
 	}
 	return null;
