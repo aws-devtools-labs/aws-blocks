@@ -35,7 +35,7 @@ import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { Construct } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -356,6 +356,7 @@ export class HostingConstruct extends Construct {
   readonly distribution: Distribution;
   readonly distributionUrl: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
+  private readonly cdn: CdnConstruct;
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -384,6 +385,14 @@ export class HostingConstruct extends Construct {
    * post-construction — do not reassign from outside the constructor.
    */
   monitoringTopic?: ITopic;
+
+  /**
+   * Registers a dependency that must finish before the new build becomes
+   * reachable through the KVS route table.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    this.cdn.addBuildAssetDependency(dependency);
+  }
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -1103,6 +1112,7 @@ export class HostingConstruct extends Construct {
         : undefined,
     });
 
+    this.cdn = cdn;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 
