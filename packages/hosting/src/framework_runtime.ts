@@ -10,6 +10,11 @@
  * Scope: REGIONAL framework compute only. Lambda@Edge compute uses
  * {@link FRAMEWORK_EDGE_COMPUTE_RUNTIME}, which is tracked separately because
  * Lambda@Edge can only associate a subset of Lambda's managed runtimes.
+ *
+ * Note: this constant and {@link FRAMEWORK_EDGE_COMPUTE_RUNTIME} currently hold
+ * the same value by coincidence, not by design — they are governed by different
+ * support tables and must be evaluated and bumped independently. Do not collapse
+ * them into a single constant.
  */
 export const FRAMEWORK_COMPUTE_RUNTIME = 'nodejs24.x';
 

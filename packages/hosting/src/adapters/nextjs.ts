@@ -167,7 +167,10 @@ export const nextjsAdapter = (
     patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
-    // compatibility. See patchEdgeBundleForLambdaEdge.
+    // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
+    // the FRAMEWORK_EDGE_COMPUTE_RUNTIME doc comment in framework_runtime.ts
+    // for why this patch is runtime-independent (ES Module namespace exports
+    // are non-writable per spec — it is not a Node-version quirk).
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
     // Patch the image-optimization bundle for the Next.js 16 image-optimizer

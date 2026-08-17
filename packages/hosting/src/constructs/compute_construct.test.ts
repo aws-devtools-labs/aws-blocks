@@ -276,7 +276,7 @@ void describe('ComputeConstruct', () => {
       assert.throws(
         () =>
           new ComputeConstruct(stack, 'Compute', {
-            name: 'default',
+            name: 'serverFn',
             computeResource: {
               ...handlerResource(bundle),
               runtime: 'python3.12',
@@ -286,6 +286,7 @@ void describe('ComputeConstruct', () => {
           assert.ok(error instanceof HostingError);
           assert.strictEqual(error.code, 'UnsupportedRuntimeError');
           assert.match(error.message, /python3\.12/);
+          assert.match(error.message, /serverFn/);
           return true;
         },
       );
