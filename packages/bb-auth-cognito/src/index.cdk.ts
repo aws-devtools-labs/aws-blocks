@@ -19,11 +19,13 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as lambda from 'aws-cdk-lib/aws-lambda';
-import { Scope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -64,15 +66,22 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends BuildingBlockScope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
 	/** Admin opt-in, captured for the IAM grant in `grantCognitoPermissions`. */
 	private readonly adminOptions?: AdminOptions;
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
+
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
 		this.adminOptions = opts.admin;

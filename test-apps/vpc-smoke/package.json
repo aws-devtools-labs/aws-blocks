@@ -7,9 +7,31 @@
   "type": "module",
   "description": "Thin round-trip smoke tests verifying all BBs work in a VPC environment",
   "scripts": {
-    "test": "echo 'VPC smoke tests run during e2e:sandbox:vpc and e2e:production:vpc'",
-    "test:e2e:local": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0",
-    "test:e2e:sandbox": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0",
-    "test:e2e:production": "echo 'No VPC-dependent BBs on main yet — skipping' && exit 0"
+    "build": "tsc --build",
+    "test": "echo 'VPC smoke tests run via test:e2e:sandbox'",
+    "test:e2e:local": "echo 'VPC smoke tests require deployment \u2014 skipping local' && exit 0",
+    "test:e2e:sandbox": "BLOCKS_TEST_ENV=sandbox npx tsx test/vpc-smoke.test.ts",
+    "test:e2e:production": "BLOCKS_TEST_ENV=production npx tsx test/vpc-smoke.test.ts"
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/core": "*",
+    "@aws-blocks/bb-data": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/bb-distributed-table": "*",
+    "@aws-blocks/bb-file-bucket": "*",
+    "@aws-blocks/bb-async-job": "*",
+    "@aws-blocks/bb-app-setting": "*",
+    "@aws-blocks/bb-realtime": "*",
+    "@aws-blocks/bb-auth-cognito": "*",
+    "@aws-blocks/bb-logger": "*",
+    "@aws-blocks/bb-metrics": "*",
+    "@aws-blocks/bb-tracer": "*",
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
   }
 }
