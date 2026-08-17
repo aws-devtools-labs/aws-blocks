@@ -52,12 +52,26 @@ test('isPgliteUnreachableTrap walks the cause chain', () => {
   assert.strictEqual(isPgliteUnreachableTrap(wrapper), true);
 });
 
+test('isPgliteUnreachableTrap matches a RuntimeError whose message is only "unreachable"', () => {
+  // The real Node/V8 WASM trap arrives as name 'RuntimeError' with message just
+  // 'unreachable' — the 'RuntimeError:' prefix lives only in the stack. Stub the
+  // stack so it carries NO trap signature, proving the name-based branch matches
+  // independently of the stack surviving.
+  const err = new Error('unreachable');
+  err.name = 'RuntimeError';
+  err.stack = 'RuntimeError\n    at _pg_initdb (wasm://wasm/0001)';
+  assert.strictEqual(isPgliteUnreachableTrap(err), true);
+});
+
 test('isPgliteUnreachableTrap ignores a bare "unreachable" without a trap signature', () => {
-  // The classifier must fire on a real WASM trap signature, not the word alone —
-  // otherwise an unrelated failure whose text/stack merely contains "unreachable"
-  // (an assertUnreachable helper, an "unreachable host" message) would be retried.
+  // The classifier must fire on a real WASM trap signature (or a RuntimeError),
+  // not the word alone — otherwise an unrelated failure whose text/stack merely
+  // contains "unreachable" (an assertUnreachable helper, an "unreachable host"
+  // message) would be retried. A plain Error named 'Error' whose message is
+  // exactly 'unreachable' must also stay false (only 'RuntimeError' qualifies).
   assert.strictEqual(isPgliteUnreachableTrap(new Error('assertUnreachable: unhandled case')), false);
   assert.strictEqual(isPgliteUnreachableTrap(new Error('connect ETIMEDOUT: host unreachable')), false);
+  assert.strictEqual(isPgliteUnreachableTrap(new Error('unreachable')), false);
 });
 
 test('isPgliteUnreachableTrap matches non-Error values', () => {
@@ -266,6 +280,23 @@ test('wraps a recreate() failure while preserving the original trap as the cause
     },
   );
   assert.strictEqual(initial.closed, true, 'the trapped instance is still closed before recreate is attempted');
+});
+
+test('a non-retryable failure on a later attempt is rethrown without closing that instance', async () => {
+  // Locks in the per-iteration independence the reorder fixes: attempt 1 traps
+  // (recreates), attempt 2 fails with an unrelated, non-retryable error — that
+  // error must propagate untouched and the second instance must NOT be closed
+  // (only a diagnosed trap is ever closed).
+  const first = new FakePglite(1); // traps once with the default unreachable error
+  const second = new FakePglite(1, new Error('syntax error')); // non-retryable on its probe
+  let idx = 0;
+  const replacements = [second];
+  await assert.rejects(
+    () => initializePgliteWithRetry(first, () => replacements[idx++], NO_BACKOFF),
+    /syntax error/,
+  );
+  assert.strictEqual(first.closed, true, 'the trapped first instance is closed before recreate');
+  assert.strictEqual(second.closed, false, 'a non-retryable failure never closes its instance');
 });
 
 test('a custom isRetryable can broaden what is retried', async () => {

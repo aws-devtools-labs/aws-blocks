@@ -81,6 +81,14 @@ const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreacha
  * sometimes only visible in the stack or a nested `cause`. This walks the
  * message, stack, and cause chain, guarding against cyclic causes.
  *
+ * The real V8/Node trap arrives as a `RuntimeError` whose `.message` is just
+ * `"unreachable"` (the `RuntimeError:` prefix only appears in `.stack`, via
+ * `Error.prototype.toString`). So we also treat a `RuntimeError` named error
+ * whose message contains `unreachable` as a trap — this catches it without
+ * depending on the stack surviving intact, and stays just as narrow because a
+ * plain `Error` (the `assertUnreachable` / "host unreachable" cases) never has
+ * `name === 'RuntimeError'`.
+ *
  * Scope: this classifier is ONLY valid for the init-probe path — the fixed
  * `SELECT 1` probe inside {@link initializePgliteWithRetry}, where the sole
  * plausible source of a trap signature is a WASM `_pg_initdb` abort. It must
@@ -94,7 +102,11 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
   while (current != null && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error) {
-      if (PGLITE_INIT_TRAP_RE.test(current.message) || (current.stack != null && PGLITE_INIT_TRAP_RE.test(current.stack))) {
+      if (
+        PGLITE_INIT_TRAP_RE.test(current.message) ||
+        (current.name === 'RuntimeError' && /unreachable/i.test(current.message)) ||
+        (current.stack != null && PGLITE_INIT_TRAP_RE.test(current.stack))
+      ) {
         return true;
       }
       current = (current as { cause?: unknown }).cause;
