@@ -33,8 +33,9 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-// Each setup() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
-// afterwards so the global does not leak into unrelated test files in the same process.
+// setup() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
+// afterwards so no test observes a stack left behind by the previous one (node
+// --test isolates files by default, so this is hygiene against future sharing).
 afterEach(() => {
 	delete (globalThis as any).CURRENT_BLOCKS_STACK;
 });

@@ -16,7 +16,11 @@ import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blo
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 
-export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+} from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';

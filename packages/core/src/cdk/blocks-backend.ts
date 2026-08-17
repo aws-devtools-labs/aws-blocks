@@ -42,6 +42,13 @@ export function assertCdkConditionActive(): void {
   }
 }
 
+/**
+ * Timeout of the shared Blocks handler Lambda, and therefore the ceiling on a
+ * single invocation. Exported because resources that feed the handler have to
+ * size their own timeouts against it (e.g. an SQS queue's visibility timeout).
+ */
+export const SHARED_HANDLER_TIMEOUT_SECONDS = 60 * 15;
+
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -73,7 +80,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler: 'handler',
     role: executionRole,
     memorySize: 2048,
-    timeout: cdk.Duration.seconds(60 * 15),
+    timeout: cdk.Duration.seconds(SHARED_HANDLER_TIMEOUT_SECONDS),
     environment: {
       NODE_ENV: 'production',
       /**

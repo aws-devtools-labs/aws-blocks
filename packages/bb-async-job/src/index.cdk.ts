@@ -5,7 +5,7 @@ import { Duration } from 'aws-cdk-lib';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Scope } from '@aws-blocks/core/cdk';
-import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
@@ -34,8 +34,6 @@ export type {
 const MAX_BATCH_SIZE_WITHOUT_WINDOW = 10;
 const MAX_BATCH_SIZE_WITH_WINDOW = 10000;
 const MAX_BATCHING_WINDOW_SECONDS = 300;
-/** Timeout of the shared Blocks Lambda, the ceiling on one handler invocation. */
-const LAMBDA_TIMEOUT_SECONDS = 900;
 
 /**
  * Reject event source options AWS would refuse at deploy time, so the failure
@@ -95,9 +93,9 @@ export class AsyncJob<T = unknown> extends Scope {
 		// before the batching window elapses and before the handler runs — so the
 		// worst-case invisibility a message needs is the window plus the handler's
 		// full budget. Anything less lets SQS redeliver a message that is still
-		// being processed. AWS's guidance is the same:
-		// visibilityTimeout >= maxBatchingWindow + functionTimeout.
-		const visibilityTimeout = LAMBDA_TIMEOUT_SECONDS + maxBatchingWindowSeconds;
+		// being processed. This is the deterministic minimum, not AWS's padded
+		// recommendation of 6x the function timeout plus the window (see D-AJ-1a).
+		const visibilityTimeout = SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds;
 
 		this.queue = new Queue(this, 'queue', {
 			queueName: `${this.fullId}`.substring(0, 80),

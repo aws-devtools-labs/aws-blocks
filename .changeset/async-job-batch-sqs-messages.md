@@ -1,4 +1,5 @@
 ---
+"@aws-blocks/core": patch
 "@aws-blocks/bb-async-job": patch
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/blocks": patch
@@ -30,7 +31,11 @@ default is a behavior change with an opt-out (`batchSize: 1` /
 umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
 `AsyncJob` and `AsyncJobOptions`.
 
-The main queue's visibility timeout is now `900 + maxBatchingWindowSeconds`
+`@aws-blocks/core/cdk` now exports `SHARED_HANDLER_TIMEOUT_SECONDS`, the shared
+handler Lambda's timeout, so resources that must size their own timeouts against
+it stop re-hardcoding `900`.
+
+The main queue's visibility timeout is now `SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds`
 seconds instead of a flat `900`. A message becomes invisible when the poller
 receives it, before the batching window elapses and before the handler runs, so
 a flat 900s let SQS redeliver a message whose invocation was still running.

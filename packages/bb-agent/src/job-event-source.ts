@@ -3,8 +3,11 @@
 
 /**
  * SQS event source options for the Agent's internal AsyncJob, shared by the
- * runtime (`agent.ts`) and CDK (`index.cdk.ts`) construction sites so the
- * provisioned event source mapping can never drift from the runtime one.
+ * runtime (`agent.ts`) and CDK (`index.cdk.ts`) construction sites so an edit to
+ * one site's numbers cannot silently miss the other. Only the CDK site's values
+ * reach a real event source mapping today — the runtime entry points do not read
+ * these options — so this is a single source of truth for the intent, not a
+ * runtime/CDK sync guarantee.
  *
  * `stream()` submits one job per interactive turn (and a second on HITL
  * resume) while the caller is blocked on that job starting, so AsyncJob's
