@@ -325,6 +325,14 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). Start from `BlocksPresets.sandbox` or
+   * `BlocksPresets.production` and override individual fields as needed. Any
+   * field a block also exposes as a per-block option is overridden by that
+   * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
+   */
+  defaults: import('../cdk/blocks-defaults.js').BlocksDefaults;
 }
 
 export class BlocksStack {

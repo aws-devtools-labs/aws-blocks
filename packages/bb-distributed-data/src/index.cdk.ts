@@ -24,14 +24,19 @@ export class DistributedDatabase extends Scope {
     super(id, { parent: scope });
 
     const stack = cdk.Stack.of(this);
-    const isSandbox = stack.node.tryGetContext('sandboxMode') === 'true';
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
     const region = stack.region;
     const dbRole = sanitizeDbRoleName(this.fullId);
 
-    // DSQL Cluster — respect explicit removalPolicy; default to DESTROY in sandbox, RETAIN otherwise.
-    const shouldDestroy = options?.removalPolicy === 'destroy' || (!options?.removalPolicy && isSandbox);
-    const removalPolicy = shouldDestroy ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN;
+    // DSQL Cluster removal: the per-block option wins, otherwise the stack-wide
+    // `defaults` (sandbox → DESTROY, production → RETAIN). Deletion protection
+    // follows: on unless the cluster is being destroyed.
+    const removalPolicy =
+      options?.removalPolicy === 'destroy'
+        ? cdk.RemovalPolicy.DESTROY
+        : options?.removalPolicy === 'retain'
+          ? cdk.RemovalPolicy.RETAIN
+          : this.defaults.removalPolicy;
 
     const cluster = new cdk.CfnResource(stack, `${this.fullId}DsqlCluster`, {
       type: 'AWS::DSQL::Cluster',

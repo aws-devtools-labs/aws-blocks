@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import type { BlocksDefaults } from './blocks-defaults.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -45,6 +46,14 @@ export function assertCdkConditionActive(): void {
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
+   * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
+   * individual fields as needed. A per-block option always wins over the
+   * corresponding stack default.
+   */
+  defaults: BlocksDefaults;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
@@ -199,6 +208,8 @@ export class BlocksBackend extends Construct {
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: iam.IRole;
+  /** Infrastructure defaults for Building Blocks created under this backend. */
+  public readonly defaults: BlocksDefaults;
 
   /**
    * The fullId used by child Scopes to compute their env var names,
@@ -238,6 +249,11 @@ export class BlocksBackend extends Construct {
 
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
+
+    // Store defaults on the backend (not the stack) so several BlocksBackends
+    // in one stack each keep their own posture; Building Blocks resolve them by
+    // walking up to their owning backend (see Scope.defaults).
+    this.defaults = props.defaults;
 
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;

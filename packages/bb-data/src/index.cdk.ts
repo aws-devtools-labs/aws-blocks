@@ -33,8 +33,6 @@ export class Database extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
     super(id, { parent: scope });
 
-    const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-
     if (options?.connection) {
       // External database — skip provisioning, just grant permissions and inject env vars
       const conn = options.connection;
@@ -67,8 +65,11 @@ export class Database extends Scope {
       snapshot: cdk.RemovalPolicy.SNAPSHOT,
     } as const;
 
-    // In sandbox mode, default to DESTROY so sandbox:destroy can clean up.
-    const defaultRemovalPolicy = isSandbox ? cdk.RemovalPolicy.DESTROY : undefined;
+    // Removal policy: the per-block option wins, otherwise the stack-wide
+    // `defaults` (sandbox → DESTROY so sandbox:destroy can clean up; production
+    // → RETAIN). Deletion protection is derived from the resolved policy in
+    // materialize() (protected unless DESTROY).
+    const defaultRemovalPolicy = this.defaults.removalPolicy;
 
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,

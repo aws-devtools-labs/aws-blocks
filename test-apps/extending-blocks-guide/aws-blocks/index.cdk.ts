@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -29,11 +28,8 @@ process.env.BLOCKS_LEGACY_USERS_TABLE = legacyUsersTableName;
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: BlocksPresets.sandbox,
 });
-
-// E2E test stacks must be fully deletable.
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
 
 // Pattern 1 fixture: an SQS queue we'll send to via raw SDK.
 const externalQueue = new sqs.Queue(blocksStack, 'external-queue');

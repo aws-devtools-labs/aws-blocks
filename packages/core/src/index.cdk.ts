@@ -10,6 +10,10 @@ export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _reset
 export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';
 export { BlocksStack, Scope, SandboxDisableDeletionProtection, BlocksBackend, registerConfig, finalizeConfigRegistry, synthGuard, DEFAULT_NODE_RUNTIME, type BlocksBackendProps } from './cdk/index.js';
 export {
+  type BlocksDefaults,
+  BlocksPresets,
+} from './cdk/index.js';
+export {
   Hosting,
   type HostingProps,
   type BlocksStackApi,

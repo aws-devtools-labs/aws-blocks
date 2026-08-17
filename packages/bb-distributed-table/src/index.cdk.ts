@@ -83,6 +83,11 @@ export class DistributedTable<T = any> extends Scope {
 			} : undefined,
 			billingMode: BillingMode.PAY_PER_REQUEST,
 			timeToLiveAttribute: config.ttl || undefined,
+			// Durability follows the stack-wide `defaults` (sandbox → DESTROY +
+			// no protection so a teardown is clean; production → RETAIN + protected).
+			// A richer per-block override lands with the `protection` option in #282.
+			removalPolicy: this.defaults.removalPolicy,
+			deletionProtection: this.defaults.deletionProtection,
 		});
 
 		this.table.grantReadWriteData(this.handler);
