@@ -1,24 +1,23 @@
-// Unit tests for the PR-vs-baseline report helpers (overview.mjs): the diff math, margin/color engine,
-// formatters, and the two render modes (Overview = colors, Detailed = numbers). Run under bare `node --test`.
+// Unit tests for the PR-vs-baseline report helpers (overview.mjs): the diff math, the delta color
+// engine, formatters, and the single results table (renderDetailed) + preword. Run under bare `node --test`.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-	MARGIN_PCT,
-	baselineHasMetrics,
+	DELTA_THRESHOLDS,
 	buildAggregate,
 	cellComposite,
 	cellKey,
 	deltaBall,
+	deltaColor,
 	diffAgainstBaseline,
 	fmtCost,
+	fmtJudge,
 	fmtScore,
 	humanTokens,
-	marginAbs,
 	meanComposite,
-	metricColor,
 	renderDetailed,
-	renderOverview,
+	renderPreword,
 } from './overview.mjs';
 
 const DIMS = { functional_completeness: 8, selector_contract: 8, persistence: 8, code_quality: 8, blocks_fidelity: 8 };
@@ -29,6 +28,9 @@ const PARTIAL = { task: 'file-gallery', template: 'bare', tests_passed: 3, tests
 const AGENT_FAIL = { task: 'sql-kb', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 }; // comp 0 · no tokens → cost/score null
 const HARNESS = { task: 'oidc-dsql', template: 'react', klass: 'harness_error' }; // excluded → null
 const UNKNOWN = { task: 'email-digest', template: 'demo', tests_passed: 0, tests_failed: 0 }; // gradeable, no tests → null
+// A dead/crashed dev-server (empty APP_BASE_URL): dev_server_status='dead' → klass dead_server. A REAL
+// fail — composite 0, INCLUDED in the mean (contrast UNKNOWN, gradeable-but-no-tests → excluded).
+const DEAD = { task: 'sql-notes', template: 'nextjs', klass: 'dead_server', dev_server_status: 'dead', tests_passed: 0, tests_failed: 0 }; // comp 0 · INCLUDED
 
 describe('cellComposite(r)', () => {
 	it('returns the shared composite for a scored cell', () => {
@@ -40,6 +42,9 @@ describe('cellComposite(r)', () => {
 		assert.equal(cellComposite(HARNESS), null);
 		assert.equal(cellComposite(UNKNOWN), null);
 	});
+	it('a dead_server (crashed dev-server) is scored 0 and INCLUDED — NOT null/excluded like unknown', () => {
+		assert.equal(cellComposite(DEAD), 0);
+	});
 });
 
 describe('meanComposite(cells)', () => {
@@ -47,50 +52,57 @@ describe('meanComposite(cells)', () => {
 		assert.equal(meanComposite([PASS, PARTIAL, AGENT_FAIL, HARNESS, UNKNOWN]), 52.3); // (92+65+0)/3
 		assert.equal(meanComposite([PASS, PARTIAL]), 78.5);
 	});
+	it('a dead_server counts toward the mean as composite 0 (the crash HURTS the score, not excluded)', () => {
+		assert.equal(meanComposite([PASS, PARTIAL, DEAD]), 52.3); // (92+65+0)/3 — DEAD INCLUDED as 0
+		// Contrast: swapping DEAD for an UNKNOWN (gradeable, no dev_server_status) EXCLUDES it → 78.5.
+		assert.equal(meanComposite([PASS, PARTIAL, UNKNOWN]), 78.5);
+	});
 	it('is null when no cell was scored', () => {
 		assert.equal(meanComposite([HARNESS, UNKNOWN]), null);
 		assert.equal(meanComposite([]), null);
 	});
 });
 
-describe('marginAbs(baseline, integer) — one tunable, MARGIN_PCT', () => {
-	it('MARGIN_PCT is the documented 5%', () => {
-		assert.equal(MARGIN_PCT, 0.05);
+describe('DELTA_THRESHOLDS — the one place the bands live', () => {
+	it('holds the documented per-metric thresholds', () => {
+		assert.equal(DELTA_THRESHOLDS.composite, 5);
+		assert.equal(DELTA_THRESHOLDS.score, 5);
+		assert.equal(DELTA_THRESHOLDS.judge, 0.3);
+		assert.equal(DELTA_THRESHOLDS.tests, 1);
+		assert.equal(DELTA_THRESHOLDS.costPct, 0.1);
+		assert.equal(DELTA_THRESHOLDS.turns, 3);
+		assert.equal(DELTA_THRESHOLDS.costAbs, 0.02);
 	});
-	it('integer metrics floor the margin to 1 (a ±1 nudge is always within-margin)', () => {
-		assert.equal(marginAbs(8, true), 1); // round(0.4)=0 → floored to 1
-		assert.equal(marginAbs(11, true), 1); // round(0.55)=1
-		assert.equal(marginAbs(40, true), 2); // round(2.0)=2
-		assert.equal(marginAbs(0, true), 1);
-	});
-	it('continuous metrics use exact 5% of |baseline| (no floor)', () => {
-		assert.equal(marginAbs(100, false), 5);
-		assert.equal(marginAbs(2, false), 0.1);
-		assert.equal(marginAbs(0, false), 0);
+	it('LOC, Files & token thresholds are GONE with their removed columns', () => {
+		assert.equal('loc' in DELTA_THRESHOLDS, false);
+		assert.equal('files' in DELTA_THRESHOLDS, false);
+		assert.equal('tokensPct' in DELTA_THRESHOLDS, false);
+		assert.equal('tokensAbs' in DELTA_THRESHOLDS, false);
+		assert.equal('cacheReadPct' in DELTA_THRESHOLDS, false);
+		assert.equal('cacheWritePct' in DELTA_THRESHOLDS, false);
 	});
 });
 
-describe('metricColor(baseline, pr, {direction, integer})', () => {
-	it('equal or better is 🟢 (both directions)', () => {
-		assert.equal(metricColor(8, 8, { direction: 'up' }), '🟢');
-		assert.equal(metricColor(8, 9, { direction: 'up' }), '🟢');
-		assert.equal(metricColor(2, 2, { direction: 'down' }), '🟢');
-		assert.equal(metricColor(2, 1, { direction: 'down' }), '🟢');
+describe('deltaColor(baseline, pr, threshold, direction) — significance + direction of the change', () => {
+	it('higher-is-better: 🟢 beyond threshold up, 🔴 beyond threshold down, 🟡 within (either way)', () => {
+		assert.equal(deltaColor(5, 11, 5, 'up'), '🟢'); // +6 beyond +5 → improved
+		assert.equal(deltaColor(11, 5, 5, 'up'), '🔴'); // -6 beyond -5 → regressed
+		assert.equal(deltaColor(10, 13, 5, 'up'), '🟡'); // +3 within → noise
+		assert.equal(deltaColor(10, 10, 5, 'up'), '🟡'); // flat → noise
 	});
-	it('worse within the (integer) margin is 🟡, beyond is 🔴 — matches the judge-dim example', () => {
-		assert.equal(metricColor(8, 7, { direction: 'up', integer: true }), '🟡'); // 8→7 within 1
-		assert.equal(metricColor(9, 5, { direction: 'up', integer: true }), '🔴'); // 9→5 beyond 1
-		assert.equal(metricColor(11, 10, { direction: 'up', integer: true }), '🟡'); // 11→10
-		assert.equal(metricColor(11, 9, { direction: 'up', integer: true }), '🔴'); // 11→9
+	it('lower-is-better (cost/tokens): a DROP is 🟢, a RISE is 🔴', () => {
+		assert.equal(deltaColor(100, 80, 5, 'down'), '🟢'); // -20 → improved (cheaper)
+		assert.equal(deltaColor(100, 120, 5, 'down'), '🔴'); // +20 → regressed (pricier)
+		assert.equal(deltaColor(100, 103, 5, 'down'), '🟡'); // +3 within → noise
 	});
-	it('worse within/beyond the (continuous) margin for a lower-is-better metric (cost/tokens)', () => {
-		assert.equal(metricColor(100, 103, { direction: 'down' }), '🟡'); // +3 within 5
-		assert.equal(metricColor(100, 110, { direction: 'down' }), '🔴'); // +10 beyond 5
+	it('the threshold boundary is inclusive-of-noise (exactly ±threshold is 🟡, not 🟢/🔴)', () => {
+		assert.equal(deltaColor(0, 5, 5, 'up'), '🟡'); // exactly +threshold
+		assert.equal(deltaColor(0, -5, 5, 'up'), '🟡'); // exactly -threshold
 	});
-	it('null when either side is missing (caller renders 🆕 / —)', () => {
-		assert.equal(metricColor(null, 5, { direction: 'up' }), null);
-		assert.equal(metricColor(5, null, { direction: 'up' }), null);
-		assert.equal(metricColor(undefined, undefined), null);
+	it('⚪ when either side is missing (no baseline value for the field)', () => {
+		assert.equal(deltaColor(null, 5, 5, 'up'), '⚪');
+		assert.equal(deltaColor(5, null, 5, 'up'), '⚪');
+		assert.equal(deltaColor(undefined, undefined, 5, 'up'), '⚪');
 	});
 });
 
@@ -99,6 +111,8 @@ describe('formatters', () => {
 		assert.equal(humanTokens(3456), '3.5K');
 		assert.equal(humanTokens(3000), '3K');
 		assert.equal(humanTokens(800), '800');
+		assert.equal(humanTokens(2396400), '2.4M');
+		assert.equal(humanTokens(13835800), '13.8M');
 		assert.equal(humanTokens(null), '—');
 	});
 	it('fmtCost trims trailing zeros', () => {
@@ -111,6 +125,18 @@ describe('formatters', () => {
 		assert.equal(fmtScore(66.7), '66.7');
 		assert.equal(fmtScore(108.3), '108.3');
 		assert.equal(fmtScore(null), '—');
+	});
+	it('fmtJudge: integer as-is, else 1 decimal', () => {
+		assert.equal(fmtJudge(8), '8');
+		assert.equal(fmtJudge(7.5), '7.5');
+		assert.equal(fmtJudge(null), '—');
+	});
+	it('non-finite numbers render as the em-dash (never Infinity / NaN leaking into the table)', () => {
+		assert.equal(humanTokens(Infinity), '—');
+		assert.equal(humanTokens(-Infinity), '—');
+		assert.equal(humanTokens(NaN), '—');
+		assert.equal(fmtCost(Infinity), '—');
+		assert.equal(fmtScore(Infinity), '—');
 	});
 });
 
@@ -144,10 +170,37 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 		assert.equal(p.stop_reason, 'end_turn');
 		assert.deepEqual(p.judge_dimensions, DIMS);
 	});
+	it('persists the newer per-cell signals (cycle_count, cache, loc, files) for future baselines', () => {
+		const full = buildAggregate([{ ...PASS, cycle_count: 22, cache_read_tokens: 150000, cache_write_tokens: 12000, loc_created: 300, loc_edited: 40, files_created: 8, files_edited: 3 }], {});
+		const c = full.cells[0];
+		assert.equal(c.cycle_count, 22);
+		assert.equal(c.cache_read_tokens, 150000);
+		assert.equal(c.cache_write_tokens, 12000);
+		assert.equal(c.loc_created, 300);
+		assert.equal(c.loc_edited, 40);
+		assert.equal(c.files_created, 8);
+		assert.equal(c.files_edited, 3);
+	});
+	it('newer signals are null when the cell lacks them (older artifacts)', () => {
+		const c = byKey['auth-notes/demo'];
+		assert.equal(c.cycle_count, null);
+		assert.equal(c.cache_read_tokens, null);
+		assert.equal(c.loc_created, null);
+		assert.equal(c.files_created, null);
+	});
 	it('a cell with no tokens has cost + score null (never a fake $0)', () => {
 		assert.equal(byKey['sql-kb/nextjs'].composite, 0);
 		assert.equal(byKey['sql-kb/nextjs'].cost, null);
 		assert.equal(byKey['sql-kb/nextjs'].score, null);
+	});
+	it('a dead_server cell is INCLUDED: verdict fail, composite 0, counted in scored_cells', () => {
+		const deadAgg = buildAggregate([PASS, DEAD], { sha: 'dead01' });
+		assert.equal(deadAgg.scored_cells, 2); // PASS + DEAD both counted
+		assert.equal(deadAgg.mean_composite, 46); // (92 + 0)/2 — DEAD drags the mean down
+		const d = deadAgg.cells.find((c) => c.task === 'sql-notes');
+		assert.equal(d.klass, 'dead_server');
+		assert.equal(d.verdict, 'fail'); // NOT 'unknown'
+		assert.equal(d.composite, 0);
 	});
 	it('cells are sorted by task/template', () => {
 		const keys = agg.cells.map(cellKey);
@@ -155,7 +208,7 @@ describe('buildAggregate(cells, meta) — schema 2', () => {
 	});
 });
 
-describe('deltaBall(delta)', () => {
+describe('deltaBall(delta) — headline composite mean-delta', () => {
 	it('🟢 / 🔴 beyond ±5, 🟡 within (inclusive), empty for null', () => {
 		assert.equal(deltaBall(5.2), '🟢');
 		assert.equal(deltaBall(-6.4), '🔴');
@@ -165,13 +218,17 @@ describe('deltaBall(delta)', () => {
 	});
 });
 
+function round1Delta(a, b) {
+	return Math.round((a - b) * 10) / 10;
+}
+
 describe('diffAgainstBaseline(current, baseline)', () => {
 	const current = buildAggregate([PASS, PARTIAL, { task: 'brand-new', template: 'demo', tests_passed: 2, tests_failed: 0, judge_score: 10, tokens_in: 50000, tokens_out: 5000 }], {});
 	const baseline = {
 		schema: 2,
 		mean_composite: 70,
 		cells: [
-			{ task: 'auth-notes', template: 'demo', composite: 80, judge_score: 7, tests_passed: 4, tests_denom: 4, judge_dimensions: { functional_completeness: 9, selector_contract: 8, persistence: 8, code_quality: 7, blocks_fidelity: 8 }, cost: 2.0, score: 40, tokens_in: 190000, tokens_out: 28000 },
+			{ task: 'auth-notes', template: 'demo', composite: 80, judge_score: 7, tests_passed: 4, tests_denom: 4, cost: 2.0, score: 40, tokens_in: 190000, tokens_out: 28000 },
 			{ task: 'file-gallery', template: 'bare', composite: 70, tests_passed: 3, tests_denom: 4, cost: 0.6, score: 116.7, tokens_in: 100000, tokens_out: 20000 },
 			{ task: 'removed', template: 'x', composite: 50, tests_passed: 5, tests_denom: 5 },
 		],
@@ -184,13 +241,12 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 		assert.equal(byKey['file-gallery/bare'].delta, -5); // 65 - 70
 		assert.equal(diff.meanDelta, round1Delta(diff.meanCurrent, 70));
 	});
-	it('attaches pr + base metric objects for the tables', () => {
+	it('attaches pr + base metric objects for the table', () => {
 		const r = byKey['auth-notes/demo'];
 		assert.equal(r.pr.cost, 1.75);
 		assert.equal(r.base.cost, 2.0);
 		assert.equal(r.pr.tests_passed, 4);
 		assert.equal(r.base.judge_score, 7);
-		assert.deepEqual(r.base.judge_dimensions.functional_completeness, 9);
 	});
 	it('a new cell has base=null; a removed cell surfaces with pr=null', () => {
 		assert.equal(byKey['brand-new/demo'].base, null);
@@ -205,70 +261,138 @@ describe('diffAgainstBaseline(current, baseline)', () => {
 		assert.equal(noBase.hasBaseline, false);
 		assert.equal(noBase.rows.every((r) => r.base === null), true);
 	});
-});
-
-function round1Delta(a, b) {
-	return Math.round((a - b) * 10) / 10;
-}
-
-describe('renderOverview(diff) — colors only', () => {
-	const current = buildAggregate([PASS], {});
-	const baseline = {
-		schema: 2,
-		mean_composite: 92,
-		cells: [{ task: 'auth-notes', template: 'demo', composite: 92, judge_score: 8, tests_passed: 4, tests_denom: 4, cost: 2.0, score: 46, tokens_in: 190000, tokens_out: 28000 }],
-	};
-	const md = renderOverview(diffAgainstBaseline(current, baseline), { heading: '## Overview' }).join('\n');
-
-	it('has the colors-only column header incl. the Δ vs base column and no baseline->pr numbers', () => {
-		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \(in\/out\) \| Score \| Δ vs base \|/);
-		assert.doesNotMatch(md, /->/); // Overview is glyphs only
-	});
-	it('colors each metric vs baseline + a per-row composite Δ ball', () => {
-		// tests 4/4 vs 4/4 → 🟢 ; judge 8 vs 8 → 🟢 ; cost $1.75 vs $2.0 (lower) → 🟢 ;
-		// tokens_in 200k vs 190k (higher=worse, beyond 5%) → 🔴 ; score 52.6 vs 46 (higher) → 🟢 ;
-		// composite 92 vs 92 → Δ 0 → 🟡 (flat, within the ±5-point band)
-		const row = md.split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(row, /\| auth-notes \| demo \| 🟢 \| 🟢 \| 🟢 \| 🔴\/🔴 \| 🟢 \| 🟡 \|/);
-	});
-	it('no-baseline mode flags every metric AND the Δ column 🆕', () => {
-		const noBase = renderOverview(diffAgainstBaseline(current, null), {}).join('\n');
-		const row = noBase.split('\n').find((l) => l.includes('auth-notes'));
-		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \| 🆕 \|/);
+	it('attaches base PER-FIELD: an older baseline missing some fields still attaches (fields read null)', () => {
+		const partialBase = {
+			mean_composite: 80,
+			cells: [{ task: 'auth-notes', template: 'demo', composite: 80, judge_score: 7, test_rate: 1 }], // no tests_passed/cost/tokens/score
+		};
+		const r = diffAgainstBaseline(buildAggregate([PASS], {}), partialBase).rows.find((x) => x.key === 'auth-notes/demo');
+		assert.notEqual(r.base, null); // base IS attached (no whole-row gate)
+		assert.equal(r.base.judge_score, 7); // a field it HAS
+		assert.equal(r.base.cost, null); // a field it LACKS → null (renders ⚪ "(new)")
+		assert.equal(r.base.tests_passed, null);
+		assert.equal(r.delta, 12); // composite still comparable (92 - 80)
 	});
 });
 
-describe('renderDetailed(diff) — numbers', () => {
-	const current = buildAggregate([PASS], {});
-	const baseline = {
-		schema: 2,
-		mean_composite: 92,
-		cells: [{ task: 'auth-notes', template: 'demo', composite: 92, judge_score: 8, tests_passed: 4, tests_denom: 4, judge_dimensions: { functional_completeness: 9, selector_contract: 8, persistence: 8, code_quality: 7, blocks_fidelity: 8 }, cost: 2.0, score: 46, tokens_in: 190000, tokens_out: 28000 }],
-	};
-	const md = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n');
-	const row = md.split('\n').find((l) => l.includes('auth-notes'));
+// A full-feature cell exercising every RENDERED column (tests, judge, cost, turns, score) plus
+// the token/cache/LOC/file counts buildAggregate still persists (no longer shown as their own columns).
+const FULL = {
+	task: 'auth-notes',
+	template: 'demo',
+	tests_passed: 4,
+	tests_failed: 0,
+	judge_score: 8,
+	judge_dimensions: { functional_completeness: 9, selector_contract: 8, persistence: 7, code_quality: 8, blocks_fidelity: 8 },
+	tokens_in: 200000,
+	tokens_out: 30000,
+	cache_read_tokens: 150000,
+	cache_write_tokens: 12000,
+	cycle_count: 22,
+	loc_created: 300,
+	loc_edited: 40,
+	files_created: 8,
+	files_edited: 3,
+	stop_reason: 'end_turn',
+}; // comp 92 · cost 1.75 · score 52.6
 
-	it('has the detailed column header incl. Δ vs base and Stop reason', () => {
-		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Tokens \| Score \| Δ vs base \| Stop reason \|/);
+// A baseline that carries ALL of FULL's metrics, so each column has a real delta to color.
+const BASE_FULL = {
+	schema: 2,
+	mean_composite: 90,
+	cells: [
+		{
+			task: 'auth-notes',
+			template: 'demo',
+			composite: 90,
+			judge_score: 7,
+			judge_dimensions: { functional_completeness: 7, selector_contract: 8, persistence: 9, code_quality: 8, blocks_fidelity: 8 },
+			tests_passed: 4,
+			tests_denom: 4,
+			cost: 2.0,
+			score: 40,
+			tokens_in: 190000,
+			tokens_out: 28000,
+			cache_read_tokens: 100000,
+			cache_write_tokens: 10000,
+			cycle_count: 18,
+			loc_created: 250,
+			loc_edited: 30,
+			files_created: 6,
+			files_edited: 2,
+		},
+	],
+};
+
+describe('renderDetailed(diff) — the expanded single results table', () => {
+	const rowFor = (diff) => renderDetailed(diff, {}).join('\n').split('\n').find((l) => l.includes('auth-notes'));
+
+	it('has the 8-column header — Tests|Judge|Cost|Turns|Score|Stop reason', () => {
+		const md = renderDetailed(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL), {}).join('\n');
+		assert.match(md, /\| Task \| Template \| Tests \| Judge \| Cost \| Turns \| Score \| Stop reason \|/);
+		assert.doesNotMatch(md, /Δ vs base/);
+		assert.doesNotMatch(md, /->/); // no arrows anywhere
+		assert.doesNotMatch(md, /Tokens|LOC|Files/); // removed columns gone from the header
 	});
-	it('renders tests as colored baseline->pr counts', () => {
-		assert.match(row, /🟢 4\/4 -> 4\/4/);
+
+	it('scalar cells are INLINE `<ball> <value> (<Δ>)` (tests/cost/turns/score)', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		assert.match(row, /🟡 4\/4 \(0\)/); // tests 4→4, ±1 → 🟡
+		assert.match(row, /🟢 \$1\.75 \(-\$0\.25\)/); // cost $2→$1.75 (−12.5% beyond ±10%) → 🟢
+		assert.match(row, /🔴 22 \(\+4\)/); // turns 18→22 (+4 beyond ±3, lower-better) → 🔴
+		assert.match(row, /🟢 52\.6 \(\+12\.6\)/); // score 40→52.6 (+12.6 beyond ±5) → 🟢
+		assert.match(row, /\| end_turn \|$/); // stop reason retained, last column
 	});
-	it('renders the judge cell multi-line per dimension with color + baseline->pr', () => {
-		// functional_completeness 9→8 (down 1, within margin 1) → 🟡 ; code_quality 7→8 (better) → 🟢
-		assert.match(row, /🟡 functional_completeness 9 -> 8/);
-		assert.match(row, /🟢 code_quality 7 -> 8/);
-		assert.match(row, /<br>/); // dimensions on separate lines
+
+	it('JUDGE is ONE inline cell — overall score + delta ONLY, no per-dimension shorthand', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL));
+		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge, '🟢 8 (+1)'); // overall 7→8 beyond ±0.3 → 🟢; ball + score + delta, nothing else
+		assert.doesNotMatch(judge, /·/); // no ` · ` separator
+		assert.doesNotMatch(judge, /F\d|S\d|P\d|C\d|B\d/); // no per-dimension shorthand (F/S/P/C/B)
+		assert.equal(judge.split('<br>').length, 1); // single line — no <br> stacking
 	});
-	it('renders cost, tokens (in/out), score, Δ vs base, and stop reason with numbers', () => {
-		assert.match(row, /🟢 \$2 -> \$1\.75/); // cost lower = better
-		assert.match(row, /in 🔴 190K -> 200K<br>out 🔴 28K -> 30K/);
-		assert.match(row, /🟢 46 -> 52\.6/); // score higher = better
-		assert.match(row, /🟡 0\.0 \| end_turn \|/); // composite 92 vs 92 → Δ 0 → 🟡 flat, ball + signed number
-		assert.match(row, /\| end_turn \|/);
+
+	it('no cell uses <br> stacking any more (every column is a single inline value)', () => {
+		const md = renderDetailed(diffAgainstBaseline(buildAggregate([FULL], {}), BASE_FULL), {}).join('\n');
+		assert.doesNotMatch(md, /<br>/); // Tokens/LOC/Files stacking and multi-line judge are gone
 	});
-	it('a removed cell shows a 🗑️ marker', () => {
-		const withRemoved = diffAgainstBaseline(current, {
+
+	it('no baseline at all → ⚪ + the CURRENT value + (new) for every metric (value never hidden)', () => {
+		const row = rowFor(diffAgainstBaseline(buildAggregate([FULL], {}), null));
+		assert.match(row, /⚪ 4\/4 \(new\)/); // tests
+		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge, '⚪ 8 (new)'); // judge: overall score only — no per-dim shorthand
+		assert.match(row, /⚪ \$1\.75 \(new\)/); // cost
+		assert.match(row, /⚪ 22 \(new\)/); // turns
+		assert.match(row, /⚪ 52\.6 \(new\)/); // score
+	});
+
+	it('a run that predates turns: the Turns cell reads — while tests/judge/cost/score still color', () => {
+		// PASS has tokens_in/out + judge_dimensions but NO cycle_count (turns).
+		const row = rowFor(diffAgainstBaseline(buildAggregate([PASS], {}), BASE_FULL));
+		assert.match(row, /🟢 \$1\.75/); // cost present → colored
+		const inner = row.split('|').slice(1, -1).map((c) => c.trim());
+		assert.equal(inner.length, 8);
+		assert.equal(inner[5], '—'); // Turns column (index: Task,Template,Tests,Judge,Cost,Turns) absent this run
+	});
+
+	it('EVERY row emits exactly 8 columns — even a crashed cell with null everything', () => {
+		const CRASH = { task: 'crash', template: 'nextjs', klass: 'agent_fail', tests_passed: 0, tests_failed: 0 };
+		const cmd = renderDetailed(diffAgainstBaseline(buildAggregate([FULL, CRASH], {}), null), {}).join('\n');
+		const dataRows = cmd.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Task') && !l.startsWith('|--') && !l.startsWith('|---'));
+		assert.equal(dataRows.length, 2);
+		for (const line of dataRows) {
+			const inner = line.split('|').slice(1, -1);
+			assert.equal(inner.length, 8, `row must have 8 columns, got ${inner.length}: ${line}`);
+			assert.ok(inner.every((c) => c.trim().length > 0), `no column may be empty: ${line}`);
+		}
+		const crashRow = dataRows.find((l) => l.includes('| crash |'));
+		assert.match(crashRow, /\| crash \| nextjs \| — \| — \| — \| — \| — \| — \|/); // 6 placeholder metric cols
+	});
+
+	it('a removed cell shows a 🗑️ marker with the last-known test count, still 8 columns', () => {
+		const withRemoved = diffAgainstBaseline(buildAggregate([FULL], {}), {
 			schema: 2,
 			mean_composite: 80,
 			cells: [
@@ -277,90 +401,86 @@ describe('renderDetailed(diff) — numbers', () => {
 			],
 		});
 		const dmd = renderDetailed(withRemoved, {}).join('\n');
-		assert.match(dmd, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+		const goneRow = dmd.split('\n').find((l) => l.includes('| gone |'));
+		assert.match(goneRow, /\| gone \| demo \| 🗑️ removed \(was 2\/5\)/);
+		assert.equal(goneRow.split('|').slice(1, -1).length, 8);
+	});
+
+	it('judge cell NEVER renders per-dimension shorthand, even when judge_dimensions are present', () => {
+		const partialDims = { ...FULL, judge_dimensions: { functional_completeness: 9, selector_contract: 8, code_quality: 7 } };
+		const row = rowFor(diffAgainstBaseline(buildAggregate([partialDims], {}), null));
+		const judge = row.split('|').slice(1, -1).map((c) => c.trim())[3];
+		assert.equal(judge, '⚪ 8 (new)'); // overall score only — the per-dim data exists but is NOT rendered
+		assert.doesNotMatch(judge, /·|F\d|S\d|P\d|C\d|B\d/); // no shorthand tail
+		assert.equal(judge.split('<br>').length, 1); // single line, never <br>-stacked
+	});
+
+	it('a removed cell whose baseline lacks a test denom omits the "(was …)" suffix (never prints /null)', () => {
+		const withRemoved = diffAgainstBaseline(buildAggregate([FULL], {}), {
+			schema: 2,
+			mean_composite: 80,
+			cells: [
+				{ task: 'auth-notes', template: 'demo', composite: 92, tests_passed: 4, tests_denom: 4 },
+				{ task: 'gone', template: 'demo', composite: 40, tests_passed: 2, tests_denom: null },
+			],
+		});
+		const goneRow = renderDetailed(withRemoved, {}).join('\n').split('\n').find((l) => l.includes('| gone |'));
+		assert.match(goneRow, /🗑️ removed/);
+		assert.doesNotMatch(goneRow, /\(was/);
+		assert.doesNotMatch(goneRow, /null/);
 	});
 });
 
-describe('Δ vs base column — per-row composite delta ball', () => {
-	const mk = (task, tp, tf, judge) => ({ task, template: 'demo', tests_passed: tp, tests_failed: tf, judge_score: judge, tokens_in: 100000, tokens_out: 10000, stop_reason: 'end_turn' });
-	// composites: imp 4/4·8 → 92 ; reg 1/4·3 → 27 ; flat 4/4·8 → 92 ; fresh 4/4·8 → 92 (no baseline cell)
-	const current = buildAggregate([mk('imp', 4, 0, 8), mk('reg', 1, 3, 3), mk('flat', 4, 0, 8), mk('fresh', 4, 0, 8)], {});
-	const baseline = {
-		schema: 2,
-		mean_composite: 80,
-		cells: [
-			{ task: 'imp', template: 'demo', composite: 60 }, // 92 - 60 = +32 → 🟢 improved
-			{ task: 'reg', template: 'demo', composite: 90 }, // 27 - 90 = -63 → 🔴 regressed
-			{ task: 'flat', template: 'demo', composite: 90 }, // 92 - 90 = +2 → 🟡 flat (within ±5)
-			// 'fresh' has no baseline cell → 🆕
-		],
-	};
-	const ov = renderOverview(diffAgainstBaseline(current, baseline), {}).join('\n');
-	const de = renderDetailed(diffAgainstBaseline(current, baseline), {}).join('\n');
-	const cellOf = (md, task) => md.split('\n').find((l) => l.includes(`| ${task} |`));
+describe('renderPreword(diff, aggregate, opts) — bulleted run summary', () => {
+	const current = buildAggregate([FULL, PARTIAL, AGENT_FAIL, HARNESS], { sha: 'deadbeef' });
+	const diff = diffAgainstBaseline(current, BASE_FULL);
+	const bullets = renderPreword(diff, current, { builderModel: 'claude-opus-4-8', judgeModel: 'claude-opus-4-8', baselineSha: '6853382abc' });
+	const md = bullets.join('\n');
 
-	it('Overview shows 🟢 improved / 🔴 regressed / 🟡 flat / 🆕 no-base as the trailing column', () => {
-		assert.match(cellOf(ov, 'imp'), /🟢 \|$/);
-		assert.match(cellOf(ov, 'reg'), /🔴 \|$/);
-		assert.match(cellOf(ov, 'flat'), /🟡 \|$/);
-		assert.match(cellOf(ov, 'fresh'), /🆕 \|$/);
+	it('every line is a markdown bullet', () => {
+		assert.ok(bullets.length > 0);
+		assert.ok(bullets.every((b) => b.startsWith('- ')));
 	});
-	it('Detailed shows the ball + signed delta (🆕 for a no-base cell)', () => {
-		assert.match(cellOf(de, 'imp'), /🟢 \+32\.0 \| end_turn \|/);
-		assert.match(cellOf(de, 'reg'), /🔴 -63\.0 \| end_turn \|/);
-		assert.match(cellOf(de, 'flat'), /🟡 \+2\.0 \| end_turn \|/);
-		assert.match(cellOf(de, 'fresh'), /🆕 \| end_turn \|/);
+	it('leads with mean composite + Δ vs main + judge mean', () => {
+		assert.match(md, /Mean composite [\d.]+\/100/);
+		assert.match(md, /vs `main`/);
+		assert.match(md, /judge mean [\d.]+\/10/);
 	});
-});
-
-describe('baselineHasMetrics(baseline) — the per-metric gate', () => {
-	it('true only for a schema-2+ baseline (carries the per-metric set)', () => {
-		assert.equal(baselineHasMetrics({ schema: 2, cells: [] }), true);
-		assert.equal(baselineHasMetrics({ schema: 3, cells: [] }), true);
+	it('tallies verdicts (pass/partial/fail/harness_error)', () => {
+		assert.match(md, /\*\*Verdicts:\*\* \d+ pass · \d+ partial · \d+ fail · \d+ harness_error/);
 	});
-	it('false for schema-1, a missing schema, or null (NOT per-metric comparable)', () => {
-		assert.equal(baselineHasMetrics({ schema: 1, cells: [] }), false);
-		assert.equal(baselineHasMetrics({ cells: [] }), false);
-		assert.equal(baselineHasMetrics(null), false);
-		assert.equal(baselineHasMetrics(undefined), false);
+	it('reports totals (cost, tokens in/out, turns)', () => {
+		assert.match(md, /\*\*Totals:\*\*/);
+		assert.match(md, /tokens .*in .*out/);
+		assert.match(md, /turns/);
 	});
-});
-
-// REGRESSION GUARD for the "Judge colored while everything else is 🆕" bug: a schema-1 baseline lacked
-// the per-metric fields, so coloring lit up Judge alone. The fix gates all per-metric coloring on
-// baseline completeness → schema-1 renders every column 🆕 while the composite mean/delta stays comparable.
-describe('schema-1 baseline → every column (Judge included) is 🆕', () => {
-	// Exactly what the OLD buildAggregate wrote: composite/judge_score/test_rate only.
-	const SCHEMA1 = {
-		schema: 1,
-		mean_composite: 80,
-		cells: [{ task: 'auth-notes', template: 'demo', composite: 80, verdict: 'pass', klass: null, judge_score: 7, test_rate: 1 }],
-	};
-	const diff = diffAgainstBaseline(buildAggregate([PASS], {}), SCHEMA1);
-
-	it('is recognized as a baseline, but NOT a per-metric one', () => {
-		assert.equal(diff.hasBaseline, true); // a baseline WAS found in S3…
-		assert.equal(diff.perMetricBaseline, false); // …but it can't diff per-metric
-		assert.equal(diff.rows.every((r) => r.base === null), true); // so no base metrics
+	it('lists biggest gains / drops by composite Δ when a baseline exists', () => {
+		assert.match(md, /\*\*Biggest gains:\*\*/);
+		assert.match(md, /\*\*Biggest drops:\*\*/);
 	});
-	it('keeps the composite mean/delta comparable (the headline still works)', () => {
-		assert.equal(diff.rows.find((r) => r.key === 'auth-notes/demo').delta, 12); // 92 - 80
-		assert.equal(diff.meanDelta, round1Delta(diff.meanCurrent, 80));
+	it('carries the run config (builder + judge model, baseline sha)', () => {
+		assert.match(md, /\*\*Config:\*\*/);
+		assert.match(md, /builder `claude-opus-4-8`/);
+		assert.match(md, /judge `claude-opus-4-8`/);
+		assert.match(md, /baseline `6853382`/); // truncated to 7 chars
 	});
-	it('Overview: per-METRIC columns render 🆕 (the bug) — but the composite Δ still colors', () => {
-		const row = renderOverview(diff, {}).find((l) => l.includes('auth-notes'));
-		// metric columns 🆕 (schema-1 has no per-metric baseline), Δ vs base 🟢 (composite 92 vs 80 → +12)
-		assert.match(row, /\| auth-notes \| demo \| 🆕 \| 🆕 \| 🆕 \| 🆕\/🆕 \| 🆕 \| 🟢 \|/);
-		// The composite Δ is the ONLY colored cell — composite persists in schema 1, so its delta is comparable.
-		const metricsOnly = row.replace(/ 🟢 \|$/, ' |');
-		assert.doesNotMatch(metricsOnly, /🟢|🟡|🔴/); // no PER-METRIC cell colors against a schema-1 baseline
+	it('with no baseline: no gains/drops bullets, says "no `main` baseline yet"', () => {
+		const noBase = renderPreword(diffAgainstBaseline(current, null), current, {});
+		const nmd = noBase.join('\n');
+		assert.match(nmd, /no `main` baseline yet/);
+		assert.doesNotMatch(nmd, /Biggest gains/);
 	});
-	it('Detailed: per-metric columns are 🆕 + numbers — only the composite Δ colors', () => {
-		const row = renderDetailed(diff, {}).find((l) => l.includes('auth-notes'));
-		assert.match(row, /🟢 \+12\.0/); // composite 92 vs 80 → Δ +12 → 🟢 (comparable even for schema-1)
-		const metricsOnly = row.replace(/🟢 \+12\.0 \|/, '|');
-		assert.doesNotMatch(metricsOnly, /🟢|🟡|🔴/); // no PER-METRIC cell colors against a schema-1 baseline
-		assert.doesNotMatch(row, /->/); // 🆕 cells show the pr value only, no baseline->pr
-		assert.match(row, /🆕 functional_completeness 8/); // judge dims are 🆕, not colored
+	it('an all-failed run (no token data) shows "tokens —" in totals, not "0 in / 0 out"', () => {
+		const failedOnly = buildAggregate([AGENT_FAIL, HARNESS], { sha: 'deadfeed' });
+		const fmd = renderPreword(diffAgainstBaseline(failedOnly, null), failedOnly, {}).join('\n');
+		assert.match(fmd, /tokens —/);
+		assert.doesNotMatch(fmd, /0 in \/ 0 out/);
+	});
+	it('a dead_server cell is tallied under `fail` and counted among the scored cells', () => {
+		const withDead = buildAggregate([FULL, DEAD], { sha: 'deadd00d' });
+		const dmd = renderPreword(diffAgainstBaseline(withDead, null), withDead, {}).join('\n');
+		// FULL passes, DEAD (crashed dev-server) fails → tallied under fail, both counted as scored.
+		assert.match(dmd, /\*\*Verdicts:\*\* 1 pass · 0 partial · 1 fail · 0 harness_error/);
+		assert.match(dmd, /across 2 scored cell\(s\)/);
 	});
 });
