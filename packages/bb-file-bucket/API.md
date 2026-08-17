@@ -76,10 +76,12 @@ export const FileBucketErrors: {
 
 // @public (undocumented)
 export interface FileBucketOptions {
+    accessLogging?: boolean;
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
+    logRetentionDays?: number;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }

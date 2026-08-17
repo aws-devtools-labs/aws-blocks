@@ -20,6 +20,9 @@ const httpMethodMap: Record<string, s3.HttpMethods> = {
 	HEAD: s3.HttpMethods.HEAD,
 };
 
+/** Default retention for S3 server access logs when `accessLogging` is enabled. */
+const DEFAULT_ACCESS_LOG_RETENTION_DAYS = 90;
+
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	private bucket: s3.IBucket;
 
@@ -51,6 +54,26 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 		const destroy = options?.removalPolicy === 'destroy' || (isSandbox && options?.removalPolicy === undefined);
 
+		// Optional S3 server access logging. When enabled, provision a dedicated,
+		// private log bucket that follows the same teardown rules as the file
+		// bucket (so `cdk destroy` behaves consistently). The log bucket is
+		// locked down (public access blocked, SSE, TLS-only) and expires logs
+		// after `logRetentionDays` to bound storage cost.
+		const accessLogBucket = options?.accessLogging
+			? new s3.Bucket(this, 'accessLogs', {
+					blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+					encryption: s3.BucketEncryption.S3_MANAGED,
+					enforceSSL: true,
+					removalPolicy: destroy ? RemovalPolicy.DESTROY : undefined,
+					autoDeleteObjects: destroy,
+					lifecycleRules: [{
+						id: 'ExpireAccessLogs',
+						enabled: true,
+						expiration: Duration.days(options?.logRetentionDays ?? DEFAULT_ACCESS_LOG_RETENTION_DAYS),
+					}],
+				})
+			: undefined;
+
 		// Bucket name is derived from the scope chain. Validate against S3's
 		// naming rules at synth so an invalid name fails here rather than at
 		// `cdk deploy` (where CloudFormation rejects it with a cryptic error).
@@ -60,6 +83,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			bucketName: this.fullId,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 			encryption: s3.BucketEncryption.S3_MANAGED,
+			// Deny non-TLS requests. All SDK and presigned-URL traffic is already
+			// HTTPS, so this is safe to always enable and closes the in-transit
+			// encryption gap flagged by security review.
+			enforceSSL: true,
 			versioned: options?.versioned ?? false,
 			removalPolicy: destroy
 				? RemovalPolicy.DESTROY
@@ -67,6 +94,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 					? RemovalPolicy.RETAIN
 					: undefined,
 			autoDeleteObjects: destroy,
+			...(accessLogBucket
+				? { serverAccessLogsBucket: accessLogBucket, serverAccessLogsPrefix: 'access-logs/' }
+				: {}),
 			cors: options?.corsRules?.map((rule: CorsRule) => ({
 				allowedOrigins: rule.allowedOrigins,
 				allowedMethods: rule.allowedMethods.map(m => httpMethodMap[m]),
