@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { buildCheckpointEnvelope, writeEnvelopeAtomic } from './partial-envelope.mjs';
+import { buildCheckpointEnvelope, buildTraceArtifact, writeEnvelopeAtomic } from './partial-envelope.mjs';
 import { CHECKPOINT_STOP_REASON, cellCost, classifyCell, isScoredCell } from './scoring.mjs';
 
 describe('buildCheckpointEnvelope(state) — the non-terminal running checkpoint', () => {
@@ -93,5 +93,32 @@ describe('writeEnvelopeAtomic(path, envelope) — survives an abrupt kill, then 
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('buildTraceArtifact(spanTraces, messages) — a trace on EVERY exit path (fixes #1/#2)', () => {
+	// The bug: trace.json was written ONLY when invoke() RETURNED, so a non-returning invoke (a
+	// MaxTokensError or a wall-clock/internal-deadline kill) left the cell with NO trace → an
+	// unanalyzable silent 0. The per-turn MessageAddedEvent accumulator captures messages incrementally,
+	// so even with zero span traces the tool-result-bearing messages are preserved on disk.
+	it('preserves accumulated messages even when span traces are absent (the error / non-return path)', () => {
+		const messages = [
+			{ role: 'assistant', content: [{ toolUse: { toolUseId: 't1', name: 'bash', input: {} } }] },
+			{ role: 'user', content: [{ toolResult: { toolUseId: 't1', status: 'error', content: [{ text: 'boom' }] } }] },
+		];
+		const artifact = buildTraceArtifact(undefined, messages);
+		assert.deepEqual(artifact.traces, []); // invoke never returned ⇒ no span traces …
+		assert.deepEqual(artifact.messages, messages); // … but the toolResult-bearing messages survive
+	});
+
+	it('passes both span traces and messages through on the success path', () => {
+		const spanTraces = [{ name: 'invoke', children: [] }];
+		const messages = [{ role: 'assistant', content: [{ text: 'done' }] }];
+		assert.deepEqual(buildTraceArtifact(spanTraces, messages), { traces: spanTraces, messages });
+	});
+
+	it('is defensive: non-array inputs collapse to empty arrays (never throws, always serializable)', () => {
+		assert.deepEqual(buildTraceArtifact(null, null), { traces: [], messages: [] });
+		assert.deepEqual(buildTraceArtifact(undefined, undefined), { traces: [], messages: [] });
 	});
 });
