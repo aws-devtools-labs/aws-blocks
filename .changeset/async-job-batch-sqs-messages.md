@@ -1,7 +1,7 @@
 ---
-"@aws-blocks/bb-async-job": minor
+"@aws-blocks/bb-async-job": patch
 "@aws-blocks/bb-agent": patch
-"@aws-blocks/blocks": minor
+"@aws-blocks/blocks": patch
 ---
 
 feat(bb-async-job): batch SQS messages by default, with a configurable batching window
@@ -23,11 +23,12 @@ and partial batch responses redeliver only failed records, so `maxRetries` still
 means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
 meaning at any batch size.
 
-This is a `minor` bump, not a patch: every consumer that never set `batchSize`
-inherits batched invocations and up to 5s of added delivery latency without
-opting in, so it should not arrive through a patch-range update. The umbrella
-`@aws-blocks/blocks` gets the same bump because it re-exports `AsyncJob` and
-`AsyncJobOptions`.
+This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
+this repo's signal for a breaking change; this change is not breaking — the new
+default is a behavior change with an opt-out (`batchSize: 1` /
+`maxBatchingWindowSeconds: 0`), and both options are new and optional. The
+umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
+`AsyncJob` and `AsyncJobOptions`.
 
 The main queue's visibility timeout is now `900 + maxBatchingWindowSeconds`
 seconds instead of a flat `900`. A message becomes invisible when the poller
