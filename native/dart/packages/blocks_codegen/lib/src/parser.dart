@@ -6,6 +6,10 @@ import 'model.dart';
 class OpenRpcParser {
   const OpenRpcParser();
 
+  /// Parses [jsonString] as an OpenRPC document.
+  ///
+  /// Throws a [FormatException] if the JSON is malformed or the `info` or
+  /// `methods` sections are missing or the wrong shape.
   RpcModel parse(String jsonString) {
     final dynamic decoded;
     try {

@@ -30,7 +30,6 @@ import {
 	type FunctionUrl,
 	type IVersion,
 	Function as LambdaFunction,
-	Runtime,
 } from 'aws-cdk-lib/aws-lambda';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
@@ -59,6 +58,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
+import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct } from './storage_construct.js';
@@ -605,7 +605,7 @@ export class HostingConstruct extends Construct {
 				});
 
 				const revalidationFn = new LambdaFunction(this, 'RevalidationFunction', {
-					runtime: Runtime.NODEJS_20_X,
+					runtime: DEFAULT_NODE_RUNTIME,
 					handler: manifest.cache.revalidationFunction.handler,
 					code: Code.fromAsset(manifest.cache.revalidationFunction.bundle),
 					timeout: Duration.seconds(30),
@@ -699,7 +699,7 @@ export class HostingConstruct extends Construct {
 				// handler: it reads its bundled `dynamodb-cache.json` and writes the
 				// build's tag→path rows into CACHE_DYNAMO_TABLE on create/update.
 				const initFn = new LambdaFunction(this, 'IsrTagTableSeedFn', {
-					runtime: Runtime.NODEJS_20_X,
+					runtime: DEFAULT_NODE_RUNTIME,
 					handler: manifest.cache.initFunction.handler,
 					code: Code.fromAsset(manifest.cache.initFunction.bundle),
 					timeout: Duration.minutes(5),
