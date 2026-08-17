@@ -206,6 +206,14 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * Inject the store LOCATOR (not the value) for a runtime managed marker and grant
  * the compute role read+decrypt scoped to that one parameter/secret. Store, env
  * prefix, namespace, and cache TTL are all derived from the marker's kind.
+ *
+ * **Trust boundary (stage fallback).** When a `stage` is configured the runtime
+ * tries `<prefix>/<stage>/<key>` first and falls back to the shared
+ * `<prefix>/<key>`. The IAM grant here is STATIC, so the compute role gets
+ * standing read on BOTH locators — not just the one a given request resolves. A
+ * stage's compute can therefore always read the shared value (that is what makes
+ * the fallback work), so treat the shared entry as readable by every stage that
+ * shares this prefix and put stage-private values under the stage locator only.
  */
 export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, cfg: StoreConfig = {}): void {
 	const { key, kind } = marker;

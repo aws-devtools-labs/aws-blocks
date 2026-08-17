@@ -55,7 +55,98 @@ import { nextjsAdapter, nuxtAdapter, astroAdapter, spaAdapter } from '@aws-block
 
 // Sub-path: typed errors
 import { HostingError } from '@aws-blocks/hosting/error';
+
+// Sub-path: secrets & config (CDK-free — safe to import in SSR/runtime code)
+import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting/secret';
 ```
+
+## Secrets & config
+
+Keep sensitive and environment-specific values out of source. You declare a value
+by **which function you call** — that choice picks the store, and the framework
+owns everything else (the CLI write, the IAM grant, the runtime read):
+
+| Declare (infra) | Store | Read (runtime) |
+| --- | --- | --- |
+| `secret('KEY')` | AWS **Secrets Manager** (sensitive) | `getSecret('KEY')` |
+| `config('KEY')` | AWS **SSM Parameter Store** (non-sensitive, free tier) | `getConfig('KEY')` |
+
+### Declare — in your hosting infra
+
+```ts
+import { HostingConstruct } from '@aws-blocks/hosting';
+import { secret, config } from '@aws-blocks/hosting/secret';
+
+new HostingConstruct(stack, 'Web', {
+  // …framework, root, api…
+  environment: {
+    STRIPE_KEY: secret('STRIPE_KEY'), // → Secrets Manager
+    FEATURE_FLAGS: config('FEATURE_FLAGS'), // → SSM Parameter Store
+  },
+  // Optional per-kind namespace / cache config:
+  secretStore: { prefix: '/myapp/secrets', cacheTtlSeconds: 0 },
+  configStore: { prefix: '/myapp/config', cacheTtlSeconds: 30 },
+});
+```
+
+The marker is inert (`{ key, kind }`) and safe to commit — only the store
+*locator* is injected (never the value), and the compute role is granted
+least-privilege read on that one resource (`secretsmanager:GetSecretValue` /
+`ssm:GetParameter`, scoped to the exact ARN) plus `kms:Decrypt`.
+
+Markers in `environment` are wired for **runtime** resolution (above). Resolving
+a marker to a literal at **synth time** — e.g. for `domain.domainName`, which
+must be a literal before CloudFront/ACM are built — needs an async wrapper that
+does the SDK read during construction; that path is provided by the Blocks
+`Hosting` block (`await Hosting.create(...)`), not this leaf construct, whose
+`domain.domainName` is a plain `string | string[]`.
+
+**Bring your own:** `environment` also accepts an existing CDK `ISecret` /
+`IParameter` handle — the construct grants read via the handle and injects its
+locator, so `getSecret` / `getConfig` resolve it identically (managed
+*provisions*, BYO *references*).
+
+### Read — in your SSR / API / runtime code
+
+```ts
+// Import from the CDK-free subpath so no CDK is pulled into the runtime bundle:
+import { getSecret, getConfig } from '@aws-blocks/hosting/secret';
+
+const key = await getSecret('STRIPE_KEY'); // Secrets Manager
+const flags = await getConfig('FEATURE_FLAGS'); // SSM
+```
+
+Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
+the value in a `.env` file. On a deployed function it fetches + decrypts from its
+store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
+redeploy).
+
+### Set the values (out of band, never in git)
+
+Standalone hosting apps get two bundled CLIs:
+
+```bash
+# Secrets Manager
+npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1
+npx hosting-secret list --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
+
+# SSM Parameter Store
+npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
+```
+
+`set` is **create-or-update**: the first call creates the entry, and running it
+again overwrites the value in place (no error, no prompt) — that is how you
+rotate a value. `set` never puts the value in `argv` / shell history — it reads a
+**hidden prompt** or `--value-stdin` (`cat key.txt | npx hosting-secret set KEY
+--value-stdin`). `list` prints names only, never values.
+
+> **Two footguns to know.** (1) `--region` (or `AWS_REGION`) must match the region
+> the app deploys to, or the deploy will report the value as "not set". (2) The
+> default prefixes (`/hosting/secrets`, `/hosting/config`) are account-global —
+> if more than one app deploys to the same account, give each its own
+> `secretStore.prefix` / `configStore.prefix` and pass the matching CLI
+> `--prefix`, or their same-named values collide.
 
 ## Architecture
 

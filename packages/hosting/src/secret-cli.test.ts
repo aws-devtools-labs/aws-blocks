@@ -51,6 +51,24 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 		);
 	});
 
+	void it('rejects --region without a value', async () => {
+		await assert.rejects(
+			runValueCli(['set', 'K', 'v', '--region'], { kind: 'secret' }),
+			/--region.*requires a value/,
+		);
+	});
+
+	void it('strips --region (and --region=) from positionals (reaches the prompt)', async () => {
+		await assert.rejects(
+			runValueCli(['set', 'ONLY_KEY', '--region', 'us-east-1'], { kind: 'config' }),
+			/stdin is not a TTY/,
+		);
+		await assert.rejects(
+			runValueCli(['set', 'ONLY_KEY', '--region=eu-west-1'], { kind: 'config' }),
+			/stdin is not a TTY/,
+		);
+	});
+
 	void it('rejects an unknown subcommand', async () => {
 		await assert.rejects(runValueCli(['frobnicate'], { kind: 'secret' }), /Unknown subcommand/);
 	});

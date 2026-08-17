@@ -14,6 +14,11 @@
  * `ps`, `/proc`, shell history). Prefer `--value-stdin` (pipe it) or the
  * interactive hidden prompt when no value is on the command line.
  *
+ * **Region.** Writes go to the SDK's default region unless `--region <name>` is
+ * passed. This matters because the value must be written in the SAME region the
+ * app deploys to — resolve them there or the deploy sees "not set". Pass
+ * `--region` (or set `AWS_REGION`) to pin it explicitly.
+ *
  * @module
  */
 
@@ -29,6 +34,8 @@ export interface ValueCliOptions {
 	prefix?: string;
 	/** Optional environment segment (`<prefix>/<stage>/<key>`). */
 	stage?: string;
+	/** AWS region to write/read in. Defaults to the SDK's resolved region (`AWS_REGION`, profile, …). */
+	region?: string;
 	/** Command label shown in usage text (e.g. `'blocks secret'`, `'hosting-config'`). */
 	label?: string;
 }
@@ -47,19 +54,20 @@ export async function setValue(
 	kind: ValueKind,
 	key: string,
 	value: string,
-	opts: { prefix?: string; stage?: string } = {},
+	opts: { prefix?: string; stage?: string; region?: string } = {},
 ): Promise<void> {
 	assertValidKey(key);
 	if (value === undefined || value === null) throw new Error(`No value provided for '${key}'.`);
 	const store = storeForKind(kind);
 	const prefix = opts.prefix ?? defaultPrefixForKind(kind);
 	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
+	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand } = await import(
 			'@aws-sdk/client-secrets-manager'
 		);
-		const client = new SecretsManagerClient({});
+		const client = new SecretsManagerClient(clientConfig);
 		try {
 			await client.send(new CreateSecretCommand({ Name: name, SecretString: value }));
 		} catch (error: unknown) {
@@ -71,22 +79,26 @@ export async function setValue(
 		}
 	} else {
 		const { SSMClient, PutParameterCommand } = await import('@aws-sdk/client-ssm');
-		const client = new SSMClient({});
+		const client = new SSMClient(clientConfig);
 		await client.send(new PutParameterCommand({ Name: name, Value: value, Type: 'SecureString', Overwrite: true }));
 	}
 	console.log(`${kind === 'secret' ? '🔐' : '⚙️ '} ${kind} '${key}' set (${name}).`);
 }
 
 /** List keys of `kind` under the prefix. Values are never returned. */
-export async function listValues(kind: ValueKind, opts: { prefix?: string; stage?: string } = {}): Promise<string[]> {
+export async function listValues(
+	kind: ValueKind,
+	opts: { prefix?: string; stage?: string; region?: string } = {},
+): Promise<string[]> {
 	const store = storeForKind(kind);
 	const base = opts.prefix ?? defaultPrefixForKind(kind);
 	const scoped = opts.stage ? `${base}/${opts.stage}` : base;
+	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
 		const smPrefix = scoped.replace(/^\//, '');
 		const { SecretsManagerClient, ListSecretsCommand } = await import('@aws-sdk/client-secrets-manager');
-		const client = new SecretsManagerClient({});
+		const client = new SecretsManagerClient(clientConfig);
 		const keys: string[] = [];
 		let nextToken: string | undefined;
 		do {
@@ -105,7 +117,7 @@ export async function listValues(kind: ValueKind, opts: { prefix?: string; stage
 	}
 
 	const { SSMClient, GetParametersByPathCommand } = await import('@aws-sdk/client-ssm');
-	const client = new SSMClient({});
+	const client = new SSMClient(clientConfig);
 	const keys: string[] = [];
 	let nextToken: string | undefined;
 	do {
@@ -127,16 +139,17 @@ export async function listValues(kind: ValueKind, opts: { prefix?: string; stage
 export async function removeValue(
 	kind: ValueKind,
 	key: string,
-	opts: { prefix?: string; stage?: string } = {},
+	opts: { prefix?: string; stage?: string; region?: string } = {},
 ): Promise<boolean> {
 	assertValidKey(key);
 	const store: SecretStore = storeForKind(kind);
 	const prefix = opts.prefix ?? defaultPrefixForKind(kind);
 	const name = secretStoreLocator(key, { prefix, store, stage: opts.stage });
+	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
 		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
-		const client = new SecretsManagerClient({});
+		const client = new SecretsManagerClient(clientConfig);
 		try {
 			await client.send(new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }));
 			console.log(`🗑️  ${kind} '${key}' removed.`);
@@ -151,7 +164,7 @@ export async function removeValue(
 	}
 
 	const { SSMClient, DeleteParameterCommand } = await import('@aws-sdk/client-ssm');
-	const client = new SSMClient({});
+	const client = new SSMClient(clientConfig);
 	try {
 		await client.send(new DeleteParameterCommand({ Name: name }));
 		console.log(`🗑️  ${kind} '${key}' removed.`);
@@ -171,7 +184,7 @@ export async function removeValue(
  *  - `kind` not fixed → argv is `<secret|config> <subcommand> [...args]`.
  */
 export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
-	const { stage, valueStdin, prefix, positional } = extractFlags(argv);
+	const { stage, valueStdin, prefix, region, positional } = extractFlags(argv);
 
 	let kind = opts.kind;
 	let rest = positional;
@@ -186,6 +199,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 	const label = opts.label ?? kind;
 	const effPrefix = prefix ?? opts.prefix;
 	const effStage = stage ?? opts.stage;
+	const effRegion = region ?? opts.region;
 	const [subcommand, ...args] = rest;
 
 	switch (subcommand) {
@@ -193,7 +207,7 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			const [key, ...valueParts] = args;
 			if (!key)
 				throw new Error(
-					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]`,
+					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
 				);
 			let value: string;
 			if (valueStdin) {
@@ -205,11 +219,11 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `);
 			}
 			if (value.length === 0) throw new Error(`No value provided for '${key}'.`);
-			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage });
+			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage, region: effRegion });
 			break;
 		}
 		case 'list': {
-			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage });
+			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage, region: effRegion });
 			const scope = effStage ? ` (stage '${effStage}')` : '';
 			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${label} set <KEY> <value>`);
 			else {
@@ -221,8 +235,8 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		case 'remove':
 		case 'rm': {
 			const [key] = args;
-			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--stage <name>]`);
-			await removeValue(kind, key, { prefix: effPrefix, stage: effStage });
+			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--stage <name>] [--region <name>]`);
+			await removeValue(kind, key, { prefix: effPrefix, stage: effStage, region: effRegion });
 			break;
 		}
 		default:
@@ -230,11 +244,18 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 	}
 }
 
-function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; prefix?: string; positional: string[] } {
+function extractFlags(argv: string[]): {
+	stage?: string;
+	valueStdin: boolean;
+	prefix?: string;
+	region?: string;
+	positional: string[];
+} {
 	const positional: string[] = [];
 	let stage: string | undefined;
 	let valueStdin = false;
 	let prefix: string | undefined;
+	let region: string | undefined;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--stage') {
@@ -249,11 +270,16 @@ function extractFlags(argv: string[]): { stage?: string; valueStdin: boolean; pr
 			if (prefix === undefined) throw new Error('`--prefix` requires a value, e.g. --prefix /myapp/secrets');
 		} else if (arg.startsWith('--prefix=')) {
 			prefix = arg.slice('--prefix='.length);
+		} else if (arg === '--region') {
+			region = argv[++i];
+			if (region === undefined) throw new Error('`--region` requires a value, e.g. --region us-east-1');
+		} else if (arg.startsWith('--region=')) {
+			region = arg.slice('--region='.length);
 		} else {
 			positional.push(arg);
 		}
 	}
-	return { stage, valueStdin, prefix, positional };
+	return { stage, valueStdin, prefix, region, positional };
 }
 
 async function readStdin(): Promise<string> {
