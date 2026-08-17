@@ -1,5 +1,6 @@
 /// Intermediate representation produced by the parser.
 /// TypeRef is a sealed class representing unresolved type references from the spec.
+library;
 
 class Constraints {
   final String? format;
@@ -13,18 +14,19 @@ class Constraints {
   final num? multipleOf;
   final int? minItems;
   final int? maxItems;
-  const Constraints(
-      {this.format,
-      this.minLength,
-      this.maxLength,
-      this.pattern,
-      this.minimum,
-      this.maximum,
-      this.exclusiveMinimum,
-      this.exclusiveMaximum,
-      this.multipleOf,
-      this.minItems,
-      this.maxItems});
+  const Constraints({
+    this.format,
+    this.minLength,
+    this.maxLength,
+    this.pattern,
+    this.minimum,
+    this.maximum,
+    this.exclusiveMinimum,
+    this.exclusiveMaximum,
+    this.multipleOf,
+    this.minItems,
+    this.maxItems,
+  });
   bool get isEmpty =>
       format == null &&
       minLength == null &&
@@ -53,10 +55,11 @@ class InlineObjectRef extends TypeRef {
   final Map<String, TypeRef> properties;
   final Set<String> required;
   final TypeRef? additionalProperties;
-  const InlineObjectRef(
-      {required this.properties,
-      required this.required,
-      this.additionalProperties});
+  const InlineObjectRef({
+    required this.properties,
+    required this.required,
+    this.additionalProperties,
+  });
 }
 
 class ArrayRef extends TypeRef {
@@ -129,8 +132,11 @@ class RpcParam {
   final String name;
   final bool isRequired;
   final TypeRef schema;
-  const RpcParam(
-      {required this.name, required this.isRequired, required this.schema});
+  const RpcParam({
+    required this.name,
+    required this.isRequired,
+    required this.schema,
+  });
 }
 
 /// An RPC method from the spec.

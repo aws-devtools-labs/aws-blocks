@@ -238,6 +238,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 			userPool: this.userPool,
 			generateSecret: false,
+			// Return a uniform error for "user doesn't exist" and "wrong
+			// password" so sign-in / forgot-password responses can't be used to
+			// enumerate which usernames are registered. Without this, Cognito
+			// leaks a distinct UserNotFoundException, which is an account-
+			// enumeration oracle. Amazon's recommended posture is ENABLED.
+			preventUserExistenceErrors: true,
 			// SDK + session-cookie auth only; the hosted UI is never used.
 			// Off by default CDK would enable the implicit grant and a
 			// placeholder example.com callback — unused attack surface.
@@ -277,8 +283,11 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		new AppSetting(this, 'session-secret', { secret: true });
 
 		// 5. Session store (KVStore). Propagate `removalPolicy` so retain-mode
-		// customers don't lose live sessions on stack delete.
-		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy });
+		// customers don't lose live sessions on stack delete. TTL is enabled so
+		// session records — which hold live Cognito refresh tokens — expire with
+		// the session instead of accumulating forever; the runtime stamps each
+		// write with `now + sessionTtlSeconds`.
+		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
 
 		// 6. Env vars + IAM
 		const fn = this.handler as lambda.Function;

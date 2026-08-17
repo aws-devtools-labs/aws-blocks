@@ -170,6 +170,11 @@ export { SessionStore, type SessionRecord } from './sessions.js';
  * Overridable via `AuthCognitoOptions.sessionTtlSeconds` for apps that want
  * shorter cookies (regulated apps where stepping away from a workstation
  * should force re-auth even if tokens are still valid).
+ *
+ * The same value bounds retention of the server-side record: each write
+ * stamps the session item with a DynamoDB TTL of `now + sessionTtlSeconds`,
+ * so a session abandoned mid-flight (cookie dropped, browser wiped) is
+ * reaped instead of storing its Cognito refresh token indefinitely.
  */
 const DEFAULT_SESSION_TTL_SECONDS = 400 * 86400;
 
@@ -651,7 +656,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// Defer CognitoJwtVerifier.create until we actually verify a token —
 		// the factory validates userPoolId at construction time and blows up
 		// if it's empty (as happens during client code generation).
-		this.sessions = new SessionStore(this, 'sessions');
+		this.sessions = new SessionStore(this, 'sessions', this.sessionTtlSeconds);
 		// Nested scope `session-secret` — matches the CDK layer's AppSetting
 		// so both sides derive the same SSM parameter path.
 		this.sessionSecretSetting = new AppSetting(this, 'session-secret', { secret: true });
@@ -1539,8 +1544,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		const record = await this.sessions.lookupSession(id);
 		if (!record) {
 			// Cookie points at a session the server has forgotten (manual
-			// deletion, TTL cleanup, signOut from elsewhere). Clear the
-			// cookie so the browser stops replaying a dead session ID.
+			// deletion, expired past `sessionTtlSeconds`, signOut from
+			// elsewhere). Clear the cookie so the browser stops replaying a
+			// dead session ID.
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}

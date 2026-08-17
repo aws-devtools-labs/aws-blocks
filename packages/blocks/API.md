@@ -28,6 +28,9 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AsyncJobContext } from '@aws-blocks/bb-async-job';
 import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 import { AsyncJobOptions } from '@aws-blocks/bb-async-job';
+import { AsyncJobState } from '@aws-blocks/bb-async-job';
+import { AsyncJobStatus } from '@aws-blocks/bb-async-job';
+import { AsyncJobTransition } from '@aws-blocks/bb-async-job';
 import { AuthAction } from '@aws-blocks/auth-common';
 import { AuthActionInput } from '@aws-blocks/auth-common';
 import { AuthBasic } from '@aws-blocks/bb-auth-basic';
@@ -108,6 +111,7 @@ import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
+import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
@@ -136,6 +140,7 @@ import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
+import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
@@ -176,6 +181,7 @@ import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
+import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
 
 export { AdminAction }
@@ -225,6 +231,12 @@ export { AsyncJobContext }
 export { AsyncJobErrors }
 
 export { AsyncJobOptions }
+
+export { AsyncJobState }
+
+export { AsyncJobStatus }
+
+export { AsyncJobTransition }
 
 export { AuthAction }
 
@@ -475,6 +487,8 @@ export { KnowledgeBaseErrors }
 
 export { KnowledgeBaseOptions }
 
+export { KVPutOptions }
+
 export { KVStore }
 
 export { KVStoreErrors }
@@ -530,6 +544,8 @@ export { OllamaModels }
 export { PasswordPolicy }
 
 export { PutUrlOptions }
+
+export { ReadValidationMode }
 
 export { Realtime }
 
@@ -610,6 +626,8 @@ export { TransactionOptions }
 export { UpdateAttributeOutcome }
 
 export { UserAttribute }
+
+export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
 
