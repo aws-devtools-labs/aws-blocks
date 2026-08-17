@@ -5,6 +5,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
+import { createChat } from './index.chat.js';
+import type { ChatTransport, ChunkStream } from './transport.js';
+import type { AgentStreamChunk } from './types.js';
 import { CannedProvider } from './providers/canned.js';
 import { checkModelHealth } from './model-factory.js';
 import { z } from 'zod';
@@ -1122,5 +1125,102 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	test('deployed Agent constructs on the aws-runtime path', () => {
 		const agent = new DeployedAgent(new Scope('test-s3-agent'), 'r', { systemPrompt: 'test', model: { deployed: { provider: 'canned' } } });
 		assert.ok(agent);
+	});
+});
+
+// ── createChat (client API) ─────────────────────────────────────────────────
+
+describe('createChat', () => {
+	// A fake transport that replays a scripted chunk sequence — exercises the
+	// client state machine without any Realtime/network dependency.
+	function fakeTransport(script: AgentStreamChunk[]): ChatTransport {
+		return {
+			subscribe(): ChunkStream {
+				let idx = 0;
+				return {
+					established: Promise.resolve(),
+					unsubscribe() {},
+					async *[Symbol.asyncIterator]() {
+						while (idx < script.length) yield script[idx++];
+					},
+				};
+			},
+			async run(turn) {
+				return { channelId: turn.channelId };
+			},
+		};
+	}
+
+	test('sendMessage streams text into the assistant message and clears loading on done', async () => {
+		const loadingStates: boolean[] = [];
+		const chat = createChat({
+			transport: fakeTransport([
+				{ type: 'text-delta', text: 'Hel' },
+				{ type: 'text-delta', text: 'lo' },
+				{ type: 'done' },
+			]),
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onLoadingChange: l => loadingStates.push(l),
+		});
+
+		await chat.sendMessage('hi');
+		// Let the background consumer drain the fake stream.
+		await new Promise(r => setTimeout(r, 10));
+
+		const msgs = chat.getMessages();
+		assert.strictEqual(msgs[0].role, 'user');
+		assert.strictEqual(msgs[0].content, 'hi');
+		assert.strictEqual(msgs[1].role, 'assistant');
+		assert.strictEqual(msgs[1].content, 'Hello', 'text-delta chunks should accumulate into the assistant message');
+		assert.strictEqual(chat.isLoading(), false, 'done should clear loading');
+		assert.deepStrictEqual(loadingStates, [true, false]);
+		assert.strictEqual(chat.getConversationId(), 'conv-1', 'first turn lazily creates the conversation');
+	});
+
+	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {
+		const interruptsSeen: Array<{ id: string }[]> = [];
+		let call = 0;
+		const chat = createChat({
+			// First turn interrupts; the resume turn completes.
+			transport: {
+				subscribe(): ChunkStream {
+					const script: AgentStreamChunk[] = call++ === 0
+						? [{ type: 'interrupt', interrupts: [{ id: 'i1', name: 'approve:x' }] }]
+						: [{ type: 'text-delta', text: 'done!' }, { type: 'done' }];
+					let idx = 0;
+					return {
+						established: Promise.resolve(),
+						unsubscribe() {},
+						async *[Symbol.asyncIterator]() {
+							while (idx < script.length) yield script[idx++];
+						},
+					};
+				},
+				async run(turn) {
+					return { channelId: turn.channelId };
+				},
+			},
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-2' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onInterrupt: ints => interruptsSeen.push(ints),
+		});
+
+		await chat.sendMessage('do risky thing');
+		await new Promise(r => setTimeout(r, 10));
+		assert.strictEqual(interruptsSeen.length, 1, 'interrupt chunk should fire onInterrupt');
+		assert.strictEqual(interruptsSeen[0][0].id, 'i1');
+		assert.strictEqual(chat.isLoading(), false, 'interrupt clears loading while awaiting the decision');
+
+		await chat.sendMessage({ interruptResponses: [{ interruptId: 'i1', approved: true }] });
+		await new Promise(r => setTimeout(r, 10));
+		const msgs = chat.getMessages();
+		assert.ok(msgs.some(m => m.role === 'approval' && m.content === 'Approved'), 'approval decision recorded');
+		assert.ok(msgs.some(m => m.role === 'assistant' && m.content === 'done!'), 'resume streams the completion');
+		assert.strictEqual(chat.isLoading(), false);
 	});
 });
