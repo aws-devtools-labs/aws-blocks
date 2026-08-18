@@ -89,17 +89,13 @@ export interface KnowledgeBaseOptions {
 	description?: string;
 	/**
 	 * CDK removal behavior for the data bucket (only for BB-created
-	 * buckets; imported S3 URI sources are unaffected). When omitted,
-	 * CDK's default applies (RETAIN — the bucket and its documents are
-	 * preserved on `cdk destroy`).
+	 * buckets; imported S3 URI sources are unaffected). When omitted, the
+	 * stack-wide `defaults` apply (`production` → RETAIN so the bucket and its
+	 * documents are preserved on `cdk destroy`; `sandbox` → DESTROY).
 	 *
-	 * Pass `'destroy'` for sandbox / ephemeral stacks where the data
-	 * bucket should be dropped on teardown. This also enables
-	 * `autoDeleteObjects` so CloudFormation can empty the bucket before
-	 * deletion. Pass `'retain'` to set the policy explicitly.
-	 *
-	 * Templates that apply `RemovalPolicies.of(stack).destroy()` at the
-	 * top level override this setting.
+	 * Pass `'destroy'` to drop the data bucket on teardown for this one
+	 * knowledge base — this also enables `autoDeleteObjects` so CloudFormation
+	 * can empty the bucket before deletion. Pass `'retain'` to keep it.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
