@@ -207,13 +207,14 @@ export interface HostingProps {
 	 * ```
 	 *
 	 * A plain string is injected verbatim (visible in the CloudFormation
-	 * template — safe for non-sensitive config). A `secret('K')` value injects
-	 * only the SSM parameter NAME and grants the Lambda decrypt access; fetch the
-	 * value at runtime with `await getSecret('K')`. Using
-	 * `secret('K', { resolveAt: 'deploy' })` instead resolves the plaintext at
-	 * deploy time into the env var (requires `Hosting.create()`).
+	 * template — safe for non-sensitive literals). A `secret('K')` value (AWS
+	 * Secrets Manager) or `config('K')` value (SSM Parameter Store) injects only
+	 * the store LOCATOR — never the value — and grants the compute role scoped
+	 * read + decrypt; fetch it at runtime with `await getSecret('K')` /
+	 * `await getConfig('K')`. A bring-your-own CDK `ISecret` / `IParameter` handle
+	 * is accepted too and resolves identically.
 	 *
-	 * The env-var name must equal the secret key: `STRIPE_KEY: secret('STRIPE_KEY')`.
+	 * The env-var name must equal the key: `STRIPE_KEY: secret('STRIPE_KEY')`.
 	 */
 	environment?: Record<string, EnvValue>;
 
@@ -425,13 +426,14 @@ export class Hosting extends Construct {
 	public readonly monitoringTopic?: cdk.aws_sns.ITopic;
 
 	/**
-	 * Async constructor. Required when any `secret()` resolves at **synth time** —
-	 * i.e. a `domain.domainName` secret or a `secret(..., { resolveAt: 'deploy' })`
-	 * env value — because those values are fetched from SSM during synthesis.
-	 * Returns a fully-constructed {@link Hosting}.
+	 * Async constructor. Required when a `secret()` / `config()` value resolves at
+	 * **synth time** — i.e. a `domain.domainName` marker — because that value is
+	 * fetched from its store (Secrets Manager / SSM) during synthesis. Returns a
+	 * fully-constructed {@link Hosting}.
 	 *
-	 * For runtime-only secrets (the default) and plain config, `new Hosting(...)`
-	 * works directly; `create()` is also safe to use uniformly.
+	 * For runtime `environment` markers (read via `getSecret`/`getConfig`) and
+	 * plain literals, `new Hosting(...)` works directly; `create()` is also safe
+	 * to use uniformly.
 	 *
 	 * @example
 	 * ```ts
