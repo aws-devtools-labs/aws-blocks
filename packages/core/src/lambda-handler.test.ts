@@ -29,6 +29,38 @@ async function invoke(backend: any, event: any): Promise<any> {
   return handler(event) as any;
 }
 
+// ── init self-heal (retry on failed initialization) ─────────────────────────
+
+describe('createLambdaHandler — init self-heal', () => {
+  it('retries initialize() on a later request instead of caching a failed init', async () => {
+    let initCalls = 0;
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async echo(msg: string) {
+          return { msg };
+        },
+      }),
+    };
+    // Fail the first initialization (e.g. config not readable yet in the brief post-deploy
+    // window), then succeed. The SAME handler instance must recover — a cached rejected
+    // initPromise would poison the container and fail every subsequent request.
+    const backendFactory = async () => {
+      initCalls++;
+      if (initCalls === 1) throw new Error('transient init failure');
+      return backend;
+    };
+    const handler = createLambdaHandler(backendFactory);
+
+    // 1st request: init fails, so the handler rejects.
+    await assert.rejects(() => handler(makeEvent()) as any, /transient init failure/);
+
+    // 2nd request: init is retried and succeeds → 200 (not a re-thrown cached rejection).
+    const res = (await handler(makeEvent())) as any;
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(initCalls, 2, 'initialize() must be retried on the next request, not cached');
+  });
+});
+
 // ── RPC body tests ──────────────────────────────────────────────────────────
 
 describe('createLambdaHandler — RPC body handling', () => {
