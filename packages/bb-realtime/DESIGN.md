@@ -91,6 +91,24 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 
 All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. No separate Lambdas are created.
 
+#### Stage defaults (throttling + access logging)
+
+The WebSocket stage adopts the stack-wide `BlocksDefaults`:
+
+- **Throttling** — `defaults.throttling` is applied as the stage's default route
+  settings (`{ rateLimit, burstLimit }`, 200/400 by default). **On a WebSocket
+  stage the throttle unit is messages per second across the connection** (not
+  HTTP requests): API Gateway meters `$default`-route messages, not connects.
+- **Access logging** — when `defaults.accessLogging` is true (production
+  preset), the stage writes structured JSON access logs to a dedicated
+  CloudWatch log group (retention = `defaults.logRetention`,
+  `RemovalPolicy.DESTROY`). This requires the account-level API Gateway
+  CloudWatch Logs role, provisioned once per stack via
+  `ensureApiGatewayAccount()` (shared with the core REST API stage through a
+  `Symbol.for`-keyed lookup, so only one `AWS::ApiGateway::Account` is emitted).
+  The stage is given an explicit dependency on that account so a clean-account
+  first deploy applies the account setting before the stage is created.
+
 ### Per Instance
 
 | Resource | Type | Purpose |
