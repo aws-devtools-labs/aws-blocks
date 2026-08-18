@@ -14,12 +14,13 @@ function synthWithRemovalPolicy(removalPolicy?: cdk.RemovalPolicy): Template {
 }
 
 // These tests verify the contract that index.cdk.ts relies on:
-// - sandboxMode=true → passes removalPolicy=DESTROY → cluster is deletable
-// - no sandboxMode  → passes undefined → cluster is retained and protected
+// - removalPolicy=DESTROY → cluster is deletable (DeletionProtection=false)
+// - removalPolicy=RETAIN  → cluster is retained and protected
 //
-// The context→removalPolicy mapping in index.cdk.ts is verified via cdk synth
-// (see canary-publish-plan.md) because Database requires BlocksStack which can't
-// be unit-tested without bundling a full backend.
+// index.cdk.ts resolves the policy as `options.removalPolicy ?? this.defaults.removalPolicy`
+// (the stack-wide sandbox/production posture) and passes it to materialize();
+// that resolution is verified via cdk synth (see canary-publish-plan.md) because
+// Database requires BlocksStack which can't be unit-tested without a full backend.
 
 test('CDK: removalPolicy=DESTROY sets DeletionPolicy=Delete and DeletionProtection=false', () => {
   const template = synthWithRemovalPolicy(cdk.RemovalPolicy.DESTROY);

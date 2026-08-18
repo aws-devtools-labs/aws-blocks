@@ -15,7 +15,7 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
 import { DistributedTable } from './index.cdk.js';
 
@@ -28,6 +28,7 @@ const userSchema = z.object({
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly id: string;
+	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
@@ -40,17 +41,10 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'TestStack');
-	const parent = new Scope('app');
-	return { stack, parent };
-}
-
-/** Same as setup() but simulates a sandbox deploy (`--context sandboxMode=true`). */
-function setupSandbox(): { stack: StubBlocksStack; parent: Scope } {
-	const app = new cdk.App({ context: { sandboxMode: 'true' } });
-	const stack = new StubBlocksStack(app, 'TestStack');
+	stack.defaults = defaults;
 	const parent = new Scope('app');
 	return { stack, parent };
 }
@@ -181,43 +175,10 @@ test('CDK: prod DistributedTable table is RETAINed on stack delete by default', 
 	});
 });
 
-// ── Sandbox stays cheap & fully deletable ───────────────────────────────────
-
-test('CDK: sandbox DistributedTable disables DeletionProtection (so sandbox:destroy works)', () => {
-	const { stack, parent } = setupSandbox();
-	new DistributedTable(parent, 'users', {
-		schema: userSchema,
-		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-	});
-	const template = Template.fromStack(stack);
-	template.hasResourceProperties('AWS::DynamoDB::Table', {
-		DeletionProtectionEnabled: false,
-	});
-});
-
-test('CDK: sandbox DistributedTable does not enable PITR (cost)', () => {
-	const { stack, parent } = setupSandbox();
-	new DistributedTable(parent, 'users', {
-		schema: userSchema,
-		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-	});
-	const template = Template.fromStack(stack);
-	template.hasResourceProperties('AWS::DynamoDB::Table', {
-		PointInTimeRecoverySpecification: Match.absent(),
-	});
-});
-
-test('CDK: sandbox DistributedTable table is DESTROYed on stack delete', () => {
-	const { stack, parent } = setupSandbox();
-	new DistributedTable(parent, 'users', {
-		schema: userSchema,
-		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-	});
-	const template = Template.fromStack(stack);
-	template.hasResource('AWS::DynamoDB::Table', {
-		DeletionPolicy: 'Delete',
-	});
-});
+// (Sandbox-default behavior — DESTROY, deletion protection off, PITR off — is
+// covered by the "adopts sandbox defaults" / "PITR follows the stack defaults"
+// tests above, which drive it through the stack `defaults` rather than the
+// `sandboxMode` context.)
 
 // ── Customer overrides win over the secure defaults ─────────────────────────
 
@@ -237,8 +198,8 @@ test('CDK: customer can opt OUT of PITR + protection in prod', () => {
 	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
 });
 
-test('CDK: customer can opt INTO durable/protected tables even in sandbox', () => {
-	const { stack, parent } = setupSandbox();
+test('CDK: customer can opt INTO durable/protected tables even under the sandbox preset', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
@@ -333,6 +294,69 @@ test('CDK: fromExisting ignores durability props (customer owns the table)', () 
 	// provision a CMK — proving the durability options are ignored.
 	template.resourceCountIs('AWS::DynamoDB::Table', 0);
 	template.resourceCountIs('AWS::KMS::Key', 0);
+});
+
+// ── Durability follows the stack `defaults` when no per-block override (#302) ──
+
+test('CDK: table adopts sandbox defaults (DESTROY, deletion protection off)', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: false });
+});
+
+test('CDK: table adopts production defaults (RETAIN, deletion protection on)', () => {
+	const { stack, parent } = setup(BlocksPresets.production);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
+});
+
+test('CDK: PITR follows the stack defaults — off under the sandbox preset', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: Match.absent(),
+	});
+});
+
+test('CDK: options.pointInTimeRecovery overrides the stack defaults (on under sandbox)', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecovery: true,
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+	});
+});
+
+test('CDK: a per-block protection option overrides the stack defaults', () => {
+	// Sandbox preset would give DESTROY + no protection; `protection: 'locked'`
+	// must win, proving the per-block override sits on top of the #302 defaults.
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		protection: 'locked',
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -67,6 +67,7 @@
     "@types/cross-spawn": "^6.0.6",
     "@types/http-proxy": "^1.17.16",
     "@types/node": "^20.0.0",
+    "esbuild": "^0.27.0",
     "typescript": "^5.3.0",
     "unctx": "^2.0.0"
   },

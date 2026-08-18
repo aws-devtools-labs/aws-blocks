@@ -289,11 +289,10 @@ const table = new DistributedTable(scope, 'items', {
       sortKey: 'sk'
     }
   },
-  // E2E stacks must tear down cleanly. The prod default is 'locked'
-  // (deletion protection on), which would wedge `cdk destroy` in
-  // DELETE_FAILED since the stack-level mixin can't relax DynamoDB
-  // deletion protection. 'disposable' keeps the table fully deletable.
-  protection: 'disposable',
+  // No per-block `protection`: durability follows the stack-wide `defaults`,
+  // which this E2E app sets to `BlocksPresets.sandbox` (DESTROY + no deletion
+  // protection) so `cdk destroy` tears everything down cleanly. See
+  // aws-blocks/index.cdk.ts.
 });
 
 // DistributedTable with TTL
@@ -308,18 +307,21 @@ const ttlTable = new DistributedTable(scope, 'ttl-items', {
   schema: ttlSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   ttl: 'expiresAt',
-  protection: 'disposable', // keep E2E teardown clean (see 'items' above)
+  // Durability follows the stack `defaults` (sandbox preset) — see 'items' above.
 });
 
 // Secure-defaults coverage on a REAL deploy (review comment #6): a table that
-// carries the durability props (PITR with a narrowed window + SSE) alongside a
-// GSI, so the GSI custom resource's UpdateTable and the table's durability
-// configuration provision together on AWS — not just in a synth template.
-// 'retained' (RETAIN, deletion protection OFF) proves PITR+SSE+GSI coexist
-// while staying deletable: the stack-level destroy aspect can delete a
-// retained-but-unlocked table, so E2E teardown doesn't wedge. (The 'locked'
-// deletion-protection case is covered by the CDK synth tests — it's a plain
-// boolean prop with no update-path interaction to exercise on real AWS.)
+// carries PITR (with a narrowed window) + SSE alongside a GSI, so the GSI
+// custom resource's UpdateTable and the table's durability configuration
+// provision together on AWS — not just in a synth template.
+//
+// Durability (removal policy + deletion protection) follows the stack `defaults`
+// (this E2E app's sandbox preset → DESTROY + unprotected), so the table tears
+// down cleanly — no orphaned `test-app-secure-items` blocking the next run.
+// Only PITR is overridden per-block, since that's the durability prop we're
+// exercising on the deploy path. (The 'locked'/deletion-protection case is
+// covered by the CDK synth tests — a deletion-protected table would by design
+// block `cdk destroy`, so it can't live in an auto-torn-down E2E stack.)
 const secureTable = new DistributedTable(scope, 'secure-items', {
   schema: itemSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
@@ -328,7 +330,6 @@ const secureTable = new DistributedTable(scope, 'secure-items', {
   },
   pointInTimeRecovery: true,
   pointInTimeRecoveryDays: 7,
-  protection: 'retained',
 });
 
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)

@@ -100,28 +100,27 @@ export class DistributedTable<T = any> extends Scope {
 			isNumericField(fieldName) ? AttributeType.NUMBER : AttributeType.STRING;
 
 		// Secure-by-default durability & encryption.
-		// Production tables enable PITR (continuous backups), deletion
-		// protection, and are retained on stack delete so a stray `cdk destroy`
-		// can't wipe customer data unrecoverably. Sandboxes default the opposite
-		// way so `sandbox:destroy` stays a one-command teardown and throwaway
-		// stacks don't accrue backup cost. An explicit option always wins.
-		//
-		// NOTE: deletion protection is gated here (not left to the stack-level
-		// SandboxDisableDeletionProtection mixin) because that mixin duck-types
-		// on a `deletionProtection` instance property, which the DynamoDB L2
-		// Table does not expose — so it can't relax it after the fact.
+		// The posture — removal policy, deletion protection, PITR — comes from the
+		// stack-wide `defaults` (BlocksPresets, #302): production retains + protects
+		// + backs up; sandbox is disposable so `sandbox:destroy` stays a one-command
+		// teardown and throwaway stacks don't accrue backup cost. Blocks read
+		// `this.defaults` rather than the `sandboxMode` context (and rather than the
+		// stack-level SandboxDisableDeletionProtection mixin, which can't reach the
+		// DynamoDB L2 `deletionProtection` prop — the reason that construct-level
+		// mechanism exists). A per-block `protection`/`pointInTimeRecovery`/
+		// `encryption` option always wins.
 		//
 		// `protection` is a single knob (disposable | retained | locked) spanning
 		// removal policy + deletion protection, so the contradictory
 		// "protect + destroy" state can't be expressed. `options` is typed `any`
 		// here, so guard against an unrecognized string (typo) rather than
-		// silently falling through to the environment default.
+		// silently falling through to the stack default.
 		const PROTECTION_VALUES = ['disposable', 'retained', 'locked'] as const;
 		if (config.protection !== undefined && !PROTECTION_VALUES.includes(config.protection)) {
 			Annotations.of(this).addWarningV2(
 				'@aws-blocks/bb-distributed-table:UnknownProtection',
 				`Unrecognized protection '${String(config.protection)}' (expected 'disposable', 'retained', ` +
-					`or 'locked') — falling back to the ${isSandbox ? 'sandbox' : 'production'} default.`,
+					`or 'locked') — falling back to the stack defaults.`,
 			);
 		}
 		// `encryption` accepts two string literals or an ExternalKmsKeyRef
@@ -143,7 +142,10 @@ export class DistributedTable<T = any> extends Scope {
 			);
 		}
 
-		const pitrEnabled = config.pointInTimeRecovery ?? !isSandbox;
+		// PITR posture comes from the stack-wide `defaults` (#302 follow-up added
+		// `defaults.pointInTimeRecovery`) — production on, sandbox off. A per-block
+		// `pointInTimeRecovery` still wins. Read independently, never derived.
+		const pitrEnabled = config.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
 		// PITR recovery window (days). DynamoDB accepts 1–35; undefined → 35.
 		// Warn (and drop back to the default) on an out-of-range value rather
 		// than letting CloudFormation reject the whole deploy at apply time.
@@ -156,16 +158,22 @@ export class DistributedTable<T = any> extends Scope {
 			);
 			pitrDays = undefined;
 		}
-		// Resolve the single `protection` knob into the two CDK properties.
-		// Default: 'locked' in prod, 'disposable' in sandbox. An explicit value
-		// wins. 'retained' orphans-but-doesn't-lock; 'locked' does both.
-		const protection = PROTECTION_VALUES.includes(config.protection)
-			? config.protection
-			: (isSandbox ? 'disposable' : 'locked');
-		const deletionProtection = protection === 'locked';
-		const removalPolicy = protection === 'disposable'
-			? RemovalPolicy.DESTROY
-			: RemovalPolicy.RETAIN;
+		// Resolve durability into the two CDK properties. The `protection` option
+		// is the richer per-block override (#282): when set it fully determines
+		// removal policy + deletion protection, and — being one knob — the
+		// contradictory "protect + destroy" state can't be expressed. When
+		// omitted, fall back to the stack-wide `defaults` (BlocksPresets, #302):
+		// production → RETAIN + protected, sandbox → DESTROY + unprotected. Read
+		// `deletionProtection` independently from `defaults`, never derived.
+		let removalPolicy: RemovalPolicy;
+		let deletionProtection: boolean;
+		if (PROTECTION_VALUES.includes(config.protection)) {
+			deletionProtection = config.protection === 'locked';
+			removalPolicy = config.protection === 'disposable' ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN;
+		} else {
+			removalPolicy = this.defaults.removalPolicy;
+			deletionProtection = this.defaults.deletionProtection;
+		}
 		// `fromKmsKey(arn)` → encrypt with an existing CMK (shareable across
 		// tables). `'customer-managed'` → CDK provisions a fresh dedicated CMK.
 		// Otherwise the AWS-managed `aws/dynamodb` key.
@@ -202,6 +210,9 @@ export class DistributedTable<T = any> extends Scope {
 					...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
 				}
 				: undefined,
+			// Resolved above from `protection` (per-block override) or the
+			// stack-wide `defaults` (#302) — supersedes main's placeholder that
+			// read `this.defaults` directly.
 			deletionProtection,
 			removalPolicy,
 			encryption,

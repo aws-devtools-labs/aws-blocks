@@ -14,12 +14,13 @@ void main() {
     return;
   }
 
-  final fixtures = fixturesDir
-      .listSync()
-      .whereType<Directory>()
-      .where((d) => File('${d.path}/spec.json').existsSync())
-      .toList()
-    ..sort((a, b) => a.path.compareTo(b.path));
+  final fixtures =
+      fixturesDir
+          .listSync()
+          .whereType<Directory>()
+          .where((d) => File('${d.path}/spec.json').existsSync())
+          .toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
 
   for (final fixture in fixtures) {
     final name = fixture.uri.pathSegments.where((s) => s.isNotEmpty).last;

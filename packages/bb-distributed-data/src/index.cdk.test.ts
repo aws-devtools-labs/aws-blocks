@@ -14,7 +14,7 @@ import { Template, Match } from 'aws-cdk-lib/assertions';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, BlocksPresets } from '@aws-blocks/core/cdk';
 import { DistributedDatabase } from './index.cdk.js';
 
 const MIGRATIONS_DIR = '.bb-data/__test_cdk_migrations__';
@@ -60,18 +60,35 @@ test('CDK: cluster has DeletionProtectionEnabled=true by default', () => {
   });
 });
 
-test('CDK: removalPolicy=destroy disables deletion protection', () => {
-  const template = synth((stack) => {
-    new DistributedDatabase(scope(stack), 'mydsql', { removalPolicy: 'destroy' });
+test('CDK: per-block removalPolicy is independent of deletion protection', () => {
+  // Deletion protection is read from `defaults` independently of removalPolicy
+  // (consistent across all adopting blocks). Here: sandbox defaults (protection
+  // off) with a per-block `removalPolicy: 'retain'` override → the cluster is
+  // RETAINed on stack delete but not deletion-protected.
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'IndepStack');
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
   });
-  template.hasResource('AWS::DSQL::Cluster', {
-    Properties: { DeletionProtectionEnabled: false },
-    DeletionPolicy: 'Delete',
-  });
+  (stack as any).handler = handler;
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql', { removalPolicy: 'retain' });
+    const template = Template.fromStack(stack);
+    template.hasResource('AWS::DSQL::Cluster', {
+      Properties: { DeletionProtectionEnabled: false },
+      DeletionPolicy: 'Retain',
+    });
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
 });
 
-test('CDK: sandboxMode=true disables deletion protection', () => {
-  const app = new cdk.App({ context: { sandboxMode: 'true' } });
+test('CDK: sandbox defaults disable deletion protection', () => {
+  const app = new cdk.App();
   const stack = new cdk.Stack(app, 'SandboxStack');
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
@@ -79,6 +96,9 @@ test('CDK: sandboxMode=true disables deletion protection', () => {
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
   });
   (stack as any).handler = handler;
+  // The cluster's removal/protection follows the stack-wide defaults (resolved
+  // via the globalThis fallback here), not the sandboxMode context.
+  (stack as any).defaults = BlocksPresets.sandbox;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     new DistributedDatabase(scope(stack), 'mydsql');

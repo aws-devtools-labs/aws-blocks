@@ -129,6 +129,7 @@
 --disable sortImports
 --disable wrapPropertyBodies
 --disable wrapFunctionBodies
+--disable wrapIfStatementBodies
 --disable simplifyGenericConstraints
 --disable redundantThrows
 --disable noForceUnwrapInTests
