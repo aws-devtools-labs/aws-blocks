@@ -99,19 +99,24 @@ export interface KVStoreOptions<T = string> {
 	 */
 	logger?: ChildLogger;
 	/**
-	 * CDK removal behavior for the underlying DynamoDB table. When omitted,
-	 * CDK's default applies (RETAIN — data is preserved on `cdk destroy`).
-	 * Pass `'destroy'` for sandbox / ephemeral stacks where the table and
-	 * its contents should be dropped on teardown. Pass `'retain'` to set
-	 * the policy explicitly (identical to omitting it today, but robust
-	 * against stack-layer policy overrides).
-	 *
-	 * Templates that apply `RemovalPolicies.of(stack).destroy()` at the
-	 * top level (e.g. under `sandboxMode`) override this setting.
+	 * Removal behavior (via CDK/CloudFormation) for the underlying DynamoDB
+	 * table. When omitted, the stack-wide `defaults` apply (`production` retains
+	 * data on `cdk destroy`, `sandbox` destroys it). Pass `'destroy'` or
+	 * `'retain'` to override for this one store.
 	 *
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Whether to block deletion of the underlying DynamoDB table. Unlike
+	 * `removalPolicy` (which only governs CDK/CloudFormation), deletion
+	 * protection also prevents deletion via the CLI, API, and AWS console.
+	 * When omitted, the stack-wide `defaults` apply (on in `production`, off in
+	 * `sandbox`). Pass `true`/`false` to override for this one store.
+	 *
+	 * Ignored by the mock and browser runtimes (no AWS resource to protect).
+	 */
+	deletionProtection?: boolean;
 	/**
 	 * Enable DynamoDB Time-to-Live on the underlying table so items written with
 	 * `put(key, value, { ttlSeconds })` (or `{ expiresAt }`) are deleted

@@ -31,6 +31,12 @@ const DELETION_PROTECTION_PROPERTIES = ['deletionProtection', 'deletionProtectio
  * `DeleteTable` while deletion protection is enabled, regardless of the
  * CloudFormation `DeletionPolicy`.
  *
+ * @deprecated Prefer the stack-wide `defaults` prop on `BlocksStack`/`BlocksBackend`
+ * (`defaults: BlocksPresets.sandbox` / `.production`, or `sandboxMode ? … : …`).
+ * Amazon-authored Building Blocks now read removal policy + deletion protection
+ * from `defaults`, so this mixin is no longer needed; it is retained only for
+ * backward compatibility.
+ *
  * @example
  * ```ts
  * import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
