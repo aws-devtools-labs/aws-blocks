@@ -45,7 +45,29 @@ export interface DatabaseEngine {
 export const DOLLAR_QUOTE_TAG_RE: RegExp;
 
 // @public
+export function initializePgliteWithRetry<T extends PgliteLike>(initial: T, recreate: () => T | Promise<T>, options?: PgliteInitRetryOptions): Promise<T>;
+
+// @public
+export function isPgliteUnreachableTrap(error: unknown): boolean;
+
+// @public
 export const loadMigrationsFromDir: (dir: string) => Promise<Record<string, string>>;
+
+// @public
+export interface PgliteInitRetryOptions {
+    backoffMs?: number;
+    isRetryable?: (error: unknown) => boolean;
+    maxAttempts?: number;
+    onRetry?: (attempt: number, error: unknown) => void;
+}
+
+// @public
+export interface PgliteLike {
+    // (undocumented)
+    close(): Promise<void>;
+    // (undocumented)
+    query(sql: string, params?: unknown[]): Promise<unknown>;
+}
 
 // @public
 export const runMigrations: (engine: DatabaseEngine, migrations: Record<string, string>) => Promise<string[]>;

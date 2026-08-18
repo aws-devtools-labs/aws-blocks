@@ -53,7 +53,7 @@ const ssrManifest = (staticDir: string, bundleDir: string): DeployManifest => ({
       handler: 'index.handler',
       placement: 'regional',
       streaming: true,
-      runtime: 'nodejs20.x',
+      runtime: 'nodejs24.x',
     },
   },
   staticAssets: { directory: staticDir },
@@ -148,7 +148,7 @@ void describe('HostingConstruct — SSR mode', () => {
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs20.x',
+      Runtime: 'nodejs24.x',
       Handler: 'index.handler',
     });
   });
@@ -190,7 +190,7 @@ void describe('HostingConstruct — SSR mode', () => {
           entrypoint: 'server.js',
           port: 3000,
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -233,7 +233,7 @@ void describe('HostingConstruct — SSR mode', () => {
           bundle: bundleDir,
           handler: 'index.handler',
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -1010,7 +1010,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
         api: {
           type: 'handler',
@@ -1018,7 +1018,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: false,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -2212,7 +2212,7 @@ void describe('HostingConstruct — custom environment variables (M4)', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
