@@ -9,6 +9,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksBackend } from './blocks-backend.js';
+import { BlocksPresets } from './blocks-defaults.js';
 import { Scope } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
@@ -32,11 +33,13 @@ describe('ESM cache-busting (multi-stage)', () => {
     const backend1 = await BlocksBackend.create(stack, 'Stage1', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const backend2 = await BlocksBackend.create(stack, 'Stage2', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const findMarker = (scope: cdk.aws_lambda_nodejs.NodejsFunction | any) =>
@@ -61,6 +64,7 @@ describe('synth shape (drop into existing stack)', () => {
     const backend = await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // Public surface mirrors BlocksStack.
@@ -82,10 +86,12 @@ describe('synth shape (drop into existing stack)', () => {
     await BlocksBackend.create(parent, 'BackendA', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
     await BlocksBackend.create(parent, 'BackendB', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(parent);
@@ -101,6 +107,7 @@ describe('shared execution role', () => {
     const backend = await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     assert.ok(backend.executionRole, 'BlocksBackend should expose .executionRole');
@@ -113,6 +120,7 @@ describe('shared execution role', () => {
     await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(parent);
@@ -149,6 +157,7 @@ describe('shared execution role', () => {
     const backend = await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // Build nested Scopes under the backend (outer → inner), the same shape a
@@ -194,6 +203,7 @@ describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load 
       BlocksBackend.create(stack, 'blocks', {
         backendHandlerPath: importMetaHandlerPath,
         backendCDKPath: sideEffectBackendPath,
+        defaults: BlocksPresets.production,
       }),
     );
   });
@@ -207,6 +217,7 @@ describe('factory function support', () => {
     const backend = await BlocksBackend.create(stack, 'FactoryStage', {
       backendHandlerPath: handlerPath,
       backendCDKPath: factoryBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = backend.node.tryFindChild('FactoryMarker');
@@ -222,6 +233,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(stack, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     assert.strictEqual(backend.fullId, 'TopLevelStack-blocks');
@@ -246,6 +258,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     assert.ok(
@@ -266,6 +279,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: fullIdConstructBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // The construct ID is `${scope.fullId}Marker` → `ParentStack-blocks-blocks-dbMarker`.
@@ -293,6 +307,7 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
     const backend = await BlocksBackend.create(nested, 'blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(nested);
@@ -313,5 +328,45 @@ describe('fullId is token-free (construct IDs / env-var keys)', () => {
         `BLOCKS_STACK_NAME must be token-free, got: ${value}`,
       );
     }
+  });
+});
+
+describe('infrastructure defaults (backend-anchored)', () => {
+  test('each backend exposes its own defaults', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'TwoBackendsStack');
+
+    const a = await BlocksBackend.create(stack, 'A', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+    const b = await BlocksBackend.create(stack, 'B', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    // Two backends in one stack must NOT clobber each other — defaults are
+    // anchored on the backend, not the shared stack.
+    assert.strictEqual(a.defaults, BlocksPresets.production);
+    assert.strictEqual(b.defaults, BlocksPresets.sandbox);
+  });
+
+  test('a nested block resolves its owning backend defaults via the tree-walk', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ResolveDefaultsStack');
+
+    const backend = await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    // A Scope under the backend resolves scope.defaults by walking up to it.
+    const outer = new Scope('outer');
+    const inner = new Scope('inner', { parent: outer });
+    assert.strictEqual(inner.defaults, backend.defaults);
+    assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
   });
 });

@@ -35,6 +35,12 @@ export interface AuroraInfraConfig {
   migrationsPath?: string;
   /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
   removalPolicy?: cdk.RemovalPolicy;
+  /**
+   * Whether to enable RDS deletion protection. Resolved independently of
+   * `removalPolicy` so the stack-wide `defaults.deletionProtection` is honored.
+   * @default derived from removalPolicy (protected unless DESTROY)
+   */
+  deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
 }
@@ -146,7 +152,9 @@ export function materialize(
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
-    deletionProtection: removalPolicy !== cdk.RemovalPolicy.DESTROY,
+    // Read independently from defaults (falling back to the removalPolicy-derived
+    // value for direct materialize() callers that don't pass it).
+    deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
     removalPolicy,
   });
 
