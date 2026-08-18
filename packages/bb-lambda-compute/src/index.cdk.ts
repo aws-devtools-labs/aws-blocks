@@ -58,12 +58,13 @@ export class LambdaCompute extends Compute {
 			},
 		});
 
-		// In sandbox mode, allow localhost origins so the local dev frontend can
-		// reach the deployed Lambda API via CORS.
-		const isSandbox =
-			this.node.tryGetContext('sandboxMode') === 'true' || this.node.tryGetContext('sandboxMode') === true;
-		if (isSandbox) {
-			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
+		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
+		// preset allows localhost so a local dev frontend can reach the deployed
+		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
+		// CORS_ALLOWED_ORIGINS.
+		const allowedOrigins = this.defaults.allowedOrigins;
+		if (allowedOrigins.length > 0) {
+			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
 		}
 
 		this.apiGateway = new apigateway.RestApi(this, 'API', {

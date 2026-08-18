@@ -14,10 +14,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { Scope } from '@aws-blocks/core/cdk';
+import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { LambdaCompute } from './index.cdk.js';
 
@@ -50,10 +50,12 @@ class StubBlocksStack extends cdk.Stack {
 	public readonly id: string;
 	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly backendHandlerPath: string;
-	constructor(scope: Construct, id: string) {
+	public readonly defaults: BlocksDefaults;
+	constructor(scope: Construct, id: string, defaults: BlocksDefaults = BlocksPresets.production) {
 		super(scope, id);
 		this.id = id;
 		this.backendHandlerPath = handlerPath;
+		this.defaults = defaults;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
 		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
 			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
@@ -61,9 +63,9 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(stackId: string): { stack: StubBlocksStack; parent: Scope } {
+function setup(stackId: string, defaults?: BlocksDefaults): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, stackId);
+	const stack = new StubBlocksStack(app, stackId, defaults);
 	const parent = new Scope('app');
 	return { stack, parent };
 }
@@ -157,5 +159,35 @@ describe('LambdaCompute', () => {
 		(globalThis as any).CURRENT_BLOCKS_STACK = bareStack;
 
 		assert.throws(() => new LambdaCompute(new Scope('app'), 'orphan'));
+	});
+});
+
+// The compute reads its allowed CORS origins from the stack's `defaults`
+// (item 3), replacing the old `sandboxMode` context read.
+describe('LambdaCompute CORS origins from defaults', () => {
+	test('sandbox posture sets CORS_ALLOWED_ORIGINS to the allowed origins (comma-joined)', () => {
+		const { stack, parent } = setup('LambdaComputeCorsSandbox', BlocksPresets.sandbox);
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Environment: {
+				Variables: Match.objectLike({
+					CORS_ALLOWED_ORIGINS: '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$',
+				}),
+			},
+		});
+	});
+
+	test('production posture sets no CORS_ALLOWED_ORIGINS (no allowed origins)', () => {
+		const { stack, parent } = setup('LambdaComputeCorsProd', BlocksPresets.production);
+
+		new LambdaCompute(parent, 'extra');
+
+		const fns = Template.fromStack(stack).findResources('AWS::Lambda::Function');
+		assert.ok(
+			!JSON.stringify(fns).includes('CORS_ALLOWED_ORIGINS'),
+			'no function should carry CORS_ALLOWED_ORIGINS under the production posture',
+		);
 	});
 });
