@@ -22,6 +22,7 @@ const sideEffectBackendPath = join(__dirname, '__fixtures__', 'side-effect-backe
 const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 const fullIdConstructBackendPath = join(__dirname, '__fixtures__', 'fullid-construct-backend.js');
 const EXECUTION_ROLE_MARKER_ACTION = 'blocks-test:MarkerAction';
+const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handler.js');
 
 describe('ESM cache-busting (multi-stage)', () => {
   test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -175,6 +176,26 @@ describe('shared execution role', () => {
         Statement: Match.arrayWith([Match.objectLike({ Action: EXECUTION_ROLE_MARKER_ACTION })]),
       },
     });
+  });
+});
+
+describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load crash)', () => {
+  test('a handler that uses import.meta.url bundles successfully instead of throwing at load', async () => {
+    // The handler is bundled to CJS, where `import.meta` is empty. Left unshimmed,
+    // `fileURLToPath(import.meta.url)` compiles to `fileURLToPath(undefined)` and
+    // throws at Lambda load (esbuild only warns, so the broken bundle would deploy).
+    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents, so bundling
+    // (which runs synchronously during construction) succeeds. The runtime behaviour
+    // of the emitted shim is verified directly in bundling.test.ts.
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ImportMetaStack');
+
+    await assert.doesNotReject(() =>
+      BlocksBackend.create(stack, 'blocks', {
+        backendHandlerPath: importMetaHandlerPath,
+        backendCDKPath: sideEffectBackendPath,
+      }),
+    );
   });
 });
 

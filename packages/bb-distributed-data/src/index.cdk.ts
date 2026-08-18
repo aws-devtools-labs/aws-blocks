@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -79,7 +79,7 @@ export class DistributedDatabase extends Scope {
         APP_ROLE_ARN: appRoleArn,
         DB_ROLE_NAME: dbRole,
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
@@ -87,7 +87,7 @@ export class DistributedDatabase extends Scope {
             ? [`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`]
             : [],
         },
-      },
+      }),
     });
 
     // Migration Lambda needs Admin access (DDL + role management)
