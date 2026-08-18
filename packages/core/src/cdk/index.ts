@@ -22,8 +22,10 @@ export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
   type BlocksDefaults,
+  type BlocksThrottling,
   BlocksPresets,
 } from './blocks-defaults.js';
 export { synthGuard } from './synth-guard.js';
@@ -38,6 +40,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: cdk.aws_iam.IRole;
+  /** The shared handler Lambda's CloudWatch log group. `bb-logger` reconfigures its retention. */
+  public readonly handlerLogGroup: cdk.aws_logs.ILogGroup;
   /** Infrastructure defaults for Building Blocks created under this stack. */
   public readonly defaults: BlocksDefaults;
 
@@ -52,6 +56,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;
+    this.handlerLogGroup = infra.handlerLogGroup;
     this.gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
     this.executionRole = infra.executionRole;
@@ -166,6 +171,24 @@ export class Scope extends Construct {
       throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
     }
     return name;
+  }
+
+  /**
+   * The shared handler Lambda's CloudWatch log group. Resolves the same way as
+   * {@link handler}: walk up to the owning BlocksStack/BlocksBackend. `bb-logger`
+   * uses this to reconfigure retention on the single, framework-owned group
+   * rather than creating a second one that would collide on the log-group name.
+   */
+  get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+    let current: Construct = this;
+    while (current.node.scope) {
+        current = current.node.scope as Construct;
+        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+            return current.handlerLogGroup;
+        }
+    }
+    // Fallback to globalThis for backward compatibility
+    return ((globalThis as any).CURRENT_BLOCKS_STACK as { handlerLogGroup: cdk.aws_logs.ILogGroup }).handlerLogGroup;
   }
 
   get fullId(): string {

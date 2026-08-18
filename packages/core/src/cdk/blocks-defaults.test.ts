@@ -10,6 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { RemovalPolicy } from 'aws-cdk-lib';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BlocksPresets } from './blocks-defaults.js';
 
 describe('BlocksPresets', () => {
@@ -23,5 +24,22 @@ describe('BlocksPresets', () => {
 		assert.strictEqual(BlocksPresets.production.removalPolicy, RemovalPolicy.RETAIN);
 		assert.strictEqual(BlocksPresets.production.deletionProtection, true);
 		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
+	});
+
+	test('sandbox keeps logs briefly and skips access logging', () => {
+		assert.strictEqual(BlocksPresets.sandbox.logRetention, RetentionDays.ONE_WEEK);
+		assert.strictEqual(BlocksPresets.sandbox.accessLogging, false);
+	});
+
+	test('production keeps logs a year and enables access logging', () => {
+		assert.strictEqual(BlocksPresets.production.logRetention, RetentionDays.ONE_YEAR);
+		assert.strictEqual(BlocksPresets.production.accessLogging, true);
+	});
+
+	test('both presets carry the 200/400 throttling default, read independently', () => {
+		for (const preset of [BlocksPresets.sandbox, BlocksPresets.production]) {
+			assert.strictEqual(preset.throttling.rateLimit, 200);
+			assert.strictEqual(preset.throttling.burstLimit, 400);
+		}
 	});
 });
