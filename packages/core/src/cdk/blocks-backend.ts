@@ -9,6 +9,7 @@ import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
+import { blocksNodejsBundling } from './bundling.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
@@ -87,10 +88,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
        */
       BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
     },
-    bundling: {
+    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+    // CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing at
+    // Lambda load. See ./bundling.ts.
+    bundling: blocksNodejsBundling({
       minify: true,
       esbuildArgs: { '--conditions': 'aws-runtime' },
-    },
+    }),
   });
 
   // In sandbox mode, allow localhost origins so the local dev frontend can

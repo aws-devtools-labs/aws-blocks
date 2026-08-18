@@ -25,6 +25,7 @@ export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
+	blocksNodejsBundling,
 	BlocksStack,
 	DEFAULT_NODE_RUNTIME,
 	finalizeConfigRegistry,

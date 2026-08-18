@@ -22,13 +22,24 @@
  * `@electric-sql/pglite`.
  */
 
-/** Minimal structural view of a PGlite instance used by the init retry. */
+/**
+ * Minimal structural view of a PGlite instance used by the init retry. Kept
+ * pglite-agnostic so `data-common` need not depend on `@electric-sql/pglite`.
+ *
+ * @internal
+ */
 export interface PgliteLike {
+  /** Run a SQL statement; used only for the `SELECT 1` init probe. */
   query(sql: string, params?: unknown[]): Promise<unknown>;
+  /** Release the instance and its underlying WASM resources. */
   close(): Promise<void>;
 }
 
-/** Tuning options for {@link initializePgliteWithRetry}. */
+/**
+ * Tuning options for {@link initializePgliteWithRetry}.
+ *
+ * @internal
+ */
 export interface PgliteInitRetryOptions {
   /** Maximum init attempts, including the first. Default 3. */
   maxAttempts?: number;
@@ -46,19 +57,44 @@ export interface PgliteInitRetryOptions {
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Matches the specific ways a PGlite WASM `_pg_initdb` abort surfaces:
+ *  - V8/Node:            `RuntimeError: unreachable` (optionally `... executed`)
+ *  - other engines:      `wasm trap: unreachable`
+ *  - Emscripten runtime: `Aborted(<reason>)` — the reason is often non-empty
+ *    under memory pressure (`Aborted(Cannot enlarge memory arrays…)`,
+ *    `Aborted(OOM)`), which is exactly the case this retry exists for, so we
+ *    match the `Aborted(` prefix rather than only the empty `Aborted()` form.
+ *
+ * Deliberately narrower than a bare `/unreachable/i`: the word "unreachable" is
+ * common (helpers like `assertUnreachable`, "unreachable host" messages), so we
+ * require it next to a trap-context token. This keeps a stray "unreachable" in
+ * an unrelated failure's message or stack from being misclassified as retryable.
+ * (Matching the `Aborted(` prefix is safe here because this only ever runs
+ * against the fixed `SELECT 1` init probe, never arbitrary user-query errors.)
+ */
+const PGLITE_INIT_TRAP_RE = /RuntimeError:\s*unreachable\b|wasm trap:\s*unreachable\b|\bAborted\(/i;
+
+/**
  * Return true when an error looks like a PGlite WASM `unreachable` init trap.
  *
- * The trap surfaces with an "unreachable" message (often wrapped as
- * `RuntimeError: unreachable` or an `Aborted()` error), sometimes only visible
- * in the stack or a nested `cause`. This walks the message, stack, and cause
- * chain, guarding against cyclic causes.
+ * The trap surfaces as one of the {@link PGLITE_INIT_TRAP_RE} signatures,
+ * sometimes only visible in the stack or a nested `cause`. This walks the
+ * message, stack, and cause chain, guarding against cyclic causes.
  *
- * Scope: the `/unreachable/i` substring match is intentionally broad and is
- * ONLY valid for the init-probe path — the fixed `SELECT 1` probe inside
- * {@link initializePgliteWithRetry}, where the sole plausible source of
- * "unreachable" is a WASM `_pg_initdb` trap. It must NOT be reused to classify
- * arbitrary user-query errors, whose text could contain "unreachable"
- * incidentally (e.g. a message about an unreachable host).
+ * The real V8/Node trap arrives as a `RuntimeError` whose `.message` is just
+ * `"unreachable"` (the `RuntimeError:` prefix only appears in `.stack`, via
+ * `Error.prototype.toString`). So we also treat a `RuntimeError` named error
+ * whose message contains `unreachable` as a trap — this catches it without
+ * depending on the stack surviving intact, and stays just as narrow because a
+ * plain `Error` (the `assertUnreachable` / "host unreachable" cases) never has
+ * `name === 'RuntimeError'`.
+ *
+ * Scope: this classifier is ONLY valid for the init-probe path — the fixed
+ * `SELECT 1` probe inside {@link initializePgliteWithRetry}, where the sole
+ * plausible source of a trap signature is a WASM `_pg_initdb` abort. It must
+ * NOT be reused to classify arbitrary user-query errors.
+ *
+ * @internal
  */
 export function isPgliteUnreachableTrap(error: unknown): boolean {
   const seen = new Set<unknown>();
@@ -66,12 +102,16 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
   while (current != null && !seen.has(current)) {
     seen.add(current);
     if (current instanceof Error) {
-      if (/unreachable/i.test(current.message) || (current.stack != null && /unreachable/i.test(current.stack))) {
+      if (
+        PGLITE_INIT_TRAP_RE.test(current.message) ||
+        (current.name === 'RuntimeError' && /unreachable/i.test(current.message)) ||
+        (current.stack != null && PGLITE_INIT_TRAP_RE.test(current.stack))
+      ) {
         return true;
       }
       current = (current as { cause?: unknown }).cause;
     } else {
-      return /unreachable/i.test(String(current));
+      return PGLITE_INIT_TRAP_RE.test(String(current));
     }
   }
   return false;
@@ -96,13 +136,20 @@ export function isPgliteUnreachableTrap(error: unknown): boolean {
  * @returns the initialized instance (differs from `initial` if it was recreated)
  * @throws the last error once attempts are exhausted, or immediately for a
  *   non-retryable error
+ *
+ * @internal
  */
 export async function initializePgliteWithRetry<T extends PgliteLike>(
   initial: T,
   recreate: () => T | Promise<T>,
   options: PgliteInitRetryOptions = {},
 ): Promise<T> {
-  const maxAttempts = Math.max(1, options.maxAttempts ?? 3);
+  // `?? 3` only defaults null/undefined, not NaN. Guard against NaN explicitly:
+  // `Math.max(1, NaN)` is `NaN` and `attempt >= NaN` is always false, which would
+  // turn a persistent trap into an unbounded close/recreate loop.
+  const maxAttempts = Number.isFinite(options.maxAttempts)
+    ? Math.max(1, Math.trunc(options.maxAttempts as number))
+    : 3;
   const backoffMs = options.backoffMs ?? 150;
   const isRetryable = options.isRetryable ?? isPgliteUnreachableTrap;
 
@@ -112,26 +159,37 @@ export async function initializePgliteWithRetry<T extends PgliteLike>(
       await instance.query('SELECT 1');
       return instance;
     } catch (error) {
-      if (attempt >= maxAttempts) {
-        // Retries exhausted: a recreated instance is unreachable to the caller,
-        // so close the last trapped instance here to free its WASM memory before
-        // giving up. Best effort, mirroring the between-attempts close below.
-        try {
-          await instance.close();
-        } catch {
-          // A trapped WASM instance may itself fail to close cleanly; ignore.
-        }
-        throw error;
-      }
+      // Classify BEFORE consulting the attempt budget, so cleanup is uniform:
+      // a non-retryable error is always rethrown untouched (we never close an
+      // instance we haven't diagnosed as a dead WASM trap). This also means
+      // maxAttempts === 1 no longer closes on an unrelated, non-trap failure.
       if (!isRetryable(error)) throw error;
-      options.onRetry?.(attempt, error);
+      // Retryable init trap: the WASM instance is aborted and unrecoverable, so
+      // close it (best effort) to free its memory — whether or not we retry.
       try {
         await instance.close();
       } catch {
         // A trapped WASM instance may itself fail to close cleanly; ignore.
       }
+      // Out of attempts: give up after having closed the dead instance above.
+      if (attempt >= maxAttempts) throw error;
+      options.onRetry?.(attempt, error);
       if (backoffMs > 0) await delay(backoffMs * attempt);
-      instance = await recreate();
+      // The factory does real work (mkdirSync, new PGlite(...)), so it can throw
+      // (ENOSPC/EACCES/construction failure). If it does, surface it as a
+      // recreate failure while preserving the original init trap as the cause,
+      // so debugging reflects "PGlite kept trapping" rather than only the
+      // secondary recreate error.
+      try {
+        instance = await recreate();
+      } catch (recreateError) {
+        throw new Error(
+          `Failed to recreate PGlite after an init trap: ${
+            recreateError instanceof Error ? recreateError.message : String(recreateError)
+          }`,
+          { cause: error },
+        );
+      }
     }
   }
 }
