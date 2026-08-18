@@ -15,7 +15,7 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
 import { DistributedTable } from './index.cdk.js';
 
@@ -28,6 +28,7 @@ const userSchema = z.object({
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly id: string;
+	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
@@ -40,9 +41,10 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'TestStack');
+	stack.defaults = defaults;
 	const parent = new Scope('app');
 	return { stack, parent };
 }
@@ -55,6 +57,28 @@ test('CDK: default DistributedTable provisions a DynamoDB table', () => {
 	});
 	const template = Template.fromStack(stack);
 	template.resourceCountIs('AWS::DynamoDB::Table', 1);
+});
+
+test('CDK: table adopts sandbox defaults (DESTROY, deletion protection off)', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Delete' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: false });
+});
+
+test('CDK: table adopts production defaults (RETAIN, deletion protection on)', () => {
+	const { stack, parent } = setup(BlocksPresets.production);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
