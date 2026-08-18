@@ -19,4 +19,6 @@ export const AsyncJobErrors = {
 	Timeout: 'AsyncJobTimeoutException',
 	/** Thrown when `getStatus()` or `waitUntilComplete()` is called on a job created without `trackStatus: true`. */
 	StatusNotTracked: 'StatusNotTrackedException',
+	/** Thrown at synth time when an `AsyncJobOptions` value is outside its supported range. */
+	InvalidOption: 'InvalidOptionException',
 } as const;
