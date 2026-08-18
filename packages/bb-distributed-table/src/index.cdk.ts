@@ -60,7 +60,7 @@ export class DistributedTable<T = any> extends Scope {
 			// never emit a `Table` resource to attach them to). Surface that at
 			// synth so a `protection: 'locked'` on what looks like a fresh
 			// table isn't a silent no-op.
-			const ignoredForExisting = (['pointInTimeRecovery', 'protection', 'encryption'] as const)
+			const ignoredForExisting = (['pointInTimeRecovery', 'pointInTimeRecoveryDays', 'protection', 'encryption'] as const)
 				.filter((key) => config[key] !== undefined);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(

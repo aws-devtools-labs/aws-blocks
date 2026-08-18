@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template, Match } from 'aws-cdk-lib/assertions';
+import { Template, Match, Annotations } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
 import { DistributedTable } from './index.cdk.js';
@@ -406,4 +406,48 @@ test('CDK: calling a runtime data method throws an actionable error (not a crypt
 			`${method}() should throw the actionable synth-time error`,
 		);
 	}
+});
+
+// ── Synth-time warnings actually fire (not just the fallback values) ─────────
+
+test('CDK: an unrecognized protection value warns at synth', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		protection: 'retian', // intentional typo — exercise the synth guard
+	});
+	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized protection'));
+});
+
+test('CDK: an unrecognized encryption value warns at synth', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		encryption: 'kms', // intentional typo — exercise the synth guard
+	});
+	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
+});
+
+test('CDK: an out-of-range pointInTimeRecoveryDays warns at synth', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		pointInTimeRecoveryDays: 60,
+	});
+	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('pointInTimeRecoveryDays must be an integer'));
+});
+
+test('CDK: durability options passed alongside fromExisting warn at synth', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		table: DistributedTable.fromExisting('preexisting-users-table'),
+		protection: 'locked',
+		pointInTimeRecoveryDays: 14,
+	});
+	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('wrapped via fromExisting'));
 });
