@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
+import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { LambdaComputeProps } from './types.js';
 
 export type { LambdaComputeProps } from './types.js';
@@ -34,9 +35,21 @@ export class LambdaCompute extends Compute {
 	readonly apiGateway: apigateway.RestApi;
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
+	/** The handler's CloudWatch log group. `bb-logger` reconfigures its retention. */
+	readonly handlerLogGroup: LogGroup;
 
 	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
 		super(id, { parent: scope });
+
+		// The single CloudWatch log group for the handler. Owning it (a real
+		// LogGroup passed as the function's `logGroup`) makes its retention follow
+		// the stack-wide default instead of AWS's infinite default, and gives
+		// bb-logger one group to reconfigure rather than a second, colliding one.
+		// Torn down with the stack (logs are not durable state).
+		this.handlerLogGroup = new LogGroup(this, 'HandlerLogGroup', {
+			retention: this.defaults.logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		});
 
 		// Entry + BLOCKS_STACK_NAME are derived from the owning stack/backend
 		// (resolved by Compute) — never caller-supplied — so every compute in an
@@ -52,6 +65,7 @@ export class LambdaCompute extends Compute {
 			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
+			logGroup: this.handlerLogGroup,
 			memorySize: 2048,
 			timeout: cdk.Duration.seconds(60 * 15),
 			environment: {
@@ -76,10 +90,49 @@ export class LambdaCompute extends Compute {
 			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
 		}
 
+		// Structured JSON access logging on the stage, when the stack-wide default
+		// enables it. Requires the account-level CloudWatch Logs role (see
+		// ensureApiGatewayAccount) — provisioned once per stack, shared across stages.
+		let accessLogGroup: LogGroup | undefined;
+		let apiGatewayAccount: apigateway.CfnAccount | undefined;
+		if (this.defaults.accessLogging) {
+			apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(this));
+			accessLogGroup = new LogGroup(this, 'ApiAccessLogs', {
+				retention: this.defaults.logRetention,
+				// Access logs are the request audit trail — follow the stack-wide removal
+				// policy (production RETAIN) so they survive a teardown, unlike the
+				// handler's operational stdout log group (always DESTROY).
+				removalPolicy: this.defaults.removalPolicy,
+			});
+		}
+
 		this.apiGateway = new apigateway.RestApi(this, 'API', {
 			restApiName: 'Blocks API',
-			deployOptions: { cachingEnabled: false },
+			// Don't let RestApi auto-create its own account-level CloudWatch role: it
+			// would collide with the one shared account we provision — a stack may
+			// have only one effective account setting. When access logging is on we
+			// point the stage at the shared account; when off, none is needed.
+			cloudWatchRole: false,
+			deployOptions: {
+				cachingEnabled: false,
+				// Cap request rate on the stage from the stack-wide default so a runaway
+				// client can't saturate the backend Lambda. Read independently.
+				throttlingRateLimit: this.defaults.throttling.rateLimit,
+				throttlingBurstLimit: this.defaults.throttling.burstLimit,
+				...(accessLogGroup
+					? {
+							accessLogDestination: new apigateway.LogGroupLogDestination(accessLogGroup),
+							accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields(),
+						}
+					: {}),
+			},
 		});
+
+		// The stage must be created after the account setting is in place, or a
+		// clean-account first deploy fails at CreateStage.
+		if (apiGatewayAccount) {
+			this.apiGateway.deploymentStage.node.addDependency(apiGatewayAccount);
+		}
 
 		const integration = new apigateway.LambdaIntegration(this.fn);
 

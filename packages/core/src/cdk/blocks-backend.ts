@@ -207,6 +207,10 @@ export class BlocksBackend extends Construct {
   get apiUrl(): string {
     return this.requireDefaultCompute().apiUrl;
   }
+  /** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+  get handlerLogGroup(): logs.ILogGroup {
+    return this.requireDefaultCompute().handlerLogGroup;
+  }
 
   private requireDefaultCompute(): LambdaShapedCompute {
     if (!this._defaultCompute) {

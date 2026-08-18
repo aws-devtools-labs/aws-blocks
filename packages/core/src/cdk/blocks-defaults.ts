@@ -2,6 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RemovalPolicy } from 'aws-cdk-lib';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+
+/**
+ * Request-rate limits applied to an API Gateway stage. On a REST API these are
+ * requests/second; on a WebSocket API the unit is messages/second across the
+ * connection. `rateLimit` is the steady-state ceiling and `burstLimit` the
+ * token-bucket size for short spikes.
+ */
+export interface BlocksThrottling {
+	/** Steady-state request (or WebSocket message) rate ceiling, per second. */
+	rateLimit: number;
+	/** Token-bucket burst size for short spikes above `rateLimit`. */
+	burstLimit: number;
+}
 
 /**
  * Default values for every Amazon-authored Building Block created within a
@@ -47,7 +61,40 @@ export interface BlocksDefaults {
 	 * 1–35 days). Backups only have a window when on, so the two are one field.
 	 */
 	pointInTimeRecovery: boolean | { retentionDays: number };
+
+	/**
+	 * How long CloudWatch Logs keeps log events written by Blocks-managed log
+	 * groups (the core handler Lambda, migration/GSI Lambdas, hosting compute,
+	 * `bb-logger`, and API Gateway access logs) before expiring them. Without a
+	 * retention set, AWS keeps log events forever, which grows cost unbounded —
+	 * every Blocks-managed log group reads this default so retention is applied
+	 * consistently.
+	 */
+	logRetention: RetentionDays;
+
+	/**
+	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
+	 * core REST API, the SSR/hosting REST API, and the `bb-realtime` WebSocket
+	 * stage. Protects the backend from runaway clients and caps blast radius.
+	 * See {@link BlocksThrottling}.
+	 */
+	throttling: BlocksThrottling;
+
+	/**
+	 * Whether to emit structured JSON access logs from every Blocks-managed API
+	 * Gateway stage to a dedicated CloudWatch log group (retention follows
+	 * {@link logRetention}). Off by default for disposable sandboxes to avoid the
+	 * extra log group and the account-level CloudWatch Logs role requirement; on
+	 * for production so requests are auditable.
+	 */
+	accessLogging: boolean;
 }
+
+/**
+ * Framework default request-rate limits, shared by both {@link BlocksPresets}.
+ * Read independently per stage — never derived from another field.
+ */
+const DEFAULT_THROTTLING: BlocksThrottling = { rateLimit: 200, burstLimit: 400 };
 
 /**
  * Prepared starting points for {@link BlocksDefaults}. Pick one and override
@@ -64,6 +111,9 @@ export const BlocksPresets = {
 		deletionProtection: false,
 		allowedOrigins: ['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$'],
 		pointInTimeRecovery: false,
+		logRetention: RetentionDays.ONE_WEEK,
+		throttling: DEFAULT_THROTTLING,
+		accessLogging: false,
 	},
 	/** Durable, protected posture for permanent deployments. */
 	production: {
@@ -71,5 +121,8 @@ export const BlocksPresets = {
 		deletionProtection: true,
 		allowedOrigins: [],
 		pointInTimeRecovery: true,
+		logRetention: RetentionDays.ONE_YEAR,
+		throttling: DEFAULT_THROTTLING,
+		accessLogging: true,
 	},
 } satisfies Record<string, BlocksDefaults>;

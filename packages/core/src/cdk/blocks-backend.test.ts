@@ -365,3 +365,118 @@ describe('infrastructure defaults (backend-anchored)', () => {
     assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
   });
 });
+
+describe('handler log group retention (defaults.logRetention)', () => {
+  test('production keeps handler logs for a year (365 days)', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'ProdLogRetentionStack');
+
+    const backend = await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // The framework owns a single log group for the shared handler and the
+    // function points at it (rather than Lambda's infinite-retention auto group).
+    assert.ok(backend.handlerLogGroup, 'BlocksBackend should expose .handlerLogGroup');
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+  });
+
+  test('sandbox keeps handler logs for a week (7 days)', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'SandboxLogRetentionStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+  });
+});
+
+describe('REST API throttling (defaults.throttling)', () => {
+  test('the shared stage carries the 200/400 rate + burst default', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'ThrottleStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // deployOptions throttling lands on the stage's catch-all method setting.
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({
+          HttpMethod: '*',
+          ResourcePath: '/*',
+          ThrottlingRateLimit: 200,
+          ThrottlingBurstLimit: 400,
+        }),
+      ]),
+    });
+  });
+
+  test('a per-stack throttling override wins over the preset', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'ThrottleOverrideStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: { ...BlocksPresets.production, throttling: { rateLimit: 50, burstLimit: 75 } },
+    });
+
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 }),
+      ]),
+    });
+  });
+});
+
+describe('REST API access logging (defaults.accessLogging)', () => {
+  test('production enables JSON access logging + the account CloudWatch role', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'AccessLogProdStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    const template = Template.fromStack(parent);
+    // The account-level CloudWatch role is provisioned exactly once.
+    template.resourceCountIs('AWS::ApiGateway::Account', 1);
+    // The stage writes JSON access logs to a dedicated log group.
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      AccessLogSetting: Match.objectLike({ DestinationArn: Match.anyValue(), Format: Match.anyValue() }),
+    });
+  });
+
+  test('sandbox disables access logging (no stage AccessLogSetting, no account role)', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'AccessLogSandboxStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    const template = Template.fromStack(parent);
+    template.resourceCountIs('AWS::ApiGateway::Account', 0);
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      AccessLogSetting: Match.absent(),
+    });
+  });
+});

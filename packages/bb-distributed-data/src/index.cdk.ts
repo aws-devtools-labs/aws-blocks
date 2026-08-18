@@ -12,6 +12,7 @@ import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -81,6 +82,12 @@ export class DistributedDatabase extends Scope {
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
+      // Own the migration Lambda's log group so its retention follows the
+      // stack-wide default instead of AWS's infinite retention.
+      logGroup: new LogGroup(stack, `${this.fullId}DsqlMigrationLogs`, {
+        retention: this.defaults.logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         DSQL_ENDPOINT: endpoint,
         DSQL_REGION: region,

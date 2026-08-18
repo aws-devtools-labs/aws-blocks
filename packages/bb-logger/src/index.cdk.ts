@@ -1,8 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as logs from 'aws-cdk-lib/aws-logs';
-import { RemovalPolicy } from 'aws-cdk-lib';
+import type { CfnLogGroup } from 'aws-cdk-lib/aws-logs';
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LoggingOptions } from './types.js';
@@ -12,16 +11,18 @@ export { LoggingErrors } from './errors.js';
 export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from './types.js';
 
 /**
- * CDK construct for Logger. Optionally creates a CloudWatch Logs LogGroup
- * with a retention policy when `options.retention` is specified. Sets the
- * `LOG_LEVEL` environment variable on the shared Lambda handler when a
- * `level` is configured.
+ * CDK construct for Logger. Sets the retention on the shared handler Lambda's
+ * CloudWatch log group and the `LOG_LEVEL` environment variable when configured.
  *
- * When `retention` is omitted, no LogGroup is created — Lambda's auto-created
- * log group applies (logs never expire).
+ * The framework owns a single log group for the shared handler (created by the
+ * BlocksStack/BlocksBackend). Logger reconfigures **that** group's retention
+ * rather than creating a second `/aws/lambda/<fn>` group, which would collide on
+ * the log-group name. Retention resolves as `options.retention ??
+ * scope.defaults.logRetention`, so an explicit per-Logger `retention` wins over
+ * the stack-wide default while both still target the one group.
  *
- * When a LogGroup is created, it uses RemovalPolicy.DESTROY so that stack
- * teardown completes cleanly during E2E tests and cleanup scenarios.
+ * When `retention` is omitted, the group keeps the stack-wide
+ * `defaults.logRetention` already applied by the BlocksStack/BlocksBackend.
  */
 export class Logger extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
@@ -32,13 +33,14 @@ export class Logger extends Scope {
 			registerConfig(this, 'LOG_LEVEL', options.level);
 		}
 
-		// Optionally create a LogGroup with retention
-		if (options?.retention) {
-			new logs.LogGroup(this, 'LogGroup', {
-				logGroupName: `/aws/lambda/${this.handler.functionName}`,
-				retention: options.retention,
-				removalPolicy: RemovalPolicy.DESTROY,
-			});
+		// Override retention on the shared handler log group when this Logger
+		// asks for a specific value; otherwise leave the stack-wide default in
+		// place. Applied via the L1 escape hatch because a per-block option must
+		// reconfigure the framework-owned group, not spawn a competing one.
+		const retention = options?.retention ?? this.defaults.logRetention;
+		const cfnLogGroup = this.handlerLogGroup.node.defaultChild as CfnLogGroup | undefined;
+		if (cfnLogGroup) {
+			cfnLogGroup.retentionInDays = retention;
 		}
 	}
 }
