@@ -62,6 +62,8 @@ try {
 
 `get()` can throw `AppSettingErrors.ParameterNotFound` when the parameter does not exist or a secret parameter has an empty value (in both the AWS and mock runtimes).
 
+AppSetting is **server-side only**. Calling `get()`/`put()` from browser code throws `AppSettingErrors.BrowserNotSupported` — the browser build has no store or credentials. Read the value on the server (e.g. inside an `ApiNamespace` method) and return it to the client.
+
 ## Examples
 
 ### Plain String Setting
