@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode } from './rpc.js';
+import { decodeRpcResponse, errorResponseFromCatch, parseRpcRequest, RpcErrorCode, MAX_RPC_BODY_BYTES } from './rpc.js';
 import { ApiError, isBlocksError } from './errors.js';
 
 describe('-32600 Invalid Request error shape', () => {
@@ -186,5 +186,38 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
       () => decodeRpcResponse({ jsonrpc: '2.0', error: { code: RpcErrorCode.InvalidRequest, message: 'Invalid Request' }, id: null }),
       (e: unknown) => e instanceof ApiError && e.status === 500,
     );
+  });
+});
+
+describe('request body size limit', () => {
+  it('accepts a normal-sized body', () => {
+    const result = parseRpcRequest(JSON.stringify({ jsonrpc: '2.0', method: 'ns.method', params: [], id: 1 }));
+    assert.strictEqual(result.ok, true);
+  });
+
+  it('rejects a body larger than MAX_RPC_BODY_BYTES with a PayloadTooLarge error', () => {
+    // A JSON string just over the limit (a single huge param value).
+    const huge = 'x'.repeat(MAX_RPC_BODY_BYTES + 1);
+    const body = JSON.stringify({ jsonrpc: '2.0', method: 'ns.method', params: [huge], id: 1 });
+    assert.ok(Buffer.byteLength(body, 'utf8') > MAX_RPC_BODY_BYTES);
+
+    const result = parseRpcRequest(body);
+    assert.strictEqual(result.ok, false);
+    if (result.ok) return; // narrow
+    const parsed = JSON.parse(result.response);
+    assert.strictEqual(parsed.error.code, RpcErrorCode.InvalidRequest);
+    assert.strictEqual(parsed.error.data?.name, 'PayloadTooLarge');
+    assert.match(parsed.error.message, /exceeds/);
+  });
+
+  it('rejects an oversized body before attempting to parse it (invalid JSON still 413s, not a ParseError)', () => {
+    // Oversized AND not valid JSON — the size guard must win, proving the body
+    // is rejected before the (expensive) parse + before any handler/DB touch.
+    const oversizedGarbage = 'x'.repeat(MAX_RPC_BODY_BYTES + 1);
+    const result = parseRpcRequest(oversizedGarbage);
+    assert.strictEqual(result.ok, false);
+    if (result.ok) return;
+    const parsed = JSON.parse(result.response);
+    assert.strictEqual(parsed.error.data?.name, 'PayloadTooLarge');
   });
 });

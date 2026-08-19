@@ -32,6 +32,18 @@ export type RpcParseResult =
 
 const VERSION = '2.0' as const;
 
+/**
+ * Maximum accepted request-body size, in bytes (10 MiB).
+ *
+ * Mirrors API Gateway's hard payload limit (~10 MB for a REST API), so the
+ * local dev server rejects exactly what the deployed runtime would — an
+ * oversized body can't quietly wedge the local database (e.g. PGlite) in dev
+ * while failing in production. Enforced in `parseRpcRequest`, the single choke
+ * point both the Lambda handler and the dev server route through, so the mock
+ * and AWS paths behave identically.
+ */
+export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
+
 /** Reserved JSON-RPC error codes. */
 export const RpcErrorCode = {
   ParseError:     -32700,
@@ -89,6 +101,23 @@ export function decodeRpcResponse(body: unknown): unknown {
  * anything about the JSON-RPC spec.
  */
 export function parseRpcRequest(bodyText: string): RpcParseResult {
+  // Reject oversized bodies before parsing or dispatch — an unbounded body can
+  // wedge the local database in dev and inflate compute cost in production. The
+  // limit matches API Gateway's payload cap (see MAX_RPC_BODY_BYTES), so the
+  // dev server and the deployed runtime reject identically. `name` is set so
+  // callers can match it with `isBlocksError(e, ...)` (errors cross by name).
+  if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
+    return {
+      ok: false,
+      response: errorResponse(
+        RpcErrorCode.InvalidRequest,
+        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte limit`,
+        null,
+        { name: 'PayloadTooLarge' },
+      ),
+    };
+  }
+
   let parsed: any;
   try {
     parsed = JSON.parse(bodyText || '{}');
