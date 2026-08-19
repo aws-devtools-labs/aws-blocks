@@ -10,8 +10,8 @@ Design document for the Agent Building Block. For usage, see [README.md](./READM
 ## Architecture
 
 The streaming agent loop runs on a **Bedrock AgentCore Runtime** (sessions up to 8h, warm,
-managed) — not the shared handler Lambda — and streams chunks to the browser over the **Realtime**
-BB, exactly as it would on Lambda. The Agent BB composes these internal BBs plus the runtime:
+managed) — not the shared Blocks request handler — and streams chunks to the browser over the
+**Realtime** BB. The Agent BB composes these internal BBs plus the runtime:
 
 | Internal BB / resource | Purpose | Created when |
 |-------------|---------|-------------|
@@ -24,16 +24,21 @@ BB, exactly as it would on Lambda. The Agent BB composes these internal BBs plus
 stream()/resume() → InvokeAgentRuntime (returns immediately)
                 ↓
      AgentCore Runtime container (agentcore-entry.ts): starts the turn as a BACKGROUND
-     async task (ping = HealthyBusy keeps the microVM alive up to 8h) and returns an ack
+     async task and returns an ack immediately
                 ↓
          runAgent() → Strands agent loop → publishes chunks to Realtime (under the runtime role)
                                          → persists messages to DistributedTable
                                          → SessionManager saves state to FileBucket
 ```
 
-The RPC handler (`stream`/`resume`) only kicks off the turn; it does not hold the connection. The
-browser subscribes to the Realtime channel by `channelId` and receives chunks as the loop runs —
-so a turn is bounded by the AgentCore session (8h), not by Lambda's 15-min / API Gateway's ~29s cap.
+The RPC handler (`stream`/`resume`) only kicks off the turn; it does not hold the connection —
+running the loop as a background task lets `InvokeAgentRuntime` return in seconds. The microVM then
+stays alive on AgentCore's own terms: AgentCore polls the container's health endpoint, and the SDK
+reports `HealthyBusy` while a background task is in flight, so AgentCore keeps the runtime running
+(up to the 8h max session) and returns it to `Healthy` — eligible for reclaim — once the task
+completes. The browser subscribes to the Realtime channel by `channelId` and receives chunks as the
+loop runs, so a turn is bounded by the AgentCore session (8h), not by the request handler's
+per-invocation limit or API Gateway's ~29s cap.
 
 **`runtime` config flag.** `runtime` records where the loop runs (currently `'agentcore'`, the only
 value and the default) — an explicit seam a future in-process/container option plugs into. Locally
@@ -73,14 +78,17 @@ The CDK class provisions:
   and conversation/message tables (DynamoDB). `AgentCoreRuntime` only adds what the shared role
   doesn't already carry:
   - **Bedrock:** `InvokeModel` + `InvokeModelWithResponseStream` on all foundation models and inference profiles
-  - **Realtime publish** (via `Realtime.grantPublish`): `execute-api:ManageConnections` + connections-table query
+  - **Realtime publish** (via `Realtime.grantPublish`): `execute-api:ManageConnections` + connections-table `dynamodb:Query` (subscriber lookup) and `dynamodb:BatchWriteItem` (410 stale-connection cleanup)
 - **Handler grant:** the shared role is granted `bedrock-agentcore:InvokeAgentRuntime` (wildcard runtime
   ARN, to avoid a role↔runtime dependency cycle) so the RPC handler can start the loop.
 
 For the runtime to assume the shared role, `BlocksRole` trusts `bedrock-agentcore.amazonaws.com` (a
-core change). The container gets `BLOCKS_RT_CALLBACK_URL` (from `grantPublish`), `BB_AGENT_ID`,
-`BLOCKS_STACK_NAME`, and the session bucket name injected as environment variables (the Lambda's S3
-config bundle and the in-process SDK-identifier registry don't reach a non-handler process).
+core change). The container gets `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and `BLOCKS_RT_CALLBACK_URL`
+injected as environment variables. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the co-bundled backend
+re-derive its resource names in-process (session bucket, conversation/message tables) via the
+SDK-identifier registry — the same derivation the handler uses — so those names aren't injected. Only
+`BLOCKS_RT_CALLBACK_URL` (from `grantPublish`) must be passed, since the API Gateway Management
+endpoint isn't otherwise discoverable off the handler.
 
 > **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
 
