@@ -1,96 +1,97 @@
 {
-  "name": "@aws-blocks/core",
-  "version": "0.1.18",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
-    "directory": "packages/core"
-  },
-  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/core#readme",
-  "bugs": {
-    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
-  },
-  "author": "Amazon Web Services",
-  "license": "Apache-2.0",
-  "type": "module",
-  "sideEffects": [
-    "./dist/server/withAuth.js"
-  ],
-  "files": [
-    "dist",
-    "README.md",
-    "src",
-    "LICENSE"
-  ],
-  "exports": {
-    ".": {
-      "browser": "./dist/client/index.js",
-      "cdk": "./dist/index.cdk.js",
-      "default": "./dist/index.js"
-    },
-    "./cdk": {
-      "types": "./dist/index.cdk.js",
-      "default": "./dist/index.cdk.js"
-    },
-    "./client": "./dist/client/index.js",
-    "./lambda-handler": "./dist/lambda-handler.js",
-    "./bb-utils": {
-      "types": "./dist/bb-utils.d.ts",
-      "default": "./dist/bb-utils.js"
-    },
-    "./version": {
-      "types": "./dist/version.d.ts",
-      "default": "./dist/version.js"
-    },
-    "./server": {
-      "types": "./dist/server/index.d.ts",
-      "import": "./dist/server/index.js",
-      "require": "./dist/server/index.js"
-    },
-    "./scripts": "./dist/scripts/index.js",
-    "./db-naming": {
-      "types": "./dist/db-naming.d.ts",
-      "default": "./dist/db-naming.js"
-    }
-  },
-  "scripts": {
-    "prebuild": "node ../../scripts/generate-version.mjs --core && node ../../scripts/generate-bb-names.mjs",
-    "build": "tsc --build",
-    "test": "node --test dist/*.test.js dist/**/*.test.js",
-    "dev": "tsc --build --watch"
-  },
-  "bin": {
-    "blocks-generate-spec": "./dist/scripts/generate-spec-cli.js",
-    "blocks-telemetry": "./dist/scripts/telemetry-cli.js"
-  },
-  "devDependencies": {
-    "@types/cross-spawn": "^6.0.6",
-    "@types/http-proxy": "^1.17.16",
-    "@types/node": "^20.0.0",
-    "esbuild": "^0.27.0",
-    "typescript": "^5.3.0",
-    "unctx": "^2.0.0"
-  },
-  "dependencies": {
-    "@aws-blocks/hosting": "*",
-    "@aws-blocks/pipeline": "*",
-    "@aws-sdk/client-s3": "^3.700.0",
-    "@aws-sdk/client-ssm": "^3.700.0",
-    "cross-spawn": "^7.0.6",
-    "http-proxy": "^1.18.1"
-  },
-  "peerDependencies": {
-    "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0",
-    "next": ">=13.0.0",
-    "unctx": ">=2.0.0"
-  },
-  "peerDependenciesMeta": {
-    "next": {
-      "optional": true
-    },
-    "unctx": {
-      "optional": true
-    }
-  }
+	"name": "@aws-blocks/core",
+	"version": "0.1.18",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+		"directory": "packages/core"
+	},
+	"homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/core#readme",
+	"bugs": {
+		"url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+	},
+	"author": "Amazon Web Services",
+	"license": "Apache-2.0",
+	"type": "module",
+	"sideEffects": [
+		"./dist/server/withAuth.js"
+	],
+	"files": [
+		"dist",
+		"README.md",
+		"src",
+		"LICENSE"
+	],
+	"exports": {
+		".": {
+			"browser": "./dist/client/index.js",
+			"cdk": "./dist/index.cdk.js",
+			"default": "./dist/index.js"
+		},
+		"./cdk": {
+			"types": "./dist/index.cdk.js",
+			"default": "./dist/index.cdk.js"
+		},
+		"./client": "./dist/client/index.js",
+		"./lambda-handler": "./dist/lambda-handler.js",
+		"./bb-utils": {
+			"types": "./dist/bb-utils.d.ts",
+			"default": "./dist/bb-utils.js"
+		},
+		"./version": {
+			"types": "./dist/version.d.ts",
+			"default": "./dist/version.js"
+		},
+		"./server": {
+			"types": "./dist/server/index.d.ts",
+			"import": "./dist/server/index.js",
+			"require": "./dist/server/index.js"
+		},
+		"./scripts": "./dist/scripts/index.js",
+		"./scripts/generate-client-worker": "./dist/scripts/generate-client-worker.js",
+		"./db-naming": {
+			"types": "./dist/db-naming.d.ts",
+			"default": "./dist/db-naming.js"
+		}
+	},
+	"scripts": {
+		"prebuild": "node ../../scripts/generate-version.mjs --core && node ../../scripts/generate-bb-names.mjs",
+		"build": "tsc --build",
+		"test": "node --test dist/*.test.js dist/**/*.test.js",
+		"dev": "tsc --build --watch"
+	},
+	"bin": {
+		"blocks-generate-spec": "./dist/scripts/generate-spec-cli.js",
+		"blocks-telemetry": "./dist/scripts/telemetry-cli.js"
+	},
+	"devDependencies": {
+		"@types/cross-spawn": "^6.0.6",
+		"@types/http-proxy": "^1.17.16",
+		"@types/node": "^20.0.0",
+		"esbuild": "^0.27.0",
+		"typescript": "^5.3.0",
+		"unctx": "^2.0.0"
+	},
+	"dependencies": {
+		"@aws-blocks/hosting": "*",
+		"@aws-blocks/pipeline": "*",
+		"@aws-sdk/client-s3": "^3.700.0",
+		"@aws-sdk/client-ssm": "^3.700.0",
+		"cross-spawn": "^7.0.6",
+		"http-proxy": "^1.18.1"
+	},
+	"peerDependencies": {
+		"aws-cdk-lib": "^2.257.0",
+		"constructs": "^10.6.0",
+		"next": ">=13.0.0",
+		"unctx": ">=2.0.0"
+	},
+	"peerDependenciesMeta": {
+		"next": {
+			"optional": true
+		},
+		"unctx": {
+			"optional": true
+		}
+	}
 }

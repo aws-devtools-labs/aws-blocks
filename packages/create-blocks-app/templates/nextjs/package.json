@@ -19,7 +19,7 @@
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
-    "prebuild": "tsx aws-blocks/scripts/generate-client.ts",
+    "prebuild": "blocks-generate-client",
     "build": "next build",
     "start": "next start",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
