@@ -33,7 +33,7 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,21 +47,26 @@ const END_MARKER = '<!-- END:block-catalog -->';
 
 const SYNC_HINT = 'Run `npm run sync-docs` and commit the result.';
 
-const mode = process.argv.includes('--check') ? 'check' : 'write';
-
-const packages = getPackages();
-const catalog = buildCatalog(packages);
-const table = renderCatalogTable(catalog);
-
-if (mode === 'check') {
-  runCheck();
-} else {
-  runWrite();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }
 
 // ─── Modes ───────────────────────────────────────────────────────────────────
 
-function runCheck() {
+function main() {
+  const mode = process.argv.includes('--check') ? 'check' : 'write';
+  const packages = getPackages();
+  const catalog = buildCatalog(packages);
+  const table = renderCatalogTable(catalog);
+
+  if (mode === 'check') {
+    runCheck(table);
+  } else {
+    runWrite(catalog, table);
+  }
+}
+
+function runCheck(table) {
   const readme = readFileSync(readmePath, 'utf-8');
   const current = extractBetweenMarkers(readme);
 
@@ -83,7 +88,7 @@ function runCheck() {
   process.exit(0);
 }
 
-function runWrite() {
+function runWrite(catalog, table) {
   const readme = readFileSync(readmePath, 'utf-8');
   const updated = injectCatalog(readme, table);
   if (updated !== readme) writeFileSync(readmePath, updated);
@@ -120,7 +125,7 @@ function escapeCell(value) {
 
 // ─── Marker helpers ──────────────────────────────────────────────────────────
 
-function injectCatalog(readme, catalogTable) {
+export function injectCatalog(readme, catalogTable) {
   const begin = readme.indexOf(BEGIN_MARKER);
   const end = readme.indexOf(END_MARKER);
   if (begin === -1 || end === -1 || end < begin) {
@@ -134,7 +139,7 @@ function injectCatalog(readme, catalogTable) {
   return `${before}\n${catalogTable}\n${after}`;
 }
 
-function extractBetweenMarkers(readme) {
+export function extractBetweenMarkers(readme) {
   const begin = readme.indexOf(BEGIN_MARKER);
   const end = readme.indexOf(END_MARKER);
   if (begin === -1 || end === -1 || end < begin) return null;
@@ -143,7 +148,7 @@ function extractBetweenMarkers(readme) {
 
 // ─── README parsing ──────────────────────────────────────────────────────────
 
-function extractBlurb(content) {
+export function extractBlurb(content) {
   const lines = content.split('\n');
   const h1 = lines.findIndex((l) => l.startsWith('# '));
   if (h1 === -1) return '';

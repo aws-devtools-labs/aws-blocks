@@ -21,5 +21,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: '.nvmrc'
+      - name: Test Building Block catalog helpers
+        run: node --test scripts/sync-catalog.test.mjs
       - name: Verify Building Block catalog is in sync
         run: node scripts/sync-catalog.mjs --check
