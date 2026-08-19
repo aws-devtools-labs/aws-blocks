@@ -53,6 +53,8 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	 * the turn's duration — the loop keeps running server-side for up to the 8h session lifetime.
 	 * `runtimeSessionId` is keyed by conversationId so a conversation's turns/resumes reuse one
 	 * warm microVM.
+	 *
+	 * @internal Internal compute seam; not customer API.
 	 */
 	protected override async dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
 		const runtimeArnKey = `BB_AGENT_${this.fullId}_RUNTIME_ARN`;

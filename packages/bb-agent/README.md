@@ -811,7 +811,7 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
 - **Loop compute:** Bedrock AgentCore Runtime — consumption-based (vCPU + memory while a session is active). See [AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/).
-- **Streaming:** AppSync Events (Realtime) — $1.00 per million connection minutes.
+- **Streaming:** API Gateway WebSocket (Realtime) — per-message + per-connection-minute pricing.
 
 ## Troubleshooting
 
