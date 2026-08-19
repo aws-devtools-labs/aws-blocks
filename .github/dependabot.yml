@@ -1,0 +1,52 @@
+# Dependabot configuration.
+#
+# Scope note: every published package lives under packages/* and every test app
+# under test-apps/* is installed from the single root package-lock.json (npm
+# workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
+# there is no per-package or per-test-app lockfile to configure separately.
+#
+# What this file controls: it does NOT generate or clear Dependabot *alerts*
+# (those come from the dependency graph). It configures the *pull requests*
+# Dependabot opens:
+#   - Version-update PRs run monthly and are grouped, so freshness does not cost
+#     a daily bump-PR stream.
+#   - Security-update PRs (driven by alerts) are batched into one grouped PR per
+#     run instead of one PR per package, which is what produced the flood of
+#     individual "bump X" PRs previously.
+#
+# Grouping policy: batch what is safe to move together, and keep isolated what
+# ships to customers.
+#   - aws-sdk (@aws-sdk/*, @smithy/*): release in lockstep, safe to batch.
+#   - dev-dependencies: build/test only, low blast radius.
+#   - security: batched to cut noise.
+#   - production runtime deps are intentionally NOT grouped, so each shipped
+#     dependency bump (e.g. ws, zod) lands as its own reviewable, mergeable,
+#     bisectable PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+      dev-dependencies:
+        dependency-type: development
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # Keep the GitHub Actions used by CI patched. Low volume, worth the PRs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
