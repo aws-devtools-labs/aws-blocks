@@ -488,7 +488,7 @@ describe('CannedProvider', () => {
 		const result = await agent.stream('hello', { userId: 'test-user' });
 		const ch = await result.channel;
 		ch.subscribe((chunk: any) => { chunks.push(chunk); });
-		// Wait for error to propagate through AsyncJob
+		// Wait for the in-process turn to publish its error chunk
 		await new Promise(resolve => setTimeout(resolve, 2000));
 		const textChunks = chunks.filter((c: any) => c.type === 'text-delta');
 		const errorChunk = chunks.find((c: any) => c.type === 'error');
