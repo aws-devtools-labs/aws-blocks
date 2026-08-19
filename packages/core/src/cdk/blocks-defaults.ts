@@ -68,7 +68,9 @@ export interface BlocksDefaults {
 	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
 	 * core REST API, the SSR/hosting REST API, and the `bb-realtime` WebSocket
 	 * stage. Protects the backend from runaway clients and caps blast radius.
-	 * See {@link BlocksThrottling}.
+	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
+	 * disposable stack is well-protected without throttling real production
+	 * traffic. See {@link BlocksThrottling}.
 	 */
 	throttling: BlocksThrottling;
 
@@ -81,12 +83,6 @@ export interface BlocksDefaults {
 	 */
 	accessLogging: boolean;
 }
-
-/**
- * Framework default request-rate limits, shared by both {@link BlocksPresets}.
- * Read independently per stage — never derived from another field.
- */
-const DEFAULT_THROTTLING: BlocksThrottling = { rateLimit: 200, burstLimit: 400 };
 
 /**
  * Prepared starting points for {@link BlocksDefaults}. Pick one and override
@@ -103,16 +99,21 @@ export const BlocksPresets = {
 		deletionProtection: false,
 		pointInTimeRecovery: false,
 		logRetention: RetentionDays.ONE_WEEK,
-		throttling: DEFAULT_THROTTLING,
+		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
 	},
-	/** Durable, protected posture for permanent deployments. */
+	/**
+	 * Durable, protected posture for permanent deployments. A higher throttle
+	 * ceiling (1000/2000) than sandbox so the default doesn't 429 real
+	 * production traffic — raise it via a per-stack `throttling` override for
+	 * higher-volume APIs.
+	 */
 	production: {
 		removalPolicy: RemovalPolicy.RETAIN,
 		deletionProtection: true,
 		pointInTimeRecovery: true,
 		logRetention: RetentionDays.ONE_YEAR,
-		throttling: DEFAULT_THROTTLING,
+		throttling: { rateLimit: 1000, burstLimit: 2000 },
 		accessLogging: true,
 	},
 } satisfies Record<string, BlocksDefaults>;

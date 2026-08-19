@@ -405,7 +405,7 @@ describe('handler log group retention (defaults.logRetention)', () => {
 });
 
 describe('REST API throttling (defaults.throttling)', () => {
-  test('the shared stage carries the 200/400 rate + burst default', async () => {
+  test('the shared stage carries the production rate + burst default (1000/2000)', async () => {
     const app = new cdk.App();
     const parent = new cdk.Stack(app, 'ThrottleStack');
 
@@ -422,9 +422,27 @@ describe('REST API throttling (defaults.throttling)', () => {
         Match.objectLike({
           HttpMethod: '*',
           ResourcePath: '/*',
-          ThrottlingRateLimit: 200,
-          ThrottlingBurstLimit: 400,
+          ThrottlingRateLimit: 1000,
+          ThrottlingBurstLimit: 2000,
         }),
+      ]),
+    });
+  });
+
+  test('sandbox caps the shared stage tighter (200/400)', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'ThrottleSandboxStack');
+
+    await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.sandbox,
+    });
+
+    const template = Template.fromStack(parent);
+    template.hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: Match.arrayWith([
+        Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
       ]),
     });
   });

@@ -146,7 +146,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(scope));
     accessLogGroup = new logs.LogGroup(scope, 'ApiAccessLogs', {
       retention: props.defaults.logRetention,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Access logs are the request audit trail — follow the stack-wide removal
+      // policy (production RETAIN) so they survive a stack teardown, unlike the
+      // handler's operational stdout log group (always DESTROY).
+      removalPolicy: props.defaults.removalPolicy,
     });
   }
 

@@ -36,10 +36,10 @@ describe('BlocksPresets', () => {
 		assert.strictEqual(BlocksPresets.production.accessLogging, true);
 	});
 
-	test('both presets carry the 200/400 throttling default, read independently', () => {
-		for (const preset of [BlocksPresets.sandbox, BlocksPresets.production]) {
-			assert.strictEqual(preset.throttling.rateLimit, 200);
-			assert.strictEqual(preset.throttling.burstLimit, 400);
-		}
+	test('sandbox caps tighter (200/400) than production (1000/2000)', () => {
+		assert.strictEqual(BlocksPresets.sandbox.throttling.rateLimit, 200);
+		assert.strictEqual(BlocksPresets.sandbox.throttling.burstLimit, 400);
+		assert.strictEqual(BlocksPresets.production.throttling.rateLimit, 1000);
+		assert.strictEqual(BlocksPresets.production.throttling.burstLimit, 2000);
 	});
 });
