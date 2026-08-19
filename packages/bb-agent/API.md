@@ -17,6 +17,7 @@ import type { z } from 'zod';
 // @public (undocumented)
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
     constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>);
+    // @internal
     protected dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void>;
 }
 
@@ -108,7 +109,9 @@ export type AgentTool<TContext = DefaultToolContext> = ToolDefinition<TContext, 
     readonly [AGENT_TOOL_BRAND]: true;
 };
 
-// @public
+// Warning: (ae-internal-missing-underscore) The name "AgentTurnPayload" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
 export interface AgentTurnPayload<TContext = DefaultToolContext> {
     channelId: string;
     context?: TContext;
