@@ -23,6 +23,9 @@ import { ulid } from 'ulid';
  * A single agent turn to dispatch (initial message or HITL resume). Passed to
  * {@link AgentBase.dispatchTurn} — run in-process locally, or shipped to the AgentCore Runtime
  * on AWS as the `InvokeAgentRuntime` payload.
+ *
+ * @internal Internal turn-dispatch seam — not part of the public API. Customers use
+ * `stream()` / `resume()`; this is the shape those hand to the compute layer.
  */
 export interface AgentTurnPayload<TContext = DefaultToolContext> {
 	/** User prompt. Empty on resume (interruptResponses drive the turn instead). */
@@ -254,6 +257,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * chunk (not re-thrown) so the client never hangs and a non-idempotent turn isn't retried.
 	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
+	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
 	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
 		try {
@@ -281,6 +285,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Base (local/mock): run the loop IN-PROCESS, fire-and-forget — chunks flow to the mock
 	 * Realtime as the turn progresses. The deployed (AWS) subclass overrides this to invoke the
 	 * AgentCore Runtime, which runs the loop as a background task and publishes to Realtime.
+	 *
+	 * @internal Internal compute seam (overridden by the AWS subclass); not customer API.
 	 */
 	protected async dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
 		// invokeTurn catches and publishes its own errors, so the floating promise can't reject.
