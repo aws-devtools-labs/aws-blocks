@@ -32,6 +32,10 @@
       "types": "./dist/index.cdk.js",
       "default": "./dist/index.cdk.js"
     },
+    "./cdk/internal": {
+      "types": "./dist/cdk/internal.d.ts",
+      "default": "./dist/cdk/internal.js"
+    },
     "./client": "./dist/client/index.js",
     "./lambda-handler": "./dist/lambda-handler.js",
     "./bb-utils": {
