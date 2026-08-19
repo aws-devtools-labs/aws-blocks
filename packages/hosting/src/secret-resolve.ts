@@ -47,7 +47,18 @@ export type { SecretStore };
 export interface KindStoreOptions {
 	/** Store path prefix (no trailing slash). Defaults to the kind's neutral prefix. */
 	prefix?: string;
-	/** Optional environment segment; a value resolves to `<prefix>/<stage>/<key>` and falls back to `<prefix>/<key>`. */
+	/**
+	 * Optional environment segment; a value resolves to `<prefix>/<stage>/<key>` and
+	 * falls back to the shared `<prefix>/<key>`.
+	 *
+	 * ⚠️ **`stage` is NOT a security boundary.** To make the fallback work, the IAM
+	 * grant is *static* and gives the compute standing read on **both** the stage
+	 * locator and the shared `<prefix>/<key>`. So every stage sharing a prefix can
+	 * read the shared value — keep production-only secrets in a stage-scoped slot,
+	 * and put only a safe cross-stage default (e.g. a sandbox credential) in the
+	 * shared slot. Two `Hosting`/`Pipeline` constructs sharing a prefix are **not**
+	 * isolated from each other.
+	 */
 	stage?: string;
 	/** Runtime cache TTL (seconds) for this kind's getter; omit/`0` = cache for the process life. */
 	cacheTtlSeconds?: number;
@@ -76,10 +87,12 @@ export interface ByoBinding {
 
 // ── BYO handle detection (duck-typed; cross-copy-safe) ──────────────────────
 
-function isCdkSecret(v: unknown): v is ISecret {
+/** Duck-typed guard for a BYO CDK Secrets Manager handle (`ISecret`). */
+export function isCdkSecret(v: unknown): v is ISecret {
 	return typeof v === 'object' && v !== null && 'secretArn' in v && 'grantRead' in v;
 }
-function isCdkParameter(v: unknown): v is IParameter {
+/** Duck-typed guard for a BYO CDK SSM parameter handle (`IParameter`). */
+export function isCdkParameter(v: unknown): v is IParameter {
 	return typeof v === 'object' && v !== null && 'parameterArn' in v && 'grantRead' in v;
 }
 

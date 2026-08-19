@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { parameterName } from '@aws-blocks/hosting/secret';
+import { secretStoreLocator } from '@aws-blocks/hosting/secret';
 import {
 	BLOCKS_CONFIG_PARAMETER_PREFIX,
 	BLOCKS_SECRET_PARAMETER_PREFIX,
@@ -16,13 +16,20 @@ void describe('Blocks value namespaces', () => {
 	void it('pins /blocks/secrets (Secrets Manager) and /blocks/config (SSM)', () => {
 		assert.strictEqual(BLOCKS_SECRET_PARAMETER_PREFIX, '/blocks/secrets');
 		assert.strictEqual(BLOCKS_CONFIG_PARAMETER_PREFIX, '/blocks/config');
-		assert.strictEqual(blocksSecretParameterName('STRIPE_KEY'), '/blocks/secrets/STRIPE_KEY');
+		// Secrets Manager names are slash-free at the root; SSM keeps the leading slash.
+		assert.strictEqual(blocksSecretParameterName('STRIPE_KEY'), 'blocks/secrets/STRIPE_KEY');
 		assert.strictEqual(blocksConfigParameterName('FEATURE_FLAGS'), '/blocks/config/FEATURE_FLAGS');
 	});
 
-	void it('is exactly the neutral engine + the Blocks prefixes (no divergent logic)', () => {
-		assert.strictEqual(blocksSecretParameterName('K'), parameterName('K', BLOCKS_SECRET_PARAMETER_PREFIX));
-		assert.strictEqual(blocksConfigParameterName('K'), parameterName('K', BLOCKS_CONFIG_PARAMETER_PREFIX));
+	void it('matches the store locator the CLI/grant/runtime actually use (no divergent name)', () => {
+		assert.strictEqual(
+			blocksSecretParameterName('K'),
+			secretStoreLocator('K', { prefix: BLOCKS_SECRET_PARAMETER_PREFIX, store: 'secrets-manager' }),
+		);
+		assert.strictEqual(
+			blocksConfigParameterName('K'),
+			secretStoreLocator('K', { prefix: BLOCKS_CONFIG_PARAMETER_PREFIX, store: 'ssm' }),
+		);
 	});
 
 	void it('blocksStoreConfig() wires both pinned prefixes for the shared engine', () => {

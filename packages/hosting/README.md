@@ -141,12 +141,26 @@ rotate a value. `set` never puts the value in `argv` / shell history — it read
 **hidden prompt** or `--value-stdin` (`cat key.txt | npx hosting-secret set KEY
 --value-stdin`). `list` prints names only, never values.
 
-> **Two footguns to know.** (1) `--region` (or `AWS_REGION`) must match the region
-> the app deploys to, or the deploy will report the value as "not set". (2) The
-> default prefixes (`/hosting/secrets`, `/hosting/config`) are account-global —
-> if more than one app deploys to the same account, give each its own
-> `secretStore.prefix` / `configStore.prefix` and pass the matching CLI
-> `--prefix`, or their same-named values collide.
+`remove` on a **secret** is recoverable by default — the value enters Secrets
+Manager's recovery window and can be restored (guards against a typo'd prod key).
+Pass `--force` to delete immediately with no recovery. (`config` removes are always
+immediate — SSM Parameter Store has no recovery window.)
+
+> **Footguns to know.**
+> 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys
+>    to, or the deploy reports the value as "not set".
+> 2. **Account-global prefix.** The default prefixes (`/hosting/secrets`,
+>    `/hosting/config`) are account-global — if more than one app deploys to the
+>    same account, give each its own `secretStore.prefix` / `configStore.prefix`
+>    (and matching CLI `--prefix`), or their same-named values collide.
+> 3. **`stage` is not a security boundary.** An optional `stage` on
+>    `secretStore` / `configStore` resolves `<prefix>/<stage>/<key>` and falls
+>    back to the shared `<prefix>/<key>`. To make that fallback work the IAM grant
+>    is *static*, so a stage's compute has standing read on **both** the stage
+>    value and the shared one. Every stage sharing a prefix can read the shared
+>    value — put production-only secrets in a stage-scoped slot and keep only a
+>    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
+>    constructs sharing a prefix are not isolated from each other.
 
 ## Architecture
 

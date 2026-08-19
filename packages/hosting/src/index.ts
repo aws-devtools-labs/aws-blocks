@@ -61,6 +61,8 @@ export {
 	collectSynthMarkers,
 	type DomainNameInput,
 	type EnvValue,
+	isCdkParameter,
+	isCdkSecret,
 	type KindStoreOptions,
 	partitionEnvironment,
 	resolveDomainNames,

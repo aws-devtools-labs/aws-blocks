@@ -17,7 +17,7 @@
  */
 
 import type { StoreConfig } from '@aws-blocks/hosting';
-import { parameterName } from '@aws-blocks/hosting/secret';
+import { secretStoreLocator } from '@aws-blocks/hosting/secret';
 
 /** Blocks prefix for `secret()` values (Secrets Manager). */
 export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
@@ -25,14 +25,28 @@ export const BLOCKS_SECRET_PARAMETER_PREFIX = '/blocks/secrets';
 /** Blocks prefix for `config()` values (SSM Parameter Store). */
 export const BLOCKS_CONFIG_PARAMETER_PREFIX = '/blocks/config';
 
-/** Blocks-namespaced name for a secret key. @example '/blocks/secrets/STRIPE_KEY' */
+/**
+ * The **actual store name** of a Blocks `secret()` key in AWS Secrets Manager —
+ * routed through {@link secretStoreLocator} so it matches exactly what the CLI
+ * writes, the IAM grant scopes to, and the runtime resolver reads. Secrets
+ * Manager names are slash-free at the root, so this is `blocks/secrets/<KEY>`
+ * (no leading slash), NOT an SSM-style `/blocks/secrets/<KEY>` path.
+ *
+ * @example 'blocks/secrets/STRIPE_KEY'
+ */
 export function blocksSecretParameterName(key: string): string {
-	return parameterName(key, BLOCKS_SECRET_PARAMETER_PREFIX);
+	return secretStoreLocator(key, { prefix: BLOCKS_SECRET_PARAMETER_PREFIX, store: 'secrets-manager' });
 }
 
-/** Blocks-namespaced name for a config key. @example '/blocks/config/FEATURE_FLAGS' */
+/**
+ * The **actual store name** of a Blocks `config()` key in SSM Parameter Store —
+ * routed through {@link secretStoreLocator} for consistency with the CLI/grant/
+ * runtime path. SSM keeps the leading-slash path.
+ *
+ * @example '/blocks/config/FEATURE_FLAGS'
+ */
 export function blocksConfigParameterName(key: string): string {
-	return parameterName(key, BLOCKS_CONFIG_PARAMETER_PREFIX);
+	return secretStoreLocator(key, { prefix: BLOCKS_CONFIG_PARAMETER_PREFIX, store: 'ssm' });
 }
 
 /** The Blocks store config (pinned prefixes) passed to the shared hosting engine. */

@@ -16,6 +16,14 @@
  *   1. `process.env[KEY]` — local dev; put the value in a `.env` file, no AWS call.
  *   2. the injected store locator — fetch, then cache.
  *
+ * ⚠️ **Local-dev caveat:** step 1 keys off the bare `process.env[KEY]`, which is
+ * NOT kind-prefixed — so if you declare both `secret('K')` and `config('K')`, a
+ * single `.env` entry `K=…` satisfies BOTH `getSecret('K')` and `getConfig('K')`
+ * locally. The per-kind namespace independence (secret ≠ config for the same key)
+ * only holds on the deployed store path (step 2), where each getter reads its own
+ * `HOSTING_SECRET_PARAM_*` / `HOSTING_CONFIG_PARAM_*` locator. Reusing the same key
+ * name for both a secret and a config is best avoided for exactly this reason.
+ *
  * **Cache lifetime.** By default a resolved value is cached for the life of the
  * process (rotation lands on the next cold start). Set `secretStore.cacheTtlSeconds`
  * / `configStore.cacheTtlSeconds` on the construct to inject a per-kind TTL so a

@@ -37,6 +37,11 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 		await assert.rejects(runValueCli(['remove'], { kind: 'config', label: 'config' }), /Usage: config remove/);
 	});
 
+	void it('strips --force from positionals (not treated as the key)', async () => {
+		// --force alone leaves no key → the usage error proves the flag was parsed, not consumed as <KEY>.
+		await assert.rejects(runValueCli(['remove', '--force'], { kind: 'secret' }), /Usage: .*remove <KEY>/);
+	});
+
 	void it('rejects --stage without a value', async () => {
 		await assert.rejects(
 			runValueCli(['set', 'K', 'v', '--stage'], { kind: 'secret' }),

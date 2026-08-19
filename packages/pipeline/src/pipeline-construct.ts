@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import { defaultPrefixForKind, isManagedValue, resolveSecretsAtSynth, secretStoreLocator } from '@aws-blocks/hosting';
+import {
+  defaultPrefixForKind,
+  isCdkSecret,
+  isManagedValue,
+  resolveSecretsAtSynth,
+  secretStoreLocator,
+} from '@aws-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
-import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import { CodeBuildStep, CodePipeline, CodePipelineSource, ManualApprovalStep, ShellStep } from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
@@ -313,9 +318,9 @@ function buildSecretEnvVars<TConfig>(
       }
       // secret marker → Secrets Manager locator (slash-free) at build time.
       envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store: 'secrets-manager' }) };
-    } else if (typeof marker === 'object' && marker !== null && 'secretName' in marker) {
+    } else if (isCdkSecret(marker)) {
       // BYO ISecret handle → reference its name; CodeBuild grants the build role read.
-      envVars[name] = { type, value: (marker as ISecret).secretName };
+      envVars[name] = { type, value: marker.secretName };
     } else {
       throw new Error(
         `Pipeline: buildSecrets['${name}'] must be a secret('...') marker or an existing ISecret handle.`,

@@ -135,11 +135,19 @@ export async function listValues(
 	return keys.sort();
 }
 
-/** Remove a value of `kind`. Returns true if it existed, false if already absent. */
+/**
+ * Remove a value of `kind`. Returns true if it existed, false if already absent.
+ *
+ * For **secrets** (Secrets Manager) the default is a *recoverable* delete — the
+ * secret enters Secrets Manager's recovery window (its default, ~30 days) and can
+ * be restored, guarding against a typo'd key in prod. Pass `force: true` to delete
+ * immediately with no recovery. (SSM `config` deletes are always immediate —
+ * Parameter Store has no recovery window — so `force` is a no-op there.)
+ */
 export async function removeValue(
 	kind: ValueKind,
 	key: string,
-	opts: { prefix?: string; stage?: string; region?: string } = {},
+	opts: { prefix?: string; stage?: string; region?: string; force?: boolean } = {},
 ): Promise<boolean> {
 	assertValidKey(key);
 	const store: SecretStore = storeForKind(kind);
@@ -151,8 +159,17 @@ export async function removeValue(
 		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
 		const client = new SecretsManagerClient(clientConfig);
 		try {
-			await client.send(new DeleteSecretCommand({ SecretId: name, ForceDeleteWithoutRecovery: true }));
-			console.log(`🗑️  ${kind} '${key}' removed.`);
+			// Default: recoverable delete (recovery window). --force: immediate, no recovery.
+			await client.send(
+				new DeleteSecretCommand(
+					opts.force ? { SecretId: name, ForceDeleteWithoutRecovery: true } : { SecretId: name },
+				),
+			);
+			console.log(
+				opts.force
+					? `🗑️  ${kind} '${key}' permanently removed (no recovery).`
+					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`aws secretsmanager restore-secret\`, or use --force to delete immediately).`,
+			);
 			return true;
 		} catch (error: unknown) {
 			if ((error as { name?: string })?.name === 'ResourceNotFoundException') {
@@ -184,7 +201,7 @@ export async function removeValue(
  *  - `kind` not fixed → argv is `<secret|config> <subcommand> [...args]`.
  */
 export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
-	const { stage, valueStdin, prefix, region, positional } = extractFlags(argv);
+	const { stage, valueStdin, prefix, region, force, positional } = extractFlags(argv);
 
 	let kind = opts.kind;
 	let rest = positional;
@@ -235,8 +252,8 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		case 'remove':
 		case 'rm': {
 			const [key] = args;
-			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--stage <name>] [--region <name>]`);
-			await removeValue(kind, key, { prefix: effPrefix, stage: effStage, region: effRegion });
+			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--force] [--stage <name>] [--region <name>]`);
+			await removeValue(kind, key, { prefix: effPrefix, stage: effStage, region: effRegion, force });
 			break;
 		}
 		default:
@@ -249,6 +266,7 @@ function extractFlags(argv: string[]): {
 	valueStdin: boolean;
 	prefix?: string;
 	region?: string;
+	force: boolean;
 	positional: string[];
 } {
 	const positional: string[] = [];
@@ -256,9 +274,12 @@ function extractFlags(argv: string[]): {
 	let valueStdin = false;
 	let prefix: string | undefined;
 	let region: string | undefined;
+	let force = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === '--stage') {
+		if (arg === '--force') {
+			force = true;
+		} else if (arg === '--stage') {
 			stage = argv[++i];
 			if (stage === undefined) throw new Error('`--stage` requires a value, e.g. --stage prod');
 		} else if (arg.startsWith('--stage=')) {
@@ -279,7 +300,7 @@ function extractFlags(argv: string[]): {
 			positional.push(arg);
 		}
 	}
-	return { stage, valueStdin, prefix, region, positional };
+	return { stage, valueStdin, prefix, region, force, positional };
 }
 
 async function readStdin(): Promise<string> {
