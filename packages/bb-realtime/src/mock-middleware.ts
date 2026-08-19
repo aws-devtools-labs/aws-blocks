@@ -93,7 +93,7 @@ function doConnect(wsUrl: string) {
 				if (data.type === 'subscribe_success' && data.channel) {
 					const pending = conn.pendingEstablished.get(data.channel);
 					if (pending) {
-						pending.forEach(p => p.resolve());
+						pending.forEach(p => { p.resolve(); });
 						conn.pendingEstablished.delete(data.channel);
 					}
 				} else if (data.type === 'error' && data.channel) {
@@ -101,7 +101,7 @@ function doConnect(wsUrl: string) {
 					if (pending) {
 						const err = new Error(data.message || 'Subscription rejected');
 						err.name = 'ConnectionFailedException';
-						pending.forEach(p => p.reject(err));
+						pending.forEach(p => { p.reject(err); });
 						conn.pendingEstablished.delete(data.channel);
 					}
 					// Remove the subscription entry since it was rejected
@@ -110,7 +110,7 @@ function doConnect(wsUrl: string) {
 				} else if (data.type === 'message' && data.channel) {
 					const handlers = conn.subscriptions.get(data.channel);
 					if (handlers) {
-						handlers.forEach(h => { try { h(data.payload); } catch (e) { console.error('[Realtime] Handler error:', e); } });
+						handlers.forEach(h => { try { h(data.data); } catch (e) { console.error('[Realtime] Handler error:', e); } });
 					}
 				}
 			} catch (e) { console.error('[Realtime] Parse error:', e); }
