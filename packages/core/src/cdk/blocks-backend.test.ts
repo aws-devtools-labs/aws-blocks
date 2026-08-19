@@ -157,6 +157,7 @@ describe('shared execution role', () => {
     await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const template = Template.fromStack(parent);
@@ -199,6 +200,7 @@ describe('shared execution role', () => {
     const backend = await BlocksBackend.create(parent, 'Blocks', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     // Building Blocks that co-bundle the app backend at synth time (e.g. the Agent BB's AgentCore
