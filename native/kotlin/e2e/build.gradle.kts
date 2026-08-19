@@ -78,6 +78,20 @@ tasks.withType<KotlinNativeSimulatorTest>().configureEach {
     // embedded keychain-access-groups entitlement is honored and Keychain storage works.
     standalone.set(false)
     device.set("booted")
+
+    // The test suite reads its endpoint from BLOCKS_URL via NSProcessInfo.environment
+    // (see TestEnv.ios.kt / BlocksE2ETestCase.kt). Kotlin/Native has no system properties,
+    // and `xcrun simctl spawn` only forwards environment variables that are set in the
+    // calling environment with a SIMCTL_CHILD_ prefix (it strips the prefix in the child).
+    // Without this, the sandbox suite never sees BLOCKS_URL, falls back to
+    // http://localhost:3001, and every request fails with DarwinHttpRequestException.
+    // Left unset for local runs so the suite still falls back to the localhost dev server.
+    val url = providers.systemProperty("BLOCKS_URL").orElse(
+        providers.environmentVariable("BLOCKS_URL")
+    ).getOrElse("")
+    if (url.isNotEmpty()) {
+        environment("SIMCTL_CHILD_BLOCKS_URL", url)
+    }
 }
 
 awsBlocks {

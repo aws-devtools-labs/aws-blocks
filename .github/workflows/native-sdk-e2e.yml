@@ -642,7 +642,11 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
-          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
+          # so emit it as-is. Appending /aws-blocks/api here doubled the path;
+          # API Gateway still routed /prod/aws-blocks/api/* to the JSON-RPC Lambda
+          # so the suite "worked", but keeping the URL clean avoids surprises.
+          echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Warm up sandbox API
         env:
