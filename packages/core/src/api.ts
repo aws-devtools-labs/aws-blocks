@@ -60,6 +60,39 @@ export const API_NAMESPACE_MARKER = Symbol.for('blocks:ApiNamespace');
 import type { ScopeParent } from './common/index.js';
 
 /**
+ * Structural view of a scope that resolves a compute carrying a recordable
+ * namespace list. Only the CDK `Scope` satisfies this at runtime (via its
+ * `compute` getter); in the mock/runtime bundles the property is absent.
+ */
+type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
+
+/**
+ * Record this namespace on its resolved compute so request routing can later
+ * map a namespace to the compute that hosts it.
+ *
+ * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
+ * namespace's compute (the stack default today), and we append the name to its
+ * `namespaces` list. In the mock/runtime bundles — or a scopeless test — there
+ * is no `compute`, so this is a silent no-op. The `compute` getter can also
+ * throw before the default compute is initialized (outside synth); that too is
+ * treated as "nothing to record". The public `ApiNamespace` signature is
+ * unchanged; this is a purely internal side effect.
+ */
+function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
+  // An API created without a Scope stays unrecorded and routes to the
+  // default compute.
+  if (!scope || typeof scope !== 'object') return;
+  try {
+    const compute = (scope as ComputeResolvingScope).compute;
+    if (compute && Array.isArray(compute.namespaces)) {
+      compute.namespaces.push(name);
+    }
+  } catch {
+    // compute resolution isn't available in this context — nothing to record.
+  }
+}
+
+/**
  * Define a type-safe API namespace that works seamlessly between frontend and backend.
  * 
  * ## Usage
@@ -157,6 +190,9 @@ export interface ApiNamespaceConstructor {
 export const ApiNamespace: ApiNamespaceConstructor = class ApiNamespace {
   constructor(scope: ScopeParent, name: string, handler: any) {
     handler[API_NAMESPACE_MARKER] = name;
+    // Record the namespace → compute association for per-compute routing.
+    // No-op outside CDK synth. Signature and returned handler are unchanged.
+    recordNamespaceOnCompute(scope, name);
     return handler;
   }
 } as any;
