@@ -1,0 +1,40 @@
+# Dependabot configuration.
+#
+# Scope note: every published package lives under packages/* and every test app
+# under test-apps/* is installed from the single root package-lock.json (npm
+# workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
+# there is no per-package or per-test-app lockfile to configure separately.
+#
+# What this file controls: it does NOT generate or clear Dependabot *alerts*
+# (those come from the dependency graph). It configures the *pull requests*
+# Dependabot opens:
+#   - Proactive version-update PRs are turned off (open-pull-requests-limit: 0)
+#     so we do not add a weekly bump-PR stream.
+#   - Security-update PRs (driven by alerts) are batched into a single grouped
+#     PR per run instead of one PR per package, which is what produced the flood
+#     of individual "bump X" PRs previously.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Disable proactive version-update PRs; we only act on security alerts.
+    # (This limit applies to version updates only, not to security updates.)
+    open-pull-requests-limit: 0
+    groups:
+      # Batch all security fixes into one PR per run to cut PR noise.
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # Keep the GitHub Actions used by CI patched. Low volume, worth the PRs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
