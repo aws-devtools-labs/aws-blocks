@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export { Agent } from './agent.mock.js';
+// Exported so api-extractor can resolve the (protected, @internal) dispatchTurn signature; the type
+// itself is @internal — not part of the public API (customers use stream()/resume()).
 export type { AgentTurnPayload } from './agent.js';
 export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
