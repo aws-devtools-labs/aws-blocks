@@ -102,7 +102,9 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 		apiGatewayAccount = ensureApiGatewayAccount(stack);
 		accessLogGroup = new LogGroup(stack, 'BlocksRtAccessLogs', {
 			retention: parent.defaults.logRetention,
-			removalPolicy: cdk.RemovalPolicy.DESTROY,
+			// Access logs are the request audit trail — follow the stack-wide
+			// removal policy (production RETAIN) so they survive a teardown.
+			removalPolicy: parent.defaults.removalPolicy,
 		});
 	}
 

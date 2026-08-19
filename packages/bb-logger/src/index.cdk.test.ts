@@ -6,14 +6,14 @@
  *
  * Logger no longer creates its own `/aws/lambda/<fn>` LogGroup (which would
  * collide with the framework-owned handler log group). Instead it reconfigures
- * retention on the single shared group, resolving
- * `options.retention ?? scope.defaults.logRetention`.
+ * retention on the single shared group — but ONLY when an explicit
+ * `options.retention` is given, so a bare Logger can't clobber a retention set
+ * by another Logger or the stack default.
  */
 import { test, describe } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { Logger } from './index.cdk.js';
 
@@ -21,14 +21,16 @@ class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly handlerLogGroup: cdk.aws_logs.ILogGroup;
 	public readonly id: string;
-	public defaults: BlocksDefaults = BlocksPresets.production;
-	constructor(scope: Construct, id: string) {
+	public readonly defaults: BlocksDefaults;
+	constructor(scope: Construct, id: string, defaults: BlocksDefaults) {
 		super(scope, id);
 		this.id = id;
+		this.defaults = defaults;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
-		// The framework-owned handler log group carries defaults.logRetention.
+		// The framework-owned handler log group carries defaults.logRetention,
+		// exactly as setupBlocksInfra creates it.
 		this.handlerLogGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
-			retention: this.defaults.logRetention,
+			retention: defaults.logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
@@ -42,8 +44,7 @@ class StubBlocksStack extends cdk.Stack {
 
 function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'LoggerStack');
-	stack.defaults = defaults;
+	const stack = new StubBlocksStack(app, 'LoggerStack', defaults);
 	const parent = new Scope('app');
 	return { stack, parent };
 }
@@ -57,14 +58,16 @@ describe('Logger CDK retention', () => {
 		template.resourceCountIs('AWS::Logs::LogGroup', 1);
 	});
 
-	test('leaves the stack-wide default retention when no per-Logger retention is set', () => {
+	test('a bare Logger leaves the stack-wide default retention untouched (no clobber)', () => {
 		const { stack, parent } = setup(BlocksPresets.production);
 		new Logger(parent, 'log');
 		const template = Template.fromStack(stack);
+		// Retention is whatever setupBlocksInfra set (production → 365); Logger
+		// must not rewrite it.
 		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
 	});
 
-	test('a per-Logger retention overrides the shared group retention', () => {
+	test('an explicit per-Logger retention overrides the shared group retention', () => {
 		const { stack, parent } = setup(BlocksPresets.production);
 		new Logger(parent, 'log', { retention: 30 });
 		const template = Template.fromStack(stack);
@@ -73,12 +76,11 @@ describe('Logger CDK retention', () => {
 		template.resourceCountIs('AWS::Logs::LogGroup', 1);
 	});
 
-	test('sandbox default retention (one week) applies via the shared group', () => {
-		const { stack, parent } = setup(BlocksPresets.sandbox);
-		new Logger(parent, 'log');
+	test('the last explicit retention wins; a later bare Logger does not reset it', () => {
+		const { stack, parent } = setup(BlocksPresets.production);
+		new Logger(parent, 'explicit', { retention: 14 });
+		new Logger(parent, 'bare'); // must NOT clobber the 14 above
 		const template = Template.fromStack(stack);
-		template.hasResourceProperties('AWS::Logs::LogGroup', {
-			RetentionInDays: RetentionDays.ONE_WEEK,
-		});
+		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 14 });
 	});
 });

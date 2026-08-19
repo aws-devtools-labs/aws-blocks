@@ -67,10 +67,21 @@ function setup(defaults: BlocksDefaults = BlocksPresets.production, stackId = 'R
 	return stack;
 }
 
-test('CDK: the WebSocket stage carries the default message throttle (200/400)', () => {
+test('CDK: the WebSocket stage carries the production message throttle (1000/2000)', () => {
 	const stack = setup();
 	const template = Template.fromStack(stack);
 	// On a WebSocket stage the throttle unit is messages/sec across the connection.
+	template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+		DefaultRouteSettings: Match.objectLike({
+			ThrottlingRateLimit: 1000,
+			ThrottlingBurstLimit: 2000,
+		}),
+	});
+});
+
+test('CDK: sandbox caps the WebSocket stage tighter (200/400)', () => {
+	const stack = setup(BlocksPresets.sandbox, 'RtThrottleSandboxStack');
+	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
 		DefaultRouteSettings: Match.objectLike({
 			ThrottlingRateLimit: 200,

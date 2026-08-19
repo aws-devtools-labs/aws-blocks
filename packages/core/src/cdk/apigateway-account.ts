@@ -30,9 +30,19 @@ const ACCOUNT_KEY = Symbol.for('BLOCKS_APIGATEWAY_ACCOUNT');
  * Callers should add their stage's dependency on the returned account so the
  * account setting is applied before the stage is created.
  *
- * Note: `AWS::ApiGateway::Account` is account/region-level (one effective
- * setting per region). This provisions one per Blocks stack; if the account is
- * already managed elsewhere (another stack, or manually), the last deploy wins.
+ * ⚠️ Single-Blocks-stack-per-region assumption. `AWS::ApiGateway::Account` is an
+ * account/region-level singleton (one effective `cloudWatchRoleArn` per region),
+ * but this provisions one per Blocks stack. If two Blocks stacks in the same
+ * account+region both enable access logging:
+ *   - on deploy, the later stack's role wins (overwrites the account setting); and
+ *   - on teardown of that later stack, its role is deleted and the account
+ *     setting is left pointing at a now-deleted role — silently breaking access
+ *     logging (or blocking `CreateStage`) for the surviving stack until it
+ *     redeploys.
+ * Enabling `accessLogging` is therefore safe for one Blocks stack per region.
+ * Multi-stack support (a shared/imported account) is deferred; if you run
+ * multiple Blocks stacks per region, manage the account role out-of-band and
+ * leave `accessLogging` to a single owner.
  */
 export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {
 	const existing = (stack as unknown as Record<symbol, CfnAccount | undefined>)[ACCOUNT_KEY];
