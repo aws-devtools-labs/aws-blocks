@@ -14,5 +14,8 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "next": "^16.3.1"
   }
 }

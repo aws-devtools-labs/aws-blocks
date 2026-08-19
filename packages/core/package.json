@@ -86,7 +86,7 @@
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
-    "next": ">=13.0.0",
+    "next": "^16.3.1",
     "unctx": ">=2.0.0"
   },
   "peerDependenciesMeta": {
