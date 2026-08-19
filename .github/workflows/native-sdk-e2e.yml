@@ -31,7 +31,7 @@ jobs:
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -76,12 +76,12 @@ jobs:
     outputs:
       spec-path: ${{ steps.spec.outputs.path }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -97,7 +97,7 @@ jobs:
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
 
       - name: Upload spec artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/blocks.spec.json
@@ -111,12 +111,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -134,7 +134,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -209,17 +209,17 @@ jobs:
             gradle-task: iosSimulatorArm64Test
             timeout: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -228,7 +228,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: native/kotlin/e2e/
@@ -261,12 +261,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -280,7 +280,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -362,12 +362,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -498,12 +498,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -609,17 +609,17 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -674,7 +674,7 @@ jobs:
         run: npm run spec
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: native/kotlin/e2e/

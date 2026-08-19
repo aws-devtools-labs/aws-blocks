@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: native/kotlin
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           # For the merge event, check out main (the merged commit). For a manual
           # dispatch, fall back to the dispatched ref (empty ref => default). Use a
@@ -40,12 +40,12 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && 'main' || '' }}
           token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v4
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@9632e9a60248a7e85f8d6c7f51208c2a1859e905 # v6
