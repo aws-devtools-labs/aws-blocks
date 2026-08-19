@@ -27,6 +27,7 @@
     "packages/bb-email-client",
     "packages/bb-tracer",
     "packages/bb-metrics",
+    "packages/bb-lambda-compute",
     "packages/blocks",
     "packages/create-blocks-app",
     "test-apps/comprehensive",
