@@ -49,7 +49,7 @@
     "@aws-blocks/bb-logger": "^0.1.3",
     "@aws-blocks/bb-realtime": "^0.1.2",
     "@aws-blocks/core": "^0.1.17",
-    "@aws-sdk/client-bedrock": "^3.700.0",
+    "@aws-sdk/client-bedrock": "^3.1111.0",
     "@opentelemetry/api": "^1.9.0",
     "@strands-agents/sdk": "~1.3.0",
     "openai": "^6.7.0",

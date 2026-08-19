@@ -53,7 +53,7 @@
     "@aws-blocks/bb-app-setting": "^0.1.3",
     "@aws-blocks/bb-distributed-table": "^0.1.3",
     "@aws-blocks/bb-logger": "^0.1.2",
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1040.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1111.0",
     "@standard-schema/spec": "^1.1.0",
     "ws": "^8.18.0"
   },
