@@ -62,7 +62,7 @@
   "scripts": {
     "prepare": "husky && bash scripts/setup-git-secrets.sh",
     "clean": "rm -rf packages/*/dist packages/*/*.tsbuildinfo test-apps/*/dist test-apps/*/.next test-apps/*/*.tsbuildinfo",
-    "generate:sources": "npm run prebuild --workspaces --if-present",
+    "generate:sources": "npm run prebuild -w packages --if-present",
     "build:bundles": "npm run bundle:handlers -w packages/hosting && npm run build:lambda -w packages/bb-distributed-table && npm run build -w packages/create-blocks-app",
     "build": "npm run generate:sources && tsc --build && npm run build:bundles",
     "build:force": "npm run clean && npm run build",
