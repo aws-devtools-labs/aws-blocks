@@ -56,11 +56,11 @@ jobs:
       # The Version PR is created with GITHUB_TOKEN, so it doesn't auto-trigger
       # CI. Append operator instructions to the PR body.
       - name: Add release instructions to Version PR
-        if: steps.changesets.outputs.pullRequestNumber
+        if: steps.changesets.outputs.pr-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUM="${{ steps.changesets.outputs.pullRequestNumber }}"
+          PR_NUM="${{ steps.changesets.outputs.pr-number }}"
           CURRENT_BODY=$(gh pr view "$PR_NUM" --json body --jq .body)
           INSTRUCTIONS="## Release Instructions
 
