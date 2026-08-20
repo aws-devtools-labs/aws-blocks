@@ -23,7 +23,7 @@ jobs:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -41,7 +41,7 @@ jobs:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -59,7 +59,7 @@ jobs:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
@@ -77,7 +77,7 @@ jobs:
       run:
         working-directory: native/swift
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
