@@ -78,13 +78,13 @@ import { HostingConstruct } from '@aws-blocks/hosting';
 import { secret, config } from '@aws-blocks/hosting/secret';
 
 new HostingConstruct(stack, 'Web', {
-  // …framework, root, api…
+  manifest, // produced by a framework adapter (see "Main exports")
   environment: {
     STRIPE_KEY: secret('STRIPE_KEY'), // → Secrets Manager
     FEATURE_FLAGS: config('FEATURE_FLAGS'), // → SSM Parameter Store
   },
   // Optional per-kind namespace / cache config:
-  secretStore: { prefix: '/myapp/secrets', cacheTtlSeconds: 0 },
+  secretStore: { prefix: '/myapp/secrets' },
   configStore: { prefix: '/myapp/config', cacheTtlSeconds: 30 },
 });
 ```

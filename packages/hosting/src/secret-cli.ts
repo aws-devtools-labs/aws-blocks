@@ -333,6 +333,11 @@ async function promptHidden(prompt: string): Promise<string> {
 	}
 	const { createInterface } = await import('node:readline');
 	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+	// Mask typed input by overriding readline's `_writeToOutput`. This is an
+	// undocumented Node internal, but it is the long-standing idiom for hidden
+	// prompts (no public readline masking API exists). It is best-effort: if a
+	// future Node drops the hook the prompt still works — the input just would not
+	// be masked — and `--value-stdin` remains the non-interactive, mask-free path.
 	const output = rl as unknown as { _writeToOutput?: (s: string) => void };
 	let muted = false;
 	output._writeToOutput = (str: string) => {

@@ -98,6 +98,19 @@ export type ComputeConfig = {
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
 
 /**
+ * Custom-domain config for the Blocks {@link Hosting} block — the leaf
+ * {@link HostingDomainConfig} with `domainName` widened to also accept a
+ * `config()` marker (resolved to a literal at synth). Only `config()` or a plain
+ * string is accepted here, never `secret()` (a synth-inlined value would leak into
+ * the template). All other fields (`hostedZone`, `certificate`, `wwwRedirect`, …)
+ * are inherited unchanged from {@link HostingDomainConfig}.
+ */
+export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
+  /** Domain name(s): a plain string / string[] and/or a `config()` marker resolved at synth. */
+  domainName: DomainNameInput;
+}
+
+/**
  * Structural interface for the Blocks backend stack.
  *
  * Accepts any object that exposes an `apiUrl` — typically a {@link BlocksStack}
@@ -226,9 +239,7 @@ export interface HostingProps {
    * (which would leak into the template). Any domain marker requires constructing
    * via the async {@link Hosting.create}.
    */
-  domain?: Omit<HostingDomainConfig, 'domainName'> & {
-    domainName: DomainNameInput;
-  };
+  domain?: HostingDomain;
 
   /**
    * Namespace/cache config for `secret()` values (AWS Secrets Manager). Defaults
