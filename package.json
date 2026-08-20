@@ -111,7 +111,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
     "@changesets/changelog-github": "^0.6.0",
-    "@changesets/cli": "^2.30.0",
+    "@changesets/cli": "^3.0.1",
     "@mermaid-js/mermaid-cli": "^11.12.0",
     "@microsoft/api-extractor": "^7.58.1",
     "@types/node": "^20.0.0",
