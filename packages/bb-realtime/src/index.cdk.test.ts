@@ -12,8 +12,6 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
-import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { Realtime } from './index.cdk.js';
 
@@ -32,7 +30,7 @@ test('CDK: calling a runtime method throws an actionable error (not a cryptic Ty
 	}
 });
 
-// ── grantPublish ─────────────────────────────────────────────────────────────
+// ── publishCallbackUrl ─────────────────────────────────────────────────────────
 
 /** Minimal StubBlocksStack: provides the shared handler + roots Scope via CURRENT_BLOCKS_STACK. */
 class StubBlocksStack extends cdk.Stack {
@@ -53,24 +51,17 @@ class StubBlocksStack extends cdk.Stack {
 /** Trivial StandardSchemaV1 that accepts anything — enough to define a namespace. */
 const anySchema = { '~standard': { version: 1, vendor: 'test', validate: (value: unknown) => ({ value }) } } as any;
 
-test('CDK: grantPublish grants postToConnection + connections-table query and returns publish config', () => {
+test('CDK: publishCallbackUrl() returns the shared WebSocket stage callback URL to inject', () => {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'teststack');
+	new StubBlocksStack(app, 'teststack'); // sets CURRENT_BLOCKS_STACK + provides the shared handler
 	const parent = new Scope('app'); // roots to CURRENT_BLOCKS_STACK
 
 	const rt = new Realtime(parent, 'rt', { namespaces: { chunks: Realtime.namespace(anySchema) } });
-	const grantee = new Role(stack, 'GranteeRole', { assumedBy: new ServicePrincipal('bedrock-agentcore.amazonaws.com') });
 
-	const cfg = rt.grantPublish(grantee);
-
-	// Returns the config an external publisher must inject into its env.
-	assert.ok(cfg.callbackUrl !== undefined, 'returns a callback URL to inject as BLOCKS_RT_CALLBACK_URL');
-
-	// The grantee's IAM policy carries both halves of the publish path.
-	const json = JSON.stringify(Template.fromStack(stack).toJSON());
-	assert.ok(json.includes('execute-api:ManageConnections'), 'grants API Gateway ManageConnections (postToConnection)');
-	assert.ok(json.includes('dynamodb:Query'), 'grants DynamoDB Query for connections-table subscriber lookup');
-	// publish() prunes stale (410) connections via deleteBatch → BatchWrite, so the grant must
-	// include the write action too (parity with the shared handler's read/write on the table).
-	assert.ok(json.includes('dynamodb:BatchWriteItem'), 'grants DynamoDB write for stale-connection cleanup');
+	// The one thing a co-located compute (e.g. the Agent BB's AgentCore Runtime) needs to publish —
+	// it runs AS the shared execution role, which already holds the publish grants, so no IAM grant
+	// is exposed; only this endpoint, which it injects as BLOCKS_RT_CALLBACK_URL.
+	const url = rt.publishCallbackUrl();
+	assert.strictEqual(typeof url, 'string', 'returns the API Gateway WebSocket callback URL as a string');
+	assert.ok(url.length > 0, 'callback URL is non-empty');
 });

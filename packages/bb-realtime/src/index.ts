@@ -22,7 +22,7 @@ import type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
-	RealtimePublisherGrants,
+	RealtimePublishInfo,
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
@@ -40,8 +40,7 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
-	RealtimePublishGrant,
-	RealtimePublisherGrants,
+	RealtimePublishInfo,
 	SubscribeOptions,
 	DisconnectReason,
 } from './types.js';
@@ -97,7 +96,7 @@ globalEmitter.setMaxListeners(1000);
  * ```
  */
 export const Realtime: {
-	new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublisherGrants;
+	new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublishInfo;
 	namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M>;
 } = class Realtime extends Scope {
 	private _namespaces: Map<string, { schema: StandardSchemaV1<any>; prefix: string }>;
@@ -176,9 +175,9 @@ export const Realtime: {
 		return { schema };
 	}
 
-	// CDK-synth-only capability (see RealtimePublisherGrants). Present for type parity with
-	// the CDK build; publishing grants have no meaning in the local/runtime build.
-	grantPublish(_grantee: unknown): never {
-		throw new Error('Realtime.grantPublish() is a CDK-synth-only operation and is not available in the local/runtime build.');
+	// CDK-synth-only capability (see RealtimePublishInfo). Present for type parity with the CDK
+	// build; the callback URL is a synth-time value with no meaning in the local/runtime build.
+	publishCallbackUrl(): never {
+		throw new Error('Realtime.publishCallbackUrl() is a CDK-synth-only operation and is not available in the local/runtime build.');
 	}
 } as any;

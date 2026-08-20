@@ -57,13 +57,13 @@ describe('Realtime', () => {
 		assert.strictEqual(typeof rt.getChannel, 'function');
 	});
 
-	it('grantPublish() throws an actionable CDK-synth-only error in the runtime/mock build', () => {
+	it('publishCallbackUrl() throws an actionable CDK-synth-only error in the runtime/mock build', () => {
 		const rt = new Realtime(mockScope, 'rt', {
 			namespaces: { events: Realtime.namespace(testSchema()) },
 		});
-		// grantPublish is a CDK-synth-only capability; the mock/runtime stub must throw rather than
+		// publishCallbackUrl is a CDK-synth-only capability; the mock/runtime stub must throw rather than
 		// silently no-op (mirrors the synth-guard coverage for publish/subscribe under --conditions=cdk).
-		assert.throws(() => rt.grantPublish({} as any), /CDK-synth-only/);
+		assert.throws(() => rt.publishCallbackUrl(), /CDK-synth-only/);
 	});
 
 	// ── Publish & Subscribe ──────────────────────────────────────────────

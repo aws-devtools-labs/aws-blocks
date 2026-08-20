@@ -35,7 +35,7 @@ import type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
-	RealtimePublisherGrants,
+	RealtimePublishInfo,
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
@@ -49,8 +49,7 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
-	RealtimePublishGrant,
-	RealtimePublisherGrants,
+	RealtimePublishInfo,
 	SubscribeOptions,
 	DisconnectReason,
 } from './types.js';
@@ -354,7 +353,7 @@ function serverSubscribe(
  * DynamoDB connections table uses on-demand billing (~$0 for typical workloads).
  */
 export const Realtime: {
-	new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublisherGrants;
+	new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublishInfo;
 	namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M>;
 } = class Realtime extends Scope {
 	private _namespaces: Map<string, { schema: StandardSchemaV1<any>; prefix: string }>;
@@ -507,9 +506,9 @@ export const Realtime: {
 		return { schema };
 	}
 
-	// CDK-synth-only capability (see RealtimePublisherGrants). Present for type parity with
-	// the CDK build; publishing grants are provisioned at synth, not in the AWS runtime.
-	grantPublish(_grantee: unknown): never {
-		throw new Error('Realtime.grantPublish() is a CDK-synth-only operation and is not available in the AWS runtime build.');
+	// CDK-synth-only capability (see RealtimePublishInfo). Present for type parity with the CDK
+	// build; the callback URL is a synth-time value, not available in the AWS runtime.
+	publishCallbackUrl(): never {
+		throw new Error('Realtime.publishCallbackUrl() is a CDK-synth-only operation and is not available in the AWS runtime build.');
 	}
 } as any;

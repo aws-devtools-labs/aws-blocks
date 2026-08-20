@@ -5,7 +5,6 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { IGrantable } from 'aws-cdk-lib/aws-iam';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -24,7 +23,7 @@ export type NamespaceDefs = Record<string, NamespaceConfig<any>>;
 
 // @public
 export const Realtime: {
-    new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublisherGrants;
+    new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublishInfo;
     namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M>;
 };
 
@@ -53,13 +52,8 @@ export interface RealtimeOptions<T extends NamespaceDefs> {
 }
 
 // @public
-export interface RealtimePublisherGrants {
-    grantPublish(grantee: IGrantable): RealtimePublishGrant;
-}
-
-// @public
-export interface RealtimePublishGrant {
-    callbackUrl: string;
+export interface RealtimePublishInfo {
+    publishCallbackUrl(): string;
 }
 
 // @public

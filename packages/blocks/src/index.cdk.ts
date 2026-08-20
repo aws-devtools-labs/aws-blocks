@@ -37,7 +37,7 @@ export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as K
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 export { Realtime } from '@aws-blocks/bb-realtime';
-export type { RealtimePublishGrant, RealtimePublisherGrants } from '@aws-blocks/bb-realtime';
+export type { RealtimePublishInfo } from '@aws-blocks/bb-realtime';
 export { Database, DatabaseErrors, fromExisting } from '@aws-blocks/bb-data';
 export { sql } from '@aws-blocks/bb-data';
 export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';

@@ -170,7 +170,7 @@ export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, Table
  * Full docs: `README.md` in the package directory above.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
-export type { RealtimeChannel, RealtimeSubscription, SubscribeOptions, DisconnectReason, RealtimePublishGrant, RealtimePublisherGrants } from '@aws-blocks/bb-realtime';
+export type { RealtimeChannel, RealtimeSubscription, SubscribeOptions, DisconnectReason, RealtimePublishInfo } from '@aws-blocks/bb-realtime';
 
 /**
  * **SQL database with Kysely query builder backed by Aurora Serverless v2.**
