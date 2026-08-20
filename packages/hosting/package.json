@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/hosting",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
