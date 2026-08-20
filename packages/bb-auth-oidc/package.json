@@ -52,7 +52,7 @@
     "@aws-blocks/bb-logger": "^0.1.4",
     "@aws-blocks/core": "^0.2.0",
     "@aws-sdk/client-ssm": "^3.0.0",
-    "jose": "^6.2.3",
+    "jose": "^6.2.9",
     "openid-client": "^6.8.4"
   },
   "devDependencies": {
