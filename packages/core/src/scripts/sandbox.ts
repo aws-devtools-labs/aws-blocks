@@ -38,6 +38,49 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+export interface SandboxDeployArgsOptions {
+  /** Directory CDK writes stack outputs to (relative to the project root). */
+  outDir: string;
+  /** Project root passed to synth as `--context projectRoot=…` (usually `process.cwd()`). */
+  projectRoot: string;
+  /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
+  backendPath: string;
+}
+
+/**
+ * Build the `npm exec cdk -- deploy …` argv used by the sandbox deploy.
+ *
+ * Kept pure (no I/O) so the argv contract — in particular the flags below — can
+ * be asserted directly, the same way {@link buildCdkDeployArgs} is for the
+ * production path.
+ *
+ * - `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
+ *   `export const runtime = 'edge'`) synthesizes a SECOND stack
+ *   (`edge-lambda-stack-*`, region us-east-1) in addition to the main hosting
+ *   stack. Without `--all`, CDK refuses with "specify which stacks to use".
+ *   Deploying every stack in a sandbox app is the intended behavior.
+ * - `--method direct` (**express mode, sandbox only**): skip CloudFormation
+ *   change-set creation and call UpdateStack directly. This trims a couple of
+ *   change-set round-trips off every sandbox deploy — a meaningful speedup for
+ *   the fast iteration loop — while remaining a full CloudFormation deploy (all
+ *   resource types, unlike `--hotswap`). The production deploy path
+ *   (`deploy.ts`) deliberately does NOT use this: a direct UpdateStack has no
+ *   reviewable change set, which is exactly the safety signal a production
+ *   deploy should keep.
+ */
+export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "exec", "cdk", "--", "deploy",
+    "--all",
+    "--method", "direct",
+    "--require-approval", "never",
+    "--outputs-file", `${outDir}/outputs.json`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
+}
+
 export async function startSandbox(options: SandboxOptions) {
   const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
   const sandboxStartTime = Date.now();
@@ -75,21 +118,9 @@ export async function startSandbox(options: SandboxOptions) {
   try {
     runSync(
       "npm",
-      [
-        "exec", "cdk", "--", "deploy",
-        // `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
-        // `export const runtime = 'edge'`) synthesizes a SECOND stack
-        // (`edge-lambda-stack-*`, region us-east-1) in addition to the main
-        // hosting stack. Without `--all`, CDK refuses with "specify which
-        // stacks to use". Deploying every stack in a sandbox app is the
-        // intended behavior, so select them all.
-        "--all",
-        "--require-approval", "never",
-        "--outputs-file", `${outDir}/outputs.json`,
-        "--context", `projectRoot=${process.cwd()}`,
-        "--context", "sandboxMode=true",
-        "--app", `npm exec tsx -- -C cdk ${backendPath}`,
-      ],
+      // Argv (including sandbox-only express mode, `--method direct`) is built by
+      // buildSandboxDeployArgs — see its doc comment for why each flag is here.
+      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
       {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
