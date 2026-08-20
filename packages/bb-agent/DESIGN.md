@@ -26,7 +26,7 @@ stream()/resume() → InvokeAgentRuntime (returns immediately)
      AgentCore Runtime container (agentcore-entry.ts): starts the turn as a BACKGROUND
      async task and returns an ack immediately
                 ↓
-         runAgent() → Strands agent loop → publishes chunks to Realtime (under the runtime role)
+         runAgent() → Strands agent loop → publishes chunks to Realtime (as the shared execution role)
                                          → persists messages to DistributedTable
                                          → SessionManager saves state to FileBucket
 ```
@@ -45,9 +45,9 @@ value and the default) — an explicit seam a future in-process/container option
 (mock) the loop runs in-process and the flag is ignored.
 
 **Compute model.** All AgentCore provisioning is kept self-contained in `AgentCoreRuntime`
-(`agentcore-runtime.cdk.ts`) — the co-bundle, the `Runtime`, its dedicated execution role and grants,
-the container env, and the handler's invoke permission — so it can later fold into a per-BB compute
-abstraction (should one land) without touching call sites.
+(`agentcore-runtime.cdk.ts`) — the co-bundle, the `Runtime`, the shared role's AgentCore trust +
+grants, the container env, and the handler's invoke permission — so it can later fold into a per-BB
+compute abstraction (should one land) without touching call sites.
 
 ## Session Persistence
 
@@ -74,21 +74,23 @@ The CDK class provisions:
 - **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
   harness. It runs **as the shared Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
   the same role the Lambda handler runs as — so it **inherits every Building Block's grants**, including
-  other BBs an agent's *tools* touch (KVStore, tables, etc.) and this agent's own session bucket (S3)
-  and conversation/message tables (DynamoDB). `AgentCoreRuntime` only adds what the shared role
-  doesn't already carry:
+  **Realtime publish** (`execute-api:ManageConnections` + the connections table, granted to the handler
+  by the `${id}-rt` Realtime child), other BBs an agent's *tools* touch (KVStore, tables, etc.), and
+  this agent's own session bucket (S3) and conversation/message tables (DynamoDB). `AgentCoreRuntime`
+  adds to that shared role only what's AgentCore-specific and not already carried:
+  - **Trust:** the `bedrock-agentcore.amazonaws.com` assume-role statement, so the runtime can assume
+    the shared role. Scoped by `aws:SourceAccount` + `aws:SourceArn` (AWS's recommended AgentCore trust
+    policy). Added here — not in core — so a Realtime-only app never trusts AgentCore.
   - **Bedrock:** `InvokeModel` + `InvokeModelWithResponseStream` on all foundation models and inference profiles
-  - **Realtime publish** (via `Realtime.grantPublish`): `execute-api:ManageConnections` + connections-table `dynamodb:Query` (subscriber lookup) and `dynamodb:BatchWriteItem` (410 stale-connection cleanup)
 - **Handler grant:** the shared role is granted `bedrock-agentcore:InvokeAgentRuntime` (wildcard runtime
   ARN, to avoid a role↔runtime dependency cycle) so the RPC handler can start the loop.
 
-For the runtime to assume the shared role, `BlocksRole` trusts `bedrock-agentcore.amazonaws.com` (a
-core change). The container gets `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and `BLOCKS_RT_CALLBACK_URL`
-injected as environment variables. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the co-bundled backend
-re-derive its resource names in-process (session bucket, conversation/message tables) via the
-SDK-identifier registry — the same derivation the handler uses — so those names aren't injected. Only
-`BLOCKS_RT_CALLBACK_URL` (from `grantPublish`) must be passed, since the API Gateway Management
-endpoint isn't otherwise discoverable off the handler.
+The container gets `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and `BLOCKS_RT_CALLBACK_URL` injected as
+environment variables. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the co-bundled backend re-derive its
+resource names in-process (session bucket, conversation/message tables) via the SDK-identifier
+registry — the same derivation the handler uses — so those names aren't injected. Only
+`BLOCKS_RT_CALLBACK_URL` (from `Realtime.publishCallbackUrl()`) must be passed, since the API Gateway
+Management endpoint isn't otherwise discoverable off the handler.
 
 > **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
 

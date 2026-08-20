@@ -66,7 +66,9 @@ test('CDK: Agent provisions an AgentCore Runtime for the loop', () => {
 test('CDK: the loop runs as the shared execution role, which carries everything it touches', () => {
 	const template = synth();
 	const json = JSON.stringify(template.toJSON());
-	// Realtime publish (both halves) — the load-bearing grant for streaming from the container.
+	// Realtime publish (both halves) — load-bearing for streaming from the container. Granted to the
+	// shared role by the Realtime BB's handler wiring (not by the Agent), and inherited because the
+	// loop runs AS that role.
 	assert.ok(json.includes('execute-api:ManageConnections'), 'Realtime postToConnection');
 	assert.ok(json.includes('dynamodb:Query'), 'connections-table + history query');
 	// Model + storage the loop uses (Bedrock granted here; S3/DynamoDB via the child BBs).
@@ -81,8 +83,37 @@ test('CDK: the loop runs as the shared execution role, which carries everything 
 	assert.ok(!json.includes('RuntimeRole'), 'no bespoke per-runtime role should be created');
 });
 
+test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', () => {
+	// Core is BB-agnostic — it does not trust bedrock-agentcore. The Agent adds that trust here, so
+	// the AgentCore Runtime can assume the shared role it runs AS. It must be scoped by
+	// aws:SourceAccount (AWS's recommended AgentCore trust policy), and lambda trust must remain.
+	const template = synth();
+	const roles = template.findResources('AWS::IAM::Role');
+	const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
+	assert.ok(blocksRoleId, 'expected the shared BlocksRole');
+
+	const statements = roles[blocksRoleId].Properties.AssumeRolePolicyDocument.Statement as Array<{
+		Principal?: { Service?: string | string[] };
+		Condition?: Record<string, Record<string, unknown>>;
+	}>;
+	const servicesOf = (s: (typeof statements)[number]) => {
+		const svc = s.Principal?.Service;
+		return Array.isArray(svc) ? svc : svc ? [svc] : [];
+	};
+	const services = statements.flatMap(servicesOf);
+	assert.ok(services.includes('lambda.amazonaws.com'), 'shared role must stay Lambda-assumable');
+	assert.ok(services.includes('bedrock-agentcore.amazonaws.com'), 'shared role must be assumable by the AgentCore Runtime');
+
+	const agentCoreStmt = statements.find(s => servicesOf(s).includes('bedrock-agentcore.amazonaws.com'));
+	assert.ok(agentCoreStmt?.Condition, 'AgentCore trust statement must carry a scoping Condition');
+	assert.ok(
+		JSON.stringify(agentCoreStmt.Condition).includes('aws:SourceAccount'),
+		'AgentCore trust must be scoped by aws:SourceAccount',
+	);
+});
+
 test('CDK: multiple agents add the identical shared-role grants ONCE, not per-agent', () => {
-	// Every agent would otherwise add the SAME Bedrock / InvokeAgentRuntime / Realtime-publish
+	// Every agent would otherwise add the SAME bedrock-agentcore trust / Bedrock / InvokeAgentRuntime
 	// statements to the one shared role. They're identical (stack-scoped), so they must be added
 	// exactly once regardless of agent count — keeping the shared role's policy from bloating with
 	// duplicates. (Overflow into managed policies is a normal CDK mechanism and not asserted against.)

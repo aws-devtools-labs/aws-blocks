@@ -9,7 +9,7 @@ managed) instead of an AsyncJob-triggered Lambda — lifting the 15-minute per-t
 **keeping the Realtime BB** as the streaming transport, so chunks reach the browser exactly as
 before. `stream()`/`resume()` call `InvokeAgentRuntime`, which starts the turn as a background
 async task and returns immediately (the microVM stays alive via `HealthyBusy` while the loop runs
-and publishes chunks to Realtime under its own execution role). Locally the loop still runs
+and publishes chunks to Realtime as the shared Blocks execution role). Locally the loop still runs
 in-process against the mock Realtime.
 
 - **No client-facing API change:** `stream()`/`resume()`/`getChannel()`, the `chunks` Realtime
@@ -19,10 +19,14 @@ in-process against the mock Realtime.
 - AgentCore provisioning is self-contained in `AgentCoreRuntime` (co-bundle + `Runtime` via
   `fromCodeAsset`, plus the handler's `InvokeAgentRuntime` permission) so it can later fold into a
   per-BB compute abstraction. The loop runs **as the shared Blocks execution role** (the same role
-  the Lambda handler runs as), so it inherits every Building Block's grants (including other BBs an
-  agent's tools touch); `AgentCoreRuntime` only adds Bedrock + Realtime-publish to that role.
+  the Lambda handler runs as), so it inherits every Building Block's grants (including Realtime
+  publish and other BBs an agent's tools touch). `AgentCoreRuntime` adds to that shared role only
+  what's AgentCore-specific: the `bedrock-agentcore` assume-role trust (scoped by
+  `aws:SourceAccount`/`aws:SourceArn`), Bedrock model access, and the handler's `InvokeAgentRuntime`
+  permission — so core stays BB-agnostic and a Realtime-only app never trusts AgentCore.
 - **Removed** the internal AsyncJob (and the `@aws-blocks/bb-async-job` dependency); bumped
   `@strands-agents/sdk` to `^1.7.0` and added `bedrock-agentcore` + `@aws-sdk/client-bedrock-agentcore`.
 
 Deployment note: this changes the deployed infra shape (adds an AgentCore Runtime, removes the
-agent's SQS queue). Depends on `@aws-blocks/bb-realtime`'s new `grantPublish`.
+agent's SQS queue). Uses `@aws-blocks/bb-realtime`'s new `publishCallbackUrl()` for the endpoint to
+inject into the container.

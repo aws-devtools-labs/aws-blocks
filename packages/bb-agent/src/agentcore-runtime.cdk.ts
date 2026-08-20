@@ -5,25 +5,27 @@
  * Self-contained CDK provisioning for the Agent BB's AgentCore Runtime.
  *
  * This class owns EVERYTHING AgentCore-specific: the synth-time co-bundle of the app backend,
- * the `Runtime` construct (via `fromCodeAsset` — Node 22 CodeZip, no Docker), its dedicated
- * execution role and that role's IAM grants, the container env injection, and the grant that
- * lets the app's RPC handler invoke the runtime. It is deliberately kept in one place, with
- * no AgentCore details leaking into the `Agent` CDK constructor, so it can later fold into a
- * per-BB compute abstraction (should one land) without touching call sites — the Agent just
- * constructs it and hands over references to the BBs the loop uses.
+ * the `Runtime` construct (via `fromCodeAsset` — Node 22 CodeZip, no Docker), the shared role's
+ * AgentCore trust + grants, the container env injection, and the grant that lets the app's RPC
+ * handler invoke the runtime. It is deliberately kept in one place, with no AgentCore details
+ * leaking into the `Agent` CDK constructor or into core, so it can later fold into a per-BB
+ * compute abstraction (should one land) without touching call sites — the Agent just constructs
+ * it and hands over references to the BBs the loop uses.
  *
- * The agent loop runs INSIDE this runtime and streams to the browser via the Realtime BB, so
- * the runtime's role — a SEPARATE principal from the shared Blocks handler role — is granted
- * Realtime publish access (see `realtime.grantPublish`), plus Bedrock, the conversation/message
- * tables, and the session bucket. Inbound auth is IAM (SigV4): the RPC handler invokes with its
- * own credentials; the browser never talks to the runtime directly.
+ * The loop runs INSIDE this runtime AS the shared Blocks execution role (the same role the Lambda
+ * handler runs as), so it inherits every Building Block's grants — including the Realtime publish
+ * permissions already granted to the handler, so it streams chunks to the browser via the Realtime
+ * BB with no extra grant (only the callback URL is injected). This class adds to that shared role
+ * only what's AgentCore-specific: the `bedrock-agentcore` assume-role trust, Bedrock model access,
+ * and the handler's `InvokeAgentRuntime` permission. Inbound auth is IAM (SigV4): the RPC handler
+ * invokes with its own credentials; the browser never talks to the runtime directly.
  */
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { registerConfig, Scope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { Realtime } from '@aws-blocks/bb-realtime';
@@ -33,7 +35,7 @@ import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 export interface AgentCoreRuntimeProps {
 	/** fullId of the owning Agent — the container looks the Agent up by this (`BB_AGENT_ID`). */
 	agentFullId: string;
-	/** Realtime BB the loop publishes chunks to. Its `grantPublish` wires the shared role. */
+	/** Realtime BB the loop publishes chunks to. `publishCallbackUrl()` supplies the endpoint to inject. */
 	realtime: InstanceType<typeof Realtime>;
 	/**
 	 * Pre-built asset dir to use instead of co-bundling at synth. Set by unit tests and apps
@@ -65,25 +67,52 @@ export class AgentCoreRuntime extends Scope {
 		// role the Lambda handler runs as. Because every Building Block grants its runtime permissions
 		// to this role (a tool that uses KVStore/tables/etc. grants there too), the AgentCore
 		// container inherits them all automatically — no bespoke, under-granted role, and no need to
-		// mirror each BB's grants. BlocksRole trusts `bedrock-agentcore` so the runtime can assume it
-		// (see core/cdk/blocks-backend.ts). One shared role that any compute can assume keeps this a
-		// drop-in for a future per-BB compute abstraction.
+		// mirror each BB's grants. One shared role that any compute can assume keeps this a drop-in
+		// for a future per-BB compute abstraction.
 		const role = this.executionRole;
 
-		// Add the agent's shared-role grants ONCE per stack. Every agent instance would otherwise add
-		// the SAME Bedrock / InvokeAgentRuntime / Realtime-publish statements to the ONE shared role;
-		// with several agents in an app that piles up duplicates and overflows the IAM inline-policy
-		// size limit (CDK then spills into `OverflowPolicy` managed policies and the role misbehaves).
-		// These grants are identical for every agent — the Realtime infra, Bedrock models, and the
-		// runtime-ARN wildcard are all stack-scoped — so granting once covers every agent's container.
-		// (The session bucket + conversation/message tables are already granted to the shared role by
-		// the Agent's FileBucket/DistributedTable children, so they're not repeated here.)
+		// Add the agent's shared-role trust + grants ONCE per stack. Every agent instance would
+		// otherwise add the SAME trust / Bedrock / InvokeAgentRuntime statements to the ONE shared
+		// role; with several agents in an app that piles up duplicates and overflows the IAM inline-
+		// policy size limit (CDK then spills into `OverflowPolicy` managed policies and the role
+		// misbehaves). These are identical for every agent — Bedrock models and the runtime-ARN
+		// wildcard are stack-scoped — so doing it once covers every agent's container. (Realtime
+		// publish, the session bucket, and the conversation/message tables are already granted to the
+		// shared role by the Realtime BB's handler wiring and the Agent's FileBucket/DistributedTable
+		// children, so they're not repeated here — the loop inherits them by running as the role.)
 		const SHARED_GRANTS_KEY = Symbol.for('BLOCKS_AGENT_RUNTIME_SHARED_ROLE_GRANTS');
 		const stackAny = stack as unknown as Record<symbol, { callbackUrl: string } | undefined>;
 		let sharedGrants = stackAny[SHARED_GRANTS_KEY];
 		if (!sharedGrants) {
-			// Realtime publish (postToConnection + connections-table query) + the config to inject.
-			const { callbackUrl } = props.realtime.grantPublish(role);
+			// The container publishes to Realtime AS this shared role, which already holds the publish
+			// grants (the Realtime BB grants postToConnection + the connections table to the handler on
+			// the same role) — so no Realtime IAM grant is needed here, only the callback URL to inject
+			// (not discoverable outside the Blocks handler).
+			const callbackUrl = props.realtime.publishCallbackUrl();
+
+			// Trust: let the AgentCore Runtime assume this shared role (it runs AS the role). Added here
+			// rather than in core, so the role only trusts `bedrock-agentcore` when an Agent exists.
+			// Scope it to this account/region with aws:SourceAccount + aws:SourceArn — AWS's recommended
+			// AgentCore Runtime trust policy — so only AgentCore runtimes in THIS account can assume the
+			// role (tightens the confused-deputy surface) without breaking assumption. `assumeRolePolicy`
+			// exists only on the concrete `Role`; core always creates BlocksRole concretely, so narrow
+			// and fail loud if that ever changes.
+			if (!(role instanceof Role)) {
+				throw new Error(
+					'AgentCore Runtime requires the shared Blocks execution role to be a concrete iam.Role to add its assume-role trust',
+				);
+			}
+			role.assumeRolePolicy?.addStatements(
+				new PolicyStatement({
+					effect: Effect.ALLOW,
+					principals: [new ServicePrincipal('bedrock-agentcore.amazonaws.com')],
+					actions: ['sts:AssumeRole'],
+					conditions: {
+						StringEquals: { 'aws:SourceAccount': stack.account },
+						ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:bedrock-agentcore:${stack.region}:${stack.account}:*` },
+					},
+				}),
+			);
 			// Bedrock model access for the loop (no Building Block grants this, and the loop no longer
 			// runs on the handler).
 			role.addToPrincipalPolicy(
@@ -137,7 +166,7 @@ export class AgentCoreRuntime extends Scope {
 				// under an un-prefixed fullId that won't match BB_AGENT_ID.
 				BLOCKS_STACK_NAME: stack.stackName,
 				// The Realtime publish endpoint — publish() reads this from process.env. Outside the
-				// Blocks handler it isn't otherwise discoverable, so grantPublish hands it back.
+				// Blocks handler it isn't otherwise discoverable, so realtime.publishCallbackUrl() supplies it.
 				BLOCKS_RT_CALLBACK_URL: callbackUrl,
 			},
 		});
