@@ -46,7 +46,7 @@
     "@aws-blocks/bb-logger": "^0.1.4",
     "@aws-blocks/core": "^0.2.0",
     "@aws-sdk/client-rds-data": "^3.700.0",
-    "@electric-sql/pglite": "^0.2.0",
+    "@electric-sql/pglite": "^0.5.5",
     "pg": "^8.13.0",
     "pluralize": "^8.0.0"
   },
