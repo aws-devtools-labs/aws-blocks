@@ -8,20 +8,11 @@
 # What this file controls: it does NOT generate or clear Dependabot *alerts*
 # (those come from the dependency graph). It configures the *pull requests*
 # Dependabot opens:
-#   - Version-update PRs run monthly and are grouped, so freshness does not cost
-#     a daily bump-PR stream.
-#   - Security-update PRs (driven by alerts) are batched into one grouped PR per
-#     run instead of one PR per package, which is what produced the flood of
-#     individual "bump X" PRs previously.
-#
-# Grouping policy: batch what is safe to move together, and keep isolated what
-# ships to customers.
-#   - aws-sdk (@aws-sdk/*, @smithy/*): release in lockstep, safe to batch.
-#   - dev-dependencies: build/test only, low blast radius.
-#   - security: batched to cut noise.
-#   - production runtime deps are intentionally NOT grouped, so each shipped
-#     dependency bump (e.g. ws, zod) lands as its own reviewable, mergeable,
-#     bisectable PR.
+#   - Version-update PRs run monthly.
+#   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
+#     and dev-dependencies (build/test only, low blast radius). Production deps
+#     and security fixes land as their own PRs so each shipped bump stays
+#     reviewable and mergeable on its own.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -36,17 +27,9 @@ updates:
           - "@smithy/*"
       dev-dependencies:
         dependency-type: development
-      npm-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
 
-  # Keep the GitHub Actions used by CI patched. Low volume, worth the PRs.
+  # Keep the GitHub Actions used by CI patched.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    groups:
-      github-actions:
-        patterns:
-          - "*"
