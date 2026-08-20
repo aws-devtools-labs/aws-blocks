@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: native/kotlin
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # For the merge event, check out main (the merged commit). For a manual
           # dispatch, fall back to the dispatched ref (empty ref => default). Use a
