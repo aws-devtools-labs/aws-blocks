@@ -25,6 +25,14 @@ export interface BlocksDefaults {
 	 * well as the CLI, API, and AWS console — until it is turned off.
 	 */
 	deletionProtection: boolean;
+
+	/**
+	 * CORS origins the compute's API accepts, as regular-expression patterns
+	 * matched against the request `Origin` header. Empty means no cross-origin
+	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
+	 * frontend can reach a deployed API; `production` allows none by default.
+	 */
+	allowedOrigins: string[];
 }
 
 /**
@@ -40,10 +48,12 @@ export const BlocksPresets = {
 	sandbox: {
 		removalPolicy: RemovalPolicy.DESTROY,
 		deletionProtection: false,
+		allowedOrigins: ['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$'],
 	},
 	/** Durable, protected posture for permanent deployments. */
 	production: {
 		removalPolicy: RemovalPolicy.RETAIN,
 		deletionProtection: true,
+		allowedOrigins: [],
 	},
 } satisfies Record<string, BlocksDefaults>;

@@ -99,11 +99,9 @@ It is excluded from the customer-facing Building Block catalog
 `LambdaCompute` is the Lambda implementation of the compute abstraction and the
 framework's default compute. It slots into the broader model as follows:
 
-- **Default compute.** Core builds a stack/backend's default compute through a
-  registered factory — a hook mirroring client-middleware registration. This
-  package supplies `LambdaCompute` as that factory via a side-effect `register`
-  module that `@aws-blocks/blocks` imports, so every app gets a Lambda-backed
-  default with no explicit wiring while core never imports the concrete class.
+- **Default compute.** `LambdaCompute` is the framework's default compute,
+  injected so core can build it without importing the concrete class — see
+  [How the default compute is injected](#how-the-default-compute-is-injected).
 - **Compute resolution.** `Scope.compute` resolves the compute a handler runs
   on: an explicit assignment on the block or an ancestor scope, else the app's
   default compute.
@@ -117,3 +115,84 @@ framework's default compute. It slots into the broader model as follows:
 The broader multi-compute model also covers request routing across computes,
 per-compute event delivery, the IAM and trust model, and VPC networking — none
 of which live in this package.
+
+## How the default compute is injected
+
+Core must obtain a `LambdaCompute` **without importing it**. The dependency
+arrow only points one way — `@aws-blocks/bb-lambda-compute` depends on
+`@aws-blocks/core`, never the reverse — because the reverse would be a cycle and
+would drag the concrete CDK class (and `aws-cdk-lib`) into core. So core defines
+the seam (a factory *type* and a `create()` option), and the umbrella
+`@aws-blocks/blocks` — the one package that depends on both core and this one —
+supplies a concrete factory through a normal `import`.
+
+### The three participants
+
+- **Core owns the seam** (`packages/core/src/cdk/compute/default-compute-factory.ts`,
+  exposed via `@aws-blocks/core/cdk/internal`): just the factory *type*.
+
+  ```ts
+  export type DefaultComputeFactory = (root: BlocksStack | BlocksBackend) => Compute;
+  ```
+
+  `create()` takes the factory as a **required argument** (after `props`) and
+  calls it directly to build the default:
+
+  ```ts
+  static async create(scope, id, props, defaultComputeFactory: DefaultComputeFactory) {
+    ...
+    stack._defaultCompute = defaultComputeFactory(stack);   // before the backend import
+  }
+  ```
+
+  The factory is a positional argument, **not a prop** — so it is absent from
+  both the public and internal props types, and a bare-`@aws-blocks/core` caller
+  who omits it gets a compile error, not a runtime one. Because it is required,
+  core needs no runtime "no factory" guard.
+
+- **The umbrella supplies the factory** (`@aws-blocks/blocks`, `index.cdk.ts`) —
+  a plain import of the concrete class, and a thin wrapper around `create()` that
+  injects it:
+
+  ```ts
+  import { BlocksStack as CoreBlocksStack } from '@aws-blocks/core/cdk';
+  import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+
+  const lambdaDefaultComputeFactory = (root) => new LambdaCompute(root, 'DefaultCompute');
+
+  export const BlocksStack = {
+    create: (scope, id, props) =>
+      CoreBlocksStack.create(scope, id, props, lambdaDefaultComputeFactory),
+  };
+  export type BlocksStack = CoreBlocksStack;   // instance type unchanged
+  ```
+
+  The umbrella's wrapper exposes only `(scope, id, props)`, so a customer can't
+  reach the factory argument through it.
+
+  The `import` is a real, visible edge (`@aws-blocks/blocks` → this package) that
+  the module graph, bundler, and `lint:deps` all see — not a load-bearing
+  side-effect import.
+
+- **The customer calls the umbrella's wrapper.** Every app already does
+  `import { BlocksStack } from '@aws-blocks/blocks/cdk'`, so the call site is
+  unchanged (`BlocksStack.create(app, id, { backendHandlerPath, backendCDKPath })`);
+  the factory is injected for them.
+
+### Execution order (CDK synth)
+
+1. The app calls the umbrella's `BlocksStack.create(...)` / `BlocksBackend.create(...)`.
+2. The wrapper forwards to core's `create()`, adding the factory argument.
+3. Inside core's `create()`, `this._defaultCompute = defaultComputeFactory(this)`
+   runs **before** importing the backend module — so a block that reads
+   `this.compute` in its constructor (during that import) resolves to it. That
+   call runs `new LambdaCompute(root, 'DefaultCompute')`, provisioning the
+   function + API Gateway.
+4. `Scope.compute` and the delegating `handler` / `gateway` / `apiUrl` accessors
+   read from `_defaultCompute`.
+
+A bare-`@aws-blocks/core` caller must supply the factory (it is a required
+argument); any app using `@aws-blocks/blocks` gets it injected for free.
+
+The `DefaultComputeFactory` type stays on `@aws-blocks/core/cdk/internal`; none
+of this is public, customer-facing surface.

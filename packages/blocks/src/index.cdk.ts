@@ -3,7 +3,54 @@
 
 // CDK build - re-export CDK versions
 // Pipeline (and all other CDK constructs) are re-exported via the wildcard below.
+// Note: BlocksStack / BlocksBackend from this wildcard are shadowed below by
+// factory-injecting wrappers of the same name.
 export * from '@aws-blocks/core/cdk';
+
+import type { Construct } from 'constructs';
+import {
+	BlocksStack as CoreBlocksStack,
+	BlocksBackend as CoreBlocksBackend,
+	type BlocksStackProps,
+	type BlocksBackendProps,
+} from '@aws-blocks/core/cdk';
+import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+
+// The umbrella is the one package that depends on both core and a concrete
+// compute, so it injects the default-compute factory here — a plain import,
+// not a side-effect global. Core calls this factory in create() to build the
+// default without importing the concrete class. `defaultComputeFactory` is an
+// internal create() option, deliberately absent from the public props types, so
+// customers cannot set it; the umbrella is its only supplier.
+//
+// The cast is plumbing: under the default TS condition `LambdaCompute` resolves
+// to its mock-typed entry, but under `--conditions=cdk` (real synth) the value
+// is the CDK `LambdaCompute` that extends `Compute`. The cast bridges that
+// condition-vs-value gap; it is not a public-API cast.
+const lambdaDefaultComputeFactory: DefaultComputeFactory = (root) =>
+	new LambdaCompute(root as never, 'DefaultCompute') as unknown as Compute;
+
+/**
+ * `BlocksStack` with the Lambda default compute wired in. Same API and instance
+ * type as core's `BlocksStack`; `create()` injects the default-compute factory.
+ */
+export const BlocksStack = {
+	create: (scope: Construct, id: string, props: BlocksStackProps): Promise<CoreBlocksStack> =>
+		CoreBlocksStack.create(scope, id, props, lambdaDefaultComputeFactory),
+};
+export type BlocksStack = CoreBlocksStack;
+
+/**
+ * `BlocksBackend` with the Lambda default compute wired in. Same API and
+ * instance type as core's `BlocksBackend`; `create()` injects the
+ * default-compute factory.
+ */
+export const BlocksBackend = {
+	create: (scope: Construct, id: string, props: BlocksBackendProps): Promise<CoreBlocksBackend> =>
+		CoreBlocksBackend.create(scope, id, props, lambdaDefaultComputeFactory),
+};
+export type BlocksBackend = CoreBlocksBackend;
 
 // Override core's untyped getSdkIdentifiers with typed overloads
 export { getSdkIdentifiers } from './sdk-identifiers.js';
