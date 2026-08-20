@@ -123,6 +123,22 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Mock/AWS parity:** both layers call the same `applyReadValidation()` helper in `errors.ts`, so all three modes (coerced output, raw-fallback + warn, strict throw) behave identically. `null` (a missing item) passes through untouched in every mode, preserving not-found semantics.
 
+### D-DT-10: Secure-by-default durability & encryption, sourced from stack `BlocksDefaults`
+
+Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPresets` in `@aws-blocks/core/cdk`), the shared infrastructure-defaults mechanism (introduced in #302): `defaults.removalPolicy`, `defaults.deletionProtection`, and `defaults.pointInTimeRecovery`. Under `BlocksPresets.production` a table defaults to PITR **on**, deletion protection **on**, and `RemovalPolicy.RETAIN`; under `BlocksPresets.sandbox` all three flip off/`DESTROY` so throwaway stacks stay cheap and `sandbox:destroy` is a one-command teardown. SSE defaults to the AWS-managed KMS key. Every default is overridable per table via `protection`, `pointInTimeRecovery`, and `encryption`; a per-block option always wins (`option ?? scope.defaults.field`). Each field is read **independently** from `defaults` — deletion protection and PITR are never derived from `removalPolicy`.
+
+**Why read `this.defaults` rather than the `sandboxMode` context.** An earlier revision of this PR read `--context sandboxMode=true` directly and gated durability on it. #302 replaced that per-block guessing with one stack-wide posture object every block reads, so an app tunes durability in one place and blocks stay consistent. Durability now flows entirely through `defaults`; the block only still reads `sandboxMode` for the GSI custom resource's drop-and-recreate fast path (an operational concern, not a durability default).
+
+**Why gate deletion protection at the construct (via `defaults`) rather than the stack aspect.** A natural alternative was to enable deletion protection unconditionally and let `SandboxDisableDeletionProtection` relax it for sandboxes. That does **not** work: the mixin duck-types on a `deletionProtection` *instance* property, and the DynamoDB L2 `Table` only accepts `deletionProtection` as a constructor prop — it exposes no such instance property to flip afterward (pinned by `core/src/cdk/mixins.test.ts`). Reading `this.defaults.deletionProtection` in the constructor is exactly why that construct-level mechanism exists; the mixin is now `@deprecated`.
+
+**Why one `protection` knob instead of separate `deletionProtection` + `removalPolicy`.** As a per-block override, deletion protection and removal policy answer a single question — "can this table be destroyed?" — and two booleans can encode a contradiction: `deletionProtection: true` + `removalPolicy: 'destroy'` tells CloudFormation to `DeleteTable` on stack delete while DynamoDB refuses the delete, wedging the stack in `DELETE_FAILED`. Collapsing them into one three-value enum (`'disposable'` → DESTROY + unprotected; `'retained'` → RETAIN + unprotected; `'locked'` → RETAIN + protected) makes the invalid combination unrepresentable while still exposing the meaningful middle state (retain without locking). When omitted, the two CDK properties come from `defaults` directly. Encryption stays a separate knob because it's an orthogonal concern.
+
+**Why AWS-managed (not customer-managed) KMS by default.** AWS-managed SSE (`aws/dynamodb`) gives CloudTrail-auditable encryption at rest with no per-key monthly charge and no extra stack resources, satisfying "SSE-KMS by default" without imposing cost. Teams that need key rotation/policy control opt into a dedicated CMK with `encryption: 'customer-managed'`.
+
+**Bring-your-own / shared CMK.** `encryption: 'customer-managed'` provisions a **dedicated CMK per table**, so an app with many customer-managed tables accrues one key (and one monthly charge) each. To share a single key across tables, callers pass `DistributedTable.fromKmsKey(keyArn)` — a branded `ExternalKmsKeyRef` — as the `encryption` value; the CDK layer resolves it with `Key.fromKeyArn(...)` and sets it as the table's `encryptionKey` (no new key is minted). The `encryption` option is therefore a three-way value (`'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`) rather than a separate `encryptionKey` field — folding it into one knob avoids a contradictory state (e.g. `encryption: 'aws-managed'` alongside a customer key). This follows the same branded-reference pattern as `fromExisting()` (`ExternalTableRef`) and deliberately keeps the CDK `IKey` type out of the public `types.ts`, which must stay runtime-agnostic across the four export layers — the public surface only ever sees the key's ARN string wrapped in a brand.
+
+**`fromExisting` is untouched.** When binding to a pre-existing table these options don't apply — the customer owns that table's durability/encryption configuration, exactly as they own its GSIs.
+
 ## Infrastructure (CDK)
 
 Creates a single DynamoDB table:
@@ -133,7 +149,7 @@ Creates a single DynamoDB table:
 - **TTL:** Enabled via `TimeToLiveSpecification` when `options.ttl` is set
 - **Billing mode:** PAY_PER_REQUEST
 - **Table name:** Derived from `scope.fullId` (includes stack name for uniqueness)
-- **Removal policy:** DESTROY (sandbox), configurable for production
+- **Durability & encryption:** Secure-by-default in production — PITR, deletion protection, SSE-KMS, and `RemovalPolicy.RETAIN` (see D-DT-10)
 - **Permissions:** `grantReadWriteData` to the parent scope's handler automatically, plus explicit `dynamodb:Query` on `index/*`
 
 Attribute types are inferred from the schema at synth time. The CDK layer probes the schema's `StandardSchemaV1.validate()` method with a test value of `0` for each key field — if the field accepts it without issues, it's numeric (`AttributeType.NUMBER`), otherwise string (`AttributeType.STRING`). This is schema-library-agnostic and uses only the standard validation interface.
@@ -217,3 +233,4 @@ Items are stored as DynamoDB JSON (marshalled via `@aws-sdk/lib-dynamodb` Docume
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation at mock level — IAM is handled by CDK grants automatically |
 | In-memory index queries vs DynamoDB index reads | Index query performance characteristics differ; no GSI throughput throttling | No mitigation — correctness is preserved. Performance testing requires sandbox |
 | TTL not enforced locally | Items with expired TTL remain in mock data | Document the gap; test TTL behavior in sandbox |
+| Durability/encryption options (`pointInTimeRecovery`, `protection`, `encryption`) are CDK-only | These provisioning-time settings have no observable effect on mock reads/writes | No mitigation needed — they're infrastructure config, not data behavior; verify the synthesized template in sandbox/prod |
