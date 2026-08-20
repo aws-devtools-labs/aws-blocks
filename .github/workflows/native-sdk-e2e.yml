@@ -31,7 +31,7 @@ jobs:
       kotlin-changed: ${{ steps.check.outputs.kotlin-changed }}
       any-changed: ${{ steps.check.outputs.any-changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -76,12 +76,12 @@ jobs:
     outputs:
       spec-path: ${{ steps.spec.outputs.path }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -97,7 +97,7 @@ jobs:
           echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
 
       - name: Upload spec artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/blocks.spec.json
@@ -111,12 +111,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -134,7 +134,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -209,17 +209,17 @@ jobs:
             gradle-task: iosSimulatorArm64Test
             timeout: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -228,7 +228,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: native/kotlin/e2e/
@@ -261,12 +261,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -280,7 +280,7 @@ jobs:
       - run: npm run build
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: test-apps/native-bindings/aws-blocks/
@@ -362,12 +362,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -498,12 +498,12 @@ jobs:
     env:
       BLOCKS_STACK_SUFFIX: native-swift-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -588,7 +588,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 30
+    # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
+    # Swift iOS sandbox job and the non-sandbox Kotlin job above.
+    timeout-minutes: ${{ matrix.timeout }}
     environment: publish
     strategy:
       fail-fast: false
@@ -598,24 +600,26 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
+            timeout: 30
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
+            timeout: 45
     env:
       BLOCKS_STACK_SUFFIX: native-kotlin-${{ matrix.suffix }}-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -638,7 +642,11 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.blocks-sandbox/config.json'))['apiUrl'])")
-          echo "blocks_url=${URL}/aws-blocks/api" >> $GITHUB_OUTPUT
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
+          # so emit it as-is. Appending /aws-blocks/api here doubled the path;
+          # API Gateway still routed /prod/aws-blocks/api/* to the JSON-RPC Lambda
+          # so the suite "worked", but keeping the URL clean avoids surprises.
+          echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
       - name: Warm up sandbox API
         env:
@@ -666,7 +674,7 @@ jobs:
         run: npm run spec
 
       - name: Download spec
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: blocks-spec
           path: native/kotlin/e2e/

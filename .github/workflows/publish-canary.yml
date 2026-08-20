@@ -19,9 +19,9 @@ jobs:
     env:
       NODE_OPTIONS: '--test-reporter=spec'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -59,7 +59,7 @@ jobs:
           npx tsx scripts/publish/publish.ts --canary "$BRANCH_NAME"
 
       - name: Upload publish manifest
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: canary-publish-manifest
           path: publish-manifest.json
