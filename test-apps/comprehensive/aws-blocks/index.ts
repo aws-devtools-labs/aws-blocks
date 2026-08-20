@@ -328,8 +328,7 @@ const secureTable = new DistributedTable(scope, 'secure-items', {
   indexes: {
     byTimestamp: { partitionKey: 'pk', sortKey: 'timestamp' },
   },
-  pointInTimeRecovery: true,
-  pointInTimeRecoveryDays: 7,
+  pointInTimeRecovery: { retentionDays: 7 },
 });
 
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)

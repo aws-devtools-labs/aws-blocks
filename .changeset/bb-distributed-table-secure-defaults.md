@@ -18,9 +18,9 @@ Under the `sandbox` preset PITR, deletion protection, and RETAIN all flip off/`D
 Every default is overridable per table:
 
 - `protection` (`'disposable' | 'retained' | 'locked'`) — one knob spanning removal policy + deletion protection, so the contradictory "protect + destroy" state can't be expressed. When set it wins over the stack `defaults`.
-- `pointInTimeRecovery` (`boolean`) — overrides `defaults.pointInTimeRecovery` for this table; `pointInTimeRecoveryDays` (1–35, default 35) narrows the PITR recovery window to trim backup cost.
+- `pointInTimeRecovery` (`boolean | { retentionDays: number }`) — overrides `defaults.pointInTimeRecovery` for this table. `true` enables PITR with the default 35-day window, `false` disables it, and `{ retentionDays: n }` (1–35) pins a shorter window to trim backup cost. Window and on/off are one field, so "days set but PITR off" can't be expressed.
 - `encryption` (`'aws-managed' | 'customer-managed'`, or `DistributedTable.fromKmsKey(arn)` to share an existing customer-managed key across tables instead of provisioning one CMK each).
 
-Tables bound via `fromExisting()` are unaffected, and now emit a synth-time warning if durability/encryption options are passed alongside them (they're ignored). An unrecognized `protection`/`encryption` value, or an out-of-range `pointInTimeRecoveryDays`, also warns at synth rather than silently falling back.
+Tables bound via `fromExisting()` are unaffected, and now emit a synth-time warning if durability/encryption options are passed alongside them (they're ignored). An unrecognized `protection`/`encryption` value, or an out-of-range `pointInTimeRecovery.retentionDays`, also warns at synth rather than silently falling back.
 
 > **Behavior change on next production deploy of an existing app:** the table will gain PITR, deletion protection, an SSE-KMS specification, and a `Retain` deletion policy (from the `production` preset). These are in-place updates (no table replacement). Because deletion protection becomes enabled, a future `cdk destroy` of a prod stack will refuse to delete the table until you relax it (`protection: 'disposable'`/`'retained'`). And because the removal policy is now `Retain`, deleting the stack orphans the table — redeploying the same app then fails with `Table already exists` until the orphaned table is removed or imported.

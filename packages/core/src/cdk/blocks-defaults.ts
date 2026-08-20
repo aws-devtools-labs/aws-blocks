@@ -32,8 +32,13 @@ export interface BlocksDefaults {
 	 * second in the retention window. On in `production`, off in `sandbox` (where
 	 * throwaway data isn't worth the backup-storage cost). Blocks whose service
 	 * has no equivalent simply ignore it.
+	 *
+	 * `true` enables backups with the service's default window; `false` disables
+	 * them; `{ retentionDays: n }` enables them and pins the window (a block
+	 * clamps/validates `n` to its service's supported range — DynamoDB PITR is
+	 * 1–35 days). Backups only have a window when on, so the two are one field.
 	 */
-	pointInTimeRecovery: boolean;
+	pointInTimeRecovery: boolean | { retentionDays: number };
 }
 
 /**

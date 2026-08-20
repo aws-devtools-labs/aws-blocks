@@ -90,12 +90,12 @@ test('CDK: default PITR does not pin a recovery window (DynamoDB 35-day default)
 	});
 });
 
-test('CDK: pointInTimeRecoveryDays sets the recovery window', () => {
+test('CDK: pointInTimeRecovery { retentionDays } enables PITR and pins the window', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-		pointInTimeRecoveryDays: 7,
+		pointInTimeRecovery: { retentionDays: 7 },
 	});
 	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::DynamoDB::Table', {
@@ -106,12 +106,12 @@ test('CDK: pointInTimeRecoveryDays sets the recovery window', () => {
 	});
 });
 
-test('CDK: an out-of-range pointInTimeRecoveryDays falls back to the default (no window pinned)', () => {
+test('CDK: an out-of-range retentionDays falls back to the default window (still enabled)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-		pointInTimeRecoveryDays: 60,
+		pointInTimeRecovery: { retentionDays: 60 },
 	});
 	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::DynamoDB::Table', {
@@ -122,13 +122,12 @@ test('CDK: an out-of-range pointInTimeRecoveryDays falls back to the default (no
 	});
 });
 
-test('CDK: pointInTimeRecoveryDays is ignored when PITR is disabled', () => {
+test('CDK: pointInTimeRecovery: false disables PITR', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		pointInTimeRecovery: false,
-		pointInTimeRecoveryDays: 7,
 	});
 	const template = Template.fromStack(stack);
 	template.hasResourceProperties('AWS::DynamoDB::Table', {
@@ -430,14 +429,14 @@ test('CDK: an unrecognized encryption value warns at synth', () => {
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
 });
 
-test('CDK: an out-of-range pointInTimeRecoveryDays warns at synth', () => {
+test('CDK: an out-of-range retentionDays warns at synth', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
 		schema: userSchema,
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-		pointInTimeRecoveryDays: 60,
+		pointInTimeRecovery: { retentionDays: 60 },
 	});
-	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('pointInTimeRecoveryDays must be an integer'));
+	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retentionDays must be an integer'));
 });
 
 test('CDK: durability options passed alongside fromExisting warn at synth', () => {
@@ -447,7 +446,7 @@ test('CDK: durability options passed alongside fromExisting warn at synth', () =
 		key: { partitionKey: 'userId', sortKey: 'createdAt' },
 		table: DistributedTable.fromExisting('preexisting-users-table'),
 		protection: 'locked',
-		pointInTimeRecoveryDays: 14,
+		pointInTimeRecovery: { retentionDays: 14 },
 	});
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('wrapped via fromExisting'));
 });

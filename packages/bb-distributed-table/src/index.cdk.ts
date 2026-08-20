@@ -60,7 +60,7 @@ export class DistributedTable<T = any> extends Scope {
 			// never emit a `Table` resource to attach them to). Surface that at
 			// synth so a `protection: 'locked'` on what looks like a fresh
 			// table isn't a silent no-op.
-			const ignoredForExisting = (['pointInTimeRecovery', 'pointInTimeRecoveryDays', 'protection', 'encryption'] as const)
+			const ignoredForExisting = (['pointInTimeRecovery', 'protection', 'encryption'] as const)
 				.filter((key) => config[key] !== undefined);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(
@@ -142,20 +142,28 @@ export class DistributedTable<T = any> extends Scope {
 			);
 		}
 
-		// PITR posture comes from the stack-wide `defaults` (#302 follow-up added
-		// `defaults.pointInTimeRecovery`) — production on, sandbox off. A per-block
-		// `pointInTimeRecovery` still wins. Read independently, never derived.
-		const pitrEnabled = config.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
-		// PITR recovery window (days). DynamoDB accepts 1–35; undefined → 35.
-		// Warn (and drop back to the default) on an out-of-range value rather
-		// than letting CloudFormation reject the whole deploy at apply time.
-		let pitrDays: number | undefined = config.pointInTimeRecoveryDays;
-		if (pitrDays !== undefined && (!Number.isInteger(pitrDays) || pitrDays < 1 || pitrDays > 35)) {
-			Annotations.of(this).addWarningV2(
-				'@aws-blocks/bb-distributed-table:InvalidPitrDays',
-				`pointInTimeRecoveryDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
-					`falling back to the 35-day default.`,
-			);
+		// PITR is one knob (`boolean | { retentionDays }`) resolved from the
+		// per-block option, else the stack-wide `defaults.pointInTimeRecovery`
+		// (#302 follow-up) — production on, sandbox off. The object form both
+		// enables PITR and pins the window, so "days set but PITR off" can't be
+		// expressed. `retentionDays` must be 1–35; warn and drop back to the
+		// 35-day default on an out-of-range value rather than failing the deploy.
+		const pitrSetting = config.pointInTimeRecovery ?? this.defaults.pointInTimeRecovery;
+		let pitrEnabled: boolean;
+		let pitrDays: number | undefined;
+		if (typeof pitrSetting === 'object' && pitrSetting !== null) {
+			pitrEnabled = true;
+			pitrDays = pitrSetting.retentionDays;
+			if (!Number.isInteger(pitrDays) || (pitrDays as number) < 1 || (pitrDays as number) > 35) {
+				Annotations.of(this).addWarningV2(
+					'@aws-blocks/bb-distributed-table:InvalidPitrDays',
+					`pointInTimeRecovery.retentionDays must be an integer between 1 and 35 (got ${String(pitrDays)}) — ` +
+						`falling back to the 35-day default.`,
+				);
+				pitrDays = undefined;
+			}
+		} else {
+			pitrEnabled = pitrSetting === true;
 			pitrDays = undefined;
 		}
 		// Resolve durability into the two CDK properties. The `protection` option

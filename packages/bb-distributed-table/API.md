@@ -63,8 +63,9 @@ export interface DistributedTableOptions<T, K extends TableKeyConfig<T> = TableK
     indexes?: Indexes;
     key: K;
     logger?: ChildLogger;
-    pointInTimeRecovery?: boolean;
-    pointInTimeRecoveryDays?: number;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
     protection?: 'disposable' | 'retained' | 'locked';
     readValidation?: ReadValidationMode;
     schema: StandardSchemaV1<T>;

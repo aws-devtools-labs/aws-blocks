@@ -58,31 +58,26 @@ export interface DistributedTableOptions<
 	 */
 	ttl?: keyof T & string;
 	/**
-	 * Enable DynamoDB Point-in-Time Recovery (continuous backups).
+	 * DynamoDB Point-in-Time Recovery (continuous backups) — restore the table
+	 * to any second within a retention window, protecting against accidental
+	 * writes/deletes and logical corruption.
 	 *
-	 * PITR lets you restore the table to any second within the retention
-	 * window (see {@link pointInTimeRecoveryDays}), protecting against
-	 * accidental writes/deletes and logical corruption.
+	 * A single knob, since the recovery window only means anything when PITR is
+	 * on:
+	 * - `true` — enable PITR with the default 35-day window.
+	 * - `false` — disable PITR.
+	 * - `{ retentionDays: n }` — enable PITR and keep `n` days of continuous
+	 *   backups (**1–35**). A shorter window reduces backup-storage cost at the
+	 *   expense of how far back you can restore.
 	 *
-	 * Defaults to **`true` on production deploys** and **`false` in sandbox
-	 * mode** (`--context sandboxMode=true`) to keep throwaway sandboxes cheap.
-	 * Set explicitly to override that default in either environment.
+	 * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+	 * from `BlocksPresets` — on under `production`, off under `sandbox`). A
+	 * per-block value always wins.
 	 *
 	 * Note: PITR bills for continuous-backup storage (per GB-month of table
 	 * size), so it is not free on large tables.
 	 */
-	pointInTimeRecovery?: boolean;
-	/**
-	 * The recovery window, in days, that Point-in-Time Recovery keeps
-	 * continuous backups for — you can restore to any second within this many
-	 * preceding days.
-	 *
-	 * Accepts **1–35**; defaults to **35** (the maximum) when omitted. Only
-	 * meaningful when PITR is enabled; ignored when `pointInTimeRecovery` is
-	 * `false`. A shorter window reduces backup-storage cost at the expense of
-	 * how far back you can restore.
-	 */
-	pointInTimeRecoveryDays?: number;
+	pointInTimeRecovery?: boolean | { retentionDays: number };
 	/**
 	 * How hard the table is to destroy — a single knob spanning DynamoDB
 	 * deletion protection and the CloudFormation removal policy, which together
@@ -99,9 +94,9 @@ export interface DistributedTableOptions<
 	 *   The table survives stack deletion and DynamoDB refuses a direct delete
 	 *   until protection is turned off. The **production default**.
 	 *
-	 * Defaults to **`'locked'` on production deploys** and **`'disposable'` in
-	 * sandbox mode** (`--context sandboxMode=true`). Set explicitly to override
-	 * in either environment.
+	 * When omitted, removal policy and deletion protection follow the stack-wide
+	 * `defaults` (`BlocksPresets.production` ≈ `'locked'`, `BlocksPresets.sandbox`
+	 * ≈ `'disposable'`). A per-block value always wins.
 	 *
 	 * Replaces the separate `deletionProtection` + `removalPolicy` booleans:
 	 * those two knobs could encode the contradictory `deletionProtection: true`
