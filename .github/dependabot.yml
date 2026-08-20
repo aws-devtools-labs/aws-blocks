@@ -13,6 +13,11 @@
 #     and dev-dependencies (build/test only, low blast radius). Production deps
 #     and security fixes land as their own PRs so each shipped bump stays
 #     reviewable and mergeable on its own.
+#   - typescript and @types/node are toolchain foundations: a major bump is a
+#     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
+#     project-reference build in one grouped PR). So they are excluded from the
+#     dev-dependencies group (minor/patch arrive as their own PRs) and their
+#     major-version updates are ignored (bump them intentionally, by hand).
 version: 2
 updates:
   - package-ecosystem: npm
@@ -20,6 +25,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       aws-sdk:
         patterns:
@@ -27,6 +37,9 @@ updates:
           - "@smithy/*"
       dev-dependencies:
         dependency-type: development
+        exclude-patterns:
+          - "typescript"
+          - "@types/node"
 
   # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
