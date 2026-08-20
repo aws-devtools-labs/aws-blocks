@@ -106,33 +106,15 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   // so permissions would quietly vanish. If a bring-your-own-role option is ever
   // added, it must resolve to a mutable role (`{ mutable: true }`).
   const executionRole = new iam.Role(scope, 'BlocksRole', {
-    // CompositePrincipal (rather than a bare ServicePrincipal) so additional
-    // compute types can assume this same shared role as they are introduced
-    // (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
+    // CompositePrincipal (rather than a bare ServicePrincipal) so a Building Block
+    // whose compute runs AS this shared role can add its own trust principal here
+    // (e.g. the Agent BB adds bedrock-agentcore in its CDK construct) — core stays
+    // agnostic and only Lambda is trusted by default.
     assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
     ],
   });
-
-  // The Agent BB's AgentCore Runtime runs AS this shared role, so its loop inherits every Building
-  // Block's grant (the same way any compute does) rather than needing a bespoke, under-granted role.
-  // Scope that trust to this account/region with aws:SourceAccount + aws:SourceArn — this is AWS's
-  // recommended AgentCore Runtime trust policy (the service sends both keys on AssumeRole), so it
-  // tightens the confused-deputy surface (only AgentCore runtimes in THIS account can assume the
-  // role) without breaking assumption. Added as its own trust statement so the condition applies
-  // only to AgentCore, not to the unconditioned lambda trust.
-  executionRole.assumeRolePolicy?.addStatements(
-    new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      principals: [new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com')],
-      actions: ['sts:AssumeRole'],
-      conditions: {
-        StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
-        ArnLike: { 'aws:SourceArn': `arn:${cdk.Aws.PARTITION}:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:*` },
-      },
-    }),
-  );
 
   // ── Resource Groups ───────────────────────────────────────────────────
   let rootStack = cdk.Stack.of(scope);
