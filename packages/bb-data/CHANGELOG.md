@@ -1,5 +1,64 @@
 # @aws-blocks/bb-data
 
+## 0.2.5
+
+### Patch Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+- 6df9e2d: fix(data): declare the `data-common` TypeScript project reference in `bb-data` and `bb-distributed-data`
+  
+  Both packages depend on `@aws-blocks/data-common` in `package.json`, but neither
+  listed it in its `tsconfig.json` `references`. Because `src/` ships in these
+  tarballs, `data-common`'s declarations have to already exist for the compiler to
+  resolve `@aws-blocks/data-common` — and nothing in the project-reference graph
+  guaranteed that.
+  
+  Correct build order was therefore supplied by the position of `data-common` in
+  the root `workspaces` array (index 8, ahead of `bb-data` at 10 and
+  `bb-distributed-data` at 11) rather than by the dependency graph. Any build that
+  does not follow that array order fails with:
+  
+  ```
+  packages/bb-distributed-data/src/validation.ts(12,54): error TS2307:
+    Cannot find module '@aws-blocks/data-common' or its corresponding type declarations.
+  ```
+  
+  That was already reachable from the repo's own scripts: the former
+  `npm run build:packages` resolved its `-w` targets in a different order and hit
+  exactly this, which is why `scripts/agent-bench/steps/1-init-bench-app.sh`
+  carried the comment "`build:packages` runs alphabetically and trips over
+  bb-data". Adding the two missing references fixes the root cause, so build order
+  now comes from the project-reference graph rather than from the ordering of the
+  root `workspaces` array.
+  
+  No API, runtime, or packaged-output change — `tsconfig.json` is not in either
+  package's `files`, so the published tarballs are unchanged.
+- 3614a09: Bundle the migration lambdas through `blocksNodejsBundling()` so `import.meta.url` used anywhere in the bundled migration handler is shimmed to its CommonJS equivalent instead of throwing at Lambda load. Consistent with the backend handler; no behavior change for existing migration lambdas. Also documents in the README that `migrationsPath` is simplest as a path relative to your project root, and that `import.meta.url` inside the bundle resolves to the bundled output (not your source tree).
+- e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
+  
+  PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [bfb9a63]
+- Updated dependencies [e4b1498]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/data-common@0.1.4
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
 ## 0.2.4
 
 ### Patch Changes
