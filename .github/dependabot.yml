@@ -28,8 +28,12 @@ updates:
       dev-dependencies:
         dependency-type: development
 
-  # Keep the GitHub Actions used by CI patched.
+  # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
