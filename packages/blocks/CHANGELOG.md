@@ -1,5 +1,143 @@
 # @aws-blocks/blocks
 
+## 0.3.0
+
+### Minor Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+
+### Patch Changes
+
+- 6df9e2d: fix(data): declare the `data-common` TypeScript project reference in `bb-data` and `bb-distributed-data`
+  
+  Both packages depend on `@aws-blocks/data-common` in `package.json`, but neither
+  listed it in its `tsconfig.json` `references`. Because `src/` ships in these
+  tarballs, `data-common`'s declarations have to already exist for the compiler to
+  resolve `@aws-blocks/data-common` — and nothing in the project-reference graph
+  guaranteed that.
+  
+  Correct build order was therefore supplied by the position of `data-common` in
+  the root `workspaces` array (index 8, ahead of `bb-data` at 10 and
+  `bb-distributed-data` at 11) rather than by the dependency graph. Any build that
+  does not follow that array order fails with:
+  
+  ```
+  packages/bb-distributed-data/src/validation.ts(12,54): error TS2307:
+    Cannot find module '@aws-blocks/data-common' or its corresponding type declarations.
+  ```
+  
+  That was already reachable from the repo's own scripts: the former
+  `npm run build:packages` resolved its `-w` targets in a different order and hit
+  exactly this, which is why `scripts/agent-bench/steps/1-init-bench-app.sh`
+  carried the comment "`build:packages` runs alphabetically and trips over
+  bb-data". Adding the two missing references fixes the root cause, so build order
+  now comes from the project-reference graph rather than from the ordering of the
+  root `workspaces` array.
+  
+  No API, runtime, or packaged-output change — `tsconfig.json` is not in either
+  package's `files`, so the published tarballs are unchanged.
+- 3614a09: Stop `import.meta.url` from crashing the deployed Lambda. The backend handler is bundled to CommonJS, where `import.meta` is empty, so `fileURLToPath(import.meta.url)` in a handler, a Building Block's `aws-runtime` code, or a dependency became `fileURLToPath(undefined)` and threw at Lambda load (every request 502'd). esbuild only warned, so the broken bundle deployed. The handler bundling now shims `import.meta.url` / `import.meta.dirname` / `import.meta.filename` to their CommonJS equivalents (`pathToFileURL(__filename)`, `__dirname`, `__filename`) — the approach esbuild blesses and Rollup applies by default — so the bundle loads cleanly and a dependency that merely contains `import.meta` no longer trips a build failure. Exposes `blocksNodejsBundling()` from `@aws-blocks/core/cdk` (re-exported by `@aws-blocks/blocks`) so every framework `NodejsFunction` gets the same treatment. Note: inside the bundle these resolve to the bundled output location, not your source tree.
+- edbf1aa: fix(bb-knowledge-base): disable `installLatestAwsSdk` on the ingestion custom resource
+  
+  The `StartIngestion` `AwsCustomResource` left `installLatestAwsSdk` at its default
+  (`true`), so the provider Lambda ran an `npm install` of the AWS SDK on every
+  invocation before it could call the API. That costs roughly 15-30s of extra cold
+  start and raises the shared provider Lambda to 512MB of memory, though that
+  reduction is only realized once every `AwsCustomResource` in the stack opts out —
+  the provider is a stack-level singleton and its `memorySize` is resolved once at
+  synth. The per-resource cold-start saving applies regardless.
+  
+  Nothing needed it. The resource calls `BedrockAgent.startIngestionJob`, a stable
+  API already bundled in the Lambda runtime's AWS SDK v3, so the bundled client is
+  sufficient and the install is pure overhead. Setting `installLatestAwsSdk: false`
+  also silences CDK's `installLatestAwsSdkNotSpecified` synth-time warning for this
+  construct.
+  
+  The tradeoff being accepted: the provider now uses whichever SDK v3 the Lambda
+  runtime bundles at deploy time rather than installing the newest one. That is safe
+  here because `startIngestionJob` is a foundational Bedrock Agent operation present
+  since the client's initial release, not a recent addition.
+  
+  Internal construct wiring only — no public API change. The synthesized
+  `Custom::AWS` resource now renders `InstallLatestAwsSdk: false`.
+  
+  Upgrade note: because `InstallLatestAwsSdk` renders as a property on the
+  `Custom::AWS` resource while the `physicalResourceId` stays stable, the first
+  deploy after upgrading is a CloudFormation *Update* and fires `onUpdate` — so one
+  `startIngestionJob` kicks off. This is harmless (ingestion is idempotent and
+  fire-and-forget), but expect to see an ingestion start right after upgrading.
+- 5262062: feat: extract `LambdaCompute` into `@aws-blocks/bb-lambda-compute`
+  
+  The abstract `Compute` base stays in core as a framework primitive; the concrete
+  `LambdaCompute` (a `NodejsFunction` fronted by its own API Gateway, assuming the
+  shared execution role) moves into a new package, `@aws-blocks/bb-lambda-compute`.
+  
+  The package is CDK-only and its sole export is internal — customers cannot
+  instantiate a compute yet. Nothing in the default path constructs it, so this is
+  additive and non-breaking.
+- bfb9a63: Polish the PGlite init-retry helper (`data-common`) following #205 review:
+  
+  - Narrow the WASM-trap classifier to specific signatures (`RuntimeError: unreachable`, `wasm trap: unreachable`, Emscripten `Aborted(<reason>)`) instead of matching the bare word `unreachable`, so an unrelated probe failure whose text/stack merely contains "unreachable" (e.g. an `assertUnreachable` helper) is no longer misclassified as retryable. The `Aborted(` prefix (not just the empty `Aborted()`) is matched so memory-pressure aborts like `Aborted(Cannot enlarge memory arrays)` / `Aborted(OOM)` — the case this retry exists for — are caught. A `RuntimeError`-named error whose message contains `unreachable` is also treated as a trap, so the real V8/Node trap (message is literally `"unreachable"`, prefix only in the stack) is caught without depending on the stack surviving.
+  - Classify retryability BEFORE consulting the attempt budget in `initializePgliteWithRetry`, so instance cleanup is uniform (a non-retryable error is always rethrown untouched) and `maxAttempts === 1` no longer closes the instance on a non-trap failure.
+  - Guard `maxAttempts` against `NaN` (which `?? 3` does not default), preventing an unbounded close/recreate loop on a persistent trap.
+  - Wrap a `recreate()` failure so the original init trap is preserved as the error `cause`, keeping debugging pointed at "PGlite kept trapping" rather than only the secondary recreate error.
+  - Mark the four init-retry exports (`initializePgliteWithRetry`, `isPgliteUnreachableTrap`, `PgliteLike`, `PgliteInitRetryOptions`) `@internal` — they exist only so the engine packages can share the helper — and document the `PgliteLike` methods.
+- e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
+  
+  PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+- 8966cfb: fix(telemetry): detect Render and Taskcluster as CI
+  
+  Telemetry CI detection (`isCI()`) checked a fixed list of CI env vars but
+  omitted Render and Taskcluster. Render sets `RENDER=true` on every build and
+  service; Taskcluster tasks always set the namespaced `TASKCLUSTER_ROOT_URL`.
+  Runs on those platforms were therefore reported as real user sessions instead
+  of `ci:true`, inflating user metrics. `RENDER` and `TASKCLUSTER_ROOT_URL` are
+  now included in both `isCI()` implementations (`@aws-blocks/core` and
+  `@aws-blocks/create-blocks-app`). The umbrella `@aws-blocks/blocks` gets a patch
+  bump because it re-exports `@aws-blocks/core`.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [6df9e2d]
+- Updated dependencies [3614a09]
+- Updated dependencies [edbf1aa]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [e4b1498]
+- Updated dependencies [406ba89]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-kv-store@0.1.6
+  - @aws-blocks/bb-data@0.2.5
+  - @aws-blocks/bb-distributed-data@0.1.6
+  - @aws-blocks/bb-distributed-table@0.1.5
+  - @aws-blocks/bb-knowledge-base@0.2.1
+  - @aws-blocks/bb-lambda-compute@0.2.0
+  - @aws-blocks/bb-realtime@0.1.4
+  - @aws-blocks/auth-common@0.1.5
+  - @aws-blocks/bb-agent@0.3.4
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-async-job@0.1.4
+  - @aws-blocks/bb-auth-basic@0.1.6
+  - @aws-blocks/bb-auth-cognito@0.1.7
+  - @aws-blocks/bb-auth-oidc@0.1.8
+  - @aws-blocks/bb-cron-job@0.1.4
+  - @aws-blocks/bb-dashboard@0.1.3
+  - @aws-blocks/bb-email-client@0.1.4
+  - @aws-blocks/bb-file-bucket@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+  - @aws-blocks/bb-metrics@0.1.4
+  - @aws-blocks/bb-tracer@0.1.6
+
 ## 0.2.7
 
 ### Patch Changes
