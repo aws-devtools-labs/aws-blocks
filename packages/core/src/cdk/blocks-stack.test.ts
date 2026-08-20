@@ -13,6 +13,7 @@ import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
 import { BlocksBackend } from './blocks-backend.js';
 import { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksStack, BlocksPresets, Scope } from './index.js';
 
@@ -165,6 +166,25 @@ describe('root is bound to the owning stack (multi-stack synth)', () => {
 		assert.notStrictEqual(stackA.executionRole, stackB.executionRole, 'the two stacks have distinct roles');
 		assert.strictEqual(blockA.backendStackName, 'RootBindingA', 'blockA derives its own stack name');
 		assert.strictEqual(blockB.backendStackName, 'RootBindingB', 'blockB derives its own stack name');
+	});
+
+	test('each stack owns an isolated compute registry (no cross-stack bleed)', async () => {
+		// Computes self-register on their owning stack (keyed per stack, not a
+		// process-global list), so a multi-stack synth keeps each stack's computes
+		// separate — finalize steps for one stack never see another's compute.
+		const app = new cdk.App();
+
+		const stackA = await makeStack(app, 'ComputeRegistryA', sideEffectBackendPath);
+		const stackB = await makeStack(app, 'ComputeRegistryB', sideEffectBackendPath);
+
+		const computesA = getComputes(stackA);
+		const computesB = getComputes(stackB);
+
+		assert.strictEqual(computesA.length, 1, 'stackA registered exactly its default compute');
+		assert.strictEqual(computesB.length, 1, 'stackB registered exactly its default compute');
+		assert.strictEqual(computesA[0], stackA._defaultCompute, 'stackA lists its own default');
+		assert.strictEqual(computesB[0], stackB._defaultCompute, 'stackB lists its own default');
+		assert.notStrictEqual(computesA[0], computesB[0], 'the two stacks hold distinct computes');
 	});
 });
 
