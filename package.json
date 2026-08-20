@@ -130,6 +130,6 @@
     "jiti": "^2.7.0"
   },
   "optionalDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "^4.60.3"
+    "@rollup/rollup-linux-x64-gnu": "^4.62.4"
   }
 }
