@@ -1,38 +1,39 @@
-name: Publish Packages
+name: Release
+
+# Version + publish via changesets/action. On push to main it either opens/updates
+# a "Version Packages" PR (running `changeset version`) or, once that PR is merged
+# and no changesets remain, publishes to npm. Merging the PR is the release gate.
+# Canary publishes live in publish-canary.yml.
+#
+# NOTE: The Version Packages PR does not start its PR checks automatically.
+# Approve the workflow runs at the bottom of the PR. Then merge the PR.
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Generate artifacts without uploading to S3
-        type: boolean
-        default: false
 
 concurrency:
-  group: publish-packages
+  group: release
   cancel-in-progress: false
 
 permissions:
-  id-token: write
-  contents: write
+  contents: write # push the version-PR branch + tags
+  pull-requests: write # open/update the Version Packages PR
+  id-token: write # npm provenance
 
 jobs:
-  publish:
-    name: Version & Publish
+  release:
+    name: Version & Publish (npm)
     runs-on: ubuntu-latest
     environment: publish
     env:
-      NODE_OPTIONS: '--test-reporter=spec'
       HUSKY: '0'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -40,130 +41,39 @@ jobs:
 
       - run: npm ci
 
-      # ── Version bump ──────────────────────────────────────────
-      - name: Run changeset version
-        id: version
+      - uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
+        id: changesets
+        with:
+          version-script: npm run version
+          publish-script: npm run release
+          commit-message: 'chore: version packages'
+          pr-title: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npx changeset version
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
 
-          # Refresh package-lock.json so its mirrored workspace versions
-          # match the bumps changeset just made. Skips network fetches.
-          npm install --package-lock-only
-
-          # Check if changeset version produced any changes
-          if git diff --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No version bumps — skipping publish"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ── Build & Test ──────────────────────────────────────────
-      - name: Build
-        if: steps.version.outputs.changed == 'true'
-        run: npm run build
-
-      - name: E2E Test Local
-        if: steps.version.outputs.changed == 'true'
-        run: npm run test:e2e:local
-
-      - name: Configure AWS credentials
-        if: steps.version.outputs.changed == 'true'
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
-
-      # ── Commit version bumps ──────────────────────────────────
-      - name: Commit version bumps
-        if: steps.version.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: version packages [skip ci]"
-
-          # Create a tag for each bumped package (with input sanitization)
-          for pkg in packages/*/package.json; do
-            name=$(node -p "require('./$pkg').name")
-            version=$(node -p "require('./$pkg').version")
-
-            # Validate name and version contain only safe characters
-            if [[ ! "$name" =~ ^@?[a-zA-Z0-9/_.-]+$ ]] || [[ ! "$version" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-              echo "::warning::Skipping tag for $pkg — unexpected characters in name or version"
-              continue
-            fi
-
-            if [[ "$name" == @aws-blocks/* ]]; then
-              tag="${name}@${version}"
-              git tag "$tag" 2>/dev/null || true
-            fi
-          done
-
-      # ── Publish ───────────────────────────────────────────────
-      - name: Publish to S3
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run != true
+      # The Version PR is created with GITHUB_TOKEN, so it doesn't auto-trigger
+      # CI. Append operator instructions to the PR body.
+      - name: Add release instructions to Version PR
+        if: steps.changesets.outputs.pr-number
         env:
-          S3_BUCKET: ${{ vars.S3_BUCKET }}
-          CLOUDFRONT_DOMAIN: ${{ vars.CLOUDFRONT_DOMAIN }}
-          CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
-        run: npm run publish:s3
-
-      - name: Publish to npm (dry-run)
-        if: steps.version.outputs.changed == 'true'
-        run: npm run publish:npm -- --dry-run
-
-      - name: Publish dry-run (local)
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run == true
-        run: npm run publish:dry-run
-
-      # ── Post-publish ──────────────────────────────────────────
-      - name: Push version commit and tags
-        if: steps.version.outputs.changed == 'true' && inputs.dry_run != true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git pull --rebase origin main
-          git push --follow-tags
+          PR_NUM="${{ steps.changesets.outputs.pr-number }}"
+          CURRENT_BODY=$(gh pr view "$PR_NUM" --json body --jq .body)
+          INSTRUCTIONS="## Release Instructions
 
-      - name: Upload publish manifest
-        if: steps.version.outputs.changed == 'true'
-        uses: actions/upload-artifact@v5
-        with:
-          name: publish-manifest
-          path: |
-            publish-manifest.json
-            dist-registry/publish-manifest.json
+          > **To complete this release:**
+          > 1. Read the version bumps and changelogs below.
+          > 2. Go to the bottom of this PR.
+          > 3. **Approve the workflow runs.**
+          > 4. Wait until all checks pass.
+          > 5. Merge the PR.
+          >
+          > The merge starts the npm publish.
 
-      - name: Summary
-        if: steps.version.outputs.changed == 'true'
-        run: |
-          MANIFEST=""
-          if [ -f publish-manifest.json ]; then
-            MANIFEST="publish-manifest.json"
-          elif [ -f dist-registry/publish-manifest.json ]; then
-            MANIFEST="dist-registry/publish-manifest.json"
-          fi
+          ---
 
-          if [ -n "$MANIFEST" ]; then
-            echo "## Published Packages" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            PUBLISHED=$(jq -r '.packages[] | "- `\(.name)@\(.version)`"' "$MANIFEST")
-            if [ -n "$PUBLISHED" ]; then
-              echo "$PUBLISHED" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "_No new versions to publish (all unchanged)._" >> "$GITHUB_STEP_SUMMARY"
-            fi
-
-            SKIPPED=$(jq -r '.skipped[]? | "- `\(.name)@\(.version)` (unchanged)"' "$MANIFEST")
-            if [ -n "$SKIPPED" ]; then
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "### Skipped (unchanged)" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "$SKIPPED" >> "$GITHUB_STEP_SUMMARY"
-            fi
-          fi
-
-      - name: No changes
-        if: steps.version.outputs.changed != 'true'
-        run: echo "No version bumps detected — nothing to publish." >> "$GITHUB_STEP_SUMMARY"
+          "
+          gh pr edit "$PR_NUM" --body "${INSTRUCTIONS}${CURRENT_BODY}"

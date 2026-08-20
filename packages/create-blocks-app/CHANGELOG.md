@@ -1,5 +1,117 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.20
+
+### Patch Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+- 6918752: Use the lazy Lambda handler factory in the React template.
+- 8966cfb: fix(telemetry): detect Render and Taskcluster as CI
+  
+  Telemetry CI detection (`isCI()`) checked a fixed list of CI env vars but
+  omitted Render and Taskcluster. Render sets `RENDER=true` on every build and
+  service; Taskcluster tasks always set the namespaced `TASKCLUSTER_ROOT_URL`.
+  Runs on those platforms were therefore reported as real user sessions instead
+  of `ci:true`, inflating user metrics. `RENDER` and `TASKCLUSTER_ROOT_URL` are
+  now included in both `isCI()` implementations (`@aws-blocks/core` and
+  `@aws-blocks/create-blocks-app`). The umbrella `@aws-blocks/blocks` gets a patch
+  bump because it re-exports `@aws-blocks/core`.
+
+## 0.1.19
+
+### Patch Changes
+
+- 1e37c67: docs: per-block docs folders + committed BB catalog with CI sync check; CLAUDE/agents docs resolved via require.resolve
+
+  `@aws-blocks/blocks` now ships one docs folder per Building Block under `docs/<block>/`
+  (`README.md` / `API.md` / `DESIGN.md`), plus a committed, marker-delimited Building Block
+  catalog in the package README that a `sync-docs --check` CI gate keeps in sync. The README's
+  catalog section and the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`) now direct
+  tools and agents to locate docs programmatically via
+  `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (and
+  `require.resolve('@aws-blocks/blocks/docs/README.md')` for the catalog) rather than assuming a
+  `node_modules/` path or following the human-facing relative links. Also adds a Security
+  Considerations section to the package README.
+
+## 0.1.18
+
+### Patch Changes
+
+- 75f5446: Add optional `fallback` parameter to `AuthenticatedContent` for rendering alternative content when the user is not authenticated.
+- 8264dd0: Add the missing `vendorize` script to the `auth-cognito` template. Every other deployable template shipped `"vendorize": "blocks-vendorize"`, but auth-cognito omitted it, so `npm run vendorize` (used to inline a Building Block's source for customization) didn't work in scaffolded auth-cognito apps. Also adds a regression test asserting every deployable template carries the standard `vendorize` script.
+
+## 0.1.17
+
+### Patch Changes
+
+- 50dbd0e: Include the local dev-server script and use public AWS Blocks imports when adding AWS Blocks to an Amplify Gen 2 project.
+
+## 0.1.16
+
+### Patch Changes
+
+- fc33428: fix(telemetry): inherit worker stderr in debug mode; enable telemetry in CI for create-blocks-app
+
+  - When `NODE_DEBUG=blocks-telemetry` is set, the telemetry worker subprocess
+    inherits the parent's stderr so delivery confirmation is observable. Silent
+    by default.
+  - Remove CI telemetry suppression from create-blocks-app to match core behavior.
+    Telemetry is now enabled in CI (same as all other CLI commands).
+  - Make `console` cross-platform and headless-safe: pick the OS browser opener
+    (`open`/`xdg-open`/`start`), resolve the region from the environment, and treat
+    a missing opener (CI / remote shells) as best-effort success instead of failing.
+  - Add an isolated E2E telemetry test suite (`test-apps/telemetry`) that verifies
+    payload structure, delivery to the real endpoint, disable mechanisms, and
+    per-command success/failure events.
+
+## 0.1.15
+
+### Patch Changes
+
+- f6a7fc7: Fix two security defects in the `demo` template:
+
+  - **Set-Cookie header (CRLF) injection**: the public `setCookie` / `deleteCookie` API methods wrote a user-controlled cookie name/value directly into the `Set-Cookie` response header. Cookie name/value components containing CR (`\r`) or LF (`\n`) are now rejected, preventing HTTP response-header injection / response splitting.
+  - **Incomplete HTML escaping (XSS)**: the frontend `escapeHtml` helper escaped `&`, `<`, `>`, and `"` but not the single quote (`'`), leaving an XSS gap when interpolating user-controlled values into single-quoted JS/HTML attribute contexts (e.g. `onchange="toggleTodo('...')"`). Single quotes are now escaped to `&#39;`.
+
+- 919d38c: Env-gate the `getLastCode` OTP helper in the `auth-cognito` template so a verification code can never be captured, logged, or returned from a deployed environment.
+
+  The passwordless-OTP demo exposes `api.getLastCode()` (tagged `@blocksSkipCodegen`) so the local UI can read the emailed code without a real mailbox. Its behavior was documented as "no-op in Sandbox/Production" but nothing enforced it — the `codeDelivery` hook captured the code and the method returned it unconditionally, so a live OTP could leak in a deployed environment. Both the capture and the read are now gated inline on `!process.env.BLOCKS_STACK_NAME` — the marker BlocksBackend injects into every deployed Blocks Lambda and leaves unset in local/mock dev, matching how the framework's generated DB connection resolver distinguishes deployed vs. local. The code is returned in local/mock dev and `null` in a deployed environment.
+
+## 0.1.14
+
+### Patch Changes
+
+- a1de3b8: Fix + polish for `create-blocks-app`:
+
+  - Reject `--template amplify` on a fresh directory up front with a
+    helpful message pointing at `--template default` (for a fresh app)
+    or the no-arg command (to integrate Blocks into an existing Amplify
+    Gen 2 project). The `amplify` template is an overlay auto-selected
+    when the CLI detects `amplify/backend.ts`, not a scaffoldable
+    starter. Previously the fresh-scaffold path with `--template amplify`
+    crashed mid-copy on missing template files.
+  - Correct two template descriptions that misstated the frontend:
+    `auth-cognito` and `demo` were labeled "Vite + lit-html" but both
+    ship a Vite + vanilla-DOM frontend. Descriptions now read
+    "Vite + vanilla-DOM frontend with Cognito passwordless email-OTP
+    auth end-to-end" and "Fuller example — AuthBasic + KVStore +
+    DynamoDB priority-sorted todo (Vite, vanilla-DOM)" respectively.
+
+- 3c365e3: Sanitize user-controlled values in demo template innerHTML assignments
+- a1de3b8: Improve `--help` output for `create-blocks-app`:
+
+  - Template discovery is now filesystem-driven — drop a folder under `templates/` with a `package.json` and it auto-registers.
+  - `--help` now lists every template with a one-line description, sourced from each template's `blocksTemplateDescription` field.
+  - Added `--yes --template nextjs` to the Examples section.
+
 ## 0.1.13
 
 ### Patch Changes

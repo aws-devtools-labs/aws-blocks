@@ -13,6 +13,7 @@ export { DistributedTableErrors } from './errors.js';
 export type {
 	TableKeyConfig,
 	DistributedTableOptions,
+	ReadValidationMode,
 	ExternalTableRef,
 	TableKey,
 	PartitionKeyCondition,
@@ -33,8 +34,9 @@ import type {
 	PutOptions,
 	DeleteOptions,
 	TableKey,
+	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -125,23 +127,38 @@ export class DistributedTable<
 	private schema: StandardSchemaV1<T>;
 	private keyConfig: K;
 	private indexes: Indexes;
+	private readValidation: ReadValidationMode;
 
-	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
+	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
-		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Default level is 'warn' (not 'error') so the readValidation='coerce'
+		// raw-fallback warning actually surfaces — it's the only log the block
+		// emits, so this doesn't add noise. Callers can pass their own logger.
+		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		this.filePath = join(getMockDataDir(this), 'data.json');
 		this.data = this.loadFromDisk();
 		this.schema = options.schema;
 		this.keyConfig = options.key;
 		this.indexes = (options.indexes ?? {}) as Indexes;
+		this.readValidation = options.readValidation ?? 'coerce';
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
 
 	async get(key: TableKey<T, K>): Promise<T | null> {
-		return this.data.get(this.serializeKey(key)) ?? null;
+		return this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null);
+	}
+
+	/**
+	 * Reconcile a stored value with the schema per this table's `readValidation`
+	 * mode (`off` → raw, `coerce` → coerced output / raw+warn on failure, `strict`
+	 * → throw on mismatch). `null` (a missing item) passes straight through. See
+	 * {@link applyReadValidation}.
+	 */
+	private reconcileRead(item: T | null): Promise<T | null> {
+		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
@@ -253,7 +270,7 @@ export class DistributedTable<
 
 		let count = 0;
 		for (const item of items) {
-			yield item;
+			yield (await this.reconcileRead(item)) as T;
 			if (options.limit && ++count >= options.limit) return;
 		}
 	}
@@ -261,7 +278,7 @@ export class DistributedTable<
 	async *scan(options?: ScanOptions): AsyncIterable<T> {
 		let count = 0;
 		for (const item of this.data.values()) {
-			yield item;
+			yield (await this.reconcileRead(item)) as T;
 			if (options?.limit && ++count >= options.limit) return;
 		}
 	}
@@ -275,7 +292,9 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]> {
-		return keys.map(key => this.data.get(this.serializeKey(key)) ?? null);
+		return Promise.all(
+			keys.map(key => this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null)),
+		);
 	}
 
 	/**

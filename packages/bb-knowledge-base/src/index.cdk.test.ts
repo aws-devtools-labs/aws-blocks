@@ -28,7 +28,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
-import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { KnowledgeBase } from './index.cdk.js';
 
 // Real local-folder source so BucketDeployment + sidecar generation synth.
@@ -45,6 +45,7 @@ const VECTOR_INDEX_TYPE = s3vectors.CfnIndex.CFN_RESOURCE_TYPE_NAME;
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
   public readonly id: string;
+  public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
@@ -61,10 +62,13 @@ function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: b
   stack: StubBlocksStack;
   kb: KnowledgeBase;
 } {
-  const app = new cdk.App(options.sandbox ? { context: { sandboxMode: 'true' } } : undefined);
+  const app = new cdk.App();
   // S3 bucket names must be lowercase; the data bucket derives its name from
   // the scope chain, so keep ids lowercase.
   const stack = new StubBlocksStack(app, 'teststack');
+  // Durability follows the stack-wide defaults (resolved via the globalThis
+  // fallback here), not the sandboxMode context.
+  if (options.sandbox) stack.defaults = BlocksPresets.sandbox;
   const parent = new Scope('app');
   const kb = new KnowledgeBase(parent, 'docs', {
     source: options.source ?? FIXTURES,
@@ -99,7 +103,7 @@ test("CDK: removalPolicy 'retain' keeps the data bucket + vector store and omits
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Retain' });
 });
 
-test('CDK: sandboxMode context defaults the data bucket + vector store to destroy', () => {
+test('CDK: sandbox defaults make the data bucket + vector store destroy', () => {
   const template = synth({ sandbox: true });
 
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
@@ -266,6 +270,17 @@ test('CDK (s3:// source): DATA_SOURCE_ID config is wired to the data source id (
     'DataSourceId',
     'config value is wired to the data source id even when the source is an S3 URI',
   );
+});
+
+test('CDK: the ingestion AwsCustomResource opts out of installing the latest AWS SDK (InstallLatestAwsSdk: false)', () => {
+  const template = synth();
+
+  // StartIngestion is the only Custom::AWS resource in this template, so an
+  // unscoped match is unambiguous. Enforce that rather than assume it: without
+  // the count assertion a second opted-out AwsCustomResource would let this pass
+  // even if StartIngestion itself regressed to the default.
+  template.resourceCountIs('Custom::AWS', 1);
+  template.hasResourceProperties('Custom::AWS', Match.objectLike({ InstallLatestAwsSdk: false }));
 });
 
 test('CDK: calling a runtime method throws an actionable synth-time error (not a cryptic TypeError)', () => {

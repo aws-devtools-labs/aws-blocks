@@ -15,4 +15,8 @@ export const AsyncJobErrors = {
 	ValidationFailed: 'ValidationFailedException',
 	/** Thrown when one or more messages in a batch fail to send (AWS only). */
 	BatchSubmitFailed: 'BatchSubmitFailedException',
+	/** Thrown when `waitUntilComplete()` gives up before the job reaches a terminal state. */
+	Timeout: 'AsyncJobTimeoutException',
+	/** Thrown when `getStatus()` or `waitUntilComplete()` is called on a job created without `trackStatus: true`. */
+	StatusNotTracked: 'StatusNotTrackedException',
 } as const;

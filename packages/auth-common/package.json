@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/auth-common",
-  "version": "0.1.3",
+  "version": "0.1.5",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/auth-common"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/auth-common#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -31,7 +40,7 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.1.6"
+    "@aws-blocks/core": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

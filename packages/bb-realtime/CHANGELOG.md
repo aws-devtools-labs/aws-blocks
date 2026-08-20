@@ -1,5 +1,28 @@
 # @aws-blocks/bb-realtime
 
+## 0.1.4
+
+### Patch Changes
+
+- 406ba89: Align local Realtime WebSocket message envelopes with the AWS runtime by using `data` for published messages.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-distributed-table@0.1.5
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
+## 0.1.3
+
+### Patch Changes
+
+- 5491cae: Harden subscription token validation. Connect tokens now use a `$connect` suffix that prevents them from being reused as channel subscription tokens via prefix matching. Channel tokens remain valid as connect tokens. Backward-compatible during rollout.
+
 ## 0.1.2
 
 ### Patch Changes

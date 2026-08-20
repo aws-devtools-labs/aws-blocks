@@ -90,6 +90,10 @@ CREATE INDEX ASYNC idx_users_email ON users(email);
 
 Migrations are validated at dev time — unsupported features (FK, SERIAL, TRUNCATE, etc.) are caught before deploy.
 
+> **Set `migrationsPath` to a path relative to your project root** (e.g. `'./aws-blocks/dsql-migrations'`); it's resolved at synth from the directory you run `cdk` / `npm run deploy` in. That's the simplest reliable pattern.
+>
+> You don't need `fileURLToPath(import.meta.url)` for this. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty. AWS Blocks shims `import.meta.url` / `import.meta.dirname` in the bundle so it won't crash at load — but at runtime those resolve to the **bundled output** location, not your source tree. So don't use `import.meta.url` to read a file relative to your source at request time; inline the data or ship it as a Lambda asset instead.
+
 ## DSQL Limitations
 
 DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so code that works locally also works in production.
@@ -108,6 +112,8 @@ DSQL is a subset of PostgreSQL. The local mock enforces these restrictions so co
 | LISTEN / NOTIFY | AppSync Events, EventBridge, or polling |
 | Extensions | Not available |
 | ADD COLUMN with DEFAULT | Add column without default, handle nulls in app |
+| Index key sort direction (`ASC`/`DESC`) | Omit it; enforce ordering with `ORDER BY` in queries (`NULLS FIRST/LAST` is supported) |
+| `ALTER TABLE DROP [COLUMN]` | Leave the column in place and stop referencing it; or rebuild the table (create new → `INSERT INTO ... SELECT` → `DROP` → `RENAME TO`, one migration file per step) |
 
 ### Transaction Constraints
 

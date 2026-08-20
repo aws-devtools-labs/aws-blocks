@@ -53,7 +53,7 @@ const ssrManifest = (staticDir: string, bundleDir: string): DeployManifest => ({
       handler: 'index.handler',
       placement: 'regional',
       streaming: true,
-      runtime: 'nodejs20.x',
+      runtime: 'nodejs24.x',
     },
   },
   staticAssets: { directory: staticDir },
@@ -148,7 +148,7 @@ void describe('HostingConstruct — SSR mode', () => {
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs20.x',
+      Runtime: 'nodejs24.x',
       Handler: 'index.handler',
     });
   });
@@ -190,7 +190,7 @@ void describe('HostingConstruct — SSR mode', () => {
           entrypoint: 'server.js',
           port: 3000,
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -233,7 +233,7 @@ void describe('HostingConstruct — SSR mode', () => {
           bundle: bundleDir,
           handler: 'index.handler',
           placement: 'regional',
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -1010,7 +1010,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
         api: {
           type: 'handler',
@@ -1018,7 +1018,7 @@ void describe('HostingConstruct — Multi-compute', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: false,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
@@ -1914,12 +1914,17 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  // These cases are about the *storage bucket* key, so they turn
+  // monitoring off — the default alarm topic brings its own KMS key
+  // and a stack-wide key count would conflate the two.
+
   void it('creates KMS key when storage.encryption is KMS', () => {
     const staticDir = createStaticDir();
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'KMS' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1932,6 +1937,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'KMS' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1974,6 +1980,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     const stack = createStack();
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -1991,6 +1998,7 @@ void describe('HostingConstruct — KMS Key Policy', () => {
     new HostingConstruct(stack, 'Hosting', {
       manifest: spaManifest(staticDir),
       storage: { encryption: 'S3_MANAGED' },
+      monitoring: { enabled: false },
     });
 
     const template = Template.fromStack(stack);
@@ -2000,6 +2008,48 @@ void describe('HostingConstruct — KMS Key Policy', () => {
       0,
       'Should NOT create a KMS key with explicit S3_MANAGED encryption',
     );
+  });
+
+  // ---- Alarm topic encryption through the L3 ----
+
+  void it('encrypts the default alarm topic and grants CloudWatch on its key', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::SNS::Topic', {
+      KmsMasterKeyId: Match.anyValue(),
+    });
+    template.hasResourceProperties('AWS::KMS::Key', {
+      KeyPolicy: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Effect: 'Allow',
+            Principal: { Service: 'cloudwatch.amazonaws.com' },
+            Action: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+          }),
+        ]),
+      },
+    });
+  });
+
+  void it('creates no alarm topic key when a BYO topic ARN is supplied', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: spaManifest(staticDir),
+      monitoring: {
+        snsTopicArn: 'arn:aws:sns:us-west-2:123456789012:existing-alarms',
+      },
+    });
+
+    const template = Template.fromStack(stack);
+    // The caller owns the imported topic's encryption.
+    template.resourceCountIs('AWS::KMS::Key', 0);
+    template.resourceCountIs('AWS::SNS::Topic', 0);
   });
 
   // ---- cdn.ssrDefaultTtl ----
@@ -2162,7 +2212,7 @@ void describe('HostingConstruct — custom environment variables (M4)', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: staticDir },
