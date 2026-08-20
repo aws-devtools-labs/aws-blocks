@@ -58,9 +58,9 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^26.2.0",
     "@types/ws": "^8.5.0",
-    "typescript": "^5.3.0"
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",
