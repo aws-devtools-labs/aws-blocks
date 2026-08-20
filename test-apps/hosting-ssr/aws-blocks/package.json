@@ -14,5 +14,9 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@types/react-dom": "^19.2.4",
+    "react-dom": "^19.2.8"
   }
 }
