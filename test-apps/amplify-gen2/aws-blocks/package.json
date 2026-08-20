@@ -16,10 +16,12 @@
     }
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-data": "*",
+    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/blocks": "*",
     "@aws-blocks/data-common": "*",
-    "aws-jwt-verify": "^5.0.0"
+    "@types/react-dom": "^19.2.4",
+    "aws-jwt-verify": "^5.0.0",
+    "react-dom": "^19.2.8"
   }
 }
