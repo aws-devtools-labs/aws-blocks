@@ -14,5 +14,9 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "concurrently": "^10.0.5",
+    "vite": "^8.2.1"
   }
 }

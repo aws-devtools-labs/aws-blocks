@@ -14,21 +14,21 @@
     "blocks:dev": "tsx watch aws-blocks/scripts/server.ts"
   },
   "devDependencies": {
-    "@aws-amplify/backend": "^1.22.0",
-    "@aws-amplify/backend-cli": "^1.8.2",
-    "@playwright/test": "^1.50.0",
+    "@aws-amplify/backend": "^1.24.0",
+    "@aws-amplify/backend-cli": "^1.9.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "@vitejs/plugin-react": "^4.0.0",
+    "@vitejs/plugin-react": "^6.0.5",
     "aws-cdk-lib": "^2.234.1",
     "constructs": "^10.6.0",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "tsx": "^4.22.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3",
-    "vite": "^6.4.3"
+    "vite": "^8.2.1"
   },
   "dependencies": {
     "aws-amplify": "^6.17.0",
