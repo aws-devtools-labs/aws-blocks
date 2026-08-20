@@ -205,9 +205,18 @@ describe('request body size limit', () => {
     assert.strictEqual(result.ok, false);
     if (result.ok) return; // narrow
     const parsed = JSON.parse(result.response);
-    assert.strictEqual(parsed.error.code, RpcErrorCode.InvalidRequest);
+    // Positive HTTP status (413), not a reserved -32xxx — so decodeRpcResponse
+    // surfaces it to the client as ApiError.status === 413.
+    assert.strictEqual(parsed.error.code, 413);
     assert.strictEqual(parsed.error.data?.name, 'PayloadTooLarge');
     assert.match(parsed.error.message, /exceeds/);
+
+    // Client round-trip: decodeRpcResponse surfaces it as ApiError.status 413
+    // (not 500), so consumer `e.status === 413` handling works.
+    assert.throws(
+      () => decodeRpcResponse(parsed),
+      (e: unknown) => e instanceof ApiError && e.status === 413 && isBlocksError(e, 'PayloadTooLarge'),
+    );
   });
 
   it('rejects an oversized body before attempting to parse it (invalid JSON still 413s, not a ParseError)', () => {

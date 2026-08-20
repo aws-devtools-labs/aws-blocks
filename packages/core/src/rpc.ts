@@ -35,12 +35,15 @@ const VERSION = '2.0' as const;
 /**
  * Maximum accepted request-body size, in bytes (10 MiB).
  *
- * Mirrors API Gateway's hard payload limit (~10 MB for a REST API), so the
- * local dev server rejects exactly what the deployed runtime would — an
- * oversized body can't quietly wedge the local database (e.g. PGlite) in dev
- * while failing in production. Enforced in `parseRpcRequest`, the single choke
- * point both the Lambda handler and the dev server route through, so the mock
- * and AWS paths behave identically.
+ * Matches the payload limit API Gateway enforces in production (~10 MB for a
+ * REST API). In prod an oversized body is rejected by API Gateway at the edge —
+ * before the Lambda is invoked — so this guard's rejection path effectively
+ * runs on the dev/mock server, where there is no edge to stop it: an oversized
+ * body would otherwise buffer and wedge the local database (e.g. PGlite). By
+ * enforcing the *same* limit locally, the dev server rejects the same oversized
+ * body prod would 413 at the edge, instead of failing only in one environment.
+ * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
+ * and the dev server route through.
  */
 export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -107,10 +110,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
   // dev server and the deployed runtime reject identically. `name` is set so
   // callers can match it with `isBlocksError(e, ...)` (errors cross by name).
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
+    // Emit the real HTTP status (413) as the error code, not a reserved -32xxx.
+    // `decodeRpcResponse` maps a positive code straight to the client
+    // `ApiError.status` (reserved codes collapse to 500), mirroring the 504
+    // handler-timeout path — so a caller's `e.status === 413` check works and
+    // the status agrees with the `PayloadTooLarge` name.
     return {
       ok: false,
       response: errorResponse(
-        RpcErrorCode.InvalidRequest,
+        413,
         `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte limit`,
         null,
         { name: 'PayloadTooLarge' },
