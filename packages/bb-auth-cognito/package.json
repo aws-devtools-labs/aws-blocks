@@ -52,18 +52,18 @@
     "aws-jwt-verify": "^5.0.0"
   },
   "devDependencies": {
-    "@aws-crypto/client-node": "^4.0.0",
-    "@aws-sdk/client-cloudwatch-logs": "^3.0.0",
+    "@aws-crypto/client-node": "^5.0.2",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1111.0",
     "@aws-sdk/client-dynamodb": "^3.0.0",
-    "@aws-sdk/client-iam": "^3.0.0",
-    "@aws-sdk/client-kms": "^3.0.0",
-    "@aws-sdk/client-lambda": "^3.0.0",
-    "@aws-sdk/client-ses": "^3.0.0",
-    "@aws-sdk/client-sts": "^3.0.0",
+    "@aws-sdk/client-iam": "^3.1111.0",
+    "@aws-sdk/client-kms": "^3.1111.0",
+    "@aws-sdk/client-lambda": "^3.1111.0",
+    "@aws-sdk/client-ses": "^3.1111.0",
+    "@aws-sdk/client-sts": "^3.1111.0",
     "@types/node": "^20.0.0",
     "asn1.js": "^5.4.1",
-    "bn.js": "^5.2.3",
-    "esbuild": "^0.25.0",
+    "bn.js": "^5.2.5",
+    "esbuild": "^0.28.2",
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
