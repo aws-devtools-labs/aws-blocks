@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-lambda-compute",
   "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/bb-lambda-compute"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/bb-lambda-compute#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -24,11 +33,12 @@
     }
   },
   "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs LambdaCompute",
     "build": "tsc --build",
     "test": "node --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "*"
+    "@aws-blocks/core": "^0.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

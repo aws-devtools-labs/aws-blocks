@@ -85,7 +85,7 @@
     "@aws-blocks/bb-email-client": "^0.1.4",
     "@aws-blocks/bb-metrics": "^0.1.4",
     "@aws-blocks/bb-dashboard": "^0.1.3",
-    "@aws-blocks/bb-lambda-compute": "*"
+    "@aws-blocks/bb-lambda-compute": "^0.2.0"
   },
   "aws-blocks": {
     "vendorize": {
