@@ -48,7 +48,7 @@ const packagesDir = join(__dirname, '..', 'packages');
 const blocksDir = join(packagesDir, 'blocks');
 const outDir = join(blocksDir, 'docs');
 
-const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app']);
+const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app', 'bb-lambda-compute']);
 
 const packages = getPackages();
 
