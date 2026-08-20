@@ -69,11 +69,11 @@
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
-    "@types/http-proxy": "^1.17.16",
+    "@types/http-proxy": "^1.17.17",
     "@types/node": "^20.0.0",
-    "esbuild": "^0.27.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.3.0",
-    "unctx": "^2.0.0"
+    "unctx": "^3.0.0"
   },
   "dependencies": {
     "@aws-blocks/hosting": "*",
