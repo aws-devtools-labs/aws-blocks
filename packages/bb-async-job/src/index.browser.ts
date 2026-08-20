@@ -6,8 +6,14 @@ export class AsyncJob {
 	constructor(...args: any[]) {}
 }
 
-export const AsyncJobErrors = {
-	PayloadTooLarge: 'PayloadTooLargeException',
-	BatchTooLarge: 'BatchTooLargeException',
-	ValidationFailed: 'ValidationFailedException',
-} as const;
+export { AsyncJobErrors } from './errors.js';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	WaitUntilCompleteOptions,
+} from './types.js';

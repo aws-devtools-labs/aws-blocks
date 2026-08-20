@@ -4,12 +4,15 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
+import { blocksNodejsBundling } from './bundling.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import type { BlocksDefaults } from './blocks-defaults.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -44,14 +47,50 @@ export function assertCdkConditionActive(): void {
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
+   * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
+   * individual fields as needed. A per-block option always wins over the
+   * corresponding stack default.
+   */
+  defaults: BlocksDefaults;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+  // Fail fast with an actionable message at the create() call site if `defaults`
+  // is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
+  // object) — otherwise the first Building Block to read `scope.defaults` throws
+  // a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
+  if (!props.defaults) {
+    throw new Error(
+      'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
+      '`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
+    );
+  }
+
+  // ── Shared execution role ──────────────────────────────────────────────
+  // A single IAM role that every Building Block grants to. Provisioned here so
+  // it exists before the backend module is imported (Building Blocks reach it
+  // via `scope.executionRole`). Block grants sit on the role's default (inline)
+  // policy. AWSLambdaBasicExecutionRole is attached so the handler retains
+  // CloudWatch Logs permissions.
+  const executionRole = new iam.Role(scope, 'BlocksRole', {
+    // CompositePrincipal (rather than a bare ServicePrincipal) so additional
+    // compute types can assume this same shared role as they are introduced
+    // (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
+    assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
+    managedPolicies: [
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+    ],
+  });
+
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'handler',
+    role: executionRole,
     memorySize: 2048,
     timeout: cdk.Duration.seconds(60 * 15),
     environment: {
@@ -67,10 +106,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
        */
       BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
     },
-    bundling: {
+    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+    // CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing at
+    // Lambda load. See ./bundling.ts.
+    bundling: blocksNodejsBundling({
       minify: true,
       esbuildArgs: { '--conditions': 'aws-runtime' },
-    },
+    }),
   });
 
   // In sandbox mode, allow localhost origins so the local dev frontend can
@@ -152,7 +194,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
   registerBuiltinRoutes();
 
-  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}` };
+  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}`, executionRole };
 }
 
 /**
@@ -177,6 +219,10 @@ export class BlocksBackend extends Construct {
   public readonly gateway: apigateway.RestApi;
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+  public readonly executionRole: iam.IRole;
+  /** Infrastructure defaults for Building Blocks created under this backend. */
+  public readonly defaults: BlocksDefaults;
 
   /**
    * The fullId used by child Scopes to compute their env var names,
@@ -217,10 +263,16 @@ export class BlocksBackend extends Construct {
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
 
+    // Store defaults on the backend (not the stack) so several BlocksBackends
+    // in one stack each keep their own posture; Building Blocks resolve them by
+    // walking up to their owning backend (see Scope.defaults).
+    this.defaults = props.defaults;
+
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;
     this.gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
+    this.executionRole = infra.executionRole;
 
     // Override BLOCKS_STACK_NAME to include the parent stack name so runtime
     // resource lookups (DynamoDB table names) match the CDK-time fullId

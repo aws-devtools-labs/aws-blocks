@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { BlocksBackend } from './blocks-backend.js';
-import { BlocksStack } from './index.js';
+import { BlocksStack, BlocksPresets, Scope } from './index.js';
 
 // Simulate the CDK condition being active (tests import CDK files directly)
 before(() => {
@@ -26,11 +26,13 @@ describe('ESM cache-busting (multi-stage)', () => {
     const stack1 = await BlocksStack.create(app, 'PipelineStage1', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const stack2 = await BlocksStack.create(app, 'PipelineStage2', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const findMarker = (scope: any) => scope.node.tryFindChild('SideEffectMarker');
@@ -53,6 +55,7 @@ describe('factory function support', () => {
     const stack = await BlocksStack.create(app, 'FactoryBlocksStack', {
       backendHandlerPath: handlerPath,
       backendCDKPath: factoryBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = stack.node.tryFindChild('FactoryMarker');
@@ -68,12 +71,55 @@ describe('legacy side-effect mode (no default export)', () => {
     const backend = await BlocksBackend.create(stack, 'LegacyStage', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
     });
 
     const marker = backend.node.tryFindChild('SideEffectMarker');
     assert.ok(
       marker,
       'Side-effect-only module should register construct via globalThis.CURRENT_BLOCKS_STACK',
+    );
+  });
+});
+
+describe('shared execution role (BlocksStack)', () => {
+  // The role synth shape and the Scope.executionRole tree-walk are shared code
+  // (setupBlocksInfra + the getter), covered in blocks-backend.test.ts. The only
+  // BlocksStack-specific behavior is that its own constructor wires
+  // executionRole — a separate code path from BlocksBackend's constructor.
+  test('BlocksStack wires executionRole via its constructor', async () => {
+    const app = new cdk.App();
+    const stack = await BlocksStack.create(app, 'StackRoleStack', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    assert.ok(stack.executionRole, 'BlocksStack should expose a populated .executionRole');
+  });
+});
+
+describe('executionRole globalThis fallback', () => {
+  test('resolves via globalThis.CURRENT_BLOCKS_STACK when no owner is in the tree', async () => {
+    const app = new cdk.App();
+    const stack = await BlocksStack.create(app, 'FallbackStack', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // A Scope whose construct-tree ancestry has no BlocksStack/BlocksBackend
+    // (parented under a plain cdk.Stack) exhausts the tree-walk and falls back
+    // to globalThis.CURRENT_BLOCKS_STACK. The `as any` is test plumbing — a
+    // plain Stack isn't a ScopeParent, but it IS a valid Construct parent.
+    const plainStack = new cdk.Stack(app, 'PlainStack');
+    (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+    const orphan = new Scope('orphan', { parent: plainStack as any });
+
+    assert.strictEqual(
+      orphan.executionRole,
+      stack.executionRole,
+      'fallback resolves to the ambient stack role',
     );
   });
 });
@@ -92,6 +138,7 @@ describe('assertCdkConditionActive', () => {
         BlocksStack.create(app, 'MissingConditionStack', {
           backendHandlerPath: handlerPath,
           backendCDKPath: sideEffectBackendPath,
+          defaults: BlocksPresets.production,
         }),
         (err: Error) => {
           assert.ok(err.message.includes('Missing --conditions=cdk'), `Expected condition error, got: ${err.message}`);

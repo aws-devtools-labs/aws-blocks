@@ -70,7 +70,8 @@ Creates a single S3 bucket:
   - `versions/{key}/{versionId}` (+ `.json` sidecars, `__deleted__` marker) — version history.
 - Path mapping for both the mock and the dev file-server is centralized in `paths.ts` so they stay in lockstep.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
-- Presigned URLs are served by the dev file-server at `/.bb-file-bucket/{scope.fullId}/{path}?token=...`. The path segments are URL-encoded; the server decodes them and validates an HMAC token scoped to method, path, and expiry.
+- Presigned URLs are served by the dev file-server at `/.bb-file-bucket/{scope.fullId}/{path}?token=...`. The path segments are URL-encoded; the server decodes them and validates an HMAC token scoped to method, path, and expiry. The HMAC secret (`LOCAL_FILE_SECRET` in `tokens.ts`) is a **per-process random value** — the token-minting mock and the validating dev file-server share the same in-process module instance, so tokens are unforgeable without being a hardcoded, source-visible literal.
+- Downloads are served with `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`. The stored body and its `Content-Type` are caller-controlled, so serving them inline would make the dev file-server a stored-XSS vector (an uploaded `text/html`/SVG payload executing in the app origin). Forcing a download + disabling MIME sniffing keeps local dev no weaker than S3-behind-CloudFront.
 - `scan()` recursively walks only the `content/` root and yields every file it finds — no marker-based filtering — so user keys are unrestricted.
 - The dev file-server's PUT handler delegates to the registered `FileBucket` instance (via a process-global registry) so uploads get versioning, key validation, and metadata. There is no direct-write fallback; an unregistered bucket fails loud with a 500.
 - Key length validated against S3's 1,024-byte limit (warns, does not reject).
