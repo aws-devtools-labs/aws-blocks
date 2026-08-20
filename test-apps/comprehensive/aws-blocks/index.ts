@@ -275,20 +275,24 @@ const itemSchema = z.object({
 
 const table = new DistributedTable(scope, 'items', {
   schema: itemSchema,
-  key: { 
-    partitionKey: 'pk', 
-    sortKey: 'sk' 
+  key: {
+    partitionKey: 'pk',
+    sortKey: 'sk'
   },
   indexes: {
-    byTimestamp: { 
-      partitionKey: 'pk', 
+    byTimestamp: {
+      partitionKey: 'pk',
       sortKey: 'timestamp'
     },
     bySk: {
       partitionKey: 'pk',
       sortKey: 'sk'
     }
-  }
+  },
+  // No per-block `protection`: durability follows the stack-wide `defaults`,
+  // which this E2E app sets to `BlocksPresets.sandbox` (DESTROY + no deletion
+  // protection) so `cdk destroy` tears everything down cleanly. See
+  // aws-blocks/index.cdk.ts.
 });
 
 // DistributedTable with TTL
@@ -303,6 +307,28 @@ const ttlTable = new DistributedTable(scope, 'ttl-items', {
   schema: ttlSchema,
   key: { partitionKey: 'pk', sortKey: 'sk' },
   ttl: 'expiresAt',
+  // Durability follows the stack `defaults` (sandbox preset) — see 'items' above.
+});
+
+// Secure-defaults coverage on a REAL deploy (review comment #6): a table that
+// carries PITR (with a narrowed window) + SSE alongside a GSI, so the GSI
+// custom resource's UpdateTable and the table's durability configuration
+// provision together on AWS — not just in a synth template.
+//
+// Durability (removal policy + deletion protection) follows the stack `defaults`
+// (this E2E app's sandbox preset → DESTROY + unprotected), so the table tears
+// down cleanly — no orphaned `test-app-secure-items` blocking the next run.
+// Only PITR is overridden per-block, since that's the durability prop we're
+// exercising on the deploy path. (The 'locked'/deletion-protection case is
+// covered by the CDK synth tests — a deletion-protected table would by design
+// block `cdk destroy`, so it can't live in an auto-torn-down E2E stack.)
+const secureTable = new DistributedTable(scope, 'secure-items', {
+  schema: itemSchema,
+  key: { partitionKey: 'pk', sortKey: 'sk' },
+  indexes: {
+    byTimestamp: { partitionKey: 'pk', sortKey: 'timestamp' },
+  },
+  pointInTimeRecovery: { retentionDays: 7 },
 });
 
 // Realtime - Typed pub/sub channels (same as template-default cursor demo)
@@ -948,7 +974,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async ttlTableGet(...args: Parameters<typeof ttlTable.get>) {
     return await ttlTable.get(...args);
   },
-  
+
+  // Secure-defaults table (PITR + GSI on a real deploy) — read/write proves
+  // the table is functional; the durability config is asserted AWS-side.
+  async secureTablePut(...args: Parameters<typeof secureTable.put>) {
+    await secureTable.put(...args);
+    return { success: true };
+  },
+
+  async secureTableGet(...args: Parameters<typeof secureTable.get>) {
+    return await secureTable.get(...args);
+  },
+
+  async secureTableQuery(...args: Parameters<typeof secureTable.query>) {
+    const results = [];
+    for await (const item of secureTable.query(...args)) results.push(item);
+    return results;
+  },
+
   // ------------------------------------------------------------------------
   // Auth Tests
   // ------------------------------------------------------------------------
