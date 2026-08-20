@@ -44,6 +44,13 @@ const VERSION = '2.0' as const;
  * body prod would 413 at the edge, instead of failing only in one environment.
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
+ *
+ * Note: this value is the Lambda + API Gateway limit. It lives here (in the
+ * compute-agnostic parser) because Lambda is the only compute path today. When
+ * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
+ * become compute-aware — sourced from / overridden by the compute layer (via
+ * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
+ * since an ALB has a different payload limit. Tracked with the multi-compute work.
  */
 export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
