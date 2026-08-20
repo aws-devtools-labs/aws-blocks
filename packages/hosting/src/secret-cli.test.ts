@@ -29,6 +29,13 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 		);
 	});
 
+	void it('rejects a positional value for a SECRET (would land in argv / shell history) (B7)', async () => {
+		await assert.rejects(
+			runValueCli(['set', 'STRIPE_KEY', 'sk_live_x'], { kind: 'secret' }),
+			/must not be passed on the command line.*value-stdin/s,
+		);
+	});
+
 	void it('validates the key before any store call', async () => {
 		await assert.rejects(runValueCli(['set', '1bad', 'v'], { kind: 'secret' }), /Invalid key/);
 	});

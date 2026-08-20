@@ -28,6 +28,7 @@ import type { IParameter } from 'aws-cdk-lib/aws-ssm';
 import { HostingError } from './hosting_error.js';
 import {
 	cacheTtlEnvVarName,
+	type ConfigValue,
 	configEnvVarName,
 	defaultPrefixForKind,
 	envVarNameForKind,
@@ -75,8 +76,15 @@ export interface StoreConfig {
 /** A `compute.environment` value: a literal, a managed marker, or a BYO CDK handle. */
 export type EnvValue = string | ManagedValue | ISecret | IParameter;
 
-/** A custom-domain name: a literal, a managed marker, or a mix in an array. */
-export type DomainNameInput = string | ManagedValue | Array<string | ManagedValue>;
+/**
+ * A custom-domain name: a literal, a `config()` marker, or a mix in an array.
+ *
+ * Only `config()` (non-sensitive → SSM) is accepted here, never `secret()`: a
+ * domain is resolved at **synth time** and inlined as a literal into the
+ * CloudFormation template (CloudFront/ACM need a literal), so a `secret()` would
+ * leak its plaintext into the template. Domains are public anyway — use `config()`.
+ */
+export type DomainNameInput = string | ConfigValue | Array<string | ConfigValue>;
 
 /** A BYO handle bound to a logical key, tagged with the kind it resolves as. */
 export interface ByoBinding {

@@ -11,8 +11,11 @@
  * deploy/runtime only READ.
  *
  * **Providing a value safely.** A positional value lands in `argv` (visible in
- * `ps`, `/proc`, shell history). Prefer `--value-stdin` (pipe it) or the
- * interactive hidden prompt when no value is on the command line.
+ * `ps`, `/proc`, shell history). A **secret** value is therefore never taken from
+ * argv — `secret set` reads it from `--value-stdin` (pipe it) or an interactive
+ * hidden prompt; passing a value positionally is a hard error. A **config** value
+ * is non-sensitive, so a positional value is allowed (`--value-stdin` / prompt
+ * still work).
  *
  * **Region.** Writes go to the SDK's default region unless `--region <name>` is
  * passed. This matters because the value must be written in the SAME region the
@@ -226,11 +229,24 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 				throw new Error(
 					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
 				);
-			let value: string;
+			// Validate the key up front — before reading/prompting for a value — so a bad
+				// key fails fast rather than after a prompt or a store call.
+				assertValidKey(key);
+				let value: string;
 			if (valueStdin) {
 				if (valueParts.length > 0) throw new Error('Pass the value via stdin OR as an argument, not both.');
 				value = await readStdin();
 			} else if (valueParts.length > 0) {
+				// A secret is sensitive: a positional value lands in argv / shell history,
+				// so it must come from stdin or the hidden prompt. A config value is
+				// non-sensitive, so a positional value is allowed (ergonomic).
+				if (kind === 'secret') {
+					throw new Error(
+						`A secret value must not be passed on the command line — it lands in argv / shell history. ` +
+							`Pipe it with \`--value-stdin\` (e.g. \`cat key.txt | ${label} set ${key} --value-stdin\`) ` +
+							`or omit the value to be prompted (hidden input).`,
+					);
+				}
 				value = valueParts.join(' ');
 			} else {
 				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `);

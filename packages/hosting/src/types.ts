@@ -216,20 +216,31 @@ export type HostingProps = {
   /**
    * Custom environment variables injected into all compute Lambda functions at runtime.
    *
-   * Values appear in plaintext in the CloudFormation template. For sensitive values
-   * (database passwords, API secrets), use AWS Systems Manager Parameter Store or
-   * Secrets Manager and read them at runtime instead.
+   * A plain string here appears **in plaintext in the CloudFormation template** — use
+   * it only for non-sensitive literals (feature flags, non-secret URLs, region config,
+   * service names). For a sensitive value (an API key, a credential) or a
+   * change-without-redeploy value, do **not** put it here: reference it with
+   * `secret('KEY')` (→ AWS Secrets Manager) or `config('KEY')` (→ SSM Parameter Store)
+   * and read it at runtime with `getSecret('KEY')` / `getConfig('KEY')` from the
+   * CDK-free `@aws-blocks/hosting/secret` subpath. Only the store locator is injected —
+   * never the value — and the value never enters the template.
    *
-   * Safe for: feature flags, non-secret URLs, region config, service names.
    * @example
    * ```typescript
    * defineHosting({
    *   environment: {
-   *     DATABASE_URL: process.env.DATABASE_URL,
-   *     FEATURE_FLAGS_API_KEY: process.env.FF_KEY,
+   *     APP_REGION: 'us-east-1', // non-sensitive literal
    *   },
    * });
+   *
+   * // sensitive / rotatable values — reference by key, set out of band, read at runtime:
+   * //   environment: { STRIPE_KEY: secret('STRIPE_KEY') }   // → getSecret('STRIPE_KEY')
+   * //   environment: { FEATURE_FLAGS: config('FEATURE_FLAGS') } // → getConfig('FEATURE_FLAGS')
    * ```
+   *
+   * @remarks The marker form (`secret()` / `config()`) is wired by the
+   * `HostingConstruct` / Blocks `Hosting` today; `defineHosting` gains it with the
+   * Amplify hosting integration.
    */
   environment?: Record<string, string>;
 

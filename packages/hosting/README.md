@@ -94,12 +94,15 @@ The marker is inert (`{ key, kind }`) and safe to commit — only the store
 least-privilege read on that one resource (`secretsmanager:GetSecretValue` /
 `ssm:GetParameter`, scoped to the exact ARN) plus `kms:Decrypt`.
 
-Markers in `environment` are wired for **runtime** resolution (above). Resolving
-a marker to a literal at **synth time** — e.g. for `domain.domainName`, which
-must be a literal before CloudFront/ACM are built — needs an async wrapper that
-does the SDK read during construction; that path is provided by the Blocks
-`Hosting` block (`await Hosting.create(...)`), not this leaf construct, whose
-`domain.domainName` is a plain `string | string[]`.
+Markers in `environment` are wired for **runtime** resolution (above), so both
+`secret()` and `config()` are allowed there (only the locator is injected, never
+the value). Resolving a marker to a literal at **synth time** — e.g. for
+`domain.domainName`, which must be a literal before CloudFront/ACM are built —
+**inlines the value into the CloudFormation template**, so those positions accept
+only `config()` (non-sensitive → SSM) or a plain string, never `secret()`. Synth
+resolution needs an async wrapper that does the SDK read during construction; that
+path is provided by the Blocks `Hosting` block (`await Hosting.create(...)`), not
+this leaf construct, whose `domain.domainName` is a plain `string | string[]`.
 
 **Bring your own:** `environment` also accepts an existing CDK `ISecret` /
 `IParameter` handle — the construct grants read via the handle and injects its
@@ -126,20 +129,24 @@ redeploy).
 Standalone hosting apps get two bundled CLIs:
 
 ```bash
-# Secrets Manager
-npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1
+# Secrets Manager — a secret value is NEVER taken from argv (it would land in
+# shell history). Omit the value for a hidden prompt, or pipe it via --value-stdin:
+npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
+cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
 npx hosting-secret list --prefix /myapp/secrets
 npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
 
-# SSM Parameter Store
+# SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
 npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
 ```
 
 `set` is **create-or-update**: the first call creates the entry, and running it
 again overwrites the value in place (no error, no prompt) — that is how you
-rotate a value. `set` never puts the value in `argv` / shell history — it reads a
-**hidden prompt** or `--value-stdin` (`cat key.txt | npx hosting-secret set KEY
---value-stdin`). `list` prints names only, never values.
+rotate a value. A **secret** value is never read from `argv` / shell history:
+`hosting-secret set` takes it from a **hidden prompt** or `--value-stdin`, and
+passing it positionally is a hard error. A **config** value is non-sensitive, so
+`hosting-config set KEY value` positionally is allowed (`--value-stdin` / the
+prompt still work). `list` prints names only, never values.
 
 `remove` on a **secret** is recoverable by default — the value enters Secrets
 Manager's recovery window and can be restored (guards against a typo'd prod key).

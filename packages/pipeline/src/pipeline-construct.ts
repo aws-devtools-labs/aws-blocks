@@ -308,6 +308,7 @@ function buildSecretEnvVars<TConfig>(
   if (!buildSecrets || Object.keys(buildSecrets).length === 0) return undefined;
 
   const prefix = props.secretStore?.prefix ?? defaultPrefixForKind('secret');
+  const stage = props.secretStore?.stage;
   const type = codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER;
 
   const envVars: Record<string, codebuild.BuildEnvironmentVariable> = {};
@@ -316,8 +317,12 @@ function buildSecretEnvVars<TConfig>(
       if (marker.kind !== 'secret') {
         throw new Error(`Pipeline: buildSecrets['${name}'] must be a secret(...) — build credentials are secrets.`);
       }
-      // secret marker → Secrets Manager locator (slash-free) at build time.
-      envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store: 'secrets-manager' }) };
+      // secret marker → Secrets Manager locator (slash-free) at build time. Honors
+      // `secretStore.stage` so the locator matches what `secret set --stage` writes.
+      // NOTE: a CodeBuild env var references ONE locator, so unlike the hosting
+      // runtime there is no two-try shared fallback — a staged build secret must be
+      // set at `<prefix>/<stage>/<KEY>`.
+      envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store: 'secrets-manager', stage }) };
     } else if (isCdkSecret(marker)) {
       // BYO ISecret handle → reference its name; CodeBuild grants the build role read.
       envVars[name] = { type, value: marker.secretName };
@@ -579,11 +584,9 @@ function validateStageName<TConfig>(stageConfig: PipelineStageConfig<TConfig>): 
 }
 
 function validateStageStacks(stage: cdk.Stage, stageName: string, source: 'stageFactory' | 'appFile'): void {
-  // Use `Stack.isStack()` (a `Symbol.for`-based marker) rather than `instanceof
-  // cdk.Stack`: the stageFactory runs in the consumer's app, which may resolve a
-  // DIFFERENT aws-cdk-lib copy than this package (monorepo / linked-package
-  // installs). `instanceof` fails across copies; `isStack` is cross-copy-safe.
-  const stacks = stage.node.children.filter((c): c is cdk.Stack => cdk.Stack.isStack(c));
+  const stacks = stage.node.children.filter(
+    (c): c is cdk.Stack => c instanceof cdk.Stack,
+  );
 
   if (stacks.length === 0) {
     const hint =

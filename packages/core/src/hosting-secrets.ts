@@ -25,9 +25,24 @@ import {
 	wireManagedValue as leafWireManagedValue,
 	type ManagedValue,
 	type SecretFetcher,
+	type StoreConfig,
 } from '@aws-blocks/hosting';
 import type * as cdk from 'aws-cdk-lib';
 import { blocksStoreConfig } from './secret-naming.js';
+
+/**
+ * Layer a caller's per-kind store config over the pinned Blocks defaults. Shallow
+ * and per-kind: the Blocks `/blocks/*` prefix stays the default, but any field the
+ * app sets (`prefix`, `stage`, `cacheTtlSeconds`) wins.
+ */
+function mergeBlocksStoreConfig(override?: StoreConfig): StoreConfig {
+	const base = blocksStoreConfig();
+	if (!override) return base;
+	return {
+		secretStore: { ...base.secretStore, ...override.secretStore },
+		configStore: { ...base.configStore, ...override.configStore },
+	};
+}
 
 /** A `compute.environment` value: a literal, a managed marker, or a BYO CDK handle. */
 export type EnvValue = LeafEnvValue;
@@ -51,13 +66,15 @@ export function collectSynthMarkers(domainName: DomainNameInput | undefined): Ma
 
 /**
  * Resolve managed markers to plaintext at synth time under the Blocks namespaces.
- * Throws a clear, actionable error if a referenced value was never set.
+ * Throws a clear, actionable error if a referenced value was never set. An optional
+ * `storeConfig` overrides the pinned Blocks prefix/stage per kind.
  */
 export async function resolveSecretsAtSynth(
 	markers: ManagedValue[],
 	fetcher?: SecretFetcher,
+	storeConfig?: StoreConfig,
 ): Promise<Map<string, string>> {
-	return leafResolveSecretsAtSynth(markers, { ...blocksStoreConfig(), fetcher });
+	return leafResolveSecretsAtSynth(markers, { ...mergeBlocksStoreConfig(storeConfig), fetcher });
 }
 
 /** Resolve domain markers to literals using the synth-resolved value map. */
@@ -65,12 +82,15 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
 	return leafResolveDomainNames(domainName, resolved);
 }
 
-/** Wire a runtime managed marker under the Blocks namespace (store from kind). */
-export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue): void {
-	leafWireManagedValue(fn, marker, blocksStoreConfig());
+/**
+ * Wire a runtime managed marker under the Blocks namespace (store from kind). An
+ * optional `storeConfig` overrides the pinned prefix/stage/cacheTtlSeconds per kind.
+ */
+export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, storeConfig?: StoreConfig): void {
+	leafWireManagedValue(fn, marker, mergeBlocksStoreConfig(storeConfig));
 }
 
-/** Wire a runtime BYO handle (grant + inject locator). */
-export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding): void {
-	leafWireByo(fn, binding, blocksStoreConfig());
+/** Wire a runtime BYO handle (grant + inject locator). Honors an optional `storeConfig`. */
+export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, storeConfig?: StoreConfig): void {
+	leafWireByo(fn, binding, mergeBlocksStoreConfig(storeConfig));
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { KindStoreOptions } from '@aws-blocks/hosting';
-import type { ManagedValue, SecretValue } from '@aws-blocks/hosting/secret';
+import type { ConfigValue, SecretValue } from '@aws-blocks/hosting/secret';
 import type * as cdk from 'aws-cdk-lib';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
@@ -43,13 +43,14 @@ export interface PipelineSourceConfig {
    *
    * @example 'arn:aws:codeconnections:us-east-1:123456789:connection/abc-def'
    *
-   * Accepts a `secret('CONNECTION_ARN')` or `config('CONNECTION_ARN')` marker to
-   * keep the ARN out of source. The marker is resolved at **synth time** (SDK
-   * read from its store — Secrets Manager for `secret`, SSM for `config`) and
-   * requires the async `await Pipeline.create(...)` path, since the CodePipeline
-   * service needs a literal ARN in the template.
+   * Accepts a `config('CONNECTION_ARN')` marker (SSM) to keep the ARN out of
+   * source. It is resolved at **synth time** and inlined as a literal into the
+   * template (the CodePipeline service needs a literal ARN), so this requires the
+   * async `await Pipeline.create(...)` path. A `secret()` is intentionally **not**
+   * accepted here: a synth-inlined value lands in the template, which would defeat
+   * the point of a secret — and a connection ARN is a reference, not a credential.
    */
-  readonly connectionArn: string | ManagedValue;
+  readonly connectionArn: string | ConfigValue;
 
   /**
    * Whether to trigger the pipeline on push to the branch.

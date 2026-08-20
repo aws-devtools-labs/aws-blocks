@@ -2211,6 +2211,23 @@ describe('_sourceOverride (internal test hook)', () => {
       assert.strictEqual(npm?.Value, 'myapp/secrets/NPM_TOKEN');
     });
 
+    it('honors secretStore.stage — staged locator matching `secret set --stage` (B4)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsStage');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+          secretStore: { prefix: '/myapp/secrets', stage: 'prod' },
+        }),
+      );
+      const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      // The stage is included, so CodeBuild reads the same locator `secret set
+      // --stage prod` writes (no shared fallback at build time — one locator).
+      assert.strictEqual(npm?.Value, 'myapp/secrets/prod/NPM_TOKEN');
+    });
+
     it('rejects a non-marker buildSecrets value', () => {
       const stack = new Stack(new App(), 'BuildSecretsBad');
       assert.throws(
