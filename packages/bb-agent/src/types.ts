@@ -21,6 +21,30 @@ export interface ModelConfig {
 	apiKey?: string | (() => Promise<string>);
 	inferenceConfig?: InferenceConfig;
 	guardrails?: GuardrailsConfig;
+	/**
+	 * Prompt caching for the `bedrock` provider. Off by default. Caching reuses the
+	 * cached prefix (tools + system prompt + prior turns) across requests, cutting
+	 * input-token cost and latency on multi-turn or long-system-prompt agents.
+	 * Ignored by the `openai-api` and `canned` providers.
+	 *
+	 * - `{ strategy: 'auto' }` — let Strands place cache points at optimal positions
+	 *   (after tools, after the last user message) for known Bedrock model IDs. This is
+	 *   the recommended default for the {@link BedrockModels} presets.
+	 * - `{ strategy: 'anthropic' }` — force-enable Anthropic-style caching. Use this
+	 *   when `modelId` is an ARN application inference profile, where `'auto'` cannot
+	 *   detect the underlying model and therefore won't enable caching.
+	 *
+	 * Caching has per-model minimum token thresholds (e.g. ~1,024 for Claude Sonnet)
+	 * and cache entries expire after ~5 minutes of inactivity.
+	 *
+	 * @see https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/#caching
+	 */
+	cacheConfig?: CacheConfig;
+}
+
+/** Prompt-caching strategy for the `bedrock` provider. @see {@link ModelConfig.cacheConfig} */
+export interface CacheConfig {
+	strategy: 'auto' | 'anthropic';
 }
 
 export interface InferenceConfig {

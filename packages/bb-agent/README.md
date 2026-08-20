@@ -148,6 +148,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
 | `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
+| `cacheConfig` | `{ strategy: 'auto' \| 'anthropic' }` | Optional prompt caching (bedrock only). See [Prompt Caching](#prompt-caching). |
 
 ```typescript
 import { Agent } from '@aws-blocks/bb-agent';
@@ -216,6 +217,21 @@ Override inference settings with spread:
 ```typescript
 model: { deployed: { ...BedrockModels.BALANCED, inferenceConfig: { temperature: 0.9, maxTokens: 8192 } } }
 ```
+
+#### Prompt Caching
+
+Prompt caching reuses the cached request prefix (tools + system prompt + prior turns) across requests, cutting input-token cost and latency — especially for agents with long system prompts, many tools, or multi-turn conversations. It's off by default and applies only to the `bedrock` provider (ignored by `openai-api` and `canned`).
+
+```typescript
+model: { deployed: { ...BedrockModels.BALANCED, cacheConfig: { strategy: 'auto' } } }
+```
+
+| Strategy | When to use |
+|----------|-------------|
+| `'auto'` | Recommended default. Strands places cache points automatically for known Bedrock model IDs — including all [`BedrockModels`](#bedrock-presets) presets. |
+| `'anthropic'` | Use when `modelId` is an ARN application inference profile, where `'auto'` cannot detect the underlying model and won't enable caching. Same performance, no extra permissions. |
+
+> Caching has per-model minimum token thresholds (e.g. ~1,024 tokens for Claude Sonnet) and cache entries expire after ~5 minutes of inactivity. See the [Strands caching docs](https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/#caching).
 
 #### Ollama Presets
 
