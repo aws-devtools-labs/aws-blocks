@@ -5,7 +5,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ApiError } from './errors.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { matchRoute, lockRouteRegistry } from './raw-route.js';
+import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv } from './common/config.js';
 import {
@@ -477,8 +477,17 @@ function createHandler(backend: any) {
       if (matched) {
         return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
       }
-      // No RawRoute matched and path is not the RPC endpoint — return 404
+      // No RawRoute matched and path is not the RPC endpoint — return 404.
+      // Log it: an unmatched route used to be entirely silent, which is what
+      // made a split route registry (duplicate @aws-blocks/core copies)
+      // undiagnosable from CloudWatch alone. The path is already in the API
+      // Gateway access logs, so this adds no new category of data.
       if (!requestPath.startsWith(BLOCKS_RPC_PREFIX)) {
+        const copies = getLoadedCoreCopies();
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        console.error(
+          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+        );
         return {
           statusCode: 404,
           headers: {

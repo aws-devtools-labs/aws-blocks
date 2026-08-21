@@ -105,19 +105,126 @@ export interface RegisteredRoute {
   handler: (context: BlocksContext) => Promise<void>;
 }
 
-const routeRegistry: RegisteredRoute[] = [];
-let registrationLocked = false;
+/**
+ * Registry state shared by every copy of `@aws-blocks/core` in the process.
+ *
+ * A bundle can end up carrying more than one physical copy of this package
+ * (an unlucky dependency tree, no dedupe). With module-local state each copy
+ * would keep its own route table: Building Blocks register into theirs, the
+ * dispatcher reads its own, and every route registered through the "wrong"
+ * copy answers 404 without a log line. The synth path has the same split —
+ * `hosting.ts` builds CloudFront behaviors from `getRegisteredRoutes()`.
+ *
+ * `locked` travels with `routes` on purpose: splitting them would let one copy
+ * lock the shared table while another is still registering, trading a silent
+ * loss for a spurious throw.
+ */
+interface RawRouteRegistryState {
+  routes: RegisteredRoute[];
+  locked: boolean;
+  /** Number of core copies that have joined this registry (1 = healthy). */
+  copies: number;
+}
+
+/**
+ * Well-known `globalThis` key holding the shared registry state.
+ *
+ * A plain string rather than a `Symbol.for()` key, deliberately: duplicate
+ * copies are diagnosed by counting strings in the deployed bundle, and a
+ * symbol would be invisible to that. It also matches the existing
+ * `__BLOCKS_LAMBDA_EVENT_HANDLERS__` precedent.
+ *
+ * **The key is a permanent contract — do not bump it.** `_V1_` names the shape
+ * this file introduced; it is not a license to mint `_V2_`. The copies that
+ * share a process are usually *different versions* of `@aws-blocks/core` — that
+ * is how a tree ends up with duplicates in the first place — so a copy reading
+ * a different key does not get a private namespace, it re-splits the registry:
+ * routes registered through one key, dispatched through the other, 404. And
+ * silently, because each key carries its own `copies` counter, so both sides
+ * report `copies: 1` and the duplicate warning never fires. That is the bug
+ * this module exists to fix, reintroduced with its own diagnostic switched off.
+ *
+ * Evolve the shape **additively** instead: add optional fields, and tolerate
+ * fields a peer copy did not write (`getState()` does). If a `_V2_` key ever
+ * proves unavoidable, it has to adopt the V1 state — read it, and keep writing
+ * it — so that a mixed tree still routes through one table.
+ */
+const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
+
+type GlobalWithRegistry = typeof globalThis & { [REGISTRY_KEY]?: RawRouteRegistryState };
+
+/** Whether *this* module copy has already counted itself. Intentionally module-local. */
+let thisCopyCounted = false;
+
+/**
+ * Resolve the shared registry state, creating it on first access.
+ *
+ * The copy count is incremented here rather than at module load so that it
+ * counts the copies actually taking part in routing, not every copy a bundle
+ * happens to carry. Bundled code is where duplicate copies occur, and a copy
+ * that is imported but never routes is not what the diagnostic is about.
+ *
+ * Tree-shaking is not the reason. `sideEffects` in package.json lets a bundler
+ * drop this module whole when nothing it exports is used, but a module that
+ * *is* used keeps its top-level statements — measured with esbuild under
+ * `--bundle --minify`, and covered by the bundling test in `raw-route.test.ts`.
+ */
+function getState(): RawRouteRegistryState {
+  const g = globalThis as GlobalWithRegistry;
+  let state = g[REGISTRY_KEY];
+  if (!state) {
+    state = { routes: [], locked: false, copies: 0 };
+    g[REGISTRY_KEY] = state;
+  }
+
+  // The state may have been left by a copy that evolved the shape (see the
+  // contract on REGISTRY_KEY), so fill in what this copy needs rather than
+  // assume it is there. A missing `routes` would throw on the first
+  // registration, and a missing `copies` would go NaN on the increment below —
+  // silencing the duplicate warning, which is the failure this module exists to
+  // report. `locked` needs no default: absent reads as unlocked, which is what
+  // a registry still accepting registrations means.
+  if (!Array.isArray(state.routes)) state.routes = [];
+  if (typeof state.copies !== 'number') state.copies = 0;
+
+  if (!thisCopyCounted) {
+    thisCopyCounted = true;
+    state.copies += 1;
+    if (state.copies > 1) {
+      console.warn(
+        `AWS Blocks: ${state.copies} copies of @aws-blocks/core loaded in this process. ` +
+          'They now share one RawRoute registry, but duplicate copies indicate a ' +
+          'dependency-tree problem — deduplicate @aws-blocks/core.',
+      );
+    }
+  }
+
+  return state;
+}
+
+/**
+ * Number of `@aws-blocks/core` copies taking part in the shared route registry.
+ *
+ * `1` for a healthy install. A higher number means the dependency tree carries
+ * duplicates — routes still work (the registry is shared), but it is worth
+ * reporting in diagnostics.
+ *
+ * **Internal.** Not re-exported from the package entry point.
+ */
+export function getLoadedCoreCopies(): number {
+  return getState().copies;
+}
 
 const VALID_METHODS = new Set<string>(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']);
 
 /** Prevent further route registration. Call after initialization is complete. */
 export function lockRouteRegistry(): void {
-  registrationLocked = true;
+  getState().locked = true;
 }
 
 /** Re-allow route registration (useful in tests after lock). */
 export function unlockRouteRegistry(): void {
-  registrationLocked = false;
+  getState().locked = false;
 }
 
 /**
@@ -132,7 +239,8 @@ export function unlockRouteRegistry(): void {
  * @throws {RawRouteErrors.DuplicateRoute} If the same method+path is registered twice.
  */
 export function registerRoute(options: RawRouteOptions & { path: string }): void {
-  if (registrationLocked) {
+  const state = getState();
+  if (state.locked) {
     throw new Error('Routes must be registered during initialization. Cannot register routes after handler creation.');
   }
 
@@ -150,7 +258,7 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
     throw new Error(`Cannot register RawRoute at ${BLOCKS_NAMESPACE} or ${BLOCKS_RPC_PREFIX}/* — these paths are reserved for RPC dispatch`);
   }
 
-  const existing = routeRegistry.find(
+  const existing = state.routes.find(
     (r) => r.method === options.method && r.path === normalizedPath,
   );
   if (existing) {
@@ -163,7 +271,7 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
 
   const { pattern, paramNames } = compilePath(normalizedPath);
 
-  routeRegistry.push({
+  state.routes.push({
     method: options.method,
     path: normalizedPath,
     pattern,
@@ -174,13 +282,18 @@ export function registerRoute(options: RawRouteOptions & { path: string }): void
 
 /** Return a read-only snapshot of all registered routes. */
 export function getRegisteredRoutes(): readonly RegisteredRoute[] {
-  return routeRegistry;
+  return getState().routes;
 }
 
-/** Remove all registered routes and unlock registration (used by tests). */
+/**
+ * Remove all registered routes and unlock registration (used by tests).
+ *
+ * Leaves the copy counter alone — it tracks module copies, not routes.
+ */
 export function clearRouteRegistry(): void {
-  routeRegistry.length = 0;
-  registrationLocked = false;
+  const state = getState();
+  state.routes.length = 0;
+  state.locked = false;
 }
 
 /**
@@ -195,7 +308,7 @@ export function matchRoute(
   // Normalize incoming path: collapse double slashes
   path = path.replace(/\/+/g, '/');
 
-  for (const route of routeRegistry) {
+  for (const route of getState().routes) {
     if (route.method !== method) continue;
     const match = route.pattern.exec(path);
     if (match) {
