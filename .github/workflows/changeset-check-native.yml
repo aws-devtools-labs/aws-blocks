@@ -6,6 +6,10 @@ on:
       - 'native/kotlin/**'
       - 'native/swift/**'
 
+concurrency:
+  group: changeset-check-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
