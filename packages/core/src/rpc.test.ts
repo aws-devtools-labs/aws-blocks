@@ -210,6 +210,7 @@ describe('request body size limit', () => {
     assert.strictEqual(parsed.error.code, 413);
     assert.strictEqual(parsed.error.data?.name, 'PayloadTooLarge');
     assert.match(parsed.error.message, /exceeds/);
+    assert.match(parsed.error.message, /10 MiB/); // human-readable size crosses the wire
 
     // Client round-trip: decodeRpcResponse surfaces it as ApiError.status 413
     // (not 500), so consumer `e.status === 413` handling works.

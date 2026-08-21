@@ -111,22 +111,19 @@ export function decodeRpcResponse(body: unknown): unknown {
  * anything about the JSON-RPC spec.
  */
 export function parseRpcRequest(bodyText: string): RpcParseResult {
-  // Reject oversized bodies before parsing or dispatch — an unbounded body can
-  // wedge the local database in dev and inflate compute cost in production. The
-  // limit matches API Gateway's payload cap (see MAX_RPC_BODY_BYTES), so the
-  // dev server and the deployed runtime reject identically. `name` is set so
-  // callers can match it with `isBlocksError(e, ...)` (errors cross by name).
+  // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
+  // for the limit and its rationale.
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
-    // Emit the real HTTP status (413) as the error code, not a reserved -32xxx.
-    // `decodeRpcResponse` maps a positive code straight to the client
-    // `ApiError.status` (reserved codes collapse to 500), mirroring the 504
-    // handler-timeout path — so a caller's `e.status === 413` check works and
-    // the status agrees with the `PayloadTooLarge` name.
+    // Emit the real HTTP status (413) as the error code, not a reserved -32xxx:
+    // `decodeRpcResponse` maps a positive code straight to `ApiError.status`
+    // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
+    // so a caller's `e.status === 413` works. `name` (which crosses the wire,
+    // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
     return {
       ok: false,
       response: errorResponse(
         413,
-        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte limit`,
+        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
         null,
         { name: 'PayloadTooLarge' },
       ),
