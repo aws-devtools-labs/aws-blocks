@@ -13,13 +13,15 @@ import { RemovalPolicy } from 'aws-cdk-lib';
 import { BlocksPresets } from './blocks-defaults.js';
 
 describe('BlocksPresets', () => {
-	test('sandbox is disposable: DESTROY + deletion protection off', () => {
+	test('sandbox is disposable: DESTROY + deletion protection off + no PITR', () => {
 		assert.strictEqual(BlocksPresets.sandbox.removalPolicy, RemovalPolicy.DESTROY);
 		assert.strictEqual(BlocksPresets.sandbox.deletionProtection, false);
+		assert.strictEqual(BlocksPresets.sandbox.pointInTimeRecovery, false);
 	});
 
-	test('production is durable: RETAIN + deletion protection on', () => {
+	test('production is durable: RETAIN + deletion protection on + PITR on', () => {
 		assert.strictEqual(BlocksPresets.production.removalPolicy, RemovalPolicy.RETAIN);
 		assert.strictEqual(BlocksPresets.production.deletionProtection, true);
+		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
 	});
 });
