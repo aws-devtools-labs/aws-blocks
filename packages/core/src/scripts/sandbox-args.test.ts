@@ -26,8 +26,19 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     backendPath: 'aws-blocks/index.ts',
   });
 
-  it('deploys via direct UpdateStack (express mode) instead of a change set', () => {
+  it('enables CloudFormation Express Mode via --express', () => {
+    assert.ok(args.includes('--express'), `expected --express in: ${args.join(' ')}`);
+  });
+
+  it('pairs express mode with the direct deployment method', () => {
     assert.strictEqual(valueAfter(args, '--method'), 'direct');
+  });
+
+  it('leaves express-mode rollback at its default (off) — no --rollback', () => {
+    // Express Mode disables automatic rollback by default; we keep that default
+    // for the throwaway sandbox loop. Passing --rollback here would silently
+    // give up the speedup.
+    assert.ok(!args.includes('--rollback'), `sandbox must not force --rollback: ${args.join(' ')}`);
   });
 
   it('deploys every stack so Lambda@Edge apps synth cleanly', () => {
@@ -49,9 +60,11 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
   });
 
   it('does NOT leak express mode into the production deploy path', () => {
-    // A production deploy must keep a reviewable change set: `--method direct`
-    // is a sandbox-only speedup and must never appear in buildCdkDeployArgs.
+    // A production deploy must keep a reviewable change set and full
+    // stabilization with rollback: neither `--express` nor `--method direct`
+    // (both sandbox-only speedups) may appear in buildCdkDeployArgs.
     const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+    assert.ok(!prod.includes('--express'), `production deploy must not use --express: ${prod.join(' ')}`);
     assert.ok(!prod.includes('--method'), `production deploy must not use --method: ${prod.join(' ')}`);
   });
 });

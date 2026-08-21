@@ -59,20 +59,28 @@ export interface SandboxDeployArgsOptions {
  *   (`edge-lambda-stack-*`, region us-east-1) in addition to the main hosting
  *   stack. Without `--all`, CDK refuses with "specify which stacks to use".
  *   Deploying every stack in a sandbox app is the intended behavior.
- * - `--method direct` (**express mode, sandbox only**): skips CloudFormation
- *   change-set creation and calls UpdateStack directly. This trims a couple of
- *   change-set round-trips off every sandbox deploy — a meaningful speedup for
- *   the fast iteration loop — while remaining a full CloudFormation deploy (all
- *   resource types, unlike `--hotswap`). The production deploy path
- *   (`deploy.ts`) deliberately does NOT use this: a direct UpdateStack has no
- *   reviewable change set, which is exactly the safety signal a production
- *   deploy should keep.
+ * - `--method direct`: skip CloudFormation change-set creation and call
+ *   UpdateStack directly. This is the baseline sandbox deployment method that
+ *   `--express` builds on.
+ * - `--express` (**CloudFormation Express Mode — sandbox only**): the real
+ *   speedup. CloudFormation reports each stack operation complete as soon as
+ *   the resource's configuration is applied, WITHOUT waiting for full
+ *   stabilization. Because it skips stabilization it also disables automatic
+ *   rollback by default, so a failed deploy can leave the stack in a failed
+ *   state — acceptable for the throwaway sandbox iteration loop, never for
+ *   production. We leave rollback at Express Mode's default (off) and do NOT
+ *   pass `--rollback`. The production deploy path (`deploy.ts`) deliberately
+ *   uses neither `--express` nor `--method direct`: it keeps a reviewable
+ *   change set and full stabilization with rollback, which are exactly the
+ *   safety signals a production deploy should keep. Requires an aws-cdk CLI
+ *   that supports `--express` (>= 2.1138.0).
  */
 export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
     "--method", "direct",
+    "--express",
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
@@ -118,8 +126,8 @@ export async function startSandbox(options: SandboxOptions) {
   try {
     runSync(
       "npm",
-      // Argv (including sandbox-only express mode, `--method direct`) is built by
-      // buildSandboxDeployArgs — see its doc comment for why each flag is here.
+      // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
+      // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
       buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
       {
         stdio: "inherit",
