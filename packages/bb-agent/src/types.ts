@@ -139,15 +139,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 */
 	removalPolicy?: 'destroy' | 'retain';
 	/**
-	 * Where the agent loop runs on AWS. Records the runtime as an explicit choice rather than a
-	 * hardwired assumption — the seam a future in-process/container option plugs into.
-	 *
-	 * Currently `'agentcore'` (the only value, and the default): the Strands loop runs on a
-	 * Bedrock AgentCore Runtime (sessions up to 8h) and streams chunks to the browser over the
-	 * Realtime BB. Ignored by the mock/browser runtimes (the loop runs in-process locally).
-	 */
-	runtime?: 'agentcore';
-	/**
 	 * @internal Pre-built AgentCore code-asset directory to use instead of co-bundling the app
 	 * backend at synth. Set by unit tests and apps that pre-bundle; normal apps leave this unset
 	 * and the backend is co-bundled automatically. Ignored by the mock/browser runtimes.
