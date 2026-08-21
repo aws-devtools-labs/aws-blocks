@@ -48,7 +48,7 @@ const agent = new Agent(scope, id, config)
 | `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
 | `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
 
-`stream()` submits the message to AsyncJob and returns immediately — no API Gateway timeout risk. The agent runs asynchronously and publishes chunks to Realtime. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
+`stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
 **Important: Subscribe before sending.** The agent starts emitting chunks immediately after `stream()` is called. If you subscribe to the channel after calling `stream()`, early chunks may be dropped. Always subscribe first, await `established`, then send:
 
@@ -800,7 +800,8 @@ The Agent BB composes several internal Building Blocks automatically:
 | `FileBucket` | S3 | Session snapshot storage (Strands agent state between turns) |
 | `DistributedTable` × 2 | DynamoDB | Conversations table + messages table |
 | `Realtime` | API Gateway WebSocket | Streaming chunks to connected clients |
-| `AsyncJob` | SQS + Lambda | Runs the agent asynchronously (no API Gateway timeout) |
+
+The streaming loop itself runs on a **Bedrock AgentCore Runtime** (provisioned by `AgentCoreRuntime` — not a composed BB). It's invoked via `InvokeAgentRuntime`, runs the loop for the length of the session (up to 8h), and publishes chunks over the Realtime BB above.
 
 When `inferenceOnly: true`, the two DistributedTables are skipped (no conversation persistence).
 
@@ -809,9 +810,8 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - **Model:** Bedrock pay-per-token pricing. See [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/).
 - **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
-- **Async execution:** SQS (AsyncJob) — $0.40 per million messages.
-- **Streaming:** AppSync Events (Realtime) — $1.00 per million connection minutes.
-- **No timeout limit:** Agent runs in AsyncJob consumer Lambda (up to 15 min), not behind API Gateway.
+- **Loop compute:** Bedrock AgentCore Runtime — consumption-based (vCPU + memory while a session is active). See [AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/).
+- **Streaming:** API Gateway WebSocket (Realtime) — per-message + per-connection-minute pricing.
 
 ## Troubleshooting
 
@@ -827,4 +827,5 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - [Bedrock supported models](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)
 - [Cross-region inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)
 - [Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
+- [Bedrock AgentCore Runtime pricing](https://aws.amazon.com/bedrock/agentcore/pricing/)
 - [Ollama model library](https://ollama.com/library)

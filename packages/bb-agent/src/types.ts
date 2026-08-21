@@ -106,6 +106,12 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * Ignored by the mock and browser runtimes.
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * @internal Pre-built AgentCore code-asset directory to use instead of co-bundling the app
+	 * backend at synth. Set by unit tests and apps that pre-bundle; normal apps leave this unset
+	 * and the backend is co-bundled automatically. Ignored by the mock/browser runtimes.
+	 */
+	agentcoreAssetPath?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
