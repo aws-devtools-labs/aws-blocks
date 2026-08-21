@@ -132,8 +132,22 @@ interface RawRouteRegistryState {
  * A plain string rather than a `Symbol.for()` key, deliberately: duplicate
  * copies are diagnosed by counting strings in the deployed bundle, and a
  * symbol would be invisible to that. It also matches the existing
- * `__BLOCKS_LAMBDA_EVENT_HANDLERS__` precedent. The `_V1_` suffix lets a
- * future incompatible shape claim its own key rather than corrupt this one.
+ * `__BLOCKS_LAMBDA_EVENT_HANDLERS__` precedent.
+ *
+ * **The key is a permanent contract — do not bump it.** `_V1_` names the shape
+ * this file introduced; it is not a license to mint `_V2_`. The copies that
+ * share a process are usually *different versions* of `@aws-blocks/core` — that
+ * is how a tree ends up with duplicates in the first place — so a copy reading
+ * a different key does not get a private namespace, it re-splits the registry:
+ * routes registered through one key, dispatched through the other, 404. And
+ * silently, because each key carries its own `copies` counter, so both sides
+ * report `copies: 1` and the duplicate warning never fires. That is the bug
+ * this module exists to fix, reintroduced with its own diagnostic switched off.
+ *
+ * Evolve the shape **additively** instead: add optional fields, and tolerate
+ * fields a peer copy did not write (`getState()` does). If a `_V2_` key ever
+ * proves unavoidable, it has to adopt the V1 state — read it, and keep writing
+ * it — so that a mixed tree still routes through one table.
  */
 const REGISTRY_KEY = '__AWS_BLOCKS_RAW_ROUTE_REGISTRY_V1__';
 
@@ -162,6 +176,16 @@ function getState(): RawRouteRegistryState {
     state = { routes: [], locked: false, copies: 0 };
     g[REGISTRY_KEY] = state;
   }
+
+  // The state may have been left by a copy that evolved the shape (see the
+  // contract on REGISTRY_KEY), so fill in what this copy needs rather than
+  // assume it is there. A missing `routes` would throw on the first
+  // registration, and a missing `copies` would go NaN on the increment below —
+  // silencing the duplicate warning, which is the failure this module exists to
+  // report. `locked` needs no default: absent reads as unlocked, which is what
+  // a registry still accepting registrations means.
+  if (!Array.isArray(state.routes)) state.routes = [];
+  if (typeof state.copies !== 'number') state.copies = 0;
 
   if (!thisCopyCounted) {
     thisCopyCounted = true;

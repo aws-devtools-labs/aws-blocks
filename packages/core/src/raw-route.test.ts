@@ -997,6 +997,48 @@ describe('duplicate core copies are announced', () => {
   });
 });
 
+// ── A peer copy's state is adopted, not trusted ─────────────────────────────
+//
+// The registry key is a permanent contract: copies sharing a process are
+// usually different *versions* of @aws-blocks/core, so the shape may only grow
+// — a copy that renamed the key would re-split the registry silently, each key
+// holding its own copy counter. The other half of that contract is this side:
+// a copy must cope with a state a peer left without the fields it expects.
+describe('registry state from a peer copy is adopted, not trusted', () => {
+  /**
+   * Import raw-route.js in a fresh process on top of a pre-seeded shared state
+   * and report what the copy made of it.
+   *
+   * `seed` stands in for a copy whose registry shape differs from this one's.
+   * Fields are omitted, never renamed — that is exactly the evolution the key's
+   * contract permits.
+   */
+  function useOnTopOf(seed: string): { matched: boolean; copies: number | null } {
+    const moduleUrl = new URL('./raw-route.js', import.meta.url).href;
+    const script = `globalThis[${JSON.stringify(REGISTRY_KEY)}] = ${seed};
+      const m = await import(${JSON.stringify(moduleUrl)});
+      m.registerRoute({ method: 'GET', path: '/probe', handler: async () => {} });
+      console.log(JSON.stringify({
+        matched: m.matchRoute('GET', '/probe') !== null,
+        copies: m.getLoadedCoreCopies(),
+      }));`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, `using raw-route.js failed: ${result.stderr}`);
+    // NaN serializes to null — which is the point of reporting it this way.
+    return JSON.parse(result.stdout.trim());
+  }
+
+  it('registers into a state that arrived without a route table', () => {
+    const { matched } = useOnTopOf('{ locked: false, copies: 1 }');
+    assert.strictEqual(matched, true, 'a missing route table must be created, not thrown on');
+  });
+
+  it('keeps the copy count a number when the state arrived without one', () => {
+    const { copies } = useOnTopOf('{ routes: [], locked: false }');
+    assert.strictEqual(copies, 1, 'a missing counter must restart at a number — NaN would mute the warning');
+  });
+});
+
 // ── A real duplicate install: two physical copies of the package ────────────
 //
 // Everything above stands in for a second core copy by writing to globalThis
