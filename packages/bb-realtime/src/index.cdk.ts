@@ -32,6 +32,7 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
+	RealtimePublishInfo,
 } from './types.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
@@ -71,6 +72,8 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 	new AppSetting(parent, 'token-secret', { secret: true });
 
 	// ── DynamoDB connections table via DistributedTable ──────────────────
+	// Provisions the connections table and grants the shared handler read/write on it, so the
+	// handler (and any compute running AS the same execution role) can publish/subscribe.
 	new DistributedTable(parent, 'connections', {
 		schema: connectionsSchema,
 		key: { partitionKey: 'connectionId', sortKey: 'channel' },
@@ -131,6 +134,22 @@ export class Realtime extends Scope {
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {
 		return { schema };
+	}
+
+	/**
+	 * The API Gateway WebSocket callback URL for this Realtime's shared infrastructure.
+	 *
+	 * A co-located Building Block whose compute runs outside the Blocks handler (e.g. the Agent BB's
+	 * AgentCore Runtime) injects this as `BLOCKS_RT_CALLBACK_URL` so its `publish()` can post to
+	 * subscribers. No IAM grant is exposed here on purpose: such a compute runs AS the shared Blocks
+	 * execution role, which already holds the publish permissions (API Gateway `postToConnection` +
+	 * the connections table, both granted to the handler on the same role). The only thing it can't
+	 * otherwise discover outside the handler is this endpoint.
+	 *
+	 * @returns the API Gateway WebSocket callback URL to inject as `BLOCKS_RT_CALLBACK_URL`.
+	 */
+	publishCallbackUrl(): string {
+		return getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this).stage.callbackUrl;
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────

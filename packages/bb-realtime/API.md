@@ -23,7 +23,7 @@ export type NamespaceDefs = Record<string, NamespaceConfig<any>>;
 
 // @public
 export const Realtime: {
-    new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T>;
+    new <T extends NamespaceDefs>(scope: ScopeParent, id: string, options: RealtimeOptions<T>): Scope & RealtimeServer<T> & RealtimePublishInfo;
     namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M>;
 };
 
@@ -49,6 +49,11 @@ export const RealtimeErrors: {
 export interface RealtimeOptions<T extends NamespaceDefs> {
     logger?: ChildLogger;
     namespaces: T;
+}
+
+// @public
+export interface RealtimePublishInfo {
+    publishCallbackUrl(): string;
 }
 
 // @public

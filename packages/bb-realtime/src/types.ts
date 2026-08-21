@@ -131,6 +131,32 @@ export interface RealtimeServer<T extends NamespaceDefs> {
 	getChannel<K extends string & keyof T>(namespace: K, channel: string): Promise<RealtimeChannel<InferMessage<T[K]>>>;
 }
 
+// ── Co-located publisher config (CDK) ───────────────────────────────────────
+
+/**
+ * CDK-only capability: expose this Realtime's API Gateway WebSocket callback URL so a co-located
+ * Building Block whose compute runs outside the Blocks handler (e.g. the Agent BB's AgentCore
+ * Runtime) can inject it as `BLOCKS_RT_CALLBACK_URL` and publish.
+ *
+ * Such a compute publishes AS the shared Blocks execution role, which already holds the publish
+ * grants (API Gateway `postToConnection` + the connections table, both granted to the handler that
+ * runs on the same role) — so no extra IAM grant is needed. The one thing it lacks is the callback
+ * URL: outside the Blocks handler it can't reach the Lambda's S3 config bundle, so the endpoint must
+ * be injected into its process env (`publish()` posts to it).
+ *
+ * Present on the type surface for all layers (the inverse of the `publish`/`subscribe`/`getChannel`
+ * synth-guards) but only implemented in the CDK build; the runtime/mock builds throw.
+ */
+export interface RealtimePublishInfo {
+	/**
+	 * The API Gateway WebSocket callback URL for this Realtime's shared infrastructure. Inject as
+	 * `BLOCKS_RT_CALLBACK_URL` on a co-located compute so its `publish()` can post to subscribers.
+	 *
+	 * CDK-synth only — throws in the runtime/mock build.
+	 */
+	publishCallbackUrl(): string;
+}
+
 // ── Options ─────────────────────────────────────────────────────────────────
 
 export interface RealtimeOptions<T extends NamespaceDefs> {

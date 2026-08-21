@@ -182,6 +182,7 @@ Channel path:             my-app-collab/chat/room-123
 | Single-process only | No cross-process pub/sub | Local dev is single-process |
 | No message ordering guarantees | In-process delivery is synchronous (ordered); AWS may deliver out of order | Ordering is inherently non-deterministic |
 | ~~No size/length enforcement locally~~ | ~~Silent failures in AWS~~ | **Fixed** — channel path (1024B) and publish size (32KB) are now enforced in both environments |
+| `publishCallbackUrl()` is CDK-synth-only | Returns the API Gateway WebSocket callback URL under `--conditions=cdk`; throws in the mock and aws-runtime builds (the URL is a synth-time value) | Intentional — only a CDK construct (e.g. the Agent BB's AgentCore Runtime) calls it, to inject `BLOCKS_RT_CALLBACK_URL` into a co-located compute. Mirrors the `publish`/`subscribe`/`getChannel` synth-guards |
 
 ## Serialization
 
