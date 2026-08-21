@@ -737,8 +737,128 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
+import type { AgentStreamChunk } from './types.js';
 
 describe('useChat', () => {
+	test('replays chunks received while loading a conversation', async () => {
+		let chunkHandler: ((chunk: AgentStreamChunk) => void) | undefined;
+		let resolveHistory: ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+		const history = new Promise<{ messages: Array<{ role: string; content: string }> }>((resolve) => {
+			resolveHistory = resolve;
+		});
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe: async (_channelId, handler) => {
+				chunkHandler = handler;
+				return { unsubscribe() {}, established: Promise.resolve() };
+			},
+		});
+
+		const loading = chat.loadConversation('conv-1');
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.ok(chunkHandler, 'subscription should be ready before loading history');
+
+		chunkHandler({ type: 'text-delta', text: 'Live ' });
+		chunkHandler({ type: 'done', text: 'Live response' });
+		assert.ok(resolveHistory, 'history request should be in flight');
+		resolveHistory({ messages: [{ role: 'user', content: 'Prompt' }] });
+
+		await loading;
+
+		assert.deepStrictEqual(
+			chat.getMessages().map(({ role, content }) => ({ role, content })),
+			[
+				{ role: 'user', content: 'Prompt' },
+				{ role: 'assistant', content: 'Live response' },
+			],
+		);
+	});
+
+	test('does not duplicate a completion already returned in conversation history', async () => {
+		let chunkHandler: ((chunk: AgentStreamChunk) => void) | undefined;
+		let resolveHistory: ((value: { messages: Array<{ role: string; content: string }> }) => void) | undefined;
+		const history = new Promise<{ messages: Array<{ role: string; content: string }> }>((resolve) => {
+			resolveHistory = resolve;
+		});
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe: async (_channelId, handler) => {
+				chunkHandler = handler;
+				return { unsubscribe() {}, established: Promise.resolve() };
+			},
+		});
+
+		const loading = chat.loadConversation('conv-1');
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.ok(chunkHandler, 'subscription should be ready before loading history');
+
+		chunkHandler({ type: 'text-delta', text: 'Live ' });
+		chunkHandler({ type: 'done', text: 'Live response' });
+		assert.ok(resolveHistory, 'history request should be in flight');
+		resolveHistory({
+			messages: [
+				{ role: 'user', content: 'Prompt' },
+				{ role: 'assistant', content: 'Live response' },
+			],
+		});
+
+		await loading;
+
+		assert.deepStrictEqual(
+			chat.getMessages().map(({ role, content }) => ({ role, content })),
+			[
+				{ role: 'user', content: 'Prompt' },
+				{ role: 'assistant', content: 'Live response' },
+			],
+		);
+	});
+
+	test('processes new chunks after loading a conversation fails to subscribe', async () => {
+		let chunkHandler: ((chunk: AgentStreamChunk) => void) | undefined;
+		let subscribeAttempts = 0;
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe: async (_channelId, handler) => {
+				subscribeAttempts++;
+				chunkHandler = handler;
+				return {
+					unsubscribe() {},
+					established: subscribeAttempts < 3 ? Promise.reject(new Error('subscription failed')) : Promise.resolve(),
+				};
+			},
+		});
+
+		await assert.rejects(() => chat.loadConversation('conv-1'), /subscription failed/);
+		await chat.sendMessage('Prompt');
+		assert.ok(chunkHandler, 'a later subscription should provide a chunk handler');
+		chunkHandler({ type: 'done', text: 'Live response' });
+
+		assert.deepStrictEqual(
+			chat.getMessages().map(({ role, content }) => ({ role, content })),
+			[
+				{ role: 'user', content: 'Prompt' },
+				{ role: 'assistant', content: 'Live response' },
+			],
+		);
+	});
+
 	test('onError is called when error chunk arrives', async () => {
 		let chunkHandler: (chunk: any) => void;
 		let errorReceived: string | undefined;
