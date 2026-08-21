@@ -1505,6 +1505,20 @@ describe('Hosting', () => {
         `BlocksConfigDeployment must DependsOn the asset deployment(s); ` +
           `found DependsOn=${JSON.stringify(dependsOn)}`,
       );
+
+      const routeCutoverId = Object.entries(tpl.Resources).find(
+        ([id, resource]) =>
+          resource.Type === 'AWS::CloudFormation::CustomResource' &&
+          /RouteStoreKeys/.test(id),
+      )?.[0];
+      assert.ok(routeCutoverId, 'expected a RouteStoreKeys cutover resource');
+
+      const routeCutoverDeps = tpl.Resources[routeCutoverId].DependsOn ?? [];
+      assert.ok(
+        routeCutoverDeps.includes(configId),
+        `RouteStoreKeys must DependsOn BlocksConfigDeployment; ` +
+          `found DependsOn=${JSON.stringify(routeCutoverDeps)}`,
+      );
     });
   });
 

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Construct } from 'constructs';
+import { Construct, type IDependable } from 'constructs';
 import {
   Annotations,
   CfnOutput,
@@ -336,6 +336,7 @@ export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
   readonly distribution: Distribution;
   readonly distributionUrl: string;
+  private readonly cdn: CdnConstruct;
   readonly computeFunctions: Map<
     string,
     LambdaFunction | experimental.EdgeFunction
@@ -368,6 +369,14 @@ export class HostingConstruct extends Construct {
    * post-construction — do not reassign from outside the constructor.
    */
   monitoringTopic?: ITopic;
+
+  /**
+   * Registers a dependency that must finish before the new build becomes
+   * reachable through the KVS route table.
+   */
+  addBuildAssetDependency(dependency: IDependable): void {
+    this.cdn.addBuildAssetDependency(dependency);
+  }
 
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
@@ -1164,6 +1173,7 @@ export class HostingConstruct extends Construct {
         : undefined,
     });
 
+    this.cdn = cdn;
     this.distribution = cdn.distribution;
     this.distributionUrl = cdn.distributionUrl;
 
