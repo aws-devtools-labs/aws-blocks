@@ -144,10 +144,33 @@ describe('shared execution role', () => {
       'BlocksRole should attach AWSLambdaBasicExecutionRole',
     );
 
+    // Core is BB-agnostic: with no Building Block that runs AS the shared role, the trust policy
+    // must NOT allow any compute principal beyond Lambda (e.g. bedrock-agentcore is added by the
+    // Agent BB's own construct, not here — see packages/bb-agent).
+    assert.ok(
+      !JSON.stringify(blocksRole.Properties.AssumeRolePolicyDocument).includes('bedrock-agentcore'),
+      'core must not trust bedrock-agentcore by default (no agent → no AgentCore trust)',
+    );
+
     // The Blocks handler references the shared role, not an auto-generated one.
     template.hasResourceProperties('AWS::Lambda::Function', {
       Role: { 'Fn::GetAtt': [blocksRoleId, 'Arn'] },
     });
+  });
+
+  test('exposes backendModulePath (props.backendCDKPath) for co-bundling BBs', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'BackendPathStack');
+
+    const backend = await BlocksBackend.create(parent, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // Building Blocks that co-bundle the app backend at synth time (e.g. the Agent BB's AgentCore
+    // Runtime) discover it via globalThis.CURRENT_BLOCKS_STACK.backendModulePath.
+    assert.strictEqual(backend.backendModulePath, sideEffectBackendPath);
   });
 
   test('a nested block resolves executionRole via the construct-tree walk', async () => {

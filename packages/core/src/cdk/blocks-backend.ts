@@ -84,9 +84,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   // so permissions would quietly vanish. If a bring-your-own-role option is ever
   // added, it must resolve to a mutable role (`{ mutable: true }`).
   const executionRole = new iam.Role(scope, 'BlocksRole', {
-    // CompositePrincipal (rather than a bare ServicePrincipal) so additional
-    // compute types can assume this same shared role as they are introduced
-    // (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
+    // CompositePrincipal (rather than a bare ServicePrincipal) so a Building Block
+    // whose compute runs AS this shared role can add its own trust principal here
+    // (e.g. the Agent BB adds bedrock-agentcore in its CDK construct) — core stays
+    // agnostic and only Lambda is trusted by default.
     assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
@@ -226,6 +227,12 @@ export class BlocksBackend extends Construct {
   public readonly gateway: apigateway.RestApi;
   public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
   public readonly backendHandlerPath: string;
+  /**
+   * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+   * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+   * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+   */
+  public readonly backendModulePath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: iam.IRole;
   /** Infrastructure defaults for Building Blocks created under this backend. */
@@ -266,6 +273,7 @@ export class BlocksBackend extends Construct {
     super(scope, id);
 
     this.backendHandlerPath = props.backendHandlerPath;
+    this.backendModulePath = props.backendCDKPath;
 
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
