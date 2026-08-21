@@ -22,3 +22,10 @@ export const AsyncJobErrors = {
 	/** Thrown at synth time when an `AsyncJobOptions` value is outside its supported range. */
 	InvalidOption: 'InvalidOptionException',
 } as const;
+
+/** Build a typed `AsyncJob` error whose `name` is one of {@link AsyncJobErrors}. */
+export function blocksError(name: string, message: string): Error {
+	const err = new Error(`${name}: ${message}`);
+	err.name = name;
+	return err;
+}
