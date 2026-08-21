@@ -43,8 +43,19 @@ function resolveRelativeToCaller(relativePath: string): string {
       const plainMatch = line.match(/\((.+?):\d+:\d+\)/) || line.match(/at\s+(.+?):\d+:\d+/);
 
       const filePath = fileUrlMatch ? fileUrlMatch[1] : plainMatch?.[1];
+      if (!filePath) continue;
 
-      if (filePath && !filePath.includes('node_modules') && !filePath.includes('pipeline-construct')) {
+      // Skip framework frames so we land on the USER's file: this package's own
+      // machinery (`pipeline-construct`), node_modules, and the Blocks `core`
+      // Pipeline wrapper (`@aws-blocks/core` re-exports Pipeline via a subclass at
+      // `core/{src,dist}/pipeline/index.*` that injects the Blocks namespace — in a
+      // monorepo/workspace its frame is NOT under node_modules, so match it here).
+      const isFrameworkFrame =
+        filePath.includes('node_modules') ||
+        filePath.includes('pipeline-construct') ||
+        /[/\\]core[/\\](?:src|dist)[/\\]pipeline[/\\]index\.[jt]s$/.test(filePath);
+
+      if (!isFrameworkFrame) {
         const callerDir = path.dirname(filePath);
         return path.resolve(callerDir, relativePath);
       }
