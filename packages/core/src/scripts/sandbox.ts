@@ -59,8 +59,8 @@ export interface SandboxDeployArgsOptions {
  *   (`edge-lambda-stack-*`, region us-east-1) in addition to the main hosting
  *   stack. Without `--all`, CDK refuses with "specify which stacks to use".
  *   Deploying every stack in a sandbox app is the intended behavior.
- * - `--method direct` (**express mode, sandbox only**): skip CloudFormation
- *   change-set creation and call UpdateStack directly. This trims a couple of
+ * - `--method direct` (**express mode, sandbox only**): skips CloudFormation
+ *   change-set creation and calls UpdateStack directly. This trims a couple of
  *   change-set round-trips off every sandbox deploy — a meaningful speedup for
  *   the fast iteration loop — while remaining a full CloudFormation deploy (all
  *   resource types, unlike `--hotswap`). The production deploy path
