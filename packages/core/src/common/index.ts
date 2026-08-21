@@ -342,7 +342,8 @@ export class BlocksStack {
 	 * Path to the app's backend module (`props.backendCDKPath`). A typed contract for Building
 	 * Blocks that co-bundle the backend at synth time and read it off
 	 * `globalThis.CURRENT_BLOCKS_STACK` (the CDK `BlocksStack` / `BlocksBackend` set it). Declared
-	 * here so those consumers can type against `BaseBlocksStack` instead of `any`.
+	 * here so those consumers can type against this shared `BlocksStack` contract — which the CDK
+	 * `BlocksStack` / `BlocksBackend` implements — instead of `any`.
 	 */
 	declare readonly backendModulePath: string;
 	constructor(scope: Construct, id: string, props: BlocksStackProps) {
