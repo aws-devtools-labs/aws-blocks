@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-data",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -41,10 +41,10 @@
     "test": "node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@aws-blocks/bb-app-setting": "^0.1.4",
+    "@aws-blocks/bb-app-setting": "^0.1.5",
     "@aws-blocks/data-common": "^0.1.4",
-    "@aws-blocks/bb-logger": "^0.1.4",
-    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/bb-logger": "^0.1.5",
+    "@aws-blocks/core": "^0.3.0",
     "@aws-sdk/client-rds-data": "^3.700.0",
     "@electric-sql/pglite": "^0.2.0",
     "pg": "^8.13.0",

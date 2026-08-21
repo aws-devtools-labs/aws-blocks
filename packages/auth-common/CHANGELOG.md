@@ -1,5 +1,13 @@
 # @aws-blocks/auth-common
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [08ab129]
+- Updated dependencies [5bfae0a]
+  - @aws-blocks/core@0.3.0
+
 ## 0.1.5
 
 ### Patch Changes

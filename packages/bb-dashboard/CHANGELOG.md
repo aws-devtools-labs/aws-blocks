@@ -1,5 +1,13 @@
 # @aws-blocks/bb-dashboard
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [08ab129]
+- Updated dependencies [5bfae0a]
+  - @aws-blocks/core@0.3.0
+
 ## 0.1.3
 
 ### Patch Changes
