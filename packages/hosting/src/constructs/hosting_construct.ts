@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { Construct } from 'constructs';
 import {
   Annotations,
   CfnOutput,
@@ -12,56 +11,55 @@ import {
   Size,
   Stack,
 } from 'aws-cdk-lib';
-import { Provider } from 'aws-cdk-lib/custom-resources';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
-  Distribution,
-  IResponseHeadersPolicy,
-  PriceClass,
-  ResponseHeadersPolicy,
+  type Distribution,
   experimental,
+  type IResponseHeadersPolicy,
+  type PriceClass,
+  ResponseHeadersPolicy,
 } from 'aws-cdk-lib/aws-cloudfront';
-import * as iam from 'aws-cdk-lib/aws-iam';
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import { Bucket } from 'aws-cdk-lib/aws-s3';
-import {
-  BucketDeployment,
-  CacheControl,
-  Source,
-} from 'aws-cdk-lib/aws-s3-deployment';
-import {
-  Alias,
-  Code,
-  FunctionUrl,
-  IVersion,
-  Function as LambdaFunction,
-} from 'aws-cdk-lib/aws-lambda';
-import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { Rule, RuleTargetInput, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction as LambdaFunctionTarget } from 'aws-cdk-lib/aws-events-targets';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { IHostedZone } from 'aws-cdk-lib/aws-route53';
-import { IKey } from 'aws-cdk-lib/aws-kms';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
+import { type Alias, Code, type FunctionUrl, type IVersion, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
-import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
+import type { IHostedZone } from 'aws-cdk-lib/aws-route53';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import { Bucket } from 'aws-cdk-lib/aws-s3';
+import { BucketDeployment, CacheControl, Source } from 'aws-cdk-lib/aws-s3-deployment';
+import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
-import { DeployManifest } from '../manifest/types.js';
+import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
+import { Provider } from 'aws-cdk-lib/custom-resources';
+import { Construct } from 'constructs';
+import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import { HostingResources } from '../types.js';
-import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY, generateBuildId } from '../defaults.js';
-import { StorageConstruct } from './storage_construct.js';
-import { ComputeConstruct } from './compute_construct.js';
-import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
-import { WafConstruct } from './waf_construct.js';
-import { DnsConstruct } from './dns_construct.js';
-import { createSecurityHeadersPolicy } from './security_headers.js';
+import type { DeployManifest } from '../manifest/types.js';
+import {
+  type EnvValue,
+  type KindStoreOptions,
+  partitionEnvironment,
+  type StoreConfig,
+  wireByo,
+  wireManagedValue,
+} from '../secret-resolve.js';
+import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
-import type { QuotaOverrides } from './quota_budget.js';
+import { ComputeConstruct } from './compute_construct.js';
+import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
+import type { QuotaOverrides } from './quota_budget.js';
+import { createSecurityHeadersPolicy } from './security_headers.js';
+import { StorageConstruct } from './storage_construct.js';
+import { WafConstruct } from './waf_construct.js';
 
 // Re-export build ID helpers for public API + tests
-export { generateBuildIdFunctionCode, generateBuildId } from '../defaults.js';
+export { generateBuildId, generateBuildIdFunctionCode } from '../defaults.js';
 export type { SkewProtectionConfig } from './skew_protection.js';
 
 // CloudFormation hard limit: 500 resources per stack (not adjustable). We warn
@@ -270,8 +268,29 @@ export type HostingConstructProps = {
     enabled: boolean;
     retentionDays?: number;
   };
-  /** Custom environment variables for all compute functions. */
-  environment?: Record<string, string>;
+  /**
+   * Custom environment variables for all compute functions. A value may be:
+   * - a plain string (injected verbatim),
+   * - a `secret('K')` marker → wired at runtime from **Secrets Manager** (read via `getSecret('K')`),
+   * - a `config('K')` marker → wired at runtime from **SSM Parameter Store** (read via `getConfig('K')`),
+   * - a BYO `ISecret` / `IParameter` handle → granted + wired identically (read via `getSecret`/`getConfig`).
+   *
+   * For each managed/BYO value the store LOCATOR (never the value) is injected and
+   * the compute role granted read+decrypt. Domain markers resolve at synth and
+   * must go through the async wrapper (e.g. `Hosting.create()`).
+   */
+  environment?: Record<string, EnvValue>;
+  /**
+   * Namespace/cache config for **secret** values (Secrets Manager). Defaults to
+   * the neutral `/hosting/secrets` prefix; a branded consumer overrides it (e.g.
+   * Blocks passes `/blocks/secrets`). Governs `prefix`, `stage`, `cacheTtlSeconds`.
+   */
+  secretStore?: KindStoreOptions;
+  /**
+   * Namespace/cache config for **config** values (SSM Parameter Store). Defaults
+   * to the neutral `/hosting/config` prefix. Governs `prefix`, `stage`, `cacheTtlSeconds`.
+   */
+  configStore?: KindStoreOptions;
   /**
    * Build cache configuration. When enabled, provisions an S3 bucket for
    * framework build caches and exports the bucket name.
@@ -336,10 +355,7 @@ export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
   readonly distribution: Distribution;
   readonly distributionUrl: string;
-  readonly computeFunctions: Map<
-    string,
-    LambdaFunction | experimental.EdgeFunction
-  > = new Map();
+  readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
   /**
    * `live` aliases for compute resources with provisioned concurrency.
@@ -372,11 +388,7 @@ export class HostingConstruct extends Construct {
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
    */
-  constructor(
-    scope: Construct,
-    id: string,
-    props: HostingConstructProps,
-  ) {
+  constructor(scope: Construct, id: string, props: HostingConstructProps) {
     super(scope, id);
 
     const { manifest } = props;
@@ -476,9 +488,7 @@ export class HostingConstruct extends Construct {
         // compute. Previously this was silently dropped — only a
         // manifest-level value (which adapters don't set from user input) was
         // honored, so `compute.provisionedConcurrency` was inert.
-        provisionedConcurrency: isSsrCompute
-          ? props.compute?.provisionedConcurrency
-          : undefined,
+        provisionedConcurrency: isSsrCompute ? props.compute?.provisionedConcurrency : undefined,
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
@@ -514,21 +524,14 @@ export class HostingConstruct extends Construct {
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
-          resolution:
-            'Ensure cache.computeResource matches a key in the compute map.',
+          resolution: 'Ensure cache.computeResource matches a key in the compute map.',
         });
       }
       this.cacheBucket.grantReadWrite(cacheFunction);
 
       if (cacheFunction instanceof LambdaFunction) {
-        cacheFunction.addEnvironment(
-          'HOSTING_NITRO_CACHE_BUCKET',
-          this.cacheBucket.bucketName,
-        );
-        cacheFunction.addEnvironment(
-          'HOSTING_NITRO_CACHE_REGION',
-          Stack.of(this).region,
-        );
+        cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_BUCKET', this.cacheBucket.bucketName);
+        cacheFunction.addEnvironment('HOSTING_NITRO_CACHE_REGION', Stack.of(this).region);
       }
     } else if (manifest.cache) {
       // OpenNext path (default when `driver` is absent or 'opennext').
@@ -590,44 +593,32 @@ export class HostingConstruct extends Construct {
 
       // Revalidation worker Lambda — processes SQS messages to refresh stale pages
       if (manifest.cache.revalidationFunction && this.revalidationQueue) {
-        const revalidationLogGroup = new LogGroup(
-          this,
-          'RevalidationLogGroup',
-          {
-            retention: props.compute?.logRetention ?? RetentionDays.TWO_WEEKS,
-            removalPolicy: RemovalPolicy.DESTROY,
-          },
-        );
+        const revalidationLogGroup = new LogGroup(this, 'RevalidationLogGroup', {
+          retention: props.compute?.logRetention ?? RetentionDays.TWO_WEEKS,
+          removalPolicy: RemovalPolicy.DESTROY,
+        });
 
-        const revalidationFn = new LambdaFunction(
-          this,
-          'RevalidationFunction',
-          {
-            runtime: DEFAULT_NODE_RUNTIME,
-            handler: manifest.cache.revalidationFunction.handler,
-            code: Code.fromAsset(manifest.cache.revalidationFunction.bundle),
-            timeout: Duration.seconds(30),
-            memorySize: 256,
-            logGroup: revalidationLogGroup,
-            environment: {
-              CACHE_BUCKET_NAME: this.cacheBucket.bucketName,
-              CACHE_BUCKET_REGION: Stack.of(this).region,
-              OPEN_NEXT_BUILD_ID: buildId,
-              ...(this.cacheTable
-                ? { CACHE_DYNAMO_TABLE: this.cacheTable.tableName }
-                : {}),
-            },
+        const revalidationFn = new LambdaFunction(this, 'RevalidationFunction', {
+          runtime: DEFAULT_NODE_RUNTIME,
+          handler: manifest.cache.revalidationFunction.handler,
+          code: Code.fromAsset(manifest.cache.revalidationFunction.bundle),
+          timeout: Duration.seconds(30),
+          memorySize: 256,
+          logGroup: revalidationLogGroup,
+          environment: {
+            CACHE_BUCKET_NAME: this.cacheBucket.bucketName,
+            CACHE_BUCKET_REGION: Stack.of(this).region,
+            OPEN_NEXT_BUILD_ID: buildId,
+            ...(this.cacheTable ? { CACHE_DYNAMO_TABLE: this.cacheTable.tableName } : {}),
           },
-        );
+        });
 
         this.cacheBucket.grantReadWrite(revalidationFn);
         if (this.cacheTable) {
           this.cacheTable.grantReadWriteData(revalidationFn);
         }
 
-        revalidationFn.addEventSource(
-          new SqsEventSource(this.revalidationQueue, { batchSize: 5 }),
-        );
+        revalidationFn.addEventSource(new SqsEventSource(this.revalidationQueue, { batchSize: 5 }));
 
         this.computeFunctions.set('revalidation', revalidationFn);
       }
@@ -638,8 +629,7 @@ export class HostingConstruct extends Construct {
       if (!cacheFunction) {
         throw new HostingError('CacheComputeResourceNotFoundError', {
           message: `Cache config references compute resource '${cacheComputeName}' but it was not found in manifest.compute`,
-          resolution:
-            'Ensure cache.computeResource matches a key in the compute map.',
+          resolution: 'Ensure cache.computeResource matches a key in the compute map.',
         });
       }
       this.cacheBucket.grantReadWrite(cacheFunction);
@@ -653,30 +643,15 @@ export class HostingConstruct extends Construct {
 
       // ISR environment variables
       if (cacheFunction instanceof LambdaFunction) {
-        cacheFunction.addEnvironment(
-          'CACHE_BUCKET_NAME',
-          this.cacheBucket.bucketName,
-        );
-        cacheFunction.addEnvironment(
-          'CACHE_BUCKET_REGION',
-          Stack.of(this).region,
-        );
+        cacheFunction.addEnvironment('CACHE_BUCKET_NAME', this.cacheBucket.bucketName);
+        cacheFunction.addEnvironment('CACHE_BUCKET_REGION', Stack.of(this).region);
         cacheFunction.addEnvironment('OPEN_NEXT_BUILD_ID', buildId);
         if (this.cacheTable) {
-          cacheFunction.addEnvironment(
-            'CACHE_DYNAMO_TABLE',
-            this.cacheTable.tableName,
-          );
+          cacheFunction.addEnvironment('CACHE_DYNAMO_TABLE', this.cacheTable.tableName);
         }
         if (this.revalidationQueue) {
-          cacheFunction.addEnvironment(
-            'REVALIDATION_QUEUE_URL',
-            this.revalidationQueue.queueUrl,
-          );
-          cacheFunction.addEnvironment(
-            'REVALIDATION_QUEUE_REGION',
-            Stack.of(this).region,
-          );
+          cacheFunction.addEnvironment('REVALIDATION_QUEUE_URL', this.revalidationQueue.queueUrl);
+          cacheFunction.addEnvironment('REVALIDATION_QUEUE_REGION', Stack.of(this).region);
         }
       }
 
@@ -769,34 +744,20 @@ export class HostingConstruct extends Construct {
       });
       this.computeFunctions.set('image-optimization', imageConstruct.function);
       if (imageConstruct.functionUrl) {
-        this.computeFunctionUrls.set(
-          'image-optimization',
-          imageConstruct.functionUrl,
-        );
+        this.computeFunctionUrls.set('image-optimization', imageConstruct.functionUrl);
       }
       // Image optimization needs to read original images from the assets bucket
       this.bucket.grantRead(imageConstruct.function);
 
       // Environment variables required by OpenNext image optimization
       if (imageConstruct.function instanceof LambdaFunction) {
-        imageConstruct.function.addEnvironment(
-          'BUCKET_NAME',
-          this.bucket.bucketName,
-        );
-        imageConstruct.function.addEnvironment(
-          'BUCKET_KEY_PREFIX',
-          `builds/${buildId}`,
-        );
-        imageConstruct.function.addEnvironment(
-          'BUCKET_REGION',
-          Stack.of(this).region,
-        );
+        imageConstruct.function.addEnvironment('BUCKET_NAME', this.bucket.bucketName);
+        imageConstruct.function.addEnvironment('BUCKET_KEY_PREFIX', `builds/${buildId}`);
+        imageConstruct.function.addEnvironment('BUCKET_REGION', Stack.of(this).region);
         // Adapter-supplied env (e.g. IPX_BASE_URL for @nuxt/image
         // when the user customizes `runtimeConfig.ipx.baseURL`).
         if (manifest.imageOptimization.environment) {
-          for (const [key, value] of Object.entries(
-            manifest.imageOptimization.environment,
-          )) {
+          for (const [key, value] of Object.entries(manifest.imageOptimization.environment)) {
             imageConstruct.function.addEnvironment(key, value);
           }
         }
@@ -819,10 +780,7 @@ export class HostingConstruct extends Construct {
             String(manifest.imageOptimization.minimumCacheTTL),
           );
         }
-        if (
-          manifest.imageOptimization.remotePatterns &&
-          manifest.imageOptimization.remotePatterns.length > 0
-        ) {
+        if (manifest.imageOptimization.remotePatterns && manifest.imageOptimization.remotePatterns.length > 0) {
           imageConstruct.function.addEnvironment(
             'IMAGE_REMOTE_PATTERNS',
             JSON.stringify(manifest.imageOptimization.remotePatterns),
@@ -831,10 +789,7 @@ export class HostingConstruct extends Construct {
         // Astro `image.domains` / Next.js `images.domains` ship as a
         // CSV of bare hostnames — simpler shape than remotePatterns,
         // honored by the IPX runtime allowlist (P0.1 enforcement).
-        if (
-          manifest.imageOptimization.domains &&
-          manifest.imageOptimization.domains.length > 0
-        ) {
+        if (manifest.imageOptimization.domains && manifest.imageOptimization.domains.length > 0) {
           imageConstruct.function.addEnvironment(
             'IMAGE_ALLOWED_HOSTNAMES',
             manifest.imageOptimization.domains.join(','),
@@ -849,16 +804,10 @@ export class HostingConstruct extends Construct {
         // these (forward-compat); when the runtime starts honoring
         // them, no CDK churn is needed.
         if (manifest.imageOptimization.formats.length > 0) {
-          imageConstruct.function.addEnvironment(
-            'IMAGE_FORMATS',
-            manifest.imageOptimization.formats.join(','),
-          );
+          imageConstruct.function.addEnvironment('IMAGE_FORMATS', manifest.imageOptimization.formats.join(','));
         }
         if (manifest.imageOptimization.sizes.length > 0) {
-          imageConstruct.function.addEnvironment(
-            'IMAGE_DEVICE_SIZES',
-            manifest.imageOptimization.sizes.join(','),
-          );
+          imageConstruct.function.addEnvironment('IMAGE_DEVICE_SIZES', manifest.imageOptimization.sizes.join(','));
         }
       }
     }
@@ -889,24 +838,18 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 5a. User-provided environment variables (applied to ALL compute functions) ----
-    const RESERVED_PREFIXES = [
-      'AWS_',
-      'HOSTING_',
-      'OPEN_NEXT_',
-      'CACHE_',
-      'REVALIDATION_',
-      'NODE_',
-      'LAMBDA_',
-    ];
-    const RESERVED_EXACT_KEYS = new Set([
-      '_HANDLER',
-      'LD_PRELOAD',
-      '_X_AMZN_TRACE_ID',
-    ]);
+    const RESERVED_PREFIXES = ['AWS_', 'HOSTING_', 'OPEN_NEXT_', 'CACHE_', 'REVALIDATION_', 'NODE_', 'LAMBDA_'];
+    const RESERVED_EXACT_KEYS = new Set(['_HANDLER', 'LD_PRELOAD', '_X_AMZN_TRACE_ID']);
     const KEY_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
     if (props.environment) {
-      for (const key of Object.keys(props.environment)) {
+      // Split plain strings / managed markers (secret|config) / BYO handles.
+      // Managed + BYO are wired at runtime; domain markers are pre-resolved by the
+      // async wrapper layer before construction.
+      const { plain, managed, byo } = partitionEnvironment(props.environment);
+      const storeConfig: StoreConfig = { secretStore: props.secretStore, configStore: props.configStore };
+
+      for (const key of Object.keys(plain)) {
         if (!KEY_PATTERN.test(key)) {
           throw new HostingError('InvalidEnvironmentKeyError', {
             message: `Environment variable key '${key}' contains invalid characters.`,
@@ -929,24 +872,30 @@ export class HostingConstruct extends Construct {
         if (key.length > 256) {
           throw new HostingError('EnvironmentKeyTooLongError', {
             message: `Environment variable key '${key}' exceeds 256 character limit.`,
-            resolution:
-              'Lambda environment variable keys must be 256 characters or fewer.',
+            resolution: 'Lambda environment variable keys must be 256 characters or fewer.',
           });
         }
-        const value = props.environment[key];
+        const value = plain[key];
         if (value.length > 8192) {
           throw new HostingError('EnvironmentValueTooLongError', {
             message: `Environment variable value for '${key}' exceeds 8KB limit.`,
-            resolution:
-              'Lambda environment variable values must be 8192 characters or fewer.',
+            resolution: 'Lambda environment variable values must be 8192 characters or fewer.',
           });
         }
       }
 
       for (const [, fn] of this.computeFunctions.entries()) {
         if (fn instanceof LambdaFunction) {
-          for (const [key, value] of Object.entries(props.environment)) {
+          for (const [key, value] of Object.entries(plain)) {
             fn.addEnvironment(key, value);
+          }
+          // Managed markers (secret|config): inject the store locator + grant read/decrypt.
+          for (const marker of managed) {
+            wireManagedValue(fn, marker, storeConfig);
+          }
+          // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
+          for (const binding of byo) {
+            wireByo(fn, binding, storeConfig);
           }
         }
       }
@@ -977,9 +926,7 @@ export class HostingConstruct extends Construct {
         // `<base>-image-optimization`, `<base>-revalidation`.
         fn.addEnvironment(
           'OTEL_SERVICE_NAME',
-          name === 'default' || name === 'server'
-            ? `${serviceName}-ssr`
-            : `${serviceName}-${name}`,
+          name === 'default' || name === 'server' ? `${serviceName}-ssr` : `${serviceName}-${name}`,
         );
       }
     }
@@ -1003,9 +950,7 @@ export class HostingConstruct extends Construct {
         : this.computeFunctions.has('server')
           ? 'server'
           : undefined;
-      const ssrFn = ssrComputeName
-        ? this.computeFunctions.get(ssrComputeName)
-        : undefined;
+      const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
       // Warmup only applies to `handler`-type compute (OpenNext): the
       // synthetic event is a raw JSON object the handler can detect and
       // short-circuit. `http-server` compute (Nitro / Astro behind the
@@ -1014,14 +959,11 @@ export class HostingConstruct extends Construct {
       // optimization into an error-rate generator. Skip it (and warn)
       // rather than synthesize an HTTP event we'd have to keep in sync
       // with LWA's expected shape.
-      const ssrComputeType = ssrComputeName
-        ? manifest.compute[ssrComputeName]?.type
-        : undefined;
+      const ssrComputeType = ssrComputeName ? manifest.compute[ssrComputeName]?.type : undefined;
       if (ssrFn instanceof LambdaFunction && ssrComputeType === 'handler') {
         const rule = new Rule(this, 'WarmupSchedule', {
           schedule: Schedule.rate(props.compute.warmup.rate),
-          description:
-            '2.1 — keep SSR Lambda warm with a synthetic invoke every N.',
+          description: '2.1 — keep SSR Lambda warm with a synthetic invoke every N.',
         });
         // The synthetic event carries a marker header so the user's
         // SSR handler can short-circuit (skip rendering work, skip
@@ -1108,11 +1050,9 @@ export class HostingConstruct extends Construct {
     if (props.cdn?.responseHeadersPolicy) {
       securityHeadersPolicy = props.cdn.responseHeadersPolicy;
     } else if (props.cdn?.contentSecurityPolicy) {
-      securityHeadersPolicy = createSecurityHeadersPolicy(
-        this,
-        'SecurityHeaders',
-        { contentSecurityPolicy: props.cdn.contentSecurityPolicy },
-      );
+      securityHeadersPolicy = createSecurityHeadersPolicy(this, 'SecurityHeaders', {
+        contentSecurityPolicy: props.cdn.contentSecurityPolicy,
+      });
     } else {
       securityHeadersPolicy = ResponseHeadersPolicy.SECURITY_HEADERS;
     }
@@ -1146,8 +1086,7 @@ export class HostingConstruct extends Construct {
       routeEdgeFunctions,
       webAcl: this.webAcl,
       certificate: this.certificate,
-      domainName:
-        resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
+      domainName: resolvedDomainNames.length > 0 ? resolvedDomainNames : undefined,
       wwwRedirect: props.domain?.wwwRedirect,
       accessLogBucket: storage.accessLogBucket,
       priceClass: props.cdn?.priceClass,
@@ -1172,8 +1111,7 @@ export class HostingConstruct extends Construct {
     if (resolvedDomainNames.length > 0) {
       new CfnOutput(this, 'DistributionDomainName', {
         value: this.distribution.distributionDomainName,
-        description:
-          'CloudFront distribution domain name. Point your DNS CNAME to this value.',
+        description: 'CloudFront distribution domain name. Point your DNS CNAME to this value.',
       });
     }
 
@@ -1186,9 +1124,7 @@ export class HostingConstruct extends Construct {
     // resource ensures CFN deletes the distribution FIRST (stopping log
     // delivery), THEN fires the auto-delete Lambda to empty the bucket.
     if (storage.accessLogBucket) {
-      const autoDeleteCr = storage.accessLogBucket.node.tryFindChild(
-        'AutoDeleteObjectsCustomResource',
-      );
+      const autoDeleteCr = storage.accessLogBucket.node.tryFindChild('AutoDeleteObjectsCustomResource');
       if (autoDeleteCr) {
         cdn.distribution.node.addDependency(autoDeleteCr as Construct);
       }
@@ -1205,20 +1141,14 @@ export class HostingConstruct extends Construct {
     const monitoringEnabled = props.monitoring?.enabled ?? true;
     if (monitoringEnabled) {
       const userTopic = props.monitoring?.snsTopicArn
-        ? Topic.fromTopicArn(
-            this,
-            'AlarmTopicImport',
-            props.monitoring.snsTopicArn,
-          )
+        ? Topic.fromTopicArn(this, 'AlarmTopicImport', props.monitoring.snsTopicArn)
         : undefined;
       const ssrComputeName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
           ? 'server'
           : undefined;
-      const ssrFn = ssrComputeName
-        ? this.computeFunctions.get(ssrComputeName)
-        : undefined;
+      const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
       const imgFn = this.computeFunctions.get('image-optimization');
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
@@ -1234,8 +1164,7 @@ export class HostingConstruct extends Construct {
       if (monitoring.topic) {
         new CfnOutput(this, 'MonitoringTopicArn', {
           value: monitoring.topic.topicArn,
-          description:
-            'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
+          description: 'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
         });
       }
     }
@@ -1252,9 +1181,7 @@ export class HostingConstruct extends Construct {
         ? 'default'
         : this.computeFunctions.has('server')
           ? 'server'
-          : [...this.computeFunctions.keys()].find(
-              (k) => k !== 'image-optimization' && k !== 'middleware',
-            );
+          : [...this.computeFunctions.keys()].find((k) => k !== 'image-optimization' && k !== 'middleware');
 
       if (primaryComputeName) {
         const primaryFn = this.computeFunctions.get(primaryComputeName);
@@ -1263,24 +1190,13 @@ export class HostingConstruct extends Construct {
           const originEntries: string[] = [];
           for (const [urlName, fnUrl] of this.computeFunctionUrls.entries()) {
             if (urlName === primaryComputeName) continue;
-            const originKey =
-              urlName === 'image-optimization' ? 'imageOptimizer' : urlName;
+            const originKey = urlName === 'image-optimization' ? 'imageOptimizer' : urlName;
             const host = Fn.select(2, Fn.split('/', fnUrl.url));
-            originEntries.push(
-              Fn.join('', [
-                `"${originKey}":{"host":"`,
-                host,
-                `","protocol":"https","port":443}`,
-              ]),
-            );
+            originEntries.push(Fn.join('', [`"${originKey}":{"host":"`, host, `","protocol":"https","port":443}`]));
           }
 
           if (originEntries.length > 0) {
-            const openNextOriginJson = Fn.join('', [
-              '{',
-              Fn.join(',', originEntries),
-              '}',
-            ]);
+            const openNextOriginJson = Fn.join('', ['{', Fn.join(',', originEntries), '}']);
             primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', openNextOriginJson);
           } else {
             primaryFn.addEnvironment('OPEN_NEXT_ORIGIN', '{}');
@@ -1345,14 +1261,10 @@ export class HostingConstruct extends Construct {
       if (!fs.existsSync(props.errorPages.notFound)) {
         throw new HostingError('CustomErrorPageNotFoundError', {
           message: `Custom 404 error page not found at path: ${props.errorPages.notFound}`,
-          resolution:
-            'Ensure the notFound path points to an existing HTML file relative to your project root.',
+          resolution: 'Ensure the notFound path points to an existing HTML file relative to your project root.',
         });
       }
-      const notFoundContent = fs.readFileSync(
-        props.errorPages.notFound,
-        'utf-8',
-      );
+      const notFoundContent = fs.readFileSync(props.errorPages.notFound, 'utf-8');
       if (notFoundContent.length > 50 * 1024) {
         throw new HostingError('ErrorPageTooLargeError', {
           message: `Custom error page at ${props.errorPages.notFound} is ${Math.round(notFoundContent.length / 1024)}KB. Maximum is 50KB.`,
@@ -1365,8 +1277,7 @@ export class HostingConstruct extends Construct {
       ) {
         throw new HostingError('InvalidErrorPageContentError', {
           message: `Custom error page at ${props.errorPages.notFound} does not appear to be valid HTML.`,
-          resolution:
-            'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
+          resolution: 'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
       buildAssetDeployments.push(
@@ -1382,14 +1293,10 @@ export class HostingConstruct extends Construct {
       if (!fs.existsSync(props.errorPages.serverError)) {
         throw new HostingError('CustomErrorPageNotFoundError', {
           message: `Custom 500 error page not found at path: ${props.errorPages.serverError}`,
-          resolution:
-            'Ensure the serverError path points to an existing HTML file relative to your project root.',
+          resolution: 'Ensure the serverError path points to an existing HTML file relative to your project root.',
         });
       }
-      const serverErrorContent = fs.readFileSync(
-        props.errorPages.serverError,
-        'utf-8',
-      );
+      const serverErrorContent = fs.readFileSync(props.errorPages.serverError, 'utf-8');
       if (serverErrorContent.length > 50 * 1024) {
         throw new HostingError('ErrorPageTooLargeError', {
           message: `Custom error page at ${props.errorPages.serverError} is ${Math.round(serverErrorContent.length / 1024)}KB. Maximum is 50KB.`,
@@ -1402,8 +1309,7 @@ export class HostingConstruct extends Construct {
       ) {
         throw new HostingError('InvalidErrorPageContentError', {
           message: `Custom error page at ${props.errorPages.serverError} does not appear to be valid HTML.`,
-          resolution:
-            'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
+          resolution: 'Ensure the file contains valid HTML (should include <html> or <!DOCTYPE> tag).',
         });
       }
       buildAssetDeployments.push(
@@ -1432,17 +1338,13 @@ export class HostingConstruct extends Construct {
 
       new CfnOutput(this, 'BuildCacheBucketName', {
         value: this.buildCacheBucket.bucketName,
-        description:
-          'S3 bucket for framework build cache. Sync .next/cache (or equivalent) in CI.',
+        description: 'S3 bucket for framework build cache. Sync .next/cache (or equivalent) in CI.',
       });
 
       // Set env var on all compute functions so they know the bucket name
       for (const [, fn] of this.computeFunctions.entries()) {
         if (fn instanceof LambdaFunction) {
-          fn.addEnvironment(
-            'HOSTING_BUILD_CACHE_BUCKET',
-            this.buildCacheBucket.bucketName,
-          );
+          fn.addEnvironment('HOSTING_BUILD_CACHE_BUCKET', this.buildCacheBucket.bucketName);
         }
       }
     }
@@ -1490,8 +1392,7 @@ export class HostingConstruct extends Construct {
     const immutablePaths = manifest.staticAssets.immutablePaths;
     const noCachePaths = manifest.staticAssets.noCachePaths;
     const mutableCacheControl =
-      manifest.staticAssets.cacheControl ??
-      'public, s-maxage=31536000, max-age=0, must-revalidate';
+      manifest.staticAssets.cacheControl ?? 'public, s-maxage=31536000, max-age=0, must-revalidate';
     const htmlCacheControl = 'no-cache, no-store, must-revalidate';
     const htmlGlobs = ['*.html', '**/*.html'];
     const staticSource = Source.asset(manifest.staticAssets.directory);
@@ -1511,9 +1412,7 @@ export class HostingConstruct extends Construct {
     // Raise the defaults to 1024/1024; allow an override for extreme builds.
     const deploymentSizing = {
       memoryLimit: props.storage?.deployment?.memoryLimit ?? 1024,
-      ephemeralStorageSize: Size.mebibytes(
-        props.storage?.deployment?.ephemeralStorageMiB ?? 1024,
-      ),
+      ephemeralStorageSize: Size.mebibytes(props.storage?.deployment?.ephemeralStorageMiB ?? 1024),
     };
 
     // Deploy no-cache paths (e.g. config.json) — always revalidate.
@@ -1540,9 +1439,7 @@ export class HostingConstruct extends Construct {
           destinationKeyPrefix: `builds/${buildId}/`,
           exclude: ['*'],
           include: immutablePaths,
-          cacheControl: [
-            CacheControl.fromString('public, max-age=31536000, immutable'),
-          ],
+          cacheControl: [CacheControl.fromString('public, max-age=31536000, immutable')],
           prune: false,
           ...deploymentSizing,
         }),
@@ -1642,21 +1539,17 @@ export class HostingConstruct extends Construct {
     );
     for (const [ext, mime] of FONT_TYPES) {
       if (!fontExtensionsPresent.has(ext)) continue;
-      const fontDeployment = new BucketDeployment(
-        this,
-        `FontTypeDeployment${ext.replace('.', '')}`,
-        {
-          sources: [staticSource],
-          destinationBucket: this.bucket,
-          destinationKeyPrefix: `builds/${buildId}/`,
-          exclude: ['*'],
-          include: [`*${ext}`],
-          contentType: mime,
-          cacheControl: [CacheControl.fromString(mutableCacheControl)],
-          prune: false,
-          ...deploymentSizing,
-        },
-      );
+      const fontDeployment = new BucketDeployment(this, `FontTypeDeployment${ext.replace('.', '')}`, {
+        sources: [staticSource],
+        destinationBucket: this.bucket,
+        destinationKeyPrefix: `builds/${buildId}/`,
+        exclude: ['*'],
+        include: [`*${ext}`],
+        contentType: mime,
+        cacheControl: [CacheControl.fromString(mutableCacheControl)],
+        prune: false,
+        ...deploymentSizing,
+      });
       // Force ordering: the font deployment must run AFTER the asset
       // deployments that ship the same files with the wrong default
       // Content-Type. Without this dependency, CDK is free to schedule
@@ -1753,10 +1646,7 @@ const normalizeTimeout = (t?: Duration | number): Duration | undefined => {
   return t;
 };
 
-const detectFontExtensions = (
-  rootDir: string,
-  extensions: readonly string[],
-): Set<string> => {
+const detectFontExtensions = (rootDir: string, extensions: readonly string[]): Set<string> => {
   const found = new Set<string>();
   const exts = new Set(extensions.map((e) => e.toLowerCase()));
   const walk = (dir: string): void => {

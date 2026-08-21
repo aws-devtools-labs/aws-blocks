@@ -55,7 +55,119 @@ import { nextjsAdapter, nuxtAdapter, astroAdapter, spaAdapter } from '@aws-block
 
 // Sub-path: typed errors
 import { HostingError } from '@aws-blocks/hosting/error';
+
+// Sub-path: secrets & config (CDK-free — safe to import in SSR/runtime code)
+import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting/secret';
 ```
+
+## Secrets & config
+
+Keep sensitive and environment-specific values out of source. You declare a value
+by **which function you call** — that choice picks the store, and the framework
+owns everything else (the CLI write, the IAM grant, the runtime read):
+
+| Declare (infra) | Store | Read (runtime) |
+| --- | --- | --- |
+| `secret('KEY')` | AWS **Secrets Manager** (sensitive) | `getSecret('KEY')` |
+| `config('KEY')` | AWS **SSM Parameter Store** (non-sensitive, free tier) | `getConfig('KEY')` |
+
+### Declare — in your hosting infra
+
+```ts
+import { HostingConstruct } from '@aws-blocks/hosting';
+import { secret, config } from '@aws-blocks/hosting/secret';
+
+new HostingConstruct(stack, 'Web', {
+  manifest, // produced by a framework adapter (see "Main exports")
+  environment: {
+    STRIPE_KEY: secret('STRIPE_KEY'), // → Secrets Manager
+    FEATURE_FLAGS: config('FEATURE_FLAGS'), // → SSM Parameter Store
+  },
+  // Optional per-kind namespace / cache config:
+  secretStore: { prefix: '/myapp/secrets' },
+  configStore: { prefix: '/myapp/config', cacheTtlSeconds: 30 },
+});
+```
+
+The marker is inert (`{ key, kind }`) and safe to commit — only the store
+*locator* is injected (never the value), and the compute role is granted
+least-privilege read on that one resource (`secretsmanager:GetSecretValue` /
+`ssm:GetParameter`, scoped to the exact ARN) plus `kms:Decrypt`.
+
+Markers in `environment` are wired for **runtime** resolution (above), so both
+`secret()` and `config()` are allowed there (only the locator is injected, never
+the value). Resolving a marker to a literal at **synth time** — e.g. for
+`domain.domainName`, which must be a literal before CloudFront/ACM are built —
+**inlines the value into the CloudFormation template**, so those positions accept
+only `config()` (non-sensitive → SSM) or a plain string, never `secret()`. Synth
+resolution needs an async wrapper that does the SDK read during construction; that
+path is provided by the Blocks `Hosting` block (`await Hosting.create(...)`), not
+this leaf construct, whose `domain.domainName` is a plain `string | string[]`.
+
+**Bring your own:** `environment` also accepts an existing CDK `ISecret` /
+`IParameter` handle — the construct grants read via the handle and injects its
+locator, so `getSecret` / `getConfig` resolve it identically (managed
+*provisions*, BYO *references*).
+
+### Read — in your SSR / API / runtime code
+
+```ts
+// Import from the CDK-free subpath so no CDK is pulled into the runtime bundle:
+import { getSecret, getConfig } from '@aws-blocks/hosting/secret';
+
+const key = await getSecret('STRIPE_KEY'); // Secrets Manager
+const flags = await getConfig('FEATURE_FLAGS'); // SSM
+```
+
+Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
+the value in a `.env` file. On a deployed function it fetches + decrypts from its
+store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
+redeploy).
+
+### Set the values (out of band, never in git)
+
+Standalone hosting apps get two bundled CLIs:
+
+```bash
+# Secrets Manager — a secret value is NEVER taken from argv (it would land in
+# shell history). Omit the value for a hidden prompt, or pipe it via --value-stdin:
+npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
+cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
+npx hosting-secret list --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
+
+# SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
+npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
+```
+
+`set` is **create-or-update**: the first call creates the entry, and running it
+again overwrites the value in place (no error, no prompt) — that is how you
+rotate a value. A **secret** value is never read from `argv` / shell history:
+`hosting-secret set` takes it from a **hidden prompt** or `--value-stdin`, and
+passing it positionally is a hard error. A **config** value is non-sensitive, so
+`hosting-config set KEY value` positionally is allowed (`--value-stdin` / the
+prompt still work). `list` prints names only, never values.
+
+`remove` on a **secret** is recoverable by default — the value enters Secrets
+Manager's recovery window and can be restored (guards against a typo'd prod key).
+Pass `--force` to delete immediately with no recovery. (`config` removes are always
+immediate — SSM Parameter Store has no recovery window.)
+
+> **Footguns to know.**
+> 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys
+>    to, or the deploy reports the value as "not set".
+> 2. **Account-global prefix.** The default prefixes (`/hosting/secrets`,
+>    `/hosting/config`) are account-global — if more than one app deploys to the
+>    same account, give each its own `secretStore.prefix` / `configStore.prefix`
+>    (and matching CLI `--prefix`), or their same-named values collide.
+> 3. **`stage` is not a security boundary.** An optional `stage` on
+>    `secretStore` / `configStore` resolves `<prefix>/<stage>/<key>` and falls
+>    back to the shared `<prefix>/<key>`. To make that fallback work the IAM grant
+>    is *static*, so a stage's compute has standing read on **both** the stage
+>    value and the shared one. Every stage sharing a prefix can read the shared
+>    value — put production-only secrets in a stage-scoped slot and keep only a
+>    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
+>    constructs sharing a prefix are not isolated from each other.
 
 ## Architecture
 

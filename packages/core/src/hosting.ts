@@ -1,42 +1,37 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as cdk from 'aws-cdk-lib';
-import {
-  AllowedMethods,
-  CachePolicy,
-  OriginRequestPolicy,
-  ViewerProtocolPolicy,
-} from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
-import { Construct } from 'constructs';
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-
+import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting';
+import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
 import {
-  HostingConstruct,
   generateBuildId,
+  HostingConstruct,
   type HostingConstructProps,
   type HostingDomainConfig,
   type HostingWafConfig,
   type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
-import {
-  detectFramework,
-  getAdapter,
-  normalizeBasePath,
-  type FrameworkAdapterFn,
-} from '@aws-blocks/hosting/adapters';
-import type {
-  DeployManifest,
-  RouteBehavior,
-  FrameworkType,
-} from '@aws-blocks/hosting';
-import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
-import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import * as cdk from 'aws-cdk-lib';
+import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
+import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
+import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
+import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+import {
+  collectSynthMarkers,
+  type DomainNameInput,
+  type EnvValue,
+  partitionEnvironment,
+  resolveDomainNames,
+  resolveSecretsAtSynth,
+  wireByo,
+  wireManagedValue,
+} from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
 
 // ─── Public types ────────────────────────────────────────────────
@@ -101,6 +96,19 @@ export type ComputeConfig = {
 };
 
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
+
+/**
+ * Custom-domain config for the Blocks {@link Hosting} block — the leaf
+ * {@link HostingDomainConfig} with `domainName` widened to also accept a
+ * `config()` marker (resolved to a literal at synth). Only `config()` or a plain
+ * string is accepted here, never `secret()` (a synth-inlined value would leak into
+ * the template). All other fields (`hostedZone`, `certificate`, `wwwRedirect`, …)
+ * are inherited unchanged from {@link HostingDomainConfig}.
+ */
+export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
+  /** Domain name(s): a plain string / string[] and/or a `config()` marker resolved at synth. */
+  domainName: DomainNameInput;
+}
 
 /**
  * Structural interface for the Blocks backend stack.
@@ -199,8 +207,55 @@ export interface HostingProps {
   /** Lambda compute configuration for SSR frameworks. */
   compute?: ComputeConfig;
 
-  /** Custom domain configuration. */
-  domain?: HostingDomainConfig;
+  /**
+   * Custom environment variables injected into all compute Lambda functions.
+   *
+   * Values are either plain strings or {@link secret} references:
+   *
+   * ```ts
+   * environment: {
+   *   FEATURE_FLAG: 'on',                 // plaintext (in CFN template + Lambda config)
+   *   STRIPE_KEY: secret('STRIPE_KEY'),   // encrypted; read at runtime via getSecret()
+   * }
+   * ```
+   *
+   * A plain string is injected verbatim (visible in the CloudFormation
+   * template — safe for non-sensitive literals). A `secret('K')` value (AWS
+   * Secrets Manager) or `config('K')` value (SSM Parameter Store) injects only
+   * the store LOCATOR — never the value — and grants the compute role scoped
+   * read + decrypt; fetch it at runtime with `await getSecret('K')` /
+   * `await getConfig('K')`. A bring-your-own CDK `ISecret` / `IParameter` handle
+   * is accepted too and resolves identically.
+   *
+   * The env-var name must equal the key: `STRIPE_KEY: secret('STRIPE_KEY')`.
+   */
+  environment?: Record<string, EnvValue>;
+
+  /**
+   * Custom domain configuration. `domainName` accepts plain strings and/or
+   * {@link config} references (e.g. `domain: { domainName: config('DOMAIN_PROD') }`).
+   * A domain is resolved at synth time and inlined as a literal into the template,
+   * so only `config()` (non-sensitive → SSM) is allowed here, never `secret()`
+   * (which would leak into the template). Any domain marker requires constructing
+   * via the async {@link Hosting.create}.
+   */
+  domain?: HostingDomain;
+
+  /**
+   * Namespace/cache config for `secret()` values (AWS Secrets Manager). Defaults
+   * to the Blocks `/blocks/secrets` prefix; set `prefix` to namespace per app,
+   * `stage` for per-stage values with a shared fallback, or `cacheTtlSeconds` to
+   * refresh a rotated value on a warm compute without a cold start. Any field the
+   * app sets overrides the Blocks default.
+   */
+  secretStore?: KindStoreOptions;
+
+  /**
+   * Namespace/cache config for `config()` values (SSM Parameter Store). Defaults
+   * to the Blocks `/blocks/config` prefix; same override semantics as
+   * {@link HostingProps.secretStore}.
+   */
+  configStore?: KindStoreOptions;
 
   /** WAF protection configuration. */
   waf?: HostingWafConfig;
@@ -399,7 +454,42 @@ export class Hosting extends Construct {
   /** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
   public readonly monitoringTopic?: cdk.aws_sns.ITopic;
 
-  constructor(scope: Construct, id: string, props: HostingProps) {
+  /**
+   * Async constructor. Required when a `secret()` / `config()` value resolves at
+   * **synth time** — i.e. a `domain.domainName` marker — because that value is
+   * fetched from its store (Secrets Manager / SSM) during synthesis. Returns a
+   * fully-constructed {@link Hosting}.
+   *
+   * For runtime `environment` markers (read via `getSecret`/`getConfig`) and
+   * plain literals, `new Hosting(...)` works directly; `create()` is also safe
+   * to use uniformly.
+   *
+   * @example
+   * ```ts
+   * await Hosting.create(stack, 'Web', {
+   *   root: '.', framework: 'nextjs', api: blocksStack,
+   *   domain: { domainName: config('DOMAIN_PROD') },
+   * });
+   * ```
+   */
+  static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
+    const synthMarkers = collectSynthMarkers(props.domain?.domainName);
+    const resolved = synthMarkers.length
+      ? await resolveSecretsAtSynth(synthMarkers, undefined, {
+          secretStore: props.secretStore,
+          configStore: props.configStore,
+        })
+      : new Map<string, string>();
+    return new Hosting(scope, id, props, resolved);
+  }
+
+  /**
+   * @param resolvedSecrets - Synth-time-resolved secret values, keyed by secret
+   *   key. Populated by {@link Hosting.create}; empty for the direct
+   *   `new Hosting()` path (which then rejects any synth-time secret with a
+   *   clear "use Hosting.create()" error).
+   */
+  constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
     super(scope, id);
 
     const root = resolve(props.root);
@@ -415,7 +505,7 @@ export class Hosting extends Construct {
       // from breaking frontend builds (e.g., Next.js webpack module resolution).
       const nodeOptions = (process.env.NODE_OPTIONS || '')
         .split(/\s+/)
-        .filter(opt => opt !== '--conditions=cdk')
+        .filter((opt) => opt !== '--conditions=cdk')
         .join(' ');
       const buildEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
       try {
@@ -430,7 +520,7 @@ export class Hosting extends Construct {
       } catch (error) {
         throw new Error(
           `Frontend build failed: ${props.buildCommand}\n` +
-          `Ensure the build command is correct and all dependencies are installed.`,
+            `Ensure the build command is correct and all dependencies are installed.`,
         );
       }
     }
@@ -445,7 +535,7 @@ export class Hosting extends Construct {
     if (!existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
-        `Provide a buildCommand or ensure the directory exists before synthesis.`,
+          `Provide a buildCommand or ensure the directory exists before synthesis.`,
       );
     }
 
@@ -494,8 +584,7 @@ export class Hosting extends Construct {
     //    errorPages will drive the CloudFront configuration correctly,
     //    and the HTML files are already in the static assets directory
     //    (copied by the adapter).
-    const manifestHasErrorPages = manifest.errorPages !== undefined &&
-      Object.keys(manifest.errorPages).length > 0;
+    const manifestHasErrorPages = manifest.errorPages !== undefined && Object.keys(manifest.errorPages).length > 0;
     const skipPropsErrorPages = !!(props.errorPages && manifestHasErrorPages);
 
     // ── 5. Write placeholder config.json into static assets ─────────
@@ -506,10 +595,7 @@ export class Hosting extends Construct {
     const staticDir = manifest.staticAssets.directory;
     const blocksSandboxDir = join(staticDir, '.blocks-sandbox');
     mkdirSync(blocksSandboxDir, { recursive: true });
-    writeFileSync(
-      join(blocksSandboxDir, 'config.json'),
-      JSON.stringify({ _placeholder: true }),
-    );
+    writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
 
     // ── 5a. Mark config.json as a no-cache path ─────────────────────
     //    config.json is a fixed-name, mutable runtime-config file: it must
@@ -532,7 +618,7 @@ export class Hosting extends Construct {
       target: 'static',
     };
     // Insert before any catch-all route
-    const catchAllIdx = manifest.routes.findIndex((r) => r.pattern === '/*' || r.pattern === '/(.*)')
+    const catchAllIdx = manifest.routes.findIndex((r) => r.pattern === '/*' || r.pattern === '/(.*)');
     if (catchAllIdx >= 0) {
       manifest.routes.splice(catchAllIdx, 0, blocksConfigRoute);
     } else {
@@ -550,28 +636,48 @@ export class Hosting extends Construct {
     const normalizedCompute = props.compute
       ? {
           ...props.compute,
-          timeout: typeof props.compute.timeout === 'number'
-            ? cdk.Duration.seconds(props.compute.timeout)
-            : props.compute.timeout,
+          timeout:
+            typeof props.compute.timeout === 'number'
+              ? cdk.Duration.seconds(props.compute.timeout)
+              : props.compute.timeout,
+        }
+      : undefined;
+
+    // ── 6b. Resolve secret() markers ─────────────────────────────
+    //    Env values split into plain / runtime-secret / deploy-time buckets;
+    //    domain names may contain markers resolved at synth time. See
+    //    ./hosting-secrets.ts for the two-strategy rationale.
+    const { plain: plainEnv, managed, byo } = partitionEnvironment(props.environment);
+
+    // Resolved domain (markers → literals); falls back to the raw config when
+    // no domain is set. resolveDomainNames throws a "use Hosting.create()"
+    // error if a domain marker reached the sync path unresolved.
+    const resolvedDomain = props.domain
+      ? {
+          ...props.domain,
+          domainName: resolveDomainNames(props.domain.domainName, resolvedSecrets),
         }
       : undefined;
 
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
-      domain: props.domain,
+      // Plain env + deploy-time literals go straight to the L3 (which stays
+      // secret-agnostic: it only ever sees plain strings). Runtime secrets are
+      // wired separately below so we can attach IAM grants per function.
+      environment: Object.keys(plainEnv).length ? plainEnv : undefined,
+      domain: resolvedDomain,
       waf: props.waf,
-      storage: props.retainOnDelete != null
-        ? { retainOnDelete: props.retainOnDelete }
-        : undefined,
-      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas)
-        ? {
-            contentSecurityPolicy: props.contentSecurityPolicy,
-            priceClass: props.priceClass,
-            geoRestriction: props.geoRestriction,
-            quotas: props.quotas,
-          }
-        : undefined,
+      storage: props.retainOnDelete != null ? { retainOnDelete: props.retainOnDelete } : undefined,
+      cdn:
+        props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas
+          ? {
+              contentSecurityPolicy: props.contentSecurityPolicy,
+              priceClass: props.priceClass,
+              geoRestriction: props.geoRestriction,
+              quotas: props.quotas,
+            }
+          : undefined,
       logging: props.logging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
@@ -591,14 +697,10 @@ export class Hosting extends Construct {
     // variables — they surface in computeFunctions as EdgeFunction/IVersion
     // without an `addEnvironment` method. Skip any function that can't take
     // env vars instead of crashing (`fn.addEnvironment is not a function`).
-    const canAddEnv = (
-      fn: unknown,
-    ): fn is cdk.aws_lambda.Function =>
+    const canAddEnv = (fn: unknown): fn is cdk.aws_lambda.Function =>
       typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
 
-    const primaryFunction = [...hosting.computeFunctions.values()].find(
-      canAddEnv,
-    );
+    const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
 
     for (const [, fn] of hosting.computeFunctions) {
       if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
@@ -608,15 +710,25 @@ export class Hosting extends Construct {
       if (props.backendConfig) {
         fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
       }
+      // Runtime managed markers (secret|config): inject the store locator
+      // (never the value) + grant read/decrypt; read via getSecret()/getConfig().
+      // The app's secretStore/configStore (prefix, stage, cacheTtlSeconds) layer
+      // over the Blocks defaults.
+      const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
+      for (const marker of managed) {
+        wireManagedValue(fn, marker, storeConfig);
+      }
+      // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
+      for (const binding of byo) {
+        wireByo(fn, binding, storeConfig);
+      }
     }
 
     // ── 8. Deploy config.json with resolved CDK tokens ───────────
     const buildId = manifest.buildId;
     if (buildId) {
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
-        sources: [
-          s3deploy.Source.jsonData('config.json', this.buildConfigJson(props)),
-        ],
+        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
@@ -629,10 +741,7 @@ export class Hosting extends Construct {
         // primary guard against staleness is step 5a's no-cache placeholder;
         // this is defense-in-depth so a post-deploy invalidation actually
         // clears any edge entry at its real key.)
-        distributionPaths: [
-          `/builds/${buildId}/.blocks-sandbox/*`,
-          '/.blocks-sandbox/*',
-        ],
+        distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
@@ -764,8 +873,8 @@ export class Hosting extends Construct {
       if (behaviorPattern.endsWith('/*')) {
         console.warn(
           `[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
-          `which may shadow SSR/frontend routes under the same prefix. ` +
-          `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
+            `which may shadow SSR/frontend routes under the same prefix. ` +
+            `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
         );
       }
 

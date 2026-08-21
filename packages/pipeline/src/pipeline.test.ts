@@ -1,17 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { after, before, describe, it } from 'node:test';
+import { _setSynthSecretFetcher } from '@aws-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { CodePipelineSource } from 'aws-cdk-lib/pipelines';
-import { Annotations, Template, Match } from 'aws-cdk-lib/assertions';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { config, secret } from './index.js';
 import { Pipeline, validateAppFilePath } from './pipeline-construct.js';
 import type { PipelineProps, PipelineStageConfig } from './types.js';
 
@@ -38,10 +40,7 @@ function defaultPipelineProps(overrides?: Partial<PipelineProps>): PipelineProps
     branches: [
       {
         branch: 'main',
-        stages: [
-          { name: 'beta' },
-          { name: 'prod', requireApproval: true },
-        ],
+        stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
       },
     ],
     stageFactory: minimalStageFactory,
@@ -137,9 +136,14 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'EmptyStagesStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [{ branch: 'main', stages: [] }],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              branches: [{ branch: 'main', stages: [] }],
+            }),
+          ),
         /empty.*stages/i,
       );
     });
@@ -149,12 +153,17 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'DupBranchStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [
-            { branch: 'main', stages: [{ name: 'beta' }] },
-            { branch: 'main', stages: [{ name: 'prod' }] },
-          ],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              branches: [
+                { branch: 'main', stages: [{ name: 'beta' }] },
+                { branch: 'main', stages: [{ name: 'prod' }] },
+              ],
+            }),
+          ),
         /duplicate branch name.*main/i,
       );
     });
@@ -164,11 +173,14 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'DupStageStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [
-            { branch: 'main', stages: [{ name: 'beta' }, { name: 'beta' }] },
-          ],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              branches: [{ branch: 'main', stages: [{ name: 'beta' }, { name: 'beta' }] }],
+            }),
+          ),
         /duplicate stage name.*beta/i,
       );
     });
@@ -178,12 +190,17 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'BadArnStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: 'not-a-valid-arn',
-          },
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              source: {
+                repo: MOCK_REPO,
+                connectionArn: 'not-a-valid-arn',
+              },
+            }),
+          ),
         /connectionArn.*arn:aws:/,
       );
     });
@@ -193,12 +210,17 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'BadRepoStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          source: {
-            repo: 'my-app-no-owner',
-            connectionArn: MOCK_CONNECTION_ARN,
-          },
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              source: {
+                repo: 'my-app-no-owner',
+                connectionArn: MOCK_CONNECTION_ARN,
+              },
+            }),
+          ),
         /owner\/repo/,
       );
     });
@@ -210,16 +232,25 @@ describe('Pipeline', () => {
       });
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          crossAccountKeys: false,
-          branches: [{
-            branch: 'main',
-            stages: [{
-              name: 'prod',
-              env: { account: '222222222222', region: 'us-east-1' },
-            }],
-          }],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              crossAccountKeys: false,
+              branches: [
+                {
+                  branch: 'main',
+                  stages: [
+                    {
+                      name: 'prod',
+                      env: { account: '222222222222', region: 'us-east-1' },
+                    },
+                  ],
+                },
+              ],
+            }),
+          ),
         /crossAccountKeys must be true/,
       );
     });
@@ -231,16 +262,25 @@ describe('Pipeline', () => {
       });
 
       assert.doesNotThrow(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          crossAccountKeys: true,
-          branches: [{
-            branch: 'main',
-            stages: [{
-              name: 'prod',
-              env: { account: '222222222222', region: 'us-east-1' },
-            }],
-          }],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              crossAccountKeys: true,
+              branches: [
+                {
+                  branch: 'main',
+                  stages: [
+                    {
+                      name: 'prod',
+                      env: { account: '222222222222', region: 'us-east-1' },
+                    },
+                  ],
+                },
+              ],
+            }),
+          ),
       );
     });
 
@@ -249,12 +289,19 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'BakeTimeLimitStack');
 
       assert.throws(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [{
-            branch: 'main',
-            stages: [{ name: 'beta', bakeTime: Duration.minutes(0) }],
-          }],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              branches: [
+                {
+                  branch: 'main',
+                  stages: [{ name: 'beta', bakeTime: Duration.minutes(0) }],
+                },
+              ],
+            }),
+          ),
         /bakeTime.*must be positive/,
       );
     });
@@ -264,12 +311,19 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'BakeTimeLargeStack');
 
       assert.doesNotThrow(
-        () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [{
-            branch: 'main',
-            stages: [{ name: 'beta', bakeTime: Duration.minutes(120) }],
-          }],
-        })),
+        () =>
+          new Pipeline(
+            stack,
+            'TestPipeline',
+            defaultPipelineProps({
+              branches: [
+                {
+                  branch: 'main',
+                  stages: [{ name: 'beta', bakeTime: Duration.minutes(120) }],
+                },
+              ],
+            }),
+          ),
       );
     });
 
@@ -277,11 +331,17 @@ describe('Pipeline', () => {
       const app = new App();
 
       assert.throws(
-        () => new Pipeline(app as any, 'TestPipeline', {
-          source: { repo: 'org/app', connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/test-id' },
-          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-          stageFactory: (scope) => { new cdk.Stack(scope, 'AppStack'); },
-        }),
+        () =>
+          new Pipeline(app as any, 'TestPipeline', {
+            source: {
+              repo: 'org/app',
+              connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/test-id',
+            },
+            branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+            stageFactory: (scope) => {
+              new cdk.Stack(scope, 'AppStack');
+            },
+          }),
         /Stack scope.*not an App|sync constructor requires a Stack/,
       );
     });
@@ -292,19 +352,20 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'SlashBranchStack');
 
-      const pipeline = new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'feature/my-feature',
-            stages: [{ name: 'alpha' }],
-          },
-        ],
-      }));
-
-      assert.ok(
-        pipeline.codePipelines.get('feature/my-feature'),
-        'Should be keyed by original branch name',
+      const pipeline = new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'feature/my-feature',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+        }),
       );
+
+      assert.ok(pipeline.codePipelines.get('feature/my-feature'), 'Should be keyed by original branch name');
 
       // Should not throw — proving the construct ID was sanitized
       Template.fromStack(stack);
@@ -315,14 +376,18 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'SpecialCharBranchStack');
 
       assert.doesNotThrow(() => {
-        new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [
-            {
-              branch: 'release/v1.0@beta',
-              stages: [{ name: 'beta' }],
-            },
-          ],
-        }));
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            branches: [
+              {
+                branch: 'release/v1.0@beta',
+                stages: [{ name: 'beta' }],
+              },
+            ],
+          }),
+        );
       });
     });
   });
@@ -332,18 +397,22 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'MultiBranchStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
-          },
-          {
-            branch: 'develop',
-            stages: [{ name: 'alpha' }],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
+            },
+            {
+              branch: 'develop',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
 
@@ -355,18 +424,22 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'BranchSourceStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'prod' }],
-          },
-          {
-            branch: 'develop',
-            stages: [{ name: 'alpha' }],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'prod' }],
+            },
+            {
+              branch: 'develop',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
       const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
@@ -391,17 +464,18 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'ApprovalStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [
-              { name: 'beta' },
-              { name: 'prod', requireApproval: true, approvalComment: 'Ready for prod?' },
-            ],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true, approvalComment: 'Ready for prod?' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
 
@@ -425,14 +499,18 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'NoApprovalStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta' }],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
       const pipelineResources = template.findResources('AWS::CodePipeline::Pipeline');
@@ -442,9 +520,7 @@ describe('Pipeline', () => {
       const betaStage = stages.find((s: any) => s.Name.includes('beta'));
       assert.ok(betaStage, 'Should have beta stage');
 
-      const approvalActions = betaStage.Actions.filter(
-        (a: any) => a.ActionTypeId?.Category === 'Approval',
-      );
+      const approvalActions = betaStage.Actions.filter((a: any) => a.ActionTypeId?.Category === 'Approval');
       assert.strictEqual(approvalActions.length, 0, 'Beta should NOT have approval actions');
     });
 
@@ -452,22 +528,22 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'IndependentApprovalStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [
-              { name: 'prod', requireApproval: true },
-            ],
-          },
-          {
-            branch: 'develop',
-            stages: [
-              { name: 'alpha' },
-            ],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'prod', requireApproval: true }],
+            },
+            {
+              branch: 'develop',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
       const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
@@ -481,13 +557,17 @@ describe('Pipeline', () => {
         const branchName = sourceStage?.Actions?.[0]?.Configuration?.BranchName;
 
         if (branchName === 'main') {
-          const deployStages = stages.filter((s: any) => s.Name !== 'Source' && s.Name !== 'Build' && s.Name !== 'UpdatePipeline');
+          const deployStages = stages.filter(
+            (s: any) => s.Name !== 'Source' && s.Name !== 'Build' && s.Name !== 'UpdatePipeline',
+          );
           const hasApproval = deployStages.some((s: any) =>
             s.Actions.some((a: any) => a.ActionTypeId?.Category === 'Approval'),
           );
           assert.ok(hasApproval, 'main branch should have approval');
         } else if (branchName === 'develop') {
-          const deployStages = stages.filter((s: any) => s.Name !== 'Source' && s.Name !== 'Build' && s.Name !== 'UpdatePipeline');
+          const deployStages = stages.filter(
+            (s: any) => s.Name !== 'Source' && s.Name !== 'Build' && s.Name !== 'UpdatePipeline',
+          );
           const hasApproval = deployStages.some((s: any) =>
             s.Actions.some((a: any) => a.ActionTypeId?.Category === 'Approval'),
           );
@@ -500,14 +580,18 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'BakeTimeStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta', bakeTime: Duration.minutes(5) }],
-          },
-        ],
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta', bakeTime: Duration.minutes(5) }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
 
@@ -543,24 +627,32 @@ describe('Pipeline', () => {
 
       const calledStages: string[] = [];
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta' }, { name: 'prod' }],
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta' }, { name: 'prod' }],
+            },
+            {
+              branch: 'develop',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+          stageFactory: (scope, stageConfig) => {
+            calledStages.push(stageConfig.name);
+            new Stack(scope, 'AppStack', { env: stageConfig.env });
           },
-          {
-            branch: 'develop',
-            stages: [{ name: 'alpha' }],
-          },
-        ],
-        stageFactory: (scope, stageConfig) => {
-          calledStages.push(stageConfig.name);
-          new Stack(scope, 'AppStack', { env: stageConfig.env });
-        },
-      }));
+        }),
+      );
 
-      assert.deepStrictEqual(calledStages, ['beta', 'prod', 'alpha'], 'stageFactory should be called for each stage in order across branches');
+      assert.deepStrictEqual(
+        calledStages,
+        ['beta', 'prod', 'alpha'],
+        'stageFactory should be called for each stage in order across branches',
+      );
     });
 
     it('passes env to stageFactory when specified', () => {
@@ -571,21 +663,22 @@ describe('Pipeline', () => {
 
       const receivedEnvs: Array<cdk.Environment | undefined> = [];
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [
-          {
-            branch: 'main',
-            stages: [
-              { name: 'beta', env: { account: '111111111111', region: 'us-west-2' } },
-              { name: 'prod' },
-            ],
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'beta', env: { account: '111111111111', region: 'us-west-2' } }, { name: 'prod' }],
+            },
+          ],
+          stageFactory: (scope, stageConfig) => {
+            receivedEnvs.push(stageConfig.env);
+            new Stack(scope, 'AppStack', { env: stageConfig.env });
           },
-        ],
-        stageFactory: (scope, stageConfig) => {
-          receivedEnvs.push(stageConfig.env);
-          new Stack(scope, 'AppStack', { env: stageConfig.env });
-        },
-      }));
+        }),
+      );
 
       assert.deepStrictEqual(receivedEnvs[0], { account: '111111111111', region: 'us-west-2' });
       assert.strictEqual(receivedEnvs[1], undefined);
@@ -597,24 +690,28 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'BranchTriggerStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-          triggerOnPush: true,
-        },
-        branches: [
-          {
-            branch: 'main',
-            triggerOnPush: false,
-            stages: [{ name: 'prod' }],
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+            triggerOnPush: true,
           },
-          {
-            branch: 'develop',
-            stages: [{ name: 'alpha' }],
-          },
-        ],
-      }));
+          branches: [
+            {
+              branch: 'main',
+              triggerOnPush: false,
+              stages: [{ name: 'prod' }],
+            },
+            {
+              branch: 'develop',
+              stages: [{ name: 'alpha' }],
+            },
+          ],
+        }),
+      );
 
       const template = Template.fromStack(stack);
       const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
@@ -624,13 +721,17 @@ describe('Pipeline', () => {
 
       // Verify that the main branch pipeline has DetectChanges: false
       template.hasResourceProperties('AWS::CodePipeline::Pipeline', {
-        Stages: Match.arrayWith([Match.objectLike({
-          Actions: Match.arrayWith([Match.objectLike({
-            Configuration: Match.objectLike({
-              DetectChanges: false,
-            }),
-          })]),
-        })]),
+        Stages: Match.arrayWith([
+          Match.objectLike({
+            Actions: Match.arrayWith([
+              Match.objectLike({
+                Configuration: Match.objectLike({
+                  DetectChanges: false,
+                }),
+              }),
+            ]),
+          }),
+        ]),
       });
     });
 
@@ -639,19 +740,23 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'DefaultTriggerStack');
 
       // This should succeed without error (triggerOnPush falls through)
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-          triggerOnPush: false,
-        },
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'prod' }],
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+            triggerOnPush: false,
           },
-        ],
-      }));
+          branches: [
+            {
+              branch: 'main',
+              stages: [{ name: 'prod' }],
+            },
+          ],
+        }),
+      );
 
       Template.fromStack(stack);
     });
@@ -673,11 +778,15 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'CustomSynthStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        synth: {
-          commands: ['pnpm install', 'pnpm build', 'pnpm cdk synth'],
-        },
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          synth: {
+            commands: ['pnpm install', 'pnpm build', 'pnpm cdk synth'],
+          },
+        }),
+      );
 
       const template = Template.fromStack(stack);
       template.resourceCountIs('AWS::CodePipeline::Pipeline', 1);
@@ -687,12 +796,16 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'SynthEnvStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        synth: {
-          commands: ['npm ci', 'npx cdk synth'],
-          env: { NODE_ENV: 'production' },
-        },
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          synth: {
+            commands: ['npm ci', 'npx cdk synth'],
+            env: { NODE_ENV: 'production' },
+          },
+        }),
+      );
 
       const template = Template.fromStack(stack);
 
@@ -713,12 +826,16 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'MonorepoStack');
 
       assert.doesNotThrow(() => {
-        new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          synth: {
-            commands: ['npm ci', 'npx cdk synth'],
-            primaryOutputDirectory: 'packages/infra/cdk.out',
-          },
-        }));
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            synth: {
+              commands: ['npm ci', 'npx cdk synth'],
+              primaryOutputDirectory: 'packages/infra/cdk.out',
+            },
+          }),
+        );
       });
 
       Template.fromStack(stack);
@@ -729,12 +846,16 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'DockerSynthStack');
 
       assert.doesNotThrow(() => {
-        new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          synth: {
-            commands: ['npm ci', 'npx cdk synth'],
-            dockerEnabled: true,
-          },
-        }));
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            synth: {
+              commands: ['npm ci', 'npx cdk synth'],
+              dockerEnabled: true,
+            },
+          }),
+        );
       });
 
       Template.fromStack(stack);
@@ -745,9 +866,14 @@ describe('Pipeline', () => {
       const stack = new cdk.Stack(app, 'NodeOptionsStack');
 
       new Pipeline(stack, 'TestPipeline', {
-        source: { repo: 'org/app', connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/test-id' },
+        source: {
+          repo: 'org/app',
+          connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/test-id',
+        },
         branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-        stageFactory: (scope) => { new cdk.Stack(scope, 'AppStack'); },
+        stageFactory: (scope) => {
+          new cdk.Stack(scope, 'AppStack');
+        },
         synth: {
           commands: ['npm ci', 'npx cdk synth'],
           env: { NODE_OPTIONS: '--max-old-space-size=4096' },
@@ -790,9 +916,13 @@ describe('Pipeline', () => {
       const app = new App();
       const stack = new Stack(app, 'NoSelfMutateStack');
 
-      new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        selfMutation: false,
-      }));
+      new Pipeline(
+        stack,
+        'TestPipeline',
+        defaultPipelineProps({
+          selfMutation: false,
+        }),
+      );
 
       const template = Template.fromStack(stack);
       const pipelineResources = template.findResources('AWS::CodePipeline::Pipeline');
@@ -848,12 +978,18 @@ describe('Pipeline', () => {
       const stack = new Stack(app, 'NoGenericStack');
 
       assert.doesNotThrow(() => {
-        new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-          branches: [{
-            branch: 'main',
-            stages: [{ name: 'beta', config: { anything: 'goes' } }],
-          }],
-        }));
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            branches: [
+              {
+                branch: 'main',
+                stages: [{ name: 'beta', config: { anything: 'goes' } }],
+              },
+            ],
+          }),
+        );
       });
     });
   });
@@ -874,15 +1010,12 @@ describe('Pipeline.create (async stageFactory)', () => {
       branches: [
         {
           branch: 'main',
-          stages: [
-            { name: 'beta' },
-            { name: 'prod', requireApproval: true },
-          ],
+          stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
         },
       ],
       stageFactory: async (scope, stageConfig) => {
         // Simulate async work (e.g., BlocksStack.create())
-        await new Promise(resolve => setTimeout(resolve, 1));
+        await new Promise((resolve) => setTimeout(resolve, 1));
         calledStages.push(stageConfig.name);
         new Stack(scope, 'AppStack', { env: stageConfig.env });
       },
@@ -926,11 +1059,12 @@ describe('Pipeline.create (async stageFactory)', () => {
     const stack = new Stack(app, 'AsyncValidationStack');
 
     await assert.rejects(
-      () => Pipeline.create(stack, 'TestPipeline', {
-        source: { repo: 'invalid-repo', connectionArn: MOCK_CONNECTION_ARN },
-        branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
-        stageFactory: async () => {},
-      }),
+      () =>
+        Pipeline.create(stack, 'TestPipeline', {
+          source: { repo: 'invalid-repo', connectionArn: MOCK_CONNECTION_ARN },
+          branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
+          stageFactory: async () => {},
+        }),
       /owner\/repo/,
     );
   });
@@ -941,19 +1075,23 @@ describe('triggerFilters', () => {
     const app = new App();
     const stack = new Stack(app, 'TriggerFilterStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      source: {
-        repo: MOCK_REPO,
-        connectionArn: MOCK_CONNECTION_ARN,
-        triggerFilters: ['packages/backend/**'],
-      },
-      branches: [
-        {
-          branch: 'main',
-          stages: [{ name: 'beta' }],
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+          triggerFilters: ['packages/backend/**'],
         },
-      ],
-    }));
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }],
+          },
+        ],
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -979,18 +1117,22 @@ describe('triggerFilters', () => {
     const app = new App();
     const stack = new Stack(app, 'NoTriggerFilterStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      source: {
-        repo: MOCK_REPO,
-        connectionArn: MOCK_CONNECTION_ARN,
-      },
-      branches: [
-        {
-          branch: 'main',
-          stages: [{ name: 'beta' }],
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
         },
-      ],
-    }));
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }],
+          },
+        ],
+      }),
+    );
 
     const template = Template.fromStack(stack);
     const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
@@ -1010,12 +1152,17 @@ describe('ARN validation', () => {
     const stack = new Stack(app, 'GovCloudArnStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'arn:aws-us-gov:codeconnections:us-gov-west-1:123456789012:connection/abc-def-123',
-        },
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            source: {
+              repo: MOCK_REPO,
+              connectionArn: 'arn:aws-us-gov:codeconnections:us-gov-west-1:123456789012:connection/abc-def-123',
+            },
+          }),
+        ),
     );
   });
 
@@ -1024,12 +1171,17 @@ describe('ARN validation', () => {
     const stack = new Stack(app, 'ChinaArnStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'arn:aws-cn:codeconnections:cn-north-1:123456789012:connection/abc-def-123',
-        },
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            source: {
+              repo: MOCK_REPO,
+              connectionArn: 'arn:aws-cn:codeconnections:cn-north-1:123456789012:connection/abc-def-123',
+            },
+          }),
+        ),
     );
   });
 
@@ -1038,12 +1190,17 @@ describe('ARN validation', () => {
     const stack = new Stack(app, 'StandardArnStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc-def-123',
-        },
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            source: {
+              repo: MOCK_REPO,
+              connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc-def-123',
+            },
+          }),
+        ),
     );
   });
 
@@ -1052,12 +1209,17 @@ describe('ARN validation', () => {
     const stack = new Stack(app, 'InvalidArnStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'not-an-arn-at-all',
-        },
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            source: {
+              repo: MOCK_REPO,
+              connectionArn: 'not-an-arn-at-all',
+            },
+          }),
+        ),
       /connectionArn.*must be a valid CodeConnections ARN/,
     );
   });
@@ -1069,12 +1231,19 @@ describe('cross-account validation', () => {
     const stack = new Stack(app, 'NoEnvStageStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [{
-          branch: 'main',
-          stages: [{ name: 'beta' }],
-        }],
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            branches: [
+              {
+                branch: 'main',
+                stages: [{ name: 'beta' }],
+              },
+            ],
+          }),
+        ),
     );
   });
 
@@ -1083,15 +1252,24 @@ describe('cross-account validation', () => {
     const stack = new Stack(app, 'AgnosticPipelineStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        branches: [{
-          branch: 'main',
-          stages: [{
-            name: 'prod',
-            env: { account: '222222222222', region: 'us-east-1' },
-          }],
-        }],
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            branches: [
+              {
+                branch: 'main',
+                stages: [
+                  {
+                    name: 'prod',
+                    env: { account: '222222222222', region: 'us-east-1' },
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
     );
   });
 
@@ -1102,16 +1280,25 @@ describe('cross-account validation', () => {
     });
 
     assert.throws(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        crossAccountKeys: false,
-        branches: [{
-          branch: 'main',
-          stages: [{
-            name: 'prod',
-            env: { account: '222222222222', region: 'us-east-1' },
-          }],
-        }],
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            crossAccountKeys: false,
+            branches: [
+              {
+                branch: 'main',
+                stages: [
+                  {
+                    name: 'prod',
+                    env: { account: '222222222222', region: 'us-east-1' },
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
       /crossAccountKeys must be true/,
     );
   });
@@ -1122,21 +1309,27 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'DefaultCommandsStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: undefined,
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: undefined,
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            build: Match.objectLike({
-              commands: Match.arrayWith(['npm ci', 'npx cdk synth']),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              build: Match.objectLike({
+                commands: Match.arrayWith(['npm ci', 'npx cdk synth']),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1145,23 +1338,29 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'CustomCommandsStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        commands: ['yarn install', 'yarn cdk synth'],
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          commands: ['yarn install', 'yarn cdk synth'],
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            build: Match.objectLike({
-              commands: Match.arrayWith(['yarn install', 'yarn cdk synth']),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              build: Match.objectLike({
+                commands: Match.arrayWith(['yarn install', 'yarn cdk synth']),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1170,23 +1369,29 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'InstallCommandsStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        installCommands: ['n 22'],
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          installCommands: ['n 22'],
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            install: Match.objectLike({
-              commands: Match.arrayWith(['n 22']),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              install: Match.objectLike({
+                commands: Match.arrayWith(['n 22']),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1210,11 +1415,15 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'CustomImageStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1229,11 +1438,15 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'SmallComputeStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        computeType: codebuild.ComputeType.SMALL,
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          computeType: codebuild.ComputeType.SMALL,
+        },
+      }),
+    );
 
     const annotations = Annotations.fromStack(stack);
     annotations.hasWarning('/SmallComputeStack/TestPipeline', Match.stringLikeRegexp('ComputeType\\.SMALL.*3GB'));
@@ -1243,11 +1456,15 @@ describe('synth defaults and DX warnings', () => {
     const app = new App();
     const stack = new Stack(app, 'MediumComputeStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        computeType: codebuild.ComputeType.MEDIUM,
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          computeType: codebuild.ComputeType.MEDIUM,
+        },
+      }),
+    );
 
     const annotations = Annotations.fromStack(stack);
     annotations.hasNoWarning('/MediumComputeStack/TestPipeline', Match.anyValue());
@@ -1269,15 +1486,21 @@ describe('stage stack discovery', () => {
     const app = new App();
     const stack = new Stack(app, 'DiscoverStack');
 
-    new Pipeline(stack, 'MyPipeline', defaultPipelineProps({
-      branches: [{
-        branch: 'main',
-        stages: [{ name: 'prod' }],
-      }],
-      stageFactory: (scope) => {
-        new Stack(scope, 'custom-prod-stack');
-      },
-    }));
+    new Pipeline(
+      stack,
+      'MyPipeline',
+      defaultPipelineProps({
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'prod' }],
+          },
+        ],
+        stageFactory: (scope) => {
+          new Stack(scope, 'custom-prod-stack');
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1304,25 +1527,29 @@ describe('stage stack discovery', () => {
     const app = new App();
     const stack = new Stack(app, 'MultiStackStage');
 
-    new Pipeline(stack, 'MyPipeline', defaultPipelineProps({
-      branches: [{
-        branch: 'main',
-        stages: [{ name: 'prod' }],
-      }],
-      stageFactory: (scope) => {
-        new Stack(scope, 'FrontendStack');
-        new Stack(scope, 'BackendStack');
-      },
-    }));
+    new Pipeline(
+      stack,
+      'MyPipeline',
+      defaultPipelineProps({
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'prod' }],
+          },
+        ],
+        stageFactory: (scope) => {
+          new Stack(scope, 'FrontendStack');
+          new Stack(scope, 'BackendStack');
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
     const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
     const pipelineKey = Object.keys(pipelines)[0];
     const stages = (pipelines[pipelineKey] as any).Properties.Stages as any[];
 
-    const deployStage = stages.find((s: any) =>
-      s.Name.includes('prod'),
-    );
+    const deployStage = stages.find((s: any) => s.Name.includes('prod'));
     assert.ok(deployStage, 'Should have prod deploy stage');
 
     const deployActions = deployStage.Actions.filter(
@@ -1349,11 +1576,16 @@ describe('stage stack discovery', () => {
     const stack = new Stack(app, 'EmptyStageStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        stageFactory: () => {
-          // Intentionally empty — creates no stacks
-        },
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            stageFactory: () => {
+              // Intentionally empty — creates no stacks
+            },
+          }),
+        ),
       /stage.*beta.*contains no stacks/i,
     );
   });
@@ -1362,15 +1594,21 @@ describe('stage stack discovery', () => {
     const app = new App();
     const stack = new Stack(app, 'UserNameStack');
 
-    new Pipeline(stack, 'Pipe', defaultPipelineProps({
-      branches: [{
-        branch: 'main',
-        stages: [{ name: 'beta' }],
-      }],
-      stageFactory: (scope) => {
-        new Stack(scope, 'blocks-pipeline-demo-prod');
-      },
-    }));
+    new Pipeline(
+      stack,
+      'Pipe',
+      defaultPipelineProps({
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }],
+          },
+        ],
+        stageFactory: (scope) => {
+          new Stack(scope, 'blocks-pipeline-demo-prod');
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1400,15 +1638,16 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'BothFactoryAndAppFileStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-        },
-        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-        stageFactory: minimalStageFactory,
-        appFile: './index.cdk.ts',
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+          },
+          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+          stageFactory: minimalStageFactory,
+          appFile: './index.cdk.ts',
+        }),
       /stageFactory.*appFile|appFile.*stageFactory/,
     );
   });
@@ -1418,14 +1657,15 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'AppFileSyncStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-        },
-        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-        appFile: './index.cdk.ts',
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+          },
+          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+          appFile: './index.cdk.ts',
+        }),
       /Pipeline\.create/,
     );
   });
@@ -1435,15 +1675,16 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'TriggerConflictStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-          triggerFilters: ['src/**'],
-        },
-        branches: [{ branch: 'main', stages: [{ name: 'prod' }], triggerOnPush: true }],
-        stageFactory: minimalStageFactory,
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+            triggerFilters: ['src/**'],
+          },
+          branches: [{ branch: 'main', stages: [{ name: 'prod' }], triggerOnPush: true }],
+          stageFactory: minimalStageFactory,
+        }),
       /triggerOnPush/,
     );
   });
@@ -1453,14 +1694,15 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'InvalidStageNameStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-        },
-        branches: [{ branch: 'main', stages: [{ name: 'prod/v2' }] }],
-        stageFactory: minimalStageFactory,
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+          },
+          branches: [{ branch: 'main', stages: [{ name: 'prod/v2' }] }],
+          stageFactory: minimalStageFactory,
+        }),
       /invalid characters/,
     );
   });
@@ -1470,17 +1712,18 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'DuplicateBranchIdStack');
 
     assert.throws(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-        },
-        branches: [
-          { branch: 'feature/foo', stages: [{ name: 'beta' }] },
-          { branch: 'feature_foo', stages: [{ name: 'beta' }] },
-        ],
-        stageFactory: minimalStageFactory,
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: MOCK_CONNECTION_ARN,
+          },
+          branches: [
+            { branch: 'feature/foo', stages: [{ name: 'beta' }] },
+            { branch: 'feature_foo', stages: [{ name: 'beta' }] },
+          ],
+          stageFactory: minimalStageFactory,
+        }),
       /duplicate ID/,
     );
   });
@@ -1490,14 +1733,15 @@ describe('additional validation tests', () => {
     const stack = new Stack(app, 'LegacyArnStack');
 
     assert.doesNotThrow(
-      () => new Pipeline(stack, 'P', {
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'arn:aws:codestar-connections:us-east-1:123456789012:connection/abc-def-123',
-        },
-        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-        stageFactory: minimalStageFactory,
-      }),
+      () =>
+        new Pipeline(stack, 'P', {
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: 'arn:aws:codestar-connections:us-east-1:123456789012:connection/abc-def-123',
+          },
+          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+          stageFactory: minimalStageFactory,
+        }),
     );
   });
 });
@@ -1524,7 +1768,11 @@ describe('validateAppFilePath', () => {
   after(() => {
     process.chdir(originalCwd);
     fs.rmSync(tmpDir, { recursive: true, force: true });
-    try { fs.unlinkSync(path.join(os.tmpdir(), 'outside.ts')); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(path.join(os.tmpdir(), 'outside.ts'));
+    } catch {
+      /* ignore */
+    }
   });
 
   it('accepts .ts, .js, .mjs, .cjs extensions', () => {
@@ -1546,20 +1794,14 @@ describe('validateAppFilePath', () => {
   });
 
   it('rejects files outside the project root', () => {
-    assert.throws(
-      () => validateAppFilePath(path.join(os.tmpdir(), 'outside.ts')),
-      /must be inside the project root/,
-    );
+    assert.throws(() => validateAppFilePath(path.join(os.tmpdir(), 'outside.ts')), /must be inside the project root/);
   });
 
   it('rejects symlinks that resolve outside the project root', () => {
     const symlinkPath = path.join(tmpDir, 'link-escape.ts');
     fs.symlinkSync(path.join(os.tmpdir(), 'outside.ts'), symlinkPath);
     try {
-      assert.throws(
-        () => validateAppFilePath(symlinkPath),
-        /must be inside the project root/,
-      );
+      assert.throws(() => validateAppFilePath(symlinkPath), /must be inside the project root/);
     } finally {
       fs.unlinkSync(symlinkPath);
     }
@@ -1577,13 +1819,15 @@ describe('synth partialBuildSpec', () => {
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            install: Match.objectLike({
-              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              install: Match.objectLike({
+                'runtime-versions': Match.objectLike({ nodejs: 22 }),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1592,11 +1836,15 @@ describe('synth partialBuildSpec', () => {
     const app = new App();
     const stack = new Stack(app, 'NullOptOutBuildSpecStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        partialBuildSpec: null,
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          partialBuildSpec: null,
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1620,25 +1868,31 @@ describe('synth partialBuildSpec', () => {
     const app = new App();
     const stack = new Stack(app, 'CustomPartialBuildSpecStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        partialBuildSpec: codebuild.BuildSpec.fromObject({
-          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
-        }),
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          partialBuildSpec: codebuild.BuildSpec.fromObject({
+            phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+          }),
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            install: Match.objectLike({
-              'runtime-versions': Match.objectLike({ nodejs: 20 }),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              install: Match.objectLike({
+                'runtime-versions': Match.objectLike({ nodejs: 20 }),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1647,13 +1901,17 @@ describe('synth partialBuildSpec', () => {
     const app = new App();
     const stack = new Stack(app, 'OverrideReplacesDefaultStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        partialBuildSpec: codebuild.BuildSpec.fromObject({
-          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
-        }),
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          partialBuildSpec: codebuild.BuildSpec.fromObject({
+            phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+          }),
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
     const projects = template.findResources('AWS::CodeBuild::Project');
@@ -1661,7 +1919,7 @@ describe('synth partialBuildSpec', () => {
       .map((p: any) => p.Properties?.Source?.BuildSpec)
       .filter((b: unknown): b is string => typeof b === 'string');
 
-    const synthSpec = buildSpecs.find(b => b.includes('runtime-versions'));
+    const synthSpec = buildSpecs.find((b) => b.includes('runtime-versions'));
     assert.ok(synthSpec, 'Expected a synth buildspec declaring runtime-versions');
 
     const parsed = JSON.parse(synthSpec);
@@ -1676,11 +1934,15 @@ describe('synth partialBuildSpec', () => {
     const app = new App();
     const stack = new Stack(app, 'OrthogonalBuildSpecStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        env: { NODE_OPTIONS: '--max-old-space-size=4096' },
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          env: { NODE_OPTIONS: '--max-old-space-size=4096' },
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1688,13 +1950,15 @@ describe('synth partialBuildSpec', () => {
     // both appear on the same synth CodeBuild project.
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            install: Match.objectLike({
-              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              install: Match.objectLike({
+                'runtime-versions': Match.objectLike({ nodejs: 22 }),
+              }),
             }),
           }),
-        })),
+        ),
       }),
       Environment: Match.objectLike({
         EnvironmentVariables: Match.arrayWith([
@@ -1711,24 +1975,30 @@ describe('synth partialBuildSpec', () => {
     const app = new App();
     const stack = new Stack(app, 'InstallCommandsMergeStack');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      synth: {
-        installCommands: ['corepack enable'],
-      },
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        synth: {
+          installCommands: ['corepack enable'],
+        },
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties('AWS::CodeBuild::Project', {
       Source: Match.objectLike({
-        BuildSpec: Match.serializedJson(Match.objectLike({
-          phases: Match.objectLike({
-            install: Match.objectLike({
-              'runtime-versions': Match.objectLike({ nodejs: 22 }),
-              commands: Match.arrayWith(['corepack enable']),
+        BuildSpec: Match.serializedJson(
+          Match.objectLike({
+            phases: Match.objectLike({
+              install: Match.objectLike({
+                'runtime-versions': Match.objectLike({ nodejs: 22 }),
+                commands: Match.arrayWith(['corepack enable']),
+              }),
             }),
           }),
-        })),
+        ),
       }),
     });
   });
@@ -1740,9 +2010,13 @@ describe('_sourceOverride (internal test hook)', () => {
     const stack = new Stack(app, 'SourceOverrideStack');
     const bucket = new Bucket(stack, 'SourceBucket');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      }),
+    );
 
     const template = Template.fromStack(stack);
 
@@ -1765,9 +2039,13 @@ describe('_sourceOverride (internal test hook)', () => {
     const stack = new Stack(app, 'SourceOverrideNoConnectionStack');
     const bucket = new Bucket(stack, 'SourceBucket');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      }),
+    );
 
     const template = Template.fromStack(stack);
     const pipelines = template.findResources('AWS::CodePipeline::Pipeline');
@@ -1787,9 +2065,13 @@ describe('_sourceOverride (internal test hook)', () => {
     const stack = new Stack(app, 'SourceOverrideSynthStack');
     const bucket = new Bucket(stack, 'SourceBucket');
 
-    new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
-    }));
+    new Pipeline(
+      stack,
+      'TestPipeline',
+      defaultPipelineProps({
+        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      }),
+    );
 
     const template = Template.fromStack(stack);
     template.resourceCountIs('AWS::CodePipeline::Pipeline', 1);
@@ -1804,14 +2086,169 @@ describe('_sourceOverride (internal test hook)', () => {
     // (repo + connectionArn) is still required and validated so production
     // configs stay well-formed. An invalid ARN must still throw.
     assert.throws(
-      () => new Pipeline(stack, 'TestPipeline', defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: 'not-an-arn-at-all',
-        },
-        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
-      })),
+      () =>
+        new Pipeline(
+          stack,
+          'TestPipeline',
+          defaultPipelineProps({
+            source: {
+              repo: MOCK_REPO,
+              connectionArn: 'not-an-arn-at-all',
+            },
+            _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+          }),
+        ),
       /connectionArn.*must be a valid CodeConnections ARN/,
     );
+  });
+
+  // ── connectionArn as a secret() (Phase 3) ───────────────────────
+  describe('connectionArn secret()', () => {
+    it('rejects a secret() connectionArn on the sync constructor', () => {
+      const stack = new Stack(new App(), 'SyncSecretStack');
+      assert.throws(
+        () =>
+          new Pipeline(
+            stack,
+            'P',
+            defaultPipelineProps({
+              source: { repo: MOCK_REPO, connectionArn: config('CONNECTION_ARN') },
+            }),
+          ),
+        /requires the async path.*Pipeline\.create/s,
+      );
+    });
+
+    it('resolves a secret() connectionArn at synth time via Pipeline.create()', async () => {
+      const app = new App();
+      // Resolve the synth-time fetcher to a valid ARN without hitting SSM.
+      _setSynthSecretFetcher(async () => MOCK_CONNECTION_ARN);
+      try {
+        const pipeline = await Pipeline.create(
+          app,
+          'AsyncSecretPipeline',
+          defaultPipelineProps({
+            source: { repo: MOCK_REPO, connectionArn: config('CONNECTION_ARN') },
+          }),
+        );
+        // The resolved ARN reached the CodePipeline source action.
+        const stack = pipeline.node.scope as Stack;
+        const t = Template.fromStack(stack);
+        const json = JSON.stringify(t.toJSON());
+        assert.ok(json.includes('test-connection-id'), 'resolved ARN should be wired into the source');
+      } finally {
+        _setSynthSecretFetcher(null);
+      }
+    });
+
+    it('resolves connectionArn from the configured store + prefix (not the defaults)', async () => {
+      const app = new App();
+      // Capture the locator the resolver looks up, instead of bypassing it.
+      const seen: string[] = [];
+      _setSynthSecretFetcher(async (locator) => {
+        seen.push(locator);
+        return MOCK_CONNECTION_ARN;
+      });
+      try {
+        await Pipeline.create(
+          app,
+          'ConfiguredStorePipeline',
+          defaultPipelineProps({
+            source: { repo: MOCK_REPO, connectionArn: config('CONNECTION_ARN') },
+            // config() → SSM: configStore.prefix must govern the connectionArn lookup.
+            configStore: { prefix: '/myapp/config' },
+          }),
+        );
+        // config → SSM keeps the leading-slash path form at the configured prefix.
+        assert.deepStrictEqual(seen, ['/myapp/config/CONNECTION_ARN']);
+      } finally {
+        _setSynthSecretFetcher(null);
+      }
+    });
+  });
+
+  describe('buildSecrets', () => {
+    // The synth CodeBuild project carries the build-time secret env vars.
+    function synthProjectEnvVars(stack: Stack): Array<{ Name: string; Type: string; Value: unknown }> {
+      const t = Template.fromStack(stack);
+      const projects = t.findResources('AWS::CodeBuild::Project');
+      for (const project of Object.values(projects)) {
+        const vars = (project as { Properties?: { Environment?: { EnvironmentVariables?: unknown } } }).Properties
+          ?.Environment?.EnvironmentVariables;
+        if (Array.isArray(vars) && vars.some((v) => v.Name === 'NPM_TOKEN')) return vars;
+      }
+      return [];
+    }
+
+    it('secret buildSecret → SECRETS_MANAGER build env var at the default prefix', () => {
+      const stack = new Stack(new App(), 'BuildSecretsDefault');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+        }),
+      );
+      const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+      assert.ok(npm, 'NPM_TOKEN env var present on the synth CodeBuild project');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      // secret → Secrets Manager slash-free locator at the neutral default prefix.
+      assert.strictEqual(npm?.Value, 'hosting/secrets/NPM_TOKEN');
+    });
+
+    it('honors secretStore.prefix (custom Secrets Manager namespace)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsSM');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+          secretStore: { prefix: '/myapp/secrets' },
+        }),
+      );
+      const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      assert.strictEqual(npm?.Value, 'myapp/secrets/NPM_TOKEN');
+    });
+
+    it('honors secretStore.stage — staged locator matching `secret set --stage` (B4)', () => {
+      const stack = new Stack(new App(), 'BuildSecretsStage');
+      new Pipeline(
+        stack,
+        'P',
+        defaultPipelineProps({
+          buildSecrets: { NPM_TOKEN: secret('NPM_TOKEN') },
+          secretStore: { prefix: '/myapp/secrets', stage: 'prod' },
+        }),
+      );
+      const npm = synthProjectEnvVars(stack).find((v) => v.Name === 'NPM_TOKEN');
+      assert.strictEqual(npm?.Type, 'SECRETS_MANAGER');
+      // The stage is included, so CodeBuild reads the same locator `secret set
+      // --stage prod` writes (no shared fallback at build time — one locator).
+      assert.strictEqual(npm?.Value, 'myapp/secrets/prod/NPM_TOKEN');
+    });
+
+    it('rejects a non-marker buildSecrets value', () => {
+      const stack = new Stack(new App(), 'BuildSecretsBad');
+      assert.throws(
+        () =>
+          new Pipeline(
+            stack,
+            'P',
+            defaultPipelineProps({
+              // @ts-expect-error — buildSecrets values must be secret(...) markers or ISecret handles
+              buildSecrets: { NPM_TOKEN: 'npm_plaintext' },
+            }),
+          ),
+        /must be a secret\('\.\.\.'\) marker or an existing ISecret handle/,
+      );
+    });
+
+    it('omits environment variables entirely when no buildSecrets are given', () => {
+      const stack = new Stack(new App(), 'NoBuildSecrets');
+      new Pipeline(stack, 'P', defaultPipelineProps());
+      // No synth project should carry an NPM_TOKEN (nothing wired).
+      assert.deepStrictEqual(synthProjectEnvVars(stack), []);
+    });
   });
 });

@@ -21,6 +21,7 @@
     "start": "next start",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "secret": "tsx aws-blocks/scripts/secret.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },

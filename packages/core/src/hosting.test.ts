@@ -1,16 +1,17 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { config, secret } from '@aws-blocks/hosting';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
-import { Template, Match } from 'aws-cdk-lib/assertions';
+import { Match, Template } from 'aws-cdk-lib/assertions';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
-import { Hosting, type BlocksStackApi } from './hosting.js';
+import { type BlocksStackApi, Hosting } from './hosting.js';
 import { clearRouteRegistry, registerRoute } from './raw-route.js';
 
 // ================================================================
@@ -180,7 +181,9 @@ describe('Hosting', () => {
       assert.ok(crKeys.length >= 1, 'Should have at least one BucketDeployment custom resource');
 
       const hasBlocksSandboxPrefix = crKeys.some((key) => {
-        const props = (customResources[key] as Record<string, unknown>).Properties as Record<string, unknown> | undefined;
+        const props = (customResources[key] as Record<string, unknown>).Properties as
+          | Record<string, unknown>
+          | undefined;
         const prefix = props?.DestinationBucketKeyPrefix as string | undefined;
         return typeof prefix === 'string' && prefix.endsWith('.blocks-sandbox');
       });
@@ -205,7 +208,10 @@ describe('Hosting', () => {
           });
         },
         (err: Error) => {
-          assert.ok(err.message.includes('Build output directory not found'), `Expected build dir error, got: ${err.message}`);
+          assert.ok(
+            err.message.includes('Build output directory not found'),
+            `Expected build dir error, got: ${err.message}`,
+          );
           return true;
         },
       );
@@ -536,16 +542,8 @@ describe('Hosting', () => {
       const apiExact = cacheBehaviors.find((b: any) => b.PathPattern === '/api');
       const apiWildcard = cacheBehaviors.find((b: any) => b.PathPattern === '/api/*');
 
-      assert.strictEqual(
-        apiExact,
-        undefined,
-        '/api must not be claimed by Blocks (framework SSR API namespace)',
-      );
-      assert.strictEqual(
-        apiWildcard,
-        undefined,
-        '/api/* must not be claimed by Blocks (framework SSR API namespace)',
-      );
+      assert.strictEqual(apiExact, undefined, '/api must not be claimed by Blocks (framework SSR API namespace)');
+      assert.strictEqual(apiWildcard, undefined, '/api/* must not be claimed by Blocks (framework SSR API namespace)');
     });
 
     it('works without api prop (static-only site)', () => {
@@ -603,10 +601,7 @@ describe('Hosting', () => {
       // Should still deploy config (with backendConfig), just without apiUrl
       const template = Template.fromStack(stack);
       const customResources = template.findResources('Custom::CDKBucketDeployment');
-      assert.ok(
-        Object.keys(customResources).length >= 1,
-        'Should have BucketDeployment even without api',
-      );
+      assert.ok(Object.keys(customResources).length >= 1, 'Should have BucketDeployment even without api');
     });
 
     it('does not inject BLOCKS_API_URL into SSR Lambda when api is omitted', () => {
@@ -632,11 +627,7 @@ describe('Hosting', () => {
       for (const [, fn] of Object.entries(lambdaFns)) {
         const env = (fn as any).Properties?.Environment?.Variables;
         if (env) {
-          assert.strictEqual(
-            env.BLOCKS_API_URL,
-            undefined,
-            'BLOCKS_API_URL should not be set when api is omitted',
-          );
+          assert.strictEqual(env.BLOCKS_API_URL, undefined, 'BLOCKS_API_URL should not be set when api is omitted');
         }
       }
     });
@@ -1179,11 +1170,7 @@ describe('Hosting', () => {
       const distributions = template.findResources('AWS::CloudFront::Distribution');
       const distKeys = Object.keys(distributions);
       const distConfig = (distributions[distKeys[0]] as any).Properties.DistributionConfig;
-      assert.strictEqual(
-        distConfig.WebACLId,
-        existingAclArn,
-        'Distribution should reference the provided WebACL ARN',
-      );
+      assert.strictEqual(distConfig.WebACLId, existingAclArn, 'Distribution should reference the provided WebACL ARN');
     });
   });
 
@@ -1260,9 +1247,7 @@ describe('Hosting', () => {
       // When errorPages is set, CloudFront CustomErrorResponses should be configured
       const errorResponses = distConfig.CustomErrorResponses;
       assert.ok(errorResponses, 'Distribution should have CustomErrorResponses');
-      const has404 = errorResponses.some(
-        (r: any) => r.ErrorCode === 404,
-      );
+      const has404 = errorResponses.some((r: any) => r.ErrorCode === 404);
       assert.ok(has404, 'Should configure 404 error response');
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
@@ -1302,11 +1287,10 @@ describe('Hosting', () => {
       // Verify no duplicate 404 error responses
       const errorResponses = distConfig.CustomErrorResponses;
       assert.ok(errorResponses, 'Distribution should have CustomErrorResponses');
-      const error404Responses = errorResponses.filter(
-        (r: any) => r.ErrorCode === 404,
-      );
+      const error404Responses = errorResponses.filter((r: any) => r.ErrorCode === 404);
       assert.strictEqual(
-        error404Responses.length, 1,
+        error404Responses.length,
+        1,
         `Expected exactly one 404 error response but got ${error404Responses.length}`,
       );
     });
@@ -1450,9 +1434,7 @@ describe('Hosting', () => {
         Resources: Record<string, { Type: string; Properties?: any }>;
       };
       const kvKeys = Object.entries(tpl.Resources).find(
-        ([id, r]) =>
-          r.Type === 'AWS::CloudFormation::CustomResource' &&
-          /RouteStoreKeys/.test(id),
+        ([id, r]) => r.Type === 'AWS::CloudFormation::CustomResource' && /RouteStoreKeys/.test(id),
       );
       assert.ok(kvKeys, 'expected a RouteStoreKeys custom resource');
       const entries = JSON.parse(kvKeys![1].Properties.Entries);
@@ -1508,15 +1490,166 @@ describe('Hosting', () => {
     });
   });
 
+  // ── value() integration ─────────────────────────────────────────
+  //
+  // Runtime values: the store LOCATOR (never the value) is injected as a Lambda
+  // env var, and the role is granted read + kms:Decrypt. The store is derived from
+  // the marker's type — secret → Secrets Manager, config → SSM Parameter Store.
+  // Domain markers resolve at synth time via Hosting.create().
+
+  describe('secret() / config() integration', () => {
+    it('secret() → Secrets Manager: injects the locator (not the value) + grants read+decrypt', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SecretEnvStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+      });
+
+      const template = Template.fromStack(stack);
+
+      // secret → Secrets Manager: slash-free locator under the Blocks /blocks/secrets namespace.
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({ HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY' }),
+        },
+      });
+
+      // The plaintext value must NOT appear anywhere in the template.
+      const json = JSON.stringify(template.toJSON());
+      assert.ok(!json.includes('STRIPE_KEY_VALUE'), 'no value should be in the template');
+
+      // The role has secretsmanager:GetSecretValue scoped to the secret + kms:Decrypt.
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({ Action: 'secretsmanager:GetSecretValue' }),
+            Match.objectLike({
+              Action: 'kms:Decrypt',
+              Condition: { StringEquals: Match.objectLike({ 'kms:ViaService': Match.anyValue() }) },
+            }),
+          ]),
+        },
+      });
+    });
+
+    it('threads secretStore { prefix, stage, cacheTtlSeconds } from core HostingProps to the wiring (B3)', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SecretStoreOverrideStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+        // Custom prefix + stage + warm-cache TTL must all reach the leaf wiring.
+        secretStore: { prefix: '/myapp/secrets', stage: 'prod', cacheTtlSeconds: 30 },
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({
+            // custom prefix + stage (Secrets Manager → slash-free)
+            HOSTING_SECRET_PARAM_STRIPE_KEY: 'myapp/secrets/prod/STRIPE_KEY',
+            // shared fallback (no stage)
+            HOSTING_SECRET_PARAM_STRIPE_KEY_FALLBACK: 'myapp/secrets/STRIPE_KEY',
+            // warm-cache TTL for rotation without a cold start
+            HOSTING_SECRET_CACHE_TTL: '30',
+          }),
+        },
+      });
+    });
+
+    it('config() → SSM: HOSTING_CONFIG_PARAM_* (leading-slash) + ssm:GetParameter', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'ConfigEnvStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { FEATURE_FLAGS: config('FEATURE_FLAGS') },
+      });
+
+      const template = Template.fromStack(stack);
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({ HOSTING_CONFIG_PARAM_FEATURE_FLAGS: '/blocks/config/FEATURE_FLAGS' }),
+        },
+      });
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: 'ssm:GetParameter' })]) },
+      });
+    });
+
+    it('does not inject a plaintext env var for a runtime value', () => {
+      createNextjsBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'SecretNoPlaintextStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        customAdapter: createNextjsFixtureAdapter(tmpDir),
+        api: MOCK_API,
+        environment: { FLAG: 'on', STRIPE_KEY: secret('STRIPE_KEY') },
+      });
+
+      const template = Template.fromStack(stack);
+      const fns = template.findResources('AWS::Lambda::Function');
+      for (const fn of Object.values(fns)) {
+        const vars = ((fn as any).Properties?.Environment?.Variables ?? {}) as Record<string, unknown>;
+        assert.strictEqual(vars.STRIPE_KEY, undefined, 'value key must not be a plaintext env var');
+      }
+    });
+
+    it('rejects a runtime value whose key mismatches the env var name', () => {
+      createNextjsBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'SecretMismatchStack');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            customAdapter: createNextjsFixtureAdapter(tmpDir),
+            api: MOCK_API,
+            environment: { STRIPE_KEY: secret('OTHER') },
+          }),
+        /must match the environment variable name/,
+      );
+    });
+
+    it('throws if a domain marker is used with the sync constructor', () => {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, 'SecretDomainSyncStack');
+      assert.throws(
+        () =>
+          new Hosting(stack, 'Hosting', {
+            root: tmpDir,
+            api: MOCK_API,
+            domain: { domainName: config('DOMAIN_PROD') },
+          }),
+        /requires async resolution/,
+      );
+    });
+  });
+
   describe('config.json stale-placeholder guard (#173)', () => {
     // Helper: pull every BucketDeployment custom resource's Properties.
     const bucketDeployments = (stack: Stack) => {
-      const crs = Template.fromStack(stack).findResources(
-        'Custom::CDKBucketDeployment',
-      );
-      return Object.values(crs).map(
-        (cr) => (cr as { Properties: Record<string, unknown> }).Properties,
-      );
+      const crs = Template.fromStack(stack).findResources('Custom::CDKBucketDeployment');
+      return Object.values(crs).map((cr) => (cr as { Properties: Record<string, unknown> }).Properties);
     };
 
     it('uploads the placeholder config.json with a no-cache directive, never the 1-year mutable cache-control', () => {
@@ -1534,22 +1667,17 @@ describe('Hosting', () => {
       const deployments = bucketDeployments(stack);
       const cc = (p: Record<string, unknown>) =>
         (p.SystemMetadata as Record<string, string> | undefined)?.['cache-control'];
-      const includes = (p: Record<string, unknown>) =>
-        (p.Include as string[] | undefined) ?? [];
-      const excludes = (p: Record<string, unknown>) =>
-        (p.Exclude as string[] | undefined) ?? [];
+      const includes = (p: Record<string, unknown>) => (p.Include as string[] | undefined) ?? [];
+      const excludes = (p: Record<string, unknown>) => (p.Exclude as string[] | undefined) ?? [];
 
       // A deployment must upload `.blocks-sandbox/config.json` with the
       // no-cache directive (this is the placeholder upload).
       const noCacheDeploy = deployments.find(
-        (p) =>
-          includes(p).includes('.blocks-sandbox/config.json') &&
-          cc(p) === 'no-cache, no-store, must-revalidate',
+        (p) => includes(p).includes('.blocks-sandbox/config.json') && cc(p) === 'no-cache, no-store, must-revalidate',
       );
       assert.ok(
         noCacheDeploy,
-        'placeholder .blocks-sandbox/config.json must be uploaded with ' +
-          '"no-cache, no-store, must-revalidate"',
+        'placeholder .blocks-sandbox/config.json must be uploaded with ' + '"no-cache, no-store, must-revalidate"',
       );
 
       // No deployment may cover the placeholder with the 1-year mutable
@@ -1565,8 +1693,7 @@ describe('Hosting', () => {
       assert.strictEqual(
         leaks.length,
         0,
-        'no mutable-tier deployment may apply s-maxage=31536000 to ' +
-          '.blocks-sandbox/config.json',
+        'no mutable-tier deployment may apply s-maxage=31536000 to ' + '.blocks-sandbox/config.json',
       );
     });
 
@@ -1607,9 +1734,7 @@ describe('Hosting', () => {
       Template.fromStack(stack).hasResourceProperties(
         'Custom::CDKBucketDeployment',
         Match.objectLike({
-          DistributionPaths: Match.arrayWith([
-            Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$'),
-          ]),
+          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$')]),
         }),
       );
     });
