@@ -40,10 +40,6 @@ completes. The browser subscribes to the Realtime channel by `channelId` and rec
 loop runs, so a turn is bounded by the AgentCore session (8h), not by the request handler's
 per-invocation limit or API Gateway's ~29s cap.
 
-**`runtime` config flag.** `runtime` records where the loop runs (currently `'agentcore'`, the only
-value and the default) — an explicit seam a future in-process/container option plugs into. Locally
-(mock) the loop runs in-process and the flag is ignored.
-
 **Compute model.** All AgentCore provisioning is kept self-contained in `AgentCoreRuntime`
 (`agentcore-runtime.cdk.ts`) — the co-bundle, the `Runtime`, the shared role's AgentCore trust +
 grants, the container env, and the handler's invoke permission — so it can later fold into a per-BB

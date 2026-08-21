@@ -43,7 +43,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     // (undocumented)
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
-    runtime?: 'agentcore';
     streamingMode?: 'token' | 'block';
     // (undocumented)
     systemPrompt: string;

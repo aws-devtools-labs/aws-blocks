@@ -14,8 +14,6 @@ in-process against the mock Realtime.
 
 - **No client-facing API change:** `stream()`/`resume()`/`getChannel()`, the `chunks` Realtime
   channel, and the `useChat` subscribe contract are unchanged.
-- New `runtime` config flag (currently `'agentcore'`, the default) records the runtime as an
-  explicit seam for future in-process/container options.
 - AgentCore provisioning is self-contained in `AgentCoreRuntime` (co-bundle + `Runtime` via
   `fromCodeAsset`, plus the handler's `InvokeAgentRuntime` permission) so it can later fold into a
   per-BB compute abstraction. The loop runs **as the shared Blocks execution role** (the same role
