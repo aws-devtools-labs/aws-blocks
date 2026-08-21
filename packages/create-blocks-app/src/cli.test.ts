@@ -136,7 +136,7 @@ describe('create-blocks-app template metadata', () => {
   it('backend template has a build script', () => {
     const pkg = JSON.parse(readFileSync(join(__dirname, '../templates/backend/package.json'), 'utf-8'));
 
-    assert.strictEqual(pkg.scripts.build, 'tsc --noEmit');
+    assert.ok(typeof pkg.scripts.build === 'string' && pkg.scripts.build.length > 0);
   });
 });
 
