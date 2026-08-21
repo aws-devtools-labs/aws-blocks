@@ -5,11 +5,13 @@ import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 import { blocksNodejsBundling } from './bundling.js';
+import { ensureApiGatewayAccount } from './apigateway-account.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
@@ -86,11 +88,22 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     ],
   });
 
+  // The single CloudWatch log group for the shared handler. Owning it here (a
+  // real LogGroup construct passed as the function's `logGroup`) means its
+  // retention follows the stack-wide default instead of AWS's infinite default,
+  // and gives bb-logger one group to reconfigure rather than a second, colliding
+  // one. Torn down with the stack (logs are not durable state).
+  const handlerLogGroup = new logs.LogGroup(scope, 'HandlerLogGroup', {
+    retention: props.defaults.logRetention,
+    removalPolicy: cdk.RemovalPolicy.DESTROY,
+  });
+
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'handler',
     role: executionRole,
+    logGroup: handlerLogGroup,
     memorySize: 2048,
     timeout: cdk.Duration.seconds(60 * 15),
     environment: {
@@ -124,10 +137,51 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
   }
 
+  // Structured JSON access logging on the shared stage, when the stack-wide
+  // default enables it. Requires the account-level CloudWatch Logs role (see
+  // ensureApiGatewayAccount) — provisioned once here rather than per adopter.
+  let accessLogGroup: logs.LogGroup | undefined;
+  let apiGatewayAccount: apigateway.CfnAccount | undefined;
+  if (props.defaults.accessLogging) {
+    apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(scope));
+    accessLogGroup = new logs.LogGroup(scope, 'ApiAccessLogs', {
+      retention: props.defaults.logRetention,
+      // Access logs are the request audit trail — follow the stack-wide removal
+      // policy (production RETAIN) so they survive a stack teardown, unlike the
+      // handler's operational stdout log group (always DESTROY).
+      removalPolicy: props.defaults.removalPolicy,
+    });
+  }
+
   const api = new apigateway.RestApi(scope, 'API', {
     restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
+    // Don't let RestApi auto-create its own account-level CloudWatch role: that
+    // would collide with the one shared account we provision (below, and in the
+    // WebSocket/hosting stages) — a stack may have only one effective account
+    // setting. When access logging is on we point the stage at the shared
+    // account; when off, no account is needed at all.
+    cloudWatchRole: false,
+    deployOptions: {
+      cachingEnabled: false,
+      // Cap request rate on the shared stage from the stack-wide default so a
+      // runaway client can't saturate the backend Lambda. Read independently of
+      // any other default.
+      throttlingRateLimit: props.defaults.throttling.rateLimit,
+      throttlingBurstLimit: props.defaults.throttling.burstLimit,
+      ...(accessLogGroup
+        ? {
+            accessLogDestination: new apigateway.LogGroupLogDestination(accessLogGroup),
+            accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields(),
+          }
+        : {}),
+    },
   });
+
+  // The stage must be created after the account setting is in place, or a
+  // clean-account first deploy fails at CreateStage.
+  if (apiGatewayAccount) {
+    api.deploymentStage.node.addDependency(apiGatewayAccount);
+  }
 
   const integration = new apigateway.LambdaIntegration(handler);
 
@@ -194,7 +248,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 
   registerBuiltinRoutes();
 
-  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}`, executionRole };
+  return { handler, handlerLogGroup, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}`, executionRole };
 }
 
 /**
@@ -221,6 +275,8 @@ export class BlocksBackend extends Construct {
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: iam.IRole;
+  /** The shared handler Lambda's CloudWatch log group. `bb-logger` reconfigures its retention. */
+  public readonly handlerLogGroup: logs.ILogGroup;
   /** Infrastructure defaults for Building Blocks created under this backend. */
   public readonly defaults: BlocksDefaults;
 
@@ -270,6 +326,7 @@ export class BlocksBackend extends Construct {
 
     const infra = setupBlocksInfra(this, props, id);
     this.handler = infra.handler;
+    this.handlerLogGroup = infra.handlerLogGroup;
     this.gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
     this.executionRole = infra.executionRole;

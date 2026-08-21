@@ -2,6 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RemovalPolicy } from 'aws-cdk-lib';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+
+/**
+ * Request-rate limits applied to an API Gateway stage. On a REST API these are
+ * requests/second; on a WebSocket API the unit is messages/second across the
+ * connection. `rateLimit` is the steady-state ceiling and `burstLimit` the
+ * token-bucket size for short spikes.
+ */
+export interface BlocksThrottling {
+	/** Steady-state request (or WebSocket message) rate ceiling, per second. */
+	rateLimit: number;
+	/** Token-bucket burst size for short spikes above `rateLimit`. */
+	burstLimit: number;
+}
 
 /**
  * Default values for every Amazon-authored Building Block created within a
@@ -39,6 +53,35 @@ export interface BlocksDefaults {
 	 * 1–35 days). Backups only have a window when on, so the two are one field.
 	 */
 	pointInTimeRecovery: boolean | { retentionDays: number };
+
+	/**
+	 * How long CloudWatch Logs keeps log events written by Blocks-managed log
+	 * groups (the core handler Lambda, migration/GSI Lambdas, hosting compute,
+	 * `bb-logger`, and API Gateway access logs) before expiring them. Without a
+	 * retention set, AWS keeps log events forever, which grows cost unbounded —
+	 * every Blocks-managed log group reads this default so retention is applied
+	 * consistently.
+	 */
+	logRetention: RetentionDays;
+
+	/**
+	 * Request-rate limits applied to every Blocks-managed API Gateway stage: the
+	 * core REST API, the SSR/hosting REST API, and the `bb-realtime` WebSocket
+	 * stage. Protects the backend from runaway clients and caps blast radius.
+	 * The sandbox preset caps tighter (200/400) than production (1000/2000) so a
+	 * disposable stack is well-protected without throttling real production
+	 * traffic. See {@link BlocksThrottling}.
+	 */
+	throttling: BlocksThrottling;
+
+	/**
+	 * Whether to emit structured JSON access logs from every Blocks-managed API
+	 * Gateway stage to a dedicated CloudWatch log group (retention follows
+	 * {@link logRetention}). Off by default for disposable sandboxes to avoid the
+	 * extra log group and the account-level CloudWatch Logs role requirement; on
+	 * for production so requests are auditable.
+	 */
+	accessLogging: boolean;
 }
 
 /**
@@ -55,11 +98,22 @@ export const BlocksPresets = {
 		removalPolicy: RemovalPolicy.DESTROY,
 		deletionProtection: false,
 		pointInTimeRecovery: false,
+		logRetention: RetentionDays.ONE_WEEK,
+		throttling: { rateLimit: 200, burstLimit: 400 },
+		accessLogging: false,
 	},
-	/** Durable, protected posture for permanent deployments. */
+	/**
+	 * Durable, protected posture for permanent deployments. A higher throttle
+	 * ceiling (1000/2000) than sandbox so the default doesn't 429 real
+	 * production traffic — raise it via a per-stack `throttling` override for
+	 * higher-volume APIs.
+	 */
 	production: {
 		removalPolicy: RemovalPolicy.RETAIN,
 		deletionProtection: true,
 		pointInTimeRecovery: true,
+		logRetention: RetentionDays.ONE_YEAR,
+		throttling: { rateLimit: 1000, burstLimit: 2000 },
+		accessLogging: true,
 	},
 } satisfies Record<string, BlocksDefaults>;

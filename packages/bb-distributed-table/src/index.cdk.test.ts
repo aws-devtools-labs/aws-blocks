@@ -358,6 +358,20 @@ test('CDK: a per-block protection option overrides the stack defaults', () => {
 	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
 });
 
+test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	// The GSI manager + isComplete Lambdas now own explicit log groups whose
+	// retention follows the stack-wide default (sandbox → one week), instead of
+	// AWS's infinite default.
+	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+});
+
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {

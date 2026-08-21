@@ -5,6 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -130,7 +131,7 @@ export class AppSetting<T = string> extends Scope {
 			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
 			// We only need runtime read access, granted below.
 			if (!external) {
-				registerSecret(cdk.Stack.of(this), parameterName);
+				registerSecret(cdk.Stack.of(this), parameterName, this.defaults.logRetention);
 			}
 
 			// Grant handler KMS access for the default aws/ssm key. External secrets
@@ -183,7 +184,7 @@ interface SecretBulkState {
  * Provider, and a single CustomResource. All subsequent calls just append to
  * the parameter list (resolved lazily at synth time).
  */
-function registerSecret(stack: cdk.Stack, parameterName: string): void {
+function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: RetentionDays): void {
 	let state = (stack as any)[SECRET_BULK_KEY] as SecretBulkState | undefined;
 	if (state) {
 		state.parameterNames.push(parameterName);
@@ -197,6 +198,12 @@ function registerSecret(stack: cdk.Stack, parameterName: string): void {
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
+		// Own the log group so its retention follows the stack-wide default
+		// instead of AWS's infinite retention.
+		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
 		code: lambda.Code.fromInline(`
 			const { SSMClient, PutParameterCommand, DeleteParameterCommand, AddTagsToResourceCommand } = require('@aws-sdk/client-ssm');
 			const crypto = require('crypto');
