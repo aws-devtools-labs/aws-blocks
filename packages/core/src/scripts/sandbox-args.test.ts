@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 
-import { buildSandboxDeployArgs } from './sandbox.js';
+import { buildSandboxDeployArgs, sandboxFailureRecoveryHint } from './sandbox.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 
 /**
@@ -71,5 +71,22 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
     assert.ok(!prod.includes('--express'), `production deploy must not use --express: ${prod.join(' ')}`);
     assert.ok(!prod.includes('--method'), `production deploy must not use --method: ${prod.join(' ')}`);
+  });
+});
+
+describe('sandboxFailureRecoveryHint — no silent dead-end after a failed express deploy', () => {
+  const hint = sandboxFailureRecoveryHint();
+
+  it('points to the repo-native destroy + redeploy recovery', () => {
+    assert.match(hint, /npm run sandbox:destroy/);
+    assert.match(hint, /npm run sandbox\b/);
+  });
+
+  it('covers the manual UPDATE_ROLLBACK_FAILED escape hatch', () => {
+    assert.match(hint, /continue-update-rollback/);
+  });
+
+  it('explains why (rollback is off under express mode)', () => {
+    assert.match(hint, /rollback is off|automatic rollback/i);
   });
 });

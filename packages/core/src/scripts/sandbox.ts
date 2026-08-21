@@ -73,7 +73,7 @@ export interface SandboxDeployArgsOptions {
  *   uses neither `--express` nor `--method direct`: it keeps a reviewable
  *   change set and full stabilization with rollback, which are exactly the
  *   safety signals a production deploy should keep. Requires an aws-cdk CLI
- *   that supports `--express` (>= 2.1138.0).
+ *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
  */
 export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
   return [
@@ -87,6 +87,34 @@ export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: San
     "--context", "sandboxMode=true",
     "--app", `npm exec tsx -- -C cdk ${backendPath}`,
   ];
+}
+
+/**
+ * Operator-facing recovery guidance printed when a sandbox deploy fails.
+ *
+ * Express Mode (see {@link buildSandboxDeployArgs}) disables CloudFormation's
+ * automatic rollback, so a failed deploy does NOT clean up after itself: a
+ * failed *first* deploy leaves the stack in `CREATE_FAILED`/`ROLLBACK_COMPLETE`
+ * and a failed update can land in `UPDATE_ROLLBACK_FAILED`. In those states
+ * CloudFormation refuses the next `UpdateStack`, so a plain re-run of
+ * `npm run sandbox` would hit the same wall — a silent dead-end for the fast
+ * loop. This spells out the exact way out instead of leaving the operator to
+ * discover it via a cryptic CloudFormation error.
+ *
+ * Kept pure so it can be asserted in a unit test.
+ */
+export function sandboxFailureRecoveryHint(): string {
+  return [
+    "",
+    "ℹ️  Express Mode leaves failed sandbox stacks in place (automatic rollback is off).",
+    "   If the next `npm run sandbox` reports the stack cannot be updated, recover with:",
+    "",
+    "     npm run sandbox:destroy   # tears the failed stack down (handles ROLLBACK_COMPLETE)",
+    "     npm run sandbox           # redeploy from a clean slate",
+    "",
+    "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
+    "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
+  ].join("\n");
 }
 
 export async function startSandbox(options: SandboxOptions) {
@@ -142,6 +170,7 @@ export async function startSandbox(options: SandboxOptions) {
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
     console.error("\n❌ Deployment failed.");
+    console.error(sandboxFailureRecoveryHint());
     throw error;
   }
 
