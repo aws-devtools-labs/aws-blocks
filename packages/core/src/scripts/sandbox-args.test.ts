@@ -12,6 +12,11 @@ import { buildCdkDeployArgs } from './deploy-stream.js';
  * if the flag is absent. Reading `args[indexOf(flag) + 1]` directly silently
  * reads `args[0]` when the flag is missing (indexOf returns -1), which turns a
  * dropped flag into a confusing value mismatch instead of a "flag missing".
+ *
+ * NOTE: resolves only the FIRST occurrence of `flag`. `--context` legitimately
+ * appears twice in this argv (projectRoot, then sandboxMode=true), so do not
+ * use `valueAfter(args, '--context')` expecting the second value — it silently
+ * returns the first. Assert repeated flags with `args.includes(...)` instead.
  */
 function valueAfter(args: string[], flag: string): string {
   const i = args.indexOf(flag);
