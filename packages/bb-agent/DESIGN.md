@@ -88,7 +88,7 @@ registry — the same derivation the handler uses — so those names aren't inje
 `BLOCKS_RT_CALLBACK_URL` (from `Realtime.publishCallbackUrl()`) must be passed, since the API Gateway
 Management endpoint isn't otherwise discoverable off the handler.
 
-> **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
+> **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned.
 
 ## Model Providers
 
