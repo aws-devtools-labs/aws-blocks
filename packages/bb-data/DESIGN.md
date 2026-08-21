@@ -81,19 +81,19 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database |
-| VPC + private subnets | Network isolation |
-| RDS Proxy | Connection pooling |
-| Security group | Inbound 5432 from Lambda SG only |
+| Aurora Serverless v2 cluster | PostgreSQL database with the RDS Data API enabled |
+| VPC + isolated subnets | Network isolation for the database |
+| Security group | Allows PostgreSQL traffic from within the VPC |
 | Secrets Manager secret | Auto-generated credentials |
-| Migration Lambda + CustomResource | Runs .sql files on deploy |
-| IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
+| Runtime configuration | Cluster ARN, secret ARN, and database name for the application runtime |
+| Migration Lambda + CustomResource | Runs `.sql` files on deploy when `migrationsPath` is set |
+| IAM grants | RDS Data API actions and `secretsmanager:GetSecretValue` |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ## Schema Migrations (External Databases)
 
-The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResource** (Aurora is unreachable from the deploy host). **External** connection-string databases (managed PostgreSQL, via `fromExisting()`) are publicly reachable, so their migrations run **host-side** as a pre-`cdk deploy` lifecycle step — reusing the same engine-agnostic `runMigrations` + `PgClientEngine` (no new runner). Code: `src/migrations/external-migrations.ts`, `src/migrations/baseline.ts`, and the lifecycle step in `@aws-blocks/core` (`scripts/external-migrations-step.ts`).
+The Aurora path above runs `.sql` migrations from a Lambda-backed CustomResource through the RDS Data API. **External** connection-string databases (managed PostgreSQL, via `fromExisting()`) run migrations **host-side** as a pre-`cdk deploy` lifecycle step — reusing the same engine-agnostic `runMigrations` + `PgClientEngine` (no new runner). Code: `src/migrations/external-migrations.ts`, `src/migrations/baseline.ts`, and the lifecycle step in `@aws-blocks/core` (`scripts/external-migrations-step.ts`).
 
 - **Where it runs:** `npm run dev` applies pending `./migrations` to the dev DB (and refreshes generated types); `npm run sandbox` / `npm run deploy` apply to the sandbox / production DB before `cdk deploy`. `core` invokes the `bb-data` CLI as a **subprocess** (core must not depend on bb-data — the dependency runs the other way); the connection string is passed via the `BLOCKS_MIGRATE_URL` env var, never argv.
 - **Session port:** the runner rewrites the stored runtime string to the **5432 session port** (`toSessionPortUrl`) — DDL, multi-statement file transactions, and a session-held advisory lock all need a stable session, which the 6543 transaction pooler doesn't guarantee.
@@ -108,11 +108,10 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| No connection pooling | Connection exhaustion only surfaces in AWS | Sandbox testing |
+| No RDS Data API behavior | Data API limits and service errors only surface in AWS | Sandbox testing |
 | No VPC isolation | Network access control not enforced locally | Infrastructure concern |
 | PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
-| No RDS Proxy behavior | Connection pinning, failover not simulated | Transparent to app code |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
 
