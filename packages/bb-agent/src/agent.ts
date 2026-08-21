@@ -477,6 +477,12 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Runtime on AWS) and publishes chunks to Realtime on the returned channelId.
 	 *
 	 * Subscribe to chunks via result.channel, or await result.complete() for the final response.
+	 *
+	 * Errors surface on two paths. Once the turn is dispatched, loop failures arrive as an `error`
+	 * chunk on the channel (and reject `complete()`). A failure to *dispatch* the turn — e.g. on AWS
+	 * when the AgentCore Runtime can't be invoked (unresolved runtime ARN, or an `InvokeAgentRuntime`
+	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
+	 * `stream()` so a dispatch failure isn't lost.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
@@ -513,6 +519,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Resume an interrupted agent with user's responses.
 	 * Dispatches a new turn that loads the session and continues from the interrupt point.
 	 * Chunks are published to the same channelId — use the existing subscription or call complete() again to wait for the result.
+	 *
+	 * Like `stream()`, errors surface on two paths: loop failures arrive as an `error` chunk on the
+	 * channel once the turn is dispatched, while a failure to *dispatch* (e.g. on AWS when the AgentCore
+	 * Runtime can't be invoked) rejects this `resume()` call itself. Always `await` it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
 		if (!responses.length) throw blocksAgentError(AgentErrors.InterruptRequired, 'resume() requires at least one interrupt response.');
