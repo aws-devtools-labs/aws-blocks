@@ -595,9 +595,14 @@ function validateStageName<TConfig>(stageConfig: PipelineStageConfig<TConfig>): 
 }
 
 function validateStageStacks(stage: cdk.Stage, stageName: string, source: 'stageFactory' | 'appFile'): void {
-  const stacks = stage.node.children.filter(
-    (c): c is cdk.Stack => c instanceof cdk.Stack,
-  );
+  // Use `Stack.isStack()` (a `Symbol.for`-based marker) rather than `instanceof
+  // cdk.Stack`. The stageFactory runs in the CONSUMER's app, which may resolve a
+  // DIFFERENT aws-cdk-lib copy than this package (monorepo / linked-package /
+  // `file:` installs — e.g. Amplify self-hosting). Across copies `instanceof`
+  // returns false, so a stage that DID create a Stack is misdetected as empty and
+  // synth fails with "contains no stacks". `Stack.isStack()` matches on a shared
+  // `Symbol.for` marker and is cross-copy-safe.
+  const stacks = stage.node.children.filter((c): c is cdk.Stack => cdk.Stack.isStack(c));
 
   if (stacks.length === 0) {
     const hint =
