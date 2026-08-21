@@ -236,7 +236,7 @@ try {
 
 ## What It Provisions (AWS)
 
-- **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
+- **Aurora Serverless v2** — PostgreSQL-compatible, with the RDS Data API enabled, scales 0.5-128 ACUs. Storage
   encryption at rest is **opt-in via a context flag** so new projects are secure by
   default without replacing an existing cluster. New `create-blocks-app` projects
   set `"@aws-blocks/bb-data:encryptStorageByDefault": true` in `cdk.json`, which
@@ -265,8 +265,11 @@ try {
 - **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
   wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
   secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
-- **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
-- **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+- **Runtime configuration** — Cluster ARN, secret ARN, and database name loaded by the application runtime
+- **Migration Lambda** — Runs `.sql` files on deploy via a CustomResource when `migrationsPath` is set
+- **IAM** — RDS Data API actions and `secretsmanager:GetSecretValue` granted to the application execution role
+
+The application Lambda accesses an AWS-provisioned database through the RDS Data API. `Database` does not provision an RDS Proxy or place the application Lambda in the database VPC. For an existing PostgreSQL database, `fromExisting()` uses a direct PostgreSQL client connection; network access and connection pooling remain the application's responsibility.
 
 > **Access model:** the database is reached exclusively over the RDS Data API
 > (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
@@ -365,10 +368,10 @@ interface DatabaseOptions {
 
 ## Performance
 
-- **Query latency:** 10-50ms (warm), ~500ms cold start from 0 ACUs
+- **Connection management:** AWS-provisioned databases use the RDS Data API; the application Lambda does not maintain direct database connections
 - **Throughput:** Requests go over the RDS Data API (HTTPS) rather than pooled database connections, so there is no connection-pool ceiling or RDS Proxy; concurrency is bounded by the Data API request limits and the cluster's ACU scaling.
+- **Cold starts:** Aurora can require time to resume from zero ACUs
 - **Storage:** Up to 128 TiB, auto-scales in 10 GiB increments
 - **Cost:** ~$0.12/ACU-hour + ~$0.10/GB-month storage
 - **Durability:** 6 copies across 3 AZs, 99.99% availability
-
 
