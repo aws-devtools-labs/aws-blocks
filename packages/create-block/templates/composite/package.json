@@ -1,0 +1,39 @@
+{
+  "name": "__BB_PKG_NAME__",
+  "version": "0.1.0",
+  "description": "TODO: one-line description of the __BB_CLASS__ Building Block.",
+  "author": "Amazon Web Services",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "DESIGN.md",
+    "src",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/index.browser.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "node ../../scripts/generate-version.mjs __BB_CLASS__",
+    "build": "tsc --build",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/bb-kv-store": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  },
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.6.0"
+  }
+}

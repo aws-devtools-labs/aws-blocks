@@ -1,0 +1,4 @@
+{
+  "extends": "../../api-extractor.base.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/index.aws.d.ts"
+}
