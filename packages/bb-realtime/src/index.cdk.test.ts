@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { Realtime } from './index.cdk.js';
 
@@ -32,18 +33,25 @@ test('CDK: calling a runtime method throws an actionable error (not a cryptic Ty
 
 // ── publishCallbackUrl ─────────────────────────────────────────────────────────
 
-/** Minimal StubBlocksStack: provides the shared handler + roots Scope via CURRENT_BLOCKS_STACK. */
+/**
+ * Minimal StubBlocksStack: provides the shared executionRole + handler (which assumes it) and roots
+ * Scope via CURRENT_BLOCKS_STACK. The connections `DistributedTable` inside Realtime's shared infra
+ * grants the shared `executionRole`, so the stub must expose one (mirrors the real BlocksStack).
+ */
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
+	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly id: string;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
+		this.executionRole = new Role(this, 'BlocksRole', { assumedBy: new ServicePrincipal('lambda.amazonaws.com') });
 		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'index.handler',
 			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+			role: this.executionRole,
 		});
 	}
 }
