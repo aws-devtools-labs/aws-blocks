@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-basic",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -33,11 +33,11 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.2.0",
-    "@aws-blocks/bb-app-setting": "^0.1.4",
-    "@aws-blocks/auth-common": "^0.1.5",
-    "@aws-blocks/bb-kv-store": "^0.1.6",
-    "@aws-blocks/bb-logger": "^0.1.4",
+    "@aws-blocks/core": "^0.3.0",
+    "@aws-blocks/bb-app-setting": "^0.1.5",
+    "@aws-blocks/auth-common": "^0.1.6",
+    "@aws-blocks/bb-kv-store": "^0.1.7",
+    "@aws-blocks/bb-logger": "^0.1.5",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.3",

@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-auth-oidc",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -46,11 +46,11 @@
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/auth-common": "^0.1.5",
-    "@aws-blocks/bb-app-setting": "^0.1.4",
-    "@aws-blocks/bb-kv-store": "^0.1.6",
-    "@aws-blocks/bb-logger": "^0.1.4",
-    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/auth-common": "^0.1.6",
+    "@aws-blocks/bb-app-setting": "^0.1.5",
+    "@aws-blocks/bb-kv-store": "^0.1.7",
+    "@aws-blocks/bb-logger": "^0.1.5",
+    "@aws-blocks/core": "^0.3.0",
     "@aws-sdk/client-ssm": "^3.0.0",
     "jose": "^6.2.3",
     "openid-client": "^6.8.4"

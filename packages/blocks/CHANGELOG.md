@@ -1,5 +1,46 @@
 # @aws-blocks/blocks
 
+## 0.4.0
+
+### Minor Changes
+
+- 08ab129: Add `pointInTimeRecovery: boolean | { retentionDays: number }` to `BlocksDefaults` (and to `BlocksPresets`: `true` in `production`, `false` in `sandbox`).
+  
+  This extends the stack-wide infrastructure-defaults posture with the continuous-backup knob, so a Building Block whose service supports it (DynamoDB Point-in-Time Recovery) can resolve its default from `scope.defaults.pointInTimeRecovery` — read independently, the same way as `removalPolicy` and `deletionProtection`. `true` enables backups with the service default window, `false` disables them, and `{ retentionDays: n }` pins the window (the block validates `n` against its service's range) — on/off and window are one field since a window only means anything when backups are on. Blocks whose service has no equivalent simply ignore it. `bb-distributed-table` is the first consumer.
+  
+  > The property **name** (`pointInTimeRecovery`) and its `{ retentionDays }` shape are a public `@aws-blocks/core/cdk` surface addition and want API-BR sign-off before release.
+
+### Patch Changes
+
+- 5bfae0a: Reject oversized JSON-RPC request bodies at the shared parser. `parseRpcRequest` now caps the body at 10 MiB (`MAX_RPC_BODY_BYTES`, the same limit API Gateway enforces in production) and returns a `413` error named `PayloadTooLarge` before parsing or dispatch. In production API Gateway rejects an oversized body at the edge before the Lambda runs; enforcing the same limit at the parser means the local dev server rejects the same body instead of buffering it and wedging the local database (e.g. PGlite). Because both the Lambda handler and the dev server route through this one parser, the cap lives in a single place, and `decodeRpcResponse` surfaces it client-side as `ApiError.status === 413`.
+- Updated dependencies [08ab129]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [9bd5b3e]
+  - @aws-blocks/bb-distributed-table@0.1.6
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/bb-file-bucket@0.1.5
+  - @aws-blocks/bb-data@0.2.6
+  - @aws-blocks/bb-app-setting@0.1.5
+  - @aws-blocks/bb-knowledge-base@0.2.2
+  - @aws-blocks/bb-email-client@0.1.5
+  - @aws-blocks/bb-auth-cognito@0.1.8
+  - @aws-blocks/bb-auth-oidc@0.1.9
+  - @aws-blocks/bb-distributed-data@0.1.7
+  - @aws-blocks/bb-agent@0.3.5
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-async-job@0.1.5
+  - @aws-blocks/bb-auth-basic@0.1.7
+  - @aws-blocks/bb-cron-job@0.1.5
+  - @aws-blocks/bb-dashboard@0.1.4
+  - @aws-blocks/bb-lambda-compute@0.2.2
+  - @aws-blocks/bb-logger@0.1.5
+  - @aws-blocks/bb-metrics@0.1.5
+  - @aws-blocks/bb-realtime@0.1.5
+  - @aws-blocks/bb-tracer@0.1.7
+
 ## 0.3.1
 
 ### Patch Changes
