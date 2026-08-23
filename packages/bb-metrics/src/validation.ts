@@ -9,6 +9,31 @@ function blocksError(name: string, message: string): Error {
 	return err;
 }
 
+const MAX_METRIC_VALUE = 2 ** 360;
+
+/**
+ * Validate a metric value against CloudWatch constraints.
+ * - Must be finite
+ * - Must be between -2^360 and 2^360, inclusive
+ */
+export function validateMetricValue(value: number): void {
+	if (!Number.isFinite(value) || value < -MAX_METRIC_VALUE || value > MAX_METRIC_VALUE) {
+		throw blocksError(
+			MetricsErrors.InvalidMetricValue,
+			'Metric value must be finite and between -2^360 and 2^360',
+		);
+	}
+}
+
+/**
+ * Validate an optional metric timestamp.
+ */
+export function validateTimestamp(timestamp?: Date): void {
+	if (timestamp !== undefined && !Number.isFinite(timestamp.getTime())) {
+		throw blocksError(MetricsErrors.InvalidTimestamp, 'Metric timestamp must be a valid Date');
+	}
+}
+
 /**
  * Validate a metric name against CloudWatch constraints.
  * - Must be non-empty
