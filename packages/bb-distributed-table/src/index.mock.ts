@@ -38,7 +38,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, applyReadValidation, validateLimit } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -226,6 +226,7 @@ export class DistributedTable<
 	async *query(
 		options: QueryOptions<T, K, Indexes>,
 	): AsyncIterable<T> {
+		const limit = validateLimit(options.limit);
 		const indexConfig = options.index ? this.indexes[options.index as keyof Indexes] : this.keyConfig;
 		if (!indexConfig) throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index));
 
@@ -273,15 +274,16 @@ export class DistributedTable<
 		let count = 0;
 		for (const item of items) {
 			yield (await this.reconcileRead(item)) as T;
-			if (options.limit && ++count >= options.limit) return;
+			if (limit !== undefined && ++count >= limit) return;
 		}
 	}
 
 	async *scan(options?: ScanOptions): AsyncIterable<T> {
+		const limit = validateLimit(options?.limit);
 		let count = 0;
 		for (const item of this.data.values()) {
 			yield (await this.reconcileRead(item)) as T;
-			if (options?.limit && ++count >= options.limit) return;
+			if (limit !== undefined && ++count >= limit) return;
 		}
 	}
 
@@ -385,4 +387,3 @@ export class DistributedTable<
 import type { PartitionKeyCondition, SortKeyCondition as SKC, KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-
