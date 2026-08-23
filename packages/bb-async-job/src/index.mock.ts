@@ -15,6 +15,7 @@ import type {
 	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
+import { validateDelaySeconds } from './validation.js';
 import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -185,9 +186,10 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * @param options - Optional. `delaySeconds` defers processing (0–900s).
 	 * @returns `{ jobId }` — unique identifier for tracking.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If serialized payload exceeds 256 KB.
-	 * @throws {AsyncJobErrors.ValidationFailed} If schema validation fails.
+	 * @throws {AsyncJobErrors.ValidationFailed} If schema validation fails or delaySeconds is not an integer from 0 to 900.
 	 */
 	async submit(payload: T, options?: SubmitOptions): Promise<{ jobId: string }> {
+		validateDelaySeconds(options?.delaySeconds);
 		await this.validatePayload(payload);
 		const jobId = randomUUID().slice(0, 13);
 		const sentAt = new Date().toISOString();
@@ -236,7 +238,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * @throws {AsyncJobErrors.BatchEmpty} If payloads array is empty.
 	 * @throws {AsyncJobErrors.BatchTooLarge} If more than {@link MAX_BATCH_PAYLOADS} payloads.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If any payload exceeds 256 KB.
-	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation.
+	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation or delaySeconds is not an integer from 0 to 900.
 	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). A multi-chunk submit is not atomic; the error's `failed` and `jobIds` properties carry the partial results across all chunks.
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
@@ -255,6 +257,8 @@ export class AsyncJob<T = unknown> extends Scope {
 			err.name = AsyncJobErrors.BatchTooLarge;
 			throw err;
 		}
+
+		validateDelaySeconds(options?.delaySeconds);
 
 		// Validate every payload before enqueuing any, so one bad payload fails the
 		// whole call rather than half-submitting the batch — matching the AWS runtime.

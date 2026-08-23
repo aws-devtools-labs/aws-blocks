@@ -103,7 +103,7 @@ import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
 AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items
 AsyncJobErrors.BatchTooLarge      // submitBatch() over the 10,000-payload soft cap
-AsyncJobErrors.ValidationFailed   // schema validation failed
+AsyncJobErrors.ValidationFailed   // schema validation or an invalid delaySeconds value
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled
 AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
@@ -198,5 +198,3 @@ handler: async (payload, ctx) => {
 ```
 
 **Check the dead-letter queue:** Jobs that fail after `maxRetries` attempts land in the DLQ. In AWS, check the `{scope}-{id}-dlq` queue in the SQS console. In local dev, failed jobs are logged to the console with their full payload.
-
-

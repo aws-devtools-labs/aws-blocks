@@ -97,6 +97,26 @@ describe('AsyncJob (aws runtime): submitBatch chunking', () => {
 });
 
 describe('AsyncJob (aws runtime): submitBatch partial failure', () => {
+	test('rejects invalid delaySeconds before sending a single or batch message', async () => {
+		const scope = new Scope(`aj-${Math.random().toString(36).slice(2)}`);
+		const job = new AsyncJob<{ n: number }>(scope, 'batch', { handler: async () => {} });
+		registerSdkIdentifiers(job.fullId, { queueUrl: QUEUE_URL });
+		let sends = 0;
+		(job as any)._sqsClient = { send: async () => { sends++; return { MessageId: 'unused' }; } };
+
+		for (const delaySeconds of [-1, 1.5, NaN, Infinity, 901]) {
+			await assert.rejects(
+				() => job.submit({ n: 1 }, { delaySeconds }),
+				(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+			);
+		}
+		await assert.rejects(
+			() => job.submitBatch([{ n: 1 }, { n: 2 }], { delaySeconds: -1 }),
+			(err: Error) => err.name === AsyncJobErrors.ValidationFailed,
+		);
+		assert.strictEqual(sends, 0);
+	});
+
 	test('throws BatchSubmitFailed carrying jobIds (real ids + null) and failed[] across chunks', async () => {
 		// 15 payloads → chunks [0..9] and [10..14]; fail one entry in the second chunk.
 		const { job } = makeJob(new Set(['12']));
