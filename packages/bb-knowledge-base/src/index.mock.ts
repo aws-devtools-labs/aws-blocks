@@ -271,12 +271,14 @@ export class KnowledgeBase extends Scope {
 	 * Resolve once the knowledge base is synced with your latest data.
 	 *
 	 * Local development has no asynchronous ingestion window (see {@link isSynced}),
-	 * so this resolves immediately. The options are accepted for API parity
-	 * with the AWS runtime and are otherwise ignored locally.
+	 * so this resolves immediately. Timing options are ignored locally, but an
+	 * already-aborted signal still rejects to preserve the cancellation contract
+	 * shared with the AWS runtime.
 	 *
-	 * @param {WaitUntilSyncedOptions} _options - Accepted for API parity; ignored in local development.
+	 * @param {WaitUntilSyncedOptions} options - Timing options are ignored locally; an aborted signal rejects.
 	 */
-	async waitUntilSynced(_options?: WaitUntilSyncedOptions): Promise<void> {
+	async waitUntilSynced(options?: WaitUntilSyncedOptions): Promise<void> {
+		options?.signal?.throwIfAborted();
 		// No-op: the local corpus loads synchronously, so there is nothing to wait for.
 	}
 
