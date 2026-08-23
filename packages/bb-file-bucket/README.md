@@ -48,6 +48,10 @@ const bucket = new FileBucket(scope, id, options?)
 | `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
 | `cacheControl` | `string` | Cache-Control header value. |
 
+### Presigned URL options
+
+`getUrl`, `putUrl`, `getFileHandle`, and `createUploadHandle` accept `expiresIn` in seconds. It must be an integer from `1` to `604800` (seven days); the default is `3600`.
+
 ### CorsRule
 
 CORS configuration for browser-based access. Supplied via the `corsRules` option.
@@ -226,6 +230,5 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 ## Local Development
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and CORS have no effect locally.
-
 
 
