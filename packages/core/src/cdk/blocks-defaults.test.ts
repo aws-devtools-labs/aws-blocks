@@ -10,6 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { RemovalPolicy } from 'aws-cdk-lib';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import { BlocksPresets } from './blocks-defaults.js';
 
 describe('BlocksPresets', () => {
@@ -23,5 +24,10 @@ describe('BlocksPresets', () => {
 		assert.strictEqual(BlocksPresets.production.removalPolicy, RemovalPolicy.RETAIN);
 		assert.strictEqual(BlocksPresets.production.deletionProtection, true);
 		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
+	});
+
+	test('both presets default Lambda compute to arm64 (Graviton)', () => {
+		assert.strictEqual(BlocksPresets.sandbox.lambdaArchitecture, Architecture.ARM_64);
+		assert.strictEqual(BlocksPresets.production.lambdaArchitecture, Architecture.ARM_64);
 	});
 });

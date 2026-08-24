@@ -96,6 +96,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   const handler = new lambda.NodejsFunction(scope, 'Handler', {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
+    // Default to arm64 (Graviton) — ~20% cheaper at equal performance. The
+    // backend is a pure-JS esbuild bundle, so there's no native-arch concern.
+    // Overridable via the stack-wide `defaults.lambdaArchitecture`.
+    architecture: props.defaults.lambdaArchitecture,
     handler: 'handler',
     role: executionRole,
     memorySize: 2048,

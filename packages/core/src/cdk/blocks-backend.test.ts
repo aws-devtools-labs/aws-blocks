@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BlocksBackend } from './blocks-backend.js';
 import { BlocksPresets } from './blocks-defaults.js';
@@ -368,5 +369,38 @@ describe('infrastructure defaults (backend-anchored)', () => {
     const inner = new Scope('inner', { parent: outer });
     assert.strictEqual(inner.defaults, backend.defaults);
     assert.strictEqual(inner.defaults, BlocksPresets.sandbox);
+  });
+});
+
+describe('handler Lambda architecture (Graviton default)', () => {
+  test('defaults the shared handler to arm64 (Graviton)', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'ArmDefaultStack');
+
+    await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // The shared handler synthesizes with an arm64 architecture.
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['arm64'],
+    });
+  });
+
+  test('respects a lambdaArchitecture override (x86_64)', async () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'X86OverrideStack');
+
+    await BlocksBackend.create(stack, 'Blocks', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: { ...BlocksPresets.production, lambdaArchitecture: Architecture.X86_64 },
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Architectures: ['x86_64'],
+    });
   });
 });
