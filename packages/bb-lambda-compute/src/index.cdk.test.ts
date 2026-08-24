@@ -1,0 +1,161 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Unit tests for LambdaCompute.
+ *
+ * LambdaCompute is not yet instantiated by the default app and is not reachable
+ * by customers. These tests exercise it directly to pin its shape: function +
+ * gateway, shared role, distinct construct paths, and owner-derived identity.
+ */
+
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { Scope } from '@aws-blocks/core/cdk';
+import { Compute } from '@aws-blocks/core/cdk/internal';
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
+import type { Construct } from 'constructs';
+import { LambdaCompute } from './index.cdk.js';
+
+// A trivial handler entry for the NodejsFunction to bundle. Written to a temp
+// dir under the package (rather than a checked-in fixture) so the package
+// carries no test scaffolding on disk. It must live under the project root —
+// CDK's NodejsFunction rejects an entry outside it.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let handlerPath: string;
+let tmpDir: string;
+
+before(() => {
+	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
+	tmpDir = mkdtempSync(join(__dirname, 'tmp-handler-'));
+	handlerPath = join(tmpDir, 'handler.mjs');
+	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
+});
+
+after(() => {
+	rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// Minimal BlocksStack-shaped owner. LambdaCompute (via Compute → Scope) reads
+// `backendHandlerPath`, `executionRole`, and the owner's `id` (for
+// BLOCKS_STACK_NAME) from the nearest BlocksStack/BlocksBackend — or, absent
+// one in the tree, from the ambient `globalThis.CURRENT_BLOCKS_STACK`. We
+// reproduce that surface here so the compute synthesizes into a real stack
+// without spinning up a full BlocksBackend.
+class StubBlocksStack extends cdk.Stack {
+	public readonly id: string;
+	public readonly executionRole: cdk.aws_iam.IRole;
+	public readonly backendHandlerPath: string;
+	constructor(scope: Construct, id: string) {
+		super(scope, id);
+		this.id = id;
+		this.backendHandlerPath = handlerPath;
+		(globalThis as any).CURRENT_BLOCKS_STACK = this;
+		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+		});
+	}
+}
+
+function setup(stackId: string): { stack: StubBlocksStack; parent: Scope } {
+	const app = new cdk.App();
+	const stack = new StubBlocksStack(app, stackId);
+	const parent = new Scope('app');
+	return { stack, parent };
+}
+
+describe('LambdaCompute', () => {
+	test('provisions a Lambda function and its own API Gateway', () => {
+		const { stack, parent } = setup('LambdaComputeShape');
+
+		const compute = new LambdaCompute(parent, 'extra');
+
+		assert.ok(compute.fn, 'LambdaCompute should expose .fn');
+		assert.ok(compute.apiGateway, 'LambdaCompute should expose .apiGateway');
+		assert.ok(compute instanceof Compute, 'LambdaCompute should be a Compute');
+
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+
+		const roles = template.findResources('AWS::IAM::Role');
+		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
+		const fns = template.findResources('AWS::Lambda::Function');
+		const blocksFns = Object.values(fns).filter(
+			(fn: any) => fn.Properties?.Role?.['Fn::GetAtt']?.[0] === blocksRoleId,
+		);
+		assert.strictEqual(blocksFns.length, 1, 'the compute function runs on the shared role');
+	});
+
+	test('the function assumes the shared execution role', () => {
+		const { stack, parent } = setup('LambdaComputeRole');
+
+		const compute = new LambdaCompute(parent, 'extra');
+
+		// The compute resolves the same shared role the owner exposes.
+		assert.strictEqual(compute.executionRole, stack.executionRole);
+
+		const template = Template.fromStack(stack);
+		const roles = template.findResources('AWS::IAM::Role');
+		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
+		assert.ok(blocksRoleId, 'expected the shared BlocksRole');
+		const fns = template.findResources('AWS::Lambda::Function');
+		const onSharedRole = Object.values(fns).filter(
+			(fn: any) => fn.Properties?.Role?.['Fn::GetAtt']?.[0] === blocksRoleId,
+		);
+		assert.strictEqual(onSharedRole.length, 1, 'the compute function should assume the shared BlocksRole');
+	});
+
+	test('multiple computes under one owner get distinct construct paths', () => {
+		const { stack, parent } = setup('LambdaComputeMultiple');
+
+		const a = new LambdaCompute(parent, 'a');
+		const b = new LambdaCompute(parent, 'b');
+
+		assert.notStrictEqual(a.node.path, b.node.path, 'distinct ids → distinct construct paths');
+		// Both synthesize without a logical-id collision.
+		assert.doesNotThrow(() => Template.fromStack(stack));
+	});
+
+	test('setEnv adds an environment variable to the function', () => {
+		const { stack, parent } = setup('LambdaComputeSetEnv');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.setEnv('BLOCKS_THING', 'value-123');
+
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: { BLOCKS_THING: 'value-123' } },
+		});
+	});
+
+	test('derives BLOCKS_STACK_NAME from the owner', () => {
+		const { stack, parent } = setup('LambdaComputeStackName');
+
+		new LambdaCompute(parent, 'extra');
+
+		// The compute's function must agree with the owner's token-free identity
+		// — otherwise the runtime derives physical resource names that were never
+		// created.
+		const template = Template.fromStack(stack);
+		const fns = template.findResources('AWS::Lambda::Function');
+		const computeFnId = Object.keys(fns).find((k) => k.includes('extra'));
+		assert.ok(computeFnId, 'expected the compute function in the template');
+		assert.strictEqual(fns[computeFnId].Properties.Environment.Variables.BLOCKS_STACK_NAME, stack.id);
+	});
+
+	test('throws when created outside a BlocksStack/BlocksBackend', () => {
+		// With no real BlocksStack/BlocksBackend in the tree or as the ambient
+		// owner (a plain cdk.Stack exposes none of backendHandlerPath / a Blocks
+		// identity), the compute cannot derive its entry or BLOCKS_STACK_NAME and
+		// fails at construction.
+		const app = new cdk.App();
+		const bareStack = new cdk.Stack(app, 'BareStack');
+		(globalThis as any).CURRENT_BLOCKS_STACK = bareStack;
+
+		assert.throws(() => new LambdaCompute(new Scope('app'), 'orphan'));
+	});
+});

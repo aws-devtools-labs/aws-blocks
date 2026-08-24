@@ -1,5 +1,71 @@
 # @aws-blocks/core
 
+## 0.2.0
+
+### Minor Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+
+### Patch Changes
+
+- 5262062: feat(core): add the internal `Compute` abstraction
+  
+  Introduce the abstract `Compute` base behind a new internal entry point
+  (`@aws-blocks/core/cdk/internal`). A compute resolves its owning
+  `BlocksStack`/`BlocksBackend` on construction to derive its runtime identity
+  (backend entry + stack name). It is framework/test-only — not part of the public
+  API, and customers cannot instantiate a compute yet. Concrete computes live in
+  their own packages (e.g. `@aws-blocks/bb-lambda-compute`).
+- 3614a09: Stop `import.meta.url` from crashing the deployed Lambda. The backend handler is bundled to CommonJS, where `import.meta` is empty, so `fileURLToPath(import.meta.url)` in a handler, a Building Block's `aws-runtime` code, or a dependency became `fileURLToPath(undefined)` and threw at Lambda load (every request 502'd). esbuild only warned, so the broken bundle deployed. The handler bundling now shims `import.meta.url` / `import.meta.dirname` / `import.meta.filename` to their CommonJS equivalents (`pathToFileURL(__filename)`, `__dirname`, `__filename`) — the approach esbuild blesses and Rollup applies by default — so the bundle loads cleanly and a dependency that merely contains `import.meta` no longer trips a build failure. Exposes `blocksNodejsBundling()` from `@aws-blocks/core/cdk` (re-exported by `@aws-blocks/blocks`) so every framework `NodejsFunction` gets the same treatment. Note: inside the bundle these resolve to the bundled output location, not your source tree.
+- 5262062: feat: extract `LambdaCompute` into `@aws-blocks/bb-lambda-compute`
+  
+  The abstract `Compute` base stays in core as a framework primitive; the concrete
+  `LambdaCompute` (a `NodejsFunction` fronted by its own API Gateway, assuming the
+  shared execution role) moves into a new package, `@aws-blocks/bb-lambda-compute`.
+  
+  The package is CDK-only and its sole export is internal — customers cannot
+  instantiate a compute yet. Nothing in the default path constructs it, so this is
+  additive and non-breaking.
+- 5071079: fix(core): make `SandboxDisableDeletionProtection` actually disable DynamoDB deletion protection
+  
+  The mixin duck-typed only on the `deletionProtection` property name, but the
+  DynamoDB L1 `CfnTable` behind an L2 `Table` spells it
+  `deletionProtectionEnabled` — and the L2 `Table` never re-exposes the prop. As a
+  result the mixin silently never matched DynamoDB tables: sandbox stacks synthed
+  `DeletionProtectionEnabled: true` and `sandbox:destroy` failed on every
+  protected table, because DynamoDB refuses `DeleteTable` while protection is on
+  regardless of the CloudFormation `DeletionPolicy`.
+  
+  The mixin now matches both the `deletionProtection` and
+  `deletionProtectionEnabled` spellings, so DynamoDB tables are cleared through
+  their L1 and consumers no longer need a local `CfnTable` workaround loop.
+  Behavior for other resource types is unchanged: only explicitly-enabled
+  protection is flipped, so unprotected resources still omit the property (Aurora
+  DB instances continue to synth without `DeletionProtection`).
+- 8966cfb: fix(telemetry): detect Render and Taskcluster as CI
+  
+  Telemetry CI detection (`isCI()`) checked a fixed list of CI env vars but
+  omitted Render and Taskcluster. Render sets `RENDER=true` on every build and
+  service; Taskcluster tasks always set the namespaced `TASKCLUSTER_ROOT_URL`.
+  Runs on those platforms were therefore reported as real user sessions instead
+  of `ci:true`, inflating user metrics. `RENDER` and `TASKCLUSTER_ROOT_URL` are
+  now included in both `isCI()` implementations (`@aws-blocks/core` and
+  `@aws-blocks/create-blocks-app`). The umbrella `@aws-blocks/blocks` gets a patch
+  bump because it re-exports `@aws-blocks/core`.
+- b11a75b: Reject primitive and null JSON-RPC params with the standard Invalid Params error.
+- Updated dependencies [940956e]
+- Updated dependencies [4981137]
+- Updated dependencies [5c58c53]
+  - @aws-blocks/hosting@0.1.9
+
 ## 0.1.18
 
 ### Patch Changes

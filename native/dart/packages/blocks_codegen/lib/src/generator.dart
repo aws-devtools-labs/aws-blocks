@@ -5,6 +5,10 @@ import 'model.dart';
 class DartCodeGenerator {
   const DartCodeGenerator();
 
+  /// Emits the complete contents of one generated `.blocks.dart` library.
+  ///
+  /// Output is deterministic for a given [model], so it is safe to check in
+  /// and diff.
   String generate(CodegenModel model) {
     final buf = StringBuffer();
     buf.writeln('// GENERATED CODE — DO NOT MODIFY BY HAND');
@@ -1033,8 +1037,8 @@ class DartCodeGenerator {
 
   /// Per-value deserialization for a `Map<String, V>` entry value `v` (dynamic).
   /// Primitive value types keep the plain `v as T` cast (byte-identical to the
-  /// prior output); object-like value types (records, sealed classes) — and the
-  /// nullable variants thereof — are decoded via their generated `fromJson`.
+  /// prior output); object-like value types (records, sealed classes), and the
+  /// nullable variants thereof, are decoded via their generated `fromJson`.
   String _mapValueFromJson(
     String v,
     ResolvedType valueType,

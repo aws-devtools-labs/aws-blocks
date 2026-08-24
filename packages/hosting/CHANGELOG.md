@@ -1,5 +1,88 @@
 # @aws-blocks/hosting
 
+## 0.1.10
+
+### Patch Changes
+
+- dd2350b: Trim the `KvKeys` custom resource IAM policy to true least privilege: it now grants only `cloudfront-keyvaluestore:DescribeKeyValueStore` and `UpdateKeys` — the two actions the deploy-time handler actually calls. The previously-granted `ListKeys`, `GetKey`, `PutKey`, and `DeleteKey` are dropped.
+  
+  This also makes the hosting stack deployable under restrictive Service Control Policies (SCPs) / permission boundaries that deny `cloudfront-keyvaluestore:ListKeys`, which previously blocked the deploy.
+  
+  Behavior is preserved: `ListKeys` was only used to diff against the live store on Create, but the route-table `KeyValueStore` is created fresh with no `ImportSource`, so it is empty at Create time — the handler now diffs Create against `{}`. The Update path still diffs against the prior template's entries and Delete still drains via `deleteDrainSet()`, neither of which used `ListKeys`.
+
+## 0.1.9
+
+### Patch Changes
+
+- 940956e: fix(hosting): encrypt the alarm SNS topic by default, with a key policy CloudWatch can actually use
+  
+  The monitoring construct's auto-created alarm topic was unencrypted. It now gets
+  a dedicated customer-managed KMS key (`MonitoringAlarmTopicKey`) whose policy
+  grants `cloudwatch.amazonaws.com` `kms:Decrypt` + `kms:GenerateDataKey*` in
+  addition to the usual account-root administration statement.
+  
+  Both halves matter. Encrypting the topic makes hosting secure-by-default, and
+  the CloudWatch grant is what keeps alarms working once it is encrypted: when an
+  SNS topic used as a CloudWatch alarm action is KMS-encrypted, the key policy
+  must grant the `cloudwatch.amazonaws.com` service principal, because CloudWatch
+  calls KMS **directly** (not via SNS) and an account-root `kms:*` statement does
+  not cover AWS service principals. Without the grant, CloudWatch's publish fails
+  with `KMSAccessDenied` and notifications are dropped silently — the alarm still
+  transitions to ALARM in the console, so the only symptom is the notification
+  that never arrives.
+  
+  An AWS-managed key (`alias/aws/sns`) cannot be used instead: its key policy is
+  not editable and does not grant CloudWatch, so a customer-managed key is the
+  only option that can carry the grant.
+  
+  The grant is scoped to just those two actions for that one service principal on
+  a single-purpose key, plus a `StringEqualsIfExists` guard on `aws:SourceAccount`
+  against cross-account confused-deputy use. `IfExists` is deliberate:
+  `aws:SourceAccount` is only populated on direct service-principal calls, and a
+  hard `StringEquals` would reintroduce the very silent deny this grant exists to
+  prevent.
+  
+  No configuration changes: encryption is unconditional, with no opt-out knob to
+  weaken it. The only API addition is a read-only `encryptionKey` accessor on
+  `MonitoringConstruct`, alongside the existing `topic` and `alarms`, so callers
+  can grant additional publishers on the key. Callers who need different key
+  management continue to pass their own `snsTopic` / `snsTopicArn` and own that
+  topic's encryption. Note the KMS key adds roughly $1/month per stack, and
+  monitoring is on by default; `monitoring: { enabled: false }` or a BYO topic
+  avoids it.
+- 4981137: fix(hosting): disable installLatestAwsSdk on the CDN invalidation custom resource
+  
+  The `DeployInvalidation` `AwsCustomResource` in `CdnConstruct` left
+  `installLatestAwsSdk` at its CDK default of `true`. That default makes the
+  custom-resource provider Lambda `npm install` the AWS SDK at invoke time,
+  adding roughly 15-30s of cold start and forcing a 512MB memory floor on the
+  provider function.
+  
+  Nothing here needs a newer SDK than the runtime ships. The resource makes a
+  single `CloudFront.createInvalidation` call — a long-stable API already bundled
+  in the Lambda runtime's AWS SDK v3. And unlike a one-off resource, this one
+  fires on *every* hosting deploy (its `CallerReference`/`physicalResourceId` are
+  keyed on `buildId`), so the install cost was paid on every deploy rather than
+  once.
+  
+  Setting `installLatestAwsSdk: false` removes that per-deploy penalty and also
+  silences CDK's `installLatestAwsSdkNotSpecified` warning for this construct.
+  No public API or template change beyond the `InstallLatestAwsSdk: false`
+  property on the synthesized `Custom::AWS` resource; invalidation behavior,
+  IAM policy, and deploy ordering are unchanged.
+- 5c58c53: fix(hosting): deploy SSR framework Lambdas on nodejs24.x and throw on unrecognized runtimes instead of silently falling back to nodejs20.x
+  
+  SSR framework compute (Nuxt/Nitro, Astro, SvelteKit, Next.js regional) now runs on
+  `nodejs24.x` via a shared `FRAMEWORK_COMPUTE_RUNTIME` constant, and `resolveRuntime()`
+  recognizes `nodejs24.x`, defaults to it when no runtime is declared, and throws
+  `UnsupportedRuntimeError` for unrecognized runtimes rather than silently returning
+  Node 20. Lambda@Edge compute (`FRAMEWORK_EDGE_COMPUTE_RUNTIME`) is bumped to
+  `nodejs24.x` as well: Lambda@Edge draws Node.js versions from the same managed runtime
+  table as regional Lambda, where `nodejs24.x` is supported and `nodejs20.x` is already
+  past deprecation. The OpenNext edge bundle banner patch was revalidated — the crash it
+  works around comes from ES Module namespace exports being non-writable per spec, not
+  from any Node-20-specific behavior.
+
 ## 0.1.8
 
 ### Patch Changes

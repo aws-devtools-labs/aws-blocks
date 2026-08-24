@@ -3,6 +3,7 @@
 
 import type { StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import type { BlocksDefaults } from '../cdk/blocks-defaults.js';
 import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
@@ -325,6 +326,14 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
+  /**
+   * Stack-wide infrastructure defaults applied to every Building Block (removal
+   * policy, deletion protection, …). Start from `BlocksPresets.sandbox` or
+   * `BlocksPresets.production` and override individual fields as needed. Any
+   * field a block also exposes as a per-block option is overridden by that
+   * option. See `BlocksDefaults` in `@aws-blocks/core/cdk`.
+   */
+  defaults: BlocksDefaults;
 }
 
 export class BlocksStack {
