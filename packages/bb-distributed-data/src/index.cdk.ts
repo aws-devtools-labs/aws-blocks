@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -51,20 +51,22 @@ export class DistributedDatabase extends Scope {
 
     const endpoint = cluster.getAtt('Endpoint').toString();
 
-    // Env vars for runtime
-    this.handler.addEnvironment(`BLOCKS_${envName}_ENDPOINT`, endpoint);
-    this.handler.addEnvironment(`BLOCKS_${envName}_REGION`, region);
+    // Config for runtime — flows through S3 config (loaded into process.env at
+    // cold start) like every other block, instead of a direct env var.
+    registerConfig(this, `BLOCKS_${envName}_ENDPOINT`, endpoint);
+    registerConfig(this, `BLOCKS_${envName}_REGION`, region);
 
-    // IAM grant — app Lambda gets DML-only access via custom DB role (least privilege)
-    this.handler.addToRolePolicy(new iam.PolicyStatement({
+    // IAM grant — the shared execution role gets DML-only access via custom DB
+    // role (least privilege).
+    this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dsql:DbConnect'],
       resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
     }));
 
     new cdk.CfnOutput(stack, `${this.fullId}DsqlEndpoint`, { value: endpoint });
 
-    // The app Lambda's IAM role ARN is needed to map the custom DB role.
-    const appRoleArn = this.handler.role!.roleArn;
+    // The shared execution role ARN is mapped to the custom DB role.
+    const appRoleArn = this.executionRole.roleArn;
 
     // Resolve migrations path if provided
     const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
