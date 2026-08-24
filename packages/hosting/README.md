@@ -136,9 +136,12 @@ npx hosting-typegen --watch   # regenerate on every save (run alongside your dev
 npx hosting-typegen --check   # CI: fail if that file is stale
 ```
 
-Wire it once so it stays effortless: a `"predev": "hosting-typegen"` hook (fresh keys
-whenever you start dev) plus `--watch` as a parallel dev task (keys update as you type),
-and `hosting-typegen --check` in CI.
+**In a Blocks app you get this for free** — the Blocks dev server (`npm run dev`)
+auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself,
+so keys update as you type with no second command. (It's a no-op if the app declares
+no secrets, and never blocks the dev server.) For a standalone hosting app, run
+`hosting-typegen --watch` alongside your dev server, or add a `"predev"` hook. Either
+way, add `hosting-typegen --check` in CI to catch a stale committed file.
 
 It statically scans your `secret('...')` / `config('...')` calls (no app execution,
 no AWS credentials) and generates a `.d.ts` that narrows the getters to exactly your

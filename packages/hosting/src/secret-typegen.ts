@@ -301,6 +301,13 @@ export interface WatchOptions extends GenerateOptions {
 	readonly pollMs?: number;
 	/** Abort to tear down all watchers/timers (used by the CLI's Ctrl+C and by tests). */
 	readonly signal?: AbortSignal;
+	/**
+	 * `unref()` the watchers/timers so they never keep the process alive on their own.
+	 * Use when embedding in a longer-lived host (e.g. the Blocks dev server) so the
+	 * watcher can't block the host's shutdown. Leave `false` for the standalone
+	 * `--watch` CLI, whose only job is to stay alive and watch. @default false
+	 */
+	readonly unref?: boolean;
 }
 
 /**
@@ -346,10 +353,12 @@ export async function watchHostingValues(options: WatchOptions = {}): Promise<()
 	for (const dir of dirs) {
 		try {
 			const w = fsWatch(dir, { recursive: true }, schedule);
+			if (options.unref) w.unref();
 			cleanups.push(() => w.close());
 		} catch {
 			// Recursive watch unsupported here — poll instead.
 			const id = setInterval(schedule, options.pollMs ?? 1000);
+			if (options.unref) id.unref();
 			cleanups.push(() => clearInterval(id));
 		}
 	}

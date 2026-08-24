@@ -12,9 +12,7 @@
   "scripts": {
     "dev:api": "tsx watch aws-blocks/scripts/server.ts",
     "dev:next": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev",
-    "dev:typegen": "hosting-typegen --watch",
-    "dev": "concurrently \"npm:dev:typegen\" \"npm:dev:api\" \"npm:dev:next\"",
-    "predev": "hosting-typegen",
+    "dev": "concurrently \"npm:dev:api\" \"npm:dev:next\"",
     "build": "next build",
     "typegen": "hosting-typegen",
     "start": "next start",
