@@ -6,7 +6,7 @@
  * injecting their own `AuthEngine`.
  */
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthAction, BlocksAuth } from '@aws-blocks/auth-common';
 import type { AuthEngine, ExchangeInput, ExchangeResult, AuthorizeParams, AuthorizeParamsRequest, BearerRefreshResult } from './engine.js';
 import type {
@@ -641,10 +641,13 @@ function isValidUrl(s: string): boolean {
 	}
 }
 
-function notAuthenticated(): Error {
-	const err = new Error('Authentication required');
-	err.name = 'NotAuthenticatedException';
-	return err;
+function notAuthenticated(): ApiError {
+	// Must be an `ApiError` with `status: 401` so that the browser `handle401()`
+	// helper (and any `err.status === 401` check) matches after this crosses the
+	// JSON-RPC boundary. A bare `Error` serializes with code 500, which silently
+	// defeats the documented 401-redirect pattern. Mirrors AuthCognito's
+	// `requireAuth()`, which already throws `ApiError(401, NotAuthenticated)`.
+	return new ApiError('Authentication required', 401, { name: 'NotAuthenticatedException' });
 }
 
 function providerNotConfigured(name: string): Error {

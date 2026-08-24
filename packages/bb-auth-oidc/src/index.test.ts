@@ -7,7 +7,7 @@ import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
-import { clearRouteRegistry } from '@aws-blocks/core';
+import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import { handleDiscovery, handleJwks, handleAuthorize, handleAuthorizeSubmit, stubIssuerUrl } from './engines/stub-idp.js';
@@ -578,6 +578,28 @@ describe('requireAuth / checkAuth / getCurrentUser without session', () => {
 		await assert.rejects(
 			() => auth.requireAuth(ctx),
 			(e: Error) => e.name === AuthOIDCErrors.NotAuthenticated,
+		);
+	});
+
+	test('requireAuth throws an ApiError with status 401 (regression: handle401 / e.status===401 must match)', async () => {
+		// Regression for the "handle401 silently does nothing" bug. requireAuth()
+		// used to throw a bare Error (no status) named NotAuthenticatedException;
+		// over the JSON-RPC wire that serializes as code 500, so the documented
+		// `if (handle401(e, provider)) return;` redirect pattern never fired.
+		// The error MUST be an ApiError(401) — mirroring AuthCognito.requireAuth() —
+		// so both the in-process throw and the wire-decoded ApiError carry status 401.
+		const auth = new AuthOIDC(ROOT, unique('noauth401'), {
+			providers: [stubIdp({ name: unique('p') })],
+		});
+		const ctx = freshContext();
+		await assert.rejects(
+			() => auth.requireAuth(ctx),
+			(e: unknown) => {
+				assert.ok(e instanceof ApiError, `expected ApiError, got ${(e as { constructor?: { name?: string } })?.constructor?.name}`);
+				assert.strictEqual(e.status, 401, 'status must be 401 so handle401() and e.status===401 checks match');
+				assert.strictEqual(e.name, AuthOIDCErrors.NotAuthenticated, 'name must be preserved for isBlocksError()');
+				return true;
+			},
 		);
 	});
 

@@ -3,7 +3,8 @@
 
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { AuthOIDCClient, resolveApiBaseOrigin } from './index.browser.js';
+import { AuthOIDCClient, resolveApiBaseOrigin, handle401 } from './index.browser.js';
+import { ApiError } from '@aws-blocks/core/client';
 
 /**
  * Browser-client tests for `AuthOIDCClient.signIn()` redirect-target
@@ -651,5 +652,40 @@ describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)'
 		assert.strictEqual(signoutPosted, true, 'the server-side sign-out POST should still run');
 		assert.strictEqual(broadcasts.length, 0, 'no cross-tab broadcast should be attempted with no window');
 		assert.strictEqual(reloaded, false, 'no page reload server-side');
+	});
+});
+
+describe('handle401 — documented 401-redirect pattern', () => {
+	beforeEach(() => { installBrowserGlobals(CURRENT_PAGE); });
+	afterEach(() => { clearBrowserGlobals(); });
+
+	test('redirects to the provider sign-in route on a 401 ApiError (the requireAuth case)', () => {
+		// requireAuth() now throws ApiError(401, NotAuthenticatedException); across the
+		// JSON-RPC wire that arrives as an ApiError whose status is 401. Before the fix
+		// requireAuth threw a bare Error → serialized as code 500 → handle401 returned
+		// false and the app never redirected (the reported "silently does nothing" bug).
+		const err = new ApiError('Authentication required', 401, { name: 'NotAuthenticatedException' });
+		const handled = handle401(err, 'google');
+		assert.strictEqual(handled, true, 'handle401 must report it scheduled a redirect');
+		assert.strictEqual(navigatedTo, '/aws-blocks/auth/signin/google', 'should navigate to the provider sign-in route');
+	});
+
+	test('does not redirect on a non-401 error (returns false, no navigation)', () => {
+		const err = new ApiError('Boom', 500, { name: 'InternalError' });
+		const handled = handle401(err, 'google');
+		assert.strictEqual(handled, false);
+		assert.strictEqual(navigatedTo, '', 'must not navigate on a non-401');
+	});
+
+	test('regression: the pre-fix bare NotAuthenticated Error is NOT matched — why requireAuth must throw ApiError(401)', () => {
+		// This is exactly what the old notAuthenticated() produced. handle401 cannot
+		// act on it (not an ApiError, no status), which is the defect. The fix makes
+		// requireAuth throw ApiError(401) (see auth-oidc index.test.ts) so this shape
+		// no longer reaches callers.
+		const bare = new Error('Authentication required');
+		bare.name = 'NotAuthenticatedException';
+		const handled = handle401(bare, 'google');
+		assert.strictEqual(handled, false, 'a bare Error is not an ApiError(401) — handle401 cannot act on it');
+		assert.strictEqual(navigatedTo, '', 'no navigation for the un-typed error');
 	});
 });
