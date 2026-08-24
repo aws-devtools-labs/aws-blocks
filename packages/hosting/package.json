@@ -45,7 +45,8 @@
   "types": "dist/index.d.ts",
   "bin": {
     "hosting-secret": "./dist/secret-cli-bin.js",
-    "hosting-config": "./dist/config-cli-bin.js"
+    "hosting-config": "./dist/config-cli-bin.js",
+    "hosting-typegen": "./dist/typegen-cli-bin.js"
   },
   "scripts": {
     "build": "tsc --build && npm run bundle:handlers",
@@ -77,10 +78,14 @@
   "peerDependencies": {
     "@opennextjs/aws": ">=3.10.0",
     "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0"
+    "constructs": "^10.6.0",
+    "typescript": ">=5.3.0"
   },
   "peerDependenciesMeta": {
     "@opennextjs/aws": {
+      "optional": true
+    },
+    "typescript": {
       "optional": true
     }
   }

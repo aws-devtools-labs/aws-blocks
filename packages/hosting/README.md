@@ -124,6 +124,41 @@ the value in a `.env` file. On a deployed function it fetches + decrypts from it
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
 
+### Type-safe keys — autocomplete + typo errors, zero code
+
+By default `getSecret` / `getConfig` accept any `string`. Run `hosting-typegen`
+(wire it as `"typegen": "hosting-typegen"` and, ideally, a `"predev"` hook) to make
+them **type-safe with no call-site change**:
+
+```bash
+npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen --check   # CI: fail if that file is stale
+```
+
+It statically scans your `secret('...')` / `config('...')` calls (no app execution,
+no AWS credentials) and generates a `.d.ts` that narrows the getters to exactly your
+declared keys — so a typo, or reading a `config` key with `getSecret` (the wrong
+store), is a **compile error**, and your editor autocompletes the valid keys:
+
+```ts
+await getSecret('STRIPE_KEY'); // ✅ declared with secret()
+await getSecret('STRIPE_KYE'); // ❌ compile error — not a declared secret key
+```
+
+Add the generated file to your `tsconfig.json` `include` and let the tool own it
+(it is regenerated, never hand-edited):
+
+```jsonc
+{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
+```
+
+The keys come straight from your `secret()`/`config()` calls — the single source of
+truth — so the types can't drift from what you wired. The file is safe to delete
+(the keys just fall back to `string`) and safe to `.gitignore` and regenerate.
+Because it is derived only from string-literal keys, a `secret(myVar)` with a
+non-literal key is reported and skipped; and a synth-only `domain` / `connectionArn`
+key may appear in autocomplete even though it is not readable at runtime.
+
 ### Set the values (out of band, never in git)
 
 Standalone hosting apps get two bundled CLIs:

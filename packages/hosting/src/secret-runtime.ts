@@ -141,17 +141,68 @@ async function resolveValue(kind: ValueKind, key: string): Promise<string> {
 }
 
 /**
+ * Type-safe key registry for {@link getSecret} — **empty by default**, populated by
+ * declaration merging (module augmentation). When it has no members, `getSecret`
+ * accepts any `string` (the loose default); once keys are merged in, `getSecret`
+ * narrows to exactly those keys, giving editor autocomplete and a compile error on
+ * a typo. Nothing else changes — the value is still fetched from Secrets Manager at
+ * runtime.
+ *
+ * You normally never write this by hand: `npm run typegen` scans your app's
+ * `secret('...')` calls and generates a `.d.ts` that augments it. To do it manually:
+ *
+ * ```ts
+ * declare module '@aws-blocks/hosting' {
+ *   interface HostingSecretRegistry {
+ *     STRIPE_KEY: string;
+ *   }
+ * }
+ * ```
+ *
+ * @see {@link HostingConfigRegistry} for the `config()` / `getConfig` counterpart.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: intentionally empty — customers/codegen augment it via declaration merging.
+export interface HostingSecretRegistry {}
+
+/**
+ * Type-safe key registry for {@link getConfig} — the SSM/`config()` counterpart to
+ * {@link HostingSecretRegistry}. Empty by default (any `string`); augment it (via
+ * `npm run typegen` or by hand) to narrow `getConfig` to your declared config keys.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: intentionally empty — customers/codegen augment it via declaration merging.
+export interface HostingConfigRegistry {}
+
+/**
+ * The key type accepted by {@link getSecret}: the union of registered secret keys,
+ * or the open `string` when the registry is empty (unadopted apps keep the loose
+ * DX). `Extract<…, string>` keeps it cast-free (registry keys are always strings).
+ */
+export type SecretKey = keyof HostingSecretRegistry extends never
+	? string
+	: Extract<keyof HostingSecretRegistry, string>;
+
+/** The key type accepted by {@link getConfig} — see {@link SecretKey}. */
+export type ConfigKey = keyof HostingConfigRegistry extends never
+	? string
+	: Extract<keyof HostingConfigRegistry, string>;
+
+/**
  * Resolve a **secret** (AWS Secrets Manager) at runtime.
  *
  * **Local development.** Reads `process.env.KEY` first, so a `.env` file supplies
  * the value with no AWS call. On a deployed function it falls through to fetching
  * the wired secret from Secrets Manager.
  *
+ * **Type safety.** `key` is typed as {@link SecretKey}: by default any `string`, but
+ * once you run `npm run typegen` (which generates a `.d.ts` augmenting
+ * {@link HostingSecretRegistry} from your `secret('...')` calls) it narrows to your
+ * declared keys — you get autocomplete, and a typo becomes a compile error.
+ *
  * @param key - The logical name, exactly as passed to `secret('<key>')`.
  * @returns The decrypted plaintext value.
  * @throws If the key is neither in `process.env` nor backed by an injected locator.
  */
-export function getSecret(key: string): Promise<string> {
+export function getSecret(key: SecretKey): Promise<string> {
 	return resolveValue('secret', key);
 }
 
@@ -159,11 +210,14 @@ export function getSecret(key: string): Promise<string> {
  * Resolve a **config** value (SSM Parameter Store) at runtime. Same resolution
  * order as {@link getSecret} (env-first for local dev, then the injected locator).
  *
+ * **Type safety.** `key` is typed as {@link ConfigKey} — any `string` by default,
+ * narrowing to your declared config keys after `npm run typegen` (see {@link getSecret}).
+ *
  * @param key - The logical name, exactly as passed to `config('<key>')`.
  * @returns The value.
  * @throws If the key is neither in `process.env` nor backed by an injected locator.
  */
-export function getConfig(key: string): Promise<string> {
+export function getConfig(key: ConfigKey): Promise<string> {
 	return resolveValue('config', key);
 }
 

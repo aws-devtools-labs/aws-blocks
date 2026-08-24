@@ -72,5 +72,30 @@ export {
 	wireByo,
 	wireManagedValue,
 } from './secret-resolve.js';
-export { _resetSecretCache, _setSecretFetcher, getConfig, getSecret } from './secret-runtime.js';
+export {
+	_resetSecretCache,
+	_setSecretFetcher,
+	type ConfigKey,
+	getConfig,
+	getSecret,
+	type HostingConfigRegistry,
+	type HostingSecretRegistry,
+	type SecretKey,
+} from './secret-runtime.js';
+export {
+	DEFAULT_TYPEGEN_INCLUDE,
+	DEFAULT_TYPEGEN_MODULE,
+	DEFAULT_TYPEGEN_MODULES,
+	DEFAULT_TYPEGEN_OUT,
+	type DynamicCallSite,
+	type GenerateOptions,
+	generateHostingValuesDts,
+	renderHostingValuesDts,
+	type ScanResult,
+	scanValueKeys,
+	type TypegenCliDeps,
+	type TypegenOptions,
+	type TypegenResult,
+	runTypegenCli,
+} from './secret-typegen.js';
 export { FrameworkType, HostingProps, HostingResources } from './types.js';

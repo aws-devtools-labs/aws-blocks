@@ -14,6 +14,7 @@
     "dev:next": "BLOCKS_API_URL=http://localhost:3001/aws-blocks/api next dev",
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:next\"",
     "build": "next build",
+    "typegen": "hosting-typegen",
     "start": "next start",
     "test": "echo 'E2e tests run via root test:e2e:local and test:e2e:sandbox'",
     "test:local": "BLOCKS_TEST_ENV=local npx playwright test",
