@@ -35,6 +35,7 @@ import type {
   FrameworkType,
 } from '@aws-blocks/hosting';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
+import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { registerConfig } from './cdk/config-registry.js';
 import { getRegisteredRoutes } from './raw-route.js';
 
@@ -254,6 +255,16 @@ export interface HostingProps {
     cacheBehaviors?: number;
     edgeFunctions?: number;
     headerPolicies?: number;
+    /**
+     * Max chunks per KVS edge route table (routes / redirects / headers);
+     * ~25 entries per chunk, default 64 (≈1600 entries). Not an AWS quota —
+     * a self-imposed guard (KVS ≤5 MB + the edge function reads chunks
+     * sequentially per request). Raise only after measuring edge-function
+     * compute headroom (e.g. a very large `trailingSlash: true` site with
+     * many canonical-form redirects); lowering it fails synth sooner.
+     * @default 64
+     */
+    maxRouteChunks?: number;
   };
 
   /**
@@ -331,6 +342,7 @@ export interface HostingProps {
 
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
+  sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
 };
@@ -499,6 +511,19 @@ export class Hosting extends Construct {
       JSON.stringify({ _placeholder: true }),
     );
 
+    // ── 5a. Mark config.json as a no-cache path ─────────────────────
+    //    config.json is a fixed-name, mutable runtime-config file: it must
+    //    NOT inherit the content-hashed mutable-asset cache-control
+    //    (`s-maxage=31536000`) applied to `/assets/<hash>.js`. Registering it
+    //    as a no-cache path uploads the build-time placeholder with
+    //    `no-cache, no-store, must-revalidate` so an edge never caches it
+    //    long-term; the real config is deployed in step 8 with `max-age=60`.
+    const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
+    const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
+    manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
+      ? existingNoCachePaths
+      : [...existingNoCachePaths, configNoCachePath];
+
     // ── 5b. Inject static route for .blocks-sandbox config ──────────
     //    Insert a static route for /.blocks-sandbox/* so CloudFront
     //    serves config.json from S3 instead of routing to compute.
@@ -596,7 +621,18 @@ export class Hosting extends Construct {
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
         distribution: hosting.distribution,
-        distributionPaths: ['/.blocks-sandbox/*'],
+        // The skew-protection viewer-request CloudFront function rewrites the
+        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
+        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
+        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
+        // a no-op for config.json. Invalidate the post-rewrite key too. (The
+        // primary guard against staleness is step 5a's no-cache placeholder;
+        // this is defense-in-depth so a post-deploy invalidation actually
+        // clears any edge entry at its real key.)
+        distributionPaths: [
+          `/builds/${buildId}/.blocks-sandbox/*`,
+          '/.blocks-sandbox/*',
+        ],
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 

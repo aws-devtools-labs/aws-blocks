@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { Scope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
@@ -33,8 +33,6 @@ export class Database extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
     super(id, { parent: scope });
 
-    const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
-
     if (options?.connection) {
       // External database — skip provisioning, just grant permissions and inject env vars
       const conn = options.connection;
@@ -45,7 +43,7 @@ export class Database extends Scope {
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN`, conn.host);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_SECRET_ARN`, conn.secretArn);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_DATABASE`, conn.database);
-        grantExternalDataApi(this, this.fullId, conn, this.handler);
+        grantExternalDataApi(this, this.fullId, conn, this.executionRole);
       }
       // connectionString variant: AppSetting handles parameter creation, IAM grants, and env var injection.
 
@@ -67,8 +65,11 @@ export class Database extends Scope {
       snapshot: cdk.RemovalPolicy.SNAPSHOT,
     } as const;
 
-    // In sandbox mode, default to DESTROY so sandbox:destroy can clean up.
-    const defaultRemovalPolicy = isSandbox ? cdk.RemovalPolicy.DESTROY : undefined;
+    // Removal policy: the per-block option wins, otherwise the stack-wide
+    // `defaults` (sandbox → DESTROY so sandbox:destroy can clean up; production
+    // → RETAIN). Deletion protection is derived from the resolved policy in
+    // materialize() (protected unless DESTROY).
+    const defaultRemovalPolicy = this.defaults.removalPolicy;
 
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
@@ -76,6 +77,10 @@ export class Database extends Scope {
       databaseName,
       migrationsPath: options?.migrationsPath ? resolve(options.migrationsPath) : undefined,
       removalPolicy: options?.removalPolicy ? REMOVAL_POLICY_MAP[options.removalPolicy] : defaultRemovalPolicy,
+      // Read independently from defaults (not derived from removalPolicy), so
+      // an override like `{ ...production, deletionProtection: false }` is honored.
+      deletionProtection: this.defaults.deletionProtection,
+      postgresVersion: options?.postgresVersion,
     });
 
     // Inject config so DataApiEngine can read them at runtime
@@ -83,8 +88,18 @@ export class Database extends Scope {
       registerConfig(this, key, value);
     });
 
-    // Grant Data API permissions to the Lambda handler
-    infra.grantDataApi(this.handler);
+    // Grant Data API permissions to the shared execution role
+    infra.grantDataApi(this.executionRole);
+  }
+
+  /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed database.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope).
+   */
+  getEngine(): never {
+    return synthGuard('Database', 'getEngine');
   }
 
   /**

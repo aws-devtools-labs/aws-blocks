@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.1.11",
+  "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "author": "Amazon Web Services",
   "license": "Apache-2.0",
   "type": "module",
@@ -22,6 +31,10 @@
     "./cdk": {
       "types": "./dist/index.cdk.js",
       "default": "./dist/index.cdk.js"
+    },
+    "./cdk/internal": {
+      "types": "./dist/cdk/internal.d.ts",
+      "default": "./dist/cdk/internal.js"
     },
     "./client": "./dist/client/index.js",
     "./lambda-handler": "./dist/lambda-handler.js",
@@ -58,6 +71,7 @@
     "@types/cross-spawn": "^6.0.6",
     "@types/http-proxy": "^1.17.16",
     "@types/node": "^20.0.0",
+    "esbuild": "^0.27.0",
     "typescript": "^5.3.0",
     "unctx": "^2.0.0"
   },

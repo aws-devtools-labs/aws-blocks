@@ -69,6 +69,19 @@ export type {
 	UserAttribute,
 	ExternalUserPoolRef,
 	CodeDeliveryFn,
+	AdminOptions,
+	AdminAction,
+	AdminUser,
+	AdminCreateInit,
+	AdminUserFilter,
+	SetPasswordOptions,
+	GroupAdmin,
+	LifecycleAdmin,
+	AdminSurface,
+	AdminGetterOf,
+	AdminDisabled,
+	AdminGrants,
+	AdminActionGate,
 } from '@aws-blocks/bb-auth-cognito';
 
 /**
@@ -128,7 +141,7 @@ export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField, AuthAction
  * Full docs: `README.md` in the package directory above.
  */
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as KVPutOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
 
 /**
  * **Structured data storage with secondary indexes backed by DynamoDB.**
@@ -143,7 +156,7 @@ export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions,
  * Full docs: `README.md` in the package directory above.
  */
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
+export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 
 /**
  * **Real-time pub/sub messaging backed by AppSync Events.**
@@ -200,7 +213,7 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * Full docs: `README.md` in the package directory above.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult } from '@aws-blocks/bb-async-job';
+export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 
 /**
  * **AI agent with streaming, tool calling, and conversation persistence.**

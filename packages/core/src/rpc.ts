@@ -32,6 +32,28 @@ export type RpcParseResult =
 
 const VERSION = '2.0' as const;
 
+/**
+ * Maximum accepted request-body size, in bytes (10 MiB).
+ *
+ * Matches the payload limit API Gateway enforces in production (~10 MB for a
+ * REST API). In prod an oversized body is rejected by API Gateway at the edge —
+ * before the Lambda is invoked — so this guard's rejection path effectively
+ * runs on the dev/mock server, where there is no edge to stop it: an oversized
+ * body would otherwise buffer and wedge the local database (e.g. PGlite). By
+ * enforcing the *same* limit locally, the dev server rejects the same oversized
+ * body prod would 413 at the edge, instead of failing only in one environment.
+ * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
+ * and the dev server route through.
+ *
+ * Note: this value is the Lambda + API Gateway limit. It lives here (in the
+ * compute-agnostic parser) because Lambda is the only compute path today. When
+ * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
+ * become compute-aware — sourced from / overridden by the compute layer (via
+ * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
+ * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ */
+export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
+
 /** Reserved JSON-RPC error codes. */
 export const RpcErrorCode = {
   ParseError:     -32700,
@@ -89,6 +111,25 @@ export function decodeRpcResponse(body: unknown): unknown {
  * anything about the JSON-RPC spec.
  */
 export function parseRpcRequest(bodyText: string): RpcParseResult {
+  // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
+  // for the limit and its rationale.
+  if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
+    // Emit the real HTTP status (413) as the error code, not a reserved -32xxx:
+    // `decodeRpcResponse` maps a positive code straight to `ApiError.status`
+    // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
+    // so a caller's `e.status === 413` works. `name` (which crosses the wire,
+    // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
+    return {
+      ok: false,
+      response: errorResponse(
+        413,
+        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
+        null,
+        { name: 'PayloadTooLarge' },
+      ),
+    };
+  }
+
   let parsed: any;
   try {
     parsed = JSON.parse(bodyText || '{}');
@@ -118,15 +159,31 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const hasParams = Object.hasOwn(parsed, 'params');
+  if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
+    return {
+      ok: false,
+      response: errorResponse(
+        RpcErrorCode.InvalidParams,
+        'Invalid params: expected an array or object',
+        id,
+        { name: 'InvalidParams' },
+      ),
+    };
+  }
+
+  let args: unknown[] = [];
+  if (hasParams) {
+    args = Array.isArray(parsed.params) ? parsed.params : Object.values(parsed.params);
+  }
+
   return {
     ok: true,
     request: {
       apiNamespace: parsed.method.substring(0, dotIndex),
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
-      args: Array.isArray(parsed.params)
-        ? parsed.params
-        : Object.values(parsed.params ?? {}),
+      args,
       id,
     },
   };

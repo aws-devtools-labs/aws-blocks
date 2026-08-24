@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import {
   Alarm,
   ComparisonOperator,
@@ -9,6 +9,8 @@ import {
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
 import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
@@ -34,7 +36,16 @@ import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
  * cheap-by-default. When the user opts in we either create an SNS
  * topic and surface its ARN (so the user can subscribe), or attach
  * the user-supplied topic. Cost: pennies/month at idle, scales with
- * alarm-state changes (not requests).
+ * alarm-state changes (not requests), plus ~$1/month for the alarm
+ * topic's KMS key.
+ *
+ * The auto-created topic is always encrypted with a dedicated
+ * customer-managed KMS key. An AWS-managed key (`alias/aws/sns`)
+ * cannot be used: its policy is not editable and does not grant
+ * CloudWatch, so every alarm action fails with `KMSAccessDenied` and
+ * notifications are dropped silently. See `createAlarmTopicKey`.
+ * Callers who need different key management supply their own
+ * `snsTopic` (and own its encryption).
  */
 export type MonitoringConstructProps = {
   enabled: boolean;
@@ -63,12 +74,67 @@ export type MonitoringConstructProps = {
 };
 
 /**
+ * Create the customer-managed key that encrypts the alarm topic.
+ *
+ * CloudWatch calls KMS **directly** (not via SNS) when it publishes an
+ * alarm notification to an encrypted topic, so the key policy needs an
+ * explicit grant for the `cloudwatch.amazonaws.com` service principal.
+ * Without it the alarm action fails with `KMSAccessDenied` and the
+ * notification is dropped — the alarm still flips to ALARM in the
+ * console, so the failure is invisible until someone notices the page
+ * that never arrived. Account-root/IAM delegation (the only statement
+ * on the default `Key` policy, and the only one some policy injectors
+ * add) does NOT cover service principals.
+ *
+ * `resources: ['*']` is scoped to *this* key — a resource policy can
+ * only speak for the resource it is attached to, and this key is
+ * single-purpose (the alarm topic is its only user). The
+ * `aws:SourceAccount` guard blocks the cross-account confused-deputy
+ * case; it is `IfExists` because that key is only populated on direct
+ * service-principal calls, and a hard `StringEquals` would
+ * reintroduce the exact silent-deny this grant exists to prevent.
+ */
+const createAlarmTopicKey = (scope: Construct): Key => {
+  const key = new Key(scope, 'AlarmTopicKey', {
+    description:
+      'Encrypts CloudWatch alarm notifications published to the hosting alarm topic.',
+    enableKeyRotation: true,
+    // The key protects in-flight notifications only — nothing durable
+    // is lost with the stack, so don't leave a billable orphan behind.
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
+
+  key.addToResourcePolicy(
+    new iam.PolicyStatement({
+      sid: 'AllowCloudWatchAlarmsToPublishToEncryptedTopic',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal('cloudwatch.amazonaws.com')],
+      actions: ['kms:Decrypt', 'kms:GenerateDataKey*'],
+      resources: ['*'],
+      conditions: {
+        StringEqualsIfExists: {
+          'aws:SourceAccount': Stack.of(scope).account,
+        },
+      },
+    }),
+  );
+
+  return key;
+};
+
+/**
  * CloudWatch alarm wiring construct. See module-level doc-comment for
  * the rationale and the alarm set.
  */
 export class MonitoringConstruct extends Construct {
   /** SNS topic alarm actions are sent to. Undefined when monitoring is disabled. */
   readonly topic?: ITopic;
+  /**
+   * KMS key encrypting the auto-created alarm topic. Undefined when
+   * monitoring is disabled or when a BYO `snsTopic` is supplied.
+   * Exposed so callers can grant additional publishers on the key.
+   */
+  readonly encryptionKey?: IKey;
   /** All CloudWatch alarms created by this construct. */
   readonly alarms: Alarm[] = [];
 
@@ -83,7 +149,14 @@ export class MonitoringConstruct extends Construct {
       return;
     }
 
-    this.topic = props.snsTopic ?? new Topic(this, 'AlarmTopic');
+    if (props.snsTopic) {
+      this.topic = props.snsTopic;
+    } else {
+      this.encryptionKey = createAlarmTopicKey(this);
+      this.topic = new Topic(this, 'AlarmTopic', {
+        masterKey: this.encryptionKey,
+      });
+    }
     const action = new SnsAction(this.topic);
 
     if (props.distribution) {
