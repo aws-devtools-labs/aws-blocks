@@ -518,9 +518,12 @@ export class Hosting extends Construct {
       // C is scaffolded (profile + resolution + docs) but not yet wired
       // through L5/L6 — fail loudly rather than silently ignoring the knob.
       throw new Error(
-        "preview.bypassCdn is not implemented yet. It requires skipping the " +
-          "CloudFront distribution and exposing the SSR API Gateway URL directly " +
-          "(see docs/design/HOSTING-PREVIEW-MODE.md, approach C). Omit it for now.",
+        "preview.bypassCdn is not implemented yet. It skips the CloudFront " +
+          "distribution and serves directly (S3 website for static/SPA; " +
+          "API-Gateway single origin for SSR). It requires making " +
+          "HostingConstruct.distribution optional (a breaking change) and a " +
+          "public endpoint — see docs/design/HOSTING-PREVIEW-MODE.md §5c for the " +
+          "full plan. Omit it for now.",
       );
     }
     if (preview.enabled) {

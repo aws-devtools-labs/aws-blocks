@@ -171,6 +171,20 @@ Landed and unit-tested (`npm test` green; no regressions in the 295 existing hos
 
 **Still needs a real deploy to confirm (approach B2's runtime assumption):** whether OpenNext, given `placement: 'regional'` on a `runtime: 'edge'` function, emits a working regional Lambda (correct converter/wrapper for the Function-URL origin) and serves the route. Unit tests validate the CDK wiring, not OpenNext's build output. See §6.
 
+## 5c. Approach C — bypass CloudFront (full plan, static + SSR)
+
+Measurements (§5b + the PR validation) proved first-deploy wall-clock is dominated by CloudFront creation + Lambda-backed custom resources — **C is the only lever that reaches "seconds not minutes."** Reading the code surfaced three hard constraints that make C a focused, breaking feature (not a small knob):
+
+1. **`HostingConstruct.distribution` becomes optional** (`distribution?: Distribution`) — a **breaking public-type change**. Guard every use: DNS records (`createDnsRecords`), `DeployInvalidation`, the atomic-deploy `BucketDeployment` dependency, and `HostingResources.distribution`. In bypass mode there is no domain/DNS/WAF/invalidation.
+2. **The asset model is CloudFront-shaped.** Builds upload to `builds/<buildId>/` and CloudFront rewrites `/` → that prefix (atomic cutover). Without CloudFront that rewrite is gone, so:
+   - **Static/SPA:** upload the build to the bucket **root** (previews don't need atomic cutover) and serve via an **S3 static-website endpoint** (native index doc + error-doc SPA fallback). URL = `http://<bucket>.s3-website-<region>.amazonaws.com` (**HTTP only**).
+   - **SSR:** the rendered HTML references `/_next/static/*`. Two options:
+     - (a) **API-Gateway single origin** *(recommended)* — one REST API: `/{proxy+}` → SSR Lambda, `/_next/static/{proxy+}` → S3 GET integration. Single URL, no `assetPrefix`, no public bucket. Cost: a new API-GW wiring (binary media types for images/fonts) — essentially "CloudFront-lite".
+     - (b) **Function URL + `assetPrefix`→S3-website** — public Lambda Function URL (authType NONE) for SSR, assets from a public S3 website via Next `assetPrefix`. Simpler infra but needs the SSR bundle built with the `aws-apigw-v2` (Function URL) converter **and** app-level `assetPrefix` cooperation → fragile/non-transparent across frameworks. Not recommended as the default.
+3. **Public endpoint / bucket** is a **security-posture change**: unauthenticated Function URL and/or public-read S3. Account-level S3 Block Public Access (off in the validation account, but on in many corp accounts) can make the S3-website path undeployable — the API-Gateway single-origin (option a) avoids public buckets and is the portable choice.
+
+**Recommended build order:** (1) make `distribution` optional + guard uses; (2) static/SPA S3-website bypass (root upload + website bucket); (3) SSR via API-Gateway single origin. Ships behind `preview.bypassCdn`, off by default even under preview. **Breaking + security-touching → flag for maintainer review before merge** (AGENTS core rules 8/breaking-change + production-safety).
+
 ## 6. Experiment plan (§Execution step 3)
 
 Measure Phase-1 savings on a real app in `/Users/osamariz/playground/test-apps` before committing to the design:
