@@ -132,8 +132,13 @@ them **type-safe with no call-site change**:
 
 ```bash
 npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
 npx hosting-typegen --check   # CI: fail if that file is stale
 ```
+
+Wire it once so it stays effortless: a `"predev": "hosting-typegen"` hook (fresh keys
+whenever you start dev) plus `--watch` as a parallel dev task (keys update as you type),
+and `hosting-typegen --check` in CI.
 
 It statically scans your `secret('...')` / `config('...')` calls (no app execution,
 no AWS credentials) and generates a `.d.ts` that narrows the getters to exactly your

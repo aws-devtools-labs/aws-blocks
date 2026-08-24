@@ -91,11 +91,13 @@ export {
 	type GenerateOptions,
 	generateHostingValuesDts,
 	renderHostingValuesDts,
+	runTypegenCli,
 	type ScanResult,
 	scanValueKeys,
 	type TypegenCliDeps,
 	type TypegenOptions,
 	type TypegenResult,
-	runTypegenCli,
+	type WatchOptions,
+	watchHostingValues,
 } from './secret-typegen.js';
 export { FrameworkType, HostingProps, HostingResources } from './types.js';

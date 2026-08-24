@@ -30,6 +30,7 @@
  * @module
  */
 
+import { existsSync, watch as fsWatch } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import fg from 'fast-glob';
@@ -278,11 +279,98 @@ export async function generateHostingValuesDts(options: GenerateOptions = {}): P
 	return { ...scan, outFile, content, upToDate };
 }
 
+/** The non-glob directory prefix of an include glob (`aws-blocks/**` → `aws-blocks`). */
+function staticDirOf(glob: string): string {
+	const dir: string[] = [];
+	for (const seg of glob.split('/')) {
+		if (/[*?{}[\]]/.test(seg)) break;
+		dir.push(seg);
+	}
+	return dir.join('/') || '.';
+}
+
+/** Options for {@link watchHostingValues}. */
+export interface WatchOptions extends GenerateOptions {
+	/** Progress sink. Defaults to `console.log`. */
+	readonly log?: (msg: string) => void;
+	/** Error sink. Defaults to `console.error`. */
+	readonly error?: (msg: string) => void;
+	/** Debounce window (ms) before regenerating after a change. @default 150 */
+	readonly debounceMs?: number;
+	/** Poll interval (ms) used when recursive `fs.watch` is unavailable (Linux). @default 1000 */
+	readonly pollMs?: number;
+	/** Abort to tear down all watchers/timers (used by the CLI's Ctrl+C and by tests). */
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * Watch the scanned sources and regenerate the `.d.ts` whenever one changes — i.e.
+ * on save. Runs an initial generation immediately, then uses recursive `fs.watch`
+ * where supported (macOS/Windows) and falls back to polling (Linux). Regeneration
+ * is debounced and only writes when the content actually changes (so it can never
+ * self-trigger a loop).
+ *
+ * @param options - See {@link WatchOptions}.
+ * @returns A `stop()` that tears down all watchers/timers.
+ */
+export async function watchHostingValues(options: WatchOptions = {}): Promise<() => void> {
+	const log = options.log ?? ((m: string) => console.log(m));
+	const err = options.error ?? ((m: string) => console.error(m));
+	const cwd = options.cwd ?? process.cwd();
+	const include = options.include ?? DEFAULT_TYPEGEN_INCLUDE;
+	const rel = (p: string) => relative(cwd, p) || '.';
+
+	const regenerate = async (): Promise<void> => {
+		try {
+			const r = await generateHostingValuesDts(options);
+			if (!r.upToDate) {
+				log(
+					`hosting-typegen: regenerated ${rel(r.outFile)} (${r.secretKeys.length} secret + ${r.configKeys.length} config).`,
+				);
+			}
+		} catch (e) {
+			err(`hosting-typegen: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
+
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const schedule = (): void => {
+		if (timer) clearTimeout(timer);
+		timer = setTimeout(() => void regenerate(), options.debounceMs ?? 150);
+	};
+
+	await regenerate(); // initial
+
+	const dirs = [...new Set(include.map((g) => resolve(cwd, staticDirOf(g))))].filter(existsSync);
+	const cleanups: Array<() => void> = [];
+	for (const dir of dirs) {
+		try {
+			const w = fsWatch(dir, { recursive: true }, schedule);
+			cleanups.push(() => w.close());
+		} catch {
+			// Recursive watch unsupported here — poll instead.
+			const id = setInterval(schedule, options.pollMs ?? 1000);
+			cleanups.push(() => clearInterval(id));
+		}
+	}
+
+	const stop = (): void => {
+		if (timer) clearTimeout(timer);
+		for (const c of cleanups) c();
+	};
+	options.signal?.addEventListener('abort', stop, { once: true });
+
+	log(`hosting-typegen: watching ${dirs.map(rel).join(', ') || '(none)'} — regenerating on change. Ctrl+C to stop.`);
+	return stop;
+}
+
 /** Options for {@link runTypegenCli} beyond argv (injected for testing). */
 export interface TypegenCliDeps {
 	/** Where CLI messages go. Defaults to the real console. */
 	readonly log?: (msg: string) => void;
 	readonly error?: (msg: string) => void;
+	/** Abort to stop `--watch` (Ctrl+C wires this; tests use it to unblock). */
+	readonly signal?: AbortSignal;
 }
 
 /**
@@ -297,6 +385,7 @@ export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): 
 	const err = deps.error ?? ((m: string) => console.error(m));
 
 	let check = false;
+	let watch = false;
 	let out: string | undefined;
 	let cwd: string | undefined;
 	const include: string[] = [];
@@ -305,13 +394,14 @@ export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): 
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === '--check') check = true;
+		else if (a === '--watch' || a === '-w') watch = true;
 		else if (a === '--out') out = argv[++i];
 		else if (a === '--module') moduleSpecifiers.push(argv[++i]);
 		else if (a === '--cwd') cwd = argv[++i];
 		else if (a === '--include') include.push(argv[++i]);
 		else if (a === '--help' || a === '-h') {
 			log(
-				'Usage: hosting-typegen [--check] [--out <path>] [--include <glob>]... [--module <spec>]... [--cwd <dir>]',
+				'Usage: hosting-typegen [--check | --watch] [--out <path>] [--include <glob>]... [--module <spec>]... [--cwd <dir>]',
 			);
 			return 0;
 		} else {
@@ -320,13 +410,27 @@ export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): 
 		}
 	}
 
-	const result = await generateHostingValuesDts({
+	if (check && watch) {
+		err('hosting-typegen: --check and --watch are mutually exclusive.');
+		return 1;
+	}
+
+	const genOptions = {
 		cwd,
 		out,
 		moduleSpecifiers: moduleSpecifiers.length ? moduleSpecifiers : undefined,
 		include: include.length ? include : undefined,
-		write: !check,
-	});
+	};
+
+	if (watch) {
+		await watchHostingValues({ ...genOptions, log, error: err, signal: deps.signal });
+		// Stay alive until aborted (Ctrl+C in the CLI; the injected signal in tests).
+		return new Promise<number>((resolve) => {
+			deps.signal?.addEventListener('abort', () => resolve(0), { once: true });
+		});
+	}
+
+	const result = await generateHostingValuesDts({ ...genOptions, write: !check });
 
 	const rel = (p: string) => relative(cwd ?? process.cwd(), p) || p;
 	for (const site of result.dynamicCallSites) {

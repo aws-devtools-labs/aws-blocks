@@ -12,7 +12,19 @@ import {
 	renderHostingValuesDts,
 	runTypegenCli,
 	scanValueKeys,
+	watchHostingValues,
 } from './secret-typegen.js';
+
+/** Poll `probe` until it returns a truthy value or the timeout elapses. */
+async function waitFor<T>(probe: () => Promise<T | null>, timeoutMs = 3000): Promise<T | null> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const v = await probe();
+		if (v) return v;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	return null;
+}
 
 const tmpDirs: string[] = [];
 
@@ -147,5 +159,34 @@ void describe('generateHostingValuesDts()', () => {
 		await runTypegenCli(['--cwd', cwd], { log: () => {}, error: () => {} });
 		const code2 = await runTypegenCli(['--check', '--cwd', cwd], { log: () => {}, error: () => {} });
 		assert.equal(code2, 0);
+	});
+});
+
+void describe('watchHostingValues()', () => {
+	void it('regenerates when a scanned file changes; stop() tears down', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('K1');`,
+		});
+		// Low debounce + poll so it is fast on both fs.watch (macOS/Windows) and the
+		// polling fallback (Linux, where recursive fs.watch is unavailable).
+		const stop = await watchHostingValues({ cwd, debounceMs: 20, pollMs: 50, log: () => {}, error: () => {} });
+		try {
+			const outFile = join(cwd, '.blocks', 'hosting-values.d.ts');
+			assert.ok((await readFile(outFile, 'utf-8')).includes('"K1": string;'));
+
+			// Add a new key → the watcher should regenerate with it.
+			await writeFile(
+				join(cwd, 'aws-blocks', 'index.cdk.ts'),
+				`import { secret, config } from '@aws-blocks/hosting'; secret('K1'); config('C2');`,
+				'utf-8',
+			);
+			const updated = await waitFor(async () => {
+				const c = await readFile(outFile, 'utf-8').catch(() => '');
+				return c.includes('"C2": string;') ? c : null;
+			});
+			assert.ok(updated, 'watcher did not regenerate with the new config key');
+		} finally {
+			stop();
+		}
 	});
 });
