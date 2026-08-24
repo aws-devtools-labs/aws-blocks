@@ -3404,6 +3404,23 @@ void describe('HostingConstruct — preview edge→regional (B2)', () => {
       construct.computeFunctionUrls.has('edge1'),
       'regional edge route gets a Function URL origin',
     );
+    // The regional edge route must get a DEDICATED CloudFront behavior
+    // pointing at its Function URL origin (otherwise CloudFront routes it to
+    // the default server Lambda / KVS router and 500s — the deploy-found bug).
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({ PathPattern: '/edge/*' }),
+        ]),
+      }),
+    });
+    // …and the edge1 Function URL is granted CloudFront invoke (OAC).
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunctionUrl',
+      Principal: 'cloudfront.amazonaws.com',
+    });
+
     // Synth must succeed and produce a single stack (no support edge stack).
     const assembly = App.of(stack)!.synth();
     const edgeStacks = assembly.stacks.filter((s) =>

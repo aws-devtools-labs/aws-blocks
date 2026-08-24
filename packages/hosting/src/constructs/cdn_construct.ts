@@ -970,6 +970,72 @@ export class CdnConstruct extends Construct {
       }
     }
 
+    // ---- Regional compute-route behaviors (preview B2) ----
+    // A `runtime: 'edge'` route deployed with `placement: 'regional'` (preview
+    // edge→regional) becomes a SEPARATE regional Lambda fronted by an OAC
+    // Function URL — distinct from the SSR default compute (which rides the
+    // REST API). The KVS edge router only knows the shared server/image
+    // origins, so a request for such a route would fall through to the default
+    // server Lambda (which lacks the split route) and 500. Give each one a
+    // DEDICATED behavior (more specific than the default `*`, so it wins)
+    // pointing straight at its FunctionUrlOrigin. This mirrors the Lambda@Edge
+    // route handling above, but routes to a regional origin instead of
+    // attaching an edge function. The behavior also binds the origin so CDK
+    // materializes its OAC (an unreferenced origin is dropped).
+    const globalEdgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
+    // Names that are NOT dedicated split routes: the SSR primary compute
+    // (routed via the default behavior / KVS router — 'default'/'server' and
+    // whatever ssrComputeName resolved to) and image-optimization (reached via
+    // the KVS router/sentinel). Global edge routes attach a Lambda@Edge above.
+    const nonDirectNames = new Set<string>([
+      'default',
+      'server',
+      'image-optimization',
+      ...(ssrComputeName ? [ssrComputeName] : []),
+    ]);
+    const directComputeTargets = new Set(
+      (props.computeFunctionUrls
+        ? [...props.computeFunctionUrls.keys()]
+        : []
+      ).filter(
+        (name) => !nonDirectNames.has(name) && !globalEdgeTargets.has(name),
+      ),
+    );
+    if (directComputeTargets.size > 0) {
+      const directRoutes = manifest.routes
+        .filter((r) => directComputeTargets.has(r.target))
+        .map((r) => ({
+          route: r,
+          pattern: prependBasePath(manifest.basePath, r.pattern),
+        }))
+        .sort(
+          (a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern),
+        );
+      for (const { route, pattern } of directRoutes) {
+        if (pattern === '/*' || pattern === '*') {
+          throw new HostingError('RegionalComputeCatchAllUnsupportedError', {
+            message: `A regional compute route (target "${route.target}") is mapped to the catch-all pattern "${pattern}". CloudFront's default behavior is reserved for the KVS router, so a catch-all regional compute route cannot be wired as a dedicated behavior.`,
+            resolution:
+              'Give the route a specific path pattern (e.g. `/api/edge`, `/edge/*`), or route it through the SSR default compute.',
+          });
+        }
+        const origin = computeOrigins.get(route.target);
+        if (!origin) continue;
+        additionalBehaviors[pattern] = {
+          origin,
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: AllowedMethods.ALLOW_ALL,
+          // A regional edge route computes its response per request → opt out
+          // of the SSR s-maxage caching, matching the Lambda@Edge routes.
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          // Function URL origin (not S3) → the managed all-viewer-except-host
+          // policy is allowed and forwards the request the Lambda needs.
+          originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          responseHeadersPolicy: props.securityHeadersPolicy,
+        };
+      }
+    }
+
     // ---- Behavior-count cap (CloudFront hard limit, default 25) ----
     // Every entry in `additionalBehaviors` (sentinels + edge routes) is a real
     // CloudFront cache behavior and counts against the per-distribution cap
