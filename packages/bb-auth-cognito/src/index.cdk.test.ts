@@ -3,6 +3,10 @@
 
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { spawnSync } from 'node:child_process';
+import { rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -22,12 +26,17 @@ function synth(build: (stack: cdk.Stack) => void) {
 	// BlocksStack has a private ctor; build a plain Stack + placeholder Handler
 	// Lambda so AuthCognito can register config via the config registry.
 	const stack = new cdk.Stack(app, 'TestStack');
+	const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	});
 	const handler = new lambda.Function(stack, 'Handler', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
 		code: lambda.Code.fromInline('exports.handler = async () => {};'),
+		role: executionRole,
 	});
 	(stack as any).handler = handler;
+	(stack as any).executionRole = executionRole;
 	(globalThis as any).CURRENT_BLOCKS_STACK = stack;
 	try {
 		build(stack);
@@ -41,6 +50,65 @@ function synth(build: (stack: cdk.Stack) => void) {
 /** The CDK `Stack` has a `.id` property exactly like a BlocksStack, so `ScopeParent` accepts it once cast. */
 function scope(stack: cdk.Stack): ScopeParent {
 	return stack as unknown as ScopeParent;
+}
+
+/**
+ * Synth `AuthCognito` in a child process started with `--conditions=cdk` and
+ * return every DynamoDB table in the resulting template.
+ *
+ * Needed because this test file imports `./index.cdk.js` directly, which leaves
+ * nested blocks (`KVStore`, `AppSetting`) resolving to their mock entry points —
+ * those emit no CloudFormation. Only the real condition-based resolution shows
+ * the nested infrastructure a customer actually deploys.
+ *
+ * Runs against the built `dist/`, which the package's own test script requires
+ * anyway (`node --test dist/**\/*.test.js`).
+ */
+function synthUnderCdkConditions(): { id: string; timeToLive: unknown }[] {
+	const probe = join(dirname(fileURLToPath(import.meta.url)), `.cdk-ttl-probe.${process.pid}.mjs`);
+	writeFileSync(probe, `
+import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { Template } from 'aws-cdk-lib/assertions';
+import { finalizeConfigRegistry, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+
+const app = new cdk.App();
+const stack = new cdk.Stack(app, 'TestStack');
+const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+	assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+});
+const handler = new lambda.Function(stack, 'Handler', {
+	runtime: DEFAULT_NODE_RUNTIME,
+	handler: 'index.handler',
+	code: lambda.Code.fromInline('exports.handler = async () => {};'),
+	role: executionRole,
+});
+stack.handler = handler;
+stack.executionRole = executionRole;
+globalThis.CURRENT_BLOCKS_STACK = stack;
+new AuthCognito(stack, 'auth');
+finalizeConfigRegistry(stack, handler);
+
+const resources = Template.fromStack(stack).toJSON().Resources;
+const tables = Object.entries(resources)
+	.filter(([, r]) => r.Type === 'AWS::DynamoDB::Table')
+	.map(([id, r]) => ({ id, timeToLive: r.Properties.TimeToLiveSpecification }));
+console.log('__TABLES__' + JSON.stringify(tables));
+`);
+	try {
+		const result = spawnSync(process.execPath, ['--conditions=cdk', probe], { encoding: 'utf8' });
+		assert.strictEqual(
+			result.status,
+			0,
+			`real-CDK probe failed (build dist first: npm run build -w packages/bb-auth-cognito)\n${result.stderr}`,
+		);
+		const marker = result.stdout.split('__TABLES__')[1];
+		assert.ok(marker, `probe produced no table report\n${result.stdout}\n${result.stderr}`);
+		return JSON.parse(marker.trim());
+	} finally {
+		rmSync(probe, { force: true });
+	}
 }
 
 // ─── User Pool ──────────────────────────────────────────────────────────────
@@ -132,6 +200,15 @@ describe('AuthCognito (CDK) — user pool client', () => {
 		});
 	});
 
+	test('client enables PreventUserExistenceErrors (no username enumeration oracle)', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth');
+		});
+		template.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+			PreventUserExistenceErrors: 'ENABLED',
+		});
+	});
+
 	test('hosted-UI / OAuth flows are disabled (no implicit grant, no placeholder callback)', () => {
 		const template = synth((stack) => {
 			new AuthCognito(scope(stack), 'auth');
@@ -203,6 +280,20 @@ describe('AuthCognito (CDK) — session store', () => {
 		const customResources = template.findResources('Custom::CDKBucketDeployment');
 		const crKeys = Object.keys(customResources);
 		assert.ok(crKeys.length >= 1, 'Should have a BucketDeployment for config');
+	});
+
+	// Session records hold live Cognito refresh tokens, so the table must carry a
+	// TTL. That assertion needs the real CDK resolution, which this file cannot
+	// use (see the note above) — so synth it in a child process started with
+	// `--conditions=cdk`, exactly how a customer's `cdk synth` resolves it.
+	test('sessions table is provisioned with DynamoDB TTL enabled (real CDK resolution)', () => {
+		const tables = synthUnderCdkConditions();
+		assert.strictEqual(tables.length, 1, `expected exactly one DynamoDB table, got ${JSON.stringify(tables)}`);
+		assert.deepStrictEqual(
+			tables[0].timeToLive,
+			{ AttributeName: 'ttl', Enabled: true },
+			'the sessions table must expire session records instead of retaining refresh tokens forever',
+		);
 	});
 });
 
@@ -534,5 +625,100 @@ describe('AuthCognito (CDK) — enablePasskeys', () => {
 		]) {
 			assert.ok(flat.has(a), `missing IAM action ${a}`);
 		}
+	});
+});
+
+// ─── Admin surface IAM grant (opt-in) ─────────────────────────────────────────
+
+/** Collect every cognito-idp IAM action granted to any role in the template. */
+function grantedActions(template: Template): Set<string> {
+	const policies = template.findResources('AWS::IAM::Policy');
+	const statements = Object.values(policies).flatMap(
+		(p) => ((p as { Properties?: { PolicyDocument?: { Statement?: unknown[] } } })
+			.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[],
+	);
+	const flat = new Set<string>();
+	for (const s of statements) {
+		const actions = Array.isArray(s.Action) ? s.Action : s.Action ? [s.Action] : [];
+		for (const a of actions) if (typeof a === 'string') flat.add(a);
+	}
+	return flat;
+}
+
+const GROUP_ADMIN_ACTIONS = [
+	'cognito-idp:AdminAddUserToGroup',
+	'cognito-idp:AdminRemoveUserFromGroup',
+	'cognito-idp:AdminListGroupsForUser',
+	'cognito-idp:ListUsersInGroup',
+];
+const LIFECYCLE_ADMIN_ACTIONS = [
+	'cognito-idp:AdminCreateUser',
+	'cognito-idp:AdminDeleteUser',
+	'cognito-idp:AdminEnableUser',
+	'cognito-idp:AdminDisableUser',
+	'cognito-idp:AdminResetUserPassword',
+	'cognito-idp:AdminSetUserPassword',
+	'cognito-idp:AdminGetUser',
+	// Shared with the group slice — getUser reports group memberships, so the
+	// lifecycle slice must be self-sufficient for that read.
+	'cognito-idp:AdminListGroupsForUser',
+	'cognito-idp:ListUsers',
+	'cognito-idp:AdminUserGlobalSignOut',
+];
+// Actions granted by BOTH slices — excluded from the "does not grant the other
+// slice's actions" cross-checks below.
+const SHARED_ADMIN_ACTIONS = ['cognito-idp:AdminListGroupsForUser'];
+const groupOnlyActions = GROUP_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+const lifecycleOnlyActions = LIFECYCLE_ADMIN_ACTIONS.filter((a) => !SHARED_ADMIN_ACTIONS.includes(a));
+
+describe('AuthCognito (CDK) — admin IAM grant', () => {
+	test('no admin option → NO Admin* actions granted (least privilege)', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'] });
+		});
+		const actions = grantedActions(template);
+		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			assert.ok(!actions.has(a), `unexpected admin action granted without opt-in: ${a}`);
+		}
+	});
+
+	test("admin: {} (no actions) → grants both group + lifecycle actions", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: {} });
+		});
+		const actions = grantedActions(template);
+		for (const a of [...GROUP_ADMIN_ACTIONS, ...LIFECYCLE_ADMIN_ACTIONS]) {
+			assert.ok(actions.has(a), `missing admin action ${a}`);
+		}
+	});
+
+	test("actions: ['groups'] → grants group actions, not lifecycle-only actions", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['groups'] } });
+		});
+		const actions = grantedActions(template);
+		for (const a of GROUP_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing group action ${a}`);
+		for (const a of lifecycleOnlyActions) assert.ok(!actions.has(a), `unexpected lifecycle action ${a}`);
+	});
+
+	test("actions: ['lifecycle'] → grants lifecycle actions, not group-only actions", () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		});
+		const actions = grantedActions(template);
+		for (const a of LIFECYCLE_ADMIN_ACTIONS) assert.ok(actions.has(a), `missing lifecycle action ${a}`);
+		for (const a of groupOnlyActions) assert.ok(!actions.has(a), `unexpected group action ${a}`);
+	});
+
+	test("actions: ['lifecycle'] is self-sufficient for getUser's group read (regression)", () => {
+		// getUser is lifecycle-gated but reports group memberships via
+		// AdminListGroupsForUser. A lifecycle-only pool must therefore grant that
+		// action, or getUser 500s with IAM AccessDenied in the deployed runtime.
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', { groups: ['admins'], admin: { actions: ['lifecycle'] } });
+		});
+		const actions = grantedActions(template);
+		assert.ok(actions.has('cognito-idp:AdminGetUser'), 'lifecycle must grant AdminGetUser');
+		assert.ok(actions.has('cognito-idp:AdminListGroupsForUser'), 'lifecycle must grant AdminListGroupsForUser for getUser groups');
 	});
 });

@@ -39,7 +39,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
 			// grant read/write to the Blocks runtime Lambda.
 			this.bucket = s3.Bucket.fromBucketName(this, 'bucket', options.bucket.bucketName);
-			this.bucket.grantReadWrite(this.handler);
+			this.bucket.grantReadWrite(this.executionRole);
 			return;
 		}
 
@@ -84,6 +84,6 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			})),
 		});
 
-		this.bucket.grantReadWrite(this.handler);
+		this.bucket.grantReadWrite(this.executionRole);
 	}
 }

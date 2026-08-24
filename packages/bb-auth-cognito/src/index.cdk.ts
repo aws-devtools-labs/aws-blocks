@@ -21,13 +21,14 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
+
 import { Scope } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type {
+	AdminOptions,
 	AuthCognitoOptions,
 	PasswordPolicy,
 	SignInWith,
@@ -63,15 +64,18 @@ export * from './types.js';
  * Grants the Lambda `cognito-idp:*` scoped to this pool's ARN; the SSM
  * secret's IAM is granted by AppSetting itself.
  */
-export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
+export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions> extends Scope {
 	public readonly userPool: cognito.IUserPool;
 	public readonly userPoolClient: cognito.IUserPoolClient;
 	private readonly sessions: KVStore;
+	/** Admin opt-in, captured for the IAM grant in `grantCognitoPermissions`. */
+	private readonly adminOptions?: AdminOptions;
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope });
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
+		this.adminOptions = opts.admin;
 		const env = envVarNames(this.fullId);
 
 		// 0. Validate options. `USER_PASSWORD_AUTH` (classic) and `USER_AUTH`
@@ -234,6 +238,12 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> exte
 		this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
 			userPool: this.userPool,
 			generateSecret: false,
+			// Return a uniform error for "user doesn't exist" and "wrong
+			// password" so sign-in / forgot-password responses can't be used to
+			// enumerate which usernames are registered. Without this, Cognito
+			// leaks a distinct UserNotFoundException, which is an account-
+			// enumeration oracle. Amazon's recommended posture is ENABLED.
+			preventUserExistenceErrors: true,
 			// SDK + session-cookie auth only; the hosted UI is never used.
 			// Off by default CDK would enable the implicit grant and a
 			// placeholder example.com callback — unused attack surface.
@@ -273,15 +283,17 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> exte
 		new AppSetting(this, 'session-secret', { secret: true });
 
 		// 5. Session store (KVStore). Propagate `removalPolicy` so retain-mode
-		// customers don't lose live sessions on stack delete.
-		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy });
+		// customers don't lose live sessions on stack delete. TTL is enabled so
+		// session records — which hold live Cognito refresh tokens — expire with
+		// the session instead of accumulating forever; the runtime stamps each
+		// write with `now + sessionTtlSeconds`.
+		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
 
 		// 6. Env vars + IAM
-		const fn = this.handler as lambda.Function;
 		registerConfig(this, env.USER_POOL_ID, this.userPool.userPoolId);
 		registerConfig(this, env.CLIENT_ID, this.userPoolClient.userPoolClientId);
 		registerConfig(this, env.REGION, cdk.Stack.of(this).region);
-		this.grantCognitoPermissions(fn);
+		this.grantCognitoPermissions(this.executionRole);
 	}
 
 	/**
@@ -307,10 +319,10 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> exte
 
 	// ─── IAM helpers ──────────────────────────────────────────────────────
 
-	private grantCognitoPermissions(fn: lambda.Function): void {
+	private grantCognitoPermissions(role: iam.IRole): void {
 		const poolArn = this.userPool.userPoolArn;
 		// Client-facing actions — work on the signed-in user via their access token.
-		fn.addToRolePolicy(new iam.PolicyStatement({
+		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
@@ -344,8 +356,58 @@ export class AuthCognito<O extends AuthCognitoOptions = AuthCognitoOptions> exte
 			],
 			resources: [poolArn],
 		}));
+
+		// Admin surface — opt-in only. Omitting `admin` grants NO Admin*/List*
+		// actions, so the synthesized role is byte-identical to today. When
+		// present, `admin.actions` scopes the grant; an omitted `actions`
+		// grants both groups + lifecycle. The same `actions` value scopes the
+		// typed `auth.admin` surface, so grant and types cannot drift.
+		const admin = this.adminOptions;
+		if (admin) {
+			const adminActions = adminIamActions(admin.actions);
+			if (adminActions.length > 0) {
+				role.addToPrincipalPolicy(new iam.PolicyStatement({
+					actions: adminActions,
+					resources: [poolArn],
+				}));
+			}
+		}
 	}
 
+}
+
+/**
+ * Map `AdminOptions.actions` to the Cognito `Admin*` / `List*` IAM actions.
+ * Omitted `actions` grants both slices. Keep in lockstep with the runtime
+ * `GroupAdmin` / `LifecycleAdmin` method sets.
+ */
+function adminIamActions(actions?: readonly ('groups' | 'lifecycle')[]): string[] {
+	const groups = [
+		'cognito-idp:AdminAddUserToGroup',
+		'cognito-idp:AdminRemoveUserFromGroup',
+		'cognito-idp:AdminListGroupsForUser',
+		'cognito-idp:ListUsersInGroup',
+	];
+	const lifecycle = [
+		'cognito-idp:AdminCreateUser',
+		'cognito-idp:AdminDeleteUser',
+		'cognito-idp:AdminEnableUser',
+		'cognito-idp:AdminDisableUser',
+		'cognito-idp:AdminResetUserPassword',
+		'cognito-idp:AdminSetUserPassword',
+		'cognito-idp:AdminGetUser',
+		// getUser also reports the user's group memberships (AdminGetUser does
+		// not return them), so the lifecycle slice must be self-sufficient for
+		// that read. Shared with the `groups` slice, which also grants it.
+		'cognito-idp:AdminListGroupsForUser',
+		'cognito-idp:ListUsers',
+		'cognito-idp:AdminUserGlobalSignOut',
+	];
+	const enabled = actions ?? ['groups', 'lifecycle'];
+	const out: string[] = [];
+	if (enabled.includes('groups')) out.push(...groups);
+	if (enabled.includes('lifecycle')) out.push(...lifecycle);
+	return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -13,6 +13,20 @@ cat .blocks-sandbox/config.json
 
 In production with Hosting, browser requests go through CloudFront (same-origin at `/aws-blocks/api`), but `config.json` still contains the underlying API Gateway URL.
 
+### Over HTTP the config lives at `/.blocks-sandbox/config.json`
+
+The browser client fetches its config from the **dotted** path `/.blocks-sandbox/config.json`. `/config.json` is not a route in local dev or in production, so a 404 there tells you nothing:
+
+```bash
+curl http://localhost:3000/.blocks-sandbox/config.json
+# → {"apiUrl":"http://localhost:3000/aws-blocks/api","environment":"local"}
+
+curl -o /dev/null -w '%{http_code}\n' http://localhost:3000/config.json
+# → 404   (expected, this path never existed)
+```
+
+`{"_placeholder":true}` is also expected in one place: the Hosting construct writes that stub into the frontend build output during CDK synth so the static route exists while the real `apiUrl` is still an unresolved CloudFormation token, and the deploy uploads the resolved config over it. Seeing it in `dist/.blocks-sandbox/config.json`, or on the origin between synth and deploy, is not a broken config. A **deployed** origin still serving the stub after a successful deploy is a real bug.
+
 ## RPC Wire Protocol
 
 The typed client (`import { api } from 'aws-blocks'`) handles all RPC automatically. This section is for low-level troubleshooting only.
@@ -65,6 +79,9 @@ curl -X POST http://localhost:3000/aws-blocks/api \
 | HTTP 200 but `{"error":...}` in body | Normal JSON-RPC error response | Read `error.message` — not a routing problem |
 | `API 'foo' not found` | Namespace doesn't match any export name | Check your `export const` names in `aws-blocks/index.ts` |
 | `config.json` not found | Server not started or not deployed yet | Run `npm run dev` or `npm run sandbox` first |
+| 404 on `/config.json` | Wrong path, the config is served from a dotted directory | Use `GET /.blocks-sandbox/config.json` |
+| Config body is `{"_placeholder":true}` | Build-time stub in the frontend build output; the real config is uploaded at deploy | Nothing to fix pre-deploy. If a deployed origin serves it, re-run the deploy |
+| HTTP 200 but `{"error":{"code":-32600}}` on a batch | JSON-RPC batching (a top-level JSON array body) is not supported | Send one call per request |
 
 ## Server won't start
 

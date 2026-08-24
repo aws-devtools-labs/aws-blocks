@@ -185,12 +185,93 @@ async function addBlocksWorkspace(targetDir: string, options: {
   }
 }
 
-const AVAILABLE_TEMPLATES = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+// ─── Template discovery ─────────────────────────────────────────────────────
+//
+// Templates are the ONLY source of truth for the template list. Each template
+// under `templates/<name>/` ships a `package.json` with:
+//   {
+//     "blocksTemplate": "<name>",
+//     "blocksTemplateDescription": "One-line description shown in --help"
+//   }
+//
+// Adding a new template = drop a folder with a package.json containing those
+// two fields. The CLI's --help, validation, and error messages all pick it up
+// automatically — no other code changes required.
+//
+// An optional `blocksTemplateOverlayOnly: true` marks a template as an overlay
+// that's auto-selected when the CLI detects a matching existing project (e.g.
+// `amplify`) rather than a scaffoldable fresh-app starter; `createFreshProject`
+// rejects it up front. A folder whose package.json can't be read is still shown
+// in --help (flagged) but excluded from `--template` validation.
+//
+// Display order below is preserved from the previous hardcoded list so that
+// `--help` reads in the intended progression (default → bare → richer variants
+// → framework variants → overlays → demos). New templates default to
+// alphabetical after known ones. Update this array to reorder.
 
-function validateTemplateName(templateName: string): void {
-  if (!AVAILABLE_TEMPLATES.includes(templateName)) {
+type TemplateInfo = {
+  name: string;
+  description: string;
+  valid: boolean;
+  overlayOnly: boolean;
+};
+
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'nextjs', 'auth-cognito', 'amplify', 'demo'];
+
+let templateCatalogCache: TemplateInfo[] | null = null;
+
+async function loadTemplateCatalog(): Promise<TemplateInfo[]> {
+  if (templateCatalogCache) return templateCatalogCache;
+
+  const templatesDir = join(__dirname, '../templates');
+  const entries = await readdir(templatesDir, { withFileTypes: true });
+  const discovered: TemplateInfo[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const pkgPath = join(templatesDir, entry.name, 'package.json');
+    try {
+      const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
+      discovered.push({
+        name: entry.name,
+        description: typeof pkg.blocksTemplateDescription === 'string'
+          ? pkg.blocksTemplateDescription
+          : '(no description — add `blocksTemplateDescription` to this template\'s package.json)',
+        valid: true,
+        overlayOnly: pkg.blocksTemplateOverlayOnly === true,
+      });
+    } catch {
+      // Template folder without a readable package.json — surface it so it's
+      // discoverable, but flag that metadata is missing.
+      discovered.push({
+        name: entry.name,
+        description: '(no package.json — template metadata missing)',
+        valid: false,
+        overlayOnly: false,
+      });
+    }
+  }
+
+  // Sort by TEMPLATE_DISPLAY_ORDER, then any unknown templates alphabetically.
+  discovered.sort((a, b) => {
+    const aIdx = TEMPLATE_DISPLAY_ORDER.indexOf(a.name);
+    const bIdx = TEMPLATE_DISPLAY_ORDER.indexOf(b.name);
+    if (aIdx === -1 && bIdx === -1) return a.name.localeCompare(b.name);
+    if (aIdx === -1) return 1;
+    if (bIdx === -1) return -1;
+    return aIdx - bIdx;
+  });
+
+  templateCatalogCache = discovered;
+  return discovered;
+}
+
+async function validateTemplateName(templateName: string): Promise<void> {
+  const catalog = await loadTemplateCatalog();
+  const names = catalog.filter(t => t.valid).map(t => t.name);
+  if (!names.includes(templateName)) {
     console.error(`Error: Unknown template "${templateName}".`);
-    console.error(`Available templates: ${AVAILABLE_TEMPLATES.join(', ')}`);
+    console.error(`Available templates: ${names.join(', ')}`);
     process.exit(1);
   }
 }
@@ -198,7 +279,29 @@ function validateTemplateName(templateName: string): void {
 // ─── Fresh project creation ──────────────────────────────────────────────────
 
 async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
-  validateTemplateName(templateName);
+  await validateTemplateName(templateName);
+
+  // Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
+  // are auto-selected when the CLI finds a matching existing project and are
+  // flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
+  // overlay snippet — not a full standalone project (no `src/`, no `index.html`,
+  // no `gitignore`) — so a fresh scaffold would fail partway through the copy.
+  // Reject up front. Keying off the catalog flag (not a hardcoded name) means a
+  // new overlay template needs no change here — just the flag in its package.json.
+  const overlayEntry = (await loadTemplateCatalog()).find(t => t.name === templateName);
+  if (overlayEntry?.overlayOnly) {
+    console.error(`Error: The \`${templateName}\` template is an overlay that's auto-selected`);
+    console.error('when the CLI detects a compatible existing project. It cannot be');
+    console.error('scaffolded as a fresh app.');
+    console.error('');
+    console.error('To scaffold a fresh Blocks app, choose a different template:');
+    console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
+    console.error('');
+    console.error('To integrate Blocks into an existing project, run this from');
+    console.error('the project root:');
+    console.error('  npx @aws-blocks/create-blocks-app');
+    process.exit(1);
+  }
 
   // Read template package.json to get template name
   const templateDir = join(__dirname, '../templates', templateName);
@@ -556,7 +659,14 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
-function printUsage() {
+async function printUsage() {
+  const catalog = await loadTemplateCatalog();
+  const names = catalog.map(t => t.name);
+  const widest = catalog.length ? Math.max(...catalog.map(t => t.name.length)) : 0;
+  const templateList = catalog
+    .map(t => `    ${t.name.padEnd(widest)}   ${t.description}`)
+    .join('\n');
+
   console.log(`Usage: create-blocks-app [directory] [options]
 
 Create a new AWS Blocks app or add Blocks to an existing project.
@@ -581,15 +691,20 @@ Options:
                          starter app; when adding to an existing project it
                          selects which aws-blocks/ workspace to copy, e.g.
                          "nextjs" for a Next.js dev server (default: "default")
-                         Available templates: ${AVAILABLE_TEMPLATES.join(', ')}
+
+                         Available templates: ${names.join(', ')}
+
+${templateList}
+
   --skip-install         Skip installing dependencies
   -y, --yes              Skip confirmation prompts
   -h, --help             Show this help message
 
 Examples:
-  npx @aws-blocks/create-blocks-app            Add Blocks to current project
-  npx @aws-blocks/create-blocks-app .          Add Blocks to current project
-  npx @aws-blocks/create-blocks-app my-app     Create a standalone Blocks starter app
+  npx @aws-blocks/create-blocks-app                            Add Blocks to current project
+  npx @aws-blocks/create-blocks-app .                          Add Blocks to current project
+  npx @aws-blocks/create-blocks-app my-app                     Create a standalone Blocks starter app
+  npx @aws-blocks/create-blocks-app . --yes --template nextjs  Non-interactive scaffold with the Next.js template
 `);
 }
 
@@ -602,7 +717,7 @@ async function create() {
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help' || args[i] === '-h') {
-      printUsage();
+      await printUsage();
       process.exit(0);
     } else if (args[i] === '--template') {
       const value = args[i + 1];
@@ -633,7 +748,7 @@ async function create() {
     }
   }
 
-  validateTemplateName(templateName);
+  await validateTemplateName(templateName);
 
   const templatePkgVersion: string = JSON.parse(
     await readFile(join(__dirname, '../templates', templateName, 'package.json'), 'utf-8'),

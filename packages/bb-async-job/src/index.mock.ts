@@ -10,14 +10,27 @@ import type {
 	AsyncJobOptions,
 	SubmitOptions,
 	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors } from './errors.js';
+import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 export { AsyncJobErrors } from './errors.js';
-export type { AsyncJobContext, AsyncJobOptions, SubmitOptions, BatchSubmitResult } from './types.js';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	SubmitOptions,
+	BatchSubmitResult,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	WaitUntilCompleteOptions,
+} from './types.js';
 
 interface QueueEntry<T> {
 	jobId: string;
@@ -61,12 +74,22 @@ const MAX_BATCH_SIZE = 10;
  *
  * const { jobId } = await emailJob.submit({ to: 'alice@example.com' });
  * ```
+ *
+ * @example Observing state transitions
+ * ```typescript
+ * const job = new AsyncJob(scope, 'ingest', { handler, trackStatus: true });
+ *
+ * const { jobId } = await job.submit({ documentId: 'doc-1' });
+ * const status = await job.waitUntilComplete(jobId);
+ * status.transitions.map(t => t.state); // ['queued', 'processing', 'complete']
+ * ```
  */
 export class AsyncJob<T = unknown> extends Scope {
 	private handler: (payload: T, context: AsyncJobContext) => Promise<void>;
 	private schema?: StandardSchemaV1<T>;
 	private maxRetries: number;
 	private _id: string;
+	private _status?: JobStatusTracker;
 
 	// In-process queue state for dev server inspection
 	public readonly _queue: {
@@ -97,6 +120,57 @@ export class AsyncJob<T = unknown> extends Scope {
 			totalCompleted: 0,
 		};
 		registerSdkIdentifiers(this.fullId, { queueUrl: `mock-queue://${this.fullId}` });
+		if (options.trackStatus) {
+			this._status = new JobStatusTracker(this, this.log);
+		}
+	}
+
+	/** Throws unless this job was created with `trackStatus: true`. */
+	private requireStatus(): JobStatusTracker {
+		if (!this._status) throw statusNotTrackedError(this._id);
+		return this._status;
+	}
+
+	/**
+	 * Read a job's recorded status, including every state it has passed through.
+	 *
+	 * Requires `trackStatus: true`. Because `transitions` is append-only, a single
+	 * read after the job settled still shows the intermediate `processing` state,
+	 * so there is no need to slow the handler down to make it observable.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @returns The status record, or `null` if nothing is recorded for that id.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.getStatus(jobId);
+	 * if (status?.state === 'failed') console.error(status.error);
+	 * ```
+	 */
+	async getStatus(jobId: string): Promise<AsyncJobStatus | null> {
+		return this.requireStatus().get(jobId);
+	}
+
+	/**
+	 * Wait until a job reaches `complete` or `failed`.
+	 *
+	 * Requires `trackStatus: true`. Resolves on either terminal state — inspect
+	 * `state` and `error` on the returned record to tell them apart.
+	 *
+	 * @param jobId - Job identifier returned by `submit()`.
+	 * @param options - Optional. `timeoutMs` (default 30000), `pollIntervalMs` (default 250), `signal`.
+	 * @returns The final status record.
+	 * @throws {AsyncJobErrors.StatusNotTracked} If the job was created without `trackStatus: true`.
+	 * @throws {AsyncJobErrors.Timeout} If the job does not settle within `timeoutMs`.
+	 *
+	 * @example
+	 * ```typescript
+	 * const status = await job.waitUntilComplete(jobId, { timeoutMs: 60_000 });
+	 * ```
+	 */
+	async waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus> {
+		return this.requireStatus().waitUntilComplete(jobId, options);
 	}
 
 	/**
@@ -129,6 +203,8 @@ export class AsyncJob<T = unknown> extends Scope {
 			failedAt: null,
 			lastError: null,
 		};
+
+		await this._status?.recordQueued(jobId, sentAt);
 
 		if (delaySeconds > 0) {
 			console.log(`[AsyncJob:${this._id}] submitted job ${jobId} (delayed ${delaySeconds}s)`);
@@ -217,6 +293,8 @@ export class AsyncJob<T = unknown> extends Scope {
 			this._queue.pending = this._queue.pending.filter(e => e.jobId !== entry.jobId);
 			this._queue.processing.push(entry);
 
+			await this._status?.tryRecordTransition(entry.jobId, 'processing', entry.receiveCount);
+
 			const start = Date.now();
 			try {
 				await this.handler(entry.payload, {
@@ -226,6 +304,7 @@ export class AsyncJob<T = unknown> extends Scope {
 				});
 				this._queue.processing = this._queue.processing.filter(e => e.jobId !== entry.jobId);
 				this._queue.totalCompleted++;
+				await this._status?.tryRecordTransition(entry.jobId, 'complete', entry.receiveCount);
 				console.log(`[AsyncJob:${this._id}] completed job ${entry.jobId} (${Date.now() - start}ms)`);
 			} catch (error: any) {
 				this._queue.processing = this._queue.processing.filter(e => e.jobId !== entry.jobId);
@@ -235,6 +314,7 @@ export class AsyncJob<T = unknown> extends Scope {
 					entry.failedAt = new Date().toISOString();
 					entry.lastError = errorMsg;
 					this._queue.failed.push(entry);
+					await this._status?.tryRecordTransition(entry.jobId, 'failed', entry.receiveCount, errorMsg);
 					console.log(`[AsyncJob:${this._id}] job ${entry.jobId} moved to DLQ after ${this.maxRetries} attempts`);
 					console.log(`[AsyncJob:${this._id}] DLQ payload: ${JSON.stringify(entry.payload)}`);
 				} else {

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "react",
+  "blocksTemplateDescription": "Vite + React 19 frontend with auth, DynamoDB, and realtime todo app",
   "engines": {
     "node": ">=22.0.0"
   },

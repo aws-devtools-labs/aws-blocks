@@ -1,0 +1,29 @@
+name: Issue Triage - Comment
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+
+jobs:
+  update-response-labels:
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPOSITORY_NAME: ${{ github.repository }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Swap to pending-maintainer-response when a community member comments on an open issue
+        if: ${{ !contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-community-response" --add-label "pending-maintainer-response"
+      - name: Move to awaiting-community when a maintainer comments on an open issue
+        if: ${{ contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state == 'open' && !github.event.issue.pull_request && !contains(github.event.issue.labels.*.name, 'pending-triage') }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-maintainer-response" --add-label "pending-community-response"
+      - name: Remove pending-maintainer-response when a maintainer comments on a closed issue
+        if: ${{ contains(fromJSON('["MEMBER", "OWNER", "COLLABORATOR"]'), github.event.comment.author_association) && github.event.issue.state != 'open' && !github.event.issue.pull_request }}
+        run: gh issue edit "$ISSUE_NUMBER" --repo "$REPOSITORY_NAME" --remove-label "pending-maintainer-response"

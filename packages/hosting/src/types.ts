@@ -19,6 +19,7 @@ export type FrameworkType =
   | 'nitro'
   | 'nuxt'
   | 'astro'
+  | 'sveltekit'
   | 'spa'
   | 'static'
   | (string & {});
