@@ -39,6 +39,14 @@ export type NextjsAdapterOptions = {
   configPath?: string;
   /** Skip the OpenNext build step (use pre-existing .open-next/ output) */
   skipBuild?: boolean;
+  /**
+   * B2 (preview) — generate the OpenNext edge-function block with
+   * `placement: 'regional'` so `runtime: 'edge'` routes build as regional
+   * Lambdas instead of Lambda@Edge. The resulting compute is recorded on the
+   * manifest with `placement: 'regional'`; the L3 construct honors it and
+   * skips `experimental.EdgeFunction` (no us-east-1 edge stack).
+   */
+  edgeToRegional?: boolean;
 };
 
 // ---- OpenNext output types (internal) ----
@@ -114,7 +122,7 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild } = options;
+  const { projectDir, configPath, skipBuild, edgeToRegional } = options;
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
@@ -146,7 +154,11 @@ export const nextjsAdapter = (
         runNextBuild(projectDir);
       }
       const edgeRoutes = detectEdgeRoutes(projectDir);
-      cleanupConfig = installGeneratedOpenNextConfig(projectDir, edgeRoutes);
+      cleanupConfig = installGeneratedOpenNextConfig(
+        projectDir,
+        edgeRoutes,
+        edgeToRegional,
+      );
     }
     try {
       runOpenNextBuild(projectDir, configPath);
@@ -215,7 +227,7 @@ export const nextjsAdapter = (
     );
   }
 
-  const manifest = translateOpenNextOutput(output, openNextDir);
+  const manifest = translateOpenNextOutput(output, openNextDir, edgeToRegional);
 
   // Lift simple Next.js redirects() / headers() rules out of the OpenNext
   // Lambda and into CloudFront. This eliminates a Lambda invocation for
@@ -1095,9 +1107,10 @@ const validateUserOpenNextConfig = (
 const installGeneratedOpenNextConfig = (
   projectDir: string,
   edgeRoutes: EdgeRoute[] = [],
+  edgeToRegional = false,
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
-  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes);
+  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, edgeToRegional);
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
   // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
@@ -1169,7 +1182,10 @@ export default config;
  * no API Gateway in front, so the body-hash 403 issue doesn't apply
  * here (Lambda@Edge invocation isn't OAC-signed by CloudFront).
  */
-const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
+const renderEdgeFunctionsBlock = (
+  edgeRoutes: EdgeRoute[],
+  edgeToRegional = false,
+): string => {
   if (edgeRoutes.length === 0) return '';
   // Escape backslashes first (so the slash inserted by quote-escape isn't
   // itself doubled), then escape single quotes. Without this CodeQL flags
@@ -1177,14 +1193,25 @@ const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
   // emit invalid JS into the generated open-next.config.ts.
   const quote = (s: string) =>
     `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  // B2 (preview): keep the Next.js edge RUNTIME (the route source demands it)
+  // but flip WHERE it runs. `placement: 'regional'` makes OpenNext emit the
+  // function as a regular regional Lambda origin (served via a Function URL),
+  // not a Lambda@Edge replica — so no us-east-1 edge-lambda-stack. The
+  // regional origin is HTTP-invoked, so it uses the Function-URL converter
+  // (`aws-apigw-v2`) + streaming wrapper, matching how OpenNext fronts a
+  // regional split function. `placement: 'global'` keeps the production
+  // Lambda@Edge path (`aws-cloudfront` origin-request converter).
+  const placement = edgeToRegional ? 'regional' : 'global';
+  const override = edgeToRegional
+    ? "converter: 'aws-apigw-v2',\n        wrapper: 'aws-lambda-streaming',"
+    : "converter: 'aws-cloudfront',\n        wrapper: 'aws-lambda',";
   const entries = edgeRoutes
     .map(
       (route, i) => `    edge${i + 1}: {
       runtime: 'edge',
-      placement: 'global',
+      placement: '${placement}',
       override: {
-        converter: 'aws-cloudfront',
-        wrapper: 'aws-lambda',
+        ${override}
       },
       routes: [${quote(route.module)}],
       patterns: [${quote(route.pattern)}],
@@ -1899,6 +1926,7 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
 const translateOpenNextOutput = (
   output: OpenNextOutput,
   openNextDir: string,
+  edgeToRegional = false,
 ): DeployManifest => {
   const manifest: DeployManifest = {
     version: 1,
@@ -1948,14 +1976,30 @@ const translateOpenNextOutput = (
       ];
       const bundle = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
 
-      manifest.compute[name] = {
-        type: 'edge',
-        bundle,
-        handler: fn.handler ?? 'index.handler',
-        placement: 'global',
-        streaming: false,
-        runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
-      };
+      // B2 (preview): when we asked OpenNext for `placement: 'regional'`,
+      // record the compute as a regional handler so the L3 construct builds a
+      // normal in-region Lambda (with a Function URL origin) instead of
+      // `experimental.EdgeFunction`. OpenNext normally moves a regional split
+      // function into `output.origins` (caught by the loop above), but honor
+      // the flag here too so the manifest is correct regardless of which
+      // section OpenNext emits it under.
+      manifest.compute[name] = edgeToRegional
+        ? {
+            type: 'handler',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'regional',
+            streaming: true,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          }
+        : {
+            type: 'edge',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'global',
+            streaming: false,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          };
     }
   }
 

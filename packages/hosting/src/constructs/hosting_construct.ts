@@ -192,6 +192,14 @@ export type HostingConstructProps = {
       countries: string[];
     };
     /**
+     * Whether to create the deploy-time CloudFront invalidation that flushes
+     * the previous build's cached HTML after an SSR deploy. Defaults to
+     * `true`. Set `false` for a fresh/throwaway distribution (preview
+     * `fastTeardown`) where nothing is cached yet — skips one custom resource.
+     * @default true
+     */
+    deployInvalidation?: boolean;
+    /**
      * Default TTL for SSR/compute cache behaviors when the origin response
      * does not include a `Cache-Control` header. Set this to enable
      * CloudFront edge caching of SSR responses and improve hit ratio.
@@ -447,7 +455,14 @@ export class HostingConstruct extends Construct {
     const hasCompute = computeEntries.length > 0;
 
     for (const [name, resource] of computeEntries) {
-      if (resource.type === 'edge') {
+      // Honor the manifest `placement` contract: a `type: 'edge'` resource is
+      // built as Lambda@Edge ONLY when placement is global. `placement:
+      // 'regional'` (preview B2 — edge routes moved off Lambda@Edge) falls
+      // through to the regional-Lambda path below, so no us-east-1 edge stack
+      // is created. The adapter normally also downgrades `type` to 'handler'
+      // for regional edge routes; this guard keeps the construct correct even
+      // if a manifest carries `type: 'edge'` with regional placement.
+      if (resource.type === 'edge' && resource.placement !== 'regional') {
         const edgeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
           name,
           computeResource: resource,
@@ -1156,6 +1171,7 @@ export class HostingConstruct extends Construct {
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
+      deployInvalidation: props.cdn?.deployInvalidation,
       customErrorPages: props.errorPages
         ? {
             notFound: !!props.errorPages.notFound,

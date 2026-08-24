@@ -209,7 +209,15 @@ export class ComputeConstruct extends Construct {
             removalPolicy: RemovalPolicy.DESTROY,
           });
 
-    if (computeResource.type === 'handler') {
+    // B2 (preview) — a `type: 'edge'` resource with `placement: 'regional'`
+    // keeps the Next.js edge runtime bundle but runs as an ordinary regional
+    // Lambda (fronted by a Function URL) instead of Lambda@Edge. Placement is
+    // the source of truth for WHERE it runs, so route it through the plain
+    // handler builder below and skip the `experimental.EdgeFunction` path.
+    const isRegionalEdge =
+      computeResource.type === 'edge' && computeResource.placement === 'regional';
+
+    if (computeResource.type === 'handler' || isRegionalEdge) {
       // Native Lambda handler — no Web Adapter needed
       this.function = new LambdaFunction(this, 'Function', {
         runtime: this.resolveRuntime(computeResource.runtime, props.name),
@@ -325,8 +333,10 @@ export class ComputeConstruct extends Construct {
       });
     }
 
-    // Function URL — skipped for edge (unsupported) or SSR (REST API instead).
-    if (computeResource.type !== 'edge' && !props.skipFunctionUrl) {
+    // Function URL — skipped for Lambda@Edge (unsupported) or SSR (REST API
+    // instead). A regional-placed edge route (B2) IS a normal Lambda, so it
+    // gets a Function URL like any other regional compute origin.
+    if ((computeResource.type !== 'edge' || isRegionalEdge) && !props.skipFunctionUrl) {
       const invokeMode =
         computeResource.streaming !== false
           ? InvokeMode.RESPONSE_STREAM

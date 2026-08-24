@@ -190,6 +190,14 @@ export type CdnConstructProps = {
    * increase AWS has actually granted — see {@link QuotaOverrides}.
    */
   quotas?: QuotaOverrides;
+  /**
+   * Whether to create the deploy-time CloudFront invalidation on SSR deploys.
+   * Defaults to `true`. Set `false` for a fresh/throwaway distribution
+   * (preview `fastTeardown`) — nothing is cached yet, so the invalidation
+   * custom resource is pure overhead.
+   * @default true
+   */
+  deployInvalidation?: boolean;
 };
 
 // ---- Construct ----
@@ -1281,7 +1289,7 @@ export class CdnConstruct extends Construct {
     // first-time/cookieless visitor may still receive stale HTML is accepted).
     const invalidationPaths = manifest.invalidationPaths ??
       (hasCompute ? ['/*'] : []);
-    if (invalidationPaths.length > 0) {
+    if (props.deployInvalidation !== false && invalidationPaths.length > 0) {
       const invalidation = new AwsCustomResource(this, 'DeployInvalidation', {
         // CallerReference keyed on buildId so a NEW deploy (new buildId) issues
         // a fresh invalidation, while an unchanged buildId is a no-op (CFN sees

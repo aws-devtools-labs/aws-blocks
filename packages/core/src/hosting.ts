@@ -103,6 +103,81 @@ export type ComputeConfig = {
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
 
 /**
+ * Resolved deploy-mode decision for a single {@link Hosting} instance.
+ *
+ * "Preview mode" trades production-grade edge features for a faster deploy
+ * on ephemeral, throwaway environments (PR previews, per-branch sandboxes).
+ * The profile is resolved **once** in the {@link Hosting} constructor and
+ * fanned out to the adapter (build) and the L3 construct (infra). Every knob
+ * is independent and individually overridable, so adding a new preview
+ * optimization is a matter of adding one field here and honoring it at one
+ * seam — the construct never branches on "preview" itself, only on the
+ * concrete prop/manifest field each knob drives.
+ *
+ * See `docs/design/HOSTING-PREVIEW-MODE.md` for the full rationale.
+ */
+export interface PreviewProfile {
+  /** Master switch. When false, every knob below is off regardless of its own value. */
+  enabled: boolean;
+  /**
+   * A1 — skip prod-only, always-on resources that a preview never needs:
+   * CloudWatch monitoring (SNS/KMS/alarms), CloudFront access logging, and
+   * cookie skew protection. Each is still overridable by passing the
+   * corresponding prop explicitly.
+   */
+  trimResources: boolean;
+  /**
+   * A2 — optimize for a throwaway stack: skip the first-deploy CloudFront
+   * invalidation (nothing is cached yet on a fresh distribution). Fast
+   * teardown (`RemovalPolicy.DESTROY`) is applied at the app/stack level via
+   * a Mixin in the sandbox deploy path, so it is not re-applied here.
+   */
+  fastTeardown: boolean;
+  /**
+   * B2 — deploy Next.js `runtime: 'edge'` routes as **regional** Lambdas
+   * (`placement: 'regional'`) instead of Lambda@Edge, eliminating the
+   * us-east-1 `edge-lambda-stack` and its slow replication/teardown. The
+   * adapter records the placement on the manifest; the L3 construct honors it.
+   */
+  edgeToRegional: boolean;
+  /**
+   * C — skip the CloudFront distribution entirely and expose the SSR origin
+   * (API Gateway) URL directly. The biggest speedup but the largest divergence
+   * from production, so it stays **opt-in even when preview is enabled**.
+   */
+  bypassCdn: boolean;
+}
+
+/**
+ * Resolve the {@link PreviewProfile} from the user prop and CDK context.
+ *
+ * Precedence: an explicit `preview` prop wins; otherwise preview is enabled
+ * when the deploy sets `--context sandboxMode=true` (the sandbox deploy path
+ * already does). Each knob defaults to the master `enabled` value except
+ * `bypassCdn`, which is opt-in even under preview.
+ */
+export function resolvePreviewProfile(
+  preview: HostingProps['preview'],
+  node: Construct['node'],
+): PreviewProfile {
+  const sandbox = node.tryGetContext('sandboxMode') === 'true';
+  const obj = typeof preview === 'object' ? preview : undefined;
+  const enabled =
+    typeof preview === 'boolean' ? preview : (obj?.enabled ?? sandbox);
+  // A knob is on only when the master switch is on AND the knob isn't
+  // explicitly overridden to false.
+  const knob = (override: boolean | undefined, dflt: boolean) =>
+    enabled && (override ?? dflt);
+  return {
+    enabled,
+    trimResources: knob(obj?.trimResources, true),
+    fastTeardown: knob(obj?.fastTeardown, true),
+    edgeToRegional: knob(obj?.edgeToRegional, true),
+    bypassCdn: knob(obj?.bypassCdn, false),
+  };
+}
+
+/**
  * Structural interface for the Blocks backend stack.
  *
  * Accepts any object that exposes an `apiUrl` — typically a {@link BlocksStack}
@@ -336,6 +411,37 @@ export interface HostingProps {
    * @default { enabled: true }
    */
   skewProtection?: SkewProtectionConfig;
+
+  /**
+   * Preview (fast-deploy) mode for ephemeral environments — PR previews and
+   * per-branch sandboxes. Trades production-grade edge features for a faster
+   * deploy. Resolves to a {@link PreviewProfile}.
+   *
+   * - `true` / `false` — enable or disable every knob at once.
+   * - object — enable preview and override individual knobs, e.g.
+   *   `{ edgeToRegional: false }` to keep Lambda@Edge, or
+   *   `{ bypassCdn: true }` to also skip the CloudFront distribution.
+   * - **omitted** — preview auto-enables when the deploy sets
+   *   `--context sandboxMode=true` (the sandbox deploy path does this), and is
+   *   off otherwise. Production deploys are never affected.
+   *
+   * When on, defaults to: skip CloudWatch monitoring, CloudFront access
+   * logging, and skew protection (A1); skip the first-deploy invalidation
+   * (A2); and deploy `runtime: 'edge'` routes as regional Lambdas instead of
+   * Lambda@Edge (B2). `bypassCdn` (C) stays opt-in even under preview.
+   *
+   * @example
+   * ```ts
+   * // auto: preview when deployed as a sandbox, prod otherwise
+   * new Hosting(stack, 'Web', { root, api: blocksStack });
+   *
+   * // force preview but keep edge routes on Lambda@Edge
+   * new Hosting(stack, 'Web', { root, preview: { edgeToRegional: false } });
+   * ```
+   *
+   * @default derived from the `sandboxMode` CDK context
+   */
+  preview?: boolean | ({ enabled?: boolean } & Partial<Omit<PreviewProfile, 'enabled'>>);
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -404,6 +510,26 @@ export class Hosting extends Construct {
 
     const root = resolve(props.root);
 
+    // ── 0. Resolve deploy mode (preview profile) ─────────────────
+    //    Resolved once, fanned out to the adapter (build) and the L3
+    //    construct (infra). See PreviewProfile for the per-knob contract.
+    const preview = resolvePreviewProfile(props.preview, this.node);
+    if (preview.bypassCdn) {
+      // C is scaffolded (profile + resolution + docs) but not yet wired
+      // through L5/L6 — fail loudly rather than silently ignoring the knob.
+      throw new Error(
+        "preview.bypassCdn is not implemented yet. It requires skipping the " +
+          "CloudFront distribution and exposing the SSR API Gateway URL directly " +
+          "(see docs/design/HOSTING-PREVIEW-MODE.md, approach C). Omit it for now.",
+      );
+    }
+    if (preview.enabled) {
+      console.log(
+        `🏃 Hosting preview mode: trimResources=${preview.trimResources} ` +
+          `fastTeardown=${preview.fastTeardown} edgeToRegional=${preview.edgeToRegional}`,
+      );
+    }
+
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
 
@@ -457,7 +583,15 @@ export class Hosting extends Construct {
     if (props.api?.apiUrl) {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
-    const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
+    const adapter =
+      props.customAdapter ??
+      getAdapter(framework, buildOutputDir, {
+        // B2: when on, the Next.js adapter emits `runtime: 'edge'` routes with
+        // `placement: 'regional'` so they deploy as regional Lambdas, not
+        // Lambda@Edge. The manifest carries the placement; the L3 construct
+        // honors it.
+        edgeToRegional: preview.edgeToRegional,
+      });
     const manifest: DeployManifest = adapter(root);
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
@@ -556,6 +690,33 @@ export class Hosting extends Construct {
         }
       : undefined;
 
+    // A1 — in preview, default the always-on, prod-only resources to OFF.
+    // An explicit user prop always wins (so `monitoring: { enabled: true }`
+    // re-enables it even in a preview).
+    const trimmedMonitoring =
+      props.monitoring ?? (preview.trimResources ? { enabled: false } : undefined);
+    const trimmedLogging =
+      props.logging ?? (preview.trimResources ? { enabled: false } : undefined);
+    const trimmedSkewProtection =
+      props.skewProtection ?? (preview.trimResources ? { enabled: false } : undefined);
+
+    // A2 — skip the first-deploy CloudFront invalidation on a throwaway stack.
+    // Only meaningful alongside the existing cdn props, so fold it in.
+    const cdnProps: HostingConstructProps['cdn'] =
+      props.contentSecurityPolicy ||
+      props.priceClass ||
+      props.geoRestriction ||
+      props.quotas ||
+      preview.fastTeardown
+        ? {
+            contentSecurityPolicy: props.contentSecurityPolicy,
+            priceClass: props.priceClass,
+            geoRestriction: props.geoRestriction,
+            quotas: props.quotas,
+            ...(preview.fastTeardown ? { deployInvalidation: false } : {}),
+          }
+        : undefined;
+
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
@@ -564,19 +725,12 @@ export class Hosting extends Construct {
       storage: props.retainOnDelete != null
         ? { retainOnDelete: props.retainOnDelete }
         : undefined,
-      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas)
-        ? {
-            contentSecurityPolicy: props.contentSecurityPolicy,
-            priceClass: props.priceClass,
-            geoRestriction: props.geoRestriction,
-            quotas: props.quotas,
-          }
-        : undefined,
-      logging: props.logging,
+      cdn: cdnProps,
+      logging: trimmedLogging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
-      monitoring: props.monitoring,
-      skewProtection: props.skewProtection,
+      monitoring: trimmedMonitoring,
+      skewProtection: trimmedSkewProtection,
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);

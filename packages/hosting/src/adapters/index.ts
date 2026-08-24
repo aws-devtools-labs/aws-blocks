@@ -182,15 +182,41 @@ export const detectFramework = (projectDir: string): string => {
 };
 
 /**
+ * Deploy-mode options that influence how an adapter builds/emits a manifest.
+ *
+ * Kept separate from framework-specific adapter options so the orchestrator
+ * (`Hosting`) can pass one deploy-mode object regardless of framework; each
+ * adapter uses only the fields it understands.
+ */
+export interface AdapterBuildOptions {
+  /**
+   * B2 — deploy Next.js `runtime: 'edge'` routes as regional Lambdas
+   * (`placement: 'regional'`) instead of Lambda@Edge. Only the Next.js
+   * adapter acts on this; others ignore it.
+   */
+  edgeToRegional?: boolean;
+}
+
+/**
  * Get the adapter function for the given framework type.
  * @param framework - the framework type
  * @param buildOutputDir - explicit build output directory (for SPA/static)
+ * @param options - deploy-mode options (e.g. preview edge→regional)
  * @returns the adapter function
  */
 export const getAdapter = (
   framework: string,
   buildOutputDir?: string,
+  options?: AdapterBuildOptions,
 ): FrameworkAdapterFn => {
+  // Next.js is the only adapter that acts on AdapterBuildOptions today
+  // (edge→regional). Construct it directly so the options reach it, rather
+  // than through the zero-arg registry wrapper.
+  if (framework === 'nextjs') {
+    return (projectDir: string) =>
+      nextjsAdapter({ projectDir, edgeToRegional: options?.edgeToRegional });
+  }
+
   const entry = adapterRegistry.get(framework);
   if (!entry) {
     throw new HostingError('UnsupportedFrameworkError', {
