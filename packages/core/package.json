@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.1.18",
+  "version": "0.2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -31,6 +31,10 @@
     "./cdk": {
       "types": "./dist/index.cdk.js",
       "default": "./dist/index.cdk.js"
+    },
+    "./cdk/internal": {
+      "types": "./dist/cdk/internal.d.ts",
+      "default": "./dist/cdk/internal.js"
     },
     "./client": "./dist/client/index.js",
     "./lambda-handler": "./dist/lambda-handler.js",

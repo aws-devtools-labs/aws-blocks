@@ -74,10 +74,15 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   // A single IAM role that every Building Block grants to. Provisioned here so
   // it exists before the backend module is imported (Building Blocks reach it
   // via `scope.executionRole`). Block grants sit on the role's default (inline)
-  // policy, exactly as they did on the auto-generated NodejsFunction role.
+  // policy. AWSLambdaBasicExecutionRole is attached so the handler retains
+  // CloudWatch Logs permissions.
   //
-  // AWSLambdaBasicExecutionRole is attached explicitly because the auto-role
-  // included it by default — omitting it would silently break CloudWatch Logs.
+  // INVARIANT: this must be a mutable, framework-owned `iam.Role` — never an
+  // imported role (`Role.fromRoleArn`/`fromRoleName`), which is immutable by
+  // default. On an immutable role, every Building Block's `grant*()` /
+  // `addToPrincipalPolicy()` silently becomes a no-op (returns false, no error),
+  // so permissions would quietly vanish. If a bring-your-own-role option is ever
+  // added, it must resolve to a mutable role (`{ mutable: true }`).
   const executionRole = new iam.Role(scope, 'BlocksRole', {
     // CompositePrincipal (rather than a bare ServicePrincipal) so additional
     // compute types can assume this same shared role as they are introduced

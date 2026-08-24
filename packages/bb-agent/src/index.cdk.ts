@@ -30,7 +30,7 @@ export class Agent extends Scope {
 	constructor(scope: ScopeParent, id: string, config?: any) {
 		super(id, { parent: scope });
 
-		this.handler.addToRolePolicy(new PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],
 			resources: [
 				'arn:aws:bedrock:*::foundation-model/*',
