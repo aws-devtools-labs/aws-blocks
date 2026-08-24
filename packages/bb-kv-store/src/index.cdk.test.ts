@@ -17,24 +17,29 @@ import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from 
 import { KVStore } from './index.cdk.js';
 
 // Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
-// which exposes `handler` on a Lambda that lives inside a `cdk.Stack`. We
-// reproduce that here so KVStore can call grantReadWriteData(this.handler)
-// and still synth into a real stack. It also carries `defaults` — Building
-// Blocks resolve `scope.defaults` by walking up to the owning
-// BlocksStack/BlocksBackend, falling back to `globalThis.CURRENT_BLOCKS_STACK`,
-// which is this stub in these tests.
+// which exposes the shared `executionRole` (blocks grant to it) plus `handler`,
+// both living inside a `cdk.Stack`. We reproduce them here so KVStore can call
+// grantReadWriteData(this.executionRole) and still synth into a real stack. It
+// also carries `defaults` — Building Blocks resolve `scope.defaults` by walking
+// up to the owning BlocksStack/BlocksBackend, falling back to
+// `globalThis.CURRENT_BLOCKS_STACK`, which is this stub in these tests.
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
+  public readonly executionRole: cdk.aws_iam.IRole;
   public readonly id: string;
   public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
+    this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+      assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
     this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
       code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+      role: this.executionRole,
     });
   }
 }
