@@ -660,32 +660,27 @@ describe('handle401 — documented 401-redirect pattern', () => {
 	afterEach(() => { clearBrowserGlobals(); });
 
 	test('redirects to the provider sign-in route on a 401 ApiError (the requireAuth case)', () => {
-		// requireAuth() now throws ApiError(401, NotAuthenticatedException); across the
-		// JSON-RPC wire that arrives as an ApiError whose status is 401. Before the fix
-		// requireAuth threw a bare Error → serialized as code 500 → handle401 returned
-		// false and the app never redirected (the reported "silently does nothing" bug).
+		// The shape requireAuth() now throws (and the wire decodes to). Pre-fix it was
+		// a bare Error → serialized as 500 → handle401 no-op'd (the reported bug).
 		const err = new ApiError('Authentication required', 401, { name: 'NotAuthenticatedException' });
 		const handled = handle401(err, 'google');
-		assert.strictEqual(handled, true, 'handle401 must report it scheduled a redirect');
-		assert.strictEqual(navigatedTo, '/aws-blocks/auth/signin/google', 'should navigate to the provider sign-in route');
+		assert.strictEqual(handled, true);
+		assert.strictEqual(navigatedTo, '/aws-blocks/auth/signin/google');
 	});
 
 	test('does not redirect on a non-401 error (returns false, no navigation)', () => {
 		const err = new ApiError('Boom', 500, { name: 'InternalError' });
 		const handled = handle401(err, 'google');
 		assert.strictEqual(handled, false);
-		assert.strictEqual(navigatedTo, '', 'must not navigate on a non-401');
+		assert.strictEqual(navigatedTo, '');
 	});
 
-	test('regression: the pre-fix bare NotAuthenticated Error is NOT matched — why requireAuth must throw ApiError(401)', () => {
-		// This is exactly what the old notAuthenticated() produced. handle401 cannot
-		// act on it (not an ApiError, no status), which is the defect. The fix makes
-		// requireAuth throw ApiError(401) (see auth-oidc index.test.ts) so this shape
-		// no longer reaches callers.
+	test('regression: the pre-fix bare NotAuthenticated Error is NOT matched', () => {
+		// The old notAuthenticated() shape: not an ApiError, no status — the defect.
 		const bare = new Error('Authentication required');
 		bare.name = 'NotAuthenticatedException';
 		const handled = handle401(bare, 'google');
-		assert.strictEqual(handled, false, 'a bare Error is not an ApiError(401) — handle401 cannot act on it');
-		assert.strictEqual(navigatedTo, '', 'no navigation for the un-typed error');
+		assert.strictEqual(handled, false);
+		assert.strictEqual(navigatedTo, '');
 	});
 });

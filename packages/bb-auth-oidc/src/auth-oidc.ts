@@ -642,11 +642,9 @@ function isValidUrl(s: string): boolean {
 }
 
 function notAuthenticated(): ApiError {
-	// Must be an `ApiError` with `status: 401` so that the browser `handle401()`
-	// helper (and any `err.status === 401` check) matches after this crosses the
-	// JSON-RPC boundary. A bare `Error` serializes with code 500, which silently
-	// defeats the documented 401-redirect pattern. Mirrors AuthCognito's
-	// `requireAuth()`, which already throws `ApiError(401, NotAuthenticated)`.
+	// A bare `Error` serializes across the JSON-RPC boundary as code 500, so the
+	// browser's `handle401()` (which matches `status === 401`) never fires. Must
+	// be an `ApiError(401)`, like AuthCognito's `requireAuth()`.
 	return new ApiError('Authentication required', 401, { name: 'NotAuthenticatedException' });
 }
 
