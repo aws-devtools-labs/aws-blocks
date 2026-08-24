@@ -5,6 +5,11 @@ on:
     types: [closed]
     branches: [main]
 
+# Not cancellable: the job pushes a git tag, so a run must not die part-way.
+concurrency:
+  group: tag-swift-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
