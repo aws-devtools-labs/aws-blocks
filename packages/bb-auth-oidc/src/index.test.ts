@@ -474,6 +474,86 @@ describe('stub IdP /authorize', () => {
 		assert.strictEqual(cap.status, 400);
 	});
 
+	test('rejects redirect_uri whose query carries the reserved `scope` param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/spa-callback?scope=openid',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: contains reserved response param scope',
+		});
+	});
+
+	test('rejects redirect_uri whose query carries the reserved `state` param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/callback?state=abc',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: contains reserved response param state',
+		});
+	});
+
+	test('rejects redirect_uri whose query carries the reserved `error_description` param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/callback?error_description=x',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: contains reserved response param error_description',
+		});
+	});
+
+	test('accepts a differently-cased reserved param name, matching the real IdP', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?State=abc',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 302, 'capital-S `State` is a distinct, non-reserved query key');
+		assert.match(cap.headers.get('Location')!, /State=abc/);
+		assert.match(cap.headers.get('Location')!, /code=/);
+	});
+
+	test('rejects redirect_uri carrying a fragment', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/auth/callback#state=1',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 400);
+		assert.deepStrictEqual(cap.sent, {
+			error: 'invalid_request',
+			error_description: 'Invalid redirect_uri: must not contain a fragment',
+		});
+	});
+
+	test('accepts redirect_uri with a non-reserved query param', async () => {
+		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
+		const cap = authorizeContext('google', {
+			...baseParams,
+			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?tenant=acme',
+		});
+		await handleAuthorize(provider, cap.ctx);
+		assert.strictEqual(cap.status, 302);
+		assert.match(cap.headers.get('Location')!, /tenant=acme/);
+		assert.match(cap.headers.get('Location')!, /code=/);
+	});
+
 	test('login-form submit issues a code for the picked user', async () => {
 		const provider = stubIdp({ name: 'google' });
 		const form = new URLSearchParams({ ...baseParams, scope: 'openid email', sub: 'stub-google-user' });
