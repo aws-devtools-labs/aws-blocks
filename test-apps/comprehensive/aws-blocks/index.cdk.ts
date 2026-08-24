@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
-import { BlocksStack, SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -32,7 +31,13 @@ const stackName = sandboxMode
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
-  backendCDKPath: join(__dirname, 'index.ts')
+  backendCDKPath: join(__dirname, 'index.ts'),
+  // E2E test stacks must be fully deletable regardless of deploy mode, so pass
+  // the sandbox preset (DESTROY + no deletion protection) unconditionally. This
+  // replaces the previous `RemovalPolicies.of(...).destroy()` +
+  // `SandboxDisableDeletionProtection` mixin. A production app would use
+  // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
+  defaults: BlocksPresets.sandbox,
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
@@ -40,11 +45,6 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 if (process.env.E2E_FROM_EMAIL) {
   blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
-
-// E2E test stacks must be fully deletable regardless of deploy mode.
-// Production apps would only apply these in sandbox mode.
-RemovalPolicies.of(blocksStack).destroy();
-Mixins.of(blocksStack).apply(new SandboxDisableDeletionProtection());
 
 // Tag every taggable resource in the stack for easy identification and cleanup
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-test');

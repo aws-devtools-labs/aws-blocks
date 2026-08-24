@@ -38,6 +38,85 @@ export interface SandboxOptions {
   devCommand?: string;
 }
 
+export interface SandboxDeployArgsOptions {
+  /** Directory CDK writes stack outputs to (relative to the project root). */
+  outDir: string;
+  /** Project root passed to synth as `--context projectRoot=…` (usually `process.cwd()`). */
+  projectRoot: string;
+  /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
+  backendPath: string;
+}
+
+/**
+ * Build the `npm exec cdk -- deploy …` argv used by the sandbox deploy.
+ *
+ * Kept pure (no I/O) so the argv contract — in particular the flags below — can
+ * be asserted directly, the same way {@link buildCdkDeployArgs} is for the
+ * production path.
+ *
+ * - `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
+ *   `export const runtime = 'edge'`) synthesizes a SECOND stack
+ *   (`edge-lambda-stack-*`, region us-east-1) in addition to the main hosting
+ *   stack. Without `--all`, CDK refuses with "specify which stacks to use".
+ *   Deploying every stack in a sandbox app is the intended behavior.
+ * - `--method direct`: skip CloudFormation change-set creation and call
+ *   UpdateStack directly. This is the baseline sandbox deployment method that
+ *   `--express` builds on.
+ * - `--express` (**CloudFormation Express Mode — sandbox only**): the real
+ *   speedup. CloudFormation reports each stack operation complete as soon as
+ *   the resource's configuration is applied, WITHOUT waiting for full
+ *   stabilization. Because it skips stabilization it also disables automatic
+ *   rollback by default, so a failed deploy can leave the stack in a failed
+ *   state — acceptable for the throwaway sandbox iteration loop, never for
+ *   production. We leave rollback at Express Mode's default (off) and do NOT
+ *   pass `--rollback`. The production deploy path (`deploy.ts`) deliberately
+ *   uses neither `--express` nor `--method direct`: it keeps a reviewable
+ *   change set and full stabilization with rollback, which are exactly the
+ *   safety signals a production deploy should keep. Requires an aws-cdk CLI
+ *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
+ */
+export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "exec", "cdk", "--", "deploy",
+    "--all",
+    "--method", "direct",
+    "--express",
+    "--require-approval", "never",
+    "--outputs-file", `${outDir}/outputs.json`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+  ];
+}
+
+/**
+ * Operator-facing recovery guidance printed when a sandbox deploy fails.
+ *
+ * Express Mode (see {@link buildSandboxDeployArgs}) disables CloudFormation's
+ * automatic rollback, so a failed deploy does NOT clean up after itself: a
+ * failed *first* deploy leaves the stack in `CREATE_FAILED`/`ROLLBACK_COMPLETE`
+ * and a failed update can land in `UPDATE_ROLLBACK_FAILED`. In those states
+ * CloudFormation refuses the next `UpdateStack`, so a plain re-run of
+ * `npm run sandbox` would hit the same wall — a silent dead-end for the fast
+ * loop. This spells out the exact way out instead of leaving the operator to
+ * discover it via a cryptic CloudFormation error.
+ *
+ * Kept pure so it can be asserted in a unit test.
+ */
+export function sandboxFailureRecoveryHint(): string {
+  return [
+    "",
+    "ℹ️  Express Mode leaves failed sandbox stacks in place (automatic rollback is off).",
+    "   If the next `npm run sandbox` reports the stack cannot be updated, recover with:",
+    "",
+    "     npm run sandbox:destroy   # tears the failed stack down (handles ROLLBACK_COMPLETE)",
+    "     npm run sandbox           # redeploy from a clean slate",
+    "",
+    "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
+    "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
+  ].join("\n");
+}
+
 export async function startSandbox(options: SandboxOptions) {
   const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
   const sandboxStartTime = Date.now();
@@ -75,21 +154,9 @@ export async function startSandbox(options: SandboxOptions) {
   try {
     runSync(
       "npm",
-      [
-        "exec", "cdk", "--", "deploy",
-        // `--all`: an app that uses Lambda@Edge (e.g. a Next.js route with
-        // `export const runtime = 'edge'`) synthesizes a SECOND stack
-        // (`edge-lambda-stack-*`, region us-east-1) in addition to the main
-        // hosting stack. Without `--all`, CDK refuses with "specify which
-        // stacks to use". Deploying every stack in a sandbox app is the
-        // intended behavior, so select them all.
-        "--all",
-        "--require-approval", "never",
-        "--outputs-file", `${outDir}/outputs.json`,
-        "--context", `projectRoot=${process.cwd()}`,
-        "--context", "sandboxMode=true",
-        "--app", `npm exec tsx -- -C cdk ${backendPath}`,
-      ],
+      // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
+      // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
+      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
       {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
@@ -103,6 +170,7 @@ export async function startSandbox(options: SandboxOptions) {
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
     console.error("\n❌ Deployment failed.");
+    console.error(sandboxFailureRecoveryHint());
     throw error;
   }
 

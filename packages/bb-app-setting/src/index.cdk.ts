@@ -136,7 +136,7 @@ export class AppSetting<T = string> extends Scope {
 			// Grant handler KMS access for the default aws/ssm key. External secrets
 			// are read-only (Decrypt only); stack-managed secrets also need Encrypt
 			// so the app can write the value via put().
-			this.handler.addToRolePolicy(new iam.PolicyStatement({
+			this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 				actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
 				resources: ['*'],
 				conditions: {
@@ -159,7 +159,7 @@ export class AppSetting<T = string> extends Scope {
 
 		// Grant handler SSM access on this parameter. External parameters are owned
 		// elsewhere, so the app only reads them (no ssm:PutParameter).
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: external ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
 			resources: [parameterArn],
 		}));

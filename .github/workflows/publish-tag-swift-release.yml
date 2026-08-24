@@ -5,6 +5,11 @@ on:
     types: [closed]
     branches: [main]
 
+# Not cancellable: the job pushes a git tag, so a run must not die part-way.
+concurrency:
+  group: tag-swift-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -14,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/swift-')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

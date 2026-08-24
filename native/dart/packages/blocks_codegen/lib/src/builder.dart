@@ -1,7 +1,7 @@
 import 'model.dart';
 
-/// Resolved type system — output of the builder stage.
-
+/// A type after the builder has resolved `$ref`s, deduplicated structurally
+/// identical shapes, and assigned a Dart name to everything that needs one.
 sealed class ResolvedType {
   const ResolvedType();
 }
@@ -24,28 +24,39 @@ class ListType extends ResolvedType {
 }
 
 class RecordType extends ResolvedType {
+  /// Mutable: collision resolution rewrites this in place when two distinct
+  /// shapes claim the same name.
   String name;
   final List<RecordField> fields;
+
   final ResolvedType? additionalProperties;
-  RecordType(
-      {required this.name, required this.fields, this.additionalProperties});
+  RecordType({
+    required this.name,
+    required this.fields,
+    this.additionalProperties,
+  });
 }
 
 class RecordField {
   final String name;
   final ResolvedType type;
   final bool isRequired;
-  const RecordField(
-      {required this.name, required this.type, required this.isRequired});
+  const RecordField({
+    required this.name,
+    required this.type,
+    required this.isRequired,
+  });
 }
 
 class EnumType extends ResolvedType {
+  /// Mutable: rewritten in place by collision resolution.
   String name;
   final List<String> values;
   EnumType({required this.name, required this.values});
 }
 
 class SealedClassType extends ResolvedType {
+  /// Mutable: rewritten in place by collision resolution.
   String name;
   final String discriminant;
   final List<SealedVariant> variants;
@@ -81,6 +92,7 @@ class TransferableType extends ResolvedType {
 }
 
 class SchemaReference extends ResolvedType {
+  /// Mutable: kept in sync when the type it points at is renamed.
   String name;
   SchemaReference(this.name);
 }
@@ -97,8 +109,11 @@ class TupleType extends ResolvedType {
 
 /// A resolved operation (method) in the codegen model.
 class Operation {
+  /// The generated Dart method name, without the namespace.
   final String name;
-  final String fullName; // dotted name for RPC call
+
+  /// The dotted name sent on the wire, e.g. `api.createTodo`.
+  final String fullName;
   final List<OperationParam> params;
   final ResolvedType result;
   const Operation({
@@ -113,8 +128,11 @@ class OperationParam {
   final String name;
   final ResolvedType type;
   final bool isRequired;
-  const OperationParam(
-      {required this.name, required this.type, required this.isRequired});
+  const OperationParam({
+    required this.name,
+    required this.type,
+    required this.isRequired,
+  });
 }
 
 /// A namespace grouping operations.
@@ -124,17 +142,25 @@ class Namespace {
   const Namespace({required this.name, required this.operations});
 }
 
-/// The complete codegen model — ready for code generation.
+/// The complete codegen model, ready for code generation.
 class CodegenModel {
   final String title;
   final String version;
+
+  /// Operations grouped by their RPC name's namespace, meaning everything
+  /// before the final dot. Methods with no dot land in `_default`.
   final List<Namespace> namespaces;
-  final Map<String, ResolvedType> types; // named types (from schemas + inline)
+
+  /// Every named type to emit, from spec schemas plus synthesized inline ones,
+  /// keyed by its final Dart name.
+  final Map<String, ResolvedType> types;
+
   final List<Server> servers;
 
   /// Non-fatal diagnostics emitted during the build (e.g. auto-disambiguated
   /// naming collisions). Callers (CLI / build_runner) surface these to the user.
   final List<String> warnings;
+
   const CodegenModel({
     required this.title,
     required this.version,
@@ -148,7 +174,9 @@ class CodegenModel {
 /// Thrown when two structurally distinct inline types resolve to the same
 /// generated Dart identifier and `autoDisambiguate` is not enabled.
 class NamingConflictException implements Exception {
+  /// A multi-line report naming each conflicting type and where it came from.
   final String message;
+
   NamingConflictException(this.message);
   @override
   String toString() => 'NamingConflictException: $message';
@@ -163,11 +191,11 @@ class _TypeOrigin {
   _TypeOrigin(this.type, this.fingerprint, this.canonicalKey, this.source);
 
   String get name => switch (type) {
-        RecordType(name: final n) => n,
-        EnumType(name: final n) => n,
-        SealedClassType(name: final n) => n,
-        _ => '',
-      };
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    _ => '',
+  };
 }
 
 /// Builds a [CodegenModel] from an [RpcModel].
@@ -187,7 +215,7 @@ class CodegenModelBuilder {
     'FileUploadHandle',
     'FileDownloadHandle',
     'OidcClient',
-    'BlocksClient'
+    'BlocksClient',
   };
   final Map<String, ResolvedType> _types = {};
   // Every named type synthesized during a build, in creation order.
@@ -199,6 +227,10 @@ class CodegenModelBuilder {
   final List<String> _warnings = [];
   int _anonCounter = 0;
 
+  /// Resolves [rpc] into a model the generator can emit.
+  ///
+  /// Throws a [NamingConflictException] when [failOnCollision] is set and two
+  /// distinct inline types still claim the same Dart name.
   CodegenModel build(RpcModel rpc) {
     _types.clear();
     _origins.clear();
@@ -208,8 +240,12 @@ class CodegenModelBuilder {
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
     for (final entry in rpc.schemas.entries) {
       if (_reserved.contains(entry.key)) continue;
-      _types[entry.key] =
-          _resolveType(entry.value, entry.key, false, 'schema:${entry.key}');
+      _types[entry.key] = _resolveType(
+        entry.value,
+        entry.key,
+        false,
+        'schema:${entry.key}',
+      );
     }
 
     // Pass 2: Resolve methods and group by namespace
@@ -224,8 +260,9 @@ class CodegenModelBuilder {
       // namespace + method + param — so they don't collide across operations
       // (the namespace segment is required: two namespaces can share a method
       // name like `create`). A `$ref` param keeps its named-schema identity.
-      final nsPrefix =
-          ns == '_default' ? '' : ns.split('.').map(_capitalize).join();
+      final nsPrefix = ns == '_default'
+          ? ''
+          : ns.split('.').map(_capitalize).join();
 
       final params = method.params.map((p) {
         return OperationParam(
@@ -252,12 +289,16 @@ class CodegenModelBuilder {
         '${method.name}#result',
       );
 
-      namespaceMap.putIfAbsent(ns, () => []).add(Operation(
-            name: opName,
-            fullName: method.name,
-            params: params,
-            result: resultType,
-          ));
+      namespaceMap
+          .putIfAbsent(ns, () => [])
+          .add(
+            Operation(
+              name: opName,
+              fullName: method.name,
+              params: params,
+              result: resultType,
+            ),
+          );
     }
 
     // Pass 3: detect (and resolve) display-name collisions among structurally
@@ -278,39 +319,58 @@ class CodegenModelBuilder {
     );
   }
 
-  ResolvedType _resolveType(TypeRef ref,
-      [String? hint, bool isDeclaredName = false, String? path]) {
+  ResolvedType _resolveType(
+    TypeRef ref, [
+    String? hint,
+    bool isDeclaredName = false,
+    String? path,
+  ]) {
     return switch (ref) {
-      PrimitiveRef(dartType: final dt, constraints: final c) =>
-        PrimitiveType(dt, constraints: c),
-      NullableRef(inner: final inner) =>
-        NullableType(_resolveType(inner, hint, isDeclaredName, path)),
+      PrimitiveRef(dartType: final dt, constraints: final c) => PrimitiveType(
+        dt,
+        constraints: c,
+      ),
+      NullableRef(inner: final inner) => NullableType(
+        _resolveType(inner, hint, isDeclaredName, path),
+      ),
       ArrayRef(items: final items, constraints: final c) => ListType(
-          _resolveType(items, hint, isDeclaredName, path),
-          constraints: c),
-      SchemaRefRef(name: final name) => _reserved.contains(name)
-          ? const PrimitiveType('dynamic')
-          : SchemaReference(name),
+        _resolveType(items, hint, isDeclaredName, path),
+        constraints: c,
+      ),
+      SchemaRefRef(name: final name) =>
+        _reserved.contains(name)
+            ? const PrimitiveType('dynamic')
+            : SchemaReference(name),
       UnionLiteralRef(values: final values) => _resolveEnum(values, hint, path),
-      InlineObjectRef() =>
-        _resolveInlineObject(ref, hint, isDeclaredName, path),
+      InlineObjectRef() => _resolveInlineObject(
+        ref,
+        hint,
+        isDeclaredName,
+        path,
+      ),
       DiscriminatedUnionRef() => _resolveDiscriminatedUnion(ref, hint, path),
       TransferableRef(blocksType: final kt, typeArgs: final args) =>
         TransferableType(
-            blocksType: kt,
-            typeArgs: args
-                .map((a) => _resolveTypeArgWithDedup(a, hint, path))
-                .toList()),
-      MapRef(valueType: final vt) =>
-        MapType(_resolveType(vt, hint, false, path)),
+          blocksType: kt,
+          typeArgs: args
+              .map((a) => _resolveTypeArgWithDedup(a, hint, path))
+              .toList(),
+        ),
+      MapRef(valueType: final vt) => MapType(
+        _resolveType(vt, hint, false, path),
+      ),
       TupleRef(items: final items) => TupleType(
-          items.map((i) => _resolveType(i, hint, false, path)).toList()),
+        items.map((i) => _resolveType(i, hint, false, path)).toList(),
+      ),
     };
   }
 
   /// Resolves a transferable type arg, deduplicating against named schemas.
-  ResolvedType _resolveTypeArgWithDedup(TypeRef ref, String? hint,
-      [String? path]) {
+  ResolvedType _resolveTypeArgWithDedup(
+    TypeRef ref,
+    String? hint, [
+    String? path,
+  ]) {
     if (ref is InlineObjectRef) {
       // Resolve fields first, then check for structural match
       final tempName = hint != null ? '${hint}Message' : '_Anon$_anonCounter';
@@ -318,13 +378,18 @@ class CodegenModelBuilder {
       final fields = ref.properties.entries.map((e) {
         return RecordField(
           name: e.key,
-          type: _resolveType(e.value, '$tempName${_capitalize(e.key)}', false,
-              childPath == null ? null : '$childPath.${e.key}'),
+          type: _resolveType(
+            e.value,
+            '$tempName${_capitalize(e.key)}',
+            false,
+            childPath == null ? null : '$childPath.${e.key}',
+          ),
           isRequired: ref.required.contains(e.key),
         );
       }).toList();
-      final key = _structuralKeyOfRecord(RecordType(
-          name: tempName, fields: fields, additionalProperties: null));
+      final key = _structuralKeyOfRecord(
+        RecordType(name: tempName, fields: fields, additionalProperties: null),
+      );
       for (final entry in _types.entries) {
         if (entry.value is RecordType &&
             _structuralKeyOfRecord(entry.value as RecordType) == key) {
@@ -334,31 +399,36 @@ class CodegenModelBuilder {
         }
       }
     }
-    return _resolveType(ref, hint != null ? '${hint}Message' : null, false,
-        path == null ? null : '$path>message');
+    return _resolveType(
+      ref,
+      hint != null ? '${hint}Message' : null,
+      false,
+      path == null ? null : '$path>message',
+    );
   }
 
   /// Structural key including field types for full deduplication.
   String _structuralKeyOfRecord(RecordType record) {
     final sorted = record.fields.toList()
       ..sort((a, b) => a.name.compareTo(b.name));
-    final parts = sorted
-        .map((f) => '${f.name}:${_typeKey(f.type)}${f.isRequired ? '!' : ''}');
+    final parts = sorted.map(
+      (f) => '${f.name}:${_typeKey(f.type)}${f.isRequired ? '!' : ''}',
+    );
     return 'obj{${parts.join(',')}}';
   }
 
   String _typeKey(ResolvedType t) => switch (t) {
-        PrimitiveType(dartType: final dt) => dt,
-        NullableType(inner: final i) => '${_typeKey(i)}?',
-        ListType(items: final i) => 'List<${_typeKey(i)}>',
-        MapType(valueType: final v) => 'Map<${_typeKey(v)}>',
-        SchemaReference(name: final n) => 'ref:$n',
-        RecordType() => _structuralKeyOfRecord(t),
-        EnumType(name: final n) => 'ref:$n',
-        SealedClassType() => _structuralKeyOfSealed(t),
-        TransferableType(blocksType: final kt) => 'xfer:$kt',
-        TupleType(items: final items) => '(${items.map(_typeKey).join(',')})',
-      };
+    PrimitiveType(dartType: final dt) => dt,
+    NullableType(inner: final i) => '${_typeKey(i)}?',
+    ListType(items: final i) => 'List<${_typeKey(i)}>',
+    MapType(valueType: final v) => 'Map<${_typeKey(v)}>',
+    SchemaReference(name: final n) => 'ref:$n',
+    RecordType() => _structuralKeyOfRecord(t),
+    EnumType(name: final n) => 'ref:$n',
+    SealedClassType() => _structuralKeyOfSealed(t),
+    TransferableType(blocksType: final kt) => 'xfer:$kt',
+    TupleType(items: final items) => '(${items.map(_typeKey).join(',')})',
+  };
 
   /// Structural key for sealed classes based on discriminant + variant shapes.
   String _structuralKeyOfSealed(SealedClassType sealed) {
@@ -383,23 +453,38 @@ class CodegenModelBuilder {
     return enumType;
   }
 
-  ResolvedType _resolveInlineObject(InlineObjectRef ref, String? hint,
-      [bool isDeclaredName = false, String? path]) {
+  ResolvedType _resolveInlineObject(
+    InlineObjectRef ref,
+    String? hint, [
+    bool isDeclaredName = false,
+    String? path,
+  ]) {
     final name = hint ?? '_Anon${_anonCounter++}';
     final fields = ref.properties.entries.map((e) {
       return RecordField(
         name: e.key,
-        type: _resolveType(e.value, '$name${_capitalize(e.key)}', false,
-            path == null ? null : '$path>${e.key}'),
+        type: _resolveType(
+          e.value,
+          '$name${_capitalize(e.key)}',
+          false,
+          path == null ? null : '$path>${e.key}',
+        ),
         isRequired: ref.required.contains(e.key),
       );
     }).toList();
     final additionalProps = ref.additionalProperties != null
-        ? _resolveType(ref.additionalProperties!, '${name}Extra', false,
-            path == null ? null : '$path>additionalProperties')
+        ? _resolveType(
+            ref.additionalProperties!,
+            '${name}Extra',
+            false,
+            path == null ? null : '$path>additionalProperties',
+          )
         : null;
     final record = RecordType(
-        name: name, fields: fields, additionalProperties: additionalProps);
+      name: name,
+      fields: fields,
+      additionalProperties: additionalProps,
+    );
 
     // Structural dedup: reuse existing type with same shape (only when no additionalProperties)
     if (additionalProps == null) {
@@ -417,7 +502,8 @@ class CodegenModelBuilder {
     // An explicitly declared name (e.g. OpenRPC `result.name`) is authoritative —
     // use it as-is and do not substitute a generic shape-based name.
     final genericName = isDeclaredName ? null : _genericNameForShape(fields);
-    final finalName = (additionalProps == null &&
+    final finalName =
+        (additionalProps == null &&
             genericName != null &&
             !_types.containsKey(genericName))
         ? genericName
@@ -427,7 +513,8 @@ class CodegenModelBuilder {
         : RecordType(
             name: finalName,
             fields: fields,
-            additionalProperties: additionalProps);
+            additionalProperties: additionalProps,
+          );
 
     _types[finalName] = finalRecord;
     _recordOrigin(finalRecord, path);
@@ -459,8 +546,10 @@ class CodegenModelBuilder {
   }
 
   ResolvedType _resolveDiscriminatedUnion(
-      DiscriminatedUnionRef ref, String? hint,
-      [String? path]) {
+    DiscriminatedUnionRef ref,
+    String? hint, [
+    String? path,
+  ]) {
     final name = hint ?? '_Union${_anonCounter++}';
 
     // Group variants by discriminant value
@@ -487,8 +576,12 @@ class CodegenModelBuilder {
         fields = v.properties.entries.map((e) {
           return RecordField(
             name: e.key,
-            type: _resolveType(e.value, '$className${_capitalize(e.key)}',
-                false, variantPath == null ? null : '$variantPath.${e.key}'),
+            type: _resolveType(
+              e.value,
+              '$className${_capitalize(e.key)}',
+              false,
+              variantPath == null ? null : '$variantPath.${e.key}',
+            ),
             isRequired: v.required.contains(e.key),
           );
         }).toList();
@@ -500,8 +593,9 @@ class CodegenModelBuilder {
         }
         fields = allFieldNames.map((fieldName) {
           // Use the first variant that has this field for the type
-          final sourceVariant =
-              group.firstWhere((v) => v.properties.containsKey(fieldName));
+          final sourceVariant = group.firstWhere(
+            (v) => v.properties.containsKey(fieldName),
+          );
           final isRequired = group.every(
             (v) =>
                 v.properties.containsKey(fieldName) &&
@@ -510,10 +604,11 @@ class CodegenModelBuilder {
           return RecordField(
             name: fieldName,
             type: _resolveType(
-                sourceVariant.properties[fieldName]!,
-                '$className${_capitalize(fieldName)}',
-                false,
-                variantPath == null ? null : '$variantPath.$fieldName'),
+              sourceVariant.properties[fieldName]!,
+              '$className${_capitalize(fieldName)}',
+              false,
+              variantPath == null ? null : '$variantPath.$fieldName',
+            ),
             isRequired: isRequired,
           );
         }).toList();
@@ -525,7 +620,10 @@ class CodegenModelBuilder {
         final nestedName =
             '$className${_capitalize(group.first.embeddedUnion!.discriminant)}';
         final resolved = _resolveDiscriminatedUnion(
-            group.first.embeddedUnion!, nestedName, variantPath);
+          group.first.embeddedUnion!,
+          nestedName,
+          variantPath,
+        );
         embeddedUnion = resolved is SealedClassType ? resolved : null;
       }
 
@@ -572,26 +670,27 @@ class CodegenModelBuilder {
   /// [SchemaReference] before reaching this point).
   void _recordOrigin(ResolvedType type, String? path) {
     final key = path ?? _displayName(type);
-    _origins
-        .add(_TypeOrigin(type, _fingerprint(type), key, _describeSource(key)));
+    _origins.add(
+      _TypeOrigin(type, _fingerprint(type), key, _describeSource(key)),
+    );
   }
 
   String _displayName(ResolvedType type) => switch (type) {
-        RecordType(name: final n) => n,
-        EnumType(name: final n) => n,
-        SealedClassType(name: final n) => n,
-        _ => '',
-      };
+    RecordType(name: final n) => n,
+    EnumType(name: final n) => n,
+    SealedClassType(name: final n) => n,
+    _ => '',
+  };
 
   /// Structural identity of a named type. Two types with the same display name
   /// but different fingerprints are a genuine conflict; identical fingerprints
   /// are the (already-merged) dedup case and must not be flagged.
   String _fingerprint(ResolvedType type) => switch (type) {
-        RecordType() => _structuralKeyOfRecord(type),
-        EnumType(values: final v) => 'enum{${(v.toList()..sort()).join(',')}}',
-        SealedClassType() => _structuralKeyOfSealed(type),
-        _ => _typeKey(type),
-      };
+    RecordType() => _structuralKeyOfRecord(type),
+    EnumType(values: final v) => 'enum{${(v.toList()..sort()).join(',')}}',
+    SealedClassType() => _structuralKeyOfSealed(type),
+    _ => _typeKey(type),
+  };
 
   /// Renders a canonical source key into a human-readable description.
   /// Key forms: `schema:Name`, `method#param:p>seg>seg`, `method#result>seg`.
@@ -688,8 +787,9 @@ class CodegenModelBuilder {
   String _formatConflicts(Map<String, List<_TypeOrigin>> conflicts) {
     final buf = StringBuffer();
     buf.writeln(
-        'Inline type naming conflict${conflicts.length > 1 ? 's' : ''} detected. '
-        'Distinct types generate the same Dart identifier:');
+      'Inline type naming conflict${conflicts.length > 1 ? 's' : ''} detected. '
+      'Distinct types generate the same Dart identifier:',
+    );
     for (final entry in conflicts.entries) {
       final sources = entry.value.map((o) => o.source).toList();
       final String list;
@@ -700,8 +800,10 @@ class CodegenModelBuilder {
             '${sources.sublist(0, sources.length - 1).join(', ')}, and ${sources.last}';
       }
       final verb = sources.length == 2 ? 'both generate' : 'all generate';
-      buf.writeln('  Naming conflict: types from $list $verb `${entry.key}`. '
-          'Rename one of these in your spec to disambiguate.');
+      buf.writeln(
+        '  Naming conflict: types from $list $verb `${entry.key}`. '
+        'Rename one of these in your spec to disambiguate.',
+      );
     }
     return buf.toString().trimRight();
   }
@@ -709,10 +811,13 @@ class CodegenModelBuilder {
   /// Builds the warning emitted when a collision is auto-disambiguated (default
   /// behavior). Names every source and the suffixed identifier it received.
   String _formatWarning(
-      String base, List<_TypeOrigin> reps, List<String> assigned) {
+    String base,
+    List<_TypeOrigin> reps,
+    List<String> assigned,
+  ) {
     final mapping = [
       for (var i = 0; i < reps.length; i++)
-        '${reps[i].source} -> ${assigned[i]}'
+        '${reps[i].source} -> ${assigned[i]}',
     ].join(', ');
     return 'Naming conflict: ${reps.length} structurally distinct types generate '
         '`$base`. Auto-disambiguated to: $mapping. '

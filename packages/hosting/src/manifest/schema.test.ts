@@ -32,7 +32,7 @@ void describe('Deploy Manifest Schema', () => {
           handler: 'index.handler',
           placement: 'regional',
           streaming: true,
-          runtime: 'nodejs20.x',
+          runtime: 'nodejs24.x',
         },
       },
       staticAssets: { directory: '/tmp/assets' },

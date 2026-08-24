@@ -31,7 +31,7 @@ const store = new KVStore(scope, id, options?)
 | `schema` | `StandardSchemaV1` | Runtime validation schema (Zod, Valibot, ArkType, etc.). When provided, the value type `T` is inferred from the schema and every `put()` validates the value before writing. |
 | `table` | `ExternalTableRef` | Wrap an existing DynamoDB table instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
-| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying DynamoDB table. When omitted, CDK's default (RETAIN — data preserved on `cdk destroy`) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+| `removalPolicy` | `'destroy' \| 'retain'` | Removal behavior for the underlying DynamoDB table. When omitted, the stack-wide `defaults` (from `BlocksPresets.sandbox`/`production`, chosen at `BlocksStack.create`) apply — `production` retains data on `cdk destroy`, `sandbox` destroys it. Pass `'destroy'`/`'retain'` to override for this one store. The table's deletion protection also follows the stack `defaults`. Ignored by the mock and browser runtimes. |
 | `ttl` | `boolean` | Enable DynamoDB Time-to-Live so items written with an expiry are deleted automatically. Defaults to `false`. See [Expiring Items](#expiring-items-ttl). |
 
 ### Expiring Items (TTL)

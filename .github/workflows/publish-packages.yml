@@ -29,11 +29,11 @@ jobs:
     env:
       HUSKY: '0'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -41,13 +41,13 @@ jobs:
 
       - run: npm ci
 
-      - uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+      - uses: changesets/action@198f833dd7d863100ea6e28967bc9a9fdefadb0a # v2.1.0
         id: changesets
         with:
-          version: npm run version
-          publish: npm run release
-          commit: 'chore: version packages'
-          title: 'chore: version packages'
+          version-script: npm run version
+          publish-script: npm run release
+          commit-message: 'chore: version packages'
+          pr-title: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -56,11 +56,11 @@ jobs:
       # The Version PR is created with GITHUB_TOKEN, so it doesn't auto-trigger
       # CI. Append operator instructions to the PR body.
       - name: Add release instructions to Version PR
-        if: steps.changesets.outputs.pullRequestNumber
+        if: steps.changesets.outputs.pr-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUM="${{ steps.changesets.outputs.pullRequestNumber }}"
+          PR_NUM="${{ steps.changesets.outputs.pr-number }}"
           CURRENT_BODY=$(gh pr view "$PR_NUM" --json body --jq .body)
           INSTRUCTIONS="## Release Instructions
 
