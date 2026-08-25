@@ -19,7 +19,11 @@ import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
-export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+} from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';

@@ -42,6 +42,13 @@ export function assertCdkConditionActive(): void {
   }
 }
 
+/**
+ * Timeout of the shared Blocks handler Lambda, and therefore the ceiling on a
+ * single invocation. Exported because resources that feed the handler have to
+ * size their own timeouts against it (e.g. an SQS queue's visibility timeout).
+ */
+export const SHARED_HANDLER_TIMEOUT_SECONDS = 60 * 15;
+
 export interface BlocksBackendProps {
   backendHandlerPath: string;
   backendCDKPath: string;
@@ -78,6 +85,13 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   // via `scope.executionRole`). Block grants sit on the role's default (inline)
   // policy. AWSLambdaBasicExecutionRole is attached so compute functions retain
   // CloudWatch Logs permissions.
+  //
+  // INVARIANT: this must be a mutable, framework-owned `iam.Role` — never an
+  // imported role (`Role.fromRoleArn`/`fromRoleName`), which is immutable by
+  // default. On an immutable role, every Building Block's `grant*()` /
+  // `addToPrincipalPolicy()` silently becomes a no-op (returns false, no error),
+  // so permissions would quietly vanish. If a bring-your-own-role option is ever
+  // added, it must resolve to a mutable role (`{ mutable: true }`).
   const executionRole = new iam.Role(scope, 'BlocksRole', {
     // CompositePrincipal (rather than a bare ServicePrincipal) so additional
     // compute types can assume this same shared role as they are introduced

@@ -12,7 +12,7 @@ import type {
 	AsyncJobTransition,
 	WaitUntilCompleteOptions,
 } from './types.js';
-import { AsyncJobErrors } from './errors.js';
+import { AsyncJobErrors, blocksError } from './errors.js';
 
 /** Child scope id of the status table. Must match between the runtime and CDK entry points. */
 export const STATUS_TABLE_ID = 'status';
@@ -81,12 +81,6 @@ export const statusTableOptions = {
 	key: { partitionKey: 'jobId' },
 	ttl: 'expiresAt',
 } as const;
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Resolve after `ms` milliseconds, rejecting early with the signal's abort

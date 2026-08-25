@@ -42,6 +42,7 @@ The CDK class mirrors the runtime's BB creation:
 - **DistributedTable:** `${id}-messages` — conversation history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
 - **AsyncJob:** `${id}-job` — job payload: `{ message, conversationId?, channelId }`
+  - Event source uses `batchSize: 1` / `maxBatchingWindowSeconds: 0`: the caller is blocked on the job starting, so the Agent opts out of AsyncJob's batching defaults (10 / 5s) rather than add up to 5s of latency to an interactive turn.
 
 > **Note:** Internal Building Blocks are created on the parent scope (not `this`) to ensure correct nested-scope resolution on AWS.
 

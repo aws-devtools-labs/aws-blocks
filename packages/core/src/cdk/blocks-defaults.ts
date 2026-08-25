@@ -33,6 +33,20 @@ export interface BlocksDefaults {
 	 * frontend can reach a deployed API; `production` allows none by default.
 	 */
 	allowedOrigins: string[];
+
+	/**
+	 * Whether stateful resources that support continuous backups keep them on by
+	 * default — e.g. DynamoDB Point-in-Time Recovery, letting you restore to any
+	 * second in the retention window. On in `production`, off in `sandbox` (where
+	 * throwaway data isn't worth the backup-storage cost). Blocks whose service
+	 * has no equivalent simply ignore it.
+	 *
+	 * `true` enables backups with the service's default window; `false` disables
+	 * them; `{ retentionDays: n }` enables them and pins the window (a block
+	 * clamps/validates `n` to its service's supported range — DynamoDB PITR is
+	 * 1–35 days). Backups only have a window when on, so the two are one field.
+	 */
+	pointInTimeRecovery: boolean | { retentionDays: number };
 }
 
 /**
@@ -44,16 +58,18 @@ export interface BlocksDefaults {
  * ```
  */
 export const BlocksPresets = {
-	/** Disposable development stacks: tear down cleanly, no delete guard. */
+	/** Disposable development stacks: tear down cleanly, no delete guard, no backups. */
 	sandbox: {
 		removalPolicy: RemovalPolicy.DESTROY,
 		deletionProtection: false,
 		allowedOrigins: ['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$'],
+		pointInTimeRecovery: false,
 	},
 	/** Durable, protected posture for permanent deployments. */
 	production: {
 		removalPolicy: RemovalPolicy.RETAIN,
 		deletionProtection: true,
 		allowedOrigins: [],
+		pointInTimeRecovery: true,
 	},
 } satisfies Record<string, BlocksDefaults>;
