@@ -228,6 +228,7 @@ function collectFromSourceFile(
  *
  * @param options - See {@link TypegenOptions}.
  * @returns The de-duplicated, sorted keys per kind, plus any non-literal call sites.
+ * @internal
  */
 export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanResult> {
 	const cwd = options.cwd ?? process.cwd();
@@ -275,6 +276,7 @@ function renderRegistry(name: string, keys: string[]): string {
  * @param scan - Keys from {@link scanValueKeys}.
  * @param moduleSpecifiers - Modules to augment (default {@link DEFAULT_TYPEGEN_MODULES}).
  * @returns The file contents, tab-indented to match the repo style.
+ * @internal
  */
 export function renderHostingValuesDts(
 	scan: Pick<ScanResult, 'secretKeys' | 'configKeys'>,
@@ -335,6 +337,7 @@ export interface GenerateOptions extends TypegenOptions {
  * @param options - See {@link GenerateOptions}.
  * @returns The scan result plus the rendered content, output path, and whether the
  *   on-disk file already matched (for `--check`).
+ * @internal
  */
 export async function generateHostingValuesDts(options: GenerateOptions = {}): Promise<TypegenResult> {
 	const cwd = options.cwd ?? process.cwd();
@@ -402,6 +405,7 @@ export interface WatchOptions extends GenerateOptions {
  *
  * @param options - See {@link WatchOptions}.
  * @returns A `stop()` that tears down all watchers/timers.
+ * @internal
  */
 export async function watchHostingValues(options: WatchOptions = {}): Promise<() => void> {
 	const log = options.log ?? ((m: string) => console.log(m));
@@ -471,6 +475,7 @@ export interface TypegenCliDeps {
  * `--cwd <dir>`.
  *
  * @returns The process exit code (0 = success / up-to-date; 1 = stale under `--check`).
+ * @internal
  */
 export async function runTypegenCli(argv: string[], deps: TypegenCliDeps = {}): Promise<number> {
 	const log = deps.log ?? ((m: string) => console.log(m));

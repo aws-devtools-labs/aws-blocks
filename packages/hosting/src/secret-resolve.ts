@@ -27,8 +27,8 @@ import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IParameter } from 'aws-cdk-lib/aws-ssm';
 import { HostingError } from './hosting_error.js';
 import {
-	cacheTtlEnvVarName,
 	type ConfigValue,
+	cacheTtlEnvVarName,
 	configEnvVarName,
 	defaultPrefixForKind,
 	envVarNameForKind,
@@ -112,6 +112,7 @@ function optsForKind(kind: ValueKind, cfg: StoreConfig): Required<Pick<KindStore
 
 /**
  * Split an environment map into plain literals, managed markers, and BYO handles.
+ * @internal
  */
 export function partitionEnvironment(environment: Record<string, EnvValue> | undefined): {
 	plain: Record<string, string>;
@@ -142,7 +143,8 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 	return { plain, managed, byo };
 }
 
-/** Every managed marker that requires a synth-time fetch (domain markers only). */
+/** Every managed marker that requires a synth-time fetch (domain markers only). * @internal
+ */
 export function collectSynthMarkers(domainName: DomainNameInput | undefined): ManagedValue[] {
 	const byKey = new Map<string, ManagedValue>();
 	for (const name of toDomainArray(domainName)) {
@@ -160,6 +162,7 @@ function toDomainArray(domainName: DomainNameInput | undefined): Array<string | 
  * Resolve managed markers to plaintext at synth time via each marker's derived
  * store + per-kind prefix. Throws an actionable error if a referenced value was
  * never set.
+ * @internal
  */
 export async function resolveSecretsAtSynth(
 	markers: ManagedValue[],
@@ -207,7 +210,8 @@ export async function resolveSecretsAtSynth(
 	return resolved;
 }
 
-/** Resolve domain markers to literals using the synth-resolved value map. */
+/** Resolve domain markers to literals using the synth-resolved value map. * @internal
+ */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {
 	const arr = toDomainArray(domainName).map((name) => {
 		if (!isManagedValue(name)) return name;
@@ -235,6 +239,7 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * stage's compute can therefore always read the shared value (that is what makes
  * the fallback work), so treat the shared entry as readable by every stage that
  * shares this prefix and put stage-private values under the stage locator only.
+ * @internal
  */
 export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, cfg: StoreConfig = {}): void {
 	const { key, kind } = marker;
@@ -261,6 +266,7 @@ export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedVal
  * Wire a BYO (existing) CDK handle: grant read via the handle's own `grantRead`
  * (which also covers KMS for the handle's key) and inject its locator under the
  * kind-appropriate env prefix, so `getSecret`/`getConfig` resolve it identically.
+ * @internal
  */
 export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, cfg: StoreConfig = {}): void {
 	const { key, kind, handle } = binding;
@@ -321,7 +327,8 @@ const kmsDecryptGranted = new WeakMap<cdk.aws_lambda.Function, Set<string>>();
 export type SecretFetcher = (locator: string) => Promise<string>;
 let synthFetcherOverride: SecretFetcher | null = null;
 
-/** Override the synth-time fetcher. **For testing only.** */
+/** Override the synth-time fetcher. **For testing only.** * @internal
+ */
 export function _setSynthSecretFetcher(fetcher: SecretFetcher | null): void {
 	synthFetcherOverride = fetcher;
 }

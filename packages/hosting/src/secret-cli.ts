@@ -52,7 +52,8 @@ function assertValidKey(key: string): void {
 	}
 }
 
-/** Set (create or overwrite) a value of `kind` in its store. */
+/** Set (create or overwrite) a value of `kind` in its store. * @internal
+ */
 export async function setValue(
 	kind: ValueKind,
 	key: string,
@@ -88,7 +89,8 @@ export async function setValue(
 	console.log(`${kind === 'secret' ? '🔐' : '⚙️ '} ${kind} '${key}' set (${name}).`);
 }
 
-/** List keys of `kind` under the prefix. Values are never returned. */
+/** List keys of `kind` under the prefix. Values are never returned. * @internal
+ */
 export async function listValues(
 	kind: ValueKind,
 	opts: { prefix?: string; stage?: string; region?: string } = {},
@@ -146,6 +148,7 @@ export async function listValues(
  * be restored, guarding against a typo'd key in prod. Pass `force: true` to delete
  * immediately with no recovery. (SSM `config` deletes are always immediate —
  * Parameter Store has no recovery window — so `force` is a no-op there.)
+ * @internal
  */
 export async function removeValue(
 	kind: ValueKind,
@@ -202,6 +205,7 @@ export async function removeValue(
  * CLI dispatcher. Two shapes:
  *  - `kind` fixed by the wrapper → argv is `<subcommand> [...args]` (e.g. `secret set KEY`).
  *  - `kind` not fixed → argv is `<secret|config> <subcommand> [...args]`.
+ * @internal
  */
 export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
 	const { stage, valueStdin, prefix, region, force, positional } = extractFlags(argv);
@@ -230,9 +234,9 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 					`Usage: ${label} set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>] [--region <name>]`,
 				);
 			// Validate the key up front — before reading/prompting for a value — so a bad
-				// key fails fast rather than after a prompt or a store call.
-				assertValidKey(key);
-				let value: string;
+			// key fails fast rather than after a prompt or a store call.
+			assertValidKey(key);
+			let value: string;
 			if (valueStdin) {
 				if (valueParts.length > 0) throw new Error('Pass the value via stdin OR as an argument, not both.');
 				value = await readStdin();

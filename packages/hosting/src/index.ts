@@ -25,7 +25,6 @@ export {
 	type ConfigValue,
 	cacheTtlEnvVarName,
 	config,
-	configEnvVarName,
 	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
 	defaultPrefixForKind,
@@ -36,13 +35,10 @@ export {
 	isSecret,
 	MANAGED_BRAND,
 	type ManagedValue,
-	parameterName,
 	type SecretStore,
 	type SecretValue,
 	secret,
-	secretEnvVarName,
 	secretStoreLocator,
-	storeForKind,
 	type ValueKind,
 } from './secret.js';
 // Shared CLI core (secret/config × set/list/remove) — consumers wrap with a fixed kind + label/prefix.
@@ -73,8 +69,6 @@ export {
 	wireManagedValue,
 } from './secret-resolve.js';
 export {
-	_resetSecretCache,
-	_setSecretFetcher,
 	type ConfigKey,
 	getConfig,
 	getSecret,

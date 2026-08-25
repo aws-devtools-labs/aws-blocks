@@ -7,16 +7,12 @@
 export {
 	type ConfigValue,
 	config,
-	configEnvVarName,
 	isConfig,
 	isManagedValue,
 	isSecret,
 	type ManagedValue,
-	parameterName,
 	type SecretValue,
 	secret,
-	secretEnvVarName,
-	storeForKind,
 	type ValueKind,
 } from '@aws-blocks/hosting/secret';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
