@@ -5,8 +5,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
@@ -23,7 +25,7 @@ export type { AppSettingOptions } from './types.js';
  *   CloudFormation cannot natively create SecureString parameters.
  * - SecureString parameters are encrypted with the default `aws/ssm` KMS key.
  */
-export class AppSetting<T = string> extends Scope {
+export class AppSetting<T = string> extends BuildingBlockScope {
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
 	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
@@ -44,6 +46,12 @@ export class AppSetting<T = string> extends Scope {
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);
+	}
+
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
+		};
 	}
 
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {

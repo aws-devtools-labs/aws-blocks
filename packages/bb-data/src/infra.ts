@@ -21,6 +21,8 @@ import {
   VPC_MAX_AZS,
 } from './constants.js';
 
+import type { VpcContext } from '@aws-blocks/core/cdk';
+
 /**
  * Configuration for Aurora Serverless v2 infrastructure.
  */
@@ -43,6 +45,12 @@ export interface AuroraInfraConfig {
   deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * VPC context from the parent scope. When provided, Aurora is placed in the
+   * shared VPC's isolated subnets instead of creating its own VPC.
+   * @internal
+   */
+  vpcContext?: VpcContext;
 }
 
 /**
@@ -96,8 +104,8 @@ export function materialize(
   const { minCapacity = DEFAULT_MIN_CAPACITY, maxCapacity = DEFAULT_MAX_CAPACITY, databaseName } = options;
   const envName = name.replace(ENV_NAME_SANITIZE_PATTERN, '_');
 
-  // VPC with isolated subnets only — no NAT gateways needed for Data API path
-  const vpc = new ec2.Vpc(scope, `${name}Vpc`, {
+  // Determine VPC (shared or standalone)
+  const vpc = options.vpcContext?.vpc ?? new ec2.Vpc(scope, `${name}Vpc`, {
     maxAzs: VPC_MAX_AZS,
     natGateways: 0,
     subnetConfiguration: [
@@ -105,16 +113,20 @@ export function materialize(
     ],
   });
 
-  // Security group allowing inbound PostgreSQL from within the VPC
+  // Single SG instantiation
   const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
     vpc,
     description: `Security group for ${name} Aurora cluster`,
     allowAllOutbound: false,
   });
+
+  // Ingress rule differs based on context
   securityGroup.addIngressRule(
-    ec2.Peer.ipv4(vpc.vpcCidrBlock),
+    options.vpcContext
+      ? options.vpcContext.lambdaSecurityGroup
+      : ec2.Peer.ipv4((vpc as ec2.Vpc).vpcCidrBlock),
     ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
-    'Allow PostgreSQL from VPC',
+    options.vpcContext ? 'Lambda to Aurora' : 'Allow PostgreSQL from VPC',
   );
 
   // Aurora Serverless v2 cluster with Data API enabled

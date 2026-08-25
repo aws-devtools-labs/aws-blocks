@@ -28,11 +28,13 @@
  *   the provider helpers.
  */
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import { type ScopeParent } from '@aws-blocks/core';
+import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 
 import type { IDependable } from 'constructs';
@@ -85,9 +87,15 @@ export type {
  */
 export class AuthOIDC<
 	P extends readonly ProviderConfig[] = readonly ProviderConfig[],
-> extends Scope {
+> extends BuildingBlockScope {
 	public readonly callbackPath: string;
 	public readonly signOutPath: string;
+
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
+		};
+	}
 
 	constructor(scope: ScopeParent, id: string, options: AuthOIDCOptions<P>) {
 		super(id, { parent: scope });
