@@ -44,6 +44,16 @@ Local Mock
 
 **Rationale:** A per-job DLQ isolates poison messages so a single failing job type can't bury unrelated work. Standard (not FIFO) queues give nearly unlimited throughput and at-least-once delivery, which matches the idempotent-handler contract. The 14-day DLQ retention is the SQS maximum, giving operators time to inspect and redrive failures.
 
+### D-AJ-1a: Visibility timeout covers the batching window as well as the handler
+
+**Decision:** The main queue's visibility timeout is `900 + maxBatchingWindowSeconds` seconds, not a flat 900 s.
+
+**Rationale:** A message becomes invisible when the poller *receives* it, which happens before the batching window elapses and before the handler is invoked. Worst-case time-to-completion for a message is therefore `maxBatchingWindowSeconds + handler runtime`, and the handler runtime is bounded by the shared Lambda's 900 s timeout. A flat 900 s timeout lets SQS make a message visible again while its invocation is still running (905 s worst case at the default 5 s window, and up to 1200 s at the 300 s maximum), redelivering work that was never lost. Sizing the timeout as window + Lambda timeout is the deterministic minimum: the longest a message can legitimately be in flight, since Lambda's platform timeout caps handler runtime regardless of `batchSize`. The Lambda timeout is imported from core (`SHARED_HANDLER_TIMEOUT_SECONDS`) rather than re-hardcoded, so the two cannot drift.
+
+**Not AWS's recommended value.** AWS recommends `6 x functionTimeout + maxBatchingWindow`, where the 6x buffers *invoke-side throttling retries*: if the function is at its concurrency ceiling, the poller retries the invoke while the message stays invisible, and the message can go visible again before the handler has ever run. That is reachable here, because the target Lambda is shared with API and CronJob traffic (D-AJ-2). We take the 1x minimum deliberately: at the 900 s shared timeout, 6x would be a 5400–5700 s visibility timeout, so a genuinely stuck message would take ~1.5 h per attempt to become visible again and ~4.5 h to reach the DLQ at the default `maxRetries` of 3 — trading a rare duplicate delivery for an operationally useless retry loop. The residual exposure is redundant work, not loss: delivery is at-least-once and handlers must be idempotent regardless (see below), and `receiveCount` in the handler context lets a handler detect a redelivery. Consumers that would rather pay the latency can raise the ceiling by keeping handler runtimes well under 900 s.
+
+**Handler contract:** at-least-once delivery still applies — this removes a redelivery the block itself would have caused, it does not make handlers exempt from being idempotent. A whole-invocation failure (Lambda timeout or OOM) redelivers every message in the batch, including records whose handler already completed; see the README's batching notes.
+
 ### D-AJ-2: Shared Lambda target (not a dedicated per-job Lambda)
 
 **Decision:** The queue's `SqsEventSource` targets the shared API Lambda — the same function used by API handlers and CronJob — rather than a dedicated function per job.
@@ -107,8 +117,8 @@ Neither case can corrupt an item — DynamoDB `PutItem` is atomic per item — b
 Creates the following resources per AsyncJob instance:
 
 1. **SQS Dead-Letter Queue** — name `{fullId}-dlq` (truncated to 80 chars), 14-day retention, `SQS_MANAGED` encryption, `enforceSSL`.
-2. **SQS Main Queue** — name `{fullId}` (truncated to 80 chars), visibility timeout 900 s, redrive to the DLQ with `maxReceiveCount = maxRetries`, `SQS_MANAGED` encryption, `enforceSSL`.
-3. **Event Source Mapping** — `SqsEventSource(queue, { batchSize })` wired to the shared handler.
+2. **SQS Main Queue** — name `{fullId}` (truncated to 80 chars), visibility timeout `900 + maxBatchingWindowSeconds` s (see D-AJ-1a), redrive to the DLQ with `maxReceiveCount = maxRetries`, `SQS_MANAGED` encryption, `enforceSSL`.
+3. **Event Source Mapping** — `SqsEventSource(queue, { batchSize, reportBatchItemFailures: true, maxBatchingWindow })` wired to the shared handler. `batchSize` comes from `options.batchSize` (default 10) and `maxBatchingWindow` from `options.maxBatchingWindowSeconds` (default 5 s, range 0–300). Partial-batch reporting is **always on and not configurable**, because it is required for any `batchSize > 1`. Without `ReportBatchItemFailures` in the mapping's `FunctionResponseTypes`, a single failing record makes SQS treat the entire batch as handled and delete every message in it — silent data loss. The runtime handler always returns `{ batchItemFailures }` to match. Both options are range-checked in the constructor and rejected at synth time with `InvalidOptionException`: `batchSize` must be 1–10 with no batching window, or 1–10000 once `maxBatchingWindowSeconds > 0`. Those are the limits AWS itself enforces when it creates the mapping, so the check only moves the failure from mid-deployment to synth.
 4. **Status table** (only when `trackStatus: true`) — a nested `DistributedTable` at child id `status`, partition key `jobId`, TTL attribute `expiresAt`. Provisioned with the same child id and options as the runtime entry points so the table the runtime resolves is the one CDK created.
 
 **IAM grants to handler:** `grantSendMessages` on the main queue (so handlers can enqueue further work).
