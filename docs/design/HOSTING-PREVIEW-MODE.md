@@ -200,6 +200,20 @@ CloudFront's KVS router is framework-agnostic: it routes off `manifest.routes[]`
 
 Common contract: **static `manifest.routes` → S3 integration; the catch-all `/{proxy+}` → the SSR/server Lambda (the framework's own router is the source of truth); `/aws-blocks/*` + `/auth/*` → backend API proxy.** Only per-framework *extras* (Next image-opt vs Nuxt IPX, directory-index vs spaFallback) need special-casing, and those are already distinguished in the manifest. **Validation must cover all five** (Next, Nuxt, Astro, SvelteKit, SPA) — the worktree already has `hosting-ssr`, `hosting-ssr-nuxt`, `hosting-ssr-astro`, `hosting-ssr-sveltekit`, `hosting-spa`, all linked to the local packages, so each can be deployed baseline-vs-bypass and regression-checked.
 
+## 5d. SSR-C validated + the stage-path constraint (deploy findings)
+
+Deployed the framework-agnostic API-Gateway single origin (REST API) on the Next benchmark app:
+- **~228–281s vs ~481s CloudFront baseline (~42–52% faster), 0 CloudFront.**
+- SSR home/login **200**, `/_next/static/*.js` **200** (S3 `AwsIntegration`), full auth round-trip **works same-origin** (`SameSite=Lax` cookie) — **the S3-website cross-origin auth regression is fixed**.
+- Two deploy-found fixes: SSR 502 → `ResponseTransferMode.STREAM`; static 404 → derive prefixes from `staticAssets.immutablePaths` (not just `routes[]`).
+
+**Open constraint — REST API stage path.** A REST API is only served under `…/prod/`, but frameworks emit **root-absolute** URLs (`/_next/*`, `/favicon.ico`, `/`). In a browser those hit the domain root (no `/prod`) → **403**. CloudFront hides this via `originPath: /prod` (browser sees root); a raw REST API can't. Fix: serve at the domain **root**, which requires one of:
+- **HTTP API v2 `$default` stage** (root path) — *recommended*. But HTTP API uses payload v2 and has no `responseTransferMode: STREAM`, so (a) the OpenNext SSR bundle must be built with `converter: aws-apigw-v2` (buffered) under bypass — an adapter build-flag — and (b) static needs a small asset-proxy Lambda (HTTP API can't use the REST S3 `AwsIntegration`).
+- Custom domain + empty base-path mapping (needs domain/ACM — defeats preview).
+- App `basePath`/`assetPrefix = /prod` (app-level, not framework-generic).
+
+Next step for SSR-C: rewrite `BypassOriginConstruct` onto **HTTP API v2 (root)** + adapter `aws-apigw-v2` converter under bypass + asset-proxy Lambda; then re-validate across Next/Nuxt/Astro/SvelteKit/SPA.
+
 ## 6. Experiment plan (§Execution step 3)
 
 Measure Phase-1 savings on a real app in `/Users/osamariz/playground/test-apps` before committing to the design:
