@@ -501,7 +501,12 @@ jobs:
         if: always()
         run: |
           cd ${{ matrix.app-dir }}
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
+          # A teardown failure leaks a stack and its retained roles. Warn in the
+          # job summary instead of `|| true`, which hid this for two months.
+          if ! npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts; then
+            echo "::warning::Teardown failed for ${{ matrix.framework }}; stack may be stuck in DELETE_FAILED"
+            echo "⚠️ Teardown failed for ${{ matrix.framework }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   e2e-telemetry:
     name: Telemetry E2E

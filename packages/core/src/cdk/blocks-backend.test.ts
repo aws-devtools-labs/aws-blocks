@@ -97,6 +97,38 @@ describe('synth shape (drop into existing stack)', () => {
     const template = Template.fromStack(parent);
     template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
   });
+
+  test('no account-level API Gateway CloudWatch role is created', async () => {
+    const app = new cdk.App();
+    const parent = new cdk.Stack(app, 'NoCloudWatchRoleStack');
+
+    await BlocksBackend.create(parent, 'Backend', {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: sideEffectBackendPath,
+      defaults: BlocksPresets.production,
+    });
+
+    // CDK's RestApi default retains this role after stack deletion, and the
+    // singleton below returns 429 when deploys run at the same time.
+    const template = Template.fromStack(parent);
+    template.resourceCountIs('AWS::ApiGateway::Account', 0);
+    const roles = template.findResources('AWS::IAM::Role', {
+      Properties: {
+        AssumeRolePolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Principal: { Service: 'apigateway.amazonaws.com' },
+            }),
+          ]),
+        },
+      },
+    });
+    assert.deepStrictEqual(
+      Object.keys(roles),
+      [],
+      'no IAM role should be assumable by apigateway.amazonaws.com',
+    );
+  });
 });
 
 describe('shared execution role', () => {

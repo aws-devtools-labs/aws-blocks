@@ -57,6 +57,8 @@ export class LambdaCompute extends Compute {
 		this.apiGateway = new apigateway.RestApi(this, 'API', {
 			restApiName: 'Blocks API',
 			deployOptions: { cachingEnabled: false },
+			// Retained IAM role + account-level singleton. See blocks-backend.ts.
+			cloudWatchRole: false,
 		});
 
 		const integration = new apigateway.LambdaIntegration(this.fn);
