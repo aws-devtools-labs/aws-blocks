@@ -18,6 +18,7 @@ import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk'
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { LambdaCompute } from './index.cdk.js';
 
@@ -189,5 +190,29 @@ describe('LambdaCompute CORS origins from defaults', () => {
 			!JSON.stringify(fns).includes('CORS_ALLOWED_ORIGINS'),
 			'no function should carry CORS_ALLOWED_ORIGINS under the production posture',
 		);
+	});
+});
+
+// arm64 (Graviton) is ~20% cheaper and the backend is a pure-JS bundle, so the
+// compute defaults to it; `architecture` overrides for x86-only native addons.
+describe('LambdaCompute architecture (Graviton default)', () => {
+	test('defaults the function to arm64', () => {
+		const { stack, parent } = setup('LambdaComputeArch');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Architectures: ['arm64'],
+		});
+	});
+
+	test('respects an architecture override (x86_64)', () => {
+		const { stack, parent } = setup('LambdaComputeArchOverride');
+
+		new LambdaCompute(parent, 'extra', { architecture: Architecture.X86_64 });
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			Architectures: ['x86_64'],
+		});
 	});
 });
