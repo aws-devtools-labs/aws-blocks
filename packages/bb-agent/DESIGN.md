@@ -81,12 +81,15 @@ The CDK class provisions:
 - **Handler grant:** the shared role is granted `bedrock-agentcore:InvokeAgentRuntime` (wildcard runtime
   ARN, to avoid a role↔runtime dependency cycle) so the RPC handler can start the loop.
 
-The container gets `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and `BLOCKS_RT_CALLBACK_URL` injected as
-environment variables. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the co-bundled backend re-derive its
-resource names in-process (session bucket, conversation/message tables) via the SDK-identifier
-registry — the same derivation the handler uses — so those names aren't injected. Only
-`BLOCKS_RT_CALLBACK_URL` (from `Realtime.publishCallbackUrl()`) must be passed, since the API Gateway
-Management endpoint isn't otherwise discoverable off the handler.
+The container gets four environment variables: `BB_AGENT_ID`, `BLOCKS_STACK_NAME`, and the config
+location `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY`. `BB_AGENT_ID` + `BLOCKS_STACK_NAME` let the
+co-bundled backend re-derive its resource names in-process (session bucket, conversation/message
+tables) via the SDK-identifier registry — the same derivation the handler uses — so those names aren't
+injected. `BLOCKS_CONFIG_BUCKET`/`BLOCKS_CONFIG_KEY` point the container at the shared config blob
+(from core's `getConfigLocation()`); `loadConfigToProcessEnv()` loads the **same full app config the
+handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered by the Realtime BB) and
+every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
+from the shared execution role.
 
 > **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned.
 

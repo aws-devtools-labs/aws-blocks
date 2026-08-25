@@ -26,5 +26,7 @@ in-process against the mock Realtime.
   `@strands-agents/sdk` to `^1.7.0` and added `bedrock-agentcore` + `@aws-sdk/client-bedrock-agentcore`.
 
 Deployment note: this changes the deployed infra shape (adds an AgentCore Runtime, removes the
-agent's SQS queue). Uses `@aws-blocks/bb-realtime`'s new `publishCallbackUrl()` for the endpoint to
-inject into the container.
+agent's SQS queue). The runtime is injected the config location (`BLOCKS_CONFIG_BUCKET`/
+`BLOCKS_CONFIG_KEY`, via core's `getConfigLocation()`) so its `loadConfigToProcessEnv()` loads the same
+full app config as the handler — this delivers the Realtime callback URL and any other config-backed BB
+value a tool touches.

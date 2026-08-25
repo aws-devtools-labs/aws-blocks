@@ -81,6 +81,11 @@ test('CDK: the loop runs as the shared execution role, which carries everything 
 	const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as { Properties?: Record<string, unknown> };
 	assert.ok(JSON.stringify(runtime.Properties ?? {}).includes('BlocksRole'), 'runtime executionRole should be the shared BlocksRole');
 	assert.ok(!json.includes('RuntimeRole'), 'no bespoke per-runtime role should be created');
+	// The container is given the config location so loadConfigToProcessEnv() loads the same full app
+	// config as the handler (delivers BLOCKS_RT_CALLBACK_URL + any config-backed BB values a tool needs).
+	const runtimeJson = JSON.stringify(runtime.Properties ?? {});
+	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_BUCKET'), 'runtime must be injected BLOCKS_CONFIG_BUCKET');
+	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_KEY'), 'runtime must be injected BLOCKS_CONFIG_KEY');
 });
 
 test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', () => {
