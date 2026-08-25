@@ -128,6 +128,17 @@ export type HostingConstructProps = {
    */
   skipRegionValidation?: boolean;
 
+  /**
+   * Preview `bypassCdn` — skip the CloudFront distribution and serve the site
+   * directly from an S3 static-website endpoint. **Static/SPA only** for now;
+   * an SSR deploy (manifest with compute) throws until the SSR bypass path
+   * (API-Gateway single origin) lands. When set, `distribution` is undefined,
+   * the endpoint is HTTP-only, and the assets bucket is public-read — intended
+   * strictly for throwaway preview environments. See
+   * `docs/design/HOSTING-PREVIEW-MODE.md` §5c.
+   */
+  bypassCdn?: boolean;
+
   /** Custom domain configuration. */
   domain?: HostingDomainConfig;
   /** WAF configuration. */
@@ -342,7 +353,14 @@ export type HostingConstructProps = {
  */
 export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
-  readonly distribution: Distribution;
+  /**
+   * The CloudFront distribution serving the site.
+   *
+   * **Undefined in preview `bypassCdn` mode**, where the site is served
+   * directly from an S3 static-website endpoint (no CloudFront). Guard access
+   * accordingly.
+   */
+  readonly distribution?: Distribution;
   readonly distributionUrl: string;
   readonly computeFunctions: Map<
     string,
@@ -407,6 +425,64 @@ export class HostingConstruct extends Construct {
       );
     }
     const buildId = manifest.buildId ?? generateBuildId();
+
+    // ---- Preview bypassCdn: serve directly from an S3 static website ----
+    // Skips the entire CloudFront path (distribution, KVS router, WAF, DNS,
+    // monitoring, atomic build-prefix cutover) for a throwaway preview. The
+    // site is served from a public S3 website endpoint (HTTP only). Static/SPA
+    // only: an SSR deploy needs an origin that can run the compute + serve
+    // assets, which the S3 website can't — that lands with the API-Gateway
+    // single-origin path (see docs/design/HOSTING-PREVIEW-MODE.md §5c).
+    if (props.bypassCdn) {
+      if (Object.keys(manifest.compute).length > 0) {
+        throw new HostingError('BypassCdnSsrUnsupportedError', {
+          message:
+            'preview.bypassCdn is only supported for static/SPA sites yet; this deploy has server compute (SSR).',
+          resolution:
+            'Deploy the SSR app with preview.bypassCdn off (it keeps CloudFront), or wait for the SSR bypass path (API-Gateway single origin). See docs/design/HOSTING-PREVIEW-MODE.md §5c.',
+        });
+      }
+      // SPA → any miss serves index.html so the client router deep-links;
+      // multi-page static → a real 404 doc when one exists, else index.html.
+      const spaFallback = manifest.staticAssets.spaFallback ?? true;
+      const errorDocument = spaFallback
+        ? 'index.html'
+        : manifest.errorPages?.[404]
+          ? manifest.errorPages[404].replace(/^\//, '')
+          : 'index.html';
+
+      const siteBucket = new Bucket(this, 'PreviewSiteBucket', {
+        websiteIndexDocument: 'index.html',
+        websiteErrorDocument: errorDocument,
+        publicReadAccess: true,
+        // A public website bucket must relax BLOCK_ALL. Preview-only; the
+        // whole point is an unauthenticated preview URL.
+        blockPublicAccess: new s3.BlockPublicAccess({
+          blockPublicAcls: false,
+          blockPublicPolicy: false,
+          ignorePublicAcls: false,
+          restrictPublicBuckets: false,
+        }),
+        removalPolicy: RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+      });
+      this.bucket = siteBucket;
+
+      // No atomic build-prefix here: upload the build to the bucket root so
+      // the website endpoint serves it directly (no CloudFront path rewrite).
+      new BucketDeployment(this, 'PreviewSiteDeployment', {
+        sources: [Source.asset(manifest.staticAssets.directory)],
+        destinationBucket: siteBucket,
+      });
+
+      this.distributionUrl = siteBucket.bucketWebsiteUrl;
+      new CfnOutput(this, 'HostingUrl', {
+        value: this.distributionUrl,
+        description: 'Preview site URL (S3 static-website endpoint, HTTP)',
+      });
+      // `distribution` intentionally left undefined; skip all CloudFront wiring.
+      return;
+    }
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning

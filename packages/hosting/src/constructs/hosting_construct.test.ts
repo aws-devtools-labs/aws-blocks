@@ -3455,3 +3455,76 @@ void describe('HostingConstruct — preview edge→regional (B2)', () => {
     );
   });
 });
+
+// ================================================================
+// Preview C — bypassCdn (static/SPA served from an S3 website)
+// ================================================================
+
+void describe('HostingConstruct — preview bypassCdn (C)', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('static/SPA: serves from a public S3 website, no CloudFront', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: { ...spaManifest(staticDir), staticAssets: { directory: staticDir, spaFallback: true } },
+      bypassCdn: true,
+    });
+
+    // No CloudFront distribution at all.
+    assert.strictEqual(construct.distribution, undefined, 'no distribution in bypass mode');
+    assert.ok(construct.distributionUrl, 'a website URL is exposed');
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    // A public S3 website bucket (index + SPA-fallback error doc = index.html).
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      WebsiteConfiguration: Match.objectLike({
+        IndexDocument: 'index.html',
+        ErrorDocument: 'index.html',
+      }),
+    });
+    // The build is uploaded (BucketDeployment custom resource present).
+    template.resourceCountIs('Custom::CDKBucketDeployment', 1);
+  });
+
+  void it('multi-page static: error document is 404.html when the manifest has one', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...spaManifest(staticDir),
+        staticAssets: { directory: staticDir, spaFallback: false },
+        errorPages: { 404: '/404.html' },
+      },
+      bypassCdn: true,
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::S3::Bucket', {
+      WebsiteConfiguration: Match.objectLike({ ErrorDocument: '404.html' }),
+    });
+  });
+
+  void it('SSR: bypassCdn throws (not supported yet)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    assert.throws(
+      () =>
+        new HostingConstruct(stack, 'Hosting', {
+          manifest: ssrManifest(staticDir, bundleDir),
+          bypassCdn: true,
+          skipRegionValidation: true,
+        }),
+      (err: HostingError) => {
+        assert.strictEqual(err.name, 'BypassCdnSsrUnsupportedError');
+        return true;
+      },
+    );
+  });
+});

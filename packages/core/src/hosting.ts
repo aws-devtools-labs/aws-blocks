@@ -495,7 +495,11 @@ export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
   public readonly bucket: cdk.aws_s3.Bucket;
   /** The CloudFront distribution. */
-  public readonly distribution: cdk.aws_cloudfront.Distribution;
+  /**
+   * The CloudFront distribution. **Undefined in preview `bypassCdn` mode**,
+   * where the site is served directly from an S3 static-website endpoint.
+   */
+  public readonly distribution?: cdk.aws_cloudfront.Distribution;
   /** The public URL of the deployed site (https://...). */
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
@@ -514,22 +518,10 @@ export class Hosting extends Construct {
     //    Resolved once, fanned out to the adapter (build) and the L3
     //    construct (infra). See PreviewProfile for the per-knob contract.
     const preview = resolvePreviewProfile(props.preview, this.node);
-    if (preview.bypassCdn) {
-      // C is scaffolded (profile + resolution + docs) but not yet wired
-      // through L5/L6 — fail loudly rather than silently ignoring the knob.
-      throw new Error(
-        "preview.bypassCdn is not implemented yet. It skips the CloudFront " +
-          "distribution and serves directly (S3 website for static/SPA; " +
-          "API-Gateway single origin for SSR). It requires making " +
-          "HostingConstruct.distribution optional (a breaking change) and a " +
-          "public endpoint — see docs/design/HOSTING-PREVIEW-MODE.md §5c for the " +
-          "full plan. Omit it for now.",
-      );
-    }
     if (preview.enabled) {
       console.log(
         `🏃 Hosting preview mode: trimResources=${preview.trimResources} ` +
-          `fastTeardown=${preview.fastTeardown} edgeToRegional=${preview.edgeToRegional}`,
+          `fastTeardown=${preview.fastTeardown} edgeToRegional=${preview.edgeToRegional} bypassCdn=${preview.bypassCdn}`,
       );
     }
 
@@ -722,6 +714,9 @@ export class Hosting extends Construct {
 
     const hostingProps: HostingConstructProps = {
       manifest,
+      // C — skip CloudFront, serve from an S3 website (static/SPA only; the
+      // construct throws for SSR until the API-Gateway single-origin lands).
+      bypassCdn: preview.bypassCdn,
       compute: normalizedCompute,
       domain: props.domain,
       waf: props.waf,
@@ -739,8 +734,20 @@ export class Hosting extends Construct {
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
+    // The single-origin API proxy (serving `/aws-blocks/*` through the same
+    // domain, no CORS) needs CloudFront. In preview `bypassCdn` mode there is
+    // no distribution, so the frontend must call the API at its own URL — the
+    // config.json still carries `apiUrl`, but cross-origin (CORS) applies.
     if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+      if (hosting.distribution) {
+        this.addApiBehaviors(hosting.distribution, props.api.apiUrl);
+      } else {
+        console.warn(
+          '⚠️  preview.bypassCdn: no CloudFront distribution, so the same-origin ' +
+            'API proxy (/aws-blocks/*) is unavailable. The frontend will call the ' +
+            'API at its own URL (cross-origin). Ensure the API allows the preview origin (CORS).',
+        );
+      }
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -770,26 +777,41 @@ export class Hosting extends Construct {
     // ── 8. Deploy config.json with resolved CDK tokens ───────────
     const buildId = manifest.buildId;
     if (buildId) {
+      // In preview `bypassCdn` mode the site is served from the S3 website
+      // ROOT (no `builds/<id>/` prefix, no CloudFront). Deploy the resolved
+      // config to `.blocks-sandbox/config.json` at the root and skip the
+      // distribution/invalidation wiring (there is no distribution).
+      const bypassCdn = !hosting.distribution;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [
-          s3deploy.Source.jsonData('config.json', this.buildConfigJson(props)),
+          s3deploy.Source.jsonData(
+            'config.json',
+            this.buildConfigJson(props, bypassCdn),
+          ),
         ],
         destinationBucket: hosting.bucket,
-        destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
+        destinationKeyPrefix: bypassCdn
+          ? '.blocks-sandbox'
+          : `builds/${buildId}/.blocks-sandbox`,
         prune: false,
-        distribution: hosting.distribution,
-        // The skew-protection viewer-request CloudFront function rewrites the
-        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
-        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
-        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
-        // a no-op for config.json. Invalidate the post-rewrite key too. (The
-        // primary guard against staleness is step 5a's no-cache placeholder;
-        // this is defense-in-depth so a post-deploy invalidation actually
-        // clears any edge entry at its real key.)
-        distributionPaths: [
-          `/builds/${buildId}/.blocks-sandbox/*`,
-          '/.blocks-sandbox/*',
-        ],
+        ...(bypassCdn
+          ? {}
+          : {
+              distribution: hosting.distribution,
+              // The skew-protection viewer-request CloudFront function rewrites
+              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
+              // BEFORE the cache lookup, so the real edge cache key lives under
+              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
+              // matches that key and is a no-op for config.json. Invalidate the
+              // post-rewrite key too. (The primary guard against staleness is
+              // step 5a's no-cache placeholder; this is defense-in-depth so a
+              // post-deploy invalidation actually clears any edge entry at its
+              // real key.)
+              distributionPaths: [
+                `/builds/${buildId}/.blocks-sandbox/*`,
+                '/.blocks-sandbox/*',
+              ],
+            }),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
@@ -861,20 +883,32 @@ export class Hosting extends Construct {
   /**
    * Build the config.json payload from props.
    *
-   * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
-   * so the frontend fetches through the same CloudFront domain (no CORS).
+   * When `api` is provided, the config normally uses a relative
+   * `/aws-blocks/api` URL so the frontend fetches through the same CloudFront
+   * domain (no CORS). In preview `bypassCdn` mode there is no CloudFront
+   * same-origin proxy, so the config carries the **absolute** API Gateway URL
+   * instead — the frontend calls the API cross-origin (the API must allow the
+   * preview origin via CORS).
    */
-  private buildConfigJson(props: HostingProps): Record<string, unknown> {
+  private buildConfigJson(
+    props: HostingProps,
+    bypassCdn = false,
+  ): Record<string, unknown> {
     return {
       ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+      ...(props.api
+        ? { apiUrl: bypassCdn ? props.api.apiUrl : BLOCKS_RPC_PREFIX }
+        : {}),
     };
   }
 
   /**
    * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+  private addApiBehaviors(
+    distribution: cdk.aws_cloudfront.Distribution,
+    apiUrl: string,
+  ): void {
     const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
     const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
@@ -891,8 +925,8 @@ export class Hosting extends Construct {
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
     };
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -901,7 +935,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -927,7 +961,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
     }
   }
 }
