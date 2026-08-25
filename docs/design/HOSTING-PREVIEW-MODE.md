@@ -185,6 +185,21 @@ Measurements (§5b + the PR validation) proved first-deploy wall-clock is domina
 
 **Recommended build order:** (1) make `distribution` optional + guard uses; (2) static/SPA S3-website bypass (root upload + website bucket); (3) SSR via API-Gateway single origin. Ships behind `preview.bypassCdn`, off by default even under preview. **Breaking + security-touching → flag for maintainer review before merge** (AGENTS core rules 8/breaking-change + production-safety).
 
+### C must be framework-agnostic — route off the manifest, not `/_next/*`
+
+CloudFront's KVS router is framework-agnostic: it routes off `manifest.routes[]` (`pattern → target` where target is `'static'` or a compute name) plus `manifest.staticAssets.spaFallback`. The API-Gateway single origin **must do the same** — derive every integration from the manifest, never from Next-specific paths — so it works for all adapters:
+
+| Framework | Manifest shape | Single-origin routing |
+|---|---|---|
+| **SPA** (`spa`) | no compute; `spaFallback:true` | all → S3; gateway 403/404 → `index.html` (200) |
+| **static / Astro static** (`static`) | no compute; `spaFallback:false`; directory-index | S3 with `/{p}` → `/{p}/index.html` key resolution; real 404 doc |
+| **Next.js** (`nextjs`) | compute + `_next/static` static routes + image-opt + ISR | routes→S3/server per manifest; `/{proxy+}`→SSR Lambda; image route→image Lambda |
+| **Nuxt/Nitro** (`nitro`) | compute `type:'http-server'` (Web Adapter) + static + `nitro-s3` cache + IPX image | static routes→S3; `/{proxy+}`→server; IPX already rides the shared REST API |
+| **Astro SSR** (`astro`) | compute (entry.mjs, middleware bundled) + static | static routes→S3; `/{proxy+}`→server |
+| **SvelteKit** (`sveltekit`) | compute + static | static routes→S3; `/{proxy+}`→server |
+
+Common contract: **static `manifest.routes` → S3 integration; the catch-all `/{proxy+}` → the SSR/server Lambda (the framework's own router is the source of truth); `/aws-blocks/*` + `/auth/*` → backend API proxy.** Only per-framework *extras* (Next image-opt vs Nuxt IPX, directory-index vs spaFallback) need special-casing, and those are already distinguished in the manifest. **Validation must cover all five** (Next, Nuxt, Astro, SvelteKit, SPA) — the worktree already has `hosting-ssr`, `hosting-ssr-nuxt`, `hosting-ssr-astro`, `hosting-ssr-sveltekit`, `hosting-spa`, all linked to the local packages, so each can be deployed baseline-vs-bypass and regression-checked.
+
 ## 6. Experiment plan (§Execution step 3)
 
 Measure Phase-1 savings on a real app in `/Users/osamariz/playground/test-apps` before committing to the design:
