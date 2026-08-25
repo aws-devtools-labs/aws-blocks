@@ -13,13 +13,3 @@ declare module "@aws-blocks/hosting" {
 		"DEMO_CONFIG": string;
 	}
 }
-
-declare module "@aws-blocks/hosting/secret" {
-	interface HostingSecretRegistry {
-		"DEMO_SECRET": string;
-	}
-
-	interface HostingConfigRegistry {
-		"DEMO_CONFIG": string;
-	}
-}

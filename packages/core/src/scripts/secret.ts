@@ -11,7 +11,7 @@
  * @module
  */
 
-import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/secret';
+import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting';
 import { blocksSecretPrefix } from '../secret-naming.js';
 
 /** Set (create or overwrite) a Blocks secret. */

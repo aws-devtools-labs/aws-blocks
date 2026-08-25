@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import { _setSynthSecretFetcher } from '@aws-blocks/hosting';
+import { _setSynthSecretFetcher } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';

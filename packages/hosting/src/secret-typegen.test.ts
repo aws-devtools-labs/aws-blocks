@@ -166,7 +166,7 @@ void describe('scanValueKeys()', () => {
 });
 
 void describe('renderHostingValuesDts()', () => {
-	void it('augments BOTH the barrel and the /secret subpath', () => {
+	void it('augments the configured module specifier(s)', () => {
 		const dts = renderHostingValuesDts({ secretKeys: ['A'], configKeys: ['B'] });
 		for (const spec of DEFAULT_TYPEGEN_MODULES) {
 			assert.ok(dts.includes(`declare module "${spec}"`), `missing augmentation for ${spec}`);

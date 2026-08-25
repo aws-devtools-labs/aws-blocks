@@ -14,7 +14,7 @@ export {
   type SecretValue,
   secret,
   type ValueKind,
-} from '@aws-blocks/hosting/secret';
+} from '@aws-blocks/hosting';
 export { __PIPELINE_STAGE_SCOPE__ } from './constants.js';
 export type { DeployStageProps } from './pipeline-construct.js';
 export { DeployStage, Pipeline } from './pipeline-construct.js';

@@ -33,7 +33,10 @@ Use `HostingConstruct` directly when you need:
 ## Main exports
 
 ```ts
-// Root entry point
+// Root entry point: the CDK-free value API (safe to import in SSR/runtime code)
+import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting';
+
+// Sub-path: the construct, manifest types, and the CDK resolution engine
 import {
   HostingConstruct,
   HostingConstructProps,
@@ -45,20 +48,18 @@ import {
   ComputeResource,
   FrameworkAdapterFn,
   HostingError,
-} from '@aws-blocks/hosting';
-
-// Sub-path: construct only
-import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+} from '@aws-blocks/hosting/constructs';
 
 // Sub-path: adapters only
 import { nextjsAdapter, nuxtAdapter, astroAdapter, spaAdapter } from '@aws-blocks/hosting/adapters';
 
 // Sub-path: typed errors
 import { HostingError } from '@aws-blocks/hosting/error';
-
-// Sub-path: secrets & config (CDK-free — safe to import in SSR/runtime code)
-import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting/secret';
 ```
+
+> The value API is on the bare `@aws-blocks/hosting` entry so an SSR/runtime bundle
+> can import `getSecret`/`getConfig` without pulling in CDK. The construct and the
+> resolution engine live on `/constructs`.
 
 ## Secrets & config
 
@@ -74,8 +75,8 @@ owns everything else (the CLI write, the IAM grant, the runtime read):
 ### Declare — in your hosting infra
 
 ```ts
-import { HostingConstruct } from '@aws-blocks/hosting';
-import { secret, config } from '@aws-blocks/hosting/secret';
+import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+import { secret, config } from '@aws-blocks/hosting';
 
 new HostingConstruct(stack, 'Web', {
   manifest, // produced by a framework adapter (see "Main exports")
@@ -112,8 +113,8 @@ locator, so `getSecret` / `getConfig` resolve it identically (managed
 ### Read — in your SSR / API / runtime code
 
 ```ts
-// Import from the CDK-free subpath so no CDK is pulled into the runtime bundle:
-import { getSecret, getConfig } from '@aws-blocks/hosting/secret';
+// The value API is the bare entry (CDK-free), so no CDK is pulled into the runtime bundle:
+import { getSecret, getConfig } from '@aws-blocks/hosting';
 
 const key = await getSecret('STRIPE_KEY'); // Secrets Manager
 const flags = await getConfig('FEATURE_FLAGS'); // SSM

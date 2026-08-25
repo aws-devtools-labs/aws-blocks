@@ -1,14 +1,14 @@
-import { Duration } from 'aws-cdk-lib';
-import {
+import type { Duration } from 'aws-cdk-lib';
+import type {
   Distribution,
   IResponseHeadersPolicy,
   PriceClass,
 } from 'aws-cdk-lib/aws-cloudfront';
-import { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
-import { IKey } from 'aws-cdk-lib/aws-kms';
-import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
-import { FrameworkAdapterFn } from './adapters/index.js';
+import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
+import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
+import type { FrameworkAdapterFn } from './adapters/index.js';
 
 /**
  * Open union type for framework names.
@@ -222,7 +222,7 @@ export type HostingProps = {
    * change-without-redeploy value, do **not** put it here: reference it with
    * `secret('KEY')` (→ AWS Secrets Manager) or `config('KEY')` (→ SSM Parameter Store)
    * and read it at runtime with `getSecret('KEY')` / `getConfig('KEY')` from the
-   * CDK-free `@aws-blocks/hosting/secret` subpath. Only the store locator is injected —
+   * CDK-free `@aws-blocks/hosting` value API. Only the store locator is injected —
    * never the value — and the value never enters the template.
    *
    * @example

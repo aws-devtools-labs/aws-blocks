@@ -4,19 +4,15 @@
 
 ```ts
 
-import { config } from '@aws-blocks/hosting/secret';
-import { configEnvVarName } from '@aws-blocks/hosting/secret';
-import { ConfigValue } from '@aws-blocks/hosting/secret';
-import { isConfig } from '@aws-blocks/hosting/secret';
-import { isManagedValue } from '@aws-blocks/hosting/secret';
-import { isSecret } from '@aws-blocks/hosting/secret';
-import { ManagedValue } from '@aws-blocks/hosting/secret';
-import { parameterName } from '@aws-blocks/hosting/secret';
-import { secret } from '@aws-blocks/hosting/secret';
-import { secretEnvVarName } from '@aws-blocks/hosting/secret';
-import { SecretValue } from '@aws-blocks/hosting/secret';
-import { storeForKind } from '@aws-blocks/hosting/secret';
-import { ValueKind } from '@aws-blocks/hosting/secret';
+import { config } from '@aws-blocks/hosting';
+import { ConfigValue } from '@aws-blocks/hosting';
+import { isConfig } from '@aws-blocks/hosting';
+import { isManagedValue } from '@aws-blocks/hosting';
+import { isSecret } from '@aws-blocks/hosting';
+import { ManagedValue } from '@aws-blocks/hosting';
+import { secret } from '@aws-blocks/hosting';
+import { SecretValue } from '@aws-blocks/hosting';
+import { ValueKind } from '@aws-blocks/hosting';
 
 // @public
 export class ApiError extends Error {
@@ -71,8 +67,6 @@ export interface BuildingBlockMeta {
 export function clearRouteRegistry(): void;
 
 export { config }
-
-export { configEnvVarName }
 
 export { ConfigValue }
 
@@ -132,8 +126,6 @@ export function matchRoute(method: string, path: string): {
     route: RegisteredRoute;
     params: Record<string, string>;
 } | null;
-
-export { parameterName }
 
 // @public
 export function preloadConfig(): Promise<void>;
@@ -227,11 +219,7 @@ export type ScopeParent = Scope | {
 
 export { secret }
 
-export { secretEnvVarName }
-
 export { SecretValue }
-
-export { storeForKind }
 
 // @public
 export function unlockRouteRegistry(): void;

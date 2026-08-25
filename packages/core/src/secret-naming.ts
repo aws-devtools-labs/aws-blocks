@@ -25,8 +25,8 @@
  * @module
  */
 
-import type { StoreConfig } from '@aws-blocks/hosting';
-import { secretStoreLocator } from '@aws-blocks/hosting/secret';
+import type { StoreConfig } from '@aws-blocks/hosting/constructs';
+import { secretStoreLocator } from '@aws-blocks/hosting';
 import { getStackId } from './scripts/stack-id.js';
 
 /** Base Blocks prefix for `secret()` values (Secrets Manager); scoped by `stackId`. */

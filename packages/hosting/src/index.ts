@@ -1,25 +1,20 @@
-export { FrameworkAdapterFn, NextjsAdapterOptions } from './adapters/index.js';
-export {
-	generateBuildId,
-	generateBuildIdFunctionCode,
-	HostingConstruct,
-	HostingConstructProps,
-	HostingDomainConfig,
-	HostingWafConfig,
-} from './constructs/hosting_construct.js';
-export type { SkewProtectionConfig } from './constructs/skew_protection.js';
-export { HostingError } from './hosting_error.js';
-export {
-	CacheConfig,
-	ComputeResource,
-	CustomHeader,
-	DeployManifest,
-	ImageConfig,
-	MiddlewareConfig,
-	Redirect,
-	Rewrite,
-	RouteBehavior,
-} from './manifest/types.js';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * `@aws-blocks/hosting` — the **CDK-free value API**: the two intent functions
+ * (`secret()` → Secrets Manager, `config()` → SSM), the runtime resolvers
+ * (`getSecret`/`getConfig`), the shared CLI core, and the typegen engine. Safe to
+ * import from application/runtime code (SSR routes, Lambda) — it pulls in no CDK.
+ *
+ * The CDK construct and the resolution engine live on the `/constructs` subpath
+ * ({@link file://./constructs/index.ts}); the runtime getters are re-exported from
+ * there too via that module's imports, but application code only ever needs this
+ * entry and `/constructs`.
+ *
+ * @module
+ */
+
 // Two intent functions (I1, Approach B): secret() → Secrets Manager, config() → SSM.
 export {
 	type ConfigValue,
@@ -50,28 +45,7 @@ export {
 	setValue,
 	type ValueCliOptions,
 } from './secret-cli.js';
-// CDK-aware resolution engine — marker/BYO → infra wiring. Used by core.Hosting,
-// a standalone hosting app, and (synth helpers) pipeline.
-export {
-	_setSynthExistsChecker,
-	_setSynthSecretFetcher,
-	assertMarkersExistAtSynth,
-	type ByoBinding,
-	collectSynthMarkers,
-	type DomainNameInput,
-	type EnvValue,
-	isCdkParameter,
-	isCdkSecret,
-	type KindStoreOptions,
-	partitionEnvironment,
-	resolveDomainNames,
-	resolveSecretsAtSynth,
-	type SecretFetcher,
-	type StoreConfig,
-	type SynthExistsChecker,
-	wireByo,
-	wireManagedValue,
-} from './secret-resolve.js';
+// Runtime resolvers — typed against the (typegen-augmented) key registries.
 export {
 	type ConfigKey,
 	type ConfigValueOf,
@@ -82,7 +56,9 @@ export {
 	type SecretKey,
 	type SecretValueOf,
 } from './secret-runtime.js';
+// Typegen engine (drives `hosting-typegen`).
 export {
+	DEFAULT_MARKER_MODULES,
 	DEFAULT_TYPEGEN_INCLUDE,
 	DEFAULT_TYPEGEN_MODULE,
 	DEFAULT_TYPEGEN_MODULES,
@@ -100,4 +76,3 @@ export {
 	type WatchOptions,
 	watchHostingValues,
 } from './secret-typegen.js';
-export { FrameworkType, HostingProps, HostingResources } from './types.js';

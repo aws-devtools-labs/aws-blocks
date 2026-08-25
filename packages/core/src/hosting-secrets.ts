@@ -13,6 +13,7 @@
  * @module
  */
 
+import type { ManagedValue } from '@aws-blocks/hosting';
 import {
 	type ByoBinding,
 	type DomainNameInput as LeafDomainNameInput,
@@ -22,12 +23,11 @@ import {
 	partitionEnvironment as leafPartitionEnvironment,
 	resolveDomainNames as leafResolveDomainNames,
 	resolveSecretsAtSynth as leafResolveSecretsAtSynth,
-	wireByo as leafWireByo,
-	wireManagedValue as leafWireManagedValue,
-	type ManagedValue,
 	type SecretFetcher,
 	type StoreConfig,
-} from '@aws-blocks/hosting';
+	wireByo as leafWireByo,
+	wireManagedValue as leafWireManagedValue,
+} from '@aws-blocks/hosting/constructs';
 import type * as cdk from 'aws-cdk-lib';
 import { blocksStoreConfig } from './secret-naming.js';
 

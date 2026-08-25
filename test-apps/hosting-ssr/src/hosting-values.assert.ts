@@ -7,8 +7,8 @@
 // (TS2578) and the build FAILS. This is the CI guard for the zero-code type-safety
 // feature: the keys come from `secret('DEMO_SECRET')` / `config('DEMO_CONFIG')` in
 // aws-blocks/index.cdk.ts, and the getters are imported here from the same CDK-free
-// subpath the SSR route uses (`@aws-blocks/hosting/secret`).
-import { getConfig, getSecret } from '@aws-blocks/hosting/secret';
+// value API the SSR route uses (`@aws-blocks/hosting`).
+import { getConfig, getSecret } from '@aws-blocks/hosting';
 
 export async function _assertHostingValueTypesNarrow(): Promise<void> {
   await getSecret('DEMO_SECRET'); // declared with secret() → valid

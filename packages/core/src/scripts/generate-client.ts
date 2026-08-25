@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { isManagedValue } from '@aws-blocks/hosting/secret';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { dirname } from 'path';
-import { pathToFileURL } from 'url';
+import { isManagedValue } from '@aws-blocks/hosting';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { API_NAMESPACE_MARKER } from '../api.js';
 
 /**

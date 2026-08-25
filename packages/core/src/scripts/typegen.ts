@@ -8,11 +8,11 @@
  * that narrows the runtime getters to your declared keys (autocomplete + typo
  * errors) with no call-site change.
  *
- * Thin pass-through to the `@aws-blocks/hosting` engine — the getters live in
- * `@aws-blocks/hosting`, so the generated file augments that module (and its
- * `/secret` subpath) by default; a Blocks app needs no extra configuration.
+ * Thin pass-through to the `@aws-blocks/hosting` engine — the getters live on
+ * `@aws-blocks/hosting`, so the generated file augments that module by default;
+ * a Blocks app needs no extra configuration.
  *
  * @module
  */
 
-export { runTypegenCli } from '@aws-blocks/hosting/secret';
+export { runTypegenCli } from '@aws-blocks/hosting';

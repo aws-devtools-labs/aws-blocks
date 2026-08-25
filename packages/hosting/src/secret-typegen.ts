@@ -38,14 +38,13 @@ import type * as TS from 'typescript';
 import type { ValueKind } from './secret.js';
 
 /**
- * Module specifiers the generated `.d.ts` augments. **Both are required:** TypeScript
- * module augmentation narrows a function only for the *exact* specifier the caller
- * imports from — augmenting the barrel does not reach the `/secret` subpath, and vice
- * versa. Apps read via either (`@aws-blocks/hosting` or the CDK-free
- * `@aws-blocks/hosting/secret`), so we augment both; declaring the same members under
- * two module scopes is not a duplicate-identifier error.
+ * Module specifiers the generated `.d.ts` augments. The value API (`getSecret`/
+ * `getConfig`) lives on the bare `@aws-blocks/hosting` entry, and module
+ * augmentation narrows a function only for the *exact* specifier the caller imports
+ * from — so this is the single specifier apps read the getters from. (Override via
+ * `moduleSpecifiers` to also augment a re-export path.)
  */
-export const DEFAULT_TYPEGEN_MODULES = ['@aws-blocks/hosting', '@aws-blocks/hosting/secret'];
+export const DEFAULT_TYPEGEN_MODULES = ['@aws-blocks/hosting'];
 
 /** The primary module specifier the generated `.d.ts` augments. */
 export const DEFAULT_TYPEGEN_MODULE = DEFAULT_TYPEGEN_MODULES[0];
@@ -97,9 +96,8 @@ export interface TypegenOptions {
 	 */
 	readonly include?: string[];
 	/**
-	 * Module specifiers the generated augmentation targets. Both the barrel and the
-	 * `/secret` subpath are augmented by default so `getSecret`/`getConfig` narrow
-	 * regardless of which one the app imports from (see {@link DEFAULT_TYPEGEN_MODULES}).
+	 * Module specifiers the generated augmentation targets. The bare `@aws-blocks/hosting` entry
+	 * by default (that is where apps read the getters from); see {@link DEFAULT_TYPEGEN_MODULES}.
 	 * @default {@link DEFAULT_TYPEGEN_MODULES}
 	 */
 	readonly moduleSpecifiers?: string[];
@@ -129,7 +127,6 @@ const VALUE_FNS: Record<string, ValueKind> = { secret: 'secret', config: 'config
  */
 export const DEFAULT_MARKER_MODULES = [
 	'@aws-blocks/hosting',
-	'@aws-blocks/hosting/secret',
 	'@aws-blocks/blocks/cdk',
 	'@aws-blocks/blocks',
 	'@aws-blocks/core/cdk',
@@ -378,8 +375,8 @@ function renderRegistry(name: string, keys: string[], types: Record<string, stri
 /**
  * Render the `.d.ts` that augments the hosting value registries. Deterministic
  * (keys are sorted) so `--check` is stable and diffs stay minimal. Emits one
- * `declare module` block per specifier (the barrel and the `/secret` subpath by
- * default) — augmentation narrows only for the exact import specifier used.
+ * `declare module` block per specifier — augmentation narrows only for the exact
+ * import specifier the app reads the getters from.
  *
  * @param scan - Keys from {@link scanValueKeys}.
  * @param moduleSpecifiers - Modules to augment (default {@link DEFAULT_TYPEGEN_MODULES}).

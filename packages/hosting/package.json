@@ -25,8 +25,8 @@
       "default": "./dist/index.js"
     },
     "./constructs": {
-      "types": "./dist/constructs/hosting_construct.d.ts",
-      "default": "./dist/constructs/hosting_construct.js"
+      "types": "./dist/constructs/index.d.ts",
+      "default": "./dist/constructs/index.js"
     },
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
@@ -35,10 +35,6 @@
     "./error": {
       "types": "./dist/hosting_error.d.ts",
       "default": "./dist/hosting_error.js"
-    },
-    "./secret": {
-      "types": "./dist/secret-exports.d.ts",
-      "default": "./dist/secret-exports.js"
     }
   },
   "main": "dist/index.js",
