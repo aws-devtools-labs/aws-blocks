@@ -50,7 +50,7 @@ export class Agent extends Scope {
 			});
 		}
 
-		const rt = new Realtime(this, 'rt', {
+		new Realtime(this, 'rt', {
 			namespaces: {
 				chunks: Realtime.namespace(agentStreamChunkSchema),
 			},
@@ -58,12 +58,12 @@ export class Agent extends Scope {
 
 		// The agent loop runs on the AgentCore Runtime (as the shared Blocks execution role) and
 		// streams to the browser over Realtime. AgentCoreRuntime co-bundles the app backend,
-		// provisions the runtime, adds Bedrock + Realtime-publish to the shared role (the session
-		// bucket and tables above already grant it), and grants the RPC handler permission to invoke
-		// it. Kept self-contained so it can later fold into a per-BB compute abstraction.
+		// provisions the runtime, adds the bedrock-agentcore trust + Bedrock to the shared role, and
+		// injects the config location so the container loads the same app config as the handler
+		// (the session bucket/tables and Realtime publish are already granted to that role). Kept
+		// self-contained so it can later fold into a per-BB compute abstraction.
 		new AgentCoreRuntime(this, 'runtime', {
 			agentFullId: this.fullId,
-			realtime: rt,
 			agentcoreAssetPath: config?.agentcoreAssetPath,
 		});
 	}
