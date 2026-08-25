@@ -47,6 +47,13 @@ export type NextjsAdapterOptions = {
    * skips `experimental.EdgeFunction` (no us-east-1 edge stack).
    */
   edgeToRegional?: boolean;
+  /**
+   * C (preview `bypassCdn`) — build the SSR bundle for an **HTTP API v2**
+   * origin (served at the domain root) instead of the CloudFront-fronted REST
+   * API: emit `converter: 'aws-apigw-v2'` + the buffered `aws-lambda` wrapper
+   * (HTTP API has no response streaming), and skip the streaming-wrapper patch.
+   */
+  bypassCdn?: boolean;
 };
 
 // ---- OpenNext output types (internal) ----
@@ -122,7 +129,7 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild, edgeToRegional } = options;
+  const { projectDir, configPath, skipBuild, edgeToRegional, bypassCdn } = options;
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
@@ -158,6 +165,7 @@ export const nextjsAdapter = (
         projectDir,
         edgeRoutes,
         edgeToRegional,
+        bypassCdn,
       );
     }
     try {
@@ -176,7 +184,12 @@ export const nextjsAdapter = (
 
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
-    patchStreamingWrapperForApiGateway(openNextDir);
+    // Skipped under bypassCdn: that path builds with the buffered `aws-lambda`
+    // wrapper for HTTP API v2 (which has no response streaming), so there is
+    // no streaming wrapper to patch.
+    if (!bypassCdn) {
+      patchStreamingWrapperForApiGateway(openNextDir);
+    }
 
     // Patch each edge bundle's process import banner for Lambda@Edge
     // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
@@ -1108,9 +1121,20 @@ const installGeneratedOpenNextConfig = (
   projectDir: string,
   edgeRoutes: EdgeRoute[] = [],
   edgeToRegional = false,
+  bypassCdn = false,
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
   const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, edgeToRegional);
+  // Default (CloudFront + REST-API STREAM) path: v1 converter + the streaming
+  // wrapper. Under `bypassCdn` the SSR Lambda is fronted by an HTTP API v2
+  // origin at the domain root, which sends payload v2 and CANNOT stream — so
+  // build the `default` function BUFFERED: v2 converter + the plain
+  // `aws-lambda` wrapper (and the streaming-wrapper patch is skipped, see the
+  // adapter build flow). Trade-off: SSR responses are buffered in preview
+  // (no progressive/streaming render); production keeps streaming.
+  const defaultOverride = bypassCdn
+    ? "converter: 'aws-apigw-v2',\n      wrapper: 'aws-lambda',"
+    : "converter: 'aws-apigw-v1',\n      wrapper: 'aws-lambda-streaming',";
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
   // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
@@ -1122,8 +1146,7 @@ const config = {
   default: {
     minify: true,
     override: {
-      converter: 'aws-apigw-v1',
-      wrapper: 'aws-lambda-streaming',
+      ${defaultOverride}
     },
   },${edgeBlock}
 };

@@ -3465,7 +3465,7 @@ void describe('HostingConstruct — preview bypassCdn (C)', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  void it('static/SPA: single API-Gateway origin, no CloudFront', () => {
+  void it('static/SPA: HTTP API v2 single origin (root), no CloudFront', () => {
     const staticDir = createStaticDir();
     const stack = createStack();
 
@@ -3474,18 +3474,24 @@ void describe('HostingConstruct — preview bypassCdn (C)', () => {
       bypassCdn: true,
     });
 
-    // No CloudFront distribution — served from an API-Gateway single origin.
+    // No CloudFront — served from an HTTP API v2 single origin at the root.
     assert.strictEqual(construct.distribution, undefined, 'no distribution in bypass mode');
     assert.ok(construct.distributionUrl, 'a single-origin URL is exposed');
 
     const template = Template.fromStack(stack);
     template.resourceCountIs('AWS::CloudFront::Distribution', 0);
-    template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
-    // Assets uploaded to builds/<id>/ (private bucket; API GW reads via a role).
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    // The asset-proxy Lambda serves static from the private bucket.
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ SPA_FALLBACK: '1' }),
+      }),
+    });
+    // Assets uploaded to builds/<id>/.
     template.resourceCountIs('Custom::CDKBucketDeployment', 1);
   });
 
-  void it('SSR: single API-Gateway origin fronts the SSR Lambda, no CloudFront', () => {
+  void it('SSR: HTTP API v2 single origin fronts the SSR Lambda, no CloudFront', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();
     const stack = createStack();
@@ -3502,10 +3508,10 @@ void describe('HostingConstruct — preview bypassCdn (C)', () => {
 
     const template = Template.fromStack(stack);
     template.resourceCountIs('AWS::CloudFront::Distribution', 0);
-    template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
-    // A Lambda proxy integration wires the catch-all to the SSR function.
-    template.hasResourceProperties('AWS::ApiGateway::Method', {
-      HttpMethod: 'ANY',
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    // The catch-all ($default) route wires to the SSR function via a v2 integration.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: '$default',
     });
   });
 
@@ -3522,12 +3528,12 @@ void describe('HostingConstruct — preview bypassCdn (C)', () => {
     });
 
     const template = Template.fromStack(stack);
-    // /aws-blocks and /auth resources exist on the single-origin API.
-    template.hasResourceProperties('AWS::ApiGateway::Resource', {
-      PathPart: 'aws-blocks',
+    // /aws-blocks and /auth greedy routes exist on the single-origin HTTP API.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'ANY /aws-blocks/{proxy+}',
     });
-    template.hasResourceProperties('AWS::ApiGateway::Resource', {
-      PathPart: 'auth',
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'ANY /auth/{proxy+}',
     });
   });
 });

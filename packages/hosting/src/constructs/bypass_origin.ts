@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Construct } from 'constructs';
+import { Duration } from 'aws-cdk-lib';
+import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import {
-  AwsIntegration,
-  HttpIntegration,
-  LambdaIntegration,
-  ResponseTransferMode,
-  RestApi,
-  type IResource,
-} from 'aws-cdk-lib/aws-apigateway';
-import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+  HttpLambdaIntegration,
+  HttpUrlIntegration,
+} from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Fn } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
-import { Fn } from 'aws-cdk-lib';
 import type { DeployManifest } from '../manifest/types.js';
 
 /**
@@ -24,9 +22,9 @@ export type BypassOriginConstructProps = {
   manifest: DeployManifest;
   /** Build id — assets live under `builds/<buildId>/` in the bucket. */
   buildId: string;
-  /** The private assets bucket (API Gateway reads it via an IAM role, not public). */
+  /** The private assets bucket (read by the asset-proxy Lambda, not public). */
   bucket: IBucket;
-  /** Compute functions by manifest name (SSR server, image-opt, etc.). */
+  /** Compute functions by manifest name (SSR server, etc.). */
   computeFunctions: Map<string, IFunction>;
   /**
    * The SSR/server compute name that owns the catch-all (`'default'` or
@@ -35,9 +33,9 @@ export type BypassOriginConstructProps = {
   serverComputeName?: string;
   /**
    * Backend API Gateway URL (`https://…/aws-blocks/api`) to proxy `/aws-blocks/*`
-   * and `/auth/*` through this SAME origin — so the frontend calls the API
-   * same-origin (no CORS, `SameSite=Lax` cookies work). Omit for a site with
-   * no backend.
+   * + `/auth/*` through this SAME origin — so the frontend calls the API
+   * same-origin (`SameSite=Lax` cookies flow, no CORS). Omit for a site with no
+   * backend.
    */
   backendApiUrl?: string;
 };
@@ -45,106 +43,77 @@ export type BypassOriginConstructProps = {
 // ---- Construct ----
 
 /**
- * **Preview `bypassCdn` — API-Gateway single origin (no CloudFront).**
+ * **Preview `bypassCdn` — HTTP API v2 single origin (no CloudFront).**
  *
  * Serves an entire hosting deploy — static assets, SSR compute, and the Blocks
- * backend API — from ONE API Gateway REST API, so the whole app is same-origin
- * (cookies + no CORS) and no CloudFront distribution is created (fast, throwaway
- * preview deploys).
+ * backend API — from ONE **HTTP API v2** origin at the **domain root** (the
+ * `$default` stage has no `/stage` path), so the framework's root-absolute URLs
+ * (`/_next/*`, `/`, `/favicon.ico`) resolve correctly and the app is
+ * same-origin (cookies + no CORS). No CloudFront distribution is created (fast,
+ * throwaway preview deploys).
  *
- * Framework-agnostic: routing is derived from the {@link DeployManifest}, not
- * from framework-specific paths. Because API Gateway routes by path resource
- * (not glob like CloudFront), the model is:
- *
- * - **static route prefixes** (`/_next/*`, `/_astro/*`, `/_nuxt/*`, exact files
- *   like `/favicon.ico`) → an S3 `AwsIntegration` (GET, private bucket via an
- *   IAM role) mapping the path to `builds/<buildId>/<path>`.
+ * Framework-agnostic: routing is derived from the {@link DeployManifest}:
+ * - **static prefixes** (`_next`, `_astro`, `_nuxt`, `_app`, exact root files)
+ *   from `staticAssets.immutablePaths` + `routes[]` → a small asset-proxy
+ *   Lambda that streams objects out of the private bucket (`builds/<buildId>/…`).
  * - **`/aws-blocks/{proxy+}` + `/auth/{proxy+}`** → HTTP proxy to the backend
- *   API Gateway (same-origin API — this is what fixes cookie auth in bypass).
- * - **catch-all `/{proxy+}` + `/`** → the SSR server Lambda (the framework's
- *   own router remains the source of truth). For a static/SPA site (no compute)
- *   the catch-all serves `index.html` from S3.
+ *   API Gateway (same-origin — this is what makes cookie auth work in bypass).
+ * - **`$default` (catch-all)** → the SSR server Lambda (built for HTTP API v2,
+ *   buffered — HTTP API has no response streaming). For a static/SPA site (no
+ *   compute) the catch-all falls back to `index.html` from S3.
  *
- * Trade-offs (documented, preview-only): HTTP behavior is API-Gateway's
- * (~29 s / ~10 MB / buffered — same as the SSR path already has behind
- * CloudFront), no edge cache, no WAF/security-headers/compression.
+ * **Trade-offs (documented, preview-only):** SSR responses are **buffered**
+ * (no progressive/streaming render — HTTP API can't stream; production keeps
+ * streaming via CloudFront + REST-API STREAM), no edge cache, no
+ * WAF/security-headers/compression.
  */
 export class BypassOriginConstruct extends Construct {
-  /** The single public origin URL (`https://{id}.execute-api.{region}.amazonaws.com/prod`). */
+  /** The single public origin URL (domain root — no stage path). */
   readonly url: string;
-  readonly api: RestApi;
+  readonly api: HttpApi;
 
   constructor(scope: Construct, id: string, props: BypassOriginConstructProps) {
     super(scope, id);
     const { manifest, buildId, bucket, computeFunctions, serverComputeName, backendApiUrl } = props;
 
-    this.api = new RestApi(this, 'BypassApi', {
-      // Binary passthrough so images/fonts/js from S3 aren't corrupted.
-      binaryMediaTypes: ['*/*'],
-      deployOptions: { stageName: 'prod' },
-      // The framework router / S3 handle 404s; don't let API GW inject its own.
-      restApiName: `bypass-${buildId}`.substring(0, 128),
+    const spaFallback = manifest.staticAssets.spaFallback ?? true;
+    const serverFn = serverComputeName ? computeFunctions.get(serverComputeName) : undefined;
+
+    // ---- Asset-proxy Lambda: streams objects from the private bucket ----
+    // HTTP API v2 can't use the REST S3 AwsIntegration, so a tiny Lambda reads
+    // `builds/<buildId>/<path>` and returns it. Keeps the bucket private (no
+    // public-read), which is portable across accounts with S3 BPA on.
+    const assetFn = new LambdaFunction(this, 'AssetProxy', {
+      runtime: Runtime.NODEJS_22_X,
+      handler: 'index.handler',
+      timeout: Duration.seconds(15),
+      memorySize: 256,
+      environment: {
+        BUCKET: bucket.bucketName,
+        KEY_PREFIX: `builds/${buildId}`,
+        // Static/SPA with no server: a miss serves index.html so the client
+        // router can deep-link. With a server, a miss is a real 404 (the
+        // server owns routing).
+        SPA_FALLBACK: !serverFn && spaFallback ? '1' : '',
+      },
+      code: Code.fromInline(ASSET_PROXY_SOURCE),
+    });
+    bucket.grantRead(assetFn);
+    const assetIntegration = new HttpLambdaIntegration('AssetInt', assetFn);
+
+    // ---- HTTP API (root path via the auto `$default` stage) ----
+    // Default route → SSR Lambda (buffered, payload v2 matches the
+    // `aws-apigw-v2` converter the adapter builds under bypassCdn). No server
+    // → default to the asset proxy (which serves index.html on miss for SPA).
+    const defaultIntegration = serverFn
+      ? new HttpLambdaIntegration('SsrInt', serverFn)
+      : assetIntegration;
+    this.api = new HttpApi(this, 'BypassApi', {
+      apiName: `bypass-${buildId}`.substring(0, 128),
+      defaultIntegration,
     });
 
-    // ---- S3 read role (private bucket, no public access) ----
-    const s3Role = new Role(this, 'S3ReadRole', {
-      assumedBy: new ServicePrincipal('apigateway.amazonaws.com'),
-    });
-    bucket.grantRead(s3Role);
-
-    // Build an S3 GET integration for a `{proxy+}` resource. Maps the captured
-    // proxy path to `builds/<buildId>/<staticPrefix>/<proxy>` in the bucket.
-    const s3ProxyIntegration = (keyPrefix: string) =>
-      new AwsIntegration({
-        service: 's3',
-        integrationHttpMethod: 'GET',
-        path: `${bucket.bucketName}/builds/${buildId}/${keyPrefix ? keyPrefix + '/' : ''}{proxy}`,
-        options: {
-          credentialsRole: s3Role,
-          requestParameters: {
-            'integration.request.path.proxy': 'method.request.path.proxy',
-          },
-          integrationResponses: [
-            {
-              statusCode: '200',
-              responseParameters: {
-                'method.response.header.Content-Type':
-                  'integration.response.header.Content-Type',
-                'method.response.header.Cache-Control':
-                  'integration.response.header.Cache-Control',
-              },
-            },
-            { statusCode: '403', selectionPattern: '403' },
-            { statusCode: '404', selectionPattern: '404' },
-          ],
-        },
-      });
-
-    const addS3Proxy = (resource: IResource, keyPrefix: string) => {
-      resource.addMethod('GET', s3ProxyIntegration(keyPrefix), {
-        requestParameters: { 'method.request.path.proxy': true },
-        methodResponses: [
-          {
-            statusCode: '200',
-            responseParameters: {
-              'method.response.header.Content-Type': true,
-              'method.response.header.Cache-Control': true,
-            },
-          },
-          { statusCode: '403' },
-          { statusCode: '404' },
-        ],
-      });
-    };
-
-    // ---- static route prefixes → S3 ----
-    // Distinct top-level path segments of the manifest's static assets.
-    // Framework-agnostic, from TWO manifest sources:
-    //   - `staticAssets.immutablePaths` — the content-hashed asset dirs
-    //     (`_next/static/*` → `_next`, `_astro/*` → `_astro`, `_nuxt/*`), which
-    //     is where the JS/CSS bundles live (NOT expressed as `routes[]`).
-    //   - `routes[]` with `target: 'static'` — per-page/static route patterns
-    //     and the injected `/.blocks-sandbox/*` config route.
+    // ---- static prefixes → asset proxy ----
     const staticPrefixes = new Set<string>();
     const firstSeg = (p: string) => p.replace(/^\//, '').split('/')[0];
     for (const glob of manifest.staticAssets.immutablePaths ?? []) {
@@ -157,120 +126,84 @@ export class BypassOriginConstruct extends Construct {
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
     }
     for (const prefix of staticPrefixes) {
-      // A prefix with a dot is an exact file at the root (`favicon.ico`,
-      // `robots.txt`) → GET on it; otherwise a directory (`_next`, `_astro`,
-      // `_nuxt`, `.blocks-sandbox`) → `<prefix>/{proxy+}` → S3.
-      const isGlobPrefix = !prefix.includes('.') || prefix.startsWith('.');
-      if (isGlobPrefix) {
-        const res = this.api.root.addResource(prefix).addResource('{proxy+}');
-        addS3Proxy(res, prefix);
-      } else {
-        // exact file (e.g. favicon.ico): map its own name as the proxy.
-        const res = this.api.root.addResource(prefix);
-        res.addMethod(
-          'GET',
-          new AwsIntegration({
-            service: 's3',
-            integrationHttpMethod: 'GET',
-            path: `${bucket.bucketName}/builds/${buildId}/${prefix}`,
-            options: {
-              credentialsRole: s3Role,
-              integrationResponses: [
-                {
-                  statusCode: '200',
-                  responseParameters: {
-                    'method.response.header.Content-Type':
-                      'integration.response.header.Content-Type',
-                  },
-                },
-                { statusCode: '404', selectionPattern: '4\\d{2}' },
-              ],
-            },
-          }),
-          {
-            methodResponses: [
-              {
-                statusCode: '200',
-                responseParameters: { 'method.response.header.Content-Type': true },
-              },
-              { statusCode: '404' },
-            ],
-          },
-        );
-      }
+      // Directory prefix (`_next`, `.blocks-sandbox`) → greedy; exact root file
+      // (`favicon.ico`) → itself.
+      const isDir = !prefix.includes('.') || prefix.startsWith('.');
+      this.api.addRoutes({
+        path: isDir ? `/${prefix}/{proxy+}` : `/${prefix}`,
+        methods: [HttpMethod.GET],
+        integration: assetIntegration,
+      });
     }
 
     // ---- backend API proxy (/aws-blocks/* + /auth/*) → same origin ----
     if (backendApiUrl) {
-      // backendApiUrl is e.g. https://host/prod/aws-blocks/api — strip to the
-      // stage root so we can re-mount /aws-blocks and /auth under it.
+      // backendApiUrl e.g. https://host/prod/aws-blocks/api → stage root
+      // https://host/prod, re-mounting /aws-blocks and /auth under this origin.
       const stageRoot = Fn.select(0, Fn.split('/aws-blocks', backendApiUrl));
       for (const prefix of ['aws-blocks', 'auth']) {
-        const proxyRes = this.api.root.addResource(prefix).addResource('{proxy+}');
-        proxyRes.addMethod(
-          'ANY',
-          new HttpIntegration(`${stageRoot}/${prefix}/{proxy}`, {
-            httpMethod: 'ANY',
-            options: {
-              requestParameters: {
-                'integration.request.path.proxy': 'method.request.path.proxy',
-              },
-            },
-          }),
-          { requestParameters: { 'method.request.path.proxy': true } },
-        );
+        this.api.addRoutes({
+          path: `/${prefix}/{proxy+}`,
+          methods: [HttpMethod.ANY],
+          // `{proxy}` is substituted from the greedy route param.
+          integration: new HttpUrlIntegration(
+            `Backend-${prefix}`,
+            `${stageRoot}/${prefix}/{proxy}`,
+            { method: HttpMethod.ANY },
+          ),
+        });
       }
     }
 
-    // ---- catch-all: SSR server Lambda (or index.html for static/SPA) ----
-    const serverFn = serverComputeName
-      ? computeFunctions.get(serverComputeName)
-      : undefined;
-    if (serverFn) {
-      // The OpenNext/Nitro SSR handler uses a response-streaming wrapper, so
-      // the integration MUST use STREAM transfer mode (like the CloudFront-
-      // fronted SsrRestApi) — a plain buffered proxy can't parse the streamed
-      // response and API Gateway returns 502.
-      const integration = new LambdaIntegration(serverFn, {
-        proxy: true,
-        responseTransferMode: ResponseTransferMode.STREAM,
-      });
-      this.api.root.addMethod('ANY', integration);
-      this.api.root.addResource('{proxy+}').addMethod('ANY', integration);
-    } else {
-      // Static/SPA: serve index.html at the root (client router deep-links).
-      const indexIntegration = new AwsIntegration({
-        service: 's3',
-        integrationHttpMethod: 'GET',
-        path: `${bucket.bucketName}/builds/${buildId}/index.html`,
-        options: {
-          credentialsRole: s3Role,
-          integrationResponses: [
-            {
-              statusCode: '200',
-              responseParameters: {
-                'method.response.header.Content-Type':
-                  "'text/html'",
-              },
-            },
-          ],
-        },
-      });
-      const indexMethodResponses = [
-        {
-          statusCode: '200',
-          responseParameters: { 'method.response.header.Content-Type': true },
-        },
-      ];
-      this.api.root.addMethod('GET', indexIntegration, {
-        methodResponses: indexMethodResponses,
-      });
-      // SPA fallback: any unmatched path → index.html too.
-      this.api.root
-        .addResource('{proxy+}')
-        .addMethod('GET', indexIntegration, { methodResponses: indexMethodResponses });
-    }
-
-    this.url = this.api.url;
+    // HTTP API `$default` stage serves at the API endpoint ROOT (no /stage).
+    this.url = this.api.apiEndpoint;
   }
 }
+
+/**
+ * Inline source for the asset-proxy Lambda. Reads `KEY_PREFIX/<rawPath>` from
+ * BUCKET and returns it (base64 for binary safety). On a miss: `index.html`
+ * when SPA_FALLBACK is set (client-router deep-link), else 404. Uses the AWS
+ * SDK v3 bundled in the Lambda Node runtime (no extra deps).
+ */
+const ASSET_PROXY_SOURCE = `
+const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const s3 = new S3Client({});
+const BUCKET = process.env.BUCKET;
+const PREFIX = process.env.KEY_PREFIX;
+const SPA = process.env.SPA_FALLBACK === '1';
+async function get(key) {
+  const r = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+  const bytes = await r.Body.transformToByteArray();
+  return { body: Buffer.from(bytes), contentType: r.ContentType, cacheControl: r.CacheControl };
+}
+exports.handler = async (event) => {
+  const raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '');
+  const key = PREFIX + '/' + (raw || 'index.html');
+  try {
+    const o = await get(key);
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': o.contentType || 'application/octet-stream',
+        'cache-control': o.cacheControl || 'public, max-age=31536000, immutable',
+      },
+      body: o.body.toString('base64'),
+      isBase64Encoded: true,
+    };
+  } catch (e) {
+    if (SPA) {
+      try {
+        const idx = await get(PREFIX + '/index.html');
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'text/html', 'cache-control': 'no-cache' },
+          body: idx.body.toString('base64'),
+          isBase64Encoded: true,
+        };
+      } catch (_) { /* fall through to 404 */ }
+    }
+    return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'Not found' };
+  }
+};
+`;

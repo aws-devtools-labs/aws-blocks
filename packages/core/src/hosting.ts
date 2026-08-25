@@ -586,6 +586,9 @@ export class Hosting extends Construct {
         // Lambda@Edge. The manifest carries the placement; the L3 construct
         // honors it.
         edgeToRegional: preview.edgeToRegional,
+        // C: bypassCdn builds the SSR bundle for an HTTP API v2 root origin
+        // (buffered aws-apigw-v2, no streaming) instead of the REST-API STREAM.
+        bypassCdn: preview.bypassCdn,
       });
     const manifest: DeployManifest = adapter(root);
 

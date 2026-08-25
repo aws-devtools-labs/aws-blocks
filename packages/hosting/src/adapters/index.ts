@@ -195,6 +195,12 @@ export interface AdapterBuildOptions {
    * adapter acts on this; others ignore it.
    */
   edgeToRegional?: boolean;
+  /**
+   * C (preview `bypassCdn`) — build the SSR bundle for an HTTP API v2 origin
+   * at the domain root: buffered `aws-apigw-v2` converter (no streaming). Only
+   * the Next.js adapter acts on this today; others ignore it.
+   */
+  bypassCdn?: boolean;
 }
 
 /**
@@ -214,7 +220,11 @@ export const getAdapter = (
   // than through the zero-arg registry wrapper.
   if (framework === 'nextjs') {
     return (projectDir: string) =>
-      nextjsAdapter({ projectDir, edgeToRegional: options?.edgeToRegional });
+      nextjsAdapter({
+        projectDir,
+        edgeToRegional: options?.edgeToRegional,
+        bypassCdn: options?.bypassCdn,
+      });
   }
 
   const entry = adapterRegistry.get(framework);
