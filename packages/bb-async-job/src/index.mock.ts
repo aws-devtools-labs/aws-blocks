@@ -43,7 +43,6 @@ interface QueueEntry<T> {
 }
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
-const MAX_BATCH_SIZE = 10;
 
 /**
  * Background job processing backed by SQS and Lambda.
@@ -225,16 +224,17 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * Enqueue multiple jobs in a single call.
 	 *
 	 * In AWS, uses SQS's native `SendMessageBatch` for better throughput than
-	 * sequential `submit()` calls. Maximum 10 payloads per call (SQS limit).
+	 * sequential `submit()` calls. Batches larger than SQS's 10-entry / 256 KB
+	 * per-request limits are split across as many `SendMessageBatch` requests as
+	 * needed, so there is no cap on the number of payloads.
 	 *
-	 * @param payloads - Array of job payloads. Maximum 10.
+	 * @param payloads - Array of job payloads.
 	 * @param options - Optional. `delaySeconds` applied to all messages.
 	 * @returns `{ jobIds, failed }` — `jobIds` in the same order as input payloads (`null` for failed entries); `failed` lists any entries that could not be enqueued.
 	 * @throws {AsyncJobErrors.BatchEmpty} If payloads array is empty.
-	 * @throws {AsyncJobErrors.BatchTooLarge} If more than 10 payloads.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If any payload exceeds 256 KB.
 	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation.
-	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). The error has `failed` and `jobIds` properties with partial results.
+	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). A multi-chunk submit is not atomic; the error's `failed` and `jobIds` properties carry the partial results across all chunks.
 	 */
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		if (payloads.length === 0) {
@@ -245,12 +245,10 @@ export class AsyncJob<T = unknown> extends Scope {
 			throw err;
 		}
 
-		if (payloads.length > MAX_BATCH_SIZE) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, maximum is ${MAX_BATCH_SIZE}`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
+		// Validate every payload before enqueuing any, so one bad payload fails the
+		// whole call rather than half-submitting the batch — matching the AWS runtime.
+		for (const payload of payloads) {
+			await this.validatePayload(payload);
 		}
 
 		const jobIds: Array<string | null> = [];

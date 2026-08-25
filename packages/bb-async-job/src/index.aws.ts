@@ -216,6 +216,35 @@ export class AsyncJob<T = unknown> extends Scope {
 		return { jobId };
 	}
 
+	/**
+	 * Group message indices into `SendMessageBatch` requests bounded by both limits
+	 * SQS enforces per request: at most {@link MAX_BATCH_SIZE} entries, and at most
+	 * {@link MAX_PAYLOAD_BYTES} of aggregate message body. `validatePayload` has
+	 * already rejected any single body over that byte limit, so a message that
+	 * would overflow the running chunk simply starts the next one — it can always
+	 * fit in a chunk of its own.
+	 */
+	private chunkBatch(bodies: string[]): number[][] {
+		const chunks: number[][] = [];
+		let current: number[] = [];
+		let currentBytes = 0;
+
+		for (let i = 0; i < bodies.length; i++) {
+			const bytes = Buffer.byteLength(bodies[i], 'utf8');
+			const wouldOverflow = current.length >= MAX_BATCH_SIZE || currentBytes + bytes > MAX_PAYLOAD_BYTES;
+			if (current.length > 0 && wouldOverflow) {
+				chunks.push(current);
+				current = [];
+				currentBytes = 0;
+			}
+			current.push(i);
+			currentBytes += bytes;
+		}
+		if (current.length > 0) chunks.push(current);
+
+		return chunks;
+	}
+
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		this.ensureQueueUrl();
 
@@ -227,41 +256,48 @@ export class AsyncJob<T = unknown> extends Scope {
 			throw err;
 		}
 
-		if (payloads.length > MAX_BATCH_SIZE) {
-			const err = new Error(
-				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, maximum is ${MAX_BATCH_SIZE}`
-			);
-			err.name = AsyncJobErrors.BatchTooLarge;
-			throw err;
-		}
-
+		// Validate and serialize every payload before enqueuing anything, so one bad
+		// payload fails the whole call rather than half-submitting the batch.
 		const messageBodies: string[] = [];
 		for (const payload of payloads) {
 			messageBodies.push(await this.validatePayload(payload));
 		}
 
-		const result = await this._sqsClient.send(new SendMessageBatchCommand({
-			QueueUrl: getSdkIdentifiers(this).queueUrl,
-			Entries: messageBodies.map((body, i) => ({
-				Id: String(i),
-				MessageBody: body,
-				DelaySeconds: options?.delaySeconds ?? 0,
-			})),
-		}));
+		// SQS caps a SendMessageBatch at 10 entries and 256 KB, so a batch of any
+		// size is split across as many requests as those limits require. The SQS
+		// batch-entry `Id` carries the payload's original index, which is how each
+		// returned MessageId (or failure) is mapped back into input order below.
+		const chunks = this.chunkBatch(messageBodies);
+		const jobIds: Array<string | null> = new Array(payloads.length).fill(null);
+		const failed: BatchSubmitResult['failed'] = [];
 
-		const idMap = new Map(result.Successful?.map(s => [s.Id!, s.MessageId!]) ?? []);
-		const failed: BatchSubmitResult['failed'] = (result.Failed ?? []).map(f => ({
-			index: parseInt(f.Id!, 10),
-			code: f.Code ?? 'UnknownError',
-			message: f.Message ?? 'Unknown error',
-		}));
+		for (const indices of chunks) {
+			const result = await this._sqsClient.send(new SendMessageBatchCommand({
+				QueueUrl: getSdkIdentifiers(this).queueUrl,
+				Entries: indices.map(i => ({
+					Id: String(i),
+					MessageBody: messageBodies[i],
+					DelaySeconds: options?.delaySeconds ?? 0,
+				})),
+			}));
 
-		const failedIndexes = new Set(failed.map(f => f.index));
-		const jobIds: Array<string | null> = payloads.map((_, i) =>
-			failedIndexes.has(i) ? null : (idMap.get(String(i)) ?? null)
-		);
+			for (const s of result.Successful ?? []) {
+				jobIds[parseInt(s.Id!, 10)] = s.MessageId!;
+			}
+			for (const f of result.Failed ?? []) {
+				failed.push({
+					index: parseInt(f.Id!, 10),
+					code: f.Code ?? 'UnknownError',
+					message: f.Message ?? 'Unknown error',
+				});
+			}
+		}
 
 		if (failed.length > 0) {
+			// A multi-chunk submit is not atomic: earlier chunks may already be on the
+			// queue. `jobIds` still carries their real MessageIds so the caller can
+			// look them up, with `null` at each failed index.
+			failed.sort((a, b) => a.index - b.index);
 			const err = new Error(
 				`${AsyncJobErrors.BatchSubmitFailed}: ${failed.length} of ${payloads.length} messages failed to send`
 			);

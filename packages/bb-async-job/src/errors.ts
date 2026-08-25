@@ -9,7 +9,11 @@ export const AsyncJobErrors = {
 	PayloadTooLarge: 'PayloadTooLargeException',
 	/** Thrown when batch is empty (must contain at least 1 payload). */
 	BatchEmpty: 'BatchEmptyException',
-	/** Thrown when batch contains more than 10 payloads. */
+	/**
+	 * @deprecated `submitBatch` no longer caps batch size — it splits large
+	 * batches across multiple SQS `SendMessageBatch` requests, so this is never
+	 * thrown. Retained for backwards compatibility with code that references it.
+	 */
 	BatchTooLarge: 'BatchTooLargeException',
 	/** Thrown when schema validation fails. */
 	ValidationFailed: 'ValidationFailedException',

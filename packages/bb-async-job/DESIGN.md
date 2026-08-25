@@ -68,9 +68,17 @@ Local Mock
 
 ### D-AJ-4: Client-side validation before enqueue
 
-**Decision:** `submit()`/`submitBatch()` validate the schema (when configured) and the 256 KB payload size before calling SQS. Batch size (1–10) and emptiness are validated first.
+**Decision:** `submit()`/`submitBatch()` validate the schema (when configured) and the 256 KB payload size before calling SQS. `submitBatch` rejects an empty batch first, then validates *every* payload before enqueuing any of them.
 
-**Rationale:** Failing fast on the caller's side produces a precise typed error (`PayloadTooLarge`, `ValidationFailed`, `BatchEmpty`, `BatchTooLarge`) instead of a generic SQS rejection, and avoids a network round-trip for input that cannot succeed. The mock applies identical checks so violations surface the same `error.name` in local dev.
+**Rationale:** Failing fast on the caller's side produces a precise typed error (`PayloadTooLarge`, `ValidationFailed`, `BatchEmpty`) instead of a generic SQS rejection, and avoids a network round-trip for input that cannot succeed. Validating the whole batch up front means one bad payload fails the call without half-submitting the batch. The mock applies identical checks so violations surface the same `error.name` in local dev.
+
+### D-AJ-4a: `submitBatch` auto-chunks; a multi-chunk submit is not atomic
+
+**Decision:** `submitBatch` accepts any number of payloads. It packs them into `SendMessageBatch` requests bounded by both SQS per-request limits — at most 10 entries and at most 256 KB of aggregate message body — and issues one request per chunk. Each batch entry's `Id` is the payload's original index, so returned `MessageId`s (and failures) map straight back into input order. The earlier hard cap that threw `BatchTooLarge` for more than 10 payloads is gone (the constant is retained, deprecated, for compatibility).
+
+**Rationale:** A bulk-upload caller with more than 10 items should not have to reimplement SQS's chunking rules. Splitting by both the count and the byte limit is necessary because either can be the binding constraint — ten 30 KB messages exceed 256 KB, and a single message is already capped at 256 KB by `validatePayload` so it always fits in a chunk of its own.
+
+**Trade-off — not atomic across chunks.** A single `SendMessageBatch` is one request, but a batch spanning several chunks is several requests, and an earlier chunk can land before a later one fails. `submitBatch` keeps the existing all-or-nothing *signal* — it throws `BatchSubmitFailed` if any entry in any chunk failed — but the thrown error carries the partial reality: `.jobIds` holds the real `MessageId` for every entry that made it onto the queue (with `null` at each failed index), and `.failed[]` lists every failure across all chunks sorted by index. A caller that catches it can retry only the `null` indexes rather than re-submitting the whole batch and double-enqueuing the ones that succeeded. Status records (`trackStatus: true`) are written only on full success; on a throw the enqueued jobs are still tracked because the handler backfills a `queued` record when it first sees them (see D-AJ status backfill). The mock runtime submits one message at a time and never partially fails, so this is an AWS-only concern.
 
 ### D-AJ-5: Event routing via queue name
 

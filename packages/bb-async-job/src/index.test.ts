@@ -72,22 +72,24 @@ test('AsyncJob - submitBatch throws BatchEmpty for empty array', async () => {
 	);
 });
 
-test('AsyncJob - submitBatch throws BatchTooLarge for >10 items', async () => {
+test('AsyncJob - submitBatch auto-chunks batches larger than 10', async () => {
+	const received: number[] = [];
+
 	const job = new AsyncJob(null as any, 'test', {
-		handler: async () => {},
+		handler: async (payload: { n: number }) => {
+			received.push(payload.n);
+		},
 	});
 
-	const items = Array.from({ length: 11 }, (_, i) => ({ n: i }));
+	const items = Array.from({ length: 25 }, (_, i) => ({ n: i }));
+	const { jobIds, failed } = await job.submitBatch(items);
+	await waitForJobs();
 
-	await assert.rejects(
-		() => job.submitBatch(items),
-		(err: Error) => {
-			assert.strictEqual(err.name, AsyncJobErrors.BatchTooLarge);
-			assert.ok(err.message.includes('11'));
-			assert.ok(err.message.includes('10'));
-			return true;
-		}
-	);
+	assert.strictEqual(jobIds.length, 25, 'a jobId per payload, no truncation');
+	assert.ok(jobIds.every(id => typeof id === 'string' && id!.length > 0));
+	assert.strictEqual(new Set(jobIds).size, 25, 'every jobId is unique');
+	assert.deepStrictEqual(failed, []);
+	assert.deepStrictEqual(received.sort((a, b) => a - b), items.map(i => i.n), 'every payload was processed');
 });
 
 test('AsyncJob - submit throws PayloadTooLarge for >256 KB', async () => {
@@ -184,6 +186,35 @@ test('AsyncJob - submitBatch with exactly 10 items succeeds', async () => {
 	const { jobIds } = await job.submitBatch(items);
 
 	assert.strictEqual(jobIds.length, 10);
+});
+
+test('AsyncJob - jobId returned by submit is the key getStatus is looked up by', async () => {
+	const job = new AsyncJob(null as any, 'test', {
+		trackStatus: true,
+		handler: async () => {},
+	});
+
+	const { jobId } = await job.submit({ x: 1 });
+
+	const status = await job.getStatus(jobId);
+	assert.ok(status, 'the id submit returned must resolve a status record');
+	assert.strictEqual(status!.jobId, jobId);
+});
+
+test('AsyncJob - every jobId from submitBatch resolves its own status record', async () => {
+	const job = new AsyncJob(null as any, 'test', {
+		trackStatus: true,
+		handler: async () => {},
+	});
+
+	const { jobIds } = await job.submitBatch(Array.from({ length: 12 }, (_, i) => ({ n: i })));
+
+	for (const jobId of jobIds) {
+		assert.ok(jobId, 'no null ids on a fully successful batch');
+		const status = await job.getStatus(jobId!);
+		assert.ok(status, `getStatus must resolve the id submitBatch returned (${jobId})`);
+		assert.strictEqual(status!.jobId, jobId);
+	}
 });
 
 // ---------------------------------------------------------------------------
