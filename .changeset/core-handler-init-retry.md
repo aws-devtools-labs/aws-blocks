@@ -17,3 +17,10 @@ config loader no longer caching a not-found result (a 404 is treated as transien
 poisoning the cache with `{}`), the handler **self-heals** as soon as config becomes readable.
 This is most likely to surface on large/slow deploys (which widen the post-deploy window), but the
 fragility was general.
+
+**Behavior change:** a failed handler init is now **retried per request** instead of cached. A
+transient config blip self-heals (the win), but a *genuinely* broken deploy (bad IAM, wrong bucket,
+malformed config) now re-runs `initialize()` — an S3 GET + backend import — on **every** invocation
+until it recovers or the container cycles, rather than failing fast. Expect added per-request latency
+and repeated S3/CloudWatch activity under a broken deploy; revisit any alarms that assumed a fast,
+sticky init failure.
