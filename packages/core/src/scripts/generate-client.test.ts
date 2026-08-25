@@ -1,12 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { generateClientCode } from './generate-client.js';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { join } from 'path';
+import { generateClientCode } from './generate-client.js';
 
 /**
  * Regression test: generateClientCode collects middleware from whatever
@@ -35,9 +35,12 @@ describe('generateClientCode — middleware collection', () => {
 	it('includes middleware specifiers registered by the backend', async () => {
 		// Create a minimal backend that registers a middleware specifier
 		const backendPath = join(tmpDir, 'backend.mjs');
-		writeFileSync(backendPath, `
+		writeFileSync(
+			backendPath,
+			`
 			globalThis.__BLOCKS_CLIENT_MIDDLEWARE__?.push('@aws-blocks/bb-realtime/aws-middleware');
-		`);
+		`,
+		);
 
 		const code = await generateClientCode(backendPath);
 		assert.ok(
@@ -52,9 +55,12 @@ describe('generateClientCode — middleware collection', () => {
 
 	it('includes mock-middleware when backend registers it (local dev mode)', async () => {
 		const backendPath = join(tmpDir, 'backend.mjs');
-		writeFileSync(backendPath, `
+		writeFileSync(
+			backendPath,
+			`
 			globalThis.__BLOCKS_CLIENT_MIDDLEWARE__?.push('@aws-blocks/bb-realtime/mock-middleware');
-		`);
+		`,
+		);
 
 		const code = await generateClientCode(backendPath);
 		assert.ok(
@@ -64,6 +70,35 @@ describe('generateClientCode — middleware collection', () => {
 		assert.ok(
 			!code.includes('aws-middleware'),
 			'Generated client must NOT include aws-middleware in local dev mode',
+		);
+	});
+
+	it('skips secret()/config() markers — they are values, not API namespaces', async () => {
+		// A secret()/config() marker is branded with Symbol.for('@aws-blocks/hosting.ManagedValue');
+		// build one inline so the fixture needs no imports. A real export still gets a proxy.
+		const backendPath = join(tmpDir, 'backend.mjs');
+		writeFileSync(
+			backendPath,
+			`
+				const BRAND = Symbol.for('@aws-blocks/hosting.ManagedValue');
+				export const stripeKey = { [BRAND]: true, key: 'STRIPE_KEY', kind: 'secret' };
+				export const featureFlags = { [BRAND]: true, key: 'FEATURE_FLAGS', kind: 'config' };
+				export function realApi() {}
+			`,
+		);
+
+		const code = await generateClientCode(backendPath);
+		assert.ok(
+			!code.includes("__BLOCKS_ApiNamespaceClient__('stripeKey')"),
+			'a secret() marker must not become an HTTP namespace',
+		);
+		assert.ok(
+			!code.includes("__BLOCKS_ApiNamespaceClient__('featureFlags')"),
+			'a config() marker must not become an HTTP namespace',
+		);
+		assert.ok(
+			code.includes("export const realApi = __BLOCKS_ApiNamespaceClient__('realApi')"),
+			'a real (non-marker) export still becomes a namespace',
 		);
 	});
 });
