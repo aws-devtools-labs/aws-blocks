@@ -36,6 +36,16 @@ export interface SandboxOptions {
   deployOnly?: boolean;
   /** Custom dev server command. Defaults to 'npx vite'. For Next.js use 'npx next dev'. */
   devCommand?: string;
+  /**
+   * Preview mode — this deploy includes hosting in the fast/cheap "preview"
+   * shape (a shareable hosted preview), as opposed to a backend-only sandbox.
+   * ONLY in preview mode do re-deploys use `--hotswap-fallback` (apply code
+   * changes directly to the Lambdas in seconds). A plain backend-only sandbox
+   * keeps the Express-Mode CloudFormation deploy — hotswap intentionally
+   * introduces CloudFormation drift, which we scope to the ephemeral preview
+   * target only.
+   */
+  preview?: boolean;
 }
 
 export interface SandboxDeployArgsOptions {
@@ -47,11 +57,11 @@ export interface SandboxDeployArgsOptions {
   backendPath: string;
   /**
    * Use `--hotswap-fallback` instead of the Express-Mode CloudFormation deploy.
-   * Set for a **re-deploy** (the stack already exists): a code-only change is
-   * applied directly to the Lambdas (skipping CloudFormation) in seconds, with
-   * an automatic fall-back to a full CloudFormation deploy for any change that
-   * isn't hotswappable (new/changed infrastructure). Left off for the first
-   * deploy (nothing to hotswap → the Express CREATE is faster there).
+   * `startSandbox` sets this only for a **preview-mode re-deploy** (see
+   * {@link SandboxOptions.preview}) — a code-only change is applied directly to
+   * the Lambdas (skipping CloudFormation) in seconds, auto-falling-back to a
+   * full CloudFormation deploy for any non-hotswappable change. Off for a plain
+   * backend-only sandbox and for the first deploy.
    */
   hotswap?: boolean;
 }
@@ -137,7 +147,7 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
+  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand, preview = false } = options;
   const sandboxStartTime = Date.now();
 
   // Load .env.local so CDK can read secret ARNs and other config.
@@ -167,28 +177,31 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
-  // Re-deploy detection: a prior deploy wrote `<outDir>/outputs.json`, so the
-  // stack likely already exists → use `--hotswap-fallback` (apply code changes
-  // directly to the Lambdas in seconds; auto-fall-back to a full CloudFormation
-  // deploy for infra changes). The FIRST deploy (no outputs file) uses the
-  // Express-Mode CREATE, which is faster when there's nothing to hotswap.
-  // hotswap-fallback is safe even if the stack was destroyed since (it falls
-  // back to a full deploy), so the heuristic never blocks a deploy.
+  // Hotswap is scoped to PREVIEW mode only (hosting in the fast/cheap preview
+  // shape) — it intentionally introduces CloudFormation drift, so a plain
+  // backend-only sandbox keeps the Express-Mode CloudFormation deploy.
+  // Within preview, hotswap applies only on a RE-deploy: a prior deploy wrote
+  // `<outDir>/outputs.json`, so the stack exists → `--hotswap-fallback` applies
+  // code changes directly to the Lambdas (seconds), auto-falling-back to a full
+  // deploy for infra changes. The FIRST preview deploy (no outputs file) uses
+  // the Express-Mode CREATE. hotswap-fallback is safe even if the stack was
+  // destroyed since (it falls back), so the heuristic never blocks a deploy.
   const isRedeploy = existsSync(join(process.cwd(), outDir, "outputs.json"));
+  const hotswap = preview && isRedeploy;
 
   console.log("🚀 Deploying to AWS...");
   console.log(
-    isRedeploy
-      ? "   (re-deploy: hotswapping code changes — seconds; infra changes fall back to a full deploy)"
-      : "   (first deploy: this may take a few minutes)",
+    hotswap
+      ? "   (preview re-deploy: hotswapping code changes — seconds; infra changes fall back to a full deploy)"
+      : "   (this may take a few minutes)",
   );
 
   try {
     runSync(
       "npm",
-      // Argv (Express-Mode CREATE, or --hotswap-fallback on re-deploy) is built
-      // by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath, hotswap: isRedeploy }),
+      // Argv (Express-Mode CREATE, or --hotswap-fallback on a preview re-deploy)
+      // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
+      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath, hotswap }),
       {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
