@@ -56,6 +56,7 @@ import { WafConstruct } from './waf_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { CdnConstruct } from './cdn_construct.js';
+import { BypassOriginConstruct } from './bypass_origin.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
 import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
@@ -129,15 +130,22 @@ export type HostingConstructProps = {
   skipRegionValidation?: boolean;
 
   /**
-   * Preview `bypassCdn` — skip the CloudFront distribution and serve the site
-   * directly from an S3 static-website endpoint. **Static/SPA only** for now;
-   * an SSR deploy (manifest with compute) throws until the SSR bypass path
-   * (API-Gateway single origin) lands. When set, `distribution` is undefined,
-   * the endpoint is HTTP-only, and the assets bucket is public-read — intended
-   * strictly for throwaway preview environments. See
-   * `docs/design/HOSTING-PREVIEW-MODE.md` §5c.
+   * Preview `bypassCdn` — skip the CloudFront distribution and serve the whole
+   * app (static + SSR + backend API) from a single API-Gateway origin
+   * ({@link BypassOriginConstruct}). Same-origin (cookies + no CORS), no
+   * CloudFront to create/propagate. When set, `distribution` is undefined.
+   * Framework-agnostic (routes off the manifest). Intended strictly for
+   * throwaway preview environments. See `docs/design/HOSTING-PREVIEW-MODE.md` §5c.
    */
   bypassCdn?: boolean;
+
+  /**
+   * Backend API Gateway URL (`https://…/aws-blocks/api`) to proxy through the
+   * `bypassCdn` single origin so `/aws-blocks/*` + `/auth/*` are same-origin
+   * (relative `apiUrl` works, cookies flow). Set by the core `Hosting` wrapper
+   * from `props.api.apiUrl` when bypassing. Ignored unless `bypassCdn`.
+   */
+  bypassApiProxyUrl?: string;
 
   /** Custom domain configuration. */
   domain?: HostingDomainConfig;
@@ -426,63 +434,15 @@ export class HostingConstruct extends Construct {
     }
     const buildId = manifest.buildId ?? generateBuildId();
 
-    // ---- Preview bypassCdn: serve directly from an S3 static website ----
-    // Skips the entire CloudFront path (distribution, KVS router, WAF, DNS,
-    // monitoring, atomic build-prefix cutover) for a throwaway preview. The
-    // site is served from a public S3 website endpoint (HTTP only). Static/SPA
-    // only: an SSR deploy needs an origin that can run the compute + serve
-    // assets, which the S3 website can't — that lands with the API-Gateway
-    // single-origin path (see docs/design/HOSTING-PREVIEW-MODE.md §5c).
-    if (props.bypassCdn) {
-      if (Object.keys(manifest.compute).length > 0) {
-        throw new HostingError('BypassCdnSsrUnsupportedError', {
-          message:
-            'preview.bypassCdn is only supported for static/SPA sites yet; this deploy has server compute (SSR).',
-          resolution:
-            'Deploy the SSR app with preview.bypassCdn off (it keeps CloudFront), or wait for the SSR bypass path (API-Gateway single origin). See docs/design/HOSTING-PREVIEW-MODE.md §5c.',
-        });
-      }
-      // SPA → any miss serves index.html so the client router deep-links;
-      // multi-page static → a real 404 doc when one exists, else index.html.
-      const spaFallback = manifest.staticAssets.spaFallback ?? true;
-      const errorDocument = spaFallback
-        ? 'index.html'
-        : manifest.errorPages?.[404]
-          ? manifest.errorPages[404].replace(/^\//, '')
-          : 'index.html';
-
-      const siteBucket = new Bucket(this, 'PreviewSiteBucket', {
-        websiteIndexDocument: 'index.html',
-        websiteErrorDocument: errorDocument,
-        publicReadAccess: true,
-        // A public website bucket must relax BLOCK_ALL. Preview-only; the
-        // whole point is an unauthenticated preview URL.
-        blockPublicAccess: new s3.BlockPublicAccess({
-          blockPublicAcls: false,
-          blockPublicPolicy: false,
-          ignorePublicAcls: false,
-          restrictPublicBuckets: false,
-        }),
-        removalPolicy: RemovalPolicy.DESTROY,
-        autoDeleteObjects: true,
-      });
-      this.bucket = siteBucket;
-
-      // No atomic build-prefix here: upload the build to the bucket root so
-      // the website endpoint serves it directly (no CloudFront path rewrite).
-      new BucketDeployment(this, 'PreviewSiteDeployment', {
-        sources: [Source.asset(manifest.staticAssets.directory)],
-        destinationBucket: siteBucket,
-      });
-
-      this.distributionUrl = siteBucket.bucketWebsiteUrl;
-      new CfnOutput(this, 'HostingUrl', {
-        value: this.distributionUrl,
-        description: 'Preview site URL (S3 static-website endpoint, HTTP)',
-      });
-      // `distribution` intentionally left undefined; skip all CloudFront wiring.
-      return;
-    }
+    // ---- Preview bypassCdn ----
+    // Skip the CloudFront distribution and serve the whole app from a single
+    // API-Gateway origin (BypassOriginConstruct) — same-origin (cookies + no
+    // CORS), no CloudFront to create/propagate. Framework-agnostic: routes off
+    // the manifest. Applied LATE (at the CloudFront site §6) so storage +
+    // compute + a single asset upload are reused; here we just capture the
+    // flag. `distribution` stays undefined in this mode.
+    // See docs/design/HOSTING-PREVIEW-MODE.md §5c.
+    const bypassCdn = props.bypassCdn === true;
 
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
@@ -1133,6 +1093,43 @@ export class HostingConstruct extends Construct {
             `http-server SSR warm.\n`,
         );
       }
+    }
+
+    // ---- 6-bis. Preview bypassCdn: API-Gateway single origin (no CloudFront) ----
+    // Storage (§1) + compute (§2) + ISR/image/middleware (§3-5) are already
+    // built above. Instead of CloudFront (§6-11), serve everything from ONE
+    // API Gateway: static assets from S3, the catch-all from the SSR server
+    // Lambda, and /aws-blocks/*+/auth/* proxied to the backend API — all
+    // same-origin (fixes cookie auth) with no distribution. Then return, so
+    // WAF/DNS/monitoring/CloudFront and the cdn-coupled error pages are skipped.
+    if (bypassCdn) {
+      const manifestWithBuildIdBypass: DeployManifest = { ...manifest, buildId };
+      // Single asset upload to builds/<id>/ (previews don't need the atomic
+      // cache-control tiers). BypassOrigin maps request paths to this prefix.
+      new BucketDeployment(this, 'BypassAssets', {
+        sources: [Source.asset(manifest.staticAssets.directory)],
+        destinationBucket: this.bucket,
+        destinationKeyPrefix: `builds/${buildId}`,
+        prune: false,
+      });
+      const serverComputeName = ['default', 'server'].find((n) =>
+        this.computeFunctions.has(n),
+      );
+      const bypass = new BypassOriginConstruct(this, 'BypassOrigin', {
+        manifest: manifestWithBuildIdBypass,
+        buildId,
+        bucket: this.bucket,
+        computeFunctions: this.computeFunctions,
+        serverComputeName,
+        backendApiUrl: props.bypassApiProxyUrl,
+      });
+      this.distributionUrl = bypass.url;
+      new CfnOutput(this, 'HostingUrl', {
+        value: this.distributionUrl,
+        description: 'Preview site URL (API-Gateway single origin, no CloudFront)',
+      });
+      // `distribution` intentionally left undefined; skip §6-11 CloudFront wiring.
+      return;
     }
 
     // ---- 6. WAF (conditional) ----

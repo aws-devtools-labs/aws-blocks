@@ -6,6 +6,7 @@ import {
   AwsIntegration,
   HttpIntegration,
   LambdaIntegration,
+  ResponseTransferMode,
   RestApi,
   type IResource,
 } from 'aws-cdk-lib/aws-apigateway';
@@ -137,22 +138,29 @@ export class BypassOriginConstruct extends Construct {
     };
 
     // ---- static route prefixes → S3 ----
-    // Distinct top-level path segments of the manifest's static routes
-    // (`/_next/static/*` → `_next`, `/_astro/*` → `_astro`, `/favicon.ico` →
-    // `favicon.ico`). Framework-agnostic: read from the manifest.
+    // Distinct top-level path segments of the manifest's static assets.
+    // Framework-agnostic, from TWO manifest sources:
+    //   - `staticAssets.immutablePaths` — the content-hashed asset dirs
+    //     (`_next/static/*` → `_next`, `_astro/*` → `_astro`, `_nuxt/*`), which
+    //     is where the JS/CSS bundles live (NOT expressed as `routes[]`).
+    //   - `routes[]` with `target: 'static'` — per-page/static route patterns
+    //     and the injected `/.blocks-sandbox/*` config route.
     const staticPrefixes = new Set<string>();
+    const firstSeg = (p: string) => p.replace(/^\//, '').split('/')[0];
+    for (const glob of manifest.staticAssets.immutablePaths ?? []) {
+      const seg = firstSeg(glob);
+      if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
+    }
     for (const route of manifest.routes) {
       if (route.target !== 'static') continue;
-      const seg = route.pattern.replace(/^\//, '').split('/')[0];
+      const seg = firstSeg(route.pattern);
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
     }
     for (const prefix of staticPrefixes) {
-      // Wildcard/dir prefix → `<prefix>/{proxy+}` → S3; exact file → GET on it.
-      const isGlobPrefix = manifest.routes.some(
-        (r) =>
-          r.target === 'static' &&
-          r.pattern.replace(/^\//, '').startsWith(`${prefix}/`),
-      );
+      // A prefix with a dot is an exact file at the root (`favicon.ico`,
+      // `robots.txt`) → GET on it; otherwise a directory (`_next`, `_astro`,
+      // `_nuxt`, `.blocks-sandbox`) → `<prefix>/{proxy+}` → S3.
+      const isGlobPrefix = !prefix.includes('.') || prefix.startsWith('.');
       if (isGlobPrefix) {
         const res = this.api.root.addResource(prefix).addResource('{proxy+}');
         addS3Proxy(res, prefix);
@@ -219,7 +227,14 @@ export class BypassOriginConstruct extends Construct {
       ? computeFunctions.get(serverComputeName)
       : undefined;
     if (serverFn) {
-      const integration = new LambdaIntegration(serverFn, { proxy: true });
+      // The OpenNext/Nitro SSR handler uses a response-streaming wrapper, so
+      // the integration MUST use STREAM transfer mode (like the CloudFront-
+      // fronted SsrRestApi) — a plain buffered proxy can't parse the streamed
+      // response and API Gateway returns 502.
+      const integration = new LambdaIntegration(serverFn, {
+        proxy: true,
+        responseTransferMode: ResponseTransferMode.STREAM,
+      });
       this.api.root.addMethod('ANY', integration);
       this.api.root.addResource('{proxy+}').addMethod('ANY', integration);
     } else {
