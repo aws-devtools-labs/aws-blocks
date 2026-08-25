@@ -167,6 +167,28 @@ Because it is derived only from string-literal keys, a `secret(myVar)` with a
 non-literal key is reported and skipped; and a synth-only `domain` / `connectionArn`
 key may appear in autocomplete even though it is not readable at runtime.
 
+### Typed, parsed values with a schema
+
+Pass a schema (Zod, Valibot, ArkType — any Standard Schema) to get a **typed,
+parsed** value instead of a `string`:
+
+```ts
+// declare
+import { z } from 'zod';
+environment: { FEATURE_FLAGS: config('FEATURE_FLAGS', { schema: z.object({ beta: z.boolean() }) }) }
+
+// read — no JSON.parse, no `any`
+const { beta } = await getConfig('FEATURE_FLAGS');   // typed as { beta: boolean }
+```
+
+`typegen` infers the schema's output type (via a TypeScript `Program`) and inlines
+it into the generated `.d.ts`, so `getConfig`/`getSecret` **return that type**. At
+runtime the value is JSON-parsed automatically (a per-key flag is set at synth). The
+schema type is typed as `StandardSchemaV1`, so the library is your choice. Note this
+is parse-to-type: the schema object isn't shipped to the runtime (it can't cross the
+synth→runtime bundle boundary), so it parses to the declared type rather than
+deep-re-validating on read.
+
 ### Set the values (out of band, never in git)
 
 Standalone hosting apps get two bundled CLIs:

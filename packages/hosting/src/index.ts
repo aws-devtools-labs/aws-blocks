@@ -35,6 +35,7 @@ export {
 	isSecret,
 	MANAGED_BRAND,
 	type ManagedValue,
+	type ManagedValueOptions,
 	type SecretStore,
 	type SecretValue,
 	secret,
@@ -73,11 +74,13 @@ export {
 } from './secret-resolve.js';
 export {
 	type ConfigKey,
+	type ConfigValueOf,
 	getConfig,
 	getSecret,
 	type HostingConfigRegistry,
 	type HostingSecretRegistry,
 	type SecretKey,
+	type SecretValueOf,
 } from './secret-runtime.js';
 export {
 	DEFAULT_TYPEGEN_INCLUDE,

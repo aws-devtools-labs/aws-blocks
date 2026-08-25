@@ -32,7 +32,14 @@
  * @module
  */
 
-import { cacheTtlEnvVarName, envVarNameForKind, fallbackEnvVarName, storeForKind, type ValueKind } from './secret.js';
+import {
+	cacheTtlEnvVarName,
+	envVarNameForKind,
+	fallbackEnvVarName,
+	jsonFlagEnvVarName,
+	storeForKind,
+	type ValueKind,
+} from './secret.js';
 
 function isNotFoundError(error: unknown): boolean {
 	const name = (error as { name?: string })?.name;
@@ -40,14 +47,33 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 interface CacheEntry {
-	value: string;
+	/** The resolved value — the raw string, or the JSON-parsed value when a schema was declared. */
+	value: unknown;
 	/** Epoch ms when this entry expires; `Infinity` = cache for the process life. */
 	expiresAt: number;
 }
 
 /** Cache keyed by `${kind}:${key}` (secret and config namespaces are distinct). */
 const cache = new Map<string, CacheEntry>();
-const inFlight = new Map<string, Promise<string>>();
+const inFlight = new Map<string, Promise<unknown>>();
+
+/**
+ * When a marker declared a `schema`, the Hosting wiring sets a per-key JSON flag
+ * env var; parse the stored string so the returned value matches the schema's
+ * inferred type (parse-only — deep validation would need the schema at runtime,
+ * which does not cross the synth→runtime bundle boundary).
+ */
+function finalizeValue(kind: ValueKind, key: string, raw: string): unknown {
+	if (process.env[jsonFlagEnvVarName(kind, key)] === undefined) return raw;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		const getter = kind === 'secret' ? 'getSecret' : 'getConfig';
+		throw new Error(
+			`[hosting] ${getter}(${JSON.stringify(key)}): a schema was declared but the stored value is not valid JSON.`,
+		);
+	}
+}
 
 function cacheTtlMs(kind: ValueKind): number {
 	const raw = process.env[cacheTtlEnvVarName(kind)];
@@ -91,7 +117,7 @@ async function defaultFetcher(locator: string, store: string): Promise<string> {
 }
 
 /** Shared resolver for both kinds. */
-async function resolveValue(kind: ValueKind, key: string): Promise<string> {
+async function resolveValue(kind: ValueKind, key: string): Promise<unknown> {
 	const cacheKey = `${kind}:${key}`;
 	const cached = cache.get(cacheKey);
 	if (cached !== undefined && Date.now() < cached.expiresAt) return cached.value;
@@ -99,8 +125,9 @@ async function resolveValue(kind: ValueKind, key: string): Promise<string> {
 	// 1. Plaintext already in env (local dev).
 	const direct = process.env[key];
 	if (direct !== undefined) {
-		cache.set(cacheKey, { value: direct, expiresAt: Number.POSITIVE_INFINITY });
-		return direct;
+		const value = finalizeValue(kind, key, direct);
+		cache.set(cacheKey, { value, expiresAt: Number.POSITIVE_INFINITY });
+		return value;
 	}
 
 	// 2. Store locator injected by the Hosting wiring.
@@ -127,7 +154,8 @@ async function resolveValue(kind: ValueKind, key: string): Promise<string> {
 			if (fallbackLocator && isNotFoundError(error)) return fetcher(fallbackLocator, store);
 			throw error;
 		})
-		.then((value) => {
+		.then((raw) => {
+			const value = finalizeValue(kind, key, raw);
 			const ttl = cacheTtlMs(kind);
 			const expiresAt = ttl === Number.POSITIVE_INFINITY ? Number.POSITIVE_INFINITY : Date.now() + ttl;
 			cache.set(cacheKey, { value, expiresAt });
@@ -187,6 +215,24 @@ export type ConfigKey = keyof HostingConfigRegistry extends never
 	: Extract<keyof HostingConfigRegistry, string>;
 
 /**
+ * The resolved value type for a secret `key`: the schema's inferred output type
+ * when `secret(key, { schema })` was declared (typegen inlines it into the
+ * registry), otherwise `string`. Falls back to `string` for an unadopted app.
+ */
+export type SecretValueOf<K extends SecretKey> = keyof HostingSecretRegistry extends never
+	? string
+	: K extends keyof HostingSecretRegistry
+		? HostingSecretRegistry[K]
+		: string;
+
+/** The resolved value type for a config `key` — see {@link SecretValueOf}. */
+export type ConfigValueOf<K extends ConfigKey> = keyof HostingConfigRegistry extends never
+	? string
+	: K extends keyof HostingConfigRegistry
+		? HostingConfigRegistry[K]
+		: string;
+
+/**
  * Resolve a **secret** (AWS Secrets Manager) at runtime.
  *
  * **Local development.** Reads `process.env.KEY` first, so a `.env` file supplies
@@ -196,14 +242,18 @@ export type ConfigKey = keyof HostingConfigRegistry extends never
  * **Type safety.** `key` is typed as {@link SecretKey}: by default any `string`, but
  * once you run `npm run typegen` (which generates a `.d.ts` augmenting
  * {@link HostingSecretRegistry} from your `secret('...')` calls) it narrows to your
- * declared keys — you get autocomplete, and a typo becomes a compile error.
+ * declared keys — autocomplete, and a typo is a compile error. When you declared a
+ * `schema` (`secret('K', { schema })`), the **return type is the schema's inferred
+ * output** and the value is **JSON-parsed** at runtime; otherwise it is `string`.
  *
  * @param key - The logical name, exactly as passed to `secret('<key>')`.
- * @returns The decrypted plaintext value.
+ * @returns The value — parsed to the schema's type when a schema was declared, else the decrypted string.
  * @throws If the key is neither in `process.env` nor backed by an injected locator.
  */
-export function getSecret(key: SecretKey): Promise<string> {
-	return resolveValue('secret', key);
+export function getSecret<K extends SecretKey>(key: K): Promise<SecretValueOf<K>> {
+	// Runtime yields the parsed value or the raw string; the precise type comes from
+	// the typegen-augmented registry, so assert it here (framework-internal).
+	return resolveValue('secret', key) as Promise<SecretValueOf<K>>;
 }
 
 /**
@@ -212,13 +262,15 @@ export function getSecret(key: SecretKey): Promise<string> {
  *
  * **Type safety.** `key` is typed as {@link ConfigKey} — any `string` by default,
  * narrowing to your declared config keys after `npm run typegen` (see {@link getSecret}).
+ * With `config('K', { schema })` the return type is the schema's inferred output and
+ * the value is JSON-parsed at runtime — no `JSON.parse(...)` and no `any`.
  *
  * @param key - The logical name, exactly as passed to `config('<key>')`.
- * @returns The value.
+ * @returns The value — parsed to the schema's type when a schema was declared, else the string.
  * @throws If the key is neither in `process.env` nor backed by an injected locator.
  */
-export function getConfig(key: ConfigKey): Promise<string> {
-	return resolveValue('config', key);
+export function getConfig<K extends ConfigKey>(key: K): Promise<ConfigValueOf<K>> {
+	return resolveValue('config', key) as Promise<ConfigValueOf<K>>;
 }
 
 /** Reset cached values and any fetcher override. **For testing only.** */

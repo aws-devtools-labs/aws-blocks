@@ -72,6 +72,12 @@ export interface ScanResult {
 	readonly secretKeys: string[];
 	/** Sorted, de-duplicated keys from `config('...')` calls. */
 	readonly configKeys: string[];
+	/**
+	 * Inferred value type per key for keys declared with a `{ schema }` — the schema's
+	 * TypeScript output type, resolved via a `Program`/TypeChecker (e.g. `{ beta: boolean }`).
+	 * Keys absent here have no schema and default to `string`. Keyed by kind.
+	 */
+	readonly valueTypes: { secret: Record<string, string>; config: Record<string, string> };
 	/** Non-literal `secret()` / `config()` calls that could not be captured statically. */
 	readonly dynamicCallSites: DynamicCallSite[];
 	/** Absolute paths of the files that were scanned. */
@@ -176,22 +182,9 @@ async function loadTypeScript(): Promise<typeof import('typescript')> {
 	}
 }
 
-/** Walk a source file collecting `secret('K')` / `config('K')` keys and non-literal call sites. */
-function collectFromSourceFile(
-	ts: typeof import('typescript'),
-	sourceFile: TS.SourceFile,
-	filePath: string,
-	allowed: Set<string>,
-	secretKeys: Set<string>,
-	configKeys: Set<string>,
-	dynamicCallSites: DynamicCallSite[],
-): void {
-	const bindings = buildMarkerBindings(ts, sourceFile, allowed);
-	// No marker is imported into this file → nothing here can be a marker call. Skip.
-	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return;
-
-	/** Resolve a call's callee to a marker kind via its import binding (not its text). */
-	const kindOfCall = (call: TS.CallExpression): ValueKind | undefined => {
+/** Resolve a call's callee to a marker kind via its import binding (not its text). */
+function makeKindOfCall(ts: typeof import('typescript'), bindings: MarkerBindings) {
+	return (call: TS.CallExpression): ValueKind | undefined => {
 		const callee = call.expression;
 		if (ts.isIdentifier(callee)) return bindings.named.get(callee.text);
 		// `import * as blocks` → `blocks.secret(…)`
@@ -204,6 +197,35 @@ function collectFromSourceFile(
 		}
 		return undefined;
 	};
+}
+
+/** The `schema:` property value node in a `secret('K', { schema })` options object, if present. */
+function schemaArgOf(ts: typeof import('typescript'), call: TS.CallExpression): TS.Expression | undefined {
+	const opts = call.arguments[1];
+	if (!opts || !ts.isObjectLiteralExpression(opts)) return undefined;
+	for (const prop of opts.properties) {
+		if (ts.isPropertyAssignment(prop) && !ts.isComputedPropertyName(prop.name) && prop.name.getText() === 'schema') {
+			return prop.initializer;
+		}
+	}
+	return undefined;
+}
+
+/** Walk a source file collecting `secret('K')` / `config('K')` keys and non-literal call sites. */
+function collectFromSourceFile(
+	ts: typeof import('typescript'),
+	sourceFile: TS.SourceFile,
+	filePath: string,
+	allowed: Set<string>,
+	secretKeys: Set<string>,
+	configKeys: Set<string>,
+	schemaKeys: { secret: Set<string>; config: Set<string> },
+	dynamicCallSites: DynamicCallSite[],
+): void {
+	const bindings = buildMarkerBindings(ts, sourceFile, allowed);
+	// No marker is imported into this file → nothing here can be a marker call. Skip.
+	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return;
+	const kindOfCall = makeKindOfCall(ts, bindings);
 
 	const visit = (node: TS.Node): void => {
 		if (ts.isCallExpression(node)) {
@@ -212,6 +234,7 @@ function collectFromSourceFile(
 				const arg = node.arguments[0];
 				if (arg && ts.isStringLiteralLike(arg)) {
 					(fn === 'secret' ? secretKeys : configKeys).add(arg.text);
+					if (schemaArgOf(ts, node)) schemaKeys[fn].add(arg.text);
 				} else if (arg) {
 					const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
 					dynamicCallSites.push({ file: filePath, line: line + 1, fn });
@@ -221,6 +244,83 @@ function collectFromSourceFile(
 		ts.forEachChild(node, visit);
 	};
 	visit(sourceFile);
+}
+
+/** Infer the TypeScript output type of a Standard Schema expression via the checker. */
+function inferSchemaOutput(
+	ts: typeof import('typescript'),
+	checker: import('typescript').TypeChecker,
+	schemaExpr: TS.Expression,
+): string | undefined {
+	const at = schemaExpr;
+	const prop = (t: import('typescript').Type, name: string): import('typescript').Type | undefined => {
+		const sym = checker.getPropertyOfType(t, name);
+		return sym ? checker.getNonNullableType(checker.getTypeOfSymbolAtLocation(sym, at)) : undefined;
+	};
+	// StandardSchemaV1: value['~standard'].types.output
+	const standard = prop(checker.getTypeAtLocation(schemaExpr), '~standard');
+	const types = standard && prop(standard, 'types');
+	const output = types && prop(types, 'output');
+	if (!output) return undefined;
+	const str = checker.typeToString(
+		output,
+		at,
+		ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType | ts.TypeFormatFlags.InTypeAlias,
+	);
+	// A resolution that yields `any`/`unknown` is not useful — treat as unresolved.
+	return str === 'any' || str === 'unknown' ? undefined : str;
+}
+
+/**
+ * Resolve the inferred output type for every `{ schema }`-carrying marker call, using
+ * a full TypeScript `Program` (needed to resolve the schema library's types). Only
+ * built when at least one schema is present, so the common no-schema path stays fast.
+ */
+function resolveSchemaTypes(
+	ts: typeof import('typescript'),
+	cwd: string,
+	files: string[],
+	allowed: Set<string>,
+): { secret: Record<string, string>; config: Record<string, string> } {
+	const out = { secret: {} as Record<string, string>, config: {} as Record<string, string> };
+	const configPath = ts.findConfigFile(cwd, ts.sys.fileExists, 'tsconfig.json');
+	let options: import('typescript').CompilerOptions = { strict: true, skipLibCheck: true };
+	if (configPath) {
+		const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+			...ts.sys,
+			onUnRecoverableConfigFileDiagnostic: () => {},
+		} as import('typescript').ParseConfigFileHost);
+		if (parsed) options = { ...parsed.options };
+	}
+	options.noEmit = true;
+	options.skipLibCheck = true;
+	const program = ts.createProgram(files, options);
+	const checker = program.getTypeChecker();
+
+	for (const file of files) {
+		const sf = program.getSourceFile(file);
+		if (!sf) continue;
+		const bindings = buildMarkerBindings(ts, sf, allowed);
+		if (bindings.named.size === 0 && bindings.namespaces.size === 0) continue;
+		const kindOfCall = makeKindOfCall(ts, bindings);
+		const visit = (node: TS.Node): void => {
+			if (ts.isCallExpression(node)) {
+				const fn = kindOfCall(node);
+				const keyArg = node.arguments[0];
+				if (fn && keyArg && ts.isStringLiteralLike(keyArg)) {
+					const schemaExpr = schemaArgOf(ts, node);
+					if (schemaExpr) {
+						const inferred = inferSchemaOutput(ts, checker, schemaExpr);
+						// Unresolved schema type → `unknown` (honest: value is JSON-parsed at runtime).
+						out[fn][keyArg.text] = inferred ?? 'unknown';
+					}
+				}
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(sf);
+	}
+	return out;
 }
 
 /**
@@ -244,26 +344,34 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	const ts = await loadTypeScript();
 	const secretKeys = new Set<string>();
 	const configKeys = new Set<string>();
+	const schemaKeys = { secret: new Set<string>(), config: new Set<string>() };
 	const dynamicCallSites: DynamicCallSite[] = [];
 
 	for (const file of files) {
 		const text = await readFile(file, 'utf-8');
 		const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /* setParentNodes */ true);
-		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, dynamicCallSites);
+		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, schemaKeys, dynamicCallSites);
 	}
+
+	// Only pay for a full Program (type resolution) when at least one schema exists.
+	const valueTypes =
+		schemaKeys.secret.size || schemaKeys.config.size
+			? resolveSchemaTypes(ts, cwd, files, allowed)
+			: { secret: {}, config: {} };
 
 	return {
 		secretKeys: [...secretKeys].sort(),
 		configKeys: [...configKeys].sort(),
+		valueTypes,
 		dynamicCallSites,
 		scannedFiles: files.sort(),
 	};
 }
 
-/** Render the `interface` body for one registry (empty stays `{}`). */
-function renderRegistry(name: string, keys: string[]): string {
+/** Render the `interface` body for one registry (empty stays `{}`); schema'd keys get their inferred type. */
+function renderRegistry(name: string, keys: string[], types: Record<string, string> = {}): string {
 	if (keys.length === 0) return `\tinterface ${name} {}`;
-	const members = keys.map((k) => `\t\t${JSON.stringify(k)}: string;`).join('\n');
+	const members = keys.map((k) => `\t\t${JSON.stringify(k)}: ${types[k] ?? 'string'};`).join('\n');
 	return `\tinterface ${name} {\n${members}\n\t}`;
 }
 
@@ -279,15 +387,16 @@ function renderRegistry(name: string, keys: string[]): string {
  * @internal
  */
 export function renderHostingValuesDts(
-	scan: Pick<ScanResult, 'secretKeys' | 'configKeys'>,
+	scan: Pick<ScanResult, 'secretKeys' | 'configKeys'> & Partial<Pick<ScanResult, 'valueTypes'>>,
 	moduleSpecifiers: string[] = DEFAULT_TYPEGEN_MODULES,
 ): string {
+	const types = scan.valueTypes ?? { secret: {}, config: {} };
 	const blocks = moduleSpecifiers
 		.map(
 			(spec) => `declare module ${JSON.stringify(spec)} {
-${renderRegistry('HostingSecretRegistry', scan.secretKeys)}
+${renderRegistry('HostingSecretRegistry', scan.secretKeys, types.secret)}
 
-${renderRegistry('HostingConfigRegistry', scan.configKeys)}
+${renderRegistry('HostingConfigRegistry', scan.configKeys, types.config)}
 }`,
 		)
 		.join('\n\n');

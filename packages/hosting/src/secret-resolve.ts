@@ -32,6 +32,7 @@ import {
 	configEnvVarName,
 	defaultPrefixForKind,
 	envVarNameForKind,
+	jsonFlagEnvVarName,
 	fallbackEnvVarName,
 	isManagedValue,
 	type ManagedValue,
@@ -333,6 +334,9 @@ export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedVal
 	if (cacheTtlSeconds && cacheTtlSeconds > 0) {
 		fn.addEnvironment(cacheTtlEnvVarName(kind), String(Math.floor(cacheTtlSeconds)));
 	}
+	// A schema means the value is JSON: flag it so the runtime getter parses it
+	// (returning the schema's inferred type that typegen puts on the getter).
+	if (marker.schema) fn.addEnvironment(jsonFlagEnvVarName(kind, key), '1');
 
 	for (const locator of [...new Set([primary, ...(fallback ? [fallback] : [])])]) {
 		grantStoreRead(fn, locator, store);

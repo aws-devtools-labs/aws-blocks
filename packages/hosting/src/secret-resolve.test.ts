@@ -104,6 +104,31 @@ void describe('assertMarkersExistAtSynth() — deploy-time existence check', () 
 	});
 });
 
+void describe('wireManagedValue() — JSON parse flag for schema markers', () => {
+	const stubSchema = {
+		'~standard': { version: 1 as const, vendor: 'test', validate: (value: unknown) => ({ value }) },
+	};
+
+	void it('injects HOSTING_CONFIG_JSON_<KEY> only when the marker declares a schema', () => {
+		const stack = new cdk.Stack(new cdk.App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
+		const fn = new lambda.Function(stack, 'Fn', {
+			runtime: lambda.Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			code: lambda.Code.fromInline('exports.handler=()=>{}'),
+		});
+		wireManagedValue(fn, config('FLAGS', { schema: stubSchema }), { configStore: { prefix: '/blocks/config' } });
+		wireManagedValue(fn, config('PLAIN'), { configStore: { prefix: '/blocks/config' } });
+		const t = Template.fromStack(stack);
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.objectLike({ HOSTING_CONFIG_JSON_FLAGS: '1' }) },
+		});
+		// PLAIN has no schema → no JSON flag.
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.not(Match.objectLike({ HOSTING_CONFIG_JSON_PLAIN: Match.anyValue() })) },
+		});
+	});
+});
+
 void describe('partitionEnvironment()', () => {
 	void it('splits plain / managed (secret+config) / BYO', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'S');
