@@ -40,7 +40,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs Agent",
     "build": "tsc --build",
-    "test": "node --test dist/index.test.js"
+    "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
     "@aws-blocks/bb-async-job": "^0.1.4",
