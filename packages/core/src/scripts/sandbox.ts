@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -45,6 +45,15 @@ export interface SandboxDeployArgsOptions {
   projectRoot: string;
   /** Backend entry passed to `--app` so CDK synthesizes from the app definition. */
   backendPath: string;
+  /**
+   * Use `--hotswap-fallback` instead of the Express-Mode CloudFormation deploy.
+   * Set for a **re-deploy** (the stack already exists): a code-only change is
+   * applied directly to the Lambdas (skipping CloudFormation) in seconds, with
+   * an automatic fall-back to a full CloudFormation deploy for any change that
+   * isn't hotswappable (new/changed infrastructure). Left off for the first
+   * deploy (nothing to hotswap → the Express CREATE is faster there).
+   */
+  hotswap?: boolean;
 }
 
 /**
@@ -74,13 +83,23 @@ export interface SandboxDeployArgsOptions {
  *   change set and full stabilization with rollback, which are exactly the
  *   safety signals a production deploy should keep. Requires an aws-cdk CLI
  *   new enough to expose `--express`; our pinned `^2.1138.0` has it.
+ * - `--hotswap-fallback` (**re-deploy only** — see `hotswap`): skips
+ *   CloudFormation and applies a code-only change directly to the Lambdas
+ *   (UpdateFunctionCode / S3 asset sync) in seconds, falling back to a full
+ *   CloudFormation deploy for non-hotswappable changes. It is mutually
+ *   exclusive with the Express/`--method` CloudFormation flags here (hotswap
+ *   bypasses CloudFormation), so we pass EITHER the hotswap flag OR the
+ *   Express flags, never both. The synth/build still runs, so a code-change
+ *   iteration is roughly `build + a few seconds` instead of `build + a full
+ *   CloudFormation deploy`. Never used on the production path.
  */
-export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath, hotswap = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
-    "--method", "direct",
-    "--express",
+    // Re-deploy → hotswap (skip CloudFormation, seconds); first deploy →
+    // Express Mode CREATE. Mutually exclusive: hotswap bypasses CloudFormation.
+    ...(hotswap ? ["--hotswap-fallback"] : ["--method", "direct", "--express"]),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
@@ -148,15 +167,28 @@ export async function startSandbox(options: SandboxOptions) {
   // Runs before CDK deploy so both success and failure paths include block info.
   await importBackendForRegistry(backendPath);
 
+  // Re-deploy detection: a prior deploy wrote `<outDir>/outputs.json`, so the
+  // stack likely already exists → use `--hotswap-fallback` (apply code changes
+  // directly to the Lambdas in seconds; auto-fall-back to a full CloudFormation
+  // deploy for infra changes). The FIRST deploy (no outputs file) uses the
+  // Express-Mode CREATE, which is faster when there's nothing to hotswap.
+  // hotswap-fallback is safe even if the stack was destroyed since (it falls
+  // back to a full deploy), so the heuristic never blocks a deploy.
+  const isRedeploy = existsSync(join(process.cwd(), outDir, "outputs.json"));
+
   console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+  console.log(
+    isRedeploy
+      ? "   (re-deploy: hotswapping code changes — seconds; infra changes fall back to a full deploy)"
+      : "   (first deploy: this may take a few minutes)",
+  );
 
   try {
     runSync(
       "npm",
-      // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
-      // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath }),
+      // Argv (Express-Mode CREATE, or --hotswap-fallback on re-deploy) is built
+      // by buildSandboxDeployArgs — see its doc for why each flag exists.
+      buildSandboxDeployArgs({ outDir, projectRoot: process.cwd(), backendPath, hotswap: isRedeploy }),
       {
         stdio: "inherit",
         env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },

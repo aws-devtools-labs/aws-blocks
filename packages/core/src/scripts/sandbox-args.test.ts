@@ -90,3 +90,36 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
     assert.match(hint, /rollback is off|automatic rollback/i);
   });
 });
+
+describe('buildSandboxDeployArgs — hotswap (re-deploy)', () => {
+  const hot = buildSandboxDeployArgs({
+    outDir: '.blocks-sandbox',
+    projectRoot: '/app',
+    backendPath: 'aws-blocks/index.ts',
+    hotswap: true,
+  });
+
+  it('uses --hotswap-fallback for a re-deploy', () => {
+    assert.ok(hot.includes('--hotswap-fallback'), `expected --hotswap-fallback in: ${hot.join(' ')}`);
+  });
+
+  it('does NOT combine hotswap with the Express/--method CFN flags (mutually exclusive)', () => {
+    // Hotswap bypasses CloudFormation, so the Express-Mode flags don't apply
+    // and CDK would reject / ignore them. Pass EITHER, never both.
+    assert.ok(!hot.includes('--express'), `hotswap must not pass --express: ${hot.join(' ')}`);
+    assert.ok(!hot.includes('--method'), `hotswap must not pass --method: ${hot.join(' ')}`);
+  });
+
+  it('keeps the non-interactive contract + outputs + sandbox context', () => {
+    assert.deepStrictEqual(hot.slice(0, 4), ['exec', 'cdk', '--', 'deploy']);
+    assert.ok(hot.includes('--all'));
+    assert.strictEqual(valueAfter(hot, '--require-approval'), 'never');
+    assert.strictEqual(valueAfter(hot, '--outputs-file'), '.blocks-sandbox/outputs.json');
+  });
+
+  it('first deploy (hotswap:false) stays on Express Mode, not hotswap', () => {
+    const first = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts' });
+    assert.ok(first.includes('--express'), 'first deploy uses Express Mode');
+    assert.ok(!first.includes('--hotswap-fallback'), 'first deploy does not hotswap');
+  });
+});
