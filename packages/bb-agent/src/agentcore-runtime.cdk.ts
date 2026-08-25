@@ -15,9 +15,11 @@
  * The loop runs INSIDE this runtime AS the shared Blocks execution role (the same role the Lambda
  * handler runs as), so it inherits every Building Block's grants — including the Realtime publish
  * permissions already granted to the handler, so it streams chunks to the browser via the Realtime
- * BB with no extra grant (only the callback URL is injected). This class adds to that shared role
- * only what's AgentCore-specific: the `bedrock-agentcore` assume-role trust, Bedrock model access,
- * and the handler's `InvokeAgentRuntime` permission. Inbound auth is IAM (SigV4): the RPC handler
+ * BB with no extra grant. The container loads the full app config (via the injected config-bucket
+ * location) exactly as the handler does, so it discovers the Realtime callback URL and every other
+ * registerConfig() value a tool's BB may need. This class adds to that shared role only what's
+ * AgentCore-specific: the `bedrock-agentcore` assume-role trust, Bedrock model access, and the
+ * handler's `InvokeAgentRuntime` permission. Inbound auth is IAM (SigV4): the RPC handler
  * invokes with its own credentials; the browser never talks to the runtime directly.
  */
 
@@ -26,17 +28,14 @@ import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { Realtime } from '@aws-blocks/bb-realtime';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 
 /** References the agent loop needs, handed in by the Agent CDK constructor. */
 export interface AgentCoreRuntimeProps {
 	/** fullId of the owning Agent — the container looks the Agent up by this (`BB_AGENT_ID`). */
 	agentFullId: string;
-	/** Realtime BB the loop publishes chunks to. `publishCallbackUrl()` supplies the endpoint to inject. */
-	realtime: InstanceType<typeof Realtime>;
 	/**
 	 * Pre-built asset dir to use instead of co-bundling at synth. Set by unit tests and apps
 	 * that pre-bundle; when omitted, the backend module is co-bundled from the BlocksStack.
@@ -81,14 +80,11 @@ export class AgentCoreRuntime extends Scope {
 		// shared role by the Realtime BB's handler wiring and the Agent's FileBucket/DistributedTable
 		// children, so they're not repeated here — the loop inherits them by running as the role.)
 		const SHARED_GRANTS_KEY = Symbol.for('BLOCKS_AGENT_RUNTIME_SHARED_ROLE_GRANTS');
-		const stackAny = stack as unknown as Record<symbol, { callbackUrl: string } | undefined>;
-		let sharedGrants = stackAny[SHARED_GRANTS_KEY];
-		if (!sharedGrants) {
+		const stackAny = stack as unknown as Record<symbol, boolean | undefined>;
+		if (!stackAny[SHARED_GRANTS_KEY]) {
 			// The container publishes to Realtime AS this shared role, which already holds the publish
 			// grants (the Realtime BB grants postToConnection + the connections table to the handler on
-			// the same role) — so no Realtime IAM grant is needed here, only the callback URL to inject
-			// (not discoverable outside the Blocks handler).
-			const callbackUrl = props.realtime.publishCallbackUrl();
+			// the same role) — so no Realtime IAM grant is needed here; it's inherited by running as the role.
 
 			// Trust: let the AgentCore Runtime assume this shared role (it runs AS the role). Added here
 			// rather than in core, so the role only trusts `bedrock-agentcore` when an Agent exists.
@@ -140,11 +136,15 @@ export class AgentCoreRuntime extends Scope {
 					],
 				}),
 			);
-			sharedGrants = { callbackUrl };
-			stackAny[SHARED_GRANTS_KEY] = sharedGrants;
+			stackAny[SHARED_GRANTS_KEY] = true;
 		}
-		// Same for every agent in the stack (shared Realtime infra → one callback URL).
-		const callbackUrl = sharedGrants.callbackUrl;
+
+		// Inject the config location so the container loads the FULL app config via
+		// loadConfigToProcessEnv() — the same config the Lambda handler loads. That's how it gets
+		// BLOCKS_RT_CALLBACK_URL (registered by the Realtime BB) plus any other config-backed BB value
+		// an agent's tools touch; without it the container runs with empty config and those BBs fail.
+		// Idempotent (one config bucket per stack); IAM to read it is inherited via the shared role.
+		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
 
 		const runtime = new Runtime(this, 'AgentRuntime', {
 			agentRuntimeArtifact: AgentRuntimeArtifact.fromCodeAsset({
@@ -165,9 +165,11 @@ export class AgentCoreRuntime extends Scope {
 				// BLOCKS_STACK_NAME (same as the Lambda handler); without it the backend registers
 				// under an un-prefixed fullId that won't match BB_AGENT_ID.
 				BLOCKS_STACK_NAME: stack.stackName,
-				// The Realtime publish endpoint — publish() reads this from process.env. Outside the
-				// Blocks handler it isn't otherwise discoverable, so realtime.publishCallbackUrl() supplies it.
-				BLOCKS_RT_CALLBACK_URL: callbackUrl,
+				// Config location so the container's loadConfigToProcessEnv() loads the full app config
+				// (same as the handler) — this delivers BLOCKS_RT_CALLBACK_URL and every other
+				// registerConfig() value a tool's BB may read. IAM to read it is inherited (shared role).
+				BLOCKS_CONFIG_BUCKET: configBucketName,
+				BLOCKS_CONFIG_KEY: configKey,
 			},
 		});
 		this.runtime = runtime;
