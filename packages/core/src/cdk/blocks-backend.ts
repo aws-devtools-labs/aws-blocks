@@ -13,6 +13,8 @@ import { blocksNodejsBundling } from './bundling.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
+import { initializeVpc, finalizeVpc } from './vpc.js';
+import type { BlocksVpcOptions, VpcContext } from './vpc-types.js';
 import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 
@@ -62,10 +64,18 @@ export interface BlocksBackendProps {
    * corresponding stack default.
    */
   defaults: BlocksDefaults;
+  /**
+   * Place the app's compute and VPC-resident resources in a VPC.
+   * Pass a standard CDK VPC — Blocks handles Lambda placement,
+   * endpoint provisioning (based on BB requirements), and SG wiring.
+   *
+   * Omit for no VPC (default — Lambda runs in AWS-managed network).
+   */
+  vpc?: BlocksVpcOptions;
 }
 
 /** Shared infra setup — creates Lambda + API Gateway on the given scope. */
-export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string, vpcContext?: VpcContext) {
   // Fail fast with an actionable message at the create() call site if `defaults`
   // is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
   // object) — otherwise the first Building Block to read `scope.defaults` throws
@@ -97,10 +107,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      // When Lambda is placed in a VPC it needs ENI management permissions
+      ...(vpcContext ? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')] : []),
     ],
   });
 
-  const handler = new lambda.NodejsFunction(scope, 'Handler', {
+  const handlerProps: any = {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'handler',
@@ -127,7 +139,16 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
       minify: true,
       esbuildArgs: { '--conditions': 'aws-runtime' },
     }),
-  });
+  };
+
+  // Apply VPC placement to the Lambda if VPC context is provided
+  if (vpcContext) {
+    handlerProps.vpc = vpcContext.vpc;
+    handlerProps.vpcSubnets = vpcContext.lambdaSubnets;
+    handlerProps.securityGroups = [vpcContext.lambdaSecurityGroup];
+  }
+
+  const handler = new lambda.NodejsFunction(scope, 'Handler', handlerProps);
 
   // In sandbox mode, allow localhost origins so the local dev frontend can
   // reach the deployed Lambda API via CORS.
@@ -269,10 +290,13 @@ export class BlocksBackend extends Construct {
     return `${stackName}-${this.node.id}`;
   }
 
+  private _vpcOptions?: BlocksVpcOptions;
+
   private constructor(scope: Construct, id: string, props: BlocksBackendProps) {
     super(scope, id);
 
     this.backendHandlerPath = props.backendHandlerPath;
+    this._vpcOptions = props.vpc;
 
     // Expose self to Building Blocks at CDK time
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -282,7 +306,13 @@ export class BlocksBackend extends Construct {
     // walking up to their owning backend (see Scope.defaults).
     this.defaults = props.defaults;
 
-    const infra = setupBlocksInfra(this, props, id);
+    // Initialize VPC context before BBs are constructed (so BBs can discover it)
+    let vpcContext: VpcContext | undefined;
+    if (props.vpc) {
+      vpcContext = initializeVpc(this, props.vpc);
+    }
+
+    const infra = setupBlocksInfra(this, props, id, vpcContext);
     this.handler = infra.handler;
     this.gateway = infra.gateway;
     this.apiUrl = infra.apiUrl;
@@ -313,6 +343,11 @@ export class BlocksBackend extends Construct {
 
     // Finalize BB config → S3 (after all BBs have registered their config)
     finalizeConfigRegistry(backend, backend.handler);
+
+    // Finalize VPC: collect requirements → deduplicate → provision endpoints
+    if (backend._vpcOptions) {
+      finalizeVpc(backend, backend._vpcOptions);
+    }
 
     return backend;
   }
