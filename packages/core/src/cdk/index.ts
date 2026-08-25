@@ -17,7 +17,11 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 
-export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+} from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
