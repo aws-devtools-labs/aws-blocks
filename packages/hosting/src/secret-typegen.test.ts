@@ -94,6 +94,65 @@ void describe('scanValueKeys()', () => {
 		assert.ok(scan.dynamicCallSites[0].line > 0);
 	});
 
+	void it('resolves the import binding, not the identifier text', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.cdk.ts': `
+				import { secret as sec, config } from '@aws-blocks/hosting';
+				// A local function of the same name must NOT be treated as a marker.
+				function secretHelper() { return 'x'; }
+				const localSecret = (k: string) => k;
+
+				const a = sec('ALIASED_KEY');        // aliased import → detected as secret
+				const b = config('REAL_CONFIG');     // named import → detected as config
+				const c = localSecret('LOCAL');      // local fn → ignored
+			`,
+			// A same-named import from an UNRELATED module (dotenv) must be ignored.
+			'aws-blocks/env.ts': `
+				import { config } from 'dotenv';
+				config({ path: '.env' });            // not a marker; also not a "non-literal" warning
+			`,
+		});
+		const scan = await scanValueKeys({ cwd });
+		assert.deepEqual(scan.secretKeys, ['ALIASED_KEY']);
+		assert.deepEqual(scan.configKeys, ['REAL_CONFIG']);
+		assert.equal(scan.dynamicCallSites.length, 0, 'dotenv config({path}) must not be flagged');
+	});
+
+	void it('detects markers imported via @aws-blocks/blocks/cdk (the primary app path)', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.cdk.ts': `
+				import { secret, config } from '@aws-blocks/blocks/cdk';
+				const s = secret('VIA_BLOCKS_CDK');
+				const c = config('CFG_VIA_BLOCKS_CDK');
+			`,
+		});
+		const scan = await scanValueKeys({ cwd });
+		assert.deepEqual(scan.secretKeys, ['VIA_BLOCKS_CDK']);
+		assert.deepEqual(scan.configKeys, ['CFG_VIA_BLOCKS_CDK']);
+	});
+
+	void it('detects namespace-imported markers (import * as blocks)', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.cdk.ts': `
+				import * as blocks from '@aws-blocks/core/cdk';
+				const s = blocks.secret('NS_SECRET');
+				const c = blocks.config('NS_CONFIG');
+			`,
+		});
+		const scan = await scanValueKeys({ cwd });
+		assert.deepEqual(scan.secretKeys, ['NS_SECRET']);
+		assert.deepEqual(scan.configKeys, ['NS_CONFIG']);
+	});
+
+	void it('ignores marker-looking calls with no import binding in the file', async () => {
+		const cwd = await fixture({
+			'aws-blocks/index.cdk.ts': `secret('NO_IMPORT'); config('NO_IMPORT_2');`,
+		});
+		const scan = await scanValueKeys({ cwd });
+		assert.deepEqual(scan.secretKeys, []);
+		assert.deepEqual(scan.configKeys, []);
+	});
+
 	void it('does not descend into node_modules / dist / .blocks', async () => {
 		const cwd = await fixture({
 			'aws-blocks/index.cdk.ts': `import { secret } from '@aws-blocks/hosting'; secret('KEEP');`,

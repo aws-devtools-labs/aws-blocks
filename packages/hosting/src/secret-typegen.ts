@@ -97,10 +97,72 @@ export interface TypegenOptions {
 	 * @default {@link DEFAULT_TYPEGEN_MODULES}
 	 */
 	readonly moduleSpecifiers?: string[];
+	/**
+	 * Module specifiers a `secret()` / `config()` call may be imported *from* to be
+	 * detected. Detection resolves each call's import binding against this list, so
+	 * an alias is caught and a local/unrelated same-named function is ignored.
+	 * @default {@link DEFAULT_MARKER_MODULES}
+	 */
+	readonly markerModules?: string[];
 }
 
 /** The function names we recognize as value declarations. */
 const VALUE_FNS: Record<string, ValueKind> = { secret: 'secret', config: 'config' };
+
+/**
+ * Module specifiers a `secret()` / `config()` call may be imported *from* to count
+ * as a real marker. Detection resolves the call's **import binding** against this
+ * list — not the identifier text — so an aliased import (`secret as sec`) is caught,
+ * a local `function secret()` or an unrelated `config()` (e.g. `dotenv`) is ignored,
+ * and a namespace import (`import * as blocks … blocks.secret(…)`) works. This is a
+ * distinct list from {@link DEFAULT_TYPEGEN_MODULES} (which is where the getters are
+ * imported *to*, and what the generated `.d.ts` augments). It must include the paths
+ * apps actually declare through — notably `@aws-blocks/blocks/cdk` and
+ * `@aws-blocks/core/cdk`, which re-export the markers — or detection silently misses
+ * the primary path.
+ */
+export const DEFAULT_MARKER_MODULES = [
+	'@aws-blocks/hosting',
+	'@aws-blocks/hosting/secret',
+	'@aws-blocks/blocks/cdk',
+	'@aws-blocks/blocks',
+	'@aws-blocks/core/cdk',
+	'@aws-blocks/core',
+];
+
+/** Per-file resolution of which local names bind to `secret`/`config` from an allowed module. */
+interface MarkerBindings {
+	/** Local name → kind, e.g. `sec` → `'secret'` for `import { secret as sec }`. */
+	readonly named: Map<string, ValueKind>;
+	/** Namespace-import locals from an allowed module, e.g. `blocks` for `import * as blocks`. */
+	readonly namespaces: Set<string>;
+}
+
+/** Build the import-binding map for one source file, restricted to allowed marker modules. */
+function buildMarkerBindings(
+	ts: typeof import('typescript'),
+	sourceFile: TS.SourceFile,
+	allowed: Set<string>,
+): MarkerBindings {
+	const named = new Map<string, ValueKind>();
+	const namespaces = new Set<string>();
+	for (const stmt of sourceFile.statements) {
+		if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+		if (!allowed.has(stmt.moduleSpecifier.text)) continue;
+		const bindings = stmt.importClause?.namedBindings;
+		if (!bindings) continue;
+		if (ts.isNamespaceImport(bindings)) {
+			namespaces.add(bindings.name.text);
+		} else if (ts.isNamedImports(bindings)) {
+			for (const el of bindings.elements) {
+				const importedName = (el.propertyName ?? el.name).text; // real export name (handles `as`)
+				const kind = VALUE_FNS[importedName];
+				if (kind) named.set(el.name.text, kind);
+			}
+		}
+	}
+	return { named, namespaces };
+}
 
 /** Dynamically import the app's TypeScript compiler (present in every TS app). */
 async function loadTypeScript(): Promise<typeof import('typescript')> {
@@ -119,13 +181,33 @@ function collectFromSourceFile(
 	ts: typeof import('typescript'),
 	sourceFile: TS.SourceFile,
 	filePath: string,
+	allowed: Set<string>,
 	secretKeys: Set<string>,
 	configKeys: Set<string>,
 	dynamicCallSites: DynamicCallSite[],
 ): void {
+	const bindings = buildMarkerBindings(ts, sourceFile, allowed);
+	// No marker is imported into this file → nothing here can be a marker call. Skip.
+	if (bindings.named.size === 0 && bindings.namespaces.size === 0) return;
+
+	/** Resolve a call's callee to a marker kind via its import binding (not its text). */
+	const kindOfCall = (call: TS.CallExpression): ValueKind | undefined => {
+		const callee = call.expression;
+		if (ts.isIdentifier(callee)) return bindings.named.get(callee.text);
+		// `import * as blocks` → `blocks.secret(…)`
+		if (
+			ts.isPropertyAccessExpression(callee) &&
+			ts.isIdentifier(callee.expression) &&
+			bindings.namespaces.has(callee.expression.text)
+		) {
+			return VALUE_FNS[callee.name.text];
+		}
+		return undefined;
+	};
+
 	const visit = (node: TS.Node): void => {
-		if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-			const fn = VALUE_FNS[node.expression.text];
+		if (ts.isCallExpression(node)) {
+			const fn = kindOfCall(node);
 			if (fn) {
 				const arg = node.arguments[0];
 				if (arg && ts.isStringLiteralLike(arg)) {
@@ -150,6 +232,7 @@ function collectFromSourceFile(
 export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanResult> {
 	const cwd = options.cwd ?? process.cwd();
 	const include = options.include ?? DEFAULT_TYPEGEN_INCLUDE;
+	const allowed = new Set(options.markerModules ?? DEFAULT_MARKER_MODULES);
 
 	const files = await fg(include, {
 		cwd,
@@ -165,7 +248,7 @@ export async function scanValueKeys(options: TypegenOptions = {}): Promise<ScanR
 	for (const file of files) {
 		const text = await readFile(file, 'utf-8');
 		const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /* setParentNodes */ true);
-		collectFromSourceFile(ts, sourceFile, file, secretKeys, configKeys, dynamicCallSites);
+		collectFromSourceFile(ts, sourceFile, file, allowed, secretKeys, configKeys, dynamicCallSites);
 	}
 
 	return {
