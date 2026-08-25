@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
@@ -52,10 +52,13 @@ export class LambdaCompute extends Compute {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,
 			},
-			bundling: {
+			// blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+			// CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing
+			// at Lambda load. See core's ./cdk/bundling.ts.
+			bundling: blocksNodejsBundling({
 				minify: true,
 				esbuildArgs: { '--conditions': 'aws-runtime' },
-			},
+			}),
 		});
 
 		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
