@@ -147,6 +147,21 @@ export type HostingConstructProps = {
    */
   bypassApiProxyUrl?: string;
 
+  /**
+   * Preview `skipIsr` — skip the ISR / on-demand-revalidation infra (cache
+   * bucket, DynamoDB tag table, SQS queue + DLQ, revalidation Lambda, seed).
+   * Framework-agnostic: gates the manifest's `cache` block regardless of
+   * adapter. SSR pages still render; only revalidation is disabled.
+   */
+  skipIsr?: boolean;
+
+  /**
+   * Preview `skipImageOptimization` — skip the image-optimization Lambda even
+   * when the manifest declares it. `/_next/image` (Nuxt IPX, etc.) degrades to
+   * the source image in preview.
+   */
+  skipImageOptimization?: boolean;
+
   /** Custom domain configuration. */
   domain?: HostingDomainConfig;
   /** WAF configuration. */
@@ -546,7 +561,10 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 3. Cache infrastructure (ISR) ----
-    if (manifest.cache && manifest.cache.driver === 'nitro-s3') {
+    // Preview `skipIsr` drops the whole ISR/revalidation cluster (§3 + §3b)
+    // — framework-agnostic. The Next adapter also disables the incremental
+    // cache at build so the server function has no cache dependency.
+    if (!props.skipIsr && manifest.cache && manifest.cache.driver === 'nitro-s3') {
       // Nitro path: a single S3 bucket fronts Nitro's `useStorage('cache')`
       // mount via the plugin the adapter injected at build time. No DDB,
       // no SQS, no separate worker — Nitro handles refresh inline.
@@ -581,7 +599,7 @@ export class HostingConstruct extends Construct {
           Stack.of(this).region,
         );
       }
-    } else if (manifest.cache) {
+    } else if (!props.skipIsr && manifest.cache) {
       // OpenNext path (default when `driver` is absent or 'opennext').
       // S3 bucket for ISR cache
       this.cacheBucket = new Bucket(this, 'CacheBucket', {
@@ -794,7 +812,9 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    // Preview `skipImageOptimization` drops it (framework-agnostic); /_next/image
+    // degrades to the source image.
+    if (!props.skipImageOptimization && manifest.imageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {

@@ -146,6 +146,20 @@ export interface PreviewProfile {
    * from production, so it stays **opt-in even when preview is enabled**.
    */
   bypassCdn: boolean;
+  /**
+   * D1 — skip the ISR / on-demand-revalidation machinery (DynamoDB tag table,
+   * SQS queue + DLQ, revalidation Lambda, cache seed). Previews don't need
+   * revalidation; SSR pages still render. The Next.js adapter also disables the
+   * incremental cache at build time so the server function has no cache
+   * dependency.
+   */
+  skipIsr: boolean;
+  /**
+   * D2 — skip the image-optimization Lambda (and, for Next.js, the `sharp`
+   * install that dominates synthesis). `/_next/image` degrades to the source
+   * image in preview.
+   */
+  skipImageOptimization: boolean;
 }
 
 /**
@@ -174,6 +188,8 @@ export function resolvePreviewProfile(
     fastTeardown: knob(obj?.fastTeardown, true),
     edgeToRegional: knob(obj?.edgeToRegional, true),
     bypassCdn: knob(obj?.bypassCdn, false),
+    skipIsr: knob(obj?.skipIsr, true),
+    skipImageOptimization: knob(obj?.skipImageOptimization, true),
   };
 }
 
@@ -589,6 +605,10 @@ export class Hosting extends Construct {
         // C: bypassCdn builds the SSR bundle for an HTTP API v2 root origin
         // (buffered aws-apigw-v2, no streaming) instead of the REST-API STREAM.
         bypassCdn: preview.bypassCdn,
+        // D1/D2: skip ISR (disable the incremental cache at build so the server
+        // function has no cache dependency) and the sharp install (image-opt).
+        skipIsr: preview.skipIsr,
+        skipImageOptimization: preview.skipImageOptimization,
       });
     const manifest: DeployManifest = adapter(root);
 
@@ -723,6 +743,10 @@ export class Hosting extends Construct {
       // config.json works and cookies flow — no CORS).
       bypassCdn: preview.bypassCdn,
       bypassApiProxyUrl: preview.bypassCdn ? props.api?.apiUrl : undefined,
+      // D1/D2 — framework-agnostic resource skips (the construct honors these
+      // regardless of adapter; the Next adapter also trims the build).
+      skipIsr: preview.skipIsr,
+      skipImageOptimization: preview.skipImageOptimization,
       compute: normalizedCompute,
       domain: props.domain,
       waf: props.waf,

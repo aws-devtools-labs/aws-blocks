@@ -201,6 +201,17 @@ export interface AdapterBuildOptions {
    * the Next.js adapter acts on this today; others ignore it.
    */
   bypassCdn?: boolean;
+  /**
+   * D1 (preview `skipIsr`) — Next.js: disable the incremental/tag cache at
+   * build so the server function has no cache dependency (and no cache infra
+   * is emitted). Others ignore it (the construct skips their cache infra).
+   */
+  skipIsr?: boolean;
+  /**
+   * D2 (preview `skipImageOptimization`) — Next.js: skip the `sharp` install
+   * and drop `manifest.imageOptimization` so no image Lambda is built/deployed.
+   */
+  skipImageOptimization?: boolean;
 }
 
 /**
@@ -224,6 +235,8 @@ export const getAdapter = (
         projectDir,
         edgeToRegional: options?.edgeToRegional,
         bypassCdn: options?.bypassCdn,
+        skipIsr: options?.skipIsr,
+        skipImageOptimization: options?.skipImageOptimization,
       });
   }
 

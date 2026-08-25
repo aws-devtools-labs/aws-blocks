@@ -3537,3 +3537,90 @@ void describe('HostingConstruct — preview bypassCdn (C)', () => {
     });
   });
 });
+
+// ================================================================
+// Preview D1/D2 — skip ISR + skip image optimization
+// ================================================================
+
+void describe('HostingConstruct — preview skipIsr / skipImageOptimization', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('skipIsr drops the DynamoDB tag table + SQS revalidation queue', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        cache: { computeResource: 'default', tagRevalidation: true, revalidationQueue: true },
+      },
+      skipIsr: true,
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::DynamoDB::Table', 0);
+    template.resourceCountIs('AWS::SQS::Queue', 0);
+  });
+
+  void it('without skipIsr the ISR infra is created (control)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        cache: { computeResource: 'default', tagRevalidation: true, revalidationQueue: true },
+      },
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::DynamoDB::Table', 1);
+    template.resourceCountIs('AWS::SQS::Queue', 2); // queue + DLQ
+  });
+
+  void it('skipImageOptimization builds no image Lambda', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        imageOptimization: { bundle: bundleDir, handler: 'index.handler', formats: ['image/webp'], sizes: [640, 1080] },
+      },
+      skipImageOptimization: true,
+      skipRegionValidation: true,
+    });
+
+    assert.strictEqual(
+      construct.node.tryFindChild('ImageOptimization'),
+      undefined,
+      'no ImageOptimization compute construct',
+    );
+  });
+
+  void it('without skipImageOptimization the image Lambda is created (control)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        imageOptimization: { bundle: bundleDir, handler: 'index.handler', formats: ['image/webp'], sizes: [640, 1080] },
+      },
+      skipRegionValidation: true,
+    });
+
+    assert.ok(
+      construct.node.tryFindChild('ImageOptimization'),
+      'ImageOptimization compute construct present',
+    );
+  });
+});

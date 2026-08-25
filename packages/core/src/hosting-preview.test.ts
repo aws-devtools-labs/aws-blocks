@@ -18,6 +18,8 @@ test('preview off by default when no prop and no sandbox context', () => {
     fastTeardown: false,
     edgeToRegional: false,
     bypassCdn: false,
+    skipIsr: false,
+    skipImageOptimization: false,
   });
 });
 
@@ -29,6 +31,8 @@ test('preview auto-enables from sandboxMode context; bypassCdn stays opt-in', ()
     fastTeardown: true,
     edgeToRegional: true,
     bypassCdn: false,
+    skipIsr: true,
+    skipImageOptimization: true,
   });
 });
 
@@ -72,6 +76,15 @@ test('explicit enabled:true wins in a non-sandbox deploy', () => {
   const p = resolvePreviewProfile({ enabled: true }, nodeWith());
   assert.strictEqual(p.enabled, true);
   assert.strictEqual(p.trimResources, true);
+});
+
+test('skipIsr / skipImageOptimization default on under preview, overridable', () => {
+  const on = resolvePreviewProfile(true, nodeWith());
+  assert.strictEqual(on.skipIsr, true);
+  assert.strictEqual(on.skipImageOptimization, true);
+  const keepIsr = resolvePreviewProfile({ enabled: true, skipIsr: false }, nodeWith());
+  assert.strictEqual(keepIsr.skipIsr, false, 'skipIsr override respected');
+  assert.strictEqual(keepIsr.skipImageOptimization, true, 'other knob still defaults on');
 });
 
 test('knobs are forced off when the master switch is off', () => {

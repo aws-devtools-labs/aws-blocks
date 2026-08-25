@@ -54,6 +54,19 @@ export type NextjsAdapterOptions = {
    * (HTTP API has no response streaming), and skip the streaming-wrapper patch.
    */
   bypassCdn?: boolean;
+  /**
+   * D1 (preview `skipIsr`) — generate the OpenNext config with
+   * `dangerous: { disableIncrementalCache, disableTagCache }` so no cache /
+   * revalidation infra is emitted and the server function is built without a
+   * cache dependency.
+   */
+  skipIsr?: boolean;
+  /**
+   * D2 (preview `skipImageOptimization`) — skip installing `sharp` into the
+   * image bundle (the slow synthesis step) and drop `manifest.imageOptimization`
+   * so the L3 builds no image Lambda.
+   */
+  skipImageOptimization?: boolean;
 };
 
 // ---- OpenNext output types (internal) ----
@@ -129,7 +142,7 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild, edgeToRegional, bypassCdn } = options;
+  const { projectDir, configPath, skipBuild, edgeToRegional, bypassCdn, skipIsr, skipImageOptimization } = options;
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
@@ -166,6 +179,7 @@ export const nextjsAdapter = (
         edgeRoutes,
         edgeToRegional,
         bypassCdn,
+        skipIsr,
       );
     }
     try {
@@ -198,18 +212,25 @@ export const nextjsAdapter = (
     // are non-writable per spec — it is not a Node-version quirk).
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
-    // Patch the image-optimization bundle for the Next.js 16 image-optimizer
-    // signature change. See patchImageOptimizerForNext16.
-    patchImageOptimizerForNext16(openNextDir, projectDir);
+    // Image-optimization patches + the (slow) linux-x64 `sharp` install.
+    // Skipped under preview `skipImageOptimization`: no image Lambda is
+    // deployed (manifest.imageOptimization is dropped below), so there is
+    // nothing to patch and the sharp install — the dominant synthesis cost —
+    // is pure waste.
+    if (!skipImageOptimization) {
+      // Patch the image-optimization bundle for the Next.js 16 image-optimizer
+      // signature change. See patchImageOptimizerForNext16.
+      patchImageOptimizerForNext16(openNextDir, projectDir);
 
-    // Patch the image-optimization bundle so a disallowed image type (e.g. an
-    // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
-    // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
-    patchImageOptimizerSvgStatus(openNextDir);
+      // Patch the image-optimization bundle so a disallowed image type (e.g. an
+      // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
+      // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
+      patchImageOptimizerSvgStatus(openNextDir);
 
-    // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
-    // See installLinuxSharpForImageOptimizer.
-    installLinuxSharpForImageOptimizer(openNextDir);
+      // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
+      // See installLinuxSharpForImageOptimizer.
+      installLinuxSharpForImageOptimizer(openNextDir);
+    }
   }
 
   // Note: Injecting config files into server bundles is an integration-layer
@@ -289,6 +310,12 @@ export const nextjsAdapter = (
   // stripBakedBasePath. MUST run after applyAssetPrefix (which sets
   // manifest.basePath and appends trailing-slash redirects).
   stripBakedBasePath(manifest);
+
+  // D2 (preview skipImageOptimization): drop the image-opt entry so the L3
+  // builds no image Lambda. `/_next/image` degrades to the source image.
+  if (skipImageOptimization) {
+    delete manifest.imageOptimization;
+  }
 
   return manifest;
 };
@@ -1122,9 +1149,17 @@ const installGeneratedOpenNextConfig = (
   edgeRoutes: EdgeRoute[] = [],
   edgeToRegional = false,
   bypassCdn = false,
+  skipIsr = false,
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
   const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, edgeToRegional);
+  // D1 (preview skipIsr): turn OFF the incremental + tag cache. OpenNext then
+  // emits no cache / revalidation infra AND builds the server function without
+  // a cache dependency, so a preview needs none of the DynamoDB/SQS/Lambda ISR
+  // machinery. SSR pages still render; only on-demand revalidation is disabled.
+  const dangerousBlock = skipIsr
+    ? `\n  dangerous: {\n    disableIncrementalCache: true,\n    disableTagCache: true,\n  },`
+    : '';
   // Default (CloudFront + REST-API STREAM) path: v1 converter + the streaming
   // wrapper. Under `bypassCdn` the SSR Lambda is fronted by an HTTP API v2
   // origin at the domain root, which sends payload v2 and CANNOT stream — so
@@ -1148,7 +1183,7 @@ const config = {
     override: {
       ${defaultOverride}
     },
-  },${edgeBlock}
+  },${edgeBlock}${dangerousBlock}
 };
 export default config;
 `;
