@@ -1,4 +1,5 @@
 import { platform } from 'node:os';
+import { isCI as ciInfoIsCI } from 'ci-info';
 
 /**
  * Detect the OS platform.
@@ -16,23 +17,18 @@ export function detectNodeVersion(): string {
 
 /**
  * Detect whether the current process is running inside a CI/CD environment.
+ *
+ * Uses the ci-info library (the same detection npm uses to tag its user-agent),
+ * which recognizes 40+ CI providers via their specific env vars. This replaces a
+ * hand-maintained env-var list that missed providers like Taskcluster (which
+ * ci-info detects via TASK_ID + RUN_ID, not TASKCLUSTER_ROOT_URL) and Render.
+ *
+ * Note: ci-info exports `isCI` as a boolean constant evaluated at import time,
+ * so this wrapper preserves the public `isCI(): boolean` function signature that
+ * existing callers rely on.
  */
 export function isCI(): boolean {
-  return !!(
-    process.env.CI ||
-    process.env.CONTINUOUS_INTEGRATION ||
-    process.env.BUILD_NUMBER ||
-    process.env.CODEBUILD_BUILD_ID ||
-    process.env.GITHUB_ACTIONS ||
-    process.env.GITLAB_CI ||
-    process.env.CIRCLECI ||
-    process.env.JENKINS_URL ||
-    process.env.TF_BUILD ||
-    process.env.BITBUCKET_BUILD_NUMBER ||
-    process.env.BUILDKITE ||
-    process.env.RENDER ||
-    process.env.TASKCLUSTER_ROOT_URL
-  );
+  return ciInfoIsCI;
 }
 
 /**
