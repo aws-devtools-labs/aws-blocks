@@ -34,6 +34,7 @@ export {
 	registerConfig,
 	SandboxDisableDeletionProtection,
 	Scope,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
 	synthGuard,
 } from './cdk/index.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
