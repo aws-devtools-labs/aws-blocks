@@ -212,7 +212,7 @@ Deployed the framework-agnostic API-Gateway single origin (REST API) on the Next
 - Custom domain + empty base-path mapping (needs domain/ACM — defeats preview).
 - App `basePath`/`assetPrefix = /prod` (app-level, not framework-generic).
 
-Next step for SSR-C: rewrite `BypassOriginConstruct` onto **HTTP API v2 (root)** + adapter `aws-apigw-v2` converter under bypass + asset-proxy Lambda; then re-validate across Next/Nuxt/Astro/SvelteKit/SPA.
+**Resolved:** `BypassOriginConstruct` now uses **HTTP API v2 (`$default` root)** + adapter `aws-apigw-v2` buffered converter under bypass + an inline asset-proxy Lambda (private bucket). Validated on Next: root URL (no /prod), `/` and `/_next/static/*.js` both 200, SSR auth redirect 307, full auth round-trip works same-origin, ~226s vs ~481s (~53% faster). **Trade-off: SSR buffered in preview (HTTP API has no streaming); production keeps streaming.** Still to validate: Nuxt/Astro/SvelteKit/SPA + browser Playwright + image-opt + skip-ISR.
 
 ## 6. Experiment plan (§Execution step 3)
 
