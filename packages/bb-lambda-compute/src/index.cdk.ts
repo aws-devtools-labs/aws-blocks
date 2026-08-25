@@ -45,8 +45,10 @@ export class LambdaCompute extends Compute {
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: DEFAULT_NODE_RUNTIME,
-			// Default to arm64 (Graviton) — ~20% cheaper at equal performance. The
-			// backend is a pure-JS esbuild bundle, so there's no native-arch concern.
+			// Default to arm64 (Graviton) — ~20% cheaper at equal performance, and
+			// transparent for the framework's own pure-JS bundles. `architecture` is
+			// internal for now (see types.ts); a customer override arrives with the
+			// public compute-configuration surface.
 			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
