@@ -58,7 +58,8 @@
     "test-apps/pipeline",
     "test-apps/db-pull-typecheck",
     "scripts/agent-bench",
-    "test-apps/telemetry"
+    "test-apps/telemetry",
+    "test-infra"
   ],
   "scripts": {
     "prepare": "husky && bash scripts/setup-git-secrets.sh",
