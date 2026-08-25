@@ -52,7 +52,9 @@ export {
 // CDK-aware resolution engine — marker/BYO → infra wiring. Used by core.Hosting,
 // a standalone hosting app, and (synth helpers) pipeline.
 export {
+	_setSynthExistsChecker,
 	_setSynthSecretFetcher,
+	assertMarkersExistAtSynth,
 	type ByoBinding,
 	collectSynthMarkers,
 	type DomainNameInput,
@@ -65,6 +67,7 @@ export {
 	resolveSecretsAtSynth,
 	type SecretFetcher,
 	type StoreConfig,
+	type SynthExistsChecker,
 	wireByo,
 	wireManagedValue,
 } from './secret-resolve.js';

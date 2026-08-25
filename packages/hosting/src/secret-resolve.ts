@@ -210,6 +210,84 @@ export async function resolveSecretsAtSynth(
 	return resolved;
 }
 
+/**
+ * Confirms a locator EXISTS without fetching its value — a secret must never enter
+ * the synth process. Resolves when present; throws `ParameterNotFound` /
+ * `ResourceNotFoundException` when absent.
+ * @internal
+ */
+export type SynthExistsChecker = (locator: string, store: SecretStore) => Promise<void>;
+let synthExistsOverride: SynthExistsChecker | null = null;
+
+/** Override the synth-time existence checker. **For testing only.** @internal */
+export function _setSynthExistsChecker(checker: SynthExistsChecker | null): void {
+	synthExistsOverride = checker;
+}
+
+/** Metadata-only existence probe: `DescribeSecret` (SM) / `GetParameter` without decryption (SSM). */
+function defaultSynthExistsChecker(): SynthExistsChecker {
+	return async (locator, store) => {
+		if (store === 'secrets-manager') {
+			const { SecretsManagerClient, DescribeSecretCommand } = await import('@aws-sdk/client-secrets-manager');
+			await new SecretsManagerClient({}).send(new DescribeSecretCommand({ SecretId: locator }));
+			return;
+		}
+		const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+		// WithDecryption:false — confirm presence without materialising a SecureString value.
+		await new SSMClient({}).send(new GetParameterCommand({ Name: locator, WithDecryption: false }));
+	};
+}
+
+/**
+ * Fail synth when a referenced `environment` marker has no value set — **existence
+ * only, never a value fetch** (a secret must not enter the synth process). This is
+ * the same deploy-time failure the domain path gives ({@link resolveSecretsAtSynth}),
+ * applied to runtime `environment` markers so a missing value fails at deploy rather
+ * than on a customer request. When a `stage` is set, a stage-specific value OR the
+ * shared default satisfies the check. Skips silently when existence cannot be
+ * determined (e.g. no credentials during a local `cdk synth`); throws only on a
+ * definitive not-found.
+ * @internal
+ */
+export async function assertMarkersExistAtSynth(markers: ManagedValue[], cfg: StoreConfig = {}): Promise<void> {
+	if (markers.length === 0) return;
+	const isNotFound = (error: unknown): boolean => {
+		const name = (error as { name?: string })?.name;
+		return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
+	};
+	const check = synthExistsOverride ?? defaultSynthExistsChecker();
+
+	await Promise.all(
+		markers.map(async (marker) => {
+			const store = storeForKind(marker.kind);
+			const { prefix, stage } = optsForKind(marker.kind, cfg);
+			const primary = secretStoreLocator(marker.key, { prefix, store, stage });
+			const fallback = stage ? secretStoreLocator(marker.key, { prefix, store }) : undefined;
+
+			try {
+				await check(primary, store);
+				return; // exists
+			} catch (error: unknown) {
+				if (!isNotFound(error)) return; // couldn't determine (no creds/etc.) — don't block synth
+			}
+			if (fallback) {
+				try {
+					await check(fallback, store);
+					return; // shared default exists
+				} catch (error: unknown) {
+					if (!isNotFound(error)) return;
+				}
+			}
+			throw new HostingError('UnresolvedSecretError', {
+				message: `${marker.kind} '${marker.key}' is referenced (environment) but not set${
+					stage ? ` for stage '${stage}' nor the shared default` : ''
+				}.`,
+				resolution: `Set it before deploying:\n  ${marker.kind} set ${marker.key} …${stage ? ` --stage ${stage}` : ''}`,
+			});
+		}),
+	);
+}
+
 /** Resolve domain markers to literals using the synth-resolved value map. * @internal
  */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {

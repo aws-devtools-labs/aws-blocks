@@ -23,6 +23,7 @@ import { registerConfig } from './cdk/config-registry.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
+	assertMarkersExistAtSynth,
   collectSynthMarkers,
   type DomainNameInput,
   type EnvValue,
@@ -473,13 +474,15 @@ export class Hosting extends Construct {
    * ```
    */
   static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
+		const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
     const synthMarkers = collectSynthMarkers(props.domain?.domainName);
     const resolved = synthMarkers.length
-      ? await resolveSecretsAtSynth(synthMarkers, undefined, {
-          secretStore: props.secretStore,
-          configStore: props.configStore,
-        })
+			? await resolveSecretsAtSynth(synthMarkers, undefined, storeConfig)
       : new Map<string, string>();
+		// Fail the deploy early if a declared `environment` secret/config has no value
+		// set — existence only, never fetching the value. (Domain markers above already
+		// fail this way; this extends it to runtime markers.)
+		await assertMarkersExistAtSynth(partitionEnvironment(props.environment).managed, storeConfig);
     return new Hosting(scope, id, props, resolved);
   }
 

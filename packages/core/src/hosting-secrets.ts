@@ -17,6 +17,7 @@ import {
 	type ByoBinding,
 	type DomainNameInput as LeafDomainNameInput,
 	type EnvValue as LeafEnvValue,
+	assertMarkersExistAtSynth as leafAssertMarkersExistAtSynth,
 	collectSynthMarkers as leafCollectSynthMarkers,
 	partitionEnvironment as leafPartitionEnvironment,
 	resolveDomainNames as leafResolveDomainNames,
@@ -80,6 +81,15 @@ export async function resolveSecretsAtSynth(
 /** Resolve domain markers to literals using the synth-resolved value map. */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {
 	return leafResolveDomainNames(domainName, resolved);
+}
+
+/**
+ * Fail synth (deploy) when a referenced `environment` marker has no value set —
+ * existence only, never fetching the value. Uses the Blocks namespaces (with an
+ * optional per-kind `storeConfig` override), matching how the values are wired.
+ */
+export async function assertMarkersExistAtSynth(markers: ManagedValue[], storeConfig?: StoreConfig): Promise<void> {
+	return leafAssertMarkersExistAtSynth(markers, mergeBlocksStoreConfig(storeConfig));
 }
 
 /**
