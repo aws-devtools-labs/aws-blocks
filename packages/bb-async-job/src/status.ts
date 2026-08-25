@@ -260,8 +260,9 @@ export class JobStatusTracker {
 	 *
 	 * Deliberately individual conditional writes rather than one `putBatch`:
 	 * DynamoDB's `BatchWriteItem` cannot carry a condition expression, so a batch
-	 * write would reintroduce the clobber described on {@link recordQueued}. A
-	 * batch is at most 10 items, so the puts are issued in parallel.
+	 * write would reintroduce the clobber described on {@link recordQueued}. The
+	 * puts are issued in parallel; since `submitBatch` auto-chunks there is no
+	 * 10-item cap on how many jobs arrive here.
 	 */
 	async recordQueuedBatch(jobs: Array<{ jobId: string; submittedAt: string }>): Promise<void> {
 		if (jobs.length === 0) return;

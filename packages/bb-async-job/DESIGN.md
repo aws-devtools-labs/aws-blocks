@@ -118,7 +118,7 @@ The rarer one is duplicate delivery. Standard queues are at-least-once, and this
 
 Neither case can corrupt an item — DynamoDB `PutItem` is atomic per item — but plain last-write-wins would silently drop a transition, and dropping the terminal one converts a successful job into a `waitUntilComplete()` timeout. A version check is far cheaper than the alternative of modelling each transition as its own row with a sort key, which would double the read cost of `getStatus()` for a history that is only ever a handful of entries.
 
-`recordQueuedBatch` issues individual conditional writes in parallel rather than one `putBatch`, because DynamoDB's `BatchWriteItem` cannot carry a condition expression and would reintroduce the clobber. A batch is at most 10 items.
+`recordQueuedBatch` issues individual conditional writes in parallel rather than one `putBatch`, because DynamoDB's `BatchWriteItem` cannot carry a condition expression and would reintroduce the clobber. Since `submitBatch` auto-chunks (D-AJ-4a), a batch is no longer capped at 10 — `recordQueuedBatch` fans out one conditional write per successfully enqueued job.
 
 ## Infrastructure (CDK)
 
@@ -138,10 +138,10 @@ No `fromExisting()` — wrapping a pre-existing SQS queue is not supported. Asyn
 
 - Reads the queue URL from `BLOCKS_QUEUE_URL_{FULLID}`; registers the SQS handler only when the URL is present.
 - `submit()` sends a single `SendMessageCommand`; returns `{ jobId: MessageId }`.
-- `submitBatch()` sends a `SendMessageBatchCommand` (max 10 entries). Successful entries map back to `jobIds` by index; failed entries populate `failed`. If any entry fails, it throws `BatchSubmitFailedException` carrying `failed` and `jobIds` for partial-result handling.
+- `submitBatch()` packs the payloads into as many `SendMessageBatchCommand` requests as SQS's per-request limits require — at most 10 entries and at most 256 KB of aggregate body per request — issuing one command per chunk (see D-AJ-4a). Each entry's `Id` is the payload's original index, so successful entries map back to `jobIds` by index and failed entries populate `failed`. If any entry in any chunk fails, it throws `BatchSubmitFailedException` carrying `failed` and `jobIds` (real MessageIds for enqueued entries, `null` at failed indexes) for partial-result handling; a multi-chunk submit is not atomic, so earlier chunks may already be on the queue (see D-AJ-4a).
 - Each delivered record is parsed into `{ payload, context }` where `context = { jobId: messageId, receiveCount: ApproximateReceiveCount, sentAt: SentTimestamp }`.
 - SQS redrive handles retries; after `maxReceiveCount` deliveries the message lands in the DLQ.
-- When `trackStatus` is enabled, `submit()` records `queued` after the send (the job id *is* the SQS message id, so it is not known before), `submitBatch()` records the whole batch with one `putBatch`, and `_processRecord` records `processing` before the handler and `complete` after it. A handler error only records `failed` once `receiveCount` has reached `maxRetries` — SQS owns the retry decision, so earlier failures record nothing and the next delivery simply appends another `processing` entry.
+- When `trackStatus` is enabled, `submit()` records `queued` after the send (the job id *is* the SQS message id, so it is not known before), `submitBatch()` records the batch via `recordQueuedBatch` — individual conditional writes, one per job, not a `putBatch` (see D-AJ-8), and only on full success (on a throw the enqueued jobs are still tracked because `_processRecord` backfills their `queued` record) — and `_processRecord` records `processing` before the handler and `complete` after it. A handler error only records `failed` once `receiveCount` has reached `maxRetries` — SQS owns the retry decision, so earlier failures record nothing and the next delivery simply appends another `processing` entry.
 
 ## Mock Implementation
 
