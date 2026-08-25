@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
     "zod": "^4.3.0"
   },
   "devDependencies": {

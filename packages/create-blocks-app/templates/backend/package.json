@@ -24,7 +24,8 @@
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*"
+    "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
