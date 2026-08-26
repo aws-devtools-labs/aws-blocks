@@ -28,7 +28,7 @@ bb-distributed-data (this package)
 ## Why a Separate Block (Not an Engine Flag on Database)
 
 1. **Transaction semantics differ** — OCC means callbacks may need retry. Different API contract.
-2. **Feature set is a strict subset** — FK, RLS, and triggers are absent. An engine flag hides this until deploy time.
+2. **SQL feature compatibility differs** — FK, RLS, and triggers are absent. An engine flag hides this until deploy time.
 3. **Mock parity goes in opposite directions** — PGlite accepts PostgreSQL syntax that DSQL does not. A separate block can have a restrictive mock.
 4. **"When to use" guidance is completely different** — customers shouldn't accidentally pick DSQL.
 5. **Multi-region is a first-class capability** — not a bolt-on option.
@@ -45,39 +45,23 @@ bb-distributed-data (this package)
 ### DsqlMockEngine (Local Dev)
 
 - PGlite wrapped with a validation layer
-- `validateStatement()` applies the package's SQL compatibility rules before execution
+- `validateStatement()` runs `dsql-lint` before execution
 - `TransactionTracker` enforces DDL/DML separation and 3,000-row limit
 - `simulateConflict()` test helper for OCC testing
 - Error translation matches production behavior
 
 ## Validation Layer
 
-PGlite accepts more PostgreSQL syntax than DSQL, so the mock applies regex-based guardrails before execution. These rules are maintained separately from the service and can lag new DSQL capabilities; the README documents the current local validation gaps.
+PGlite accepts PostgreSQL syntax that DSQL may not. The mock runs the official `@aws/dsql-lint` package before execution and keeps only narrow supplemental checks for explicit collation and index-key sort direction.
 
 ### Statement Validation
 
-`validateStatement(sql)` strips string literals and comments, then checks regex patterns:
+`validateStatement(sql)`:
 
-| Pattern | Rejects |
-|---------|---------|
-| `FOREIGN KEY` / `REFERENCES` | FK constraints |
-| `CREATE TRIGGER` | Triggers |
-| `CREATE VIEW` | Views (currently rejected locally although DSQL supports persistent views) |
-| `LANGUAGE plpgsql` | PL/pgSQL functions |
-| `SERIAL` / `BIGSERIAL` | Serial pseudo-types (identity columns remain allowed) |
-| `CREATE SEQUENCE` | Standalone sequences (currently rejected locally although DSQL supports them with an explicit `CACHE`) |
-| `JSONB` except `::jsonb` | JSONB columns and `CAST(... AS JSONB)` (DSQL supports both; the validator permits only `::jsonb`) |
-| `TRUNCATE` | Use DELETE FROM |
-| `LISTEN` / `NOTIFY` | Async notifications |
-| `CREATE EXTENSION` | Extensions |
-| `ADD COLUMN ... DEFAULT` | Column default on ALTER |
-| `ALTER DEFAULT PRIVILEGES` | Not supported by DSQL |
-| `CREATE POLICY` / `ENABLE ROW LEVEL SECURITY` | RLS |
-| `CREATE TEMP TABLE` | Temporary tables |
-| `SET TRANSACTION ISOLATION LEVEL` | Fixed Repeatable Read |
-| `COLLATE` | C collation only |
-| `CREATE INDEX ... ASC/DESC` | Sort direction on index keys (NULLS FIRST/LAST is allowed) |
-| `ALTER TABLE ... DROP [COLUMN]` | Non-primary-key column removal (currently rejected locally although DSQL supports it) |
+1. Strips string literals and comments for the supplemental checks.
+2. Rejects explicit collation and index-key sort direction.
+3. Runs `dsql-lint` and reports its compatibility diagnostics and suggested rewrites.
+4. Ignores known false positives for DSQL-supported expression indexes and `ALTER TABLE` forms.
 
 ### Transaction Tracking
 
@@ -175,7 +159,6 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | No real OCC conflicts | Single-connection PGlite has no concurrency | `simulateConflict()` test helper |
-| Validator rejects DSQL-supported SQL | JSONB columns, persistent views, standalone sequences, and non-primary-key `DROP COLUMN` fail locally | Document the gaps until the validator is aligned |
 | System collation vs C only | String sorting may differ | Reject explicit COLLATE |
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |

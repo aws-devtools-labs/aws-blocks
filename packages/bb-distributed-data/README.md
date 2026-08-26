@@ -4,7 +4,7 @@ Serverless SQL database backed by Amazon Aurora DSQL. Zero-ops, instant provisio
 
 **When to use:** Serverless apps that need to scale without ops overhead, workloads with zero idle cost requirements, multi-region active-active writes, or any SQL app where you don't need FK/RLS/triggers.
 
-**When NOT to use:** If you need foreign keys, Row Level Security, triggers, or stored procedures — use `Database` (Aurora). Also use `Database` if you need DSQL-supported SQL that the local validator does not yet accept, including JSONB columns, persistent views, standalone sequences, or `ALTER TABLE ... DROP COLUMN`. If you need transactions that must not fail at commit under contention — use `Database`. If you're connecting to Supabase — use `Database` with `fromExisting()`.
+**When NOT to use:** If you need foreign keys, Row Level Security, triggers, or stored procedures — use `Database` (Aurora). If you need transactions that must not fail at commit under contention — use `Database`. If you're connecting to Supabase — use `Database` with `fromExisting()`.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
@@ -88,15 +88,15 @@ CREATE TABLE users (
 CREATE INDEX ASYNC idx_users_email ON users(email);
 ```
 
-Migrations are checked against local compatibility rules at dev time. These rules catch common unsupported features such as foreign keys, `SERIAL`, and `TRUNCATE`, but they are not a substitute for current DSQL compatibility guidance.
+Migrations are checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) at synth time.
 
 > **Set `migrationsPath` to a path relative to your project root** (e.g. `'./aws-blocks/dsql-migrations'`); it's resolved at synth from the directory you run `cdk` / `npm run deploy` in. That's the simplest reliable pattern.
 >
 > You don't need `fileURLToPath(import.meta.url)` for this. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty. AWS Blocks shims `import.meta.url` / `import.meta.dirname` in the bundle so it won't crash at load — but at runtime those resolve to the **bundled output** location, not your source tree. So don't use `import.meta.url` to read a file relative to your source at request time; inline the data or ship it as a Lambda asset instead.
 
-## DSQL Limitations
+## PostgreSQL Compatibility
 
-DSQL supports a subset of PostgreSQL. The [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) is the source of truth and evolves as DSQL adds PostgreSQL features. The Aurora DSQL MCP server's `dsql_lint` tool can also check migration SQL and suggest compatible rewrites.
+Aurora DSQL is PostgreSQL wire-protocol compatible. SQL feature compatibility differs from PostgreSQL; see the [Aurora DSQL SQL compatibility documentation](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) for full details.
 
 | Not Supported | Alternative |
 |---------------|-------------|
@@ -111,17 +111,6 @@ DSQL supports a subset of PostgreSQL. The [Aurora DSQL SQL compatibility documen
 | Extensions | Not available |
 | ADD COLUMN with DEFAULT | Add the column without a default, backfill existing rows, then use `ALTER COLUMN ... SET DEFAULT` |
 | Index key sort direction (`ASC`/`DESC`) | Omit it; enforce ordering with `ORDER BY` in queries (`NULLS FIRST/LAST` is supported) |
-
-### Local Validation Gaps
-
-The local PGlite validator currently rejects some SQL that DSQL supports:
-
-| DSQL-Supported SQL | Current Local Behavior |
-|--------------------|------------------------|
-| JSONB columns | Rejected; use `JSON` for local parity |
-| Persistent views (`CREATE VIEW`) | Rejected; use CTEs or application-layer query composition |
-| `CREATE SEQUENCE` with `CACHE 1` or `CACHE >= 65536` | Rejected; use an identity column |
-| `ALTER TABLE ... DROP COLUMN` for non-primary-key columns | Rejected; leave the column in place or rebuild the table |
 
 ### Transaction Constraints
 
@@ -211,12 +200,12 @@ No VPC, no secrets, no security groups, no proxy. DSQL uses IAM token authentica
 
 ## Local Development
 
-- **Engine:** PGlite (WASM PostgreSQL) wrapped with a DSQL validation layer
+- **Engine:** PGlite (WASM PostgreSQL) wrapped with a DSQL compatibility layer
 - **Storage:** `.bb-data/{fullId}/` — persists across restarts
-- **Validation:** Regex-based compatibility checks run before PGlite executes a query
+- **Validation:** `dsql-lint` checks SQL before PGlite executes it
 - **Transaction tracking:** DDL/DML mixing and 3,000-row limit enforced locally
 
-The validation layer catches many common incompatibilities locally. Check the current DSQL documentation or use `dsql_lint` as well, especially for features listed under [Local Validation Gaps](#local-validation-gaps).
+Migration SQL is also checked with `dsql-lint` during CDK synthesis, before it is bundled for deployment.
 
 ## Configuration
 
@@ -250,7 +239,7 @@ interface DistributedDatabaseOptions {
 | Aspect | `Database` (bb-data) | `DistributedDatabase` (bb-distributed-data) |
 |--------|---------------------|--------------------------|
 | Engine | Aurora Serverless v2 (Data API) | Aurora DSQL (pg + IAM) |
-| PostgreSQL compat | Full | Subset (no FK, RLS, triggers) |
+| PostgreSQL compatibility | Full | Wire protocol compatible; see [SQL compatibility details](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html) |
 | Transactions | Pessimistic (exactly-once) | OCC (may conflict at commit) |
 | `withRLS()` | ✅ | ❌ |
 | `fromExisting()` | ✅ | ❌ |
@@ -260,4 +249,3 @@ interface DistributedDatabaseOptions {
 | VPC required | Yes | No |
 | Deploy time | ~10 min | Seconds |
 | Idle cost | $0 (0 ACU) | $0 |
-

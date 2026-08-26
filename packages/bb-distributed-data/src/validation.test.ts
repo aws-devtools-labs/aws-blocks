@@ -26,11 +26,9 @@ describe('validateStatement', () => {
     ['FOREIGN KEY', 'CREATE TABLE t (id TEXT, x TEXT REFERENCES users(id))'],
     // Triggers require PL/pgSQL runtime — not available in DSQL
     ['CREATE TRIGGER', 'CREATE TRIGGER t BEFORE INSERT ON u FOR EACH ROW EXECUTE FUNCTION f()'],
-    // Views are not supported — materialize queries in application code
-    ['CREATE VIEW', 'CREATE VIEW v AS SELECT 1'],
     // PL/pgSQL procedural language is not available — only SQL-language functions
     ['PL/pgSQL', "CREATE FUNCTION f() RETURNS INT AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql"],
-    // SERIAL is syntactic sugar for a sequence — DSQL has no sequence support
+    // SERIAL must be rewritten to an identity column with an explicit CACHE
     ['SERIAL', 'CREATE TABLE t (id SERIAL PRIMARY KEY)'],
     // TRUNCATE is not implemented — use DELETE FROM for the same effect
     ['TRUNCATE', 'TRUNCATE TABLE users'],
@@ -50,12 +48,6 @@ describe('validateStatement', () => {
     ['ISOLATION LEVEL', 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'],
     // DSQL only supports C collation — locale-aware sorting is not available
     ['COLLATE', 'SELECT * FROM t ORDER BY name COLLATE "en_US"'],
-    // DROP COLUMN is not in DSQL's supported ALTER TABLE subset — rebuild the table instead
-    ['DROP COLUMN', 'ALTER TABLE t DROP COLUMN x'],
-    // Postgres allows omitting the COLUMN keyword — same DROP COLUMN action, same rejection
-    ['DROP COLUMN shorthand', 'ALTER TABLE t DROP x'],
-    ['DROP COLUMN IF EXISTS shorthand', 'ALTER TABLE t DROP IF EXISTS x'],
-    ['DROP COLUMN quoted shorthand', 'ALTER TABLE t DROP "identity"'],
   ] as const;
 
   for (const [label, sql] of rejects) {
@@ -65,9 +57,9 @@ describe('validateStatement', () => {
   }
 
   it('allows supported ALTER TABLE forms that contain DROP', () => {
-    // Per the DSQL ALTER TABLE grammar, the ALTER COLUMN ... DROP actions and
-    // DROP CONSTRAINT are supported — must not be confused with the
-    // unsupported DROP [COLUMN].
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP COLUMN c'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP c'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP IF EXISTS c'));
     // https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html
     assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY'));
     assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT'));
@@ -85,6 +77,19 @@ describe('validateStatement', () => {
     // follows the semicolon belongs to a different statement.
     assert.doesNotThrow(() =>
       validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT; DROP TABLE archived'),
+    );
+  });
+
+  it('allows DROP IDENTITY followed by another statement in one batch', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY; SELECT 1'),
+    );
+  });
+
+  it('uses dsql-lint diagnostics and suggestions', () => {
+    assert.throws(
+      () => validateStatement('CREATE TABLE copy AS SELECT 1 AS id'),
+      /Create the table with explicit column definitions/,
     );
   });
 });
@@ -204,19 +209,16 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // DSQL-compatible: partial indexes are supported
-  it('allows partial index with ASYNC', () => {
-    assert.doesNotThrow(() => validateStatement(
-      'CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'
-    ));
+  it('rejects partial index with ASYNC', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
-  // Rejected: JSONB is not a supported storage type in DSQL — use JSON instead.
-  // JSONB is only available as a query runtime cast (::jsonb).
-  it('rejects JSONB column definition', () => {
-    assert.throws(
-      () => validateStatement('CREATE TABLE events (id TEXT PRIMARY KEY, payload JSONB NOT NULL)'),
-      { name: 'DsqlValidationError' }
+  it('allows JSONB column definition', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE TABLE events (id TEXT PRIMARY KEY, payload JSONB NOT NULL)')
     );
   });
 
@@ -262,12 +264,14 @@ describe('validateStatement — complex scenarios', () => {
     );
   });
 
-  // Rejected: CREATE OR REPLACE VIEW is still a view
-  it('rejects CREATE OR REPLACE VIEW', () => {
-    assert.throws(
-      () => validateStatement('CREATE OR REPLACE VIEW active_users AS SELECT * FROM users WHERE active'),
-      { name: 'DsqlValidationError' }
+  it('allows CREATE OR REPLACE VIEW', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE OR REPLACE VIEW active_users AS SELECT * FROM users WHERE active')
     );
+  });
+
+  it('allows standalone sequences with an explicit cache', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE SEQUENCE order_ids CACHE 65536'));
   });
 
   // Rejected: TEMPORARY TABLE — DSQL doesn't support session-scoped temp tables
@@ -555,16 +559,22 @@ describe('validateStatement — index key sort order', () => {
     assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS LAST)'));
   });
 
-  it('allows a plain CREATE INDEX without sort order', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at)'));
+  it('rejects a plain CREATE INDEX without ASYNC', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at)'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
-  it('allows a partial index whose WHERE mentions a column like "description"', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t (name) WHERE description IS NOT NULL'));
+  it('rejects a partial index whose WHERE mentions a column like "description"', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX ASYNC idx ON t (name) WHERE description IS NOT NULL'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
   it('allows an expression index without sort order', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t ((lower(name)))'));
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t ((lower(name)))'));
   });
 
   it('does not flag ORDER BY ... DESC in a SELECT (no false positive outside CREATE INDEX)', () => {

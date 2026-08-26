@@ -195,15 +195,17 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
-  it('accepts a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
-    await assert.doesNotReject(
-      () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`))
+  it('rejects a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`)),
+      { name: 'DsqlValidationError' },
     );
   });
 
-  it('still supports a plain CREATE INDEX (no ASYNC)', async () => {
-    await assert.doesNotReject(
-      () => engine.withDdl(() => db.execute(sql`CREATE INDEX idx_users_plain ON users(id)`))
+  it('rejects a plain CREATE INDEX (no ASYNC)', async () => {
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`CREATE INDEX idx_users_plain ON users(id)`)),
+      { name: 'DsqlValidationError' },
     );
   });
 
@@ -214,12 +216,15 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
-  it('rejects ALTER TABLE DROP COLUMN', async () => {
+  it('applies ALTER TABLE DROP COLUMN', async () => {
     await engine.withDdl(() => db.execute(sql`CREATE TABLE legacy (id TEXT PRIMARY KEY, obsolete TEXT)`));
-    await assert.rejects(
-      () => engine.withDdl(() => db.execute(sql`ALTER TABLE legacy DROP COLUMN obsolete`)),
-      /DROP COLUMN/i,
-    );
+    await engine.withDdl(() => db.execute(sql`ALTER TABLE legacy DROP COLUMN obsolete`));
+    const columns = await db.query<{ column_name: string }>(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'legacy'
+    `);
+    assert.deepEqual(columns.map(column => column.column_name), ['id']);
   });
 
   it('does not strip ASYNC outside of CREATE INDEX (column named "async")', async () => {

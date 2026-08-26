@@ -141,7 +141,7 @@ export const handler = async (event: CloudFormationCustomResourceEvent): Promise
     // 1. Run user-defined migrations if the directory was bundled
     if (existsSync(MIGRATIONS_DIR)) {
       const migrations = await loadMigrationsFromDir(MIGRATIONS_DIR);
-      const applied = await withRetry(() => runMigrations(engine, migrations));
+      const applied = await withRetry(() => runMigrations(engine, migrations, { validate: false }));
       console.log('[bb-distributed-data] Applied:', applied.length ? applied : '(none pending)');
     } else {
       console.log('[bb-distributed-data] No migrations directory bundled, skipping migrations');

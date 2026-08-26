@@ -10,13 +10,12 @@
 
 import { TRANSACTION_ROW_LIMIT } from './errors.js';
 import { splitStatements, DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
+import { runDsqlLint } from './dsql-lint.js';
 
-// --- Statement validation ---
-
-interface ValidationRule {
-  pattern: RegExp;
-  message: string;
-  severity: 'error' | 'warn';
+function isKnownDsqlLintFalsePositive(rule: string, statement: string): boolean {
+  if (rule === 'index_expression' || rule === 'at_unsupported_drop_constraint') return true;
+  return rule === 'parse_error'
+    && /^\s*ALTER\s+TABLE\b[\s\S]*\bALTER\s+(?:COLUMN\s+)?(?:[\w.]+|"[^"]+")\s+DROP\s+(?:IDENTITY|EXPRESSION)(?:\s+IF\s+EXISTS)?\s*;?\s*$/i.test(statement);
 }
 
 /** Strip string literals and comments to avoid false positives. */
@@ -67,49 +66,34 @@ export function stripLiteralsAndComments(sql: string): string {
   return result;
 }
 
-const RULES: ValidationRule[] = [
-  // Source: https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-postgresql-compatibility.html
-  { pattern: /\b(FOREIGN\s+KEY|REFERENCES)\b/i, message: 'DSQL does not support foreign key constraints.', severity: 'error' },
-  { pattern: /\bCREATE\s+TRIGGER\b/i, message: 'DSQL does not support triggers.', severity: 'error' },
-  { pattern: /\bCREATE\s+(OR\s+REPLACE\s+)?VIEW\b/i, message: 'DSQL does not support views.', severity: 'error' },
-  { pattern: /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\b[\s\S]*\bLANGUAGE\s+plpgsql\b/i, message: 'DSQL does not support PL/pgSQL.', severity: 'error' },
-  { pattern: /\bCREATE\s+SEQUENCE\b|\b(SERIAL|BIGSERIAL)\b/i, message: 'DSQL does not support sequences. Use UUIDs.', severity: 'error' },
-  { pattern: /\bTRUNCATE\b/i, message: 'DSQL does not support TRUNCATE. Use DELETE FROM.', severity: 'error' },
-  { pattern: /\b(LISTEN|NOTIFY)\b/i, message: 'DSQL does not support LISTEN/NOTIFY.', severity: 'error' },
-  { pattern: /\bCREATE\s+EXTENSION\b/i, message: 'DSQL does not support extensions.', severity: 'error' },
-  { pattern: /\bALTER\s+TABLE\b[\s\S]*\bADD\s+COLUMN\b[\s\S]*\bDEFAULT\b/i, message: 'DSQL does not support ADD COLUMN with DEFAULT.', severity: 'error' },
-  { pattern: /\bALTER\s+TABLE\b[^;]*\bDROP\s+(?:COLUMN\b|IF\s+EXISTS\b|(?!(?:DEFAULT|NOT|EXPRESSION|IDENTITY|CONSTRAINT)\b)[\w"])/i, message: 'DSQL does not support ALTER TABLE DROP COLUMN. Leave the column in place and stop referencing it, or rebuild the table (create a new table → INSERT INTO ... SELECT → DROP → RENAME TO). (DSQL: "unsupported ALTER TABLE DROP COLUMN statement")', severity: 'error' },
-  { pattern: /\bALTER\s+DEFAULT\s+PRIVILEGES\b/i, message: 'DSQL does not support ALTER DEFAULT PRIVILEGES.', severity: 'error' },
-  { pattern: /\b(CREATE\s+POLICY|ENABLE\s+ROW\s+LEVEL\s+SECURITY)\b/i, message: 'DSQL does not support Row Level Security.', severity: 'error' },
-  { pattern: /\bCREATE\s+(TEMP|TEMPORARY)\s+TABLE\b/i, message: 'DSQL does not support temporary tables.', severity: 'error' },
-  { pattern: /\bSET\s+TRANSACTION\s+ISOLATION\s+LEVEL\b/i, message: 'DSQL uses fixed Repeatable Read isolation.', severity: 'error' },
-  { pattern: /\bCOLLATE\b/i, message: 'DSQL only supports C collation.', severity: 'error' },
-  { pattern: /(?<!::)\bJSONB\b/i, message: 'DSQL does not support JSONB columns. Use JSON instead (JSONB is available as a query runtime cast via ::jsonb).', severity: 'error' },
-  { pattern: /(@>|<@|\?\||\?&)/, message: 'JSONB operators lack GIN index acceleration in DSQL.', severity: 'warn' },
-  // DSQL rejects a sort direction (ASC/DESC) on index keys — it isn't in the
-  // CREATE INDEX ASYNC grammar (only `NULLS FIRST|LAST`, which IS supported, is).
-  // `[^;]*` keeps the match inside a single statement; ASC/DESC cannot otherwise
-  // appear in a CREATE INDEX. Caveat: stripLiteralsAndComments doesn't strip
-  // double-quoted identifiers, so a column literally named "desc"/"asc" would
-  // false-positive — niche, and shared with other single-keyword rules here.
-  { pattern: /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*\b(?:ASC|DESC)\b/i, message: 'DSQL does not support sort order (ASC/DESC) on index keys. Remove it — ordering is enforced by ORDER BY in queries (NULLS FIRST/LAST is allowed). (DSQL: "specifying sort order not supported for index keys")', severity: 'error' },
-];
-
 /** Validate a SQL statement for DSQL compatibility. Throws on unsupported features. */
 export function validateStatement(sql: string): void {
   const cleaned = stripLiteralsAndComments(sql);
-  for (const rule of RULES) {
-    if (rule.pattern.test(cleaned)) {
-      if (rule.severity === 'error') {
-        const err = new Error(rule.message);
-        err.name = 'DsqlValidationError';
-        throw err;
-      }
-      console.warn(`[bb-distributed-data] ${rule.message}`);
-    }
+  if (/\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*\b(?:ASC|DESC)\b/i.test(cleaned)) {
+    throw Object.assign(
+      new Error('DSQL does not support sort order (ASC/DESC) on index keys. Remove it; use ORDER BY in queries.'),
+      { name: 'DsqlValidationError' },
+    );
   }
-  if (/\bCREATE\s+(UNIQUE\s+)?INDEX\b/i.test(cleaned) && !/\bASYNC\b/i.test(cleaned)) {
-    console.warn('[bb-distributed-data] Consider using CREATE INDEX ASYNC for non-blocking index creation.');
+  if (/\bCOLLATE\b/i.test(cleaned)) {
+    throw Object.assign(new Error('DSQL only supports C collation.'), { name: 'DsqlValidationError' });
+  }
+
+  const file = runDsqlLint(sql).files[0];
+  if (file.error) {
+    throw Object.assign(new Error(`dsql-lint failed: ${file.error}`), { name: 'DsqlValidationError' });
+  }
+  const diagnostics = file.diagnostics.filter(
+    diagnostic => !isKnownDsqlLintFalsePositive(
+      diagnostic.rule,
+      stripLiteralsAndComments(diagnostic.statement_preview),
+    ),
+  );
+  if (diagnostics.length > 0) {
+    const message = diagnostics
+      .map(diagnostic => `${diagnostic.message} ${diagnostic.suggestion}`)
+      .join('\n');
+    throw Object.assign(new Error(message), { name: 'DsqlValidationError' });
   }
 }
 
