@@ -3369,6 +3369,9 @@ void describe('HostingConstruct — preview edge→regional (B2)', () => {
         bundle: bundleDir,
         handler: 'index.handler',
         placement,
+        // The adapter marks an edge→regional downgrade so the CDN gives it a
+        // dedicated behavior; the global (Lambda@Edge) case is left unmarked.
+        ...(placement === 'regional' ? { edgeRegional: true } : {}),
         streaming: placement === 'regional',
         runtime: 'nodejs24.x',
       },

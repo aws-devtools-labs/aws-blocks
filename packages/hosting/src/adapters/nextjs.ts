@@ -2005,7 +2005,19 @@ const translateOpenNextOutput = (
       // Skip S3 origin and imageOptimizer (handled separately via manifest.imageOptimization)
       if (name === 's3' || name === 'imageOptimizer') continue;
 
-      const computeResource = mapOriginToCompute(name, origin, openNextDir);
+      // A regionalized edge split lands here (not `edgeFunctions`) when OpenNext
+      // moves it into `origins`. We generate these function keys as `edge<N>`
+      // (see renderEdgeFunctionsBlock), so under edge→regional a compute named
+      // `edge<N>` is a downgraded edge route → mark it so the CDN gives it a
+      // dedicated behavior (the KVS router doesn't know it). Regular multi-
+      // computes (`default`/`server`/`api`) are never named this way.
+      const isEdgeRegional = edgeToRegional && /^edge\d+$/.test(name);
+      const computeResource = mapOriginToCompute(
+        name,
+        origin,
+        openNextDir,
+        isEdgeRegional,
+      );
       if (computeResource) {
         manifest.compute[name] = computeResource;
       }
@@ -2047,6 +2059,9 @@ const translateOpenNextOutput = (
             bundle,
             handler: fn.handler ?? 'index.handler',
             placement: 'regional',
+            // Mark as an edge→regional downgrade so the CDN gives it a dedicated
+            // behavior (the KVS router doesn't know this split route).
+            edgeRegional: true,
             streaming: true,
             runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
           }
@@ -2169,6 +2184,7 @@ const mapOriginToCompute = (
   name: string,
   origin: OpenNextOrigin,
   openNextDir: string,
+  edgeRegional = false,
 ): ComputeResource | undefined => {
   const bundleDir = path.join(openNextDir, 'server-functions', name);
 
@@ -2186,6 +2202,9 @@ const mapOriginToCompute = (
       bundle: effectiveBundle,
       handler: origin.handler ?? 'index.handler',
       placement: 'regional',
+      // Only edge→regional downgrades get the marker (dedicated CDN behavior);
+      // a regular regional origin stays KVS-routed.
+      ...(edgeRegional ? { edgeRegional: true } : {}),
       streaming: origin.streaming ?? true,
       runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       memorySize: origin.memorySize,

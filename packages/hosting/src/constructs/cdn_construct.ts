@@ -983,22 +983,22 @@ export class CdnConstruct extends Construct {
     // attaching an edge function. The behavior also binds the origin so CDK
     // materializes its OAC (an unreferenced origin is dropped).
     const globalEdgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
-    // Names that are NOT dedicated split routes: the SSR primary compute
-    // (routed via the default behavior / KVS router — 'default'/'server' and
-    // whatever ssrComputeName resolved to) and image-optimization (reached via
-    // the KVS router/sentinel). Global edge routes attach a Lambda@Edge above.
-    const nonDirectNames = new Set<string>([
-      'default',
-      'server',
-      'image-optimization',
-      ...(ssrComputeName ? [ssrComputeName] : []),
-    ]);
+    // A compute gets a DEDICATED behavior only when it is an edge→regional
+    // downgrade — a `runtime:'edge'` route preview moved to a regional Lambda
+    // (`manifest.compute[name].edgeRegional === true`). Those are invisible to
+    // the KVS router, so they need their own behavior pointing at the Function
+    // URL. A regular regional multi-compute (e.g. a plain `api` handler) is
+    // KVS-routed and must NOT get a behavior — matching it on "has a Function
+    // URL" alone would wrongly hijack its route into a cache behavior. Global
+    // edge routes attach a Lambda@Edge above, so they're excluded too.
     const directComputeTargets = new Set(
       (props.computeFunctionUrls
         ? [...props.computeFunctionUrls.keys()]
         : []
       ).filter(
-        (name) => !nonDirectNames.has(name) && !globalEdgeTargets.has(name),
+        (name) =>
+          manifest.compute?.[name]?.edgeRegional === true &&
+          !globalEdgeTargets.has(name),
       ),
     );
     if (directComputeTargets.size > 0) {
