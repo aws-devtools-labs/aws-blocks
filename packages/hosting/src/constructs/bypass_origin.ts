@@ -11,7 +11,7 @@ import {
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Fn } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
-import type { IFunction, FunctionUrl } from 'aws-cdk-lib/aws-lambda';
+import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { DeployManifest } from '../manifest/types.js';
 
 /**
@@ -26,15 +26,6 @@ export type BypassOriginConstructProps = {
   bucket: IBucket;
   /** Compute functions by manifest name (SSR server, etc.). */
   computeFunctions: Map<string, IFunction>;
-  /**
-   * Public (`authType: NONE`) Function URLs by compute name. The SSR catch-all
-   * is fronted by the server compute's Function URL via `HttpUrlIntegration` —
-   * invoking the handler the same way the (working) non-bypass Function-URL
-   * path does, so every framework's SSR serves correctly (not just Next's
-   * `aws-apigw-v2` handler). No SigV4 signing is involved (no CloudFront OAC),
-   * so the OAC POST-body signature bug cannot occur.
-   */
-  computeFunctionUrls?: Map<string, FunctionUrl>;
   /**
    * The SSR/server compute name that owns the catch-all (`'default'` or
    * `'server'`), or undefined for a static/SPA site (no compute).
@@ -83,11 +74,10 @@ export class BypassOriginConstruct extends Construct {
 
   constructor(scope: Construct, id: string, props: BypassOriginConstructProps) {
     super(scope, id);
-    const { manifest, buildId, bucket, computeFunctions, computeFunctionUrls, serverComputeName, backendApiUrl } = props;
+    const { manifest, buildId, bucket, computeFunctions, serverComputeName, backendApiUrl } = props;
 
     const spaFallback = manifest.staticAssets.spaFallback ?? true;
     const serverFn = serverComputeName ? computeFunctions.get(serverComputeName) : undefined;
-    const serverUrl = serverComputeName ? computeFunctionUrls?.get(serverComputeName) : undefined;
 
     // ---- Asset-proxy Lambda: streams objects from the private bucket ----
     // HTTP API v2 can't use the REST S3 AwsIntegration, so a tiny Lambda reads
@@ -112,20 +102,12 @@ export class BypassOriginConstruct extends Construct {
     const assetIntegration = new HttpLambdaIntegration('AssetInt', assetFn);
 
     // ---- HTTP API (root path via the auto `$default` stage) ----
-    // Default route → SSR. Prefer the server compute's public Function URL via
-    // an HTTP proxy: this invokes the handler exactly as the working non-bypass
-    // Function-URL path does, so every framework's SSR serves (Nuxt/Astro/
-    // SvelteKit `handler`/`http-server`, and Next's `aws-apigw-v2` handler,
-    // which also accepts the Function URL's payload-v2 event). The Function URL
-    // is `authType: NONE` and there's no CloudFront OAC, so no SigV4 signing
-    // occurs — POST/PUT bodies pass through untouched (no signature bug).
-    // Falls back to a direct Lambda invoke if no URL was provided, then to the
-    // asset proxy for a static/SPA site (serves index.html on miss).
-    const defaultIntegration = serverUrl
-      ? new HttpUrlIntegration('SsrInt', serverUrl.url, { method: HttpMethod.ANY })
-      : serverFn
-        ? new HttpLambdaIntegration('SsrInt', serverFn)
-        : assetIntegration;
+    // Default route → SSR Lambda (buffered, payload v2 matches the
+    // `aws-apigw-v2` converter the adapter builds under bypassCdn). No server
+    // → default to the asset proxy (which serves index.html on miss for SPA).
+    const defaultIntegration = serverFn
+      ? new HttpLambdaIntegration('SsrInt', serverFn)
+      : assetIntegration;
     this.api = new HttpApi(this, 'BypassApi', {
       apiName: `bypass-${buildId}`.substring(0, 128),
       defaultIntegration,

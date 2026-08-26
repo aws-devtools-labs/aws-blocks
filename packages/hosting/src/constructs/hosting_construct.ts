@@ -547,18 +547,7 @@ export class HostingConstruct extends Construct {
           : undefined,
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
-        // Non-bypass SSR is fronted by the REST API (no Function URL). Under
-        // bypassCdn the SSR catch-all is fronted by the HTTP API v2
-        // HttpUrlIntegration → the compute's Function URL, so the SSR compute
-        // KEEPS its Function URL there.
-        skipFunctionUrl: isSsrCompute && !bypassCdn,
-        // …and that Function URL is public (authType NONE) so the unsigned
-        // HttpUrlIntegration proxy can reach it. This invokes the handler the
-        // same way the working non-bypass Function-URL path does — fixing the
-        // API-GW-v2-payload 500 for non-Next SSR (Nuxt/Astro/SvelteKit) — and,
-        // with no CloudFront OAC + no signing, cannot hit the OAC POST-body
-        // signature bug.
-        publicFunctionUrl: isSsrCompute && bypassCdn,
+        skipFunctionUrl: isSsrCompute,
         environment: props.compute?.environment,
       });
 
@@ -1151,10 +1140,6 @@ export class HostingConstruct extends Construct {
         buildId,
         bucket: this.bucket,
         computeFunctions: this.computeFunctions,
-        // The SSR catch-all is fronted by the compute's (public) Function URL —
-        // invoking the handler exactly as the working non-bypass path does, so
-        // any framework's SSR (Next/Nuxt/Astro/SvelteKit) serves correctly.
-        computeFunctionUrls: this.computeFunctionUrls,
         serverComputeName,
         backendApiUrl: props.bypassApiProxyUrl,
       });
