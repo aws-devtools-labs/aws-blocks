@@ -6,6 +6,7 @@ import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { LambdaComputeProps } from './types.js';
 
@@ -34,7 +35,7 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 
-	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
+	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
 		super(id, { parent: scope });
 
 		// Entry + BLOCKS_STACK_NAME are derived from the owning stack/backend
@@ -44,6 +45,11 @@ export class LambdaCompute extends Compute {
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: DEFAULT_NODE_RUNTIME,
+			// Default to arm64 (Graviton) — ~20% cheaper at equal performance, and
+			// transparent for the framework's own pure-JS bundles. `architecture` is
+			// internal for now (see types.ts); a customer override arrives with the
+			// public compute-configuration surface.
+			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
 			memorySize: 2048,
