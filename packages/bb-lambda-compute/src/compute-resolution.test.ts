@@ -50,16 +50,12 @@ after(() => {
 
 async function makeStack(id: string): Promise<BlocksStack> {
 	const app = new cdk.App();
-	return BlocksStack.create(
-		app,
-		id,
-		{
-			backendHandlerPath: handlerPath,
-			backendCDKPath: sideEffectBackendPath,
-			defaults: BlocksPresets.production,
-		},
-		lambdaFactory,
-	);
+	return BlocksStack.create(app, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: sideEffectBackendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
 }
 
 describe('Scope.compute resolution', () => {

@@ -18,11 +18,12 @@ import type { Compute, DefaultComputeFactory } from '@aws-blocks/core/cdk/intern
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 
 // The umbrella is the one package that depends on both core and a concrete
-// compute, so it injects the default-compute factory here — a plain import,
-// not a side-effect global. Core calls this factory in create() to build the
-// default without importing the concrete class. `defaultComputeFactory` is an
-// internal create() option, deliberately absent from the public props types, so
-// customers cannot set it; the umbrella is its only supplier.
+// compute, so it supplies the default-compute factory here — a plain import,
+// not a side-effect global. It spreads the factory onto the customer's props
+// (turning the public BlocksStackProps into core's CoreBlocksStackProps), so
+// core builds the default without importing the concrete class. The factory is
+// deliberately absent from the customer-facing props types; the umbrella is its
+// only supplier.
 //
 // The cast is plumbing: under the default TS condition `LambdaCompute` resolves
 // to its mock-typed entry, but under `--conditions=cdk` (real synth) the value
@@ -33,22 +34,23 @@ const lambdaDefaultComputeFactory: DefaultComputeFactory = (root) =>
 
 /**
  * `BlocksStack` with the Lambda default compute wired in. Same API and instance
- * type as core's `BlocksStack`; `create()` injects the default-compute factory.
+ * type as core's `BlocksStack`; `create()` spreads the default-compute factory
+ * onto the props.
  */
 export const BlocksStack = {
 	create: (scope: Construct, id: string, props: BlocksStackProps): Promise<CoreBlocksStack> =>
-		CoreBlocksStack.create(scope, id, props, lambdaDefaultComputeFactory),
+		CoreBlocksStack.create(scope, id, { ...props, defaultComputeFactory: lambdaDefaultComputeFactory }),
 };
 export type BlocksStack = CoreBlocksStack;
 
 /**
  * `BlocksBackend` with the Lambda default compute wired in. Same API and
- * instance type as core's `BlocksBackend`; `create()` injects the
- * default-compute factory.
+ * instance type as core's `BlocksBackend`; `create()` spreads the
+ * default-compute factory onto the props.
  */
 export const BlocksBackend = {
 	create: (scope: Construct, id: string, props: BlocksBackendProps): Promise<CoreBlocksBackend> =>
-		CoreBlocksBackend.create(scope, id, props, lambdaDefaultComputeFactory),
+		CoreBlocksBackend.create(scope, id, { ...props, defaultComputeFactory: lambdaDefaultComputeFactory }),
 };
 export type BlocksBackend = CoreBlocksBackend;
 

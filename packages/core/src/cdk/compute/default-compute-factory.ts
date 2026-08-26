@@ -23,11 +23,13 @@ export interface LambdaShapedCompute extends Compute {
 }
 
 /**
- * Builds the default {@link Compute} for a stack/backend. `create()` takes one
- * as a required argument and calls it to build the default without importing a
- * concrete compute class — the factory is supplied by whoever owns both core
- * and a concrete compute package (the umbrella `@aws-blocks/blocks`, which
- * injects `LambdaCompute`). It is a `create()` argument, not a public prop, so
+ * Builds the default {@link Compute} for a stack/backend. `create()` reads it
+ * from its props (`CoreBlocksStackProps.defaultComputeFactory`) and calls it to
+ * build the default without importing a concrete compute class — the factory is
+ * supplied by whoever owns both core and a concrete compute package (the
+ * umbrella `@aws-blocks/blocks`, which injects `LambdaCompute`). It lives on
+ * `CoreBlocksStackProps`/`CoreBlocksBackendProps`, which the umbrella derives
+ * from the customer-facing props, so it is absent from `BlocksStackProps` and
  * customers cannot set it.
  *
  * @internal

@@ -63,6 +63,18 @@ export interface BlocksBackendProps {
 }
 
 /**
+ * Core's `create()` props: the public {@link BlocksBackendProps} plus the
+ * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * Customers use {@link BlocksBackendProps} and never set the factory.
+ *
+ * @internal
+ */
+export interface CoreBlocksBackendProps extends BlocksBackendProps {
+  /** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+  defaultComputeFactory: DefaultComputeFactory;
+}
+
+/**
  * Shared infra setup — provisions the stack-level resources that are NOT owned
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
@@ -253,16 +265,16 @@ export class BlocksBackend extends Construct {
     // after construction — it derives BLOCKS_STACK_NAME from this.fullId.
   }
 
-  static async create(scope: Construct, id: string, props: BlocksBackendProps, defaultComputeFactory: DefaultComputeFactory) {
+  static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
     assertCdkConditionActive();
     const backend = new BlocksBackend(scope, id, props);
     // Create the default compute before importing the backend: it OWNS the
     // Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
     // a block reading `this.compute` in its constructor (during that import)
     // must resolve to it. The factory is supplied by the umbrella
-    // @aws-blocks/blocks (which injects LambdaCompute), so core never imports
-    // the concrete compute class.
-    backend._defaultCompute = defaultComputeFactory(backend);
+    // @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+    // imports the concrete compute class.
+    backend._defaultCompute = props.defaultComputeFactory(backend);
     // file:// URL (not a raw path) so the cache-busting query works on Windows,
     // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
     const backendUrl = pathToFileURL(props.backendCDKPath);

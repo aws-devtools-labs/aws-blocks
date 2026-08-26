@@ -17,23 +17,26 @@ to the default compute. The compute is created in `create()` before the backend
 module is imported, so a block reading `this.compute` in its constructor
 resolves to it. `_compute` is internal (no public option yet).
 
-Core no longer imports a concrete compute: `create()` takes a
-`defaultComputeFactory` as a required argument and calls it to build the
-default. The umbrella `@aws-blocks/blocks` supplies `LambdaCompute` through a
-thin `create()` wrapper, so apps built on `@aws-blocks/blocks` are unaffected —
-their call site is unchanged.
+Core no longer imports a concrete compute: `create()` requires a
+`defaultComputeFactory` on its props (`CoreBlocksStackProps` /
+`CoreBlocksBackendProps` — the public `BlocksStackProps` / `BlocksBackendProps`
+plus that factory) and calls it to build the default. The umbrella
+`@aws-blocks/blocks` supplies `LambdaCompute` by spreading the factory onto the
+props in a thin `create()` wrapper, so apps built on `@aws-blocks/blocks` are
+unaffected — their call site is unchanged.
 
 **Breaking (direct `@aws-blocks/core` consumers only):** core no longer provides
 a built-in default compute. `BlocksStack.create()` / `BlocksBackend.create()`
-now require a fourth `defaultComputeFactory` argument; a bare three-argument call
-no longer type-checks (and throws at synth if forced). This break is inherent to
-moving the Lambda + API Gateway out of core — it is not specific to how the
-factory is passed. Migrate by either:
+now require a `defaultComputeFactory` field on the props (typed
+`CoreBlocksStackProps` / `CoreBlocksBackendProps`); props without it no longer
+type-check (and it throws at synth if forced). This break is inherent to moving
+the Lambda + API Gateway out of core — it is not specific to how the factory is
+passed. Migrate by either:
 
 - using `@aws-blocks/blocks` (`import { BlocksStack } from '@aws-blocks/blocks/cdk'`),
   which injects a Lambda default for you — the recommended path; or
-- supplying your own factory:
-  `BlocksStack.create(scope, id, props, (root) => new LambdaCompute(root, 'DefaultCompute'))`,
+- supplying your own factory on the props:
+  `BlocksStack.create(scope, id, { ...props, defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute') })`,
   which requires depending on `@aws-blocks/bb-lambda-compute` and the internal
   `@aws-blocks/core/cdk/internal` types.
 

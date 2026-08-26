@@ -22,6 +22,7 @@ import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/defau
 export {
 	BlocksBackend,
 	type BlocksBackendProps,
+	type CoreBlocksBackendProps,
 	SHARED_HANDLER_TIMEOUT_SECONDS,
 } from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
@@ -35,6 +36,22 @@ export {
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
+
+/**
+ * Core's `create()` props: the public {@link BlocksStackProps} plus the required
+ * `defaultComputeFactory`. The umbrella (`@aws-blocks/blocks`) supplies the
+ * factory (which builds a `LambdaCompute`) by spreading it onto the customer's
+ * props; customers use {@link BlocksStackProps} and never set the factory.
+ *
+ * Kept separate (rather than a `create()` argument) so the factory travels with
+ * the props object and core stays free of any concrete compute class.
+ *
+ * @internal
+ */
+export interface CoreBlocksStackProps extends BlocksStackProps {
+  /** Builds the stack's default compute. Injected by `@aws-blocks/blocks`. */
+  defaultComputeFactory: DefaultComputeFactory;
+}
 
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
@@ -79,7 +96,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     this.executionRole = infra.executionRole;
   }
 
-  static async create(scope: Construct, id: string, props: BlocksStackProps, defaultComputeFactory: DefaultComputeFactory) {
+  static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
     assertCdkConditionActive();
 
     // Detect ambient pipeline stage scope set by Pipeline appFile imports
@@ -91,9 +108,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     // Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
     // a block reading `this.compute` in its constructor (during that import)
     // must resolve to it. The factory is supplied by the umbrella
-    // @aws-blocks/blocks (which injects LambdaCompute), so core never imports
-    // the concrete compute class.
-    stack._defaultCompute = defaultComputeFactory(stack);
+    // @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+    // imports the concrete compute class.
+    stack._defaultCompute = props.defaultComputeFactory(stack);
     // file:// URL (not a raw path) so the cache-busting query works on Windows,
     // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
     const backendUrl = pathToFileURL(props.backendCDKPath);

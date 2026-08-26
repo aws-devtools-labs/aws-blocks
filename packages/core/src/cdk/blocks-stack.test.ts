@@ -66,9 +66,9 @@ const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js')
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
 const makeStack = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksStack.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production }, stubComputeFactory);
+	BlocksStack.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production }, stubComputeFactory);
+	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksStack.create() with same backendCDKPath but different IDs produces constructs in each', async () => {

@@ -72,7 +72,7 @@ const importMetaHandlerPath = join(__dirname, '__fixtures__', 'import-meta-handl
 // Wraps BlocksBackend.create, injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it 15 times.
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production }, stubComputeFactory);
+	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksBackend.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -221,7 +221,8 @@ describe('CJS bundle: import.meta.url in the handler is shimmed (no Lambda-load 
         backendHandlerPath: importMetaHandlerPath,
         backendCDKPath: sideEffectBackendPath,
         defaults: BlocksPresets.production,
-      }, stubComputeFactory),
+        defaultComputeFactory: stubComputeFactory,
+      }),
     );
   });
 });
@@ -331,12 +332,14 @@ describe('infrastructure defaults (backend-anchored)', () => {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
       defaults: BlocksPresets.production,
-    }, stubComputeFactory);
+      defaultComputeFactory: stubComputeFactory,
+    });
     const b = await BlocksBackend.create(stack, 'B', {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
       defaults: BlocksPresets.sandbox,
-    }, stubComputeFactory);
+      defaultComputeFactory: stubComputeFactory,
+    });
 
     // Two backends in one stack must NOT clobber each other — defaults are
     // anchored on the backend, not the shared stack.
@@ -352,7 +355,8 @@ describe('infrastructure defaults (backend-anchored)', () => {
       backendHandlerPath: handlerPath,
       backendCDKPath: sideEffectBackendPath,
       defaults: BlocksPresets.sandbox,
-    }, stubComputeFactory);
+      defaultComputeFactory: stubComputeFactory,
+    });
 
     // A Scope under the backend resolves scope.defaults by walking up to it.
     const outer = new Scope('outer');
