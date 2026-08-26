@@ -455,7 +455,6 @@ export function getSdkIdentifiers(bb: Agent): {
     sessionBucketName: string;
     realtimeWsUrl: string;
     realtimeCallbackUrl: string;
-    jobQueueUrl: string;
 };
 
 // @public (undocumented)

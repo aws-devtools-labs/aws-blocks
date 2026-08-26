@@ -60,7 +60,7 @@ export function getSdkIdentifiers(bb: Database): { clusterArn: string; secretArn
 export function getSdkIdentifiers(bb: DistributedDatabase): { clusterEndpoint: string };
 export function getSdkIdentifiers(bb: KnowledgeBase): { kbId: string };
 export function getSdkIdentifiers(bb: InstanceType<typeof Realtime>): { wsUrl: string; callbackUrl: string };
-export function getSdkIdentifiers(bb: Agent): { conversationsTableName: string; messagesTableName: string; sessionBucketName: string; realtimeWsUrl: string; realtimeCallbackUrl: string; jobQueueUrl: string };
+export function getSdkIdentifiers(bb: Agent): { conversationsTableName: string; messagesTableName: string; sessionBucketName: string; realtimeWsUrl: string; realtimeCallbackUrl: string };
 export function getSdkIdentifiers(bb: Dashboard): { dashboardName: string };
 export function getSdkIdentifiers(bb: Logger): { logGroupName: string };
 export function getSdkIdentifiers(bb: { fullId: string }): Record<string, string>;
