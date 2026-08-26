@@ -4,6 +4,7 @@
 import type { StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import type { BlocksDefaults } from '../cdk/blocks-defaults.js';
+import type { BlocksVpcOptions } from '../cdk/vpc-types.js';
 import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
@@ -351,7 +352,7 @@ export interface BlocksStackProps extends StackProps {
    * });
    * ```
    */
-  vpc?: import('../cdk/vpc-types.js').BlocksVpcOptions;
+  vpc?: BlocksVpcOptions;
 }
 
 export class BlocksStack {
