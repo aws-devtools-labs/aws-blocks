@@ -29,6 +29,11 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
+// BLOCKS_PREVIEW=bypass → preview + bypassCdn (validate the framework-agnostic
+// single-origin path for non-Next frameworks).
+const preview =
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
   buildCommand: 'npx nuxt build',
@@ -39,6 +44,7 @@ new Hosting(blocksStack, 'Hosting', {
     memorySize: 1024,
     timeout: cdk.Duration.seconds(30),
   },
+  preview,
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-nuxt');

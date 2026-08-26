@@ -34,12 +34,16 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // served from S3. `api: blocksStack` still wires the single-origin
 // /aws-blocks/* CloudFront proxy so client-side fetches reach the backend
 // with no CORS.
+const preview =
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
   buildCommand: 'npx astro build',
   buildOutputDir: 'dist',
   framework: 'astro',
   api: blocksStack,
+  preview,
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-astro');

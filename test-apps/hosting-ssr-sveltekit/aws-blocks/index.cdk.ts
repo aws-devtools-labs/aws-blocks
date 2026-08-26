@@ -33,6 +33,9 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // on Lambda via the Lambda Web Adapter (http-server compute). `api: blocksStack`
 // wires the single-origin /aws-blocks/* CloudFront proxy so client fetches reach
 // the backend with no CORS.
+const preview =
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
   buildCommand: 'npm run build',
@@ -43,6 +46,7 @@ new Hosting(blocksStack, 'Hosting', {
     memorySize: 1024,
     timeout: cdk.Duration.seconds(30),
   },
+  preview,
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-sveltekit');
