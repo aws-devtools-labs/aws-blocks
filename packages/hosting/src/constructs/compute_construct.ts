@@ -106,6 +106,15 @@ export type ComputeConstructProps = {
    */
   skipFunctionUrl?: boolean;
   /**
+   * Invoke an `http-server` (Lambda Web Adapter) compute in BUFFERED mode
+   * instead of `response_stream`. Set by the L3 for preview `bypassCdn`, where
+   * the SSR compute is fronted by a buffered API Gateway `HttpLambdaIntegration`
+   * (no streaming Function URL). Preview trades away SSR streaming (a perf
+   * feature) for a functional, secure single-origin — the Lambda stays private
+   * (no public Function URL). No effect on `handler`/`edge` computes.
+   */
+  bufferedInvoke?: boolean;
+  /**
    * Additional environment variables to inject into the Lambda function.
    * Merged with (and overrides) the manifest's compute resource environment.
    */
@@ -262,7 +271,11 @@ export class ComputeConstruct extends Construct {
         ],
         environment: {
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/bootstrap',
-          AWS_LWA_INVOKE_MODE: 'response_stream',
+          // Buffered when invoked via API Gateway's buffered HttpLambdaIntegration
+          // (preview bypassCdn — no streaming Function URL); streaming otherwise
+          // (Function URL / REST-API STREAM). A response_stream reply behind a
+          // buffered invoke can't be parsed by API Gateway → 500.
+          AWS_LWA_INVOKE_MODE: props.bufferedInvoke ? 'buffered' : 'response_stream',
           PORT: String(port),
           ...computeResource.environment,
           ...props.environment,

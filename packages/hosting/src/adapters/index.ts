@@ -247,6 +247,15 @@ export const getAdapter = (
       });
   }
 
+  // Nuxt/Nitro act on `bypassCdn` (force the `node-server` preset so SSR runs
+  // as a buffered LWA http-server behind the bypass's private API Gateway
+  // integration, not a streaming `aws-lambda` handler). Construct directly so
+  // the option reaches the adapter, like nextjs above.
+  if (framework === 'nuxt' || framework === 'nitro') {
+    return (projectDir: string) =>
+      nitroAdapter({ projectDir, bypassCdn: options?.bypassCdn });
+  }
+
   const entry = adapterRegistry.get(framework);
   if (!entry) {
     throw new HostingError('UnsupportedFrameworkError', {

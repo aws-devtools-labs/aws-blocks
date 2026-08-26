@@ -548,6 +548,12 @@ export class HostingConstruct extends Construct {
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
+        // Under bypassCdn the SSR compute is invoked via a buffered API Gateway
+        // HttpLambdaIntegration (private — no public Function URL). An
+        // http-server (LWA) compute must therefore run buffered; its default
+        // response_stream reply 500s behind a buffered invoke. (handler/edge
+        // computes ignore this.) Preview drops SSR streaming — a perf feature.
+        bufferedInvoke: bypassCdn && isSsrCompute,
         environment: props.compute?.environment,
       });
 
