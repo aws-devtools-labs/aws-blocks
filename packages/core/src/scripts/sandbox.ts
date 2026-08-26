@@ -96,20 +96,32 @@ export interface SandboxDeployArgsOptions {
  * - `--hotswap-fallback` (**re-deploy only** — see `hotswap`): skips
  *   CloudFormation and applies a code-only change directly to the Lambdas
  *   (UpdateFunctionCode / S3 asset sync) in seconds, falling back to a full
- *   CloudFormation deploy for non-hotswappable changes. It is mutually
- *   exclusive with the Express/`--method` CloudFormation flags here (hotswap
- *   bypasses CloudFormation), so we pass EITHER the hotswap flag OR the
- *   Express flags, never both. The synth/build still runs, so a code-change
- *   iteration is roughly `build + a few seconds` instead of `build + a full
- *   CloudFormation deploy`. Never used on the production path.
+ *   CloudFormation deploy for non-hotswappable changes. We pair it with
+ *   `--express` (not `--method direct` — `--express` implies its own method):
+ *   the two flags are orthogonal, so the fallback CloudFormation deploy runs in
+ *   the fast Express Mode too, not a plain slow deploy. The synth/build still
+ *   runs, so a code-change iteration is roughly `build + a few seconds` (a true
+ *   hotswap) or `build + a fast Express fallback` (when a non-hotswappable
+ *   change slips in). Never used on the production path.
+ *
+ *   NOTE for callers: a true (seconds) hotswap requires the synth to produce a
+ *   deterministic template — any tag/env/name whose value changes per-synth
+ *   (a date stamp, git sha, timestamp, or a per-deploy build id) is NOT
+ *   hotswappable and forces the Express fallback every time. Preview mode pins
+ *   `buildId='preview'` for exactly this reason; app code must likewise avoid
+ *   dynamic tags on preview stacks.
  */
 export function buildSandboxDeployArgs({ outDir, projectRoot, backendPath, hotswap = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
-    // Re-deploy → hotswap (skip CloudFormation, seconds); first deploy →
-    // Express Mode CREATE. Mutually exclusive: hotswap bypasses CloudFormation.
-    ...(hotswap ? ["--hotswap-fallback"] : ["--method", "direct", "--express"]),
+    // Re-deploy → hotswap (skip CloudFormation, seconds) with an Express-Mode
+    // fallback; first deploy → Express Mode CREATE. `--hotswap-fallback` and
+    // `--express` are orthogonal — the former decides *whether* to touch
+    // CloudFormation, the latter decides *how* the CloudFormation deploy runs —
+    // so when hotswap falls back (a non-hotswappable change), the fallback still
+    // runs in the fast Express Mode instead of a plain (slow) deploy.
+    ...(hotswap ? ["--hotswap-fallback", "--express"] : ["--method", "direct", "--express"]),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,

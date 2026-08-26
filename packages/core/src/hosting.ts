@@ -613,7 +613,18 @@ export class Hosting extends Construct {
     const manifest: DeployManifest = adapter(root);
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
+    // Preview mode uses a STABLE buildId so re-deploys hotswap. The per-deploy
+    // random buildId drives the atomic `builds/<id>/` cutover (zero-downtime
+    // prod) but bakes into the asset prefix, the SSR Lambda code key, the
+    // BucketDeployment prefix, and the bypass API name — churning all of them
+    // every deploy, which is non-hotswappable → hotswap always falls back.
+    // A preview is a single, throwaway environment with no zero-downtime
+    // requirement, so a fixed buildId (overwrite-in-place) is correct and lets
+    // a code-only change hotswap (only the Lambda code + asset content differ,
+    // both hotswappable). Production keeps the per-deploy atomic buildId.
+    if (preview.enabled) {
+      manifest.buildId = 'preview';
+    } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }
 

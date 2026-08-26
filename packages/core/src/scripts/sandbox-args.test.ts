@@ -103,10 +103,17 @@ describe('buildSandboxDeployArgs — hotswap (re-deploy)', () => {
     assert.ok(hot.includes('--hotswap-fallback'), `expected --hotswap-fallback in: ${hot.join(' ')}`);
   });
 
-  it('does NOT combine hotswap with the Express/--method CFN flags (mutually exclusive)', () => {
-    // Hotswap bypasses CloudFormation, so the Express-Mode flags don't apply
-    // and CDK would reject / ignore them. Pass EITHER, never both.
-    assert.ok(!hot.includes('--express'), `hotswap must not pass --express: ${hot.join(' ')}`);
+  it('pairs hotswap with --express so the fallback deploy is also fast', () => {
+    // --hotswap-fallback and --express are orthogonal: the former decides
+    // WHETHER to touch CloudFormation, the latter HOW the CloudFormation deploy
+    // runs. When a non-hotswappable change forces the fallback, we still want it
+    // to run in Express Mode, not a plain slow deploy — so both flags are passed.
+    assert.ok(hot.includes('--express'), `hotswap should pair with --express: ${hot.join(' ')}`);
+  });
+
+  it('does NOT pass --method with hotswap (--express implies its own method)', () => {
+    // --express selects its own deployment method, so --method direct is not
+    // needed alongside it here; keeping it off avoids a redundant/conflicting flag.
     assert.ok(!hot.includes('--method'), `hotswap must not pass --method: ${hot.join(' ')}`);
   });
 
