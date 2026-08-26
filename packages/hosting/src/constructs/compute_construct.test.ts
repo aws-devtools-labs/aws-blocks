@@ -178,6 +178,43 @@ void describe('ComputeConstruct', () => {
       });
     });
 
+    void it('creates a PUBLIC (authType NONE) Function URL when publicFunctionUrl is set (bypassCdn SSR)', () => {
+      // Under bypassCdn the SSR catch-all is fronted by an API Gateway
+      // HttpUrlIntegration (no SigV4 signing), so the Function URL must accept
+      // unsigned requests — authType NONE. With no CloudFront OAC + no signing,
+      // POST/PUT bodies pass through and the OAC signature bug can't occur.
+      const bundle = createBundleDir();
+      fs.writeFileSync(path.join(bundle, 'server.js'), '// server');
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: httpServerResource(bundle),
+        publicFunctionUrl: true,
+      });
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Url', {
+        AuthType: 'NONE',
+      });
+    });
+
+    void it('defaults the Function URL to authType AWS_IAM (no publicFunctionUrl)', () => {
+      const bundle = createBundleDir();
+      fs.writeFileSync(path.join(bundle, 'server.js'), '// server');
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: httpServerResource(bundle),
+      });
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Url', {
+        AuthType: 'AWS_IAM',
+      });
+    });
+
     void it('includes Lambda Web Adapter layer', () => {
       const bundle = createBundleDir();
       fs.writeFileSync(path.join(bundle, 'server.js'), '// server');

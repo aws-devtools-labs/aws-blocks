@@ -106,6 +106,16 @@ export type ComputeConstructProps = {
    */
   skipFunctionUrl?: boolean;
   /**
+   * Make the compute's Function URL **public** (`authType: NONE`) instead of
+   * the default `AWS_IAM`. Set by the L3 for preview `bypassCdn`, where the SSR
+   * catch-all is fronted by an HTTP API v2 `HttpUrlIntegration` — a plain HTTP
+   * proxy that does NOT SigV4-sign, so the Function URL must accept unsigned
+   * requests. This invokes the handler exactly as the (working) non-bypass
+   * Function-URL path does, and — with no CloudFront OAC and no signing —
+   * cannot hit the CloudFront-OAC POST-body signature bug. Preview-only.
+   */
+  publicFunctionUrl?: boolean;
+  /**
    * Additional environment variables to inject into the Lambda function.
    * Merged with (and overrides) the manifest's compute resource environment.
    */
@@ -345,7 +355,12 @@ export class ComputeConstruct extends Construct {
       // Point the Function URL at the warm alias when one exists.
       const urlTarget = this.alias ?? this.function;
       this.functionUrl = urlTarget.addFunctionUrl({
-        authType: FunctionUrlAuthType.AWS_IAM,
+        // Public (NONE) only under bypassCdn, where an API Gateway
+        // HttpUrlIntegration (no SigV4 signing) fronts it. Everywhere else the
+        // Function URL is IAM-authed and reached via CloudFront OAC.
+        authType: props.publicFunctionUrl
+          ? FunctionUrlAuthType.NONE
+          : FunctionUrlAuthType.AWS_IAM,
         invokeMode,
       });
     }
