@@ -67,6 +67,19 @@ export type NextjsAdapterOptions = {
    * so the L3 builds no image Lambda.
    */
   skipImageOptimization?: boolean;
+  /**
+   * E1 (preview) — pin Next.js's build ID to this deterministic value for the
+   * build by temporarily wrapping `next.config` with a `generateBuildId`. Next
+   * otherwise generates a random build ID per build, which renames the
+   * `_next/static/<buildId>/` asset folder every deploy — changing the CDK
+   * asset hash and forcing a full S3 re-upload of otherwise byte-identical
+   * static assets (the dominant cost of a preview code-only re-deploy). With a
+   * stable build ID an unchanged (or server-only) build produces identical
+   * assets, so CDK skips the upload. Respects a user-defined `generateBuildId`.
+   * Preview-only — production keeps Next's per-build random ID (correct cache
+   * busting for a long-lived CDN).
+   */
+  deterministicBuildId?: string;
 };
 
 // ---- OpenNext output types (internal) ----
@@ -142,12 +155,30 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild, edgeToRegional, bypassCdn, skipIsr, skipImageOptimization } = options;
+  const {
+    projectDir,
+    configPath,
+    skipBuild,
+    edgeToRegional,
+    bypassCdn,
+    skipIsr,
+    skipImageOptimization,
+    deterministicBuildId,
+  } = options;
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
 
   if (!skipBuild) {
+    // E1 (preview): pin Next's build ID for the duration of the build so a
+    // code-only re-deploy produces byte-identical static assets (CDK then skips
+    // the full S3 re-upload). Always restored in the finally below. No-op in
+    // production (deterministicBuildId undefined) or when the user already sets
+    // `generateBuildId`.
+    const restoreBuildId = deterministicBuildId
+      ? pinNextBuildId(projectDir, deterministicBuildId)
+      : undefined;
+    try {
     // L3 routes the SSR Lambda through API Gateway REST + STREAM. REST sends
     // payload v1, OpenNext defaults to v2 — force the v1 converter + streaming
     // wrapper for `default`. OpenNext's `--config-path` flag silently fails
@@ -186,6 +217,11 @@ export const nextjsAdapter = (
       runOpenNextBuild(projectDir, configPath);
     } finally {
       cleanupConfig?.();
+    }
+    } finally {
+      // Restore next.config immediately after the builds — the post-build
+      // patches below operate on `.open-next` output, not the config.
+      restoreBuildId?.();
     }
 
     // Warn when the installed @opennextjs/aws is outside the version
@@ -1130,6 +1166,101 @@ const validateUserOpenNextConfig = (
     resolution:
       'Either delete open-next.config.ts to let the adapter generate one, or add the missing override(s) to your config. Without them: payload v1/v2 mismatch renders every URL as "/", or POST/PUT bodies are silently dropped (response_stream wrapper).',
   });
+};
+
+/** Is this project ESM (`package.json` `"type": "module"`)? Governs the CJS/ESM shape of the injected wrapper. */
+const isEsmProject = (projectDir: string): boolean => {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8'),
+    ) as { type?: string };
+    return pkg.type === 'module';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Pin Next.js's build ID to `buildId` for the duration of the build by
+ * temporarily wrapping the user's `next.config` with a `generateBuildId`.
+ *
+ * WHY: Next generates a random build ID per build, which renames the
+ * `_next/static/<buildId>/` asset folder every time. That rename changes the
+ * CDK asset hash even when every file is byte-identical, forcing a full S3
+ * re-upload of the static bundle on every re-deploy — the dominant cost of a
+ * preview code-only re-deploy. A stable build ID makes an unchanged (or
+ * server-only) build produce identical assets, so CDK skips the upload.
+ *
+ * Mechanism: rename `next.config.<ext>` → `next.config.blocks-base.<ext>` and
+ * write a thin wrapper that re-exports it with `generateBuildId` merged in
+ * (respecting a user-defined one). Returns a restore function — ALWAYS call it
+ * in a `finally`. Returns `undefined` (no-op) when there's no config to wrap,
+ * the user already defines `generateBuildId`, or a stale base file is present.
+ *
+ * Preview-only: production passes no `deterministicBuildId`, keeping Next's
+ * per-build random ID (correct cache-busting for a long-lived CDN).
+ */
+export const pinNextBuildId = (
+  projectDir: string,
+  buildId: string,
+): (() => void) | undefined => {
+  const configFile = ['ts', 'mjs', 'cjs', 'js']
+    .map((ext) => path.join(projectDir, `next.config.${ext}`))
+    .find((p) => fs.existsSync(p));
+  // No config → Next uses defaults; nothing to wrap.
+  if (!configFile) return undefined;
+
+  const original = fs.readFileSync(configFile, 'utf8');
+  // Respect a user-defined build ID — never override intent.
+  if (/generateBuildId/.test(original)) return undefined;
+
+  const ext = path.extname(configFile).slice(1);
+  const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
+  // A stale base file (e.g. a previous crashed build) — don't clobber it.
+  if (fs.existsSync(baseFile)) return undefined;
+
+  const isCjs = ext === 'cjs' || (ext === 'js' && !isEsmProject(projectDir));
+  const id = JSON.stringify(buildId);
+  // Extensionless relative specifier — Next's config loader resolves it for
+  // .ts/.mjs/.js/.cjs alike (verified against next.config.ts).
+  const spec = JSON.stringify('./next.config.blocks-base');
+  const wrapper = isCjs
+    ? `// AWS Blocks preview: deterministic build ID (auto-restored after build).
+const blocksBase = require(${spec});
+const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
+module.exports = async (phase, ctx) => {
+  const cfg = typeof blocksResolved === 'function' ? await blocksResolved(phase, ctx) : await blocksResolved;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+};
+`
+    : `// AWS Blocks preview: deterministic build ID (auto-restored after build).
+import blocksBase from ${spec};
+export default async function blocksPreviewConfig(phase, ctx) {
+  const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+}
+`;
+
+  fs.renameSync(configFile, baseFile);
+  fs.writeFileSync(configFile, wrapper, 'utf8');
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    // Remove the wrapper and move the original back. Best-effort: a failure
+    // here must not mask the build's own error.
+    try {
+      fs.rmSync(configFile, { force: true });
+    } catch {
+      // ignore
+    }
+    try {
+      fs.renameSync(baseFile, configFile);
+    } catch {
+      // ignore
+    }
+  };
 };
 
 /**

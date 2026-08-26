@@ -609,6 +609,10 @@ export class Hosting extends Construct {
         // function has no cache dependency) and the sharp install (image-opt).
         skipIsr: preview.skipIsr,
         skipImageOptimization: preview.skipImageOptimization,
+        // E1: pin Next's build ID in preview so a code-only re-deploy yields
+        // byte-identical static assets and CDK skips the full S3 re-upload (the
+        // dominant re-deploy cost). Production keeps Next's random per-build ID.
+        deterministicBuildId: preview.enabled ? 'preview' : undefined,
       });
     const manifest: DeployManifest = adapter(root);
 

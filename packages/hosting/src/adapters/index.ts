@@ -212,6 +212,12 @@ export interface AdapterBuildOptions {
    * and drop `manifest.imageOptimization` so no image Lambda is built/deployed.
    */
   skipImageOptimization?: boolean;
+  /**
+   * E1 (preview) — pin Next.js's build ID to this deterministic value so a
+   * code-only re-deploy produces byte-identical static assets and CDK skips the
+   * full S3 re-upload. Only the Next.js adapter acts on it. Preview-only.
+   */
+  deterministicBuildId?: string;
 }
 
 /**
@@ -237,6 +243,7 @@ export const getAdapter = (
         bypassCdn: options?.bypassCdn,
         skipIsr: options?.skipIsr,
         skipImageOptimization: options?.skipImageOptimization,
+        deterministicBuildId: options?.deterministicBuildId,
       });
   }
 
