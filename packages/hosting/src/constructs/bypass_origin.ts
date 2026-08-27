@@ -177,33 +177,41 @@ async function get(key) {
   const bytes = await r.Body.transformToByteArray();
   return { body: Buffer.from(bytes), contentType: r.ContentType, cacheControl: r.CacheControl };
 }
+function ok(o, cacheOverride) {
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': o.contentType || 'application/octet-stream',
+      'cache-control': cacheOverride || o.cacheControl || 'public, max-age=31536000, immutable',
+    },
+    body: o.body.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
 exports.handler = async (event) => {
-  const raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '');
-  const key = PREFIX + '/' + (raw || 'index.html');
-  try {
-    const o = await get(key);
-    return {
-      statusCode: 200,
-      headers: {
-        'content-type': o.contentType || 'application/octet-stream',
-        'cache-control': o.cacheControl || 'public, max-age=31536000, immutable',
-      },
-      body: o.body.toString('base64'),
-      isBase64Encoded: true,
-    };
-  } catch (e) {
-    if (SPA) {
-      try {
-        const idx = await get(PREFIX + '/index.html');
-        return {
-          statusCode: 200,
-          headers: { 'content-type': 'text/html', 'cache-control': 'no-cache' },
-          body: idx.body.toString('base64'),
-          isBase64Encoded: true,
-        };
-      } catch (_) { /* fall through to 404 */ }
-    }
-    return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'Not found' };
+  const raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '').replace(/\\/+$/, '');
+  // Candidate keys, in order: exact file, then (for extensionless paths) the
+  // static multi-page resolutions '<path>/index.html' and '<path>.html'. This
+  // is directory-index resolution — a static multi-page site (e.g. Astro
+  // \`output: 'static'\`) serves /about from about/index.html or about.html.
+  const hasExt = /\\.[a-zA-Z0-9]+$/.test(raw);
+  const candidates = !raw
+    ? ['index.html']
+    : hasExt
+      ? [raw]
+      : [raw, raw + '/index.html', raw + '.html'];
+  for (const c of candidates) {
+    try { return ok(await get(PREFIX + '/' + c)); } catch (_) { /* next */ }
   }
+  // SPA sites: an unknown route serves index.html (client router owns routing).
+  if (SPA) {
+    try { return ok(await get(PREFIX + '/index.html'), 'no-cache'); } catch (_) {}
+  }
+  // Static multi-page: serve the build's 404 page (real 404 status) if present.
+  try {
+    const nf = await get(PREFIX + '/404.html');
+    return { statusCode: 404, headers: { 'content-type': 'text/html', 'cache-control': 'no-cache' }, body: nf.body.toString('base64'), isBase64Encoded: true };
+  } catch (_) {}
+  return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'Not found' };
 };
 `;
