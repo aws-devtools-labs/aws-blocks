@@ -1224,8 +1224,12 @@ export const pinNextBuildId = (
   // Extensionless relative specifier — Next's config loader resolves it for
   // .ts/.mjs/.js/.cjs alike (verified against next.config.ts).
   const spec = JSON.stringify('./next.config.blocks-base');
+  // `// @ts-nocheck` — this is a generated shim, and a `.ts` config in a
+  // project with a type-checked `next build` (default) would otherwise fail on
+  // the untyped `phase`/`ctx` params ("implicitly has an 'any' type").
   const wrapper = isCjs
-    ? `// AWS Blocks preview: deterministic build ID (auto-restored after build).
+    ? `// @ts-nocheck
+// AWS Blocks preview: deterministic build ID (auto-restored after build).
 const blocksBase = require(${spec});
 const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
 module.exports = async (phase, ctx) => {
@@ -1233,7 +1237,8 @@ module.exports = async (phase, ctx) => {
   return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
 };
 `
-    : `// AWS Blocks preview: deterministic build ID (auto-restored after build).
+    : `// @ts-nocheck
+// AWS Blocks preview: deterministic build ID (auto-restored after build).
 import blocksBase from ${spec};
 export default async function blocksPreviewConfig(phase, ctx) {
   const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;
