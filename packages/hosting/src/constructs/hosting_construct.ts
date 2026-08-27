@@ -567,9 +567,15 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 3. Cache infrastructure (ISR) ----
-    // Preview `skipIsr` drops the whole ISR/revalidation cluster (§3 + §3b)
-    // — framework-agnostic. The Next adapter also disables the incremental
-    // cache at build so the server function has no cache dependency.
+    // Preview `skipIsr` drops the ISR *revalidation* cluster (tag table, SQS
+    // queue + DLQ, revalidation Lambda — all individually gated by
+    // manifest.cache flags below, which the adapter turns off under skipIsr).
+    // For the OpenNext path it KEEPS the S3 incremental cache + build seed so
+    // prerendered pages (pure SSG *and* ISR) are still served frozen from the
+    // build snapshot — SSG is not ISR, so skipping revalidation must not
+    // re-render static pages per request. The Nitro path still drops its cache
+    // under skipIsr (Nuxt prerendered pages are frozen via static S3 files, not
+    // this cache), so it keeps the `!skipIsr` guard.
     if (!props.skipIsr && manifest.cache && manifest.cache.driver === 'nitro-s3') {
       // Nitro path: a single S3 bucket fronts Nitro's `useStorage('cache')`
       // mount via the plugin the adapter injected at build time. No DDB,
@@ -605,8 +611,12 @@ export class HostingConstruct extends Construct {
           Stack.of(this).region,
         );
       }
-    } else if (!props.skipIsr && manifest.cache) {
-      // OpenNext path (default when `driver` is absent or 'opennext').
+    } else if (manifest.cache && manifest.cache.driver !== 'nitro-s3') {
+      // OpenNext path (default when `driver` is absent or 'opennext'). Runs even
+      // under `skipIsr` — the cache bucket, build seed, and compute read grant
+      // are what keep SSG/ISR pages frozen; the revalidation sub-resources
+      // (tag table, queue, revalidation Lambda) are gated on their own
+      // manifest.cache flags, which the adapter sets false under skipIsr.
       // S3 bucket for ISR cache
       this.cacheBucket = new Bucket(this, 'CacheBucket', {
         removalPolicy: RemovalPolicy.DESTROY,
@@ -616,8 +626,10 @@ export class HostingConstruct extends Construct {
         lifecycleRules: [{ expiration: Duration.days(30) }],
       });
 
-      // DynamoDB table for tag-based revalidation
-      if (manifest.cache.tagRevalidation) {
+      // DynamoDB table for tag-based revalidation. Also suppressed under
+      // skipIsr (belt-and-suspenders with the adapter, which sets the flag
+      // false): preview keeps the cache but never the revalidation infra.
+      if (manifest.cache.tagRevalidation && !props.skipIsr) {
         this.cacheTable = new Table(this, 'CacheTagTable', {
           partitionKey: { name: 'tag', type: AttributeType.STRING },
           sortKey: { name: 'path', type: AttributeType.STRING },
@@ -635,8 +647,9 @@ export class HostingConstruct extends Construct {
       }
 
       // SQS queue for async revalidation (FIFO required — OpenNext sends
-      // MessageDeduplicationId and MessageGroupId with revalidation messages)
-      if (manifest.cache.revalidationQueue) {
+      // MessageDeduplicationId and MessageGroupId with revalidation messages).
+      // Suppressed under skipIsr — preview uses OpenNext's `dummy` queue.
+      if (manifest.cache.revalidationQueue && !props.skipIsr) {
         // Hold a reference to the DLQ on the construct so the
         // monitoring construct can attach an alarm to it later.
         this.revalidationDlq = new Queue(this, 'RevalidationDLQ', {

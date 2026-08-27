@@ -206,15 +206,10 @@ export class BypassOriginConstruct extends Construct {
         if (norm === seg) barePrefixes.add(seg); // pattern is just `/<seg>` (+ optional `/*`)
       }
     }
-    // Image-optimization endpoints. Under bypass, `skipImageOptimization` is
-    // always on (no image Lambda), so these degrade to the SOURCE image: the
-    // asset proxy recovers the original object key and serves it unoptimized
-    // (see ASSET_PROXY_SOURCE). Route them here so they reach the proxy instead
-    // of leaking to the SSR `$default` (which 403s an `_ipx` request with no
-    // sharp/allowlist). `_next/image` needs no entry — it's already covered by
-    // the `_next` immutable-asset prefix; the proxy reads its `?url=` query.
-    staticPrefixes.add('_ipx'); // Nuxt / @nuxt/image (ipx)
-    staticPrefixes.add('_image'); // Astro
+    // (Image-optimization endpoints are mounted separately below, at basePath —
+    // NOT here at assetPrefix. They live under the app's basePath, which can
+    // differ from the asset prefix; e.g. Next with `assetPrefix:'/cdn-assets'`
+    // still serves `/_next/image` at the root.)
     for (const prefix of staticPrefixes) {
       // Directory prefix (`_next`, `products`, `.blocks-sandbox`) → greedy;
       // exact root file (`favicon.ico`) → itself.
@@ -252,6 +247,27 @@ export class BypassOriginConstruct extends Construct {
         });
       }
     }
+
+    // ---- image-optimization endpoints → asset proxy (degrade to source) ----
+    // Under bypass `skipImageOptimization` is always on (no image Lambda), so
+    // these degrade to the ORIGINAL source image (the asset proxy recovers the
+    // key and serves it unoptimized; a remote source 302s to origin — see
+    // ASSET_PROXY_SOURCE). They live under the app's **basePath**, which is NOT
+    // necessarily the asset prefix: Next with `assetPrefix:'/cdn-assets'` still
+    // serves `/_next/image` at the root, so mounting these under the asset
+    // prefix would miss them → they'd leak to SSR → 404/403. Mount at basePath.
+    const imageBase = (manifest.basePath ?? '').replace(/\/+$/, '');
+    const addAssetRoute = (path: string) =>
+      this.api.addRoutes({ path, methods: STATIC_METHODS, integration: assetIntegration });
+    // Nuxt / @nuxt/image (ipx): path-form `/_ipx/<modifiers>/<src>` (greedy).
+    addAssetRoute(`${imageBase}/_ipx/{proxy+}`);
+    // Astro `_image?href=…` (query-form, bare) + any path-form subtree.
+    addAssetRoute(`${imageBase}/_image`);
+    addAssetRoute(`${imageBase}/_image/{proxy+}`);
+    // Next.js `_next/image?url=…` (query-form). Explicit route so it resolves at
+    // basePath even when static `_next/*` is mounted under a different
+    // assetPrefix; a more specific key than `_next/{proxy+}`, so it wins.
+    addAssetRoute(`${imageBase}/_next/image`);
 
     // ---- backend API proxy (/aws-blocks/* + /auth/*) → same origin ----
     if (backendApiUrl) {

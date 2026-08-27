@@ -39,11 +39,16 @@ catch-all's 2-segment invoke ARN — so a no-server (SPA/static) site, whose
 `$default` too (both grants constant, so route count still never bounds policy
 size).
 
-Finally, the bare-path static route (`/about`) is now added **only when that
-bare path is itself prerendered**. A prefix that exists only via nested pages
-(`/products/p1` → prefix `products`) with a DYNAMIC index (`/products`) must let
-the bare path reach SSR; the previous blanket bare route captured it in the
-asset proxy → 404.
+The bare-path static route (`/about`) is now added **only when that bare path is
+itself prerendered**. A prefix that exists only via nested pages (`/products/p1`
+→ prefix `products`) with a DYNAMIC index (`/products`) must let the bare path
+reach SSR; the previous blanket bare route captured it in the asset proxy → 404.
+
+Finally, image-optimization endpoints are mounted at the app's **basePath**, not
+its asset prefix. Next.js with `assetPrefix:'/cdn-assets'` still serves
+`/_next/image` at the root — mounting it under the asset prefix missed it, so it
+leaked to SSR → 404 (remote images broke on next-pages-router). `_ipx`, `_image`
+and an explicit `_next/image` route are now mounted under `basePath`.
 
 Validated on real deploys: Nuxt `_nuxt/*` chunks load (no cached 500s), local
 `_ipx/*` render (5/5), remote `_ipx/*` 302 to origin (3/3), `HEAD`→200 /

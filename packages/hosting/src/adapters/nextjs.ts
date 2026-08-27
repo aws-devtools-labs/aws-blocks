@@ -297,7 +297,7 @@ export const nextjsAdapter = (
     );
   }
 
-  const manifest = translateOpenNextOutput(output, openNextDir, edgeToRegional);
+  const manifest = translateOpenNextOutput(output, openNextDir, edgeToRegional, skipIsr);
 
   // Lift simple Next.js redirects() / headers() rules out of the OpenNext
   // Lambda and into CloudFront. This eliminates a Lambda invocation for
@@ -1289,13 +1289,20 @@ const installGeneratedOpenNextConfig = (
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
   const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, edgeToRegional);
-  // D1 (preview skipIsr): turn OFF the incremental + tag cache. OpenNext then
-  // emits no cache / revalidation infra AND builds the server function without
-  // a cache dependency, so a preview needs none of the DynamoDB/SQS/Lambda ISR
-  // machinery. SSR pages still render; only on-demand revalidation is disabled.
-  const dangerousBlock = skipIsr
-    ? `\n  dangerous: {\n    disableIncrementalCache: true,\n    disableTagCache: true,\n  },`
-    : '';
+  // D1 (preview skipIsr): drop the ISR *revalidation* machinery but KEEP the
+  // S3 incremental cache — so prerendered pages (pure SSG *and* ISR) are still
+  // served frozen from the build-time cache instead of re-rendered on every
+  // request. Concretely: keep `incrementalCache` (default S3), turn OFF the tag
+  // cache (`disableTagCache` → no DynamoDB tag table), and use the `dummy` queue
+  // so the server never enqueues background revalidation (no SQS/revalidation
+  // Lambda). Pure SSG stays frozen forever; ISR pages serve the build snapshot
+  // without revalidating — which is exactly what a throwaway preview wants.
+  // (Previously this also set `disableIncrementalCache: true`, which threw away
+  // the cache and made pure SSG re-render per request — SSG is not ISR.)
+  const dangerousBlock = skipIsr ? `\n  dangerous: {\n    disableTagCache: true,\n  },` : '';
+  // Under skipIsr, override the queue to OpenNext's no-op `dummy` so the SSR
+  // function has no SQS dependency (revalidation is intentionally disabled).
+  const queueOverride = skipIsr ? '\n      queue: "dummy",' : '';
   // Default (CloudFront + REST-API STREAM) path: v1 converter + the streaming
   // wrapper. Under `bypassCdn` the SSR Lambda is fronted by an HTTP API v2
   // origin at the domain root, which sends payload v2 and CANNOT stream — so
@@ -1317,7 +1324,7 @@ const config = {
   default: {
     minify: true,
     override: {
-      ${defaultOverride}
+      ${defaultOverride}${queueOverride}
     },
   },${edgeBlock}${dangerousBlock}
 };
@@ -2121,6 +2128,7 @@ const translateOpenNextOutput = (
   output: OpenNextOutput,
   openNextDir: string,
   edgeToRegional = false,
+  skipIsr = false,
 ): DeployManifest => {
   const manifest: DeployManifest = {
     version: 1,
@@ -2264,11 +2272,15 @@ const translateOpenNextOutput = (
 
         manifest.cache = {
           computeResource: primaryComputeName,
+          // Under skipIsr we keep the S3 incremental cache + seed (frozen SSG)
+          // but provision NO revalidation infra: no tag table, no SQS queue, no
+          // revalidation Lambda (the server uses the `dummy` queue).
           tagRevalidation: tagCacheEnabled,
-          revalidationQueue: true,
-          revalidationFunction: hasRevalidationFn
-            ? { bundle: revalidationFnDir, handler: 'index.handler' }
-            : undefined,
+          revalidationQueue: !skipIsr,
+          revalidationFunction:
+            !skipIsr && hasRevalidationFn
+              ? { bundle: revalidationFnDir, handler: 'index.handler' }
+              : undefined,
           ...(seedDirectory ? { seedDirectory } : {}),
           ...(initFunction ? { initFunction } : {}),
         };
