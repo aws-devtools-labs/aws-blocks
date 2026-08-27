@@ -18,7 +18,9 @@ import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
 // Matches the timeout in packages/core/src/telemetry/telemetry-send-worker.ts — keep in sync.
-const TIMEOUT_MS = 500;
+// Spawned detached and unref'd, so this bounds only the background process, never
+// user-perceived command latency.
+const TIMEOUT_MS = 5_000;
 const debug = (process.env.NODE_DEBUG || '').includes('blocks-telemetry');
 
 const endpoint = process.argv[2];

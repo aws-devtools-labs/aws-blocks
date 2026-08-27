@@ -51,8 +51,9 @@ export function classifyError(error: unknown): { code: string; phase: string } {
  * Wrap a CLI command function with telemetry tracking.
  *
  * Measures wall-clock duration, classifies errors, and sends a single telemetry event
- * after the command completes (success or failure). The telemetry send is fire-and-forget
- * and bounded by a 500ms timeout — it will never delay the command or affect its exit code.
+ * after the command completes (success or failure). The telemetry send is fire-and-forget,
+ * handed to a detached background subprocess — it will never delay the command or affect
+ * its exit code.
  *
  * If telemetry is disabled (via env var or config), the function is executed directly
  * with zero overhead.

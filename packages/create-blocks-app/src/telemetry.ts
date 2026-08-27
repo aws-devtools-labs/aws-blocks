@@ -218,8 +218,8 @@ export interface TrackCommandOptions {
  * persisted, no first-run notice).
  *
  * The file sink writes regardless of opt-out status (inspired by CDK CLI's --telemetry-file).
- * The HTTP sink is fire-and-forget with a 500ms timeout and respects consent —
- * it will never delay the command.
+ * The HTTP sink is fire-and-forget, handed to a detached background subprocess,
+ * and respects consent — it will never delay the command.
  */
 export async function trackCommand(
   commandName: string,

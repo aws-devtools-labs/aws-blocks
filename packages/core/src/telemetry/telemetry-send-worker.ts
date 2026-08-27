@@ -17,7 +17,12 @@
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
 
-const TIMEOUT_MS = 500;
+// This worker is spawned detached and unref'd, so the parent CLI has already
+// returned by the time the POST is in flight — this budget bounds only the
+// background process, never user-perceived command latency. 500ms (carried over
+// from the pre-#48 in-process send, where it did gate the CLI) aborted otherwise
+// successful requests whenever a cold DNS+TCP+TLS+origin round trip ran long.
+const TIMEOUT_MS = 5_000;
 const debug = (process.env.NODE_DEBUG || '').includes('blocks-telemetry');
 
 const endpoint = process.argv[2];
