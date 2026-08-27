@@ -32,8 +32,20 @@ Also sets `scopePermissionToRoute: false` on the shared asset-proxy integration,
 collapsing its per-route Lambda invoke-permissions into a single api-scoped
 statement. The proxy backs many routes (bare + greedy × GET/HEAD/OPTIONS per
 prefix, plus the image endpoints); per-route permissions would otherwise
-multiply toward the 20 KB Lambda resource-policy limit.
+multiply toward the 20 KB Lambda resource-policy limit. CDK's api-scoped grant
+is `execute-api:.../*/*/*` (3 segments), which does NOT match the `$default`
+catch-all's 2-segment invoke ARN — so a no-server (SPA/static) site, whose
+`$default` IS the asset proxy, 500'd on `/`. An explicit `*/*` grant covers
+`$default` too (both grants constant, so route count still never bounds policy
+size).
 
-Validated on a real Nuxt deploy: `_nuxt/*` module chunks load (no cached 500s),
-local `_ipx/*` images render (5/5), remote `_ipx/*` images 302 to origin and
-render (3/3), `HEAD`→200 / `OPTIONS`→204 on assets.
+Finally, the bare-path static route (`/about`) is now added **only when that
+bare path is itself prerendered**. A prefix that exists only via nested pages
+(`/products/p1` → prefix `products`) with a DYNAMIC index (`/products`) must let
+the bare path reach SSR; the previous blanket bare route captured it in the
+asset proxy → 404.
+
+Validated on real deploys: Nuxt `_nuxt/*` chunks load (no cached 500s), local
+`_ipx/*` render (5/5), remote `_ipx/*` 302 to origin (3/3), `HEAD`→200 /
+`OPTIONS`→204; SPA/static `/` → 200; Astro SSR `/products` (dynamic index) → 200
+while `/products/p1` (prerendered) → 200.

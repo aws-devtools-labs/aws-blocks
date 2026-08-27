@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Construct } from 'constructs';
-import { Duration } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib';
 import { HttpApi, HttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import {
   HttpLambdaIntegration,
   HttpUrlIntegration,
 } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Fn } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -112,12 +113,16 @@ export class BypassOriginConstruct extends Construct {
       code: Code.fromInline(ASSET_PROXY_SOURCE),
     });
     bucket.grantRead(assetFn);
-    // `scopePermissionToRoute: false` → ONE api-scoped Lambda invoke-permission
-    // (`execute-api:.../*/*/*`) instead of one per route. The asset proxy backs
-    // every static route (bare + greedy + GET/HEAD/OPTIONS, per prefix, plus the
-    // image-optimization endpoints below); per-route permissions would multiply
-    // into the 20 KB Lambda resource-policy limit. This collapses them to a
-    // single statement, so route count no longer bounds the policy size.
+    // `scopePermissionToRoute: false` → the integration adds ONE api-scoped
+    // invoke-permission instead of one per route. The asset proxy backs every
+    // static route (bare + greedy + GET/HEAD/OPTIONS, per prefix, plus the image
+    // endpoints below); per-route permissions would multiply into the 20 KB
+    // Lambda resource-policy limit. NOTE: CDK's api-scoped grant is
+    // `execute-api:.../*/*/*` (3 segments), which matches normal routes but NOT
+    // the `$default` catch-all's 2-segment invoke ARN — so a no-server (SPA /
+    // static) site, whose `$default` IS this integration, would 500 on `/`. The
+    // explicit `*/*` grant below covers `$default` too. Both are constant (2
+    // statements total), so route count still never bounds the policy size.
     const assetIntegration = new HttpLambdaIntegration('AssetInt', assetFn, {
       scopePermissionToRoute: false,
     });
@@ -132,6 +137,20 @@ export class BypassOriginConstruct extends Construct {
     this.api = new HttpApi(this, 'BypassApi', {
       apiName: `bypass-${buildId}`.substring(0, 128),
       defaultIntegration,
+    });
+
+    // One broad invoke-permission covering EVERY route of this API, including
+    // the `$default` catch-all (which CDK's `scopePermissionToRoute:false` grant
+    // misses — see the assetIntegration note). `*/*` = any stage / any
+    // method+path (IAM `*` spans `/`), so it authorizes both `$default` and the
+    // named asset routes with a single statement.
+    assetFn.addPermission('BypassApiInvoke', {
+      principal: new ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: Stack.of(this).formatArn({
+        service: 'execute-api',
+        resource: this.api.apiId,
+        resourceName: '*/*',
+      }),
     });
 
     // Static assets answer the read/preflight methods, not just GET. The
@@ -166,6 +185,14 @@ export class BypassOriginConstruct extends Construct {
     // prerendered subtrees. (A genuinely DYNAMIC child under a prerendered
     // prefix would 404 here rather than reach SSR — a rare, documented edge.)
     const staticPrefixes = new Set<string>();
+    // Prefixes whose BARE path (`/about`) is itself a prerendered page — only
+    // these get a bare route (see the route loop). A prefix that exists ONLY
+    // because of nested prerendered pages (`/products/p1` → prefix `products`,
+    // with a DYNAMIC `/products` index) must NOT get a bare route, or the bare
+    // path would be captured by the asset proxy (→ 404) instead of reaching SSR.
+    // The signal: a static route whose whole pattern is that one segment —
+    // `/about` or `/about/*` (norm === seg), NOT `/products/p1/*`.
+    const barePrefixes = new Set<string>();
     for (const glob of manifest.staticAssets.immutablePaths ?? []) {
       const seg = firstSeg(glob);
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
@@ -173,7 +200,11 @@ export class BypassOriginConstruct extends Construct {
     for (const route of manifest.routes) {
       if (route.target !== 'static') continue;
       const seg = firstSeg(route.pattern);
-      if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
+      if (seg && seg !== '*' && seg !== '(.*)') {
+        staticPrefixes.add(seg);
+        const norm = route.pattern.replace(/^\//, '').replace(/\/\*$/, '').replace(/\/$/, '');
+        if (norm === seg) barePrefixes.add(seg); // pattern is just `/<seg>` (+ optional `/*`)
+      }
     }
     // Image-optimization endpoints. Under bypass, `skipImageOptimization` is
     // always on (no image Lambda), so these degrade to the SOURCE image: the
@@ -190,17 +221,24 @@ export class BypassOriginConstruct extends Construct {
       const isDir = !prefix.includes('.') || prefix.startsWith('.');
       const base = prefixBase(prefix);
       if (isDir) {
-        // Mount BOTH the bare path and the greedy subtree: HTTP API `{proxy+}`
-        // matches `/about/x` but NOT `/about` itself, so a prerendered page at
-        // `/about` (served from about/index.html via directory-index) needs the
-        // bare route too — otherwise it falls through to the SSR catch-all,
-        // which doesn't serve prerendered pages → 500. Two routes per prefix
-        // (not per page) keeps the asset proxy's invoke-permission policy small.
-        this.api.addRoutes({
-          path: `${base}/${prefix}`,
-          methods: STATIC_METHODS,
-          integration: assetIntegration,
-        });
+        // Bare path (`/about`): HTTP API `{proxy+}` matches `/about/x` but NOT
+        // `/about` itself, so a prerendered bare page (served from
+        // about/index.html via directory-index) needs its own route — otherwise
+        // it falls to the SSR catch-all (500 on a static-only app, or a wrong
+        // render). Add it ONLY when the bare path is actually prerendered
+        // (`barePrefixes`); a prefix that exists only via nested pages
+        // (`/products/p1`) with a DYNAMIC `/products` index must let the bare
+        // path reach SSR instead of being captured here (→ 404). The greedy
+        // subtree is always mounted — its directory-index serves the nested
+        // prerendered pages. Two routes/prefix (not per page) keeps the asset
+        // proxy's invoke-permission policy small.
+        if (barePrefixes.has(prefix)) {
+          this.api.addRoutes({
+            path: `${base}/${prefix}`,
+            methods: STATIC_METHODS,
+            integration: assetIntegration,
+          });
+        }
         this.api.addRoutes({
           path: `${base}/${prefix}/{proxy+}`,
           methods: STATIC_METHODS,
