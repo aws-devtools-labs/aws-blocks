@@ -212,7 +212,7 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
   it('rejects CREATE INDEX ASYNC with a DESC sort order on a key', async () => {
     await assert.rejects(
       () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_email_desc ON users (email DESC)`)),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 

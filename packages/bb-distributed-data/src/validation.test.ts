@@ -46,7 +46,7 @@ describe('validateStatement', () => {
     ['TEMP TABLE', 'CREATE TEMP TABLE t (id INT)'],
     // DSQL uses fixed Repeatable Read isolation — cannot be changed per-transaction
     ['ISOLATION LEVEL', 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'],
-    // DSQL only supports C collation — locale-aware sorting is not available
+    // Locale-aware collations are not available
     ['COLLATE', 'SELECT * FROM t ORDER BY name COLLATE "en_US"'],
   ] as const;
 
@@ -72,9 +72,6 @@ describe('validateStatement', () => {
   });
 
   it('allows a supported ALTER TABLE followed by an unrelated statement in one batch', () => {
-    // The DROP COLUMN rule must not match across a statement boundary: the
-    // ALTER TABLE here is a supported DROP DEFAULT, and the DROP TABLE that
-    // follows the semicolon belongs to a different statement.
     assert.doesNotThrow(() =>
       validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT; DROP TABLE archived'),
     );
@@ -91,6 +88,12 @@ describe('validateStatement', () => {
       () => validateStatement('CREATE TABLE copy AS SELECT 1 AS id'),
       /Create the table with explicit column definitions/,
     );
+  });
+
+  it('allows supported expression collations', () => {
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "C" FROM t'));
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "POSIX" FROM t'));
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "default" FROM t'));
   });
 });
 
@@ -236,7 +239,7 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // Rejected: BIGSERIAL is a sequence under the hood — DSQL has no sequences
+  // Rejected: BIGSERIAL must be rewritten to an identity column with an explicit cache
   it('rejects BIGSERIAL (sequence-backed auto-increment)', () => {
     assert.throws(
       () => validateStatement('CREATE TABLE logs (id BIGSERIAL PRIMARY KEY, msg TEXT)'),
@@ -355,7 +358,7 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // Rejected: COLLATE in column definition — DSQL only supports C collation
+  // Rejected: locale-aware COLLATE in a column definition
   it('rejects COLLATE in column definition', () => {
     assert.throws(
       () => validateStatement('CREATE TABLE t (name TEXT COLLATE "en_US.utf8")'),
@@ -539,19 +542,22 @@ describe('validateStatement — index key sort order', () => {
   it('rejects DESC on an index key', () => {
     assert.throws(
       () => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at DESC)'),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 
   it('rejects DESC on a CREATE INDEX ASYNC key', () => {
     assert.throws(
       () => validateStatement('CREATE INDEX ASYNC idx_persons_user_recent ON persons (user_id, last_encounter_at DESC)'),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 
   it('rejects an explicit ASC on an index key', () => {
-    assert.throws(() => validateStatement('CREATE INDEX idx ON t (col ASC)'), /sort order/i);
+    assert.throws(
+      () => validateStatement('CREATE INDEX idx ON t (col ASC)'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
   it('allows NULLS FIRST / NULLS LAST on an index key (supported by DSQL)', () => {

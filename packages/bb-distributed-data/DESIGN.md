@@ -52,16 +52,11 @@ bb-distributed-data (this package)
 
 ## Validation Layer
 
-PGlite accepts PostgreSQL syntax that DSQL may not. The mock runs the official `@aws/dsql-lint` package before execution and keeps only narrow supplemental checks for explicit collation and index-key sort direction.
+PGlite accepts PostgreSQL syntax that DSQL may not. The mock runs `@aws/dsql-lint` before execution.
 
 ### Statement Validation
 
-`validateStatement(sql)`:
-
-1. Strips string literals and comments for the supplemental checks.
-2. Rejects explicit collation and index-key sort direction.
-3. Runs `dsql-lint` and reports its compatibility diagnostics and suggested rewrites.
-4. Ignores known false positives for DSQL-supported expression indexes and `ALTER TABLE` forms.
+`validateStatement(sql)` runs `dsql-lint` and reports its compatibility diagnostics and suggested rewrites.
 
 ### Transaction Tracking
 
@@ -159,7 +154,7 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | No real OCC conflicts | Single-connection PGlite has no concurrency | `simulateConflict()` test helper |
-| System collation vs C only | String sorting may differ | Reject explicit COLLATE |
+| Available collations differ | String sorting may differ | `dsql-lint` rejects unsupported explicit collations |
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |
 | CREATE INDEX ASYNC is synchronous | Index immediately available locally | Log warning |

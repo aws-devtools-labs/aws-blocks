@@ -12,13 +12,7 @@ import { TRANSACTION_ROW_LIMIT } from './errors.js';
 import { splitStatements, DOLLAR_QUOTE_TAG_RE } from '@aws-blocks/data-common';
 import { runDsqlLint } from './dsql-lint.js';
 
-function isKnownDsqlLintFalsePositive(rule: string, statement: string): boolean {
-  if (rule === 'index_expression' || rule === 'at_unsupported_drop_constraint') return true;
-  return rule === 'parse_error'
-    && /^\s*ALTER\s+TABLE\b[\s\S]*\bALTER\s+(?:COLUMN\s+)?(?:[\w.]+|"[^"]+")\s+DROP\s+(?:IDENTITY|EXPRESSION)(?:\s+IF\s+EXISTS)?\s*;?\s*$/i.test(statement);
-}
-
-/** Strip string literals and comments to avoid false positives. */
+/** Strip string literals and comments before statement classification. */
 export function stripLiteralsAndComments(sql: string): string {
   let result = '';
   let i = 0;
@@ -68,29 +62,12 @@ export function stripLiteralsAndComments(sql: string): string {
 
 /** Validate a SQL statement for DSQL compatibility. Throws on unsupported features. */
 export function validateStatement(sql: string): void {
-  const cleaned = stripLiteralsAndComments(sql);
-  if (/\bCREATE\s+(?:UNIQUE\s+)?INDEX\b[^;]*\b(?:ASC|DESC)\b/i.test(cleaned)) {
-    throw Object.assign(
-      new Error('DSQL does not support sort order (ASC/DESC) on index keys. Remove it; use ORDER BY in queries.'),
-      { name: 'DsqlValidationError' },
-    );
-  }
-  if (/\bCOLLATE\b/i.test(cleaned)) {
-    throw Object.assign(new Error('DSQL only supports C collation.'), { name: 'DsqlValidationError' });
-  }
-
   const file = runDsqlLint(sql).files[0];
   if (file.error) {
     throw Object.assign(new Error(`dsql-lint failed: ${file.error}`), { name: 'DsqlValidationError' });
   }
-  const diagnostics = file.diagnostics.filter(
-    diagnostic => !isKnownDsqlLintFalsePositive(
-      diagnostic.rule,
-      stripLiteralsAndComments(diagnostic.statement_preview),
-    ),
-  );
-  if (diagnostics.length > 0) {
-    const message = diagnostics
+  if (file.diagnostics.length > 0) {
+    const message = file.diagnostics
       .map(diagnostic => `${diagnostic.message} ${diagnostic.suggestion}`)
       .join('\n');
     throw Object.assign(new Error(message), { name: 'DsqlValidationError' });
