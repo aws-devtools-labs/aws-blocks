@@ -83,6 +83,15 @@ export class BypassOriginConstruct extends Construct {
     // HTTP API v2 can't use the REST S3 AwsIntegration, so a tiny Lambda reads
     // `builds/<buildId>/<path>` and returns it. Keeps the bucket private (no
     // public-read), which is portable across accounts with S3 BPA on.
+    // URL prefix the framework prepends to asset URLs — `assetPrefix`
+    // (Next.js) or `basePath` (Next/Nuxt `app.baseURL`). The bytes live in S3
+    // WITHOUT it (`builds/<id>/_next/*`, not `.../cdn-assets/_next/*`), but the
+    // browser requests them WITH it (`/cdn-assets/_next/*`, `/myapp/_nuxt/*`).
+    // So we route the prefixed URLs to the asset proxy and strip the prefix
+    // before the S3 lookup. Leading slash, no trailing slash; '' when neither.
+    const assetUrlPrefix = (manifest.assetPrefix ?? manifest.basePath ?? '')
+      .replace(/\/+$/, '');
+
     const assetFn = new LambdaFunction(this, 'AssetProxy', {
       runtime: Runtime.NODEJS_22_X,
       handler: 'index.handler',
@@ -91,6 +100,8 @@ export class BypassOriginConstruct extends Construct {
       environment: {
         BUCKET: bucket.bucketName,
         KEY_PREFIX: `builds/${buildId}`,
+        // Stripped from the request path before the S3 lookup (see above).
+        STRIP_PREFIX: assetUrlPrefix,
         // Static/SPA with no server: a miss serves index.html so the client
         // router can deep-link. With a server, a miss is a real 404 (the
         // server owns routing).
@@ -129,8 +140,13 @@ export class BypassOriginConstruct extends Construct {
       // Directory prefix (`_next`, `.blocks-sandbox`) → greedy; exact root file
       // (`favicon.ico`) → itself.
       const isDir = !prefix.includes('.') || prefix.startsWith('.');
+      // Framework asset dirs live under the app's basePath/assetPrefix in the
+      // browser (`/myapp/_nuxt/*`), so mount them there. `.blocks-sandbox` is a
+      // Blocks-internal path the client always fetches at the domain root
+      // (`/.blocks-sandbox/config.json`), so it stays unprefixed.
+      const base = prefix.startsWith('.blocks-sandbox') ? '' : assetUrlPrefix;
       this.api.addRoutes({
-        path: isDir ? `/${prefix}/{proxy+}` : `/${prefix}`,
+        path: isDir ? `${base}/${prefix}/{proxy+}` : `${base}/${prefix}`,
         methods: [HttpMethod.GET],
         integration: assetIntegration,
       });
@@ -172,6 +188,7 @@ const s3 = new S3Client({});
 const BUCKET = process.env.BUCKET;
 const PREFIX = process.env.KEY_PREFIX;
 const SPA = process.env.SPA_FALLBACK === '1';
+const STRIP = (process.env.STRIP_PREFIX || '').replace(/^\\/+/, '').replace(/\\/+$/, '');
 async function get(key) {
   const r = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
   const bytes = await r.Body.transformToByteArray();
@@ -189,7 +206,12 @@ function ok(o, cacheOverride) {
   };
 }
 exports.handler = async (event) => {
-  const raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '').replace(/\\/+$/, '');
+  let raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '').replace(/\\/+$/, '');
+  // Strip the framework's basePath/assetPrefix so the key matches the bytes,
+  // which are stored WITHOUT it (e.g. '/myapp/_nuxt/x.js' → '_nuxt/x.js').
+  if (STRIP && (raw === STRIP || raw.startsWith(STRIP + '/'))) {
+    raw = raw.slice(STRIP.length).replace(/^\\/+/, '');
+  }
   // Candidate keys, in order: exact file, then (for extensionless paths) the
   // static multi-page resolutions '<path>/index.html' and '<path>.html'. This
   // is directory-index resolution — a static multi-page site (e.g. Astro
