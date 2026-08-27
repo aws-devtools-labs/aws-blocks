@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { isBlocksError } from '@aws-blocks/core';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -119,7 +120,7 @@ test('rejects a fractional or non-finite maxResults with ValidationError (parity
 	for (const bad of [1.5, Number.NaN]) {
 		await assert.rejects(
 			() => kb.retrieve('password', { maxResults: bad }),
-			(e: unknown) => (e as Error).name === KnowledgeBaseErrors.ValidationError,
+			(e: unknown) => isBlocksError(e, KnowledgeBaseErrors.ValidationError),
 			`maxResults=${bad} should reject with ValidationError`,
 		);
 	}

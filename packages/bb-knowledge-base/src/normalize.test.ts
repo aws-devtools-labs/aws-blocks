@@ -12,6 +12,12 @@ describe('normalizeMaxResults', () => {
 		assert.strictEqual(normalizeMaxResults(undefined), 10);
 	});
 
+	it('treats an explicit null as unset and defaults to 10', () => {
+		// Parsed JSON (e.g. an agent/tool-calling layer) often sends null for an
+		// omitted field; it must not be rejected as a non-integer.
+		assert.strictEqual(normalizeMaxResults(null), 10);
+	});
+
 	it('passes a valid integer through', () => {
 		assert.strictEqual(normalizeMaxResults(50), 50);
 	});

@@ -196,7 +196,7 @@ export class KnowledgeBase extends Scope {
 	 * @param query - Natural language search query. Must be non-empty.
 	 * @param options - Optional retrieval parameters (maxResults, filter).
 	 * @returns Chunks ranked by relevance score (highest first). Empty array if no matches.
-	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only.
+	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only, or `maxResults` is a non-integer.
 	 * @throws {InvalidSourceConfigException} If the source folder does not exist or is not a string path.
 	 *
 	 * @example

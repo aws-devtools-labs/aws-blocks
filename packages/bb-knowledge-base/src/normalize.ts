@@ -18,12 +18,15 @@ const DEFAULT_RESULTS = 10;
  * {@link KnowledgeBaseErrors.ValidationError}, so the mock and AWS runtimes never
  * diverge on an input Bedrock would reject.
  *
- * @param maxResults - The caller-supplied value, or `undefined` for the default.
+ * `undefined` and `null` both mean "unset" and yield the default — parsed JSON
+ * (e.g. from an agent/tool-calling layer) often sends `null` for an omitted field.
+ *
+ * @param maxResults - The caller-supplied value, or `undefined`/`null` for the default.
  * @returns An integer in the range 1–100.
- * @throws {KnowledgeBaseValidationError} If `maxResults` is defined but not an integer.
+ * @throws {KnowledgeBaseValidationError} If `maxResults` is set but not an integer.
  */
-export function normalizeMaxResults(maxResults: number | undefined): number {
-	if (maxResults === undefined) return DEFAULT_RESULTS;
+export function normalizeMaxResults(maxResults: number | undefined | null): number {
+	if (maxResults === undefined || maxResults === null) return DEFAULT_RESULTS;
 	if (!Number.isInteger(maxResults)) {
 		throw blocksError(
 			KnowledgeBaseErrors.ValidationError,

@@ -5,6 +5,7 @@ import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
+import { isBlocksError } from '@aws-blocks/core';
 import { KnowledgeBaseErrors, KnowledgeBase } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────
@@ -365,7 +366,7 @@ describe('retrieve (SDK-mocked)', () => {
 			for (const bad of [1.5, Number.NaN]) {
 				await assert.rejects(
 					() => kb.retrieve('query', { maxResults: bad }),
-					(e: unknown) => (e as Error).name === KnowledgeBaseErrors.ValidationError,
+					(e: unknown) => isBlocksError(e, KnowledgeBaseErrors.ValidationError),
 					`maxResults=${bad} should reject with ValidationError`,
 				);
 			}

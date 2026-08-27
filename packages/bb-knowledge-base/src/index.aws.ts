@@ -279,7 +279,7 @@ export class KnowledgeBase extends Scope {
 	 * @param query - Natural language search query. Must be non-empty.
 	 * @param {RetrieveOptions} options - Optional retrieval parameters (maxResults, filter).
 	 * @returns Chunks ranked by relevance score (highest first). Empty array if no matches.
-	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only.
+	 * @throws {KnowledgeBaseValidationError} If query is empty or whitespace-only, or `maxResults` is a non-integer.
 	 * @throws {KnowledgeBaseNotReadyException} If the KB has not been created/deployed.
 	 * @throws {InvalidFilterException} If the filter keys are invalid for the Bedrock query.
 	 * @throws {RetrievalFailedException} For other Bedrock retrieval errors (network, service).
@@ -297,8 +297,7 @@ export class KnowledgeBase extends Scope {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
-		// Bedrock API limits numberOfResults to an integer in 1–100 (well within
-		// Lambda's 6 MB response payload); reject fractional/non-finite inputs.
+		// 1–100 results stays well within Lambda's 6 MB response payload.
 		const maxResults = normalizeMaxResults(options?.maxResults);
 		const filter = buildFilter(options?.filter);
 		const knowledgeBaseId = this.ensureKbId();
