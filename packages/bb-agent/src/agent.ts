@@ -289,8 +289,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @internal Internal compute seam (overridden by the AWS subclass); not customer API.
 	 */
 	protected async dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+		// Reproduce the AWS wire boundary locally. On AWS, dispatchTurn JSON-serializes `context` into the
+		// InvokeAgentRuntime payload and the container re-parses it (z.unknown passthrough), so a tool
+		// receives a JSON-mangled context (Date→string, Set→{}, undefined dropped) — NOT the live object
+		// it would get here in-process. Round-trip it so a serialization bug fails locally instead of only
+		// after deploy. (A non-JSON-serializable context throws here, mirroring the AWS JSON.stringify.)
+		const context =
+			payload.context === undefined ? undefined : (JSON.parse(JSON.stringify(payload.context)) as TContext);
 		// invokeTurn catches and publishes its own errors, so the floating promise can't reject.
-		void this.invokeTurn(payload);
+		void this.invokeTurn({ ...payload, context });
 	}
 
 	/**
