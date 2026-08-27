@@ -124,9 +124,26 @@ export class BypassOriginConstruct extends Construct {
       defaultIntegration,
     });
 
-    // ---- static prefixes → asset proxy ----
-    const staticPrefixes = new Set<string>();
     const firstSeg = (p: string) => p.replace(/^\//, '').split('/')[0];
+    const prefixBase = (seg: string) =>
+      // Framework asset dirs live under the app's basePath/assetPrefix in the
+      // browser (`/myapp/_nuxt/*`), so mount them there. `.blocks-sandbox` is a
+      // Blocks-internal path the client always fetches at the domain root
+      // (`/.blocks-sandbox/config.json`), so it stays unprefixed.
+      seg.startsWith('.blocks-sandbox') ? '' : assetUrlPrefix;
+
+    // ---- static prefixes → asset proxy (greedy, one route per top segment) ----
+    // Collapse every static route + immutable-asset glob to its FIRST path
+    // segment and mount ONE greedy `{proxy+}` route per segment. Collapsing is
+    // load-bearing: an app can have many prerendered pages under one prefix
+    // (`/products/p1`, `/products/p2`, … or a stress app's `/stress/1..N`);
+    // one route per page would add one Lambda invoke-permission each and blow
+    // the asset proxy's resource-policy size limit (20 KB). The asset proxy's
+    // directory-index resolution serves each nested page (`/products/p1` →
+    // products/p1/index.html or products/p1.html), so greedy is correct for
+    // prerendered subtrees. (A genuinely DYNAMIC child under a prerendered
+    // prefix would 404 here rather than reach SSR — a rare, documented edge.)
+    const staticPrefixes = new Set<string>();
     for (const glob of manifest.staticAssets.immutablePaths ?? []) {
       const seg = firstSeg(glob);
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
@@ -137,14 +154,10 @@ export class BypassOriginConstruct extends Construct {
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
     }
     for (const prefix of staticPrefixes) {
-      // Directory prefix (`_next`, `.blocks-sandbox`) → greedy; exact root file
-      // (`favicon.ico`) → itself.
+      // Directory prefix (`_next`, `products`, `.blocks-sandbox`) → greedy;
+      // exact root file (`favicon.ico`) → itself.
       const isDir = !prefix.includes('.') || prefix.startsWith('.');
-      // Framework asset dirs live under the app's basePath/assetPrefix in the
-      // browser (`/myapp/_nuxt/*`), so mount them there. `.blocks-sandbox` is a
-      // Blocks-internal path the client always fetches at the domain root
-      // (`/.blocks-sandbox/config.json`), so it stays unprefixed.
-      const base = prefix.startsWith('.blocks-sandbox') ? '' : assetUrlPrefix;
+      const base = prefixBase(prefix);
       this.api.addRoutes({
         path: isDir ? `${base}/${prefix}/{proxy+}` : `${base}/${prefix}`,
         methods: [HttpMethod.GET],
