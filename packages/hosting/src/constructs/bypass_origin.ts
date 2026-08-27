@@ -65,7 +65,9 @@ export type BypassOriginConstructProps = {
  * **Trade-offs (documented, preview-only):** SSR responses are **buffered**
  * (no progressive/streaming render — HTTP API can't stream; production keeps
  * streaming via CloudFront + REST-API STREAM), no edge cache, no
- * WAF/security-headers/compression.
+ * WAF/security-headers/compression, and **image optimization is skipped** —
+ * the framework image endpoints (`_ipx`, `_next/image`, `_image`) degrade to
+ * the original source image (served unoptimized by the asset proxy).
  */
 export class BypassOriginConstruct extends Construct {
   /** The single public origin URL (domain root — no stage path). */
@@ -110,7 +112,15 @@ export class BypassOriginConstruct extends Construct {
       code: Code.fromInline(ASSET_PROXY_SOURCE),
     });
     bucket.grantRead(assetFn);
-    const assetIntegration = new HttpLambdaIntegration('AssetInt', assetFn);
+    // `scopePermissionToRoute: false` → ONE api-scoped Lambda invoke-permission
+    // (`execute-api:.../*/*/*`) instead of one per route. The asset proxy backs
+    // every static route (bare + greedy + GET/HEAD/OPTIONS, per prefix, plus the
+    // image-optimization endpoints below); per-route permissions would multiply
+    // into the 20 KB Lambda resource-policy limit. This collapses them to a
+    // single statement, so route count no longer bounds the policy size.
+    const assetIntegration = new HttpLambdaIntegration('AssetInt', assetFn, {
+      scopePermissionToRoute: false,
+    });
 
     // ---- HTTP API (root path via the auto `$default` stage) ----
     // Default route → SSR Lambda (buffered, payload v2 matches the
@@ -123,6 +133,18 @@ export class BypassOriginConstruct extends Construct {
       apiName: `bypass-${buildId}`.substring(0, 128),
       defaultIntegration,
     });
+
+    // Static assets answer the read/preflight methods, not just GET. The
+    // browser's module loader fetches `rel=modulepreload`/`rel=prefetch`
+    // crossorigin chunks with a HEAD (and, cross-origin, an OPTIONS preflight);
+    // a GET-only route misses those, so they leak to the SSR `$default`
+    // integration, which 500s on an asset path — failing the module load even
+    // though the GET body is fine. GET/HEAD/OPTIONS share one method-wildcarded
+    // Lambda invoke-permission (`execute-api:.../*/*<path>`), so this adds route
+    // keys but no new resource-policy statements. Write methods still fall
+    // through to SSR (so App-router server-action POSTs to a prerendered path
+    // keep reaching the server).
+    const STATIC_METHODS = [HttpMethod.GET, HttpMethod.HEAD, HttpMethod.OPTIONS];
 
     const firstSeg = (p: string) => p.replace(/^\//, '').split('/')[0];
     const prefixBase = (seg: string) =>
@@ -153,6 +175,15 @@ export class BypassOriginConstruct extends Construct {
       const seg = firstSeg(route.pattern);
       if (seg && seg !== '*' && seg !== '(.*)') staticPrefixes.add(seg);
     }
+    // Image-optimization endpoints. Under bypass, `skipImageOptimization` is
+    // always on (no image Lambda), so these degrade to the SOURCE image: the
+    // asset proxy recovers the original object key and serves it unoptimized
+    // (see ASSET_PROXY_SOURCE). Route them here so they reach the proxy instead
+    // of leaking to the SSR `$default` (which 403s an `_ipx` request with no
+    // sharp/allowlist). `_next/image` needs no entry — it's already covered by
+    // the `_next` immutable-asset prefix; the proxy reads its `?url=` query.
+    staticPrefixes.add('_ipx'); // Nuxt / @nuxt/image (ipx)
+    staticPrefixes.add('_image'); // Astro
     for (const prefix of staticPrefixes) {
       // Directory prefix (`_next`, `products`, `.blocks-sandbox`) → greedy;
       // exact root file (`favicon.ico`) → itself.
@@ -167,18 +198,18 @@ export class BypassOriginConstruct extends Construct {
         // (not per page) keeps the asset proxy's invoke-permission policy small.
         this.api.addRoutes({
           path: `${base}/${prefix}`,
-          methods: [HttpMethod.GET],
+          methods: STATIC_METHODS,
           integration: assetIntegration,
         });
         this.api.addRoutes({
           path: `${base}/${prefix}/{proxy+}`,
-          methods: [HttpMethod.GET],
+          methods: STATIC_METHODS,
           integration: assetIntegration,
         });
       } else {
         this.api.addRoutes({
           path: `${base}/${prefix}`,
-          methods: [HttpMethod.GET],
+          methods: STATIC_METHODS,
           integration: assetIntegration,
         });
       }
@@ -237,12 +268,60 @@ function ok(o, cacheOverride) {
     isBase64Encoded: true,
   };
 }
+function redirect(location) {
+  // A remote image source (the app asked its image optimizer to fetch+resize a
+  // remote URL). The proxy does NOT fetch it — a Lambda that fetches arbitrary
+  // URLs is an open SSRF proxy (instance metadata, internal endpoints). Instead
+  // 302 so the BROWSER loads the origin directly (unoptimized) — the same bytes
+  // the app's <img> would get from the source, with no server-side fetch.
+  return { statusCode: 302, headers: { location, 'cache-control': 'no-cache' }, body: '' };
+}
 exports.handler = async (event) => {
+  const method = (event.requestContext && event.requestContext.http && event.requestContext.http.method) || event.httpMethod || 'GET';
+  // OPTIONS: a CORS preflight (the browser's crossorigin module loader may send
+  // one). Answer it directly — never resolve it to a file body.
+  if (method === 'OPTIONS') {
+    const origin = (event.headers && (event.headers.origin || event.headers.Origin)) || '*';
+    return { statusCode: 204, headers: { 'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, HEAD, OPTIONS', 'access-control-allow-headers': '*', 'access-control-max-age': '600', vary: 'Origin' }, body: '' };
+  }
+  const res = await serve(event);
+  // HEAD: same status + headers as GET, but no body.
+  if (method === 'HEAD') { res.body = ''; res.isBase64Encoded = false; }
+  return res;
+};
+async function serve(event) {
   let raw = (event.rawPath || event.path || '/').replace(/^\\/+/, '').replace(/\\/+$/, '');
   // Strip the framework's basePath/assetPrefix so the key matches the bytes,
   // which are stored WITHOUT it (e.g. '/myapp/_nuxt/x.js' → '_nuxt/x.js').
   if (STRIP && (raw === STRIP || raw.startsWith(STRIP + '/'))) {
     raw = raw.slice(STRIP.length).replace(/^\\/+/, '');
+  }
+  // Image optimization is skipped under bypass (no image Lambda) — degrade each
+  // framework's image endpoint to the ORIGINAL source object so the <img> still
+  // renders (unoptimized). Recover the source key from the request shape:
+  //   ipx (Nuxt):        '_ipx/<modifiers>/<src>'        → '<src>'
+  //   Next.js:           '_next/image?url=<src>&w=&q='   → '<src>'
+  //   Astro:             '_image?href=<src>&w=&f='       → '<src>'
+  // The source may carry the app's basePath/assetPrefix (Next encodes it into
+  // ?url=); strip it the same way as the request path. A REMOTE source
+  // (http(s)://…) isn't in the bucket — 302 the browser to the origin instead.
+  if (raw.startsWith('_ipx/')) {
+    const rest = raw.slice('_ipx/'.length);
+    const slash = rest.indexOf('/');
+    const src = slash >= 0 ? rest.slice(slash + 1) : rest; // drop the modifiers segment
+    // ipx inlines a remote source ('_ipx/<mods>/https://host/…'); APIGW can
+    // collapse the '//' in rawPath, so re-normalize before the remote check.
+    const remote = src.replace(/^(https?):\\/+/i, '$1://');
+    if (/^https?:\\/\\//i.test(remote)) return redirect(remote);
+    raw = src;
+  } else if (raw === '_next/image' || raw === '_image') {
+    const q = event.queryStringParameters || {};
+    const src = q.url || q.href || '';
+    if (/^https?:\\/\\//i.test(src)) return redirect(src); // remote — browser loads it
+    raw = src.replace(/^\\/+/, '').replace(/\\/+$/, '');
+    if (STRIP && (raw === STRIP || raw.startsWith(STRIP + '/'))) {
+      raw = raw.slice(STRIP.length).replace(/^\\/+/, '');
+    }
   }
   // Candidate keys, in order: exact file, then (for extensionless paths) the
   // static multi-page resolutions '<path>/index.html' and '<path>.html'. This
@@ -267,5 +346,5 @@ exports.handler = async (event) => {
     return { statusCode: 404, headers: { 'content-type': 'text/html', 'cache-control': 'no-cache' }, body: nf.body.toString('base64'), isBase64Encoded: true };
   } catch (_) {}
   return { statusCode: 404, headers: { 'content-type': 'text/plain' }, body: 'Not found' };
-};
+}
 `;
