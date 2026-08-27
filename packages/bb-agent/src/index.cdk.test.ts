@@ -88,6 +88,12 @@ test('CDK: the loop runs as the shared execution role, which carries everything 
 	const runtimeJson = JSON.stringify(runtime.Properties ?? {});
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_BUCKET'), 'runtime must be injected BLOCKS_CONFIG_BUCKET');
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_KEY'), 'runtime must be injected BLOCKS_CONFIG_KEY');
+	// BLOCKS_STACK_NAME must be the owning root id (`backendStackName`) — the SAME value the handler
+	// uses to derive resource names — so the container's namespace matches what CDK provisioned. (The
+	// stub has id === stackName, so it can't distinguish backendStackName from cdk.Stack.of().stackName;
+	// the BlocksBackend divergence is covered by the shared backendStackName contract + sandbox e2e.)
+	assert.ok(runtimeJson.includes('BLOCKS_STACK_NAME'), 'runtime must be injected BLOCKS_STACK_NAME');
+	assert.ok(runtimeJson.includes('teststack'), 'BLOCKS_STACK_NAME resolves to the owning root id');
 });
 
 test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', () => {
