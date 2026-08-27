@@ -158,11 +158,30 @@ export class BypassOriginConstruct extends Construct {
       // exact root file (`favicon.ico`) → itself.
       const isDir = !prefix.includes('.') || prefix.startsWith('.');
       const base = prefixBase(prefix);
-      this.api.addRoutes({
-        path: isDir ? `${base}/${prefix}/{proxy+}` : `${base}/${prefix}`,
-        methods: [HttpMethod.GET],
-        integration: assetIntegration,
-      });
+      if (isDir) {
+        // Mount BOTH the bare path and the greedy subtree: HTTP API `{proxy+}`
+        // matches `/about/x` but NOT `/about` itself, so a prerendered page at
+        // `/about` (served from about/index.html via directory-index) needs the
+        // bare route too — otherwise it falls through to the SSR catch-all,
+        // which doesn't serve prerendered pages → 500. Two routes per prefix
+        // (not per page) keeps the asset proxy's invoke-permission policy small.
+        this.api.addRoutes({
+          path: `${base}/${prefix}`,
+          methods: [HttpMethod.GET],
+          integration: assetIntegration,
+        });
+        this.api.addRoutes({
+          path: `${base}/${prefix}/{proxy+}`,
+          methods: [HttpMethod.GET],
+          integration: assetIntegration,
+        });
+      } else {
+        this.api.addRoutes({
+          path: `${base}/${prefix}`,
+          methods: [HttpMethod.GET],
+          integration: assetIntegration,
+        });
+      }
     }
 
     // ---- backend API proxy (/aws-blocks/* + /auth/*) → same origin ----
