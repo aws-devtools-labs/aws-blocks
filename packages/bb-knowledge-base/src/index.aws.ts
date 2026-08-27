@@ -22,7 +22,8 @@ import type {
 	MetadataFilter,
 	WaitUntilSyncedOptions,
 } from './types.js';
-import { KnowledgeBaseErrors } from './errors.js';
+import { blocksError, KnowledgeBaseErrors } from './errors.js';
+import { normalizeMaxResults } from './normalize.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -49,12 +50,6 @@ function envKey(fullId: string, suffix: string): string {
 }
 
 // ── Error helpers ──────────────────────────────────────────────────────────
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Resolve after `ms` milliseconds. Used to space out the sync polls in
@@ -302,8 +297,9 @@ export class KnowledgeBase extends Scope {
 			throw blocksError(KnowledgeBaseErrors.ValidationError, 'Query must be a non-empty string.');
 		}
 
-		// Bedrock API limits numberOfResults to 1–100. Well within Lambda's 6 MB response payload.
-		const maxResults = Math.min(Math.max(options?.maxResults ?? 10, 1), 100);
+		// Bedrock API limits numberOfResults to an integer in 1–100 (well within
+		// Lambda's 6 MB response payload); reject fractional/non-finite inputs.
+		const maxResults = normalizeMaxResults(options?.maxResults);
 		const filter = buildFilter(options?.filter);
 		const knowledgeBaseId = this.ensureKbId();
 

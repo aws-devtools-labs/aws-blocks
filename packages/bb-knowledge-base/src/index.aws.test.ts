@@ -351,6 +351,30 @@ describe('retrieve (SDK-mocked)', () => {
 		}
 	});
 
+	test('rejects a fractional or non-finite maxResults before sending a Bedrock request', async () => {
+		const cleanup = setKbEnv('TEST', 'R9b');
+		let sent = false;
+		mockRuntimeSend(() => {
+			sent = true;
+			return { retrievalResults: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'r9b', { source: './knowledge' });
+
+			for (const bad of [1.5, Number.NaN]) {
+				await assert.rejects(
+					() => kb.retrieve('query', { maxResults: bad }),
+					(e: unknown) => (e as Error).name === KnowledgeBaseErrors.ValidationError,
+					`maxResults=${bad} should reject with ValidationError`,
+				);
+			}
+			assert.strictEqual(sent, false, 'no RetrieveCommand should be sent for an invalid maxResults');
+		} finally {
+			cleanup();
+		}
+	});
+
 	test('handles empty retrievalResults', async () => {
 		const cleanup = setKbEnv('TEST', 'R10');
 		mockRuntimeSend(() => ({ retrievalResults: [] }));

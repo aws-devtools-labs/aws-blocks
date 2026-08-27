@@ -113,6 +113,18 @@ test('maxResults is clamped to [1, 100]', async () => {
 	assert.ok(resultsNeg.length >= 1, 'negative maxResults should clamp to 1');
 });
 
+test('rejects a fractional or non-finite maxResults with ValidationError (parity with AWS)', async () => {
+	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
+
+	for (const bad of [1.5, Number.NaN]) {
+		await assert.rejects(
+			() => kb.retrieve('password', { maxResults: bad }),
+			(e: unknown) => (e as Error).name === KnowledgeBaseErrors.ValidationError,
+			`maxResults=${bad} should reject with ValidationError`,
+		);
+	}
+});
+
 // ── Empty results ──────────────────────────────────────────────────────────
 
 test('unrelated query returns empty array', async () => {
