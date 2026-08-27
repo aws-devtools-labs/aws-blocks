@@ -10,6 +10,8 @@ describe('validateStatement', () => {
     assert.doesNotThrow(() => validateStatement('SELECT * FROM users'));
     assert.doesNotThrow(() => validateStatement("INSERT INTO users VALUES ('1', 'Alice')"));
     assert.doesNotThrow(() => validateStatement('CREATE TABLE users (id TEXT PRIMARY KEY)'));
+    assert.doesNotThrow(() => validateStatement('CREATE TABLE posts (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id))'));
+    assert.doesNotThrow(() => validateStatement('CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'));
     assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON users(name)'));
   });
 
@@ -22,9 +24,7 @@ describe('validateStatement', () => {
   });
 
   const rejects = [
-    // REFERENCES is a foreign key — DSQL has no referential integrity enforcement
-    ['FOREIGN KEY', 'CREATE TABLE t (id TEXT, x TEXT REFERENCES users(id))'],
-    // Triggers require PL/pgSQL runtime — not available in DSQL
+    // CREATE TRIGGER is not supported
     ['CREATE TRIGGER', 'CREATE TRIGGER t BEFORE INSERT ON u FOR EACH ROW EXECUTE FUNCTION f()'],
     // PL/pgSQL procedural language is not available — only SQL-language functions
     ['PL/pgSQL', "CREATE FUNCTION f() RETURNS INT AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql"],
@@ -152,7 +152,8 @@ describe('validateMigrations', () => {
   it('passes valid migrations', () => {
     assert.doesNotThrow(() => validateMigrations({
       '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY)',
-      '002.sql': "INSERT INTO t (id) VALUES ('1')",
+      '002.sql': 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES t(id))',
+      '003.sql': "INSERT INTO t (id) VALUES ('1')",
     }));
   });
 
@@ -170,7 +171,7 @@ describe('validateMigrations', () => {
 
   it('rejects unsupported features', () => {
     assert.throws(() => validateMigrations({
-      '001.sql': 'CREATE TABLE t (id TEXT REFERENCES other(id))',
+      '001.sql': 'ALTER TABLE t ENABLE ROW LEVEL SECURITY',
     }), { name: 'DsqlMigrationValidationError' });
   });
 });
@@ -198,14 +199,14 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // DSQL-compatible: CHECK constraints are supported (only FK is not)
+  // DSQL-compatible: CHECK constraints are supported
   it('allows CHECK constraints', () => {
     assert.doesNotThrow(() => validateStatement(
       'CREATE TABLE products (id TEXT PRIMARY KEY, price INT CHECK (price > 0))'
     ));
   });
 
-  // DSQL-compatible: UNIQUE constraints work (just not FK)
+  // DSQL-compatible: UNIQUE constraints work
   it('allows UNIQUE constraint', () => {
     assert.doesNotThrow(() => validateStatement(
       'CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL)'
@@ -247,24 +248,16 @@ describe('validateStatement — complex scenarios', () => {
     );
   });
 
-  // Rejected: REFERENCES in column definition is a foreign key constraint
-  it('rejects inline REFERENCES in multi-column CREATE TABLE', () => {
-    assert.throws(
-      () => validateStatement(
-        'CREATE TABLE comments (id TEXT PRIMARY KEY, post_id TEXT REFERENCES posts(id), body TEXT)'
-      ),
-      { name: 'DsqlValidationError' }
-    );
+  it('allows inline REFERENCES in multi-column CREATE TABLE', () => {
+    assert.doesNotThrow(() => validateStatement(
+      'CREATE TABLE comments (id TEXT PRIMARY KEY, post_id TEXT REFERENCES posts(id), body TEXT)'
+    ));
   });
 
-  // Rejected: explicit FOREIGN KEY in table constraint form
-  it('rejects FOREIGN KEY as table constraint', () => {
-    assert.throws(
-      () => validateStatement(
-        'CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'
-      ),
-      { name: 'DsqlValidationError' }
-    );
+  it('allows FOREIGN KEY as table constraint', () => {
+    assert.doesNotThrow(() => validateStatement(
+      'CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'
+    ));
   });
 
   it('allows CREATE OR REPLACE VIEW', () => {
@@ -507,21 +500,6 @@ describe('validateStatement — unsupported features after bind parameters', () 
   it('rejects TRUNCATE that appears after a positional parameter', () => {
     assert.throws(
       () => validateStatement('DELETE FROM audit WHERE id = $1; TRUNCATE other'),
-      { name: 'DsqlValidationError' }
-    );
-  });
-
-  it('rejects REFERENCES that appears after a positional parameter', () => {
-    assert.throws(
-      () => validateStatement('INSERT INTO t (a) VALUES ($1) /* then */ ; CREATE TABLE c (id TEXT REFERENCES t(id))'),
-      { name: 'DsqlValidationError' }
-    );
-  });
-
-  it('rejects a foreign key in a parameterized multi-column INSERT context', () => {
-    // Two params surrounding the violation — the classic real-world shape.
-    assert.throws(
-      () => validateStatement('CREATE TABLE c (a TEXT DEFAULT $1, post_id TEXT REFERENCES posts(id), b TEXT DEFAULT $2)'),
       { name: 'DsqlValidationError' }
     );
   });

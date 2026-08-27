@@ -30,6 +30,7 @@ describe('DistributedDatabase E2E (mock)', () => {
     await engine.withDdl(async () => {
       await db.execute(sql`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE)`);
       await db.execute(sql`CREATE TABLE accounts (id TEXT PRIMARY KEY, balance INT NOT NULL DEFAULT 0)`);
+      await db.execute(sql`CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id))`);
     });
   });
 
@@ -92,8 +93,17 @@ describe('DistributedDatabase E2E (mock)', () => {
     assert.equal(result, 'ok');
   });
 
-  it('rejects FK at query time', async () => {
-    await assert.rejects(() => db.execute(sql`CREATE TABLE bad (id TEXT REFERENCES users(id))`), { name: 'DsqlValidationError' });
+  it('accepts FK syntax before the runtime DDL permission check', async () => {
+    await assert.rejects(() => db.execute(sql`CREATE TABLE bad (id TEXT REFERENCES users(id))`), { name: 'DsqlPermissionError' });
+  });
+
+  it('enforces foreign keys', async () => {
+    await db.execute(sql`INSERT INTO users (id, name) VALUES (${'fk-user'}, ${'FK User'})`);
+    await db.execute(sql`INSERT INTO memberships (id, user_id) VALUES (${'valid-membership'}, ${'fk-user'})`);
+    await assert.rejects(
+      () => db.execute(sql`INSERT INTO memberships (id, user_id) VALUES (${'invalid-membership'}, ${'missing-user'})`),
+      { name: DistributedDatabaseErrors.QueryFailed },
+    );
   });
 
   it('rejects DDL+DML in transaction', async () => {
@@ -139,7 +149,7 @@ describe('Migration runner E2E', () => {
 
   it('rejects invalid migrations', async () => {
     await assert.rejects(() => engine.withDdl(() => runMigrations(engine, {
-      '004.sql': 'CREATE TABLE bad (id TEXT REFERENCES t(id))',
+      '004.sql': 'ALTER TABLE t ENABLE ROW LEVEL SECURITY',
     })), { name: 'DsqlMigrationValidationError' });
   });
 });

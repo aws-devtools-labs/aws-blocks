@@ -28,7 +28,7 @@ bb-distributed-data (this package)
 ## Why a Separate Block (Not an Engine Flag on Database)
 
 1. **Transaction semantics differ** — OCC means callbacks may need retry. Different API contract.
-2. **SQL feature compatibility differs** — FK, RLS, and triggers are absent. An engine flag hides this until deploy time.
+2. **SQL feature compatibility differs** — RLS, triggers, procedures, and PL/pgSQL functions are not supported. An engine flag hides this until deploy time.
 3. **Mock parity goes in opposite directions** — PGlite accepts PostgreSQL syntax that DSQL does not. A separate block can have a restrictive mock.
 4. **"When to use" guidance is completely different** — customers shouldn't accidentally pick DSQL.
 5. **Multi-region is a first-class capability** — not a bolt-on option.

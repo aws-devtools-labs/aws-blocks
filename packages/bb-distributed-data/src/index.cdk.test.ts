@@ -264,14 +264,14 @@ test('CDK: migration CustomResource has migrationsHash property', () => {
 test('CDK: invalid DSQL migration fails at synth', () => {
   rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   mkdirSync(MIGRATIONS_DIR, { recursive: true });
-  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'CREATE TABLE t (id TEXT REFERENCES parent(id))');
+  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'ALTER TABLE t ENABLE ROW LEVEL SECURITY');
 
   try {
     assert.throws(
       () => synth((stack) => {
         new DistributedDatabase(scope(stack), 'mydsql', { migrationsPath: MIGRATIONS_DIR });
       }),
-      /Remove the REFERENCES clause/,
+      /row level security/i,
     );
   } finally {
     rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
