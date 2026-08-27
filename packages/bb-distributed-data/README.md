@@ -2,7 +2,7 @@
 
 Serverless SQL database backed by Amazon Aurora DSQL. Zero-ops, instant provisioning, scale-to-zero, and optionally multi-region active-active writes.
 
-**When to use:** Serverless apps that need to scale without ops overhead, workloads with zero idle cost requirements, multi-region active-active writes, or SQL apps that fit Aurora DSQL's PostgreSQL compatibility.
+**When to use:** Serverless apps that need to scale without ops overhead, workloads with zero idle cost requirements, multi-region active-active writes, or any SQL app where you don't need Row Level Security, triggers, procedures, or PL/pgSQL functions.
 
 **When NOT to use:** If you need Row Level Security, triggers, procedures, or PL/pgSQL functions — use `Database` (Aurora). Aurora DSQL supports SQL-language functions. If you need transactions that must not fail at commit under contention — use `Database`. If you're connecting to Supabase — use `Database` with `fromExisting()`.
 
