@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { AsyncJob, AsyncJobErrors } from './index.aws.js';
+import { AsyncJob, AsyncJobErrors, BatchSubmitFailedError } from './index.aws.js';
 
 /**
  * AWS-runtime coverage for `submitBatch` chunking. The mock runtime submits one
@@ -103,7 +103,8 @@ describe('AsyncJob (aws runtime): submitBatch partial failure', () => {
 
 		await assert.rejects(
 			() => job.submitBatch(Array.from({ length: 15 }, (_, i) => ({ n: i }))),
-			(err: Error & { failed?: any[]; jobIds?: Array<string | null> }) => {
+			(err: unknown) => {
+				assert.ok(err instanceof BatchSubmitFailedError, 'typed error, no cast needed');
 				assert.strictEqual(err.name, AsyncJobErrors.BatchSubmitFailed);
 				assert.strictEqual(err.message.includes('1 of 15'), true);
 
@@ -113,10 +114,10 @@ describe('AsyncJob (aws runtime): submitBatch partial failure', () => {
 
 				// The 14 that made it onto the queue keep their real MessageIds so the
 				// caller can still look them up; only the failed index is null.
-				assert.strictEqual(err.jobIds?.length, 15);
-				assert.strictEqual(err.jobIds![12], null);
-				assert.strictEqual(err.jobIds![0], 'msg-0');
-				assert.strictEqual(err.jobIds![14], 'msg-14');
+				assert.strictEqual(err.jobIds.length, 15);
+				assert.strictEqual(err.jobIds[12], null);
+				assert.strictEqual(err.jobIds[0], 'msg-0');
+				assert.strictEqual(err.jobIds[14], 'msg-14');
 				return true;
 			},
 		);
@@ -129,5 +130,128 @@ describe('AsyncJob (aws runtime): submitBatch partial failure', () => {
 			(err: Error) => err.name === AsyncJobErrors.BatchEmpty,
 		);
 		assert.strictEqual(sentBatches.length, 0);
+	});
+
+	test('a MissingResult (entry in neither Successful nor Failed) becomes a failure, not a null success', async () => {
+		const scope = new Scope(`aj-${Math.random().toString(36).slice(2)}`);
+		const job = new AsyncJob<{ n: number }>(scope, 'batch', { handler: async () => {} });
+		registerSdkIdentifiers(job.fullId, { queueUrl: QUEUE_URL });
+		// Drop entry '1' from both result lists — SQS should never do this, but if it
+		// does the index must not silently return as a null "success".
+		(job as any)._sqsClient = {
+			send: async (cmd: { input: { Entries: BatchEntry[] } }) => {
+				const kept = cmd.input.Entries.filter(e => e.Id !== '1');
+				return { Successful: kept.map(e => ({ Id: e.Id, MessageId: `msg-${e.Id}` })), Failed: [] };
+			},
+		};
+
+		await assert.rejects(
+			() => job.submitBatch(Array.from({ length: 3 }, (_, i) => ({ n: i }))),
+			(err: unknown) => {
+				assert.ok(err instanceof BatchSubmitFailedError);
+				assert.strictEqual(err.jobIds[1], null);
+				assert.strictEqual(err.jobIds[0], 'msg-0');
+				const f = err.failed.find(x => x.index === 1);
+				assert.strictEqual(f?.code, 'MissingResult');
+				return true;
+			},
+		);
+	});
+
+	test('rejects a batch over the soft cap with BatchTooLarge before touching SQS', async () => {
+		const { job, sentBatches } = makeJob();
+		await assert.rejects(
+			() => job.submitBatch(Array.from({ length: 10_001 }, () => ({ n: 0 }))),
+			(err: Error) => {
+				assert.strictEqual(err.name, AsyncJobErrors.BatchTooLarge);
+				return true;
+			},
+		);
+		assert.strictEqual(sentBatches.length, 0);
+	});
+
+	test('a status-write failure on the success path does not fail the submit', async () => {
+		const { job } = makeJob();
+		// No trackStatus, so inject a tracker whose batch write rejects. Every message
+		// is already enqueued and the handler backfills `queued`, so submit must still
+		// resolve rather than making the caller re-submit and double-enqueue.
+		(job as any)._status = {
+			recordQueuedBatch: async () => { throw new Error('ProvisionedThroughputExceededException'); },
+		};
+
+		const { jobIds, failed } = await job.submitBatch(Array.from({ length: 3 }, (_, i) => ({ n: i })));
+		assert.deepStrictEqual(failed, []);
+		assert.deepStrictEqual(jobIds, ['msg-0', 'msg-1', 'msg-2']);
+	});
+});
+
+describe('AsyncJob (aws runtime): submitBatch concurrency and transport failures', () => {
+	test('sends chunks with bounded concurrency (>1 in flight, never more than 5)', async () => {
+		const scope = new Scope(`aj-${Math.random().toString(36).slice(2)}`);
+		const job = new AsyncJob<{ n: number }>(scope, 'batch', { handler: async () => {} });
+		registerSdkIdentifiers(job.fullId, { queueUrl: QUEUE_URL });
+
+		let inFlight = 0;
+		let peak = 0;
+		(job as any)._sqsClient = {
+			send: async (cmd: { input: { Entries: BatchEntry[] } }) => {
+				inFlight++;
+				peak = Math.max(peak, inFlight);
+				await new Promise(r => setTimeout(r, 5));
+				inFlight--;
+				return { Successful: cmd.input.Entries.map(e => ({ Id: e.Id, MessageId: `msg-${e.Id}` })), Failed: [] };
+			},
+		};
+
+		// 80 payloads → 8 chunks of 10.
+		const { jobIds } = await job.submitBatch(Array.from({ length: 80 }, (_, i) => ({ n: i })));
+		assert.strictEqual(jobIds.length, 80);
+		assert.ok(peak > 1, 'chunks should overlap rather than run fully serially');
+		assert.ok(peak <= 5, `peak concurrency ${peak} must not exceed 5`);
+	});
+
+	test('a transport-level send rejection fails that chunk and short-circuits the rest', async () => {
+		const scope = new Scope(`aj-${Math.random().toString(36).slice(2)}`);
+		const job = new AsyncJob<{ n: number }>(scope, 'batch', { handler: async () => {} });
+		registerSdkIdentifiers(job.fullId, { queueUrl: QUEUE_URL });
+
+		const sent: string[][] = [];
+		(job as any)._sqsClient = {
+			send: async (cmd: { input: { Entries: BatchEntry[] } }) => {
+				const ids = cmd.input.Entries.map(e => e.Id);
+				sent.push(ids);
+				// Chunk whose first entry is index 10 rejects synchronously (before any
+				// await), so `aborted` is set before workers pick up chunks 5..9.
+				if (ids[0] === '10') {
+					const err = new Error('Rate exceeded');
+					err.name = 'ThrottlingException';
+					throw err;
+				}
+				await new Promise(r => setTimeout(r, 20));
+				return { Successful: cmd.input.Entries.map(e => ({ Id: e.Id, MessageId: `msg-${e.Id}` })), Failed: [] };
+			},
+		};
+
+		// 100 payloads → 10 chunks of 10, concurrency 5: chunks 0..4 dispatch first,
+		// chunk 1 (indices 10..19) rejects, chunks 5..9 are short-circuited.
+		await assert.rejects(
+			() => job.submitBatch(Array.from({ length: 100 }, (_, i) => ({ n: i }))),
+			(err: unknown) => {
+				assert.ok(err instanceof BatchSubmitFailedError);
+				assert.strictEqual(err.jobIds.length, 100);
+
+				// Chunk 0 landed.
+				assert.strictEqual(err.jobIds[0], 'msg-0');
+				// Chunk 1 failed at the transport level — every index carries the code.
+				assert.strictEqual(err.jobIds[10], null);
+				assert.strictEqual(err.failed.find(f => f.index === 10)?.code, 'ThrottlingException');
+				assert.strictEqual(err.failed.find(f => f.index === 19)?.code, 'ThrottlingException');
+				// Chunks 5..9 were never sent (only 0..4 attempted).
+				assert.strictEqual(sent.length, 5);
+				assert.strictEqual(err.jobIds[50], null);
+				assert.strictEqual(err.failed.find(f => f.index === 50)?.code, 'BatchSubmitAborted');
+				return true;
+			},
+		);
 	});
 });

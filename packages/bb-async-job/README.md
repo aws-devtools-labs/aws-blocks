@@ -21,7 +21,7 @@ Background job processing backed by SQS and Lambda.
 
 **Available Methods:**
 - **`submit(payload, options?)`** - Enqueue a single job (returns `{ jobId }`)
-- **`submitBatch(payloads, options?)`** - Enqueue any number of jobs in one call — batches larger than SQS's 10-entry / 256 KB per-request limits are split across multiple `SendMessageBatch` requests automatically (returns `{ jobIds, failed: [] }` on full success). Because a multi-chunk submit is not atomic, on partial failure it **throws** `AsyncJobErrors.BatchSubmitFailed` — the error has `.jobIds` (real MessageIds for the entries that made it onto the queue, `null` at failed indexes) and `.failed[]` (each entry's `index`, `code`, `message`). The mock runtime never partially fails; this is AWS-only.
+- **`submitBatch(payloads, options?)`** - Enqueue up to 10,000 jobs in one call — batches larger than SQS's 10-entry / 256 KB per-request limits are split across multiple `SendMessageBatch` requests automatically and sent with bounded concurrency (over 10,000 throws `AsyncJobErrors.BatchTooLarge`; returns `{ jobIds, failed: [] }` on full success). Because a multi-chunk submit is not atomic, on partial failure it **throws** `AsyncJobErrors.BatchSubmitFailed` — the error has `.jobIds` (real MessageIds for the entries that made it onto the queue, `null` at failed indexes) and `.failed[]` (each entry's `index`, `code`, `message`; a transport-level `send()` rejection fails its whole chunk and short-circuits the rest). The mock runtime never partially fails; this is AWS-only.
 - **`getStatus(jobId)`** - Read a job's recorded state and full transition history (returns `AsyncJobStatus | null`). Requires `trackStatus: true`.
 - **`waitUntilComplete(jobId, options?)`** - Wait until the job reaches `complete` or `failed` (returns the final `AsyncJobStatus`). Requires `trackStatus: true`.
 
@@ -102,6 +102,7 @@ import { AsyncJobErrors } from '@aws-blocks/bb-async-job';
 
 AsyncJobErrors.PayloadTooLarge    // payload > 256 KB
 AsyncJobErrors.BatchEmpty         // submitBatch([]) called with no items
+AsyncJobErrors.BatchTooLarge      // submitBatch() over the 10,000-payload soft cap
 AsyncJobErrors.ValidationFailed   // schema validation failed
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled

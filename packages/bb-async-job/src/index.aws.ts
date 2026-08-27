@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SQSClient, SendMessageCommand, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
+import type { SendMessageBatchCommandOutput } from '@aws-sdk/client-sqs';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
 import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -15,13 +16,13 @@ import type {
 	AsyncJobStatus,
 	WaitUntilCompleteOptions,
 } from './types.js';
-import { AsyncJobErrors } from './errors.js';
+import { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -35,6 +36,13 @@ export type {
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
 const MAX_BATCH_SIZE = 10;
+/**
+ * Upper bound on payloads per `submitBatch` call. Not an SQS limit — a guardrail
+ * so a single call cannot fan out to an unbounded number of SQS requests.
+ */
+const MAX_BATCH_PAYLOADS = 10_000;
+/** Maximum number of `SendMessageBatch` requests in flight at once. */
+const MAX_BATCH_CONCURRENCY = 5;
 
 export class AsyncJob<T = unknown> extends Scope {
 	private _handler: (payload: T, context: AsyncJobContext) => Promise<void>;
@@ -245,6 +253,72 @@ export class AsyncJob<T = unknown> extends Scope {
 		return chunks;
 	}
 
+	/**
+	 * Send `chunks` through SQS with at most {@link MAX_BATCH_CONCURRENCY} requests
+	 * in flight, writing results into `jobIds` / `failed` (both indexed by the
+	 * payload's original position).
+	 *
+	 * Two failure kinds are handled differently. An *entry-level* failure — SQS
+	 * accepts the request but rejects individual messages — is per-index and does
+	 * not implicate the rest of the batch. A *transport-level* failure — the
+	 * `send()` promise itself rejects (throttling, connection, auth) — cannot be
+	 * mapped to individual entries and signals an unhealthy endpoint, so it fails
+	 * every index in that chunk and short-circuits the chunks not yet started
+	 * rather than hammering a broken endpoint. Chunks already in flight still
+	 * settle normally. Either way the caller ends up with a complete `jobIds` /
+	 * `failed` picture instead of a raw SDK error with no partial context.
+	 */
+	private async sendChunksBounded(
+		chunks: number[][],
+		messageBodies: string[],
+		jobIds: Array<string | null>,
+		failed: BatchSubmitResult['failed'],
+		delaySeconds: number,
+	): Promise<void> {
+		const queueUrl = getSdkIdentifiers(this).queueUrl;
+		let next = 0;
+		let aborted = false;
+
+		const worker = async (): Promise<void> => {
+			for (;;) {
+				const idx = next++;
+				if (idx >= chunks.length) return;
+				const indices = chunks[idx];
+
+				if (aborted) {
+					for (const i of indices) {
+						failed.push({ index: i, code: 'BatchSubmitAborted', message: 'Skipped after an earlier chunk failed at the transport level' });
+					}
+					continue;
+				}
+
+				let result: SendMessageBatchCommandOutput;
+				try {
+					result = await this._sqsClient.send(new SendMessageBatchCommand({
+						QueueUrl: queueUrl,
+						Entries: indices.map(i => ({ Id: String(i), MessageBody: messageBodies[i], DelaySeconds: delaySeconds })),
+					}));
+				} catch (err: unknown) {
+					aborted = true;
+					const code = err instanceof Error ? err.name : 'TransportError';
+					const message = err instanceof Error ? err.message : String(err);
+					for (const i of indices) failed.push({ index: i, code, message });
+					continue;
+				}
+
+				for (const s of result.Successful ?? []) {
+					jobIds[parseInt(s.Id!, 10)] = s.MessageId!;
+				}
+				for (const f of result.Failed ?? []) {
+					failed.push({ index: parseInt(f.Id!, 10), code: f.Code ?? 'UnknownError', message: f.Message ?? 'Unknown error' });
+				}
+			}
+		};
+
+		const workers = Array.from({ length: Math.min(MAX_BATCH_CONCURRENCY, chunks.length) }, () => worker());
+		await Promise.all(workers);
+	}
+
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
 		this.ensureQueueUrl();
 
@@ -256,6 +330,14 @@ export class AsyncJob<T = unknown> extends Scope {
 			throw err;
 		}
 
+		if (payloads.length > MAX_BATCH_PAYLOADS) {
+			const err = new Error(
+				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
+			);
+			err.name = AsyncJobErrors.BatchTooLarge;
+			throw err;
+		}
+
 		// Validate and serialize every payload before enqueuing anything, so one bad
 		// payload fails the whole call rather than half-submitting the batch.
 		const messageBodies: string[] = [];
@@ -263,33 +345,23 @@ export class AsyncJob<T = unknown> extends Scope {
 			messageBodies.push(await this.validatePayload(payload));
 		}
 
-		// SQS caps a SendMessageBatch at 10 entries and 256 KB, so a batch of any
-		// size is split across as many requests as those limits require. The SQS
-		// batch-entry `Id` carries the payload's original index, which is how each
-		// returned MessageId (or failure) is mapped back into input order below.
+		// SQS caps a SendMessageBatch at 10 entries and 256 KB, so the batch is split
+		// across as many requests as those limits require and sent with bounded
+		// concurrency. Each entry's `Id` is the payload's original index, so results
+		// map straight back into input order.
 		const chunks = this.chunkBatch(messageBodies);
 		const jobIds: Array<string | null> = new Array(payloads.length).fill(null);
 		const failed: BatchSubmitResult['failed'] = [];
 
-		for (const indices of chunks) {
-			const result = await this._sqsClient.send(new SendMessageBatchCommand({
-				QueueUrl: getSdkIdentifiers(this).queueUrl,
-				Entries: indices.map(i => ({
-					Id: String(i),
-					MessageBody: messageBodies[i],
-					DelaySeconds: options?.delaySeconds ?? 0,
-				})),
-			}));
+		await this.sendChunksBounded(chunks, messageBodies, jobIds, failed, options?.delaySeconds ?? 0);
 
-			for (const s of result.Successful ?? []) {
-				jobIds[parseInt(s.Id!, 10)] = s.MessageId!;
-			}
-			for (const f of result.Failed ?? []) {
-				failed.push({
-					index: parseInt(f.Id!, 10),
-					code: f.Code ?? 'UnknownError',
-					message: f.Message ?? 'Unknown error',
-				});
+		// Defense: SQS should return every entry in Successful or Failed. If one comes
+		// back in neither (or with an unparseable Id) its slot stays null; surface that
+		// as a failure rather than returning a "success" that contains a null id.
+		const failedIndexes = new Set(failed.map(f => f.index));
+		for (let i = 0; i < payloads.length; i++) {
+			if (jobIds[i] === null && !failedIndexes.has(i)) {
+				failed.push({ index: i, code: 'MissingResult', message: 'SQS returned no result for this entry' });
 			}
 		}
 
@@ -298,20 +370,30 @@ export class AsyncJob<T = unknown> extends Scope {
 			// queue. `jobIds` still carries their real MessageIds so the caller can
 			// look them up, with `null` at each failed index.
 			failed.sort((a, b) => a.index - b.index);
-			const err = new Error(
-				`${AsyncJobErrors.BatchSubmitFailed}: ${failed.length} of ${payloads.length} messages failed to send`
+			throw new BatchSubmitFailedError(
+				`${failed.length} of ${payloads.length} messages failed to send`,
+				jobIds,
+				failed,
 			);
-			err.name = AsyncJobErrors.BatchSubmitFailed;
-			(err as any).failed = failed;
-			(err as any).jobIds = jobIds;
-			throw err;
 		}
 
 		if (this._status) {
+			// Best-effort: every message is already enqueued, and the handler backfills
+			// a `queued` record when it first sees a job, so a status-write failure here
+			// (e.g. DynamoDB throttling on a large fan-out) must not turn a successful
+			// enqueue into a throw that would make the caller re-submit and double-enqueue.
 			const submittedAt = new Date().toISOString();
-			await this._status.recordQueuedBatch(
-				jobIds.filter((id): id is string => id !== null).map(jobId => ({ jobId, submittedAt }))
-			);
+			try {
+				await this._status.recordQueuedBatch(
+					jobIds.filter((id): id is string => id !== null).map(jobId => ({ jobId, submittedAt })),
+				);
+			} catch (err: unknown) {
+				this.log.error?.(
+					`AsyncJob: failed to record queued status for a submitted batch: ${
+						err instanceof Error ? err.message : String(err)
+					}`,
+				);
+			}
 		}
 
 		return { jobIds, failed: [] };

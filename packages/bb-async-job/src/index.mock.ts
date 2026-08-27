@@ -20,7 +20,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 
-export { AsyncJobErrors } from './errors.js';
+export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
 	AsyncJobContext,
 	AsyncJobOptions,
@@ -43,6 +43,8 @@ interface QueueEntry<T> {
 }
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
+/** Upper bound on payloads per `submitBatch` call — parity with the AWS runtime. */
+const MAX_BATCH_PAYLOADS = 10_000;
 
 /**
  * Background job processing backed by SQS and Lambda.
@@ -223,15 +225,16 @@ export class AsyncJob<T = unknown> extends Scope {
 	/**
 	 * Enqueue multiple jobs in a single call.
 	 *
-	 * In AWS, uses SQS's native `SendMessageBatch` for better throughput than
-	 * sequential `submit()` calls. Batches larger than SQS's 10-entry / 256 KB
-	 * per-request limits are split across as many `SendMessageBatch` requests as
-	 * needed, so there is no cap on the number of payloads.
+	 * The mock runtime enqueues each payload via `submit()` in turn; the AWS
+	 * runtime instead packs them into SQS `SendMessageBatch` requests. Either way a
+	 * batch of any size up to {@link MAX_BATCH_PAYLOADS} is accepted — larger
+	 * batches are rejected up front.
 	 *
-	 * @param payloads - Array of job payloads.
+	 * @param payloads - Array of job payloads (at most {@link MAX_BATCH_PAYLOADS}).
 	 * @param options - Optional. `delaySeconds` applied to all messages.
 	 * @returns `{ jobIds, failed }` — `jobIds` in the same order as input payloads (`null` for failed entries); `failed` lists any entries that could not be enqueued.
 	 * @throws {AsyncJobErrors.BatchEmpty} If payloads array is empty.
+	 * @throws {AsyncJobErrors.BatchTooLarge} If more than {@link MAX_BATCH_PAYLOADS} payloads.
 	 * @throws {AsyncJobErrors.PayloadTooLarge} If any payload exceeds 256 KB.
 	 * @throws {AsyncJobErrors.ValidationFailed} If any payload fails schema validation.
 	 * @throws {AsyncJobErrors.BatchSubmitFailed} If one or more messages fail to send (AWS only). A multi-chunk submit is not atomic; the error's `failed` and `jobIds` properties carry the partial results across all chunks.
@@ -242,6 +245,14 @@ export class AsyncJob<T = unknown> extends Scope {
 				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
 			);
 			err.name = AsyncJobErrors.BatchEmpty;
+			throw err;
+		}
+
+		if (payloads.length > MAX_BATCH_PAYLOADS) {
+			const err = new Error(
+				`${AsyncJobErrors.BatchTooLarge}: Batch contains ${payloads.length} payloads, exceeds the ${MAX_BATCH_PAYLOADS} per-call limit`
+			);
+			err.name = AsyncJobErrors.BatchTooLarge;
 			throw err;
 		}
 

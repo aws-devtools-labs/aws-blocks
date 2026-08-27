@@ -92,6 +92,20 @@ test('AsyncJob - submitBatch auto-chunks batches larger than 10', async () => {
 	assert.deepStrictEqual(received.sort((a, b) => a - b), items.map(i => i.n), 'every payload was processed');
 });
 
+test('AsyncJob - submitBatch rejects a batch over the soft cap with BatchTooLarge', async () => {
+	const job = new AsyncJob(null as any, 'test', {
+		handler: async () => {},
+	});
+
+	await assert.rejects(
+		() => job.submitBatch(Array.from({ length: 10_001 }, () => ({ n: 0 }))),
+		(err: Error) => {
+			assert.strictEqual(err.name, AsyncJobErrors.BatchTooLarge);
+			return true;
+		}
+	);
+});
+
 test('AsyncJob - submit throws PayloadTooLarge for >256 KB', async () => {
 	const job = new AsyncJob(null as any, 'test', {
 		handler: async () => {},
