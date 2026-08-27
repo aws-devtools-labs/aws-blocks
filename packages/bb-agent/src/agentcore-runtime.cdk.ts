@@ -161,10 +161,14 @@ export class AgentCoreRuntime extends Scope {
 				// The Agent's fullId so the container's getAgentInstance(BB_AGENT_ID) matches the
 				// Agent the co-bundled backend registers at import.
 				BB_AGENT_ID: props.agentFullId,
-				// The runtime Scope derives fullId by walking to a parent whose id is
-				// BLOCKS_STACK_NAME (same as the Lambda handler); without it the backend registers
-				// under an un-prefixed fullId that won't match BB_AGENT_ID.
-				BLOCKS_STACK_NAME: stack.stackName,
+				// The namespace the container rebuilds fullId (and every derived resource name) from.
+				// MUST be the owning stack/backend's canonical root id — the SAME value the Lambda
+				// handler and the Lambda compute use (`backendStackName`) — not the raw CFN stack name.
+				// They coincide for a top-level BlocksStack, but for a BlocksBackend embedded in a
+				// customer stack the handler uses the backend fullId while cdk.Stack.of(this).stackName
+				// is the customer stack name; using the latter would make the container derive names from
+				// the wrong namespace and miss its own tables/bucket/config.
+				BLOCKS_STACK_NAME: this.backendStackName,
 				// Config location so the container's loadConfigToProcessEnv() loads the full app config
 				// (same as the handler) — this delivers BLOCKS_RT_CALLBACK_URL and every other
 				// registerConfig() value a tool's BB may read. IAM to read it is inherited (shared role).

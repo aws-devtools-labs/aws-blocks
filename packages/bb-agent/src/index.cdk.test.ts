@@ -12,61 +12,79 @@
  * and the shared handler's permission to INVOKE the runtime — and injects the config location so the
  * container loads the same app config as the handler.
  */
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert';
-import { dirname } from 'node:path';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { Agent } from './index.cdk.js';
 
 /**
- * Minimal StubBlocksStack: provides the shared executionRole + handler (which assumes it) and
- * roots Scope via CURRENT_BLOCKS_STACK — mirrors how the AgentCore runtime resolves the shared role.
+ * Inject LambdaCompute as the stack's default compute, the same way
+ * `@aws-blocks/blocks` does for real apps. `main` (PR #459) made the Agent
+ * resolve the stack's `defaultCompute` at construction (the Realtime/AgentCore
+ * wiring reads it), so a bare handler-only stub stack (no default compute) can
+ * no longer synthesize it — `BlocksStack.create` initializes the default
+ * compute the getter resolves to. (`root as never` is core's existing plumbing
+ * pattern for the factory signature.)
  */
-class StubBlocksStack extends cdk.Stack {
-	public readonly handler: cdk.aws_lambda.Function;
-	public readonly executionRole: cdk.aws_iam.IRole;
-	public readonly id: string;
-	constructor(scope: Construct, id: string) {
-		super(scope, id);
-		this.id = id;
-		(globalThis as any).CURRENT_BLOCKS_STACK = this;
-		this.executionRole = new Role(this, 'BlocksRole', { assumedBy: new ServicePrincipal('lambda.amazonaws.com') });
-		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
-			runtime: DEFAULT_NODE_RUNTIME,
-			handler: 'index.handler',
-			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
-			role: this.executionRole,
-		});
-	}
-}
+const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 
 /** A real directory to hand fromCodeAsset (any existing dir works for a synth-only test). */
 const ASSET_DIR = dirname(fileURLToPath(import.meta.url));
 
-function synth(): Template {
+let tmpDir: string;
+let handlerPath: string;
+let backendPath: string;
+
+before(() => {
+	// Building Blocks resolve to their mock entry points unless `--conditions=cdk`
+	// is active; keep it set so `BlocksStack.create` produces real CloudFormation.
+	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
+	// `BlocksStack.create` needs a real backend handler + backend module on disk
+	// (it imports the backend module and points the handler compute at the file).
+	tmpDir = mkdtempSync(join(ASSET_DIR, 'tmp-agent-cdk-'));
+	handlerPath = join(tmpDir, 'handler.mjs');
+	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
+	backendPath = join(tmpDir, 'backend.mjs');
+	writeFileSync(backendPath, 'export default () => {};\n');
+});
+
+after(() => {
+	rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function synth(): Promise<Template> {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'teststack');
-	const parent = new Scope('app'); // roots to CURRENT_BLOCKS_STACK
+	// Real BlocksStack (with the shared executionRole/BlocksRole + a LambdaCompute default compute)
+	// so the Agent can resolve its default compute. `id` === 'teststack' so BLOCKS_STACK_NAME (derived
+	// from the owning root id) resolves to 'teststack', which the injection assertion below matches.
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
 	// agentcoreAssetPath bypasses the synth-time co-bundle (which needs a BlocksStack backend path).
-	new Agent(parent, 'agent', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	new Agent(stack, 'agent', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
 	return Template.fromStack(stack);
 }
 
-test('CDK: Agent provisions an AgentCore Runtime for the loop', () => {
-	const template = synth();
+test('CDK: Agent provisions an AgentCore Runtime for the loop', async () => {
+	const template = await synth();
 	assert.ok(
 		Object.keys(template.findResources('AWS::BedrockAgentCore::Runtime')).length >= 1,
 		'expected an AWS::BedrockAgentCore::Runtime resource',
 	);
 });
 
-test('CDK: the loop runs as the shared execution role, which carries everything it touches', () => {
-	const template = synth();
+test('CDK: the loop runs as the shared execution role, which carries everything it touches', async () => {
+	const template = await synth();
 	const json = JSON.stringify(template.toJSON());
 	// Realtime publish (both halves) — load-bearing for streaming from the container. Granted to the
 	// shared role by the Realtime BB's handler wiring (not by the Agent), and inherited because the
@@ -88,13 +106,18 @@ test('CDK: the loop runs as the shared execution role, which carries everything 
 	const runtimeJson = JSON.stringify(runtime.Properties ?? {});
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_BUCKET'), 'runtime must be injected BLOCKS_CONFIG_BUCKET');
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_KEY'), 'runtime must be injected BLOCKS_CONFIG_KEY');
+	// BLOCKS_STACK_NAME must be the owning root id (`backendStackName`) — the SAME value the handler
+	// uses to derive resource names — so the container's namespace matches what CDK provisioned. Here
+	// the owning BlocksStack's id is 'teststack', so backendStackName resolves to 'teststack'.
+	assert.ok(runtimeJson.includes('BLOCKS_STACK_NAME'), 'runtime must be injected BLOCKS_STACK_NAME');
+	assert.ok(runtimeJson.includes('teststack'), 'BLOCKS_STACK_NAME resolves to the owning root id');
 });
 
-test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', () => {
+test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared role (scoped)', async () => {
 	// Core is BB-agnostic — it does not trust bedrock-agentcore. The Agent adds that trust here, so
 	// the AgentCore Runtime can assume the shared role it runs AS. It must be scoped by
 	// aws:SourceAccount (AWS's recommended AgentCore trust policy), and lambda trust must remain.
-	const template = synth();
+	const template = await synth();
 	const roles = template.findResources('AWS::IAM::Role');
 	const blocksRoleId = Object.keys(roles).find(k => k.includes('BlocksRole'));
 	assert.ok(blocksRoleId, 'expected the shared BlocksRole');
@@ -119,16 +142,20 @@ test('CDK: the Agent adds the bedrock-agentcore assume-role trust to the shared 
 	);
 });
 
-test('CDK: multiple agents add the identical shared-role grants ONCE, not per-agent', () => {
+test('CDK: multiple agents add the identical shared-role grants ONCE, not per-agent', async () => {
 	// Every agent would otherwise add the SAME bedrock-agentcore trust / Bedrock / InvokeAgentRuntime
 	// statements to the one shared role. They're identical (stack-scoped), so they must be added
 	// exactly once regardless of agent count — keeping the shared role's policy from bloating with
 	// duplicates. (Overflow into managed policies is a normal CDK mechanism and not asserted against.)
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'teststack');
-	const parent = new Scope('app');
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
 	for (const id of ['agent1', 'agent2', 'agent3']) {
-		new Agent(parent, id, { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+		new Agent(stack, id, { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
 	}
 	const template = Template.fromStack(stack);
 	const json = JSON.stringify(template.toJSON());
