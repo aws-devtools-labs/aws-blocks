@@ -202,12 +202,20 @@ export function successResponse(result: unknown, id: string | number | null): st
  * use code 500.
  */
 export function errorResponseFromCatch(error: unknown, id: string | number | null): string {
-  const code = error instanceof ApiError ? error.status : 500;
-  const message = error instanceof Error ? error.message : String(error);
+  // Only `ApiError` is a deliberate, client-safe error: its status, message,
+  // `name`, and `retriable` flag are part of the public contract (clients match
+  // on `name` via `isBlocksError`). Any other throw is an internal failure —
+  // typically a driver/SDK exception whose class name and raw message can leak
+  // implementation details (table names, SQL, ARNs, `$metadata`). Collapse those
+  // to a stable, generic 500 so nothing internal reaches the wire; the caller
+  // logs the real error server-side (see lambda-handler.ts / dev-server.ts).
+  if (!(error instanceof ApiError)) {
+    return errorResponse(500, 'Internal error', id);
+  }
   const data: Record<string, unknown> = {};
-  if (error instanceof Error && error.name && error.name !== 'Error') data.name = error.name;
-  if (error instanceof ApiError && error.retriable) data.retriable = true;
-  return errorResponse(code, message, id, Object.keys(data).length > 0 ? data : undefined);
+  if (error.name && error.name !== 'Error') data.name = error.name;
+  if (error.retriable) data.retriable = true;
+  return errorResponse(error.status, error.message, id, Object.keys(data).length > 0 ? data : undefined);
 }
 
 /** Encode a "method not found" error. */

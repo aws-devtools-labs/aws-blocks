@@ -158,9 +158,28 @@ describe('ApiError status ↔ JSON-RPC error code', () => {
     assert.strictEqual(parsed.error.data.retriable, true);
   });
 
-  it('encodes a non-ApiError throw as code 500 with no data.name', () => {
+  it('collapses a non-ApiError throw to a generic 500 with no message or name leak', () => {
     const parsed = JSON.parse(errorResponseFromCatch(new Error('plain'), 2));
     assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
+    assert.strictEqual(parsed.error.data, undefined);
+  });
+
+  it('never leaks a driver/SDK exception class name or raw message to the client', () => {
+    // Mimic a DynamoDB/Postgres driver throw: a real class name and a message
+    // that embeds internal detail (table names, SQL, ARNs, etc.).
+    const driverError = new Error(
+      'ResourceNotFoundException: Requested resource not found: Table: app-notes-prod not found',
+    );
+    driverError.name = 'ResourceNotFoundException';
+
+    const wire = JSON.stringify(JSON.parse(errorResponseFromCatch(driverError, 3)));
+    assert.doesNotMatch(wire, /ResourceNotFoundException/, 'exception class name must not reach the client');
+    assert.doesNotMatch(wire, /app-notes-prod|Table:/, 'raw driver message must not reach the client');
+
+    const parsed = JSON.parse(errorResponseFromCatch(driverError, 3));
+    assert.strictEqual(parsed.error.code, 500);
+    assert.strictEqual(parsed.error.message, 'Internal error');
     assert.strictEqual(parsed.error.data, undefined);
   });
 
