@@ -1137,6 +1137,15 @@ export class HostingConstruct extends Construct {
         destinationBucket: this.bucket,
         destinationKeyPrefix: `builds/${buildId}`,
         prune: false,
+        // Exclude the build-time placeholder `.blocks-sandbox/config.json`
+        // (`{_placeholder:true}`). The real runtime config (with the same-origin
+        // `apiUrl`) is written to the SAME key by `BlocksConfigDeployment`; if
+        // this asset upload also carried the placeholder it could clobber the
+        // real config (asset-upload ordering isn't guaranteed relative to the
+        // config deployment). Excluding it here makes the real config the ONLY
+        // writer of that key — order-independent. Without this the browser
+        // client can't resolve the API URL and every authed call fails.
+        exclude: ['.blocks-sandbox/config.json'],
       });
       const serverComputeName = ['default', 'server'].find((n) =>
         this.computeFunctions.has(n),

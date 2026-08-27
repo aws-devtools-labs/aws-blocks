@@ -863,9 +863,20 @@ export class Hosting extends Construct {
       // (and vary by deploy shape), so the previous
       // `tryFindChild('AssetDeployment')` never matched and the dependency
       // was silently never wired.
+      // Match by `instanceof` AND by constructor name: an app with a linked /
+      // duplicate `aws-cdk-lib` (a real setup — file:-linked framework packages)
+      // gets a SECOND BucketDeployment class, so `instanceof` against OUR class
+      // silently misses the hosting construct's deployments (created with the
+      // app's class). The name check is robust across that dual-package boundary
+      // so the config deployment reliably depends on — and runs AFTER — every
+      // asset upload (else a placeholder config.json can clobber the real one).
       const assetDeployments = hosting.node
         .findAll()
-        .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+        .filter(
+          (c): c is s3deploy.BucketDeployment =>
+            c instanceof s3deploy.BucketDeployment ||
+            c.constructor?.name === 'BucketDeployment',
+        );
       for (const dep of assetDeployments) {
         configDeployment.node.addDependency(dep);
       }
