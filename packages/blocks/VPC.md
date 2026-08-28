@@ -12,9 +12,11 @@ VPC support adds recurring AWS costs. Understand these before enabling:
 
 **Example:** A 2-AZ app using KVStore + Database + AsyncJob + AppSetting:
 - 1 NAT Gateway: ~$32/month
-- 4 interface endpoints × 2 AZs × $7.20: ~$57.60/month
-- 2 gateway endpoints: $0
-- **Total VPC overhead: ~$90/month**
+- 5 interface endpoints × 2 AZs × $7.20: ~$72/month
+  (SQS, Secrets Manager, RDS Data, and the always-on CloudWatch Logs + SSM that
+  `finalizeVpc` provisions for every VPC-attached deployment)
+- 2 gateway endpoints (S3, DynamoDB): $0
+- **Total VPC overhead: ~$104/month**
 
 > **Most AWS Blocks apps don't need a VPC.** All Blocks communicate with AWS services over HTTPS through public endpoints by default. A VPC adds cost and complexity — only use one when you have a specific requirement for it.
 

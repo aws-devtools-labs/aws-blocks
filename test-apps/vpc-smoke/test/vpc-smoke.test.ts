@@ -34,12 +34,14 @@ async function rpc(method: string, ...args: unknown[]): Promise<unknown> {
 }
 
 test('VPC Smoke Tests', async (t) => {
-  t.before(async () => {
-    if (ENV === 'local') {
-      console.log('⏭️  VPC smoke tests require deployment — skipping in local mode.');
-      process.exit(0);
-    }
+  if (ENV === 'local') {
+    // Local runs can't exercise VPC connectivity — skip cleanly (no process.exit,
+    // which would force-kill the whole test runner) so the rest of the suite runs.
+    t.skip('VPC smoke tests require deployment — skipping in local mode.');
+    return;
+  }
 
+  t.before(async () => {
     console.log(`🚀 Deploying ${ENV}...\n`);
     execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
       cwd: join(__dirname, '..'), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' },

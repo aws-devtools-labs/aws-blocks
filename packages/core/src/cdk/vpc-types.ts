@@ -4,8 +4,15 @@
 import type * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 /**
- * Subnet role — BBs declare what kind of subnet they need.
- * The VPC maps roles to actual subnet selections.
+ * A subnet role — the kind of subnet a Building Block needs, expressed as an
+ * intent the VPC resolves to a concrete {@link ec2.SubnetSelection}:
+ *
+ * - `'private-with-egress'` — private subnets with outbound internet access via
+ *   a NAT gateway. Required by anything that must reach a public AWS endpoint at
+ *   runtime (e.g. a service with no interface endpoint).
+ * - `'isolated'` — private subnets with no internet route at all. Best for
+ *   resources reached entirely over VPC endpoints or in-VPC (e.g. a database).
+ * - `'public'` — subnets with a direct internet gateway route.
  */
 export type SubnetRole = 'private-with-egress' | 'isolated' | 'public';
 
@@ -59,8 +66,39 @@ export interface VpcRequirements {
   gatewayEndpoints?: ec2.GatewayVpcEndpointAwsService[];
   /** Interface VPC endpoints this BB needs (e.g., SQS, SSM, Secrets Manager). */
   interfaceEndpoints?: ec2.InterfaceVpcEndpointAwsService[];
-  /** Subnet role for VPC-resident resources (e.g., Aurora needs 'isolated'). */
-  subnetRole?: SubnetRole;
+  /**
+   * The subnet role the BB's **parent runtime** — the shared Blocks handler
+   * Lambda (or, in future, container) that executes this BB's operations — must
+   * run in for the BB to work at runtime.
+   *
+   * Declare this when your BB's runtime code depends on a network capability of
+   * its host that a valid-looking placement might not provide. The canonical
+   * case: a service with no VPC endpoint (e.g. Aurora DSQL) is reached over a
+   * public HTTPS endpoint, so the Lambda needs `'private-with-egress'`; if the
+   * Lambda is placed in isolated subnets the deploy still succeeds but every
+   * call times out at runtime.
+   *
+   * The framework **validates** this at synth against the Lambda's resolved
+   * placement and fails the build with an actionable message on a mismatch. It
+   * never moves the runtime — reassigning a customer's explicit Lambda placement
+   * is not a BB's responsibility, so an unsatisfiable requirement is an error,
+   * not a silent relocation.
+   *
+   * This constrains the BB's **host**. To place compute the BB provisions
+   * **itself** (e.g. an Aurora cluster), resolve a subnet inline in your
+   * constructor via {@link VpcContext.selectSubnets} instead.
+   */
+  runtimeSubnet?: SubnetRole;
+}
+
+/**
+ * The minimal shape {@link VpcContext.selectSubnets} needs from a Building
+ * Block to produce an instructive, BB-named error — just its `fullId`. Typed
+ * structurally so `vpc-types.ts` stays type-only and free of a dependency on
+ * the `Scope` class.
+ */
+export interface SubnetScope {
+  readonly fullId: string;
 }
 
 /**
@@ -72,5 +110,24 @@ export interface VpcContext {
   readonly vpc: ec2.IVpc;
   readonly lambdaSecurityGroup: ec2.ISecurityGroup;
   readonly lambdaSubnets: ec2.SubnetSelection;
-  selectSubnets(role: SubnetRole): ec2.SubnetSelection;
+  /**
+   * Resolve a {@link SubnetRole} to a concrete {@link ec2.SubnetSelection} for a
+   * resource this Building Block provisions itself, verifying the VPC actually
+   * has subnets of that role.
+   *
+   * Prefer this over building an `ec2.SubnetSelection` by hand: if the VPC has
+   * no matching subnet, it throws an actionable, BB-named error at synth
+   * ("`KVStore 'app/cache'` needs an 'isolated' subnet, but VPC 'vpc-…' has
+   * none …") instead of the opaque CDK "no subnet groups" error thrown later.
+   *
+   * @param scope   the BB requesting the subnet (its `fullId` names the error)
+   * @param role    the subnet role the BB's own resource needs
+   * @param opts.fallback  an alternate role to use when `role` is absent from
+   *   the VPC. Provide it to **explicitly** allow graceful degradation (e.g.
+   *   Aurora over the Data API works from `'private-with-egress'` when there is
+   *   no isolated tier); omit it to require `role` strictly and fail otherwise.
+   *   The downgrade is never silent — it only happens when you opt in here.
+   * @throws if the VPC has neither `role` nor (when given) `opts.fallback`
+   */
+  selectSubnets(scope: SubnetScope, role: SubnetRole, opts?: { fallback?: SubnetRole }): ec2.SubnetSelection;
 }

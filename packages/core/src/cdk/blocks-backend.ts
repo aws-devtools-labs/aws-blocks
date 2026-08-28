@@ -112,7 +112,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
     ],
   });
 
-  const handlerProps: any = {
+  const handlerProps: lambda.NodejsFunctionProps = {
     entry: props.backendHandlerPath,
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'handler',
@@ -139,14 +139,16 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
       minify: true,
       esbuildArgs: { '--conditions': 'aws-runtime' },
     }),
+    // VPC placement, when a VPC is configured. Spread conditionally so the
+    // non-VPC path leaves these unset (CDK treats undefined as "no VPC").
+    ...(vpcContext
+      ? {
+          vpc: vpcContext.vpc,
+          vpcSubnets: vpcContext.lambdaSubnets,
+          securityGroups: [vpcContext.lambdaSecurityGroup],
+        }
+      : {}),
   };
-
-  // Apply VPC placement to the Lambda if VPC context is provided
-  if (vpcContext) {
-    handlerProps.vpc = vpcContext.vpc;
-    handlerProps.vpcSubnets = vpcContext.lambdaSubnets;
-    handlerProps.securityGroups = [vpcContext.lambdaSecurityGroup];
-  }
 
   const handler = new lambda.NodejsFunction(scope, 'Handler', handlerProps);
 

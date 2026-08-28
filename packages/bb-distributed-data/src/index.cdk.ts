@@ -22,9 +22,13 @@ import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, 
 
 export class DistributedDatabase extends BuildingBlockScope {
   getVpcRequirements(): VpcRequirements {
-    // DSQL uses public HTTPS endpoints — no gateway/interface endpoint needed.
-    // Lambda in a VPC with NAT gateway (private-with-egress) can reach DSQL directly.
-    return {};
+    // DSQL has no VPC endpoint — it's reached over a public HTTPS endpoint. The
+    // shared handler Lambda therefore needs egress ('private-with-egress'). If
+    // the Lambda is placed in isolated subnets the deploy succeeds but every
+    // DSQL call times out at runtime, so declare this as a runtime requirement:
+    // finalizeVpc validates it against the Lambda's placement and fails synth on
+    // a mismatch instead of shipping a silently-broken deployment.
+    return { runtimeSubnet: 'private-with-egress' };
   }
 
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {

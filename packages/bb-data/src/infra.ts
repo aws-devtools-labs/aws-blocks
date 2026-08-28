@@ -15,7 +15,6 @@ import { join } from 'node:path';
 import {
   ENV_NAME_SANITIZE_PATTERN,
   ENV_VAR_PREFIX,
-  DEFAULT_POSTGRES_PORT,
   DEFAULT_MIN_CAPACITY,
   DEFAULT_MAX_CAPACITY,
   VPC_MAX_AZS,
@@ -127,28 +126,27 @@ export function materialize(
   // path), otherwise fall back to private-with-egress.
   let clusterSubnets: ec2.SubnetSelection;
   if (options.vpcContext) {
-    clusterSubnets = vpc.isolatedSubnets.length > 0
-      ? options.vpcContext.selectSubnets('isolated')
-      : options.vpcContext.selectSubnets('private-with-egress');
+    // Prefer the isolated tier when the VPC has one (keeps the DB off any NAT
+    // path); otherwise fall back to private-with-egress. selectSubnets throws an
+    // instructive, BB-named error if neither exists. `name` is the BB's fullId
+    // here (Database calls materialize(this, this.fullId, …)).
+    clusterSubnets = options.vpcContext.selectSubnets({ fullId: name }, 'isolated', {
+      fallback: 'private-with-egress',
+    });
   } else {
     clusterSubnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
   }
 
-  // Single SG instantiation
+  // Security group for the cluster. No ingress rule: the cluster runs with
+  // `enableDataApi: true` and is reached exclusively over the RDS Data API
+  // (HTTPS via the Secrets Manager + RDS Data interface endpoints), never a raw
+  // Postgres socket. A 5432 ingress rule would imply a direct DB connection path
+  // that nothing in Blocks uses. Egress stays closed for the same reason.
   const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
     vpc,
     description: `Security group for ${name} Aurora cluster`,
     allowAllOutbound: false,
   });
-
-  // Ingress rule differs based on context
-  securityGroup.addIngressRule(
-    options.vpcContext
-      ? options.vpcContext.lambdaSecurityGroup
-      : ec2.Peer.ipv4((vpc as ec2.Vpc).vpcCidrBlock),
-    ec2.Port.tcp(DEFAULT_POSTGRES_PORT),
-    options.vpcContext ? 'Lambda to Aurora' : 'Allow PostgreSQL from VPC',
-  );
 
   // Aurora Serverless v2 cluster with Data API enabled
   const removalPolicy = options.removalPolicy ?? cdk.RemovalPolicy.RETAIN;

@@ -50,8 +50,12 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   backendCDKPath: join(__dirname, 'index.ts'),
   defaults: BlocksPresets.sandbox,
   vpc: {
-    // Use fromLookup with the stack's own env — CDK will resolve it at synth.
-    // This works because BlocksStack IS a Stack, satisfying CDK's scope requirement.
+    // Vpc.fromLookup needs a Stack scope to cache the context lookup, and it must
+    // resolve BEFORE this BlocksStack is built (BlocksStack.create wires VPC
+    // placement during construction). So we host the lookup in a throwaway sibling
+    // stack; fromLookup resolves to concrete subnet/AZ attributes at synth, so the
+    // resulting IVpc is safely usable from this different stack. The sibling holds
+    // no real resources — it exists only as a lookup scope.
     network: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
     // Provision endpoints into THIS app stack (not the shared persistent VPC),
     // so the smoke test exercises the real finalizeVpc auto-detection path

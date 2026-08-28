@@ -20,7 +20,7 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  * - VPC with 2 AZs, isolated subnets, no NAT gateways
  * - Aurora Serverless v2 cluster (PostgreSQL-compatible, Data API enabled)
  * - Secrets Manager secret with auto-generated credentials
- * - Security group allowing inbound PostgreSQL (5432) from VPC
+ * - Security group with no ingress (Aurora is reached over the RDS Data API, not a socket)
  * - IAM grants for rds-data:* and secretsmanager:GetSecretValue
  * - Environment variables (BLOCKS_{id}_CLUSTER_ARN, BLOCKS_{id}_SECRET_ARN, BLOCKS_{id}_DATABASE)
  *
@@ -33,12 +33,16 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  */
 export class Database extends BuildingBlockScope {
   getVpcRequirements(): VpcRequirements {
+    // Aurora is reached over the RDS Data API, so it needs Secrets Manager + RDS
+    // Data interface endpoints. It does NOT declare a `runtimeSubnet`: the Data
+    // API is called from the shared Lambda over HTTPS (via those endpoints), so
+    // the Lambda's own placement is unconstrained. The cluster's placement is
+    // resolved by the Database construct itself via `selectSubnets`, not here.
     return {
       interfaceEndpoints: [
         ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
         ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
       ],
-      subnetRole: 'isolated',
     };
   }
 

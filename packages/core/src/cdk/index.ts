@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import { pathToFileURL } from 'node:url';
 import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
@@ -62,23 +61,15 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     // Set globalThis so Building Blocks attach directly to this stack
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
 
-    // Initialize VPC context before BBs are constructed (so BBs can discover it)
-    if (props.vpc) {
-      const vpcContext = initializeVpc(this, props.vpc);
-      // Apply VPC placement to the Lambda handler after infra is set up
-      // (infra setup happens next)
-      const infra = setupBlocksInfra(this, props, id, vpcContext);
-      this.handler = infra.handler;
-      this.gateway = infra.gateway;
-      this.apiUrl = infra.apiUrl;
-      this.executionRole = infra.executionRole;
-    } else {
-      const infra = setupBlocksInfra(this, props, id);
-      this.handler = infra.handler;
-      this.gateway = infra.gateway;
-      this.apiUrl = infra.apiUrl;
-      this.executionRole = infra.executionRole;
-    }
+    // Initialize VPC context before BBs are constructed (so BBs can discover it),
+    // then set up infra once. Single path — the only difference is whether a VPC
+    // context is threaded through.
+    const vpcContext = props.vpc ? initializeVpc(this, props.vpc) : undefined;
+    const infra = setupBlocksInfra(this, props, id, vpcContext);
+    this.handler = infra.handler;
+    this.gateway = infra.gateway;
+    this.apiUrl = infra.apiUrl;
+    this.executionRole = infra.executionRole;
   }
 
   static async create(scope: Construct, id: string, props: BlocksStackProps) {

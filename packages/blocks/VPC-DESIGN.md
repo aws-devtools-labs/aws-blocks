@@ -66,33 +66,46 @@ await BlocksStack.create(app, stackName, {
 
 ## BB Endpoint Registration
 
-Each Building Block declares what VPC endpoints it needs via two explicit methods on the `Scope` class. No `instanceof` detection — each BB calls the method matching its endpoint type directly.
+Each Building Block declares what it needs from the VPC by implementing
+`getVpcRequirements()`, which returns a plain `VpcRequirements` object. The
+framework collects these at finalization, deduplicates, and provisions.
 
 ### Registration API
 
 ```typescript
-// On Scope (core/cdk)
-protected getVpcRequirements()(service: ec2.GatewayVpcEndpointAwsService): void;
-protected getVpcRequirements()(service: ec2.InterfaceVpcEndpointAwsService): void;
+// On BuildingBlockScope (core/cdk)
+abstract getVpcRequirements(): VpcRequirements;
+
+interface VpcRequirements {
+  gatewayEndpoints?: ec2.GatewayVpcEndpointAwsService[];
+  interfaceEndpoints?: ec2.InterfaceVpcEndpointAwsService[];
+  /** Subnet role the BB's parent runtime (shared Lambda) must run in;
+   *  validated at synth, fails the build on a mismatch. */
+  runtimeSubnet?: SubnetRole;
+}
 ```
 
 ### Per-BB Declarations
 
-| Building Block | Registration Call |
-|----------------|-----------------|
-| bb-kv-store | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
-| bb-distributed-table | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.DYNAMODB)` |
-| bb-file-bucket | `this.getVpcRequirements()(ec2.GatewayVpcEndpointAwsService.S3)` |
-| bb-data | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER)` + `...RDS_DATA` |
-| bb-async-job | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SQS)` |
-| bb-agent | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
-| bb-knowledge-base | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME)` |
-| bb-email-client | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SES)` |
-| bb-app-setting | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
-| bb-realtime | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.APIGATEWAY)` |
-| bb-auth-cognito | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
-| bb-auth-oidc | `this.getVpcRequirements()(ec2.InterfaceVpcEndpointAwsService.SSM)` |
-| bb-distributed-data | None (DSQL uses public HTTPS, reachable via NAT) |
+| Building Block | `getVpcRequirements()` returns |
+|----------------|--------------------------------|
+| bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
+| bb-distributed-table | `{ gatewayEndpoints: [DYNAMODB] }` |
+| bb-file-bucket | `{ gatewayEndpoints: [S3] }` |
+| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }` |
+| bb-async-job | `{ interfaceEndpoints: [SQS] }` |
+| bb-agent | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
+| bb-knowledge-base | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
+| bb-email-client | `{ interfaceEndpoints: [SES] }` |
+| bb-app-setting | `{ interfaceEndpoints: [SSM] }` |
+| bb-realtime | `{ interfaceEndpoints: [APIGATEWAY] }` |
+| bb-auth-cognito | `{ interfaceEndpoints: [SSM] }` |
+| bb-auth-oidc | `{ interfaceEndpoints: [SSM] }` |
+| bb-distributed-data | `{ runtimeSubnet: 'private-with-egress' }` (DSQL over public HTTPS needs Lambda egress) |
+
+> CloudWatch Logs and SSM interface endpoints are always provisioned by
+> `finalizeVpc` regardless of BB declarations (Lambda log delivery; framework
+> config in SSM).
 
 ### Always-Added Endpoints
 

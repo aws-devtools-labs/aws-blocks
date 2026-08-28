@@ -3,9 +3,33 @@
 
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
-import type { BlocksVpcOptions, VpcContext, VpcRequirements, SubnetRole } from './vpc-types.js';
+import type { BlocksVpcOptions, VpcContext, VpcRequirements, SubnetRole, SubnetScope } from './vpc-types.js';
 
 const VPC_CONTEXT_KEY = Symbol.for('BLOCKS_VPC_CONTEXT');
+
+/** Map a subnet role to its concrete CDK subnet type. */
+function subnetTypeForRole(role: SubnetRole): ec2.SubnetType {
+  switch (role) {
+    case 'isolated':
+      return ec2.SubnetType.PRIVATE_ISOLATED;
+    case 'public':
+      return ec2.SubnetType.PUBLIC;
+    case 'private-with-egress':
+      return ec2.SubnetType.PRIVATE_WITH_EGRESS;
+  }
+}
+
+/** Does the VPC actually contain at least one subnet of the given role? */
+function vpcHasRole(vpc: ec2.IVpc, role: SubnetRole): boolean {
+  switch (role) {
+    case 'isolated':
+      return vpc.isolatedSubnets.length > 0;
+    case 'public':
+      return vpc.publicSubnets.length > 0;
+    case 'private-with-egress':
+      return vpc.privateSubnets.length > 0;
+  }
+}
 
 /**
  * Set the VPC context on a scope (BlocksStack or BlocksBackend).
@@ -50,6 +74,20 @@ function hasBuildingBlockProtocol(construct: Construct): construct is Construct 
 export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcContext {
   const { network: vpc, subnets } = options;
 
+  // Default Lambda placement to private-with-egress. Guard the default: if the
+  // caller didn't specify `subnets` and the VPC has no such tier, fail now with
+  // an actionable message instead of letting Lambda placement throw a cryptic
+  // CDK error later. (A caller who *explicitly* passes an isolated selection is
+  // honored — per-BB `runtimeSubnet` validation catches BBs that can't run there.)
+  if (!subnets && !vpcHasRole(vpc, 'private-with-egress')) {
+    throw new Error(
+      `VPC '${vpc.vpcId}' has no private-with-egress subnets, which Blocks uses for Lambda ` +
+        `placement by default. Add a PRIVATE_WITH_EGRESS subnet tier (a private subnet with a ` +
+        `NAT gateway), or pass 'vpc.subnets' to choose a different placement explicitly. ` +
+        `See packages/blocks/VPC.md.`,
+    );
+  }
+
   const resolvedSubnets = subnets ?? { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
 
   const lambdaSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksLambdaSg', {
@@ -62,16 +100,22 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
     vpc,
     lambdaSecurityGroup,
     lambdaSubnets: resolvedSubnets,
-    selectSubnets(role: SubnetRole): ec2.SubnetSelection {
-      switch (role) {
-        case 'isolated':
-          return { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
-        case 'public':
-          return { subnetType: ec2.SubnetType.PUBLIC };
-        case 'private-with-egress':
-        default:
-          return { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
+    selectSubnets(scope: SubnetScope, role: SubnetRole, opts?: { fallback?: SubnetRole }): ec2.SubnetSelection {
+      if (vpcHasRole(vpc, role)) {
+        return { subnetType: subnetTypeForRole(role) };
       }
+      // Requested role is absent. Fall back only if the BB explicitly opted in
+      // AND the fallback role actually exists — never downgrade silently.
+      if (opts?.fallback && vpcHasRole(vpc, opts.fallback)) {
+        return { subnetType: subnetTypeForRole(opts.fallback) };
+      }
+      const wanted = opts?.fallback ? `'${role}' (or '${opts.fallback}')` : `'${role}'`;
+      throw new Error(
+        `${scope.fullId} needs a ${wanted} subnet, but VPC '${vpc.vpcId}' has none. ` +
+          `Add a matching subnet tier to your VPC (e.g. a 'subnetConfiguration' entry of the ` +
+          `required type), or place the Building Block differently. ` +
+          `See packages/blocks/VPC.md for guidance.`,
+      );
     },
   };
 
@@ -86,16 +130,16 @@ export function initializeVpc(scope: Construct, options: BlocksVpcOptions): VpcC
  * @internal
  */
 export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
-  if (options.provisionEndpoints === false) {
-    return;
-  }
+  const { network: vpc, subnets } = options;
 
-  const { network: vpc } = options;
+  // The subnet role the shared handler Lambda is actually placed in. Mirrors the
+  // default applied in initializeVpc.
+  const lambdaPlacement: SubnetRole = subnetSelectionRole(subnets) ?? 'private-with-egress';
 
   const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
   const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];
 
-  // Pull requirements from all BuildingBlockScope instances in the tree
+  // Pull requirements from all BuildingBlockScope instances in the tree.
   for (const child of scope.node.findAll()) {
     if (hasBuildingBlockProtocol(child)) {
       const reqs = child.getVpcRequirements();
@@ -105,14 +149,34 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
       if (reqs.interfaceEndpoints) {
         interfaceEndpoints.push(...reqs.interfaceEndpoints);
       }
+      // Validate the BB's parent-runtime subnet requirement against where the
+      // Lambda is actually placed. We never move the Lambda (that's the
+      // customer's explicit choice) — an unsatisfiable requirement is a synth
+      // error, not a silent relocation. This turns an otherwise-silent runtime
+      // failure (e.g. DSQL in an isolated Lambda: deploys clean, times out on
+      // every call) into an actionable build error.
+      if (reqs.runtimeSubnet && !runtimeSatisfies(lambdaPlacement, reqs.runtimeSubnet)) {
+        const fullId = (child as { fullId?: string }).fullId ?? child.node.id;
+        throw new Error(
+          `${fullId} requires its runtime to be in a '${reqs.runtimeSubnet}' subnet, but the ` +
+            `Blocks Lambda is placed in '${lambdaPlacement}' subnets. ` +
+            `Set 'vpc.subnets' to a '${reqs.runtimeSubnet}' selection (and ensure the VPC has ` +
+            `that tier), or remove the Building Block that needs it. See packages/blocks/VPC.md.`,
+        );
+      }
     }
   }
 
-  // Provision gateway endpoints (deduplicated)
+  if (options.provisionEndpoints === false) {
+    return;
+  }
+
+  // Provision gateway endpoints (deduplicated). Gateway endpoints attach to
+  // route tables, not ENIs, so they have no security-group layer.
   const provisionedGateway = new Set<string>();
 
   for (const service of gatewayEndpoints) {
-    const key = (service as any).name ?? String(service);
+    const key = service.name;
     if (provisionedGateway.has(key)) continue;
     provisionedGateway.add(key);
 
@@ -124,6 +188,24 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
   interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS);
   // Always add SSM (auth BBs and AppSetting all use SSM)
   interfaceEndpoints.push(ec2.InterfaceVpcEndpointAwsService.SSM);
+
+  // Dedicated security group for the interface endpoints. Without an explicit
+  // SG, CDK creates a default that allows 443 from the entire VPC CIDR — on a
+  // bring-your-own VPC that exposes every endpoint to unrelated workloads. Scope
+  // ingress to just the Blocks Lambda SG so only our functions can reach them.
+  const ctx = getVpcContext(scope);
+  const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
+    vpc,
+    description: 'Blocks interface VPC endpoints — 443 from the Blocks Lambda only',
+    allowAllOutbound: true,
+  });
+  if (ctx) {
+    endpointSecurityGroup.addIngressRule(
+      ec2.Peer.securityGroupId(ctx.lambdaSecurityGroup.securityGroupId),
+      ec2.Port.tcp(443),
+      'HTTPS from Blocks Lambda',
+    );
+  }
 
   // Provision interface endpoints (deduplicated)
   const provisionedInterface = new Set<string>();
@@ -138,6 +220,38 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
       vpc,
       service,
       privateDnsEnabled: true,
+      securityGroups: [endpointSecurityGroup],
+      // `open: false` suppresses CDK's default "allow 443 from the whole VPC
+      // CIDR" ingress rule. Our dedicated SG already allows 443 from just the
+      // Blocks Lambda SG; without this, CDK would re-widen access to the entire
+      // VPC — the exact broadening this dedicated SG exists to prevent.
+      open: false,
     });
   }
+}
+
+/** The SubnetRole implied by an explicit SubnetSelection, if it maps cleanly. */
+function subnetSelectionRole(selection?: ec2.SubnetSelection): SubnetRole | undefined {
+  switch (selection?.subnetType) {
+    case ec2.SubnetType.PRIVATE_ISOLATED:
+      return 'isolated';
+    case ec2.SubnetType.PUBLIC:
+      return 'public';
+    case ec2.SubnetType.PRIVATE_WITH_EGRESS:
+      return 'private-with-egress';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Does a Lambda placed in `placement` satisfy a BB needing `required`?
+ * `private-with-egress` is the most capable (egress + private), so it satisfies
+ * any requirement here; otherwise the roles must match exactly.
+ */
+function runtimeSatisfies(placement: SubnetRole, required: SubnetRole): boolean {
+  if (placement === required) return true;
+  // A runtime with egress can also serve a BB that only needs to be private.
+  if (placement === 'private-with-egress' && required === 'isolated') return true;
+  return false;
 }
