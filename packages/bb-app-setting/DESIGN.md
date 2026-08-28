@@ -28,15 +28,16 @@ CloudFormation cannot natively create SSM SecureString parameters. The CDK imple
   - On `Create`: generates a **random** secret via `crypto.randomBytes(32).toString('base64url')` and calls `PutParameterCommand` with `Type: 'SecureString'`, `Overwrite: false` (no serialized initial value — secrets never come from source)
   - On `Delete`: calls `DeleteParameterCommand` to clean up the parameter
   - On `Update`: generates a random secret for newly added names (same as `Create`) **and** deletes parameters for names removed since the previous deployment (not a no-op); existing values are left untouched and managed at runtime via `put()`
-  - Granted `ssm:PutParameter` and `ssm:DeleteParameter` scoped to the parameter ARN, plus `kms:Encrypt` (with the `kms:ViaService` condition) so it can write the encrypted SecureString
-  - A single shared Lambda + `CustomResource` is created per stack; each secret parameter name is appended to the resource's `ParameterNames` list
+  - Granted `ssm:PutParameter` and `ssm:DeleteParameter` scoped to the parameter ARN, plus `kms:Encrypt`/`kms:GenerateDataKey*` (scoped by the `kms:ViaService` condition to `ssm.{region}`) so it can write the encrypted SecureString under either the default `aws/ssm` key or a customer-managed key
+  - A single shared Lambda + `CustomResource` is created per stack; each secret is appended to the resource's `Parameters` list as `{ name, keyId? }` — the optional `keyId` carries the customer-managed KMS key ARN and is passed as `KeyId` on `PutParameter`
 
 - **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month). Set `kmsKeyArn` to encrypt with a **customer-managed key** instead: the bulk-init Custom Resource passes it as `KeyId` on `PutParameter`, the handler is granted `kms:Decrypt`/`Encrypt`/`GenerateDataKey*` on that specific key ARN, and the runtime `put()` re-specifies the key on overwrite (SSM would otherwise fall back to `aws/ssm`). The CMK's own key policy must permit the app's execution role.
 
 - **Handler permissions (the runtime `this.handler`):**
   - `ssm:GetParameter` on the parameter ARN
   - `ssm:PutParameter` on the parameter ARN
-  - `kms:Decrypt` **and** `kms:Encrypt` with a `kms:ViaService` condition restricting usage to `ssm.{region}.amazonaws.com`
+  - Default `aws/ssm` key: `kms:Decrypt` **and** `kms:Encrypt` with a `kms:ViaService` condition restricting usage to `ssm.{region}.amazonaws.com`
+  - Customer-managed key (`kmsKeyArn` set): `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey*` scoped to that specific key ARN, with **no** `ViaService` condition (see *KMS encryption* above). The CMK's own key policy must also permit this role.
 
 ## Serialization & Validation
 
@@ -63,7 +64,7 @@ The 4 KB (4096 bytes) size limit applies to the **JSON-encoded** value of non-se
 - `put()` writes the value to disk immediately.
 - Schema validation on `put()` when configured, throws `ValidationFailedException`.
 - Validates 4 KB serialized value size limit for non-secret parameters.
-- `secret: true` behaves identically to non-secret (no encryption locally).
+- `secret: true` behaves identically to non-secret (no encryption locally); `kmsKeyArn` is ignored in the mock.
 
 ### Mock vs AWS Behavior Differences
 
