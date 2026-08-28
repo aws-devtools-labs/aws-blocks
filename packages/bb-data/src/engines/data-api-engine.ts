@@ -88,7 +88,8 @@ const SQLSTATE_PATTERN = /SQLState:\s*([A-Z0-9]{5})/i;
  * Classification priority:
  * 1. Parse SQLState from the message (most reliable — matches pg error codes).
  * 2. Fall back to message-text matching for unique constraints (backward compat).
- * 3. Check SDK exception names for connection errors.
+ * 3. Check SDK exception names for connection errors (service unavailable,
+ *    or a scale-to-zero cluster resuming from auto-pause).
  * 4. Default to QueryFailed.
  */
 function translateError(e: unknown): never {
@@ -110,7 +111,14 @@ function translateError(e: unknown): never {
       }
     } else if (/unique constraint|duplicate key/i.test(msg)) {
       e.name = DatabaseErrors.UniqueConstraintViolation;
-    } else if (e.name === 'ServiceUnavailableException' || e.name === 'InternalServerErrorException') {
+    } else if (
+      e.name === 'ServiceUnavailableException' ||
+      e.name === 'InternalServerErrorException' ||
+      // A scale-to-zero cluster (minCapacity: 0) auto-pauses after ~5 minutes
+      // idle; the call that wakes it fails while it resumes. Transient, and
+      // retryable — not a bad statement.
+      e.name === 'DatabaseResumingException'
+    ) {
       e.name = DatabaseErrors.ConnectionFailed;
     } else {
       e.name = DatabaseErrors.QueryFailed;
