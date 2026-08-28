@@ -1,6 +1,5 @@
 ---
+"@aws-blocks/bb-data": patch
 ---
 
-Test/tooling only: add an RDS Data API error-classification fixture corpus and a
-capture script for `bb-data`. No change to any published artifact, so no version
-bump.
+Add an internal RDS Data API error-classification fixture corpus and a capture script. Tests and tooling only — no change to runtime behavior or the public API.
