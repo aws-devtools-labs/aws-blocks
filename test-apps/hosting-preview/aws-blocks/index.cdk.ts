@@ -17,8 +17,8 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
 const stackName = sandboxMode
-  ? `blocks-hosting-ssr-nuxt-${getSandboxId(projectRoot)}${suffix ? `-${suffix}` : ''}`
-  : `blocks-hosting-ssr-nuxt-prod-${suffix || 'default'}`;
+  ? `blocks-hosting-preview-${getSandboxId(projectRoot)}${suffix ? `-${suffix}` : ''}`
+  : `blocks-hosting-preview-prod-${suffix || 'default'}`;
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -29,18 +29,18 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
+// Hosting — preview mode FULLY ENABLED: the cheapest, disposable shape
+// (no CDN → single regional origin, buffered; no cache/ISR; no image-opt).
+
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
-  buildCommand: 'npx nuxt build',
-  buildOutputDir: '.output',
-  framework: 'nuxt',
+  buildCommand: 'npm run build',
+  buildOutputDir: 'dist',
+  framework: 'spa',
   api: blocksStack,
-  compute: {
-    memorySize: 1024,
-    timeout: cdk.Duration.seconds(30),
-  },
+  preview: true,
 });
 
-cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-nuxt');
+cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-preview');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
 cdk.Tags.of(blocksStack).add('blocks:created-at', new Date().toISOString().split('T')[0]);

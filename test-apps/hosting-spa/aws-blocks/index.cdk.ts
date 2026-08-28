@@ -30,8 +30,6 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 
 // Hosting — SPA (static site served via CloudFront)
-const preview =
-  process.env.BLOCKS_PREVIEW === 'bypass' ? { cdn: false } : { cdn: true };
 
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
@@ -39,7 +37,6 @@ new Hosting(blocksStack, 'Hosting', {
   buildOutputDir: 'dist',
   framework: 'spa',
   api: blocksStack,
-  preview,
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-spa');
