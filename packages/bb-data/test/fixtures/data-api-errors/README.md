@@ -43,18 +43,33 @@ Each `*.json` file is one error case:
 
 ## Fidelity status — read this
 
-The seed fixtures in this directory are **transcribed** from the message/name
-shapes already asserted in `src/engines/data-api-engine.test.ts` and the
-documented RDS Data API error format. They are **not yet literal captures from a
-live cluster** — so at this point the corpus buys structure and drift-visibility,
-not higher fidelity than the tests it replaces.
+Each fixture's `provenance` field records how it was obtained. Two tiers exist:
 
-To actually close the drift gap, regenerate them from a real cluster:
+- **Captured** — `syntax-error-42601`, `undefined-table-42p01`, and
+  `unique-constraint-sqlstate-23505` are literal captures from a live Aurora
+  PostgreSQL 17.7 Serverless v2 cluster over the RDS Data API (us-west-2,
+  2026-08-28).
+- **Constructed** — the remaining fixtures (`serialization-failure-40001`,
+  `connection-failure-08006`, `unique-constraint-message`, `service-unavailable`,
+  `internal-server-error`) were not provoked during that capture. They cover
+  classification paths that need a specific cluster state (a serializable
+  conflict, a connection drop, a service-level outage) or a no-SQLState message.
+  Their `expected` mapping is exercised; their exact `name`/`message` strings are
+  best-effort.
+
+The capture already earned its keep: real statement errors arrive with
+`name` **`DatabaseErrorException`** and a `Position:` segment in the message —
+not the `BadRequestException` shape the first-cut fixtures assumed. Classification
+is unaffected (it keys off the `SQLState:` suffix), but that is exactly the drift
+a captured corpus makes visible. The constructed fixtures were updated to the
+observed `DatabaseErrorException` name for consistency.
+
+To extend or refresh the corpus, capture from a real cluster:
 
 ```
 RESOURCE_ARN=arn:aws:rds:... \
 SECRET_ARN=arn:aws:secretsmanager:... \
-DATABASE=postgres \
+DATABASE=appdb \
 AWS_REGION=... \
 npx tsx scripts/capture-data-api-errors.ts
 ```

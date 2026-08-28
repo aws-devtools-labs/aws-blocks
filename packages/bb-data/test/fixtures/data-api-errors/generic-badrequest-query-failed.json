@@ -1,6 +1,0 @@
-{
-  "name": "BadRequestException",
-  "message": "ERROR: relation \"missing_table\" does not exist; SQLState: 42P01",
-  "expected": "QueryFailed",
-  "provenance": "SQLState 42P01 falls through to QueryFailed; message text is the documented PostgreSQL undefined-table wording, pending real capture"
-}

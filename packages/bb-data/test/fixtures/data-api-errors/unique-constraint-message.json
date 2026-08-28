@@ -1,6 +1,6 @@
 {
-  "name": "BadRequestException",
+  "name": "DatabaseErrorException",
   "message": "ERROR: duplicate key value violates unique constraint \"users_email_key\"",
   "expected": "UniqueConstraintViolation",
-  "provenance": "transcribed from data-api-engine.test.ts (message-text classification path, no SQLState)"
+  "provenance": "message-text classification fallback (no SQLState). Constructed: captured Data API statement errors always carried a SQLState, so this no-SQLState path is a defensive/backward-compat case that was not observed live"
 }

@@ -1,6 +1,6 @@
 {
-  "name": "BadRequestException",
-  "message": "ERROR: syntax error at or near \"CREAT\"; SQLState: 42601",
+  "name": "DatabaseErrorException",
+  "message": "ERROR: syntax error at or near \"CREAT\"; Position: 1; SQLState: 42601",
   "expected": "QueryFailed",
-  "provenance": "SQLState 42601 falls through to QueryFailed; message text is the documented PostgreSQL syntax-error wording, pending real capture"
+  "provenance": "captured from a live Aurora PostgreSQL 17.7 Serverless v2 cluster via the RDS Data API (us-west-2, 2026-08-28)"
 }

@@ -1,6 +1,6 @@
 {
-  "name": "DatabaseError",
+  "name": "DatabaseErrorException",
   "message": "ERROR: could not serialize access due to read/write dependencies among transactions; SQLState: 40001",
   "expected": "SerializationFailure",
-  "provenance": "SQLState 40001 classification path; message text is the documented PostgreSQL serialization-failure wording, pending real capture"
+  "provenance": "SQLState 40001 classification path. name matches the DatabaseErrorException observed for captured statement errors; message text is constructed (a serialization failure was not provoked during capture)"
 }

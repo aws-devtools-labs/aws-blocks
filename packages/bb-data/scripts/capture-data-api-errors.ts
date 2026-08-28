@@ -39,15 +39,21 @@ const requireEnv = (key: string): string => {
 	return value;
 };
 
+// Scratch table used by the unique-constraint probe. Created before the probes
+// run and dropped after, so the probes are self-contained and repeatable.
+const SCRATCH_TABLE = '_capture_probe';
+
 // Statements crafted to provoke a specific error class. `expected` is the
 // DatabaseErrors key we believe the engine should classify each as — recorded
 // alongside the capture so a reviewer can confirm the mapping still holds.
 const PROBES: { slug: string; sql: string; expected: string }[] = [
 	{ slug: 'syntax-error', sql: 'CREAT TABLE bad_syntax (id int)', expected: 'QueryFailed' },
 	{ slug: 'undefined-table', sql: 'SELECT * FROM definitely_missing_table_xyz', expected: 'QueryFailed' },
+	// The scratch table is seeded with id=1 during setup, so re-inserting it
+	// violates the primary key.
 	{
 		slug: 'unique-constraint',
-		sql: "INSERT INTO pg_namespace (nspname) VALUES ('pg_catalog')",
+		sql: `INSERT INTO ${SCRATCH_TABLE} (id) VALUES (1)`,
 		expected: 'UniqueConstraintViolation',
 	},
 ];
@@ -57,11 +63,16 @@ const main = async (): Promise<void> => {
 	const secretArn = requireEnv('SECRET_ARN');
 	const database = requireEnv('DATABASE');
 	const client = new RDSDataClient({});
+	const run = (sql: string) => client.send(new ExecuteStatementCommand({ resourceArn, secretArn, database, sql }));
+
+	// Setup: a scratch table seeded with one row for the unique-constraint probe.
+	await run(`CREATE TABLE IF NOT EXISTS ${SCRATCH_TABLE} (id int PRIMARY KEY)`);
+	await run(`INSERT INTO ${SCRATCH_TABLE} (id) VALUES (1) ON CONFLICT DO NOTHING`);
 
 	for (const probe of PROBES) {
 		let captured: { name: string; message: string } | null = null;
 		try {
-			await client.send(new ExecuteStatementCommand({ resourceArn, secretArn, database, sql: probe.sql }));
+			await run(probe.sql);
 			console.warn(`[capture] ${probe.slug}: statement unexpectedly succeeded — skipping`);
 		} catch (e) {
 			captured = {
@@ -79,6 +90,9 @@ const main = async (): Promise<void> => {
 		writeFileSync(out, `${JSON.stringify(record, null, 2)}\n`);
 		console.log(`[capture] ${probe.slug}: ${captured.name} → wrote ${out}`);
 	}
+
+	// Teardown: drop the scratch table so the script is repeatable.
+	await run(`DROP TABLE IF EXISTS ${SCRATCH_TABLE}`);
 };
 
 main().catch((e) => {
