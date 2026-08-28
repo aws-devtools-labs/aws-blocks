@@ -54,9 +54,9 @@ same-origin**:
   degrade to the original source image; a **remote** source is 302'd to origin
   (the proxy never fetches arbitrary URLs — no SSRF).
 
-**Deploy speed.** Sandbox deploys use CloudFormation **Express Mode**
-(`--method direct --express`). Preview **re-deploys hotswap** the Lambdas
-(`--hotswap-fallback --express`) once a stack exists, and preview pins a
+**Deploy speed.** Building on the sandbox Express-Mode deploy, preview
+**re-deploys hotswap** the Lambdas (`--hotswap-fallback --express`) once a stack
+exists, and preview pins a
 deterministic `buildId='preview'` so a code-only change produces byte-identical
 assets and stays a true hotswap. Measured (nuxt): first deploy ~1.9× faster,
 code-only re-deploy ~2.4× faster, teardown ~20×+ faster than the CloudFront
