@@ -6,9 +6,11 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
+import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
+import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -168,6 +170,23 @@ export async function startSandbox(options: SandboxOptions) {
   }
 
   process.env.BLOCKS_STAGE = 'sandbox';
+
+  // Fail fast if AWS credentials are missing/expired, before spending ~10s in
+  // synth only to hit an opaque CDK credential error. Unlike deploy(), startSandbox
+  // isn't wrapped in trackCommand, so emit the FAIL event manually (mirroring the
+  // CDK-deploy failure path below) before rethrowing — otherwise a no-creds abort
+  // sends no telemetry.
+  try {
+    await assertAwsCredentials('sandbox');
+  } catch (error) {
+    buildAndSendEvent({
+      command: 'sandbox',
+      state: 'FAIL',
+      duration: Date.now() - sandboxStartTime,
+      error: classifyError(error),
+    });
+    throw error;
+  }
 
   // Provision connection string to SSM SecureString.
   // On first deploy, creates the parameter. On subsequent deploys, updates if changed.
