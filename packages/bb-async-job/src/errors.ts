@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { BatchSubmitResult } from './types.js';
+
 /**
  * Error name constants for AsyncJob operations.
  */
@@ -9,7 +11,7 @@ export const AsyncJobErrors = {
 	PayloadTooLarge: 'PayloadTooLargeException',
 	/** Thrown when batch is empty (must contain at least 1 payload). */
 	BatchEmpty: 'BatchEmptyException',
-	/** Thrown when batch contains more than 10 payloads. */
+	/** Thrown when a batch exceeds the per-call payload soft cap (10,000). */
 	BatchTooLarge: 'BatchTooLargeException',
 	/** Thrown when schema validation fails. */
 	ValidationFailed: 'ValidationFailedException',
@@ -28,4 +30,25 @@ export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
 	return err;
+}
+
+/**
+ * Thrown by `submitBatch` when one or more messages fail to enqueue (AWS only).
+ *
+ * A multi-chunk submit is not atomic (see DESIGN.md D-AJ-4a), so this carries
+ * the partial result: `jobIds` holds the SQS MessageId for every entry that was
+ * enqueued, with `null` at each failed index, and `failed` lists every failure
+ * across all chunks, sorted by index. A caller can catch this and retry only
+ * the `null` indexes rather than re-submitting the whole batch.
+ */
+export class BatchSubmitFailedError extends Error {
+	override readonly name = AsyncJobErrors.BatchSubmitFailed;
+	readonly jobIds: Array<string | null>;
+	readonly failed: BatchSubmitResult['failed'];
+
+	constructor(message: string, jobIds: Array<string | null>, failed: BatchSubmitResult['failed']) {
+		super(`${AsyncJobErrors.BatchSubmitFailed}: ${message}`);
+		this.jobIds = jobIds;
+		this.failed = failed;
+	}
 }

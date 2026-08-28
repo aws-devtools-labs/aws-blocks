@@ -1808,10 +1808,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  async asyncJobSubmitBatchTooMany() {
-    const items = Array.from({ length: 11 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
-    await testJob.submitBatch(items);
-    return { success: true };
+  async asyncJobSubmitLargeBatch() {
+    // More than one SQS SendMessageBatch worth of items: submitBatch must
+    // auto-chunk and return a jobId per item.
+    const items = Array.from({ length: 25 }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
+    const { jobIds } = await testJob.submitBatch(items);
+    return { jobIds };
   },
 
   async asyncJobSubmitDelayed(key: string, value: string, delaySeconds: number) {
