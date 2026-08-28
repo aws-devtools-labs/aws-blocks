@@ -540,6 +540,18 @@ export class Hosting extends Construct {
           `fastTeardown=${preview.fastTeardown} edgeToRegional=${preview.edgeToRegional} bypassCdn=${preview.bypassCdn}`,
       );
     }
+    // Safety guard: `bypassCdn` removes CloudFront entirely (single API Gateway
+    // origin) — intended for ephemeral previews, not production. Warn (don't
+    // throw, so an explicit no-CDN production choice stays possible) when it's
+    // active outside a sandbox deploy (`--context sandboxMode=true`), so an
+    // accidental one is loud.
+    const isSandboxDeploy = this.node.tryGetContext('sandboxMode') === 'true';
+    if (preview.bypassCdn && !isSandboxDeploy) {
+      cdk.Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:bypassCdn-non-sandbox',
+        'Hosting preview.bypassCdn is enabled on a non-sandbox deploy: the app is served from a single API Gateway origin with NO CloudFront — no edge cache, no WAF, no custom domain, buffered (non-streaming) SSR, a ~6 MB response cap, and image endpoints serve the source image unoptimized. This is intended for ephemeral preview environments; do not use it for production traffic.',
+      );
+    }
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);

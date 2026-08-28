@@ -31,7 +31,9 @@ composable knobs, each at a single seam:
   revalidating.
 - **`bypassCdn`** (opt-in even under preview) — skip CloudFront entirely and
   serve the whole app from **one API Gateway HTTP API v2 origin** at the domain
-  root. Framework-agnostic, routed off the `DeployManifest`.
+  root. Framework-agnostic, routed off the `DeployManifest`. A synth **warning**
+  fires if it's enabled on a non-sandbox deploy (it's a preview shape, not for
+  production traffic).
 
 Under `bypassCdn` the single origin serves everything, **securely and
 same-origin**:
