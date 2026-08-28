@@ -23,76 +23,69 @@ test('preview off by default when no prop and no sandbox context', () => {
   });
 });
 
-test('preview auto-enables from sandboxMode context; bypassCdn stays opt-in', () => {
+test('preview auto-enables from sandboxMode context and scales EVERYTHING down (CDN off by default)', () => {
   const p = resolvePreviewProfile(undefined, nodeWith({ sandboxMode: 'true' }));
   assert.deepStrictEqual(p, {
     enabled: true,
     trimResources: true,
     fastTeardown: true,
     edgeToRegional: true,
-    bypassCdn: false,
+    bypassCdn: true, // cdn capability defaults off → no CloudFront
     skipIsr: true,
     skipImageOptimization: true,
   });
 });
 
-test('preview: true enables every knob except bypassCdn', () => {
+test('preview: true = maximum scale-down (no CDN, no cache, no image-opt)', () => {
   const p = resolvePreviewProfile(true, nodeWith());
   assert.strictEqual(p.enabled, true);
   assert.strictEqual(p.trimResources, true);
   assert.strictEqual(p.fastTeardown, true);
   assert.strictEqual(p.edgeToRegional, true);
-  assert.strictEqual(p.bypassCdn, false);
+  assert.strictEqual(p.bypassCdn, true);
+  assert.strictEqual(p.skipIsr, true);
+  assert.strictEqual(p.skipImageOptimization, true);
 });
 
 test('preview: false wins over sandbox context (production-safety default)', () => {
   const p = resolvePreviewProfile(false, nodeWith({ sandboxMode: 'true' }));
   assert.strictEqual(p.enabled, false);
+  assert.strictEqual(p.bypassCdn, false);
   assert.strictEqual(p.trimResources, false);
-  assert.strictEqual(p.edgeToRegional, false);
 });
 
-test('object form enables preview and overrides a single knob', () => {
+test('cdn:true keeps the CDN (CDN-fronted, production-like preview)', () => {
   const p = resolvePreviewProfile(
-    { edgeToRegional: false },
+    { cdn: true },
     nodeWith({ sandboxMode: 'true' }),
   );
   assert.strictEqual(p.enabled, true);
-  assert.strictEqual(p.edgeToRegional, false, 'overridden knob is off');
-  assert.strictEqual(p.trimResources, true, 'other knobs still default on');
-  assert.strictEqual(p.fastTeardown, true);
+  assert.strictEqual(p.bypassCdn, false, 'cdn kept → not bypassed');
+  // other capabilities still scale down
+  assert.strictEqual(p.skipIsr, true);
+  assert.strictEqual(p.skipImageOptimization, true);
 });
 
-test('bypassCdn can be opted into via the object form', () => {
-  const p = resolvePreviewProfile(
-    { enabled: true, bypassCdn: true },
-    nodeWith(),
-  );
-  assert.strictEqual(p.enabled, true);
-  assert.strictEqual(p.bypassCdn, true);
+test('imageOptimization:true keeps image optimization; cdn still off', () => {
+  const p = resolvePreviewProfile({ enabled: true, imageOptimization: true }, nodeWith());
+  assert.strictEqual(p.skipImageOptimization, false, 'imageOptimization kept');
+  assert.strictEqual(p.bypassCdn, true, 'cdn still off by default');
 });
 
-test('explicit enabled:true wins in a non-sandbox deploy', () => {
+test('explicit enabled:true turns preview on in a non-sandbox deploy', () => {
   const p = resolvePreviewProfile({ enabled: true }, nodeWith());
   assert.strictEqual(p.enabled, true);
+  assert.strictEqual(p.bypassCdn, true);
   assert.strictEqual(p.trimResources, true);
 });
 
-test('skipIsr / skipImageOptimization default on under preview, overridable', () => {
-  const on = resolvePreviewProfile(true, nodeWith());
-  assert.strictEqual(on.skipIsr, true);
-  assert.strictEqual(on.skipImageOptimization, true);
-  const keepIsr = resolvePreviewProfile({ enabled: true, skipIsr: false }, nodeWith());
-  assert.strictEqual(keepIsr.skipIsr, false, 'skipIsr override respected');
-  assert.strictEqual(keepIsr.skipImageOptimization, true, 'other knob still defaults on');
-});
-
-test('knobs are forced off when the master switch is off', () => {
-  // enabled:false with a knob set true → the knob is still off.
+test('capabilities are inert when preview is off (enabled:false)', () => {
+  // enabled:false with a capability set → still fully off.
   const p = resolvePreviewProfile(
-    { enabled: false, edgeToRegional: true },
+    { enabled: false, cdn: true, imageOptimization: true },
     nodeWith({ sandboxMode: 'true' }),
   );
   assert.strictEqual(p.enabled, false);
-  assert.strictEqual(p.edgeToRegional, false);
+  assert.strictEqual(p.bypassCdn, false);
+  assert.strictEqual(p.skipImageOptimization, false);
 });

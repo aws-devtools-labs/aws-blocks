@@ -34,7 +34,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // wires the single-origin /aws-blocks/* CloudFront proxy so client fetches reach
 // the backend with no CORS.
 const preview =
-  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { cdn: false } : { cdn: true };
 
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),

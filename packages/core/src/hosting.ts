@@ -163,6 +163,45 @@ export interface PreviewProfile {
 }
 
 /**
+ * Public preview overrides — a small, **service-neutral** set of capabilities
+ * to keep (or let scale down) in a preview environment.
+ *
+ * These say WHAT to keep, not HOW it's built, so they read the same regardless
+ * of the underlying compute topology and don't leak framework internals. The
+ * framework maps each capability to the concrete infrastructure (see
+ * {@link resolvePreviewProfile}). For the common case, pass `preview: true` and
+ * override nothing.
+ *
+ * One rule: when preview is on, **everything scales down by default** — name a
+ * capability to keep it.
+ */
+export interface PreviewOverrides {
+  /**
+   * Force preview on/off explicitly. Omit to derive it from the deploy stage
+   * (on under `--context sandboxMode=true`, off for production).
+   */
+  enabled?: boolean;
+  /**
+   * Keep a content-delivery layer in front of the app — edge caching, WAF,
+   * custom domain, and streaming responses. **Off by default in preview**
+   * (the app is served from a single regional origin, responses buffered). Set
+   * `cdn: true` to opt up to a CDN-fronted, production-like preview.
+   */
+  cdn?: boolean;
+  /**
+   * Keep response caching and incremental page regeneration. **Off by default
+   * in preview** — pages are served frozen from the build and don't regenerate
+   * in the background.
+   */
+  cache?: boolean;
+  /**
+   * Keep on-the-fly image optimization. **Off by default in preview** — images
+   * are served unoptimized from their source.
+   */
+  imageOptimization?: boolean;
+}
+
+/**
  * Resolve the {@link PreviewProfile} from the user prop and CDK context.
  *
  * Precedence: an explicit `preview` prop wins; otherwise preview is enabled
@@ -178,18 +217,31 @@ export function resolvePreviewProfile(
   const obj = typeof preview === 'object' ? preview : undefined;
   const enabled =
     typeof preview === 'boolean' ? preview : (obj?.enabled ?? sandbox);
-  // A knob is on only when the master switch is on AND the knob isn't
-  // explicitly overridden to false.
-  const knob = (override: boolean | undefined, dflt: boolean) =>
-    enabled && (override ?? dflt);
+  // Map the public, service-neutral capabilities ({@link PreviewOverrides}) to
+  // the internal scale-down knobs. Callers say WHAT to keep (a capability);
+  // this decides HOW (the concrete infra knob), so the public surface never
+  // leaks framework/infra terms and survives new compute topologies.
+  // `dropped(keep, keptByDefault)` = the internal "skip/bypass" flag: a
+  // capability is scaled down when preview is on AND the caller didn't ask to
+  // keep it (falling back to its preview default).
+  const dropped = (keep: boolean | undefined, keptByDefault: boolean) =>
+    enabled && !(keep ?? keptByDefault);
   return {
     enabled,
-    trimResources: knob(obj?.trimResources, true),
-    fastTeardown: knob(obj?.fastTeardown, true),
-    edgeToRegional: knob(obj?.edgeToRegional, true),
-    bypassCdn: knob(obj?.bypassCdn, false),
-    skipIsr: knob(obj?.skipIsr, true),
-    skipImageOptimization: knob(obj?.skipImageOptimization, true),
+    // Monitoring/logging/alarms/skew are always trimmed in preview for now
+    // (no public capability yet — can be surfaced post-release if asked).
+    trimResources: enabled,
+    // Always optimized for a throwaway stack when preview is on.
+    fastTeardown: enabled,
+    edgeToRegional: enabled,
+    // `cdn` — dropped by default (no CloudFront); set `cdn: true` to opt up to
+    // a CDN-fronted, prod-like preview.
+    bypassCdn: dropped(obj?.cdn, false),
+    // Response caching / incremental regeneration is always off in preview for
+    // now (no public capability yet — add post-release if asked).
+    skipIsr: enabled,
+    // `imageOptimization` — dropped by default.
+    skipImageOptimization: dropped(obj?.imageOptimization, false),
   };
 }
 
@@ -430,34 +482,38 @@ export interface HostingProps {
 
   /**
    * Preview (fast-deploy) mode for ephemeral environments — PR previews and
-   * per-branch sandboxes. Trades production-grade edge features for a faster
-   * deploy. Resolves to a {@link PreviewProfile}.
+   * per-branch sandboxes. A **cheap, disposable** deploy that keeps the app
+   * functional while scaling down uncritical services (performance, edge
+   * features, streaming). Express **intent**, not infrastructure.
    *
-   * - `true` / `false` — enable or disable every knob at once.
-   * - object — enable preview and override individual knobs, e.g.
-   *   `{ edgeToRegional: false }` to keep Lambda@Edge, or
-   *   `{ bypassCdn: true }` to also skip the CloudFront distribution.
+   * - `true` / `false` — turn preview on or off.
+   * - object ({@link PreviewOverrides}) — turn preview on and keep specific
+   *   capabilities, e.g. `{ cdn: true }` for a production-like, CDN-fronted
+   *   preview, or `{ imageOptimization: true }`.
    * - **omitted** — preview auto-enables when the deploy sets
    *   `--context sandboxMode=true` (the sandbox deploy path does this), and is
    *   off otherwise. Production deploys are never affected.
    *
-   * When on, defaults to: skip CloudWatch monitoring, CloudFront access
-   * logging, and skew protection (A1); skip the first-deploy invalidation
-   * (A2); and deploy `runtime: 'edge'` routes as regional Lambdas instead of
-   * Lambda@Edge (B2). `bypassCdn` (C) stays opt-in even under preview.
+   * When on, **everything scales down by default**: no CDN (single regional
+   * origin, buffered responses), no response caching / regeneration, no image
+   * optimization, and no monitoring/logging/alarms. Name a capability in the
+   * object form to keep it.
    *
    * @example
    * ```ts
-   * // auto: preview when deployed as a sandbox, prod otherwise
+   * // auto: preview when deployed as a sandbox, production otherwise
    * new Hosting(stack, 'Web', { root, api: blocksStack });
    *
-   * // force preview but keep edge routes on Lambda@Edge
-   * new Hosting(stack, 'Web', { root, preview: { edgeToRegional: false } });
+   * // force the cheapest preview (no CDN, no cache, no image-opt)
+   * new Hosting(stack, 'Web', { root, preview: true });
+   *
+   * // production-like preview: keep the CDN (CloudFront, custom domain, streaming)
+   * new Hosting(stack, 'Web', { root, preview: { cdn: true } });
    * ```
    *
    * @default derived from the `sandboxMode` CDK context
    */
-  preview?: boolean | ({ enabled?: boolean } & Partial<Omit<PreviewProfile, 'enabled'>>);
+  preview?: boolean | PreviewOverrides;
 }
 
 // ─── Default build output directories per framework ──────────────

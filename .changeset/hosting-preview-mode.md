@@ -7,35 +7,32 @@
 Add hosting **preview mode** — a fast, cheap, disposable deploy shape for
 ephemeral environments (PR previews, per-branch sandboxes, demos).
 
-`Hosting` gains a `preview` prop (`boolean` or a per-knob object). It
-auto-enables when the deploy sets `--context sandboxMode=true` (the sandbox
-deploy path already does) and is off for production, so the production path is
-never affected. It resolves once to a `PreviewProfile` and fans out to
-composable knobs, each at a single seam:
+`Hosting` gains a `preview` prop: `true`/`false`, or a small object of
+**service-neutral capabilities** to keep (`PreviewOverrides`). It auto-enables
+when the deploy sets `--context sandboxMode=true` (the sandbox deploy path
+already does) and is off for production, so the production path is never
+affected.
 
-- **`trimResources`** — skip prod-only always-on resources a preview doesn't need
-  (CloudWatch monitoring/SNS/KMS/alarms, CloudFront access logging, skew
-  protection). An explicit prop (e.g. `monitoring: { enabled: true }`) always wins.
-- **`fastTeardown`** — skip the first-deploy CloudFront invalidation (nothing is
-  cached yet on a fresh distribution).
-- **`edgeToRegional`** — deploy Next.js `runtime: 'edge'` routes as **regional**
-  Lambdas instead of Lambda@Edge, eliminating the us-east-1 `edge-lambda-stack`
-  and its slow replication/teardown.
-- **`skipImageOptimization`** — skip the image-optimization Lambda (and, for
-  Next.js, the slow `sharp` install). Image endpoints degrade to the **source
-  image**.
-- **`skipIsr`** — drop the ISR **revalidation** machinery (DynamoDB tag table,
-  SQS queue/DLQ, revalidation Lambda) while **keeping the S3 incremental cache +
-  build seed**, so pure-SSG and prerendered pages are still served **frozen** at
-  build time (SSG is not ISR). ISR pages serve the build snapshot without
-  revalidating.
-- **`bypassCdn`** (opt-in even under preview) — skip CloudFront entirely and
-  serve the whole app from **one API Gateway HTTP API v2 origin** at the domain
-  root. Framework-agnostic, routed off the `DeployManifest`. A synth **warning**
-  fires if it's enabled on a non-sandbox deploy (it's a preview shape, not for
+**The public surface is intent, not infrastructure** — it never exposes
+framework or AWS-topology terms. One rule: preview scales everything down; name
+a capability to keep it.
+
+- **`cdn`** — keep a content-delivery layer (edge caching, WAF, custom domain,
+  streaming responses). **Off by default** in preview: the app is served from a
+  single regional origin at the domain root (responses buffered). `cdn: true`
+  opts up to a CDN-fronted, production-like preview. A synth **warning** fires if
+  the no-CDN shape runs on a non-sandbox deploy (it's a preview shape, not for
   production traffic).
+- **`imageOptimization`** — keep on-the-fly image optimization. **Off by
+  default**: images are served unoptimized from their source.
 
-Under `bypassCdn` the single origin serves everything, **securely and
+Everything else always scales down in preview with no public toggle yet
+(response caching / incremental regeneration, monitoring/logging/alarms, and
+Next.js `runtime:'edge'` routes → regional) — these can be surfaced as
+capabilities post-release if asked. Internally the resolver maps capabilities to
+per-service infrastructure; that mapping is an implementation detail.
+
+With the CDN off (the default), one origin serves everything, **securely and
 same-origin**:
 
 - **Static assets** via a small asset-proxy Lambda reading the private S3 bucket
@@ -70,9 +67,9 @@ and SPA** — routing, SSR (private, no Function URL), SSG-frozen, same-origin
 cookie-auth CRUD, and image fallback.
 
 **Breaking:** `HostingConstruct.distribution` and `HostingResources.distribution`
-are now **optional** (`undefined` under `bypassCdn`, where no CloudFront exists);
-code reading `.distribution` must guard. Otherwise additive — omitting `preview`
-in a non-sandbox deploy preserves today's behavior exactly.
+are now **optional** (`undefined` when a preview runs without a CDN, where no
+CloudFront exists); code reading `.distribution` must guard. Otherwise additive —
+omitting `preview` in a non-sandbox deploy preserves today's behavior exactly.
 
 Example:
 
@@ -80,9 +77,9 @@ Example:
 // auto: preview when deployed as a sandbox, production otherwise
 new Hosting(stack, 'Web', { root, api: blocksStack });
 
-// force preview but keep edge routes on Lambda@Edge
-new Hosting(stack, 'Web', { root, preview: { edgeToRegional: false } });
+// force the cheapest preview (no CDN, no cache, no image optimization)
+new Hosting(stack, 'Web', { root, framework: 'nextjs', preview: true });
 
-// skip CloudFront entirely — one API Gateway origin (fast, cheap, disposable)
-new Hosting(stack, 'Web', { root, framework: 'nextjs', preview: { bypassCdn: true } });
+// production-like preview: keep the CDN (CloudFront, custom domain, streaming)
+new Hosting(stack, 'Web', { root, framework: 'nextjs', preview: { cdn: true } });
 ```

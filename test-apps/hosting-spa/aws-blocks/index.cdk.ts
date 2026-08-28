@@ -31,7 +31,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 // Hosting — SPA (static site served via CloudFront)
 const preview =
-  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { cdn: false } : { cdn: true };
 
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),

@@ -29,10 +29,10 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
-// BLOCKS_PREVIEW=bypass → preview + bypassCdn (validate the framework-agnostic
+// BLOCKS_PREVIEW=bypass → no-CDN single-origin preview (validate the framework-agnostic
 // single-origin path for non-Next frameworks).
 const preview =
-  process.env.BLOCKS_PREVIEW === 'bypass' ? { bypassCdn: true } : undefined;
+  process.env.BLOCKS_PREVIEW === 'bypass' ? { cdn: false } : { cdn: true };
 
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
