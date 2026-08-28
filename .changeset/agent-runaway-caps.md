@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": patch
-"@aws-blocks/blocks": patch
+"@aws-blocks/bb-agent": minor
+"@aws-blocks/blocks": minor
 ---
 
 feat(bb-agent): cap model and tool calls per turn to bound runaway cost
@@ -26,8 +26,12 @@ over many steps or chain many tools must raise `maxLLMCalls` /
 *count*, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
 on Bedrock spend for real cost protection.
 
-This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
-this repo's signal for a breaking change; this change is not breaking — the new
-default is a behavior change with an opt-out (raise the cap), and both options
-are new and optional. The umbrella `@aws-blocks/blocks` gets the same bump
-because it re-exports `AgentConfig`.
+This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
+repo's signal for a change that can alter existing behavior. The two options are
+new and optional and there's an opt-out (raise the cap, or set it to `false`),
+but the new default changes the runtime behavior of every existing agent — a
+turn that legitimately exceeds 20 model or tool calls is now cut off unless the
+customer opts out — so it ships as `minor` rather than `patch` to surface that
+clearly. The scope is per execution segment (counts reset on `resume()` after an
+interrupt), not a whole multi-segment turn. The umbrella `@aws-blocks/blocks`
+gets the same bump because it re-exports `AgentConfig`.

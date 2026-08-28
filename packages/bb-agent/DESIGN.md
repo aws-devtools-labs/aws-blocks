@@ -34,6 +34,12 @@ Two storage backends, same FileBucket BB:
 - **AWS:** Strands' native `S3Storage` → FileBucket-provisioned S3 bucket
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
+## Runaway-protection caps
+
+`AgentConfig.maxLLMCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
+
+**Scope is per execution segment, not per logical conversation turn.** The counters live in a single `runAgent` invocation, so a turn that pauses on a HITL interrupt and is resumed via `resume()` starts a fresh count. This is intentional: it's a lightweight, compute-agnostic backstop that needs no cross-process state, and the interrupt→resume path is naturally throttled (each resume needs an approval; trustable auto-approval stays within one segment, which the cap already counts). Bounding a whole multi-segment turn (or on-demand stop/poll) would require persisting counts alongside the session and is deliberately out of scope — on-demand cancellation is a separate, compute-agnostic API-design task.
+
 ## Infrastructure (CDK)
 
 The CDK class mirrors the runtime's BB creation:

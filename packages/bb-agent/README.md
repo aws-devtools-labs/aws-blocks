@@ -372,7 +372,7 @@ Two per-turn safety caps bound this, and **both default to `20`**:
 - **`maxLLMCalls`** — the maximum number of model invocations in a single turn. This is the most direct spend guard (model calls are the billing unit), and because every tool round needs a model call it transitively bounds tool loops too.
 - **`maxToolIterations`** — the maximum number of tool calls in a single turn (parallel tool batches count each call).
 
-When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`.
+When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`. The count is per execution segment and resets on `resume()` — a turn that pauses on a [tool-approval interrupt](#tool-approval-human-in-the-loop) and is resumed starts a fresh budget, so the cap bounds each segment rather than a whole multi-segment turn.
 
 ```typescript
 const agent = new Agent(scope, 'support', {
