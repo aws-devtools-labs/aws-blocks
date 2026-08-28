@@ -391,6 +391,8 @@ const unbounded = new Agent(scope, 'batch', {
 
 Raise the caps for agents that legitimately take many steps so they aren't cut off mid-task, or set a cap to `false` to disable it — tuning these to your agent is part of delivering a good agentic experience, not just a cost lever. The caps bound call *count*, not tokens or wall-clock — for real cost protection, also configure a [billing alarm](https://docs.aws.amazon.com/cost-management/latest/userguide/monitor-charges.html) or a CloudWatch alarm on Bedrock spend.
 
+When sizing the caps for an agent that uses [tool approval](#tool-approval-human-in-the-loop), note the interrupt interaction: a `trustable` tool that's been trusted runs without interrupting, so its calls stay within the current segment and count against that segment's cap; a tool that interrupts for explicit approval only continues after `resume()`, which starts a fresh segment with a fresh budget.
+
 ## Tools
 
 Tools let the agent take actions during its reasoning — query a database, call an API, send an email. The model decides *when* to call a tool based on the user's message and the tool's description. You define the tool's schema and handler; the framework handles the rest.
