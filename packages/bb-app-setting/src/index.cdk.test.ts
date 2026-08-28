@@ -230,3 +230,68 @@ test('CDK: fromExisting still registers the runtime config key (BLOCKS_SSM_PARAM
 	);
 	assert.equal(registry.entries.get('BLOCKS_SSM_PARAM_DB_URL'), '/blocks/sandbox/db-abc-connection-string');
 });
+
+const TEST_CMK = 'arn:aws:kms:us-east-1:111122223333:key/abcd1234-5678-90ab-cdef-1234567890ab';
+
+test('CDK: secret with kmsKeyArn grants handler KMS on the specific CMK ARN (not a ViaService wildcard)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'cmk-secret', { secret: true, name: '/app/cmk-secret', kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+	const policies = template.findResources('AWS::IAM::Policy');
+
+	let found = false;
+	for (const logicalId of Object.keys(policies)) {
+		const statements = policies[logicalId]?.Properties?.PolicyDocument?.Statement;
+		if (!Array.isArray(statements)) continue;
+		for (const stmt of statements) {
+			const actions = Array.isArray(stmt.Action) ? stmt.Action : [stmt.Action];
+			if (!actions.includes('kms:Decrypt')) continue;
+			// The CMK grant scopes to the exact key ARN and carries no ViaService condition.
+			const resStr = JSON.stringify(stmt.Resource);
+			if (resStr.includes(TEST_CMK)) {
+				found = true;
+				assert.ok(actions.includes('kms:Encrypt'), 'stack-managed CMK secret should grant kms:Encrypt');
+				assert.ok(
+					actions.some((a: string) => a.startsWith('kms:GenerateDataKey')),
+					'CMK secret should grant kms:GenerateDataKey*',
+				);
+				assert.strictEqual(stmt.Condition, undefined, 'CMK grant should not use a ViaService wildcard condition');
+			}
+		}
+	}
+	assert.ok(found, `Expected a handler KMS grant scoped to the CMK ARN ${TEST_CMK}`);
+});
+
+test('CDK: secret with kmsKeyArn passes the KeyId to the bulk secret custom resource', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'cmk-secret', { secret: true, name: '/app/cmk-secret', kmsKeyArn: TEST_CMK });
+	const template = Template.fromStack(stack);
+
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulk = Object.values(crs).find((r) => Array.isArray(r?.Properties?.Parameters));
+	assert.ok(bulk, 'Expected a bulk-secrets custom resource with a Parameters list');
+	const params = bulk.Properties.Parameters as Array<{ name: string; keyId?: string }>;
+	const entry = params.find((p) => p.name === '/app/cmk-secret');
+	assert.ok(entry, 'the secret should appear in the bulk Parameters');
+	assert.strictEqual(entry?.keyId, TEST_CMK, 'the CMK ARN must be passed through as keyId');
+});
+
+test('CDK: a default-key secret carries no keyId in the bulk Parameters', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'plain-secret', { secret: true, name: '/app/plain-secret' });
+	const template = Template.fromStack(stack);
+	const crs = template.findResources('AWS::CloudFormation::CustomResource');
+	const bulk = Object.values(crs).find((r) => Array.isArray(r?.Properties?.Parameters));
+	const params = bulk?.Properties?.Parameters as Array<{ name: string; keyId?: string }>;
+	const entry = params.find((p) => p.name === '/app/plain-secret');
+	assert.ok(entry, 'the secret should appear in the bulk Parameters');
+	assert.strictEqual(entry?.keyId, undefined, 'a default-key secret must not set keyId');
+});
+
+test('CDK: kmsKeyArn without secret throws ValidationFailed', () => {
+	const { parent } = setup();
+	assert.throws(
+		() => new AppSetting(parent, 'bad', { value: 'x', name: '/app/bad', kmsKeyArn: TEST_CMK }),
+		/only valid with 'secret: true'/,
+	);
+});

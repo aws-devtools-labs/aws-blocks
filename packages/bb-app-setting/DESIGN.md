@@ -31,7 +31,7 @@ CloudFormation cannot natively create SSM SecureString parameters. The CDK imple
   - Granted `ssm:PutParameter` and `ssm:DeleteParameter` scoped to the parameter ARN, plus `kms:Encrypt` (with the `kms:ViaService` condition) so it can write the encrypted SecureString
   - A single shared Lambda + `CustomResource` is created per stack; each secret parameter name is appended to the resource's `ParameterNames` list
 
-- **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month)
+- **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month). Set `kmsKeyArn` to encrypt with a **customer-managed key** instead: the bulk-init Custom Resource passes it as `KeyId` on `PutParameter`, the handler is granted `kms:Decrypt`/`Encrypt`/`GenerateDataKey*` on that specific key ARN, and the runtime `put()` re-specifies the key on overwrite (SSM would otherwise fall back to `aws/ssm`). The CMK's own key policy must permit the app's execution role.
 
 - **Handler permissions (the runtime `this.handler`):**
   - `ssm:GetParameter` on the parameter ARN

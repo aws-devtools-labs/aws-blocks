@@ -32,6 +32,7 @@ export const AppSettingErrors: {
 
 // @public
 export interface AppSettingOptions<T = string> {
+    kmsKeyArn?: string;
     logger?: ChildLogger;
     name?: string;
     schema?: StandardSchemaV1<T>;
