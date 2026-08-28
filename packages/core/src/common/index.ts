@@ -323,6 +323,56 @@ export function computeScopeFullId(scope: { id: string; parent?: any }) {
   return scope.id;
 }
 
+/**
+ * The AWS Blocks resource-name contract. Every stack and Building Block resource
+ * name derives from the stack name (via {@link computeScopeFullId} → `fullId`),
+ * so the stack name must satisfy the CloudFormation stack-name rules: start with
+ * a letter, then only letters, digits, and hyphens, up to 128 characters.
+ *
+ * This is deliberately a **single shared validator** rather than an ad-hoc check
+ * at each call site: it is the one place the naming contract is enforced, so new
+ * name rules and other name-producing sites can consolidate here.
+ */
+const STACK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
+const STACK_NAME_MAX_LENGTH = 128;
+
+/** Suggest a valid stack name derived from an invalid one, for the error message. */
+function suggestStackName(name: string): string {
+  const cleaned = name
+    .replace(/[^A-Za-z0-9-]+/g, '-') // non-conforming runs → single hyphen
+    .replace(/^[^A-Za-z]+/, '') // must start with a letter
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, STACK_NAME_MAX_LENGTH);
+  return cleaned || 'my-app';
+}
+
+/**
+ * Fail fast at synth if a stack name would be rejected by CloudFormation.
+ *
+ * Without this, an invalid name (e.g. one containing underscores) passes `cdk
+ * synth` and only fails with an opaque `StackNameInvalidFormat` **minutes into
+ * provisioning**. This turns that into an immediate, actionable error before any
+ * infrastructure is created.
+ *
+ * @param name - The stack name (the `BlocksStack` id).
+ * @throws {Error} With guidance and a suggested valid name when `name` is invalid.
+ */
+export function assertValidStackName(name: string): void {
+  if (STACK_NAME_PATTERN.test(name) && name.length <= STACK_NAME_MAX_LENGTH) return;
+  const reason =
+    name.length > STACK_NAME_MAX_LENGTH
+      ? `it is ${name.length} characters (max ${STACK_NAME_MAX_LENGTH})`
+      : 'it must start with a letter and contain only letters, digits, and hyphens (no underscores, spaces, or other characters)';
+  const err = new Error(
+    `Invalid AWS Blocks stack name "${name}": ${reason}. ` +
+      `CloudFormation rejects it, but only after several minutes of provisioning. ` +
+      `Rename the stack — for example "${suggestStackName(name)}".`,
+  );
+  err.name = 'InvalidStackNameError';
+  throw err;
+}
+
 export interface BlocksStackProps extends StackProps {
   backendHandlerPath: string;
   backendCDKPath: string;
