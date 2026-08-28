@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseError",
+  "message": "ERROR: duplicate key value violates unique constraint \"users_pkey\"; SQLState: 23505",
+  "expected": "UniqueConstraintViolation",
+  "provenance": "transcribed from data-api-engine.test.ts (SQLState 23505 classification path)"
+}

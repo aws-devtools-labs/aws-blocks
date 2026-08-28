@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseError",
+  "message": "ERROR: connection failure; SQLState: 08006",
+  "expected": "ConnectionFailed",
+  "provenance": "SQLState 08xxx classification path; message text is the documented PostgreSQL connection-failure class, pending real capture"
+}

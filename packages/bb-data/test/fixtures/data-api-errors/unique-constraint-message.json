@@ -1,0 +1,6 @@
+{
+  "name": "BadRequestException",
+  "message": "ERROR: duplicate key value violates unique constraint \"users_email_key\"",
+  "expected": "UniqueConstraintViolation",
+  "provenance": "transcribed from data-api-engine.test.ts (message-text classification path, no SQLState)"
+}
