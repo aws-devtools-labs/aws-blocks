@@ -9,6 +9,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: block-catalog-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -17,9 +21,11 @@ jobs:
     name: Catalog in sync
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
+      - name: Test Building Block catalog helpers
+        run: node --test scripts/sync-catalog.test.mjs
       - name: Verify Building Block catalog is in sync
         run: node scripts/sync-catalog.mjs --check

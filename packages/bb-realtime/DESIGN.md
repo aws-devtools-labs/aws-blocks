@@ -62,7 +62,7 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 - Connection pool keyed by `wsUrl` (e.g., `ws://localhost:3001/realtime`)
 - Subscribe: `{ action: 'subscribe', channel, token }`
 - Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
-- Data: `{ type: 'message', channel, payload }`
+- Data: `{ type: 'message', channel, data }`
 
 ### AWS Middleware
 
@@ -177,7 +177,6 @@ Channel path:             my-app-collab/chat/room-123
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| WS message uses `payload` field (mock) vs `data` (AWS) | Native mobile clients see different wire format | Abstracted by SDK middlewares; document for native implementors |
 | Mock skips connect-time token auth (`?token=` query param) | A client can still *open* a WS locally, but can no longer *subscribe* without a valid channel token (enforced at subscribe time) | Recommend sandbox testing for connect-time auth-sensitive flows |
 | No connection duration limit locally | Mock WS stays open indefinitely | Document the 2-hour AWS limit in README |
 | Single-process only | No cross-process pub/sub | Local dev is single-process |

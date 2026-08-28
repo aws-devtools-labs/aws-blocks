@@ -1,7 +1,7 @@
 import 'model.dart';
 
-/// Resolved type system — output of the builder stage.
-
+/// A type after the builder has resolved `$ref`s, deduplicated structurally
+/// identical shapes, and assigned a Dart name to everything that needs one.
 sealed class ResolvedType {
   const ResolvedType();
 }
@@ -24,8 +24,11 @@ class ListType extends ResolvedType {
 }
 
 class RecordType extends ResolvedType {
+  /// Mutable: collision resolution rewrites this in place when two distinct
+  /// shapes claim the same name.
   String name;
   final List<RecordField> fields;
+
   final ResolvedType? additionalProperties;
   RecordType({
     required this.name,
@@ -46,12 +49,14 @@ class RecordField {
 }
 
 class EnumType extends ResolvedType {
+  /// Mutable: rewritten in place by collision resolution.
   String name;
   final List<String> values;
   EnumType({required this.name, required this.values});
 }
 
 class SealedClassType extends ResolvedType {
+  /// Mutable: rewritten in place by collision resolution.
   String name;
   final String discriminant;
   final List<SealedVariant> variants;
@@ -87,6 +92,7 @@ class TransferableType extends ResolvedType {
 }
 
 class SchemaReference extends ResolvedType {
+  /// Mutable: kept in sync when the type it points at is renamed.
   String name;
   SchemaReference(this.name);
 }
@@ -103,8 +109,11 @@ class TupleType extends ResolvedType {
 
 /// A resolved operation (method) in the codegen model.
 class Operation {
+  /// The generated Dart method name, without the namespace.
   final String name;
-  final String fullName; // dotted name for RPC call
+
+  /// The dotted name sent on the wire, e.g. `api.createTodo`.
+  final String fullName;
   final List<OperationParam> params;
   final ResolvedType result;
   const Operation({
@@ -133,17 +142,25 @@ class Namespace {
   const Namespace({required this.name, required this.operations});
 }
 
-/// The complete codegen model — ready for code generation.
+/// The complete codegen model, ready for code generation.
 class CodegenModel {
   final String title;
   final String version;
+
+  /// Operations grouped by their RPC name's namespace, meaning everything
+  /// before the final dot. Methods with no dot land in `_default`.
   final List<Namespace> namespaces;
-  final Map<String, ResolvedType> types; // named types (from schemas + inline)
+
+  /// Every named type to emit, from spec schemas plus synthesized inline ones,
+  /// keyed by its final Dart name.
+  final Map<String, ResolvedType> types;
+
   final List<Server> servers;
 
   /// Non-fatal diagnostics emitted during the build (e.g. auto-disambiguated
   /// naming collisions). Callers (CLI / build_runner) surface these to the user.
   final List<String> warnings;
+
   const CodegenModel({
     required this.title,
     required this.version,
@@ -157,7 +174,9 @@ class CodegenModel {
 /// Thrown when two structurally distinct inline types resolve to the same
 /// generated Dart identifier and `autoDisambiguate` is not enabled.
 class NamingConflictException implements Exception {
+  /// A multi-line report naming each conflicting type and where it came from.
   final String message;
+
   NamingConflictException(this.message);
   @override
   String toString() => 'NamingConflictException: $message';
@@ -208,6 +227,10 @@ class CodegenModelBuilder {
   final List<String> _warnings = [];
   int _anonCounter = 0;
 
+  /// Resolves [rpc] into a model the generator can emit.
+  ///
+  /// Throws a [NamingConflictException] when [failOnCollision] is set and two
+  /// distinct inline types still claim the same Dart name.
   CodegenModel build(RpcModel rpc) {
     _types.clear();
     _origins.clear();

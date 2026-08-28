@@ -15,11 +15,21 @@ import {
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
+import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 
-export { BlocksBackend, type BlocksBackendProps } from './blocks-backend.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+} from './blocks-backend.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
+export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export {
+  type BlocksDefaults,
+  BlocksPresets,
+} from './blocks-defaults.js';
 export { synthGuard } from './synth-guard.js';
 export type { ScopeOptions } from '../index.js';
 export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from '../errors.js';
@@ -32,11 +42,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly backendHandlerPath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: cdk.aws_iam.IRole;
+  /** Infrastructure defaults for Building Blocks created under this stack. */
+  public readonly defaults: BlocksDefaults;
 
   private constructor(scope: Construct, id: string, props: BlocksStackProps) {
     super(scope, id, props);
     this.id = id;
     this.backendHandlerPath = props.backendHandlerPath;
+    this.defaults = props.defaults;
 
     // Set globalThis so Building Blocks attach directly to this stack
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
@@ -86,50 +99,116 @@ export class Scope extends Construct {
   readonly bbName?: string;
   readonly bbVersion?: string;
 
+  /**
+   * The owning stack/backend (the root of the Blocks construct tree), resolved
+   * once at construction: the nearest BlocksStack/BlocksBackend up the construct
+   * tree, or the ambient `globalThis.CURRENT_BLOCKS_STACK` fallback. All
+   * root-derived accessors below read from this instead of each repeating the
+   * tree walk.
+   */
+  private readonly root: BlocksStack | BlocksBackend;
+
   constructor(id: string, options?: ScopeOptions) {
     const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
     super(parent, id);
     this.id = id;
     this.parent = parent;
+    this.root = this.resolveRoot();
   }
 
-  get handler() {
-    // Walk up the construct tree to find the owning BlocksStack/BlocksBackend
+  /**
+   * Walk up the construct tree to the nearest owning BlocksStack/BlocksBackend;
+   * fall back to the ambient `globalThis.CURRENT_BLOCKS_STACK`. Called once from
+   * the constructor; the result is cached in {@link root}.
+   */
+  private resolveRoot(): BlocksStack | BlocksBackend {
     let current: Construct = this;
     while (current.node.scope) {
         current = current.node.scope as Construct;
         if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-            return current.handler;
+            return current;
         }
     }
-    // Fallback to globalThis for backward compatibility
-    return ((globalThis as any).CURRENT_BLOCKS_STACK as { handler: cdk.aws_lambda_nodejs.NodejsFunction }).handler;
+    // Fallback to the ambient stack. In production this is always a real
+    // BlocksStack/BlocksBackend; the cast also admits the test doubles that set
+    // globalThis.CURRENT_BLOCKS_STACK to a stub exposing the same surface.
+    return (globalThis as any).CURRENT_BLOCKS_STACK as BlocksStack | BlocksBackend;
+  }
+
+  get handler() {
+    return this.root.handler;
   }
 
   /**
    * The shared IAM role assumed by all Blocks compute. Building Blocks grant
-   * their permissions to this role instead of to an individual function's
-   * auto-role. CDK's `grant*()` / `addToPrincipalPolicy()` route those grants
-   * to the role's default (inline) policy — exactly where they landed on the
-   * auto-generated role before.
-   *
-   * Resolves the same way as {@link handler}: walk up to the owning
-   * BlocksStack/BlocksBackend, falling back to the ambient stack.
+   * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
+   * route those grants to the role's default (inline) policy.
    */
   get executionRole(): cdk.aws_iam.IRole {
-    let current: Construct = this;
-    while (current.node.scope) {
-        current = current.node.scope as Construct;
-        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
-            return current.executionRole;
-        }
+    return this.root.executionRole;
+  }
+
+  /**
+   * The backend entry file the owning BlocksStack/BlocksBackend runs — the
+   * single handler entry shared across the whole app.
+   */
+  get backendHandlerPath(): string {
+    return this.root.backendHandlerPath;
+  }
+
+  /**
+   * The owning stack/backend's token-free root identity. This is the value the
+   * runtime receives as `BLOCKS_STACK_NAME` and rebuilds `fullId` from, so
+   * physical resource names (DynamoDB tables, env-var keys, IAM ARNs) derived
+   * from `fullId` match byte-for-byte between synth and runtime — otherwise the
+   * runtime looks up names that were never created. `BlocksBackend` exposes this
+   * as `fullId` ({@link BlocksBackend.fullId}); `BlocksStack` as `id`.
+   */
+  get backendStackName(): string {
+    const name = this.root instanceof BlocksBackend ? this.root.fullId : this.root.id;
+    if (!name) {
+      throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
     }
-    // Fallback to globalThis for backward compatibility
-    return ((globalThis as any).CURRENT_BLOCKS_STACK as { executionRole: cdk.aws_iam.IRole }).executionRole;
+    return name;
   }
 
   get fullId(): string {
     return computeScopeFullId(this);
+  }
+
+  /**
+   * The stack-wide infrastructure {@link BlocksDefaults} registered by
+   * `BlocksStack.create` / `BlocksBackend.create`. Read these in a Building
+   * Block's CDK constructor to resolve a durability value, letting a per-block
+   * option override:
+   *
+   * ```ts
+   * const removalPolicy = options?.removalPolicy ?? this.defaults.removalPolicy;
+   * ```
+   */
+  get defaults(): BlocksDefaults {
+    // Resolve the same way as handler/executionRole: walk up to the owning
+    // BlocksStack/BlocksBackend and read its defaults, so several backends in
+    // one stack each keep their own posture. Falls back to the ambient stack,
+    // then to the production preset when none was registered.
+    let current: Construct = this;
+    while (current.node.scope) {
+        current = current.node.scope as Construct;
+        if (current instanceof BlocksStack || current instanceof BlocksBackend) {
+            return current.defaults;
+        }
+    }
+    const ambient = ((globalThis as any).CURRENT_BLOCKS_STACK as { defaults?: BlocksDefaults } | undefined)?.defaults;
+    if (ambient) return ambient;
+    // No owning BlocksStack/BlocksBackend in the tree and none ambient — this is
+    // usually a deliberate test stub, but could be a real misconfiguration (a
+    // block built outside any Blocks backend). Fall back to the safe production
+    // posture, and log so it's debuggable if it fires unexpectedly.
+    console.warn(
+      `[Blocks] Scope "${this.id}" resolved infrastructure defaults with no owning ` +
+      'BlocksStack/BlocksBackend in scope; falling back to BlocksPresets.production.',
+    );
+    return BlocksPresets.production;
   }
 
   protected buildUserAgentChain(): [string, string][] {

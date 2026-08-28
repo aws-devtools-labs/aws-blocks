@@ -28,7 +28,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
-import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { KnowledgeBase } from './index.cdk.js';
 
 // Real local-folder source so BucketDeployment + sidecar generation synth.
@@ -44,15 +44,21 @@ const VECTOR_INDEX_TYPE = s3vectors.CfnIndex.CFN_RESOURCE_TYPE_NAME;
 // resolve through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack).
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
+  public readonly executionRole: cdk.aws_iam.IRole;
   public readonly id: string;
+  public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
+    this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+      assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
     this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
       code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+      role: this.executionRole,
     });
   }
 }
@@ -61,10 +67,13 @@ function buildStack(options: { removalPolicy?: 'destroy' | 'retain'; sandbox?: b
   stack: StubBlocksStack;
   kb: KnowledgeBase;
 } {
-  const app = new cdk.App(options.sandbox ? { context: { sandboxMode: 'true' } } : undefined);
+  const app = new cdk.App();
   // S3 bucket names must be lowercase; the data bucket derives its name from
   // the scope chain, so keep ids lowercase.
   const stack = new StubBlocksStack(app, 'teststack');
+  // Durability follows the stack-wide defaults (resolved via the globalThis
+  // fallback here), not the sandboxMode context.
+  if (options.sandbox) stack.defaults = BlocksPresets.sandbox;
   const parent = new Scope('app');
   const kb = new KnowledgeBase(parent, 'docs', {
     source: options.source ?? FIXTURES,
@@ -99,7 +108,7 @@ test("CDK: removalPolicy 'retain' keeps the data bucket + vector store and omits
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Retain' });
 });
 
-test('CDK: sandboxMode context defaults the data bucket + vector store to destroy', () => {
+test('CDK: sandbox defaults make the data bucket + vector store destroy', () => {
   const template = synth({ sandbox: true });
 
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });

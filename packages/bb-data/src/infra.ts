@@ -8,7 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +35,12 @@ export interface AuroraInfraConfig {
   migrationsPath?: string;
   /** CloudFormation removal policy for the Aurora cluster. @default RETAIN */
   removalPolicy?: cdk.RemovalPolicy;
+  /**
+   * Whether to enable RDS deletion protection. Resolved independently of
+   * `removalPolicy` so the stack-wide `defaults.deletionProtection` is honored.
+   * @default derived from removalPolicy (protected unless DESTROY)
+   */
+  deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
 }
@@ -146,7 +152,9 @@ export function materialize(
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,
-    deletionProtection: removalPolicy !== cdk.RemovalPolicy.DESTROY,
+    // Read independently from defaults (falling back to the removalPolicy-derived
+    // value for direct materialize() callers that don't pass it).
+    deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
     removalPolicy,
   });
 
@@ -202,16 +210,16 @@ export function materialize(
         DATABASE_NAME: databaseName,
         MIGRATIONS_DIR: '/var/task/migrations',
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          afterBundling: (inputDir: string, outputDir: string) => [
+          afterBundling: (_inputDir: string, outputDir: string) => [
             `cp -r ${options.migrationsPath} ${outputDir}/migrations`,
           ],
         },
         externalModules: ['@aws-sdk/*'],
-      },
+      }),
     });
     grantDataApi(migrationFn);
 

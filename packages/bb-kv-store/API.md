@@ -55,6 +55,7 @@ export const KVStoreErrors: {
 
 // @public (undocumented)
 export interface KVStoreOptions<T = string> {
+    deletionProtection?: boolean;
     logger?: ChildLogger;
     removalPolicy?: 'destroy' | 'retain';
     schema?: StandardSchemaV1<T>;

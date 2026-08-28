@@ -9,6 +9,7 @@ import { Realtime } from '@aws-blocks/bb-realtime';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { INTERACTIVE_JOB_EVENT_SOURCE } from './job-event-source.js';
 import { z } from 'zod';
 
 export { AgentErrors } from './errors.js';
@@ -30,7 +31,7 @@ export class Agent extends Scope {
 	constructor(scope: ScopeParent, id: string, config?: any) {
 		super(id, { parent: scope });
 
-		this.handler.addToRolePolicy(new PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],
 			resources: [
 				'arn:aws:bedrock:*::foundation-model/*',
@@ -64,6 +65,7 @@ export class Agent extends Scope {
 
 		new AsyncJob(this, 'job', {
 			schema: jobPayloadSchema,
+			...INTERACTIVE_JOB_EVENT_SOURCE,
 			handler: async () => {},
 		});
 	}
