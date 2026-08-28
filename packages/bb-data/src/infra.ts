@@ -113,6 +113,27 @@ export function materialize(
     ],
   });
 
+  // Pick where the cluster lands.
+  //
+  // Standalone: we build the VPC above with a dedicated isolated tier, so pin to it.
+  //
+  // Shared (bring-your-own) VPC: the isolated tier is not guaranteed. The VPC in
+  // every docs example (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`)
+  // has only public + private-with-egress subnets, so hard-requiring PRIVATE_ISOLATED
+  // makes the documented setup fail synth with "no isolated subnet groups in this VPC".
+  // Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), never a
+  // raw socket, so the placement tier doesn't affect reachability — it only has to be a
+  // tier the VPC actually has. Prefer isolated when present (keeps the DB off any NAT
+  // path), otherwise fall back to private-with-egress.
+  let clusterSubnets: ec2.SubnetSelection;
+  if (options.vpcContext) {
+    clusterSubnets = vpc.isolatedSubnets.length > 0
+      ? options.vpcContext.selectSubnets('isolated')
+      : options.vpcContext.selectSubnets('private-with-egress');
+  } else {
+    clusterSubnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+  }
+
   // Single SG instantiation
   const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
     vpc,
@@ -160,7 +181,7 @@ export function materialize(
     serverlessV2MaxCapacity: maxCapacity,
     writer: rds.ClusterInstance.serverlessV2(`${name}Writer`),
     vpc,
-    vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+    vpcSubnets: clusterSubnets,
     securityGroups: [securityGroup],
     defaultDatabaseName: databaseName,
     enableDataApi: true,

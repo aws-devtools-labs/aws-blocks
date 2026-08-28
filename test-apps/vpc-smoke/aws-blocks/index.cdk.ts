@@ -53,7 +53,13 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     // Use fromLookup with the stack's own env — CDK will resolve it at synth.
     // This works because BlocksStack IS a Stack, satisfying CDK's scope requirement.
     network: ec2.Vpc.fromLookup(new cdk.Stack(app, `${stackName}-vpc-ref`, { env }), 'Vpc', { vpcId }),
-    provisionEndpoints: false,
+    // Provision endpoints into THIS app stack (not the shared persistent VPC),
+    // so the smoke test exercises the real finalizeVpc auto-detection path
+    // end-to-end. Endpoints live and die with this per-PR stack; the persistent
+    // test VPC stays bare. Concurrency is serialized at the CI job level
+    // (group: blocks-test-vpc) because AWS permits only one private-DNS
+    // interface endpoint per service per VPC.
+    provisionEndpoints: true,
   },
 });
 

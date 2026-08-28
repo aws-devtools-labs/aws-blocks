@@ -291,6 +291,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: publish
+    # Serialize across PRs: the smoke app provisions private-DNS interface
+    # endpoints into the shared persistent test VPC, and AWS permits only one
+    # per service per VPC. Without this, two open PRs collide on the endpoints
+    # (and the shared stack) and CloudFormation fails the second run. Queue
+    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    concurrency:
+      group: blocks-test-vpc
+      cancel-in-progress: false
     env:
       BLOCKS_STACK_SUFFIX: vpc-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
