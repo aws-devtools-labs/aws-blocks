@@ -17,6 +17,7 @@ export class AppSetting<T = string> extends Scope {
     static fromExisting<T = string>(scope: ScopeParent, id: string, options: {
         name: string;
         secret?: boolean;
+        kmsKeyArn?: string;
     }): AppSetting<T>;
     get(): Promise<T>;
     // @internal

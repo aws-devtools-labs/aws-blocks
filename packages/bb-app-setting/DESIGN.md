@@ -27,17 +27,17 @@ CloudFormation cannot natively create SSM SecureString parameters. The CDK imple
   - Uses `lambda.Code.fromInline()` with `@aws-sdk/client-ssm` and `crypto`
   - On `Create`: generates a **random** secret via `crypto.randomBytes(32).toString('base64url')` and calls `PutParameterCommand` with `Type: 'SecureString'`, `Overwrite: false` (no serialized initial value — secrets never come from source)
   - On `Delete`: calls `DeleteParameterCommand` to clean up the parameter
-  - On `Update`: generates a random secret for newly added names (same as `Create`) **and** deletes parameters for names removed since the previous deployment (not a no-op); existing values are left untouched and managed at runtime via `put()`
-  - Granted `ssm:PutParameter` and `ssm:DeleteParameter` scoped to the parameter ARN, plus `kms:Encrypt`/`kms:GenerateDataKey*` (scoped by the `kms:ViaService` condition to `ssm.{region}`) so it can write the encrypted SecureString under either the default `aws/ssm` key or a customer-managed key
+  - On `Update`: generates a random secret for newly added names (same as `Create`) **and** deletes parameters for names removed since the previous deployment (not a no-op). Existing values are left untouched **unless the secret's `keyId` changed** (i.e. `kmsKeyArn` was added/changed/removed) — in that case it reads the current value (`GetParameter` with decryption) and rewrites it under the new key (`Overwrite: true`), so the value survives a key rotation and the handler's new key-scoped grant stays consistent
+  - Granted `ssm:GetParameter`/`ssm:PutParameter`/`ssm:DeleteParameter` scoped to the parameter ARN, plus `kms:Encrypt`/`kms:Decrypt` (scoped by the `kms:ViaService` condition to `ssm.{region}`) so it can create, read-when-re-keying, and re-encrypt SecureStrings under either the default `aws/ssm` key or a customer-managed key
   - A single shared Lambda + `CustomResource` is created per stack; each secret is appended to the resource's `Parameters` list as `{ name, keyId? }` — the optional `keyId` carries the customer-managed KMS key ARN and is passed as `KeyId` on `PutParameter`
 
-- **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month). Set `kmsKeyArn` to encrypt with a **customer-managed key** instead: the bulk-init Custom Resource passes it as `KeyId` on `PutParameter`, the handler is granted `kms:Decrypt`/`Encrypt`/`GenerateDataKey*` on that specific key ARN, and the runtime `put()` re-specifies the key on overwrite (SSM would otherwise fall back to `aws/ssm`). The CMK's own key policy must permit the app's execution role.
+- **KMS encryption:** Uses the default `aws/ssm` managed KMS key (no custom key needed, $0/month). Set `kmsKeyArn` to encrypt with a **customer-managed key** instead: the bulk-init Custom Resource passes it as `KeyId` on `PutParameter`, the handler is granted `kms:Decrypt`/`Encrypt` on that specific key ARN, and the runtime `put()` re-specifies the key on overwrite (SSM would otherwise fall back to `aws/ssm`). Changing `kmsKeyArn` later re-encrypts the existing value (see the Update behavior above). The CMK's own key policy must permit the app's execution role.
 
 - **Handler permissions (the runtime `this.handler`):**
   - `ssm:GetParameter` on the parameter ARN
   - `ssm:PutParameter` on the parameter ARN
   - Default `aws/ssm` key: `kms:Decrypt` **and** `kms:Encrypt` with a `kms:ViaService` condition restricting usage to `ssm.{region}.amazonaws.com`
-  - Customer-managed key (`kmsKeyArn` set): `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey*` scoped to that specific key ARN, with **no** `ViaService` condition (see *KMS encryption* above). The CMK's own key policy must also permit this role.
+  - Customer-managed key (`kmsKeyArn` set): `kms:Decrypt` **and** `kms:Encrypt` scoped to that specific key ARN, with **no** `ViaService` condition (see *KMS encryption* above). The CMK's own key policy must also permit this role.
 
 ## Serialization & Validation
 

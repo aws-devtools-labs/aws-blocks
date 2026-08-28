@@ -36,9 +36,10 @@ export interface AppSettingOptions<T = string> {
 	 * (e.g. cross-account access, key rotation, or a dedicated key policy).
 	 *
 	 * Only valid together with `secret: true`. The CDK layer grants the shared
-	 * handler `kms:Decrypt` (plus `kms:Encrypt`/`kms:GenerateDataKey*` for
-	 * stack-managed secrets it writes) on this key, and the runtime `put()` passes
-	 * the key so an overwrite does not silently fall back to the default key.
+	 * handler `kms:Decrypt` (plus `kms:Encrypt` for stack-managed secrets it
+	 * writes) on this key, and the runtime `put()` passes the key so an overwrite
+	 * does not silently fall back to the default key. Changing this on an existing
+	 * secret re-encrypts its current value under the new key at deploy time.
 	 *
 	 * @example
 	 * new AppSetting(scope, 'apiKey', { secret: true, kmsKeyArn: myKey.keyArn });

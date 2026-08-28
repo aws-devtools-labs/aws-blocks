@@ -33,10 +33,12 @@ const setting = new AppSetting(scope, id, options)
 > **Customer-managed KMS key (`kmsKeyArn`):** Provide a CMK ARN to control the
 > decrypt/grant scope of a secret (e.g. cross-account access or a dedicated key
 > policy). The construct grants the shared handler `kms:Decrypt` (plus
-> `kms:Encrypt`/`kms:GenerateDataKey*` for secrets it writes) on that specific
-> key ARN. Because AWS Blocks does not own a bring-your-own key, **the key's own
-> key policy must also allow the app's Lambda execution role** to use it (or
-> delegate to IAM via the account-root statement CDK adds to same-account keys).
+> `kms:Encrypt` for secrets it writes) on that specific key ARN. Because AWS
+> Blocks does not own a bring-your-own key, **the key's own key policy must also
+> allow the app's Lambda execution role** to use it (or delegate to IAM via the
+> account-root statement CDK adds to same-account keys). Adding or changing
+> `kmsKeyArn` on an already-deployed secret re-encrypts its current value under
+> the new key on the next deploy, so decryption keeps working.
 
 > **Naming:** When you omit `name`, the framework derives a unique SSM path from
 > the construct scope tree (`/${fullId}`). This is the recommended approach — it

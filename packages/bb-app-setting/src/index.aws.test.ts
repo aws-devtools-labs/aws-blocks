@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { describe, it, mock } from 'node:test';
+import { describe, test, mock } from 'node:test';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { Scope } from '@aws-blocks/core';
 import { AppSetting } from './index.aws.js';
@@ -20,7 +20,7 @@ function captureSend() {
 }
 
 describe('AWS runtime put() KMS key', () => {
-	it('passes the CMK as KeyId when a secret is backed by kmsKeyArn', async () => {
+	test('passes the CMK as KeyId when a secret is backed by kmsKeyArn', async () => {
 		const { inputs, restore } = captureSend();
 		try {
 			const setting = new AppSetting(new Scope('app'), 'cmk', { secret: true, kmsKeyArn: TEST_CMK });
@@ -33,7 +33,7 @@ describe('AWS runtime put() KMS key', () => {
 		}
 	});
 
-	it('omits KeyId for a default-key secret', async () => {
+	test('omits KeyId for a default-key secret', async () => {
 		const { inputs, restore } = captureSend();
 		try {
 			const setting = new AppSetting(new Scope('app'), 'plain', { secret: true });
@@ -45,7 +45,7 @@ describe('AWS runtime put() KMS key', () => {
 		}
 	});
 
-	it('omits KeyId for a non-secret String parameter', async () => {
+	test('omits KeyId for a non-secret String parameter', async () => {
 		const { inputs, restore } = captureSend();
 		try {
 			const setting = new AppSetting<string>(new Scope('app'), 'cfg', { value: 'init' });
