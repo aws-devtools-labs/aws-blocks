@@ -3,7 +3,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { createLambdaHandler, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
+import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { decodeRpcResponse } from './rpc.js';
@@ -607,7 +607,7 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
     assert.strictEqual(body.error.code, 504);
   });
 
-  it('504 response includes CORS headers from event origin', async () => {
+  it('504 response includes CORS headers for an allowed origin', async () => {
     const backend = {
       api: () => ({
         async echo() {
@@ -616,6 +616,10 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
         },
       }),
     };
+
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
 
     const event = makeEvent({
       headers: {
@@ -629,6 +633,71 @@ describe('createLambdaHandler — timeout guard for API Gateway events', () => {
     assert.strictEqual(result.statusCode, 504);
     assert.strictEqual(result.headers['Access-Control-Allow-Origin'], 'https://myapp.example.com');
     assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], 'true');
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('504 response omits CORS headers when no allowlist is configured', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return {};
+        },
+      }),
+    };
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+
+    const event = makeEvent({
+      headers: {
+        'Content-Type': 'application/json',
+        origin: 'https://evil.example.com',
+      },
+    });
+    const ctx = makeLambdaContext(50);
+    const result = await invokeWithContext(backend, event, ctx);
+
+    assert.strictEqual(result.statusCode, 504);
+    assert.strictEqual(result.headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], undefined);
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('disallowed origin with a configured allowlist is rejected with 403 before the timeout path', async () => {
+    const backend = {
+      api: () => ({
+        async echo() {
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+          return {};
+        },
+      }),
+    };
+
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+
+    const event = makeEvent({
+      headers: {
+        'Content-Type': 'application/json',
+        origin: 'https://evil.example.com',
+      },
+    });
+    const ctx = makeLambdaContext(50);
+    const result = await invokeWithContext(backend, event, ctx);
+
+    assert.strictEqual(result.statusCode, 403);
+    assert.strictEqual(result.headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], undefined);
+
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    _resetCorsPatterns();
   });
 });
 
@@ -1001,5 +1070,79 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── SQS partial batch failure tests ─────────────────────────────────────────
+
+/**
+ * These pin the runtime half of the bb-async-job BatchSize fix: with a batch
+ * larger than 1, failing records must be reported individually via
+ * `batchItemFailures` so SQS retries only those messages. If this response
+ * shape regresses, every successful sibling message in a partially-failing
+ * batch would be redelivered (or, worse, the failures silently dropped).
+ */
+function makeSqsBatchEvent(count: number) {
+  return {
+    Records: Array.from({ length: count }, (_, i) => ({
+      eventSource: 'aws:sqs',
+      eventSourceARN: 'arn:aws:sqs:us-east-1:123456789012:my-queue',
+      messageId: `msg-${i}`,
+      body: JSON.stringify({ n: i }),
+    })),
+  };
+}
+
+describe('handleEventSourceRecords — SQS partial batch responses', () => {
+  it('reports only the failed records of a mixed-success 10-record batch', async () => {
+    const processed: number[] = [];
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async (record: any) => {
+      const { n } = JSON.parse(record.body);
+      if (n % 3 === 0) throw new Error(`boom on ${n}`);
+      processed.push(n);
+    });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+
+      assert.deepStrictEqual(
+        result.batchItemFailures.map((f: any) => f.itemIdentifier).sort(),
+        ['msg-0', 'msg-3', 'msg-6', 'msg-9']
+      );
+      assert.deepStrictEqual(processed.sort((a, b) => a - b), [1, 2, 4, 5, 7, 8]);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('returns no batchItemFailures when every record in the batch succeeds', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => {});
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.deepStrictEqual(result, {});
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
+  });
+
+  it('reports all records when the whole batch fails (no silent drop)', async () => {
+    const handlers = new Map<string, (record: any) => Promise<void>>();
+    handlers.set('aws:sqs:my-queue', async () => { throw new Error('always'); });
+    (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ = handlers;
+
+    try {
+      const handler = createLambdaHandler(async () => ({}));
+      const result: any = await handler(makeSqsBatchEvent(10));
+      assert.strictEqual(result.batchItemFailures.length, 10);
+    } finally {
+      delete (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__;
+    }
   });
 });

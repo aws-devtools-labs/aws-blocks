@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/pipeline",
   "version": "0.1.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
+    "directory": "packages/pipeline"
+  },
+  "homepage": "https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/pipeline#readme",
+  "bugs": {
+    "url": "https://github.com/aws-devtools-labs/aws-blocks/issues"
+  },
   "description": "CDK Pipelines-based CI/CD construct for AWS Blocks applications",
   "author": "Amazon Web Services",
   "license": "Apache-2.0",

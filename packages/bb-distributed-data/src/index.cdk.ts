@@ -7,7 +7,7 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -24,19 +24,26 @@ export class DistributedDatabase extends Scope {
     super(id, { parent: scope });
 
     const stack = cdk.Stack.of(this);
-    const isSandbox = stack.node.tryGetContext('sandboxMode') === 'true';
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
     const region = stack.region;
     const dbRole = sanitizeDbRoleName(this.fullId);
 
-    // DSQL Cluster — respect explicit removalPolicy; default to DESTROY in sandbox, RETAIN otherwise.
-    const shouldDestroy = options?.removalPolicy === 'destroy' || (!options?.removalPolicy && isSandbox);
-    const removalPolicy = shouldDestroy ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN;
+    // Removal policy and deletion protection are resolved independently from the
+    // stack-wide `defaults` (per-block `removalPolicy` option wins for that field).
+    // Reading `defaults.deletionProtection` directly — rather than deriving it
+    // from `removalPolicy` — keeps every adopting block consistent: the same
+    // `defaults` object yields the same posture no matter which block reads it.
+    const removalPolicy =
+      options?.removalPolicy === 'destroy'
+        ? cdk.RemovalPolicy.DESTROY
+        : options?.removalPolicy === 'retain'
+          ? cdk.RemovalPolicy.RETAIN
+          : this.defaults.removalPolicy;
 
     const cluster = new cdk.CfnResource(stack, `${this.fullId}DsqlCluster`, {
       type: 'AWS::DSQL::Cluster',
       properties: {
-        DeletionProtectionEnabled: removalPolicy !== cdk.RemovalPolicy.DESTROY,
+        DeletionProtectionEnabled: this.defaults.deletionProtection,
       },
     });
 
@@ -44,20 +51,22 @@ export class DistributedDatabase extends Scope {
 
     const endpoint = cluster.getAtt('Endpoint').toString();
 
-    // Env vars for runtime
-    this.handler.addEnvironment(`BLOCKS_${envName}_ENDPOINT`, endpoint);
-    this.handler.addEnvironment(`BLOCKS_${envName}_REGION`, region);
+    // Config for runtime — flows through S3 config (loaded into process.env at
+    // cold start) like every other block, instead of a direct env var.
+    registerConfig(this, `BLOCKS_${envName}_ENDPOINT`, endpoint);
+    registerConfig(this, `BLOCKS_${envName}_REGION`, region);
 
-    // IAM grant — app Lambda gets DML-only access via custom DB role (least privilege)
-    this.handler.addToRolePolicy(new iam.PolicyStatement({
+    // IAM grant — the shared execution role gets DML-only access via custom DB
+    // role (least privilege).
+    this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['dsql:DbConnect'],
       resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
     }));
 
     new cdk.CfnOutput(stack, `${this.fullId}DsqlEndpoint`, { value: endpoint });
 
-    // The app Lambda's IAM role ARN is needed to map the custom DB role.
-    const appRoleArn = this.handler.role!.roleArn;
+    // The shared execution role ARN is mapped to the custom DB role.
+    const appRoleArn = this.executionRole.roleArn;
 
     // Resolve migrations path if provided
     const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
@@ -79,7 +88,7 @@ export class DistributedDatabase extends Scope {
         APP_ROLE_ARN: appRoleArn,
         DB_ROLE_NAME: dbRole,
       },
-      bundling: {
+      bundling: blocksNodejsBundling({
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
@@ -87,7 +96,7 @@ export class DistributedDatabase extends Scope {
             ? [`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`]
             : [],
         },
-      },
+      }),
     });
 
     // Migration Lambda needs Admin access (DDL + role management)
@@ -107,6 +116,16 @@ export class DistributedDatabase extends Scope {
 
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
+  }
+
+  /**
+   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+   * has no engine — queries run in the app Lambda against the deployed cluster.
+   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+   * query ran at synth time (e.g. at module scope).
+   */
+  getEngine(): never {
+    return synthGuard('DistributedDatabase', 'getEngine');
   }
 }
 

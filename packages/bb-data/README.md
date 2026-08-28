@@ -64,6 +64,10 @@ Migrations run automatically:
 
 Applied migrations are tracked in a `_migrations` table. Each file runs once.
 
+> **Set `migrationsPath` to a path relative to your project root** (as in the Quick Start — `'./aws-blocks/migrations'`); it's resolved at synth from the directory you run `cdk` / `npm run deploy` in. That's the simplest reliable pattern.
+>
+> You don't need `fileURLToPath(import.meta.url)` for this. Your backend module runs as ESM locally but is bundled to **CommonJS** in Lambda, where `import.meta` is empty. AWS Blocks shims `import.meta.url` / `import.meta.dirname` in the bundle so it won't crash at load — but at runtime those resolve to the **bundled output** location, not your source tree. So don't use `import.meta.url` to read a file relative to your source at request time; inline the data or ship it as a Lambda asset instead.
+
 ## Kysely Query Builder
 
 For type-safe queries without raw SQL:
@@ -252,6 +256,8 @@ interface DatabaseOptions {
   connection?: ExternalDatabaseRef;
   /** Schema metadata for crud() support. */
   schema?: TableSchema;
+  /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
+  postgresVersion?: string;
 }
 ```
 

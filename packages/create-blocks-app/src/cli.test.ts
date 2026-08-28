@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import assert from 'node:assert';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -170,6 +170,32 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
+      const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      const serverPath = join(tmpDir, 'aws-blocks', 'scripts', 'server.ts');
+      const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
+      const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
+      assert.strictEqual(packageJson.scripts['blocks:dev'], 'tsx watch aws-blocks/scripts/server.ts');
+      assert.ok(existsSync(serverPath));
+      assert.match(readFileSync(serverPath, 'utf-8'), /startDevServer/);
+      assert.match(readFileSync(generateClientPath, 'utf-8'), /from '@aws-blocks\/blocks\/scripts'/);
+      assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
+      assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
+      assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('generates a lazy backend import for the React template Lambda handler', () => {
+    const tmpDir = join(__dirname, '../.test-react-lambda-handler');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'react-app', version: '1.0.0' }));
+    try {
+      const result = run(['-y', '--skip-install', '--template', 'react'], tmpDir);
+      assert.strictEqual(result.exitCode, 0);
+      const handler = readFileSync(join(tmpDir, 'aws-blocks', 'index.handler.ts'), 'utf-8');
+      assert.match(handler, /createLambdaHandler\(\(\) => import\('\.\/index\.js'\)\)/);
+      assert.doesNotMatch(handler, /import \* as backend/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -321,6 +347,30 @@ describe('create-blocks-app auto-detection', () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
+  });
+
+  it('every deployable template ships the standard `vendorize` script', () => {
+    // Regression guard: the auth-cognito template was missing `vendorize`
+    // (all other deployable templates had it), so `npm run vendorize` didn't
+    // work in scaffolded auth-cognito apps. A template that can `sandbox`/`deploy`
+    // (i.e. has those lifecycle scripts) must also expose `vendorize` so users
+    // can inline a Block's source for customization.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const templates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+    const missing: string[] = [];
+    for (const name of templates) {
+      const pkgPath = join(templatesDir, name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
+      // Only deployable templates (those with a sandbox lifecycle) are expected
+      // to carry vendorize; e.g. the amplify template has no sandbox/deploy.
+      if (scripts.sandbox && scripts.vendorize !== 'blocks-vendorize') {
+        missing.push(name);
+      }
+    }
+    assert.deepStrictEqual(missing, [], `Deployable templates missing "vendorize": ${missing.join(', ')}`);
   });
 
   it('skips npm install when creating a fresh project with --skip-install', () => {

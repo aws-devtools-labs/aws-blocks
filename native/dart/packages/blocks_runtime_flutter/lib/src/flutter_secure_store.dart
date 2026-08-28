@@ -6,7 +6,7 @@ class FlutterSecureStore implements TokenStore {
   final FlutterSecureStorage _storage;
 
   FlutterSecureStore({FlutterSecureStorage? storage})
-      : _storage = storage ?? const FlutterSecureStorage();
+    : _storage = storage ?? const FlutterSecureStorage();
 
   @override
   Future<String?> get(String key) => _storage.read(key: key);

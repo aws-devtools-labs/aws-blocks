@@ -1,5 +1,77 @@
 # @aws-blocks/create-blocks-app
 
+## 0.1.20
+
+### Patch Changes
+
+- 7b4c62d: Add infrastructure `defaults` chosen once at the app entry point, replacing the per-block `sandboxMode` logic and the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin dance for removal-policy and deletion-protection.
+  
+  `@aws-blocks/core/cdk` now exports `BlocksDefaults` and the `BlocksPresets.sandbox` / `BlocksPresets.production` starting points. `BlocksStack.create` / `BlocksBackend.create` take a required `defaults` prop; start from a preset and override individual fields with a spread. `defaults` is anchored on the owning `BlocksStack`/`BlocksBackend` (resolved by walking up the construct tree, like `handler`/`executionRole`), so multiple backends in one stack each keep their own posture. Building Blocks read the resolved values via `scope.defaults`, and a per-block option always wins (`option ?? scope.defaults.field`).
+  
+  Adopted across the stateful Building Blocks: `bb-kv-store`, `bb-data`, `bb-distributed-data`, `bb-distributed-table`, and `bb-knowledge-base` now take their removal policy and deletion protection from `defaults` instead of reading the `sandboxMode` context themselves. (`bb-distributed-table` reads `defaults` directly for now; a richer per-block `protection` override lands with #282.)
+  
+  The `create-blocks-app` scaffolding templates are updated to pass `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production` (replacing the `RemovalPolicies`/`SandboxDisableDeletionProtection` mixin), so newly-generated apps satisfy the required prop.
+  
+  **Breaking:** `BlocksStack.create` / `BlocksBackend.create` now require a `defaults` field — pass `BlocksPresets.sandbox` or `BlocksPresets.production` (typically `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`). The previously-shipped experimental `hardening` prop and its `resolve*` helpers are removed; log-retention, API throttling, access-logging and point-in-time-recovery move into `defaults` in follow-up, per-feature changes.
+- 6918752: Use the lazy Lambda handler factory in the React template.
+- 8966cfb: fix(telemetry): detect Render and Taskcluster as CI
+  
+  Telemetry CI detection (`isCI()`) checked a fixed list of CI env vars but
+  omitted Render and Taskcluster. Render sets `RENDER=true` on every build and
+  service; Taskcluster tasks always set the namespaced `TASKCLUSTER_ROOT_URL`.
+  Runs on those platforms were therefore reported as real user sessions instead
+  of `ci:true`, inflating user metrics. `RENDER` and `TASKCLUSTER_ROOT_URL` are
+  now included in both `isCI()` implementations (`@aws-blocks/core` and
+  `@aws-blocks/create-blocks-app`). The umbrella `@aws-blocks/blocks` gets a patch
+  bump because it re-exports `@aws-blocks/core`.
+
+## 0.1.19
+
+### Patch Changes
+
+- 1e37c67: docs: per-block docs folders + committed BB catalog with CI sync check; CLAUDE/agents docs resolved via require.resolve
+
+  `@aws-blocks/blocks` now ships one docs folder per Building Block under `docs/<block>/`
+  (`README.md` / `API.md` / `DESIGN.md`), plus a committed, marker-delimited Building Block
+  catalog in the package README that a `sync-docs --check` CI gate keeps in sync. The README's
+  catalog section and the scaffolded `AGENTS.md` (`@aws-blocks/create-blocks-app`) now direct
+  tools and agents to locate docs programmatically via
+  `require.resolve('@aws-blocks/blocks/docs/<block>/README.md')` (and
+  `require.resolve('@aws-blocks/blocks/docs/README.md')` for the catalog) rather than assuming a
+  `node_modules/` path or following the human-facing relative links. Also adds a Security
+  Considerations section to the package README.
+
+## 0.1.18
+
+### Patch Changes
+
+- 75f5446: Add optional `fallback` parameter to `AuthenticatedContent` for rendering alternative content when the user is not authenticated.
+- 8264dd0: Add the missing `vendorize` script to the `auth-cognito` template. Every other deployable template shipped `"vendorize": "blocks-vendorize"`, but auth-cognito omitted it, so `npm run vendorize` (used to inline a Building Block's source for customization) didn't work in scaffolded auth-cognito apps. Also adds a regression test asserting every deployable template carries the standard `vendorize` script.
+
+## 0.1.17
+
+### Patch Changes
+
+- 50dbd0e: Include the local dev-server script and use public AWS Blocks imports when adding AWS Blocks to an Amplify Gen 2 project.
+
+## 0.1.16
+
+### Patch Changes
+
+- fc33428: fix(telemetry): inherit worker stderr in debug mode; enable telemetry in CI for create-blocks-app
+
+  - When `NODE_DEBUG=blocks-telemetry` is set, the telemetry worker subprocess
+    inherits the parent's stderr so delivery confirmation is observable. Silent
+    by default.
+  - Remove CI telemetry suppression from create-blocks-app to match core behavior.
+    Telemetry is now enabled in CI (same as all other CLI commands).
+  - Make `console` cross-platform and headless-safe: pick the OS browser opener
+    (`open`/`xdg-open`/`start`), resolve the region from the environment, and treat
+    a missing opener (CI / remote shells) as best-effort success instead of failing.
+  - Add an isolated E2E telemetry test suite (`test-apps/telemetry`) that verifies
+    payload structure, delivery to the real endpoint, disable mechanisms, and
+    per-command success/failure events.
+
 ## 0.1.15
 
 ### Patch Changes

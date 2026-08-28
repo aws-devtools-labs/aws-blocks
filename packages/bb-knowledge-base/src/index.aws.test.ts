@@ -5,6 +5,7 @@ import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
+import { isBlocksError } from '@aws-blocks/core';
 import { KnowledgeBaseErrors, KnowledgeBase } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────
@@ -346,6 +347,30 @@ describe('retrieve (SDK-mocked)', () => {
 
 			await kb.retrieve('query', { maxResults: 50 });
 			assert.strictEqual(capturedNumberOfResults, 50, 'maxResults=50 should pass through');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('rejects a fractional or non-finite maxResults before sending a Bedrock request', async () => {
+		const cleanup = setKbEnv('TEST', 'R9b');
+		let sent = false;
+		mockRuntimeSend(() => {
+			sent = true;
+			return { retrievalResults: [] };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'r9b', { source: './knowledge' });
+
+			for (const bad of [1.5, Number.NaN]) {
+				await assert.rejects(
+					() => kb.retrieve('query', { maxResults: bad }),
+					(e: unknown) => isBlocksError(e, KnowledgeBaseErrors.ValidationError),
+					`maxResults=${bad} should reject with ValidationError`,
+				);
+			}
+			assert.strictEqual(sent, false, 'no RetrieveCommand should be sent for an invalid maxResults');
 		} finally {
 			cleanup();
 		}

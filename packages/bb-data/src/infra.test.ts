@@ -46,6 +46,33 @@ test('CDK: default capacity is 0.5-2 ACUs', () => {
   });
 });
 
+// --- Engine version ---
+
+test('CDK: default engine version is 16.13', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    EngineVersion: Match.stringLikeRegexp('^16\\.13'),
+  });
+});
+
+test('CDK: postgresVersion override sets the engine version', () => {
+  const template = synthTemplate({ databaseName: 'mydb', postgresVersion: '16.11' });
+  template.hasResourceProperties('AWS::RDS::DBCluster', {
+    EngineVersion: '16.11',
+  });
+});
+
+test('CDK: malformed postgresVersion throws at synth time', () => {
+  assert.throws(
+    () => synthTemplate({ databaseName: 'mydb', postgresVersion: '16' }),
+    /Invalid postgresVersion "16"/,
+  );
+  assert.throws(
+    () => synthTemplate({ databaseName: 'mydb', postgresVersion: 'bogus' }),
+    /Invalid postgresVersion "bogus"/,
+  );
+});
+
 // --- VPC ---
 
 test('CDK: VPC has isolated subnets and no NAT gateways', () => {
