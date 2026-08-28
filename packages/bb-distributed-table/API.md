@@ -30,6 +30,8 @@ export class DistributedTable<T, K extends TableKeyConfig<T> = TableKeyConfig<T>
     // (undocumented)
     static fromExisting(tableName: string): ExternalTableRef;
     // (undocumented)
+    static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
+    // (undocumented)
     get(key: TableKey<T, K>): Promise<T | null>;
     // (undocumented)
     getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]>;
@@ -57,13 +59,26 @@ export const DistributedTableErrors: {
 
 // @public (undocumented)
 export interface DistributedTableOptions<T, K extends TableKeyConfig<T> = TableKeyConfig<T>, Indexes extends Record<string, TableKeyConfig<T>> = Record<string, TableKeyConfig<T>>> {
+    encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     indexes?: Indexes;
     key: K;
     logger?: ChildLogger;
+    pointInTimeRecovery?: boolean | {
+        retentionDays: number;
+    };
+    protection?: 'disposable' | 'retained' | 'locked';
     readValidation?: ReadValidationMode;
     schema: StandardSchemaV1<T>;
     table?: ExternalTableRef;
     ttl?: keyof T & string;
+}
+
+// @public
+export interface ExternalKmsKeyRef {
+    // (undocumented)
+    readonly __brand: 'ExternalKmsKeyRef';
+    // (undocumented)
+    readonly keyArn: string;
 }
 
 // @public (undocumented)

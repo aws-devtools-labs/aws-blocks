@@ -43,7 +43,7 @@ export class Database extends Scope {
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_CLUSTER_ARN`, conn.host);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_SECRET_ARN`, conn.secretArn);
         registerConfig(this, `${ENV_VAR_PREFIX}_${envName}_DATABASE`, conn.database);
-        grantExternalDataApi(this, this.fullId, conn, this.handler);
+        grantExternalDataApi(this, this.fullId, conn, this.executionRole);
       }
       // connectionString variant: AppSetting handles parameter creation, IAM grants, and env var injection.
 
@@ -88,8 +88,8 @@ export class Database extends Scope {
       registerConfig(this, key, value);
     });
 
-    // Grant Data API permissions to the Lambda handler
-    infra.grantDataApi(this.handler);
+    // Grant Data API permissions to the shared execution role
+    infra.grantDataApi(this.executionRole);
   }
 
   /**

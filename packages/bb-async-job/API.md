@@ -40,6 +40,7 @@ export const AsyncJobErrors: {
     readonly BatchSubmitFailed: "BatchSubmitFailedException";
     readonly Timeout: "AsyncJobTimeoutException";
     readonly StatusNotTracked: "StatusNotTrackedException";
+    readonly InvalidOption: "InvalidOptionException";
 };
 
 // @public
@@ -47,6 +48,7 @@ export interface AsyncJobOptions<T> {
     batchSize?: number;
     handler: (payload: T, context: AsyncJobContext) => Promise<void>;
     logger?: ChildLogger;
+    maxBatchingWindowSeconds?: number;
     maxRetries?: number;
     schema?: StandardSchemaV1<T>;
     trackStatus?: boolean;
@@ -71,6 +73,17 @@ export interface AsyncJobTransition {
     at: string;
     attempt: number;
     state: AsyncJobState;
+}
+
+// @public
+export class BatchSubmitFailedError extends Error {
+    constructor(message: string, jobIds: Array<string | null>, failed: BatchSubmitResult['failed']);
+    // (undocumented)
+    readonly failed: BatchSubmitResult['failed'];
+    // (undocumented)
+    readonly jobIds: Array<string | null>;
+    // (undocumented)
+    readonly name: "BatchSubmitFailedException";
 }
 
 // @public

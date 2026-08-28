@@ -471,7 +471,7 @@ export class KnowledgeBase extends Scope {
 			arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
 		});
 
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:Retrieve'],
 			resources: [knowledgeBaseArn],
 		}));
@@ -479,7 +479,7 @@ export class KnowledgeBase extends Scope {
 		// Ingestion-job status for isSynced()/waitUntilSynced(). These actions are
 		// authorized at the knowledge-base resource level (the data source and
 		// ingestion jobs are sub-resources of the KB ARN).
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: ['bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs'],
 			resources: [knowledgeBaseArn],
 		}));

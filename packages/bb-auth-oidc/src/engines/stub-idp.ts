@@ -279,17 +279,16 @@ function parseAuthorizeRequest(params: URLSearchParams, ctx: BlocksContext): Aut
 		return null;
 	}
 
-	// Reject custom-scheme redirect URIs the way real IdPs do.
-	// Google, Microsoft Entra, Okta, and Auth0 all reject anything that
-	// isn't https:// (or loopback http://) at the authorize endpoint.
-	// Without this, the stub gives a false green — tests pass while the
-	// wrong URL would explode in production.
-	if (!isAllowedRedirectUri(redirectUri)) {
+	// Reject redirect URIs the way real IdPs do — custom schemes, and query
+	// strings carrying a reserved OAuth/OIDC response param. Without this the
+	// stub gives a false green: tests pass while Google would refuse the URL.
+	const rejection = redirectUriRejectionReason(redirectUri);
+	if (rejection) {
 		ctx.response.status = 400;
 		ctx.response.headers.set('Content-Type', 'application/json');
 		ctx.response.send({
 			error: 'invalid_request',
-			error_description: 'redirect_uri must be HTTPS or loopback HTTP',
+			error_description: rejection,
 		});
 		return null;
 	}
@@ -388,12 +387,15 @@ export async function handleToken(providerName: string, ctx: BlocksContext): Pro
 		ctx.response.send({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
 		return;
 	}
-	// Reject custom schemes at the token endpoint as defense in depth — if
-	// a code somehow slipped through with a bad redirect_uri, catch it here
-	// before issuing tokens.
-	if (redirectUri && !isAllowedRedirectUri(redirectUri)) {
+	// Unreachable via the current /authorize flow: a code is only minted after
+	// parseAuthorizeRequest validated pending.redirectUri with this same
+	// function, and the mismatch check above means redirectUri equals that
+	// validated value. Kept as a guard for any future path that mints a code
+	// without going through /authorize (e.g. a seeded-session test helper).
+	const tokenRejection = redirectUri ? redirectUriRejectionReason(redirectUri) : null;
+	if (tokenRejection) {
 		ctx.response.status = 400;
-		ctx.response.send({ error: 'invalid_request', error_description: 'redirect_uri must be HTTPS or loopback HTTP' });
+		ctx.response.send({ error: 'invalid_request', error_description: tokenRejection });
 		return;
 	}
 	if (!codeVerifier || (await s256(codeVerifier)) !== pending.codeChallenge) {
@@ -717,13 +719,7 @@ function renderLoginPage(providerName: string, users: StubUser[], req: Authorize
  * §7.3 and Google's OAuth implementation which accepts localhost for
  * development flows).
  */
-function isAllowedRedirectUri(uri: string): boolean {
-	let parsed: URL;
-	try {
-		parsed = new URL(uri);
-	} catch {
-		return false;
-	}
+function isAllowedRedirectUri(parsed: URL): boolean {
 	const scheme = parsed.protocol.slice(0, -1).toLowerCase();
 	if (scheme === 'https') return true;
 	if (scheme === 'http') {
@@ -731,5 +727,74 @@ function isAllowedRedirectUri(uri: string): boolean {
 		return host === '127.0.0.1' || host === '[::1]' || host === 'localhost';
 	}
 	return false;
+}
+
+/**
+ * OAuth 2.0 / OIDC response parameters that an authorization server itself
+ * appends to the redirect_uri. Google rejects a registered or requested
+ * redirect_uri whose query already contains any of these, because the IdP
+ * would otherwise have to duplicate or clobber the parameter on the way back.
+ *
+ * Matching is case-sensitive: OAuth 2.0 parameter names (RFC 6749 Appendix B)
+ * and URI query keys are both case-sensitive, so `State` is a distinct key
+ * from the reserved `state` and a real IdP passes it through untouched.
+ */
+const RESERVED_RESPONSE_PARAMS = new Set([
+	'scope',
+	'code',
+	'state',
+	'error',
+	'error_description',
+	'error_uri',
+	'response_type',
+	'access_token',
+	'token_type',
+	'id_token',
+	'expires_in',
+	'session_state',
+	'iss',
+]);
+
+/**
+ * Validate a redirect_uri the way a real IdP does, returning an
+ * `error_description` string when it must be rejected, or `null` when it is
+ * acceptable.
+ *
+ * Two rules are enforced:
+ * 1. Scheme — HTTPS or loopback HTTP only (see {@link isAllowedRedirectUri}).
+ * 2. No reserved OAuth/OIDC response parameter in the query string. Google
+ *    fails with "Invalid redirect_uri: contains reserved response param
+ *    scope"; the stub mirrors that wording so a test failure here reads the
+ *    same as the production failure.
+ * 3. No URI fragment — RFC 6749 §3.1.2 requires redirect_uri to be an
+ *    absolute URI without a fragment component, and real IdPs reject one
+ *    outright (the fragment is where an implicit-flow response would land).
+ *
+ * Known remaining permissiveness vs. Google (deliberate, documented gaps):
+ * - No exact-match registration check: the stub has no registered
+ *   redirect_uri allowlist (providers are declared by name only, and the app
+ *   derives its own callback URL at runtime), so it cannot reject an
+ *   otherwise-valid URI that a real IdP would refuse for not exactly matching
+ *   a pre-registered value — including extra non-reserved query params.
+ * - Custom schemes are rejected outright here, whereas real IdPs accept them
+ *   only for registered native/installed-app clients.
+ * - PKCE is required unconditionally by the stub and is not validated against
+ *   per-client registration policy.
+ */
+function redirectUriRejectionReason(uri: string): string | null {
+	let parsed: URL;
+	try {
+		parsed = new URL(uri);
+	} catch {
+		return 'redirect_uri must be HTTPS or loopback HTTP';
+	}
+	if (!isAllowedRedirectUri(parsed)) return 'redirect_uri must be HTTPS or loopback HTTP';
+	if (parsed.hash) return 'Invalid redirect_uri: must not contain a fragment';
+	for (const name of parsed.searchParams.keys()) {
+		if (RESERVED_RESPONSE_PARAMS.has(name)) {
+			return `Invalid redirect_uri: contains reserved response param ${name}`;
+		}
+	}
+	return null;
 }
 
