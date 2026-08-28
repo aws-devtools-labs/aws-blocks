@@ -29,6 +29,8 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     description?: string;
     inferenceOnly?: boolean;
     logger?: ChildLogger;
+    maxLLMCalls?: number | false;
+    maxToolIterations?: number | false;
     // (undocumented)
     model?: {
         deployed?: ModelConfig | ModelConfig[];

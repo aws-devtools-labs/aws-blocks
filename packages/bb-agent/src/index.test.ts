@@ -541,6 +541,80 @@ describe('CannedProvider', () => {
 	});
 });
 
+// ── runaway protection caps ──────────────────────────────────────────────────
+
+describe('runaway protection caps', () => {
+	test('maxLLMCalls stops a turn that keeps calling the model', async () => {
+		// A tool prompt drives two model calls (initial call → tool → follow-up call).
+		// With maxLLMCalls: 1 the second BeforeModelCallEvent trips the cap and cancels
+		// the turn, surfacing an error chunk (so complete() rejects).
+		const scope = new Scope('test-cap-llm');
+		const agent = new Agent(scope, 'capllm', {
+			systemPrompt: 'test',
+			maxLLMCalls: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const result = await agent.stream('run getStatus', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: any) => {
+			assert.match(err.message, /maxLLMCalls/);
+			return true;
+		});
+	});
+
+	test('maxToolIterations stops a turn that fans out too many tools', async () => {
+		// Naming both tools makes the canned provider fire two tool calls in one turn;
+		// with maxToolIterations: 1 the second BeforeToolCallEvent trips the cap.
+		const scope = new Scope('test-cap-tools');
+		const agent = new Agent(scope, 'captools', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const result = await agent.stream('run alpha and bravo', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: any) => {
+			assert.match(err.message, /maxToolIterations/);
+			return true;
+		});
+	});
+
+	test('a normal single-tool turn under the default caps completes', async () => {
+		// Two model calls + one tool call are both well under the default caps (20),
+		// so the turn completes normally rather than tripping either guard.
+		const scope = new Scope('test-cap-default');
+		const agent = new Agent(scope, 'capdef', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const result = await agent.stream('run getStatus', { userId: 'test-user' });
+		const chunk = await result.complete();
+		assert.strictEqual(chunk.type, 'done', 'a normal turn under the default caps should complete');
+	});
+
+	test('a cap set to false is disabled', async () => {
+		// The same two-tool fan-out that trips at maxToolIterations: 1 must complete
+		// when the cap is disabled with `false`.
+		const scope = new Scope('test-cap-disabled');
+		const agent = new Agent(scope, 'capoff', {
+			systemPrompt: 'test',
+			maxToolIterations: false,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const result = await agent.stream('run alpha and bravo', { userId: 'test-user' });
+		const chunk = await result.complete();
+		assert.strictEqual(chunk.type, 'done', 'disabling the cap should let the turn complete');
+	});
+});
+
 // ── tool context ─────────────────────────────────────────────────────────────
 
 describe('tool context', () => {
