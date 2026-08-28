@@ -103,12 +103,15 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       );
     });
 
-    test('AsyncJob - submitBatch throws BatchTooLarge', async () => {
+    test('AsyncJob - submitBatch auto-chunks a batch larger than 10', async () => {
       const api = getApi();
-      await assert.rejects(
-        () => api.asyncJobSubmitBatchTooMany(),
-        /BatchTooLargeException/
+      const { jobIds } = await api.asyncJobSubmitLargeBatch();
+      assert.strictEqual(jobIds.length, 25, 'a jobId per payload, no truncation');
+      assert.ok(
+        jobIds.every((id: string | null) => typeof id === 'string' && id.length > 0),
+        'every entry enqueued with a real id'
       );
+      assert.strictEqual(new Set(jobIds).size, 25, 'every jobId is unique');
     });
 
     // Schema Validation Tests
