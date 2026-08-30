@@ -8,6 +8,11 @@ import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './widgets.js';
 import type { LambdaComputeProps } from './types.js';
 
 export type { LambdaComputeProps } from './types.js';
@@ -99,5 +104,44 @@ export class LambdaCompute extends Compute {
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	protected provisionLogGroup(retention: RetentionDays): void {
+		new LogGroup(this, 'Logs', {
+			logGroupName: `/aws/lambda/${this.fn.functionName}`,
+			retention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		});
+	}
+
+	protected applyTracing(): void {
+		(this.fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
+		this.executionRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+				resources: ['*'],
+			})
+		);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Defense-in-depth: dashboardSection only calls this when logging is on,
+		// but guard anyway so the builder can never emit an empty/misleading
+		// log section for a compute with no Logger attached.
+		if (!this.isLoggerEnabled) {
+			throw new Error(`Compute "${this.id}": loggingWidgets requires a Logger — call enableLogging() first`);
+		}
+		return buildLoggingWidgets(`/aws/lambda/${this.fn.functionName}`, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }

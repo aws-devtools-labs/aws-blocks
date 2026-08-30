@@ -4,6 +4,7 @@
 
 ```ts
 
+import type { Compute } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // @public
@@ -21,14 +22,12 @@ export const DashboardErrors: {
 
 // @public
 export interface DashboardOptions {
+    computes?: Compute | Compute[];
     dashboardName?: string;
     defaultTimeRange?: string;
-    logger?: LoggerBBRef;
-    metricConfigs?: MetricConfig[];
-    metrics?: MetricsBBRef;
+    metrics?: MetricsSource | MetricsSource[];
     routePath?: string | false;
     title?: string;
-    tracer?: TracerBBRef;
 }
 
 // @public
@@ -51,6 +50,12 @@ export interface MetricsBBRef {
     readonly defaultDimensions?: Record<string, string>;
     // (undocumented)
     readonly namespace: string;
+}
+
+// @public
+export interface MetricsSource {
+    metricConfigs?: MetricConfig[];
+    metrics: MetricsBBRef;
 }
 
 // @public

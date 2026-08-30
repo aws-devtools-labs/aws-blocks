@@ -1,8 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as logs from 'aws-cdk-lib/aws-logs';
-import { RemovalPolicy } from 'aws-cdk-lib';
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LoggingOptions } from './types.js';
@@ -32,13 +30,10 @@ export class Logger extends Scope {
 			registerConfig(this, 'LOG_LEVEL', options.level);
 		}
 
-		// Optionally create a LogGroup with retention
-		if (options?.retention) {
-			new logs.LogGroup(this, 'LogGroup', {
-				logGroupName: `/aws/lambda/${this.handler.functionName}`,
-				retention: options.retention,
-				removalPolicy: RemovalPolicy.DESTROY,
-			});
-		}
+		// Attach this logger to the compute: marks logging enabled (so the
+		// Dashboard renders this compute's logs section) and provisions the log
+		// group with a retention policy when one is configured. The compute owns
+		// both — the Logger only signals intent.
+		this.compute.enableLogging(options?.retention);
 	}
 }

@@ -8,12 +8,19 @@ Design document for Logger. For usage, see [README.md](./README.md).
 
 ## Infrastructure (CDK)
 
-The CDK construct optionally creates a CloudWatch Logs LogGroup:
+The Logger owns no infrastructure directly — it **delegates to its resolved
+compute** (`this.compute`), so logging targets whichever compute backs the block
+rather than a hardcoded function:
 
-- **When `retention` is set:** Creates a LogGroup with the specified retention policy and `RemovalPolicy.DESTROY` for clean stack teardown.
-- **When `retention` is omitted:** No LogGroup is created — Lambda's auto-created log group applies (logs never expire).
-- **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when `options.level` is configured. Multiple Logger BBs can coexist with different levels via constructor options.
-- **LogGroup name:** `/aws/lambda/${handler.functionName}` (matches Lambda's default naming).
+- **Log group + retention:** calls `this.compute.enableLogging(retention)`. The
+  compute marks itself as having a logger attached and, when `retention` is set,
+  provisions its own log group with that retention policy (`RemovalPolicy.DESTROY`
+  for clean teardown). When `retention` is omitted, no LogGroup is created —
+  the compute's auto-created log group applies (logs never expire). For a
+  Lambda compute the group is `/aws/lambda/{functionName}`.
+- **Log level config:** when `options.level` is set, registers `LOG_LEVEL` via
+  `registerConfig` (delivered to the compute through the config registry, not a
+  direct `addEnvironment`). Multiple Logger BBs can coexist with different levels.
 
 ## Serialization Format
 
