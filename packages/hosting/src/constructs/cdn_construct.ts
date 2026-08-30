@@ -408,6 +408,8 @@ export class CdnConstruct extends Construct {
       restApi = new RestApi(this, 'SsrRestApi', {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod' },
+        // Retained IAM role + account-level singleton. See core/blocks-backend.ts.
+        cloudWatchRole: false,
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
         // request bodies (Lambda then sees 2× size) and re-encodes responses,
         // breaking binary uploads, downloads, and streaming.

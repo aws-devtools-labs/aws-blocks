@@ -64,7 +64,20 @@ jobs:
               fi
             fi
 
+            # DynamoDB refuses deletion while protection is on, which wedges the
+            # stack permanently. Clear it first.
+            for TABLE in $(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::DynamoDB::Table'].PhysicalResourceId" \
+              --output text 2>/dev/null); do
+              aws dynamodb update-table --table-name "$TABLE" \
+                --no-deletion-protection-enabled >/dev/null 2>&1 \
+                && echo "   deletion protection off: $TABLE"
+            done
+
             echo "🗑️  Delete triggered: $STACK (created $CREATION_TIME)"
+            # Pace the calls. API Gateway's control plane returns 429 when many
+            # stacks delete at once, and a throttled RestApi delete wedges.
+            sleep 3
             if aws cloudformation delete-stack --stack-name "$STACK"; then
               DELETED=$((DELETED + 1))
               DELETED_STACKS="$DELETED_STACKS $STACK"
@@ -101,8 +114,46 @@ jobs:
             fi
           done
 
+          # --- Second pass: retain the leaf that refuses, free the stack ---
+          # Without this a single stuck resource keeps the whole stack, and every
+          # IAM role in it, forever. RetainResources is valid only for resources
+          # already in DELETE_FAILED. Retained resources are orphans, so name
+          # them explicitly rather than reporting a clean success.
+          RETRIED=""
+          ORPHANED=""
+          for STACK in $DELETE_FAILURES; do
+            [ -z "$STACK" ] && continue
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+              --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "GONE")
+            [ "$STATUS" != "DELETE_FAILED" ] && continue
+
+            STUCK=$(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" \
+              --output text 2>/dev/null)
+            [ -z "$STUCK" ] && continue
+
+            echo "♻️  Retrying $STACK, retaining: $STUCK"
+            if aws cloudformation delete-stack --stack-name "$STACK" --retain-resources $STUCK; then
+              RETRIED="$RETRIED $STACK"
+              ORPHANED="$ORPHANED $STACK:[$STUCK]"
+            fi
+            sleep 3
+          done
+
+          for STACK in $RETRIED; do
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK" 2>/dev/null \
+              && echo "✅ $STACK deleted (leaf retained)" \
+              && ACTUALLY_DELETED=$((ACTUALLY_DELETED + 1))
+          done
+
           echo ""
           echo "## Stack Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -n "$ORPHANED" ]; then
+            echo "- ⚠️ Orphaned resources (retained, need manual cleanup):" | tee -a "$GITHUB_STEP_SUMMARY"
+            for ENTRY in $ORPHANED; do
+              echo "  - $ENTRY" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          fi
           echo "- Delete triggered: $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Actually deleted: $ACTUALLY_DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Failed to trigger: $FAILED" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -141,6 +141,10 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
   const api = new apigateway.RestApi(scope, 'API', {
     restApiName: 'Blocks API',
     deployOptions: { cachingEnabled: false },
+    // CDK's default creates a RETAIN-ed IAM role that outlives the stack, plus
+    // the AWS::ApiGateway::Account singleton that 429s on concurrent deploys.
+    // Nothing here enables execution logging, so the role has no use.
+    cloudWatchRole: false,
   });
 
   const integration = new apigateway.LambdaIntegration(handler);
