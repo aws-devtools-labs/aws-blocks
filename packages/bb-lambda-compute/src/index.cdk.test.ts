@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { LambdaCompute } from './index.cdk.js';
@@ -251,13 +251,66 @@ describe('LambdaCompute handler log-group retention (defaults.logRetention)', ()
 	});
 });
 
+// enableLogging(retention) reconfigures the compute's OWN single log group (the
+// one the function writes to), enforcing last-wins + a synth warning on
+// conflict. This is the seam bb-logger drives when a Logger passes an explicit
+// retention; the compute owns whether a group already exists and the policy.
+describe('LambdaCompute enableLogging(retention)', () => {
+	test('overrides the handler group retention without spawning a second group', () => {
+		const { stack, parent } = setup('LambdaComputeSetRetention', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(30);
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+		// Still exactly one group — the override mutates the owned group.
+		template.resourceCountIs('AWS::Logs::LogGroup', 1);
+	});
+
+	test('last explicit retention wins across multiple calls', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionLastWins', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(14);
+		compute.enableLogging(30);
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+	});
+
+	test('conflicting retentions emit a synth warning (last wins, not silent)', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionConflict', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(14);
+		compute.enableLogging(30);
+		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('log retention set to 30'));
+	});
+
+	test('the same retention twice emits no conflict warning', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionSame', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(30);
+		compute.enableLogging(30);
+		Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('log-retention-conflict|overriding'));
+	});
+
+	test('a bare enableLogging() leaves the stack-wide default retention untouched', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionDefault', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+		// No explicit retention → the group keeps the production default (365).
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+	});
+});
+
 describe('LambdaCompute stage throttling (defaults.throttling)', () => {
 	test('production carries the 1000/2000 rate + burst default', () => {
 		const { stack, parent } = setup('LambdaComputeThrottleProd', BlocksPresets.production);
 		new LambdaCompute(parent, 'extra');
 		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
 			MethodSettings: Match.arrayWith([
-				Match.objectLike({ HttpMethod: '*', ResourcePath: '/*', ThrottlingRateLimit: 1000, ThrottlingBurstLimit: 2000 }),
+				Match.objectLike({
+					HttpMethod: '*',
+					ResourcePath: '/*',
+					ThrottlingRateLimit: 1000,
+					ThrottlingBurstLimit: 2000,
+				}),
 			]),
 		});
 	});
@@ -279,9 +332,7 @@ describe('LambdaCompute stage throttling (defaults.throttling)', () => {
 		});
 		new LambdaCompute(parent, 'extra');
 		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([
-				Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 }),
-			]),
+			MethodSettings: Match.arrayWith([Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 })]),
 		});
 	});
 });
@@ -343,5 +394,99 @@ describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
 		template.resourceCountIs('AWS::ApiGateway::Account', 1);
 		// Both stages still get access logging.
 		template.resourceCountIs('AWS::ApiGateway::Stage', 2);
+	});
+});
+
+// Observability methods the Logger / Tracer / Dashboard blocks call on the
+// resolved compute instead of poking a specific function. Under Option 1
+// retention is NOT set here: the compute owns one handler log group (created in
+// its constructor with defaults.logRetention) and bb-logger reconfigures that
+// group — so enableLogging() is presence-only.
+describe('LambdaCompute observability', () => {
+	test('enableLogging() marks logging enabled so the Dashboard renders the logs section', () => {
+		const { parent } = setup('LambdaComputeLogEnabled');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+
+		// Presence-based: no second LogGroup is provisioned (the constructor's
+		// handler group is the only one); the logs section simply renders.
+		assert.notStrictEqual(compute.dashboardSection('us-east-1').logging, undefined);
+	});
+
+	test('enableTracing turns on Active tracing and grants X-Ray publish on the shared role', () => {
+		const { stack, parent } = setup('LambdaComputeTracing');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			TracingConfig: { Mode: 'Active' },
+		});
+		template.hasResourceProperties('AWS::IAM::Policy', {
+			PolicyDocument: {
+				Statement: Match.arrayWith([
+					Match.objectLike({
+						Action: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+						Effect: 'Allow',
+					}),
+				]),
+			},
+		});
+	});
+
+	test('dashboardSection returns the Lambda health widget rows', () => {
+		const { parent } = setup('LambdaComputeWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const rows = compute.dashboardSection('us-east-1').health;
+
+		assert.strictEqual(rows.length, 2, 'two rows');
+		assert.strictEqual(rows[0].length, 2, 'first row has two widgets');
+		assert.strictEqual(rows[1].length, 2, 'second row has two widgets');
+
+		const titles = rows.flat().flatMap((w) => w.toJson().map((j: any) => j.properties?.title));
+		for (const t of ['Lambda Invocations', 'Lambda Errors', 'Lambda Duration', 'Lambda Concurrent Executions']) {
+			assert.ok(titles.includes(t), `expected a "${t}" widget`);
+		}
+	});
+
+	test('dashboardSection omits logs/traces until a Logger/Tracer is attached', () => {
+		const { parent } = setup('LambdaComputeGating');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const section = compute.dashboardSection('us-east-1');
+		assert.equal(section.logging, undefined, 'no logs section without a Logger');
+		assert.equal(section.tracing, undefined, 'no traces section without a Tracer');
+	});
+
+	test("dashboardSection.logging queries this compute's log group once a Logger is attached", () => {
+		const { parent } = setup('LambdaComputeLogWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+		const json = (compute.dashboardSection('us-east-1').logging ?? []).flat().flatMap((w) => w.toJson());
+
+		const titles = json.map((j: any) => j.properties?.title);
+		assert.ok(titles.includes('Recent Errors'), 'has a recent-errors log query widget');
+		assert.ok(titles.includes('Log Volume'), 'has a log-volume widget');
+		// The log query targets the compute's own handler log group.
+		const logWidget = json.find((j: any) => j.properties?.title === 'Recent Errors');
+		assert.equal(logWidget.type, 'log');
+	});
+
+	test('dashboardSection.tracing emits an X-Ray trace widget once a Tracer is attached', () => {
+		const { parent } = setup('LambdaComputeTraceWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+		const json = (compute.dashboardSection('eu-west-1').tracing ?? []).flat().flatMap((w) => w.toJson());
+
+		assert.strictEqual(json.length, 1, 'one trace widget');
+		assert.equal(json[0].type, 'trace');
+		assert.equal(json[0].properties.title, 'Traces');
+		assert.equal(json[0].properties.region, 'eu-west-1');
+		assert.ok(json[0].properties.filters.query.includes('AWS::Lambda::Function'));
 	});
 });

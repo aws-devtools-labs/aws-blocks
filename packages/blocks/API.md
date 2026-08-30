@@ -133,6 +133,7 @@ import { MetricsBBRef } from '@aws-blocks/bb-dashboard';
 import { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { MetricsErrors } from '@aws-blocks/bb-metrics';
 import { MetricsOptions } from '@aws-blocks/bb-metrics';
+import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
@@ -529,6 +530,8 @@ export { MetricsEmitter }
 export { MetricsErrors }
 
 export { MetricsOptions }
+
+export { MetricsSource }
 
 export { MetricUnit }
 

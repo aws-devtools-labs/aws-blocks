@@ -22,6 +22,80 @@ export { getSdkIdentifiers } from './sdk-identifiers.js';
 //
 
 /**
+ * **Shared auth interfaces and UI components for all Blocks auth Building Blocks.**
+ *
+ * Provides the `BlocksAuth` interface (implemented by every auth BB), auth state
+ * types, and framework-agnostic UI components (`Authenticator`, `AuthenticatedContent`,
+ * `onAuthChange`). Import these when writing provider-agnostic auth code.
+ *
+ * Package: `@aws-blocks/auth-common`
+ * Full docs: `README.md` in the package directory above.
+ */
+export type { AuthAction, AuthActionInput, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+export type {
+	AgentConfig,
+	AgentResult,
+	AgentStreamChunk,
+	AgentTool,
+	DefaultToolContext,
+	ModelConfig,
+	StreamOptions,
+	TokenUsage,
+	ToolCallRecord,
+	ToolDefinition,
+	ToolFactory,
+	ToolHandlerArgs,
+	ToolsConfig,
+} from '@aws-blocks/bb-agent';
+/**
+ * **AI agent with streaming, tool calling, and conversation persistence.**
+ *
+ * Use for building conversational AI experiences: chatbots, copilots, data
+ * extraction, or any LLM-powered feature. Supports Bedrock, OpenAI-compatible,
+ * and CannedProvider (local dev). Tools defined with Zod schemas. Conversation
+ * history persisted to DynamoDB. Streaming via AsyncJob + Realtime.
+ * Set `inferenceOnly: true` for simple prompt→response without persistence.
+ *
+ * Package: `@aws-blocks/bb-agent`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
+export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
+/**
+ * **Single application configuration value backed by SSM Parameter Store.**
+ *
+ * Use for feature flags, API URLs, thresholds, or structured config objects.
+ * Set `secret: true` for sensitive values (API keys, tokens) — stored as SSM
+ * SecureString encrypted with the `aws/ssm` KMS key. Each instance maps to
+ * exactly one SSM parameter. Supports schema validation for typed objects.
+ *
+ * Package: `@aws-blocks/bb-app-setting`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
+export type {
+	AsyncJobContext,
+	AsyncJobOptions,
+	AsyncJobState,
+	AsyncJobStatus,
+	AsyncJobTransition,
+	BatchSubmitResult,
+	SubmitOptions,
+	WaitUntilCompleteOptions,
+} from '@aws-blocks/bb-async-job';
+/**
+ * **Background job processing backed by SQS and Lambda.**
+ *
+ * Use for fire-and-forget async work: sending emails, processing uploads,
+ * generating reports, or any task that shouldn't block an API response.
+ * Supports single and batch submission (up to 10), optional delay, schema
+ * validation, and automatic retries with dead-letter queue.
+ *
+ * Package: `@aws-blocks/bb-async-job`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
+/**
  * **Username/password authentication with JWT sessions.**
  *
  * Use when you need simple credential-based auth for prototypes, internal
@@ -33,8 +107,45 @@ export { getSdkIdentifiers } from './sdk-identifiers.js';
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
-export { AuthBasic, AuthBasicErrors, type AuthBasicUser, type AuthBasicOptions, type PasswordPolicy } from '@aws-blocks/bb-auth-basic';
-
+export {
+	AuthBasic,
+	AuthBasicErrors,
+	type AuthBasicOptions,
+	type AuthBasicUser,
+	type PasswordPolicy,
+} from '@aws-blocks/bb-auth-basic';
+export type {
+	AdminAction,
+	AdminActionGate,
+	AdminCreateInit,
+	AdminDisabled,
+	AdminGetterOf,
+	AdminGrants,
+	AdminOptions,
+	AdminSurface,
+	AdminUser,
+	AdminUserFilter,
+	AuthCognitoOptions,
+	AuthFlowType,
+	CodeDeliveryDetails,
+	CodeDeliveryFn,
+	CognitoUser,
+	ConfirmSignInOptions,
+	DeviceRecord,
+	ExternalUserPoolRef,
+	GroupAdmin,
+	LifecycleAdmin,
+	MFAPreference,
+	ResetPasswordResult,
+	SetPasswordOptions,
+	SignInNextStep,
+	SignInOptions,
+	SignInResult,
+	SignUpOptions,
+	SignUpResult,
+	UpdateAttributeOutcome,
+	UserAttribute,
+} from '@aws-blocks/bb-auth-cognito';
 /**
  * **Cognito authentication — username/password + MFA + groups.**
  *
@@ -52,38 +163,11 @@ export { AuthBasic, AuthBasicErrors, type AuthBasicUser, type AuthBasicOptions, 
  */
 export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 export type {
-	AuthCognitoOptions,
-	AuthFlowType,
-	CognitoUser,
-	SignInOptions,
-	SignInResult,
-	SignInNextStep,
-	ConfirmSignInOptions,
-	SignUpOptions,
-	SignUpResult,
-	ResetPasswordResult,
-	CodeDeliveryDetails,
-	UpdateAttributeOutcome,
-	MFAPreference,
-	DeviceRecord,
-	UserAttribute,
-	ExternalUserPoolRef,
-	CodeDeliveryFn,
-	AdminOptions,
-	AdminAction,
-	AdminUser,
-	AdminCreateInit,
-	AdminUserFilter,
-	SetPasswordOptions,
-	GroupAdmin,
-	LifecycleAdmin,
-	AdminSurface,
-	AdminGetterOf,
-	AdminDisabled,
-	AdminGrants,
-	AdminActionGate,
-} from '@aws-blocks/bb-auth-cognito';
-
+	AuthOIDCErrorName,
+	MappedClaims,
+	OIDCUser,
+	RelayOrigin,
+} from '@aws-blocks/bb-auth-oidc';
 /**
  * **OIDC sign-in gate for Google, GitHub, Okta, Cognito User Pools, and any
  * OIDC-compliant IdP.**
@@ -103,75 +187,49 @@ export type {
 export {
 	AuthOIDC,
 	AuthOIDCErrors,
-	google,
-	github,
-	customOidc,
-	customOauth2,
-	stubIdp,
 	cognitoFederated,
+	customOauth2,
+	customOidc,
+	github,
+	google,
 	relayOrigin,
+	stubIdp,
 } from '@aws-blocks/bb-auth-oidc';
+export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
+/**
+ * **Scheduled task execution backed by EventBridge Scheduler and Lambda.**
+ *
+ * Use for recurring jobs: cleanup, report generation, data syncs, cache
+ * warming, periodic health checks. Supports cron and rate expressions,
+ * IANA timezones, and typed static input. No runtime methods — the
+ * constructor defines the schedule and handler.
+ *
+ * Package: `@aws-blocks/bb-cron-job`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {
-	AuthOIDCErrorName,
-	OIDCUser,
-	MappedClaims,
-	RelayOrigin,
-} from '@aws-blocks/bb-auth-oidc';
-
+	DashboardOptions,
+	LoggerBBRef,
+	MetricConfig,
+	MetricsBBRef,
+	MetricsSource,
+	TracerBBRef,
+} from '@aws-blocks/bb-dashboard';
 /**
- * **Shared auth interfaces and UI components for all Blocks auth Building Blocks.**
+ * **Auto-generated CloudWatch Dashboard for application observability.**
  *
- * Provides the `BlocksAuth` interface (implemented by every auth BB), auth state
- * types, and framework-agnostic UI components (`Authenticator`, `AuthenticatedContent`,
- * `onAuthChange`). Import these when writing provider-agnostic auth code.
+ * Use when you want a single URL to view application health after deployment.
+ * Creates pre-configured widgets for Lambda health, custom metrics, log
+ * queries, and X-Ray traces without manually creating CloudWatch dashboards.
+ * Pass real observability BB instances (Logger, Metrics, Tracer) for
+ * automatic type-safe integration.
  *
- * Package: `@aws-blocks/auth-common`
+ * Package: `@aws-blocks/bb-dashboard`
  * Full docs: `README.md` in the package directory above.
  */
-export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField, AuthActionInput } from '@aws-blocks/auth-common';
-
-/**
- * **Simple key-value storage backed by DynamoDB.**
- *
- * Use for fast single-key get/put/delete: user preferences, feature flags,
- * session data, caches. Supports conditional writes and schema validation.
- * If you need queries, indexes, or structured data, use `DistributedTable`.
- *
- * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `README.md` in the package directory above.
- */
-export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions as KVPutOptions, KVStoreOptions, ExternalTableRef } from '@aws-blocks/bb-kv-store';
-
-/**
- * **Structured data storage with secondary indexes backed by DynamoDB.**
- *
- * Default choice for most application data. Use for entities with composite
- * keys, range queries, secondary access patterns, and batch operations.
- * Supports Zod/Valibot schemas for type-safe validation. Zero cost at rest,
- * scales automatically. Use `KVStore` for simpler key-only access, or
- * `Database` when you need SQL JOINs/transactions.
- *
- * Package: `@aws-blocks/bb-distributed-table`
- * Full docs: `README.md` in the package directory above.
- */
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
-
-/**
- * **Real-time pub/sub messaging backed by AppSync Events.**
- *
- * Use for pushing data to connected browser clients: chat, notifications,
- * live dashboards, collaborative editing. Typed namespaces with schema
- * validation on publish. Local dev uses WebSocket bridge; production uses
- * AppSync Events API.
- *
- * Package: `@aws-blocks/bb-realtime`
- * Full docs: `README.md` in the package directory above.
- */
-export { Realtime } from '@aws-blocks/bb-realtime';
-export type { RealtimeChannel, RealtimeSubscription, SubscribeOptions, DisconnectReason } from '@aws-blocks/bb-realtime';
-
+export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
+export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
 /**
  * **SQL database with Kysely query builder backed by Aurora Serverless v2.**
  *
@@ -184,8 +242,7 @@ export type { RealtimeChannel, RealtimeSubscription, SubscribeOptions, Disconnec
  * Full docs: `README.md` in the package directory above.
  */
 export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
-export type { DatabaseOptions, ExternalDatabaseRef, Transaction, SqlQuery } from '@aws-blocks/bb-data';
-
+export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 /**
  * **Serverless SQL database backed by Aurora DSQL.**
  *
@@ -199,51 +256,30 @@ export type { DatabaseOptions, ExternalDatabaseRef, Transaction, SqlQuery } from
  * Full docs: `README.md` in the package directory above.
  */
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
-
+export type {
+	DeleteOptions as DTDeleteOptions,
+	DistributedTableOptions,
+	PutOptions as DTPutOptions,
+	QueryOptions as DTQueryOptions,
+	ReadValidationMode,
+	ScanOptions as DTScanOptions,
+	TableKey,
+	TableKeyConfig,
+} from '@aws-blocks/bb-distributed-table';
 /**
- * **Background job processing backed by SQS and Lambda.**
+ * **Structured data storage with secondary indexes backed by DynamoDB.**
  *
- * Use for fire-and-forget async work: sending emails, processing uploads,
- * generating reports, or any task that shouldn't block an API response.
- * Supports single and batch submission (up to 10), optional delay, schema
- * validation, and automatic retries with dead-letter queue.
+ * Default choice for most application data. Use for entities with composite
+ * keys, range queries, secondary access patterns, and batch operations.
+ * Supports Zod/Valibot schemas for type-safe validation. Zero cost at rest,
+ * scales automatically. Use `KVStore` for simpler key-only access, or
+ * `Database` when you need SQL JOINs/transactions.
  *
- * Package: `@aws-blocks/bb-async-job`
+ * Package: `@aws-blocks/bb-distributed-table`
  * Full docs: `README.md` in the package directory above.
  */
-export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
-export type { AsyncJobOptions, AsyncJobContext, SubmitOptions, BatchSubmitResult, AsyncJobState, AsyncJobStatus, AsyncJobTransition, WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
-
-/**
- * **AI agent with streaming, tool calling, and conversation persistence.**
- *
- * Use for building conversational AI experiences: chatbots, copilots, data
- * extraction, or any LLM-powered feature. Supports Bedrock, OpenAI-compatible,
- * and CannedProvider (local dev). Tools defined with Zod schemas. Conversation
- * history persisted to DynamoDB. Streaming via AsyncJob + Realtime.
- * Set `inferenceOnly: true` for simple prompt→response without persistence.
- *
- * Package: `@aws-blocks/bb-agent`
- * Full docs: `README.md` in the package directory above.
- */
-export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
-export type { AgentConfig, AgentResult, AgentStreamChunk, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, ToolCallRecord, ModelConfig, StreamOptions, TokenUsage } from '@aws-blocks/bb-agent';
-
-/**
- * **Scheduled task execution backed by EventBridge Scheduler and Lambda.**
- *
- * Use for recurring jobs: cleanup, report generation, data syncs, cache
- * warming, periodic health checks. Supports cron and rate expressions,
- * IANA timezones, and typed static input. No runtime methods — the
- * constructor defines the schedule and handler.
- *
- * Package: `@aws-blocks/bb-cron-job`
- * Full docs: `README.md` in the package directory above.
- */
-export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
-export type { CronJobOptions, CronJobEvent } from '@aws-blocks/bb-cron-job';
-
+export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 /**
  * **Transactional email with AWS SES integration.**
  *
@@ -255,8 +291,18 @@ export type { CronJobOptions, CronJobEvent } from '@aws-blocks/bb-cron-job';
  * Full docs: `README.md` in the package directory above.
  */
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
-export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from '@aws-blocks/bb-email-client';
-
+export type {
+	CorsRule,
+	ExternalBucketRef as FBExternalBucketRef,
+	FileBucketOptions,
+	FileContent,
+	FileInfo,
+	GetUrlOptions,
+	LifecycleRule,
+	PutOptions as FBPutOptions,
+	PutUrlOptions,
+	ScanOptions as FBScanOptions,
+} from '@aws-blocks/bb-file-bucket';
 /**
  * **File storage backed by Amazon S3.**
  *
@@ -270,22 +316,16 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from '@a
  * Full docs: `README.md` in the package directory above.
  */
 export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
-export type { FileBucketOptions, PutOptions as FBPutOptions, GetUrlOptions, PutUrlOptions, ScanOptions as FBScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef as FBExternalBucketRef } from '@aws-blocks/bb-file-bucket';
-
-/**
- * **Single application configuration value backed by SSM Parameter Store.**
- *
- * Use for feature flags, API URLs, thresholds, or structured config objects.
- * Set `secret: true` for sensitive values (API keys, tokens) — stored as SSM
- * SecureString encrypted with the `aws/ssm` KMS key. Each instance maps to
- * exactly one SSM parameter. Supports schema validation for typed objects.
- *
- * Package: `@aws-blocks/bb-app-setting`
- * Full docs: `README.md` in the package directory above.
- */
-export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
-export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
-
+export type {
+	ChunkingConfig,
+	ChunkingStrategy,
+	KnowledgeBaseOptions,
+	MetadataFilter,
+	RetrieveOptions,
+	RetrieveResult,
+	SourceConfig,
+	WaitUntilSyncedOptions,
+} from '@aws-blocks/bb-knowledge-base';
 /**
  * **Semantic document retrieval backed by Bedrock Knowledge Bases.**
  *
@@ -299,37 +339,25 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * Full docs: `README.md` in the package directory above.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
-export type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, SourceConfig, ChunkingConfig, ChunkingStrategy, WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
-
+export type {
+	ConditionalDeleteOptions,
+	ConditionalWriteOptions,
+	ExternalTableRef,
+	KVStoreOptions,
+	PutOptions as KVPutOptions,
+} from '@aws-blocks/bb-kv-store';
 /**
- * **Distributed tracing backed by AWS X-Ray.**
+ * **Simple key-value storage backed by DynamoDB.**
  *
- * Use when you need to trace request flow across services, debug latency
- * issues, or visualize service dependencies. Wrap discrete units of work
- * (DB calls, HTTP requests, business logic) with `startSegment`. Use
- * annotations for searchable values and metadata for debugging data.
+ * Use for fast single-key get/put/delete: user preferences, feature flags,
+ * session data, caches. Supports conditional writes and schema validation.
+ * If you need queries, indexes, or structured data, use `DistributedTable`.
  *
- * Package: `@aws-blocks/bb-tracer`
+ * Package: `@aws-blocks/bb-kv-store`
  * Full docs: `README.md` in the package directory above.
  */
-export { Tracer } from '@aws-blocks/bb-tracer';
-export type { TracerOptions, Segment, AnnotationValue } from '@aws-blocks/bb-tracer';
-
-/**
- * **Custom application metrics backed by Amazon CloudWatch (via EMF).**
- *
- * Use for tracking numeric measurements over time: request counts, error
- * rates, latency, queue depths, business KPIs. Metrics are emitted via
- * CloudWatch Embedded Metric Format — synchronous stdout writes with zero
- * latency impact. Supports dimensions, high-resolution (1s) metrics,
- * batch emission, and child emitters for scoped dimension inheritance.
- *
- * Package: `@aws-blocks/bb-metrics`
- * Full docs: `README.md` in the package directory above.
- */
-export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
-export type { MetricsOptions, EmitOptions, MetricDatum, MetricUnit, MetricResolution, ExternalMetricsRef, MetricsEmitter } from '@aws-blocks/bb-metrics';
-
+export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+export type { ChildLogger, LogEntry, LoggingOptions, LogLevel, RetentionDays } from '@aws-blocks/bb-logger';
 /**
  * **Structured logging with consistent JSON format, log levels, and contextual metadata.**
  *
@@ -345,19 +373,56 @@ export type { MetricsOptions, EmitOptions, MetricDatum, MetricUnit, MetricResolu
  * Full docs: `README.md` in the package directory above.
  */
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
-export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from '@aws-blocks/bb-logger';
-
+export type {
+	EmitOptions,
+	ExternalMetricsRef,
+	MetricDatum,
+	MetricResolution,
+	MetricsEmitter,
+	MetricsOptions,
+	MetricUnit,
+} from '@aws-blocks/bb-metrics';
 /**
- * **Auto-generated CloudWatch Dashboard for application observability.**
+ * **Custom application metrics backed by Amazon CloudWatch (via EMF).**
  *
- * Use when you want a single URL to view application health after deployment.
- * Creates pre-configured widgets for Lambda health, custom metrics, log
- * queries, and X-Ray traces without manually creating CloudWatch dashboards.
- * Pass real observability BB instances (Logger, Metrics, Tracer) for
- * automatic type-safe integration.
+ * Use for tracking numeric measurements over time: request counts, error
+ * rates, latency, queue depths, business KPIs. Metrics are emitted via
+ * CloudWatch Embedded Metric Format — synchronous stdout writes with zero
+ * latency impact. Supports dimensions, high-resolution (1s) metrics,
+ * batch emission, and child emitters for scoped dimension inheritance.
  *
- * Package: `@aws-blocks/bb-dashboard`
+ * Package: `@aws-blocks/bb-metrics`
  * Full docs: `README.md` in the package directory above.
  */
-export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
-export type { DashboardOptions, MetricConfig, MetricsBBRef, LoggerBBRef, TracerBBRef } from '@aws-blocks/bb-dashboard';
+export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
+export type {
+	DisconnectReason,
+	RealtimeChannel,
+	RealtimeSubscription,
+	SubscribeOptions,
+} from '@aws-blocks/bb-realtime';
+/**
+ * **Real-time pub/sub messaging backed by AppSync Events.**
+ *
+ * Use for pushing data to connected browser clients: chat, notifications,
+ * live dashboards, collaborative editing. Typed namespaces with schema
+ * validation on publish. Local dev uses WebSocket bridge; production uses
+ * AppSync Events API.
+ *
+ * Package: `@aws-blocks/bb-realtime`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Realtime } from '@aws-blocks/bb-realtime';
+export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
+/**
+ * **Distributed tracing backed by AWS X-Ray.**
+ *
+ * Use when you need to trace request flow across services, debug latency
+ * issues, or visualize service dependencies. Wrap discrete units of work
+ * (DB calls, HTTP requests, business logic) with `startSegment`. Use
+ * annotations for searchable values and metadata for debugging data.
+ *
+ * Package: `@aws-blocks/bb-tracer`
+ * Full docs: `README.md` in the package directory above.
+ */
+export { Tracer } from '@aws-blocks/bb-tracer';

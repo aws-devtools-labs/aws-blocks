@@ -1,21 +1,22 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ScopeParent } from '@aws-blocks/core';
+import { registerConfig, Scope } from '@aws-blocks/core/cdk';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { buildDashboardWidgets, resolveConfig } from './widgets.js';
-import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
-	ResolvedDashboardConfig,
+	LoggerBBRef,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
+	MetricsSource,
+	ResolvedDashboardConfig,
 	TracerBBRef,
 } from './types.js';
 
@@ -34,21 +35,26 @@ export type {
  *
  * @example
  * ```typescript
- * // Minimal — Lambda health widgets only
+ * // Minimal — a health section for the app's compute.
  * const dashboard = new Dashboard(scope, 'dashboard');
  * ```
  *
  * @example
  * ```typescript
- * // With observability BB composition
+ * // Logs/traces appear automatically when a Logger/Tracer is attached to the
+ * // compute — you don't pass them to the dashboard. Metrics are app-wide and
+ * // passed explicitly (one section per namespace), with their configs.
+ * new Logger(scope, 'logger');   // → logs section
+ * new Tracer(scope, 'tracer');   // → traces section
+ * const metrics = new Metrics(scope, 'metrics');
  * const dashboard = new Dashboard(scope, 'dashboard', {
- *   logger,
- *   metrics,
- *   tracer,
- *   metricConfigs: [
- *     { name: 'OrdersPlaced' },
- *     { name: 'Latency', stat: 'p99', period: 300 },
- *   ],
+ *   metrics: {
+ *     metrics,
+ *     metricConfigs: [
+ *       { name: 'OrdersPlaced' },
+ *       { name: 'Latency', stat: 'p99', period: 300 },
+ *     ],
+ *   },
  * });
  * ```
  */
@@ -65,15 +71,19 @@ export class Dashboard extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
 		super(id, { parent: scope });
 
-		const functionName = this.handler.functionName;
-		// Point log widgets at the framework-owned handler log group (its name is
-		// generated, not `/aws/lambda/<fn>`), so "Recent Errors" / "Log Volume"
-		// resolve to the group the handler actually writes to.
-		const config = resolveConfig(id, options, functionName, this.fullId, this.handlerLogGroup.logGroupName);
+		const config = resolveConfig(id, options, this.fullId);
 		this.dashboardName = config.dashboardName;
 
 		const region = Stack.of(this).region;
-		const widgetRows = buildDashboardWidgets(config, functionName, region);
+		// The dashboard is organized by compute: it renders the app's compute
+		// (`this.compute`) as a group — health always, plus logs/traces only when
+		// a Logger/Tracer is attached to it (`dashboardSection` gates internally),
+		// so we can't render an empty section. Metrics are app-wide (rendered once
+		// per namespace). There is no customer-facing way to create additional
+		// computes yet, so the dashboard covers the single default compute; a
+		// `computes` selector arrives with the multi-compute customer surface.
+		const computeSections = [this.compute.dashboardSection(region)];
+		const widgetRows = buildDashboardWidgets(computeSections, config, region);
 
 		new CwDashboard(this, 'Resource', {
 			dashboardName: config.dashboardName,

@@ -3,11 +3,12 @@
 
 /**
  * Shared types for the Dashboard Building Block.
- * This file has zero runtime dependencies — types only.
+ * This file has zero runtime dependencies — types only (the cloudwatch import
+ * below is `import type`, erased at compile time).
  *
  * Uses structural interfaces so that the real observability BB instances
- * (Metrics, Logger, Tracer) satisfy these types via duck typing, while
- * tests can pass minimal mock objects.
+ * (Metrics, Logger, Tracer) satisfy these types via duck typing, while tests
+ * can pass minimal mock objects.
  */
 
 // ── Observability BB structural interfaces ──────────────────────────────────
@@ -31,6 +32,11 @@ export interface MetricsBBRef {
  * Structural interface satisfied by `@aws-blocks/bb-logger` instances.
  * Only requires `fullId` for identification. The log group name is derived
  * from the shared Lambda handler's function name.
+ *
+ * @deprecated No longer consumed by {@link DashboardOptions}. The dashboard is
+ * organized by compute and renders a logs section automatically when a Logger
+ * is attached to a compute — you do not pass a Logger to the Dashboard. Kept
+ * only for backward compatibility; will be removed in a future major.
  */
 export interface LoggerBBRef {
 	readonly fullId: string;
@@ -39,6 +45,11 @@ export interface LoggerBBRef {
 /**
  * Structural interface satisfied by `@aws-blocks/bb-tracer` instances.
  * Only requires `fullId` for identification. Presence implies tracing is active.
+ *
+ * @deprecated No longer consumed by {@link DashboardOptions}. The dashboard
+ * renders a traces section automatically when a Tracer is attached to a
+ * compute — you do not pass a Tracer to the Dashboard. Kept only for backward
+ * compatibility; will be removed in a future major.
  */
 export interface TracerBBRef {
 	readonly fullId: string;
@@ -89,16 +100,52 @@ export interface MetricConfig {
 	dimensions?: Record<string, string>;
 }
 
+/**
+ * A metrics source for the dashboard: a Metrics Building Block paired with the
+ * metric names to pre-create widgets for **in that source's namespace**.
+ *
+ * Configs are per-source (not dashboard-wide) because metric names are specific
+ * to a namespace — `OrdersPlaced` lives in the orders namespace, not the billing
+ * one. With multiple sources, each renders its own metrics section from its own
+ * configs.
+ *
+ * @example
+ * ```typescript
+ * metrics: { metrics: ordersMetrics, metricConfigs: [{ name: 'OrdersPlaced' }] }
+ * // or several namespaces:
+ * metrics: [
+ *   { metrics: ordersMetrics,  metricConfigs: [{ name: 'OrdersPlaced' }] },
+ *   { metrics: billingMetrics, metricConfigs: [{ name: 'InvoicesSent' }] },
+ * ]
+ * ```
+ */
+export interface MetricsSource {
+	/** The Metrics Building Block whose resolved `namespace` these widgets query. */
+	metrics: MetricsBBRef;
+	/**
+	 * Metric names to pre-create widgets for, within this source's namespace.
+	 *
+	 * Because metrics are emitted at runtime (via EMF) while widgets are created
+	 * at build time (CDK synth), the construct can't auto-discover them — declare
+	 * them here so widgets are pre-created (they show "Insufficient data" until
+	 * the first emission). Omit for a single placeholder graph.
+	 */
+	metricConfigs?: MetricConfig[];
+}
+
 // ── Dashboard configuration types ───────────────────────────────────────────
 
 /**
  * Configuration options for the Dashboard Building Block.
  *
- * Pass real observability BB instances for automatic, type-safe integration.
- * The Dashboard extracts configuration directly from the BB instances:
- * - **Metrics**: uses `namespace` (the resolved CloudWatch namespace)
- * - **Logger**: presence triggers log widgets; log group derived from Lambda handler
- * - **Tracer**: presence implies X-Ray tracing is active
+ * The dashboard renders your app's compute with a health section plus logs /
+ * traces sections automatically when a Logger / Tracer is attached to it (the
+ * compute self-reports this). You therefore do **not** pass Logger / Tracer
+ * instances here — attaching them is the signal.
+ *
+ * **Metrics** are the exception: they are app-scoped (a CloudWatch namespace is
+ * not tied to a compute), so they are passed explicitly via {@link metrics} and
+ * rendered once app-wide.
  */
 export interface DashboardOptions {
 	/**
@@ -110,44 +157,25 @@ export interface DashboardOptions {
 	// ── Observability BB composition ────────────────────────────────────────
 
 	/**
-	 * Metrics Building Block instance (or any object with `namespace`).
-	 * When provided, adds metric widgets using the BB's resolved CloudWatch namespace.
-	 */
-	metrics?: MetricsBBRef;
-
-	/**
-	 * Logger Building Block instance (or any object with `fullId`).
-	 * When provided, adds log query widgets using the Lambda handler's log group.
-	 */
-	logger?: LoggerBBRef;
-
-	/**
-	 * Tracer Building Block instance (or any object with `fullId`).
-	 * When provided, adds X-Ray trace widgets.
-	 */
-	tracer?: TracerBBRef;
-
-	// ── Dashboard-specific config ──────────────────────────────────────────
-
-	/**
-	 * Metrics to create dashboard widgets for.
+	 * Metrics source(s) — a Metrics Building Block paired with its metric configs
+	 * ({@link MetricsSource}), or an array of them. Each becomes an app-wide
+	 * metrics section on the dashboard, one per namespace, built from that
+	 * source's own `metricConfigs`.
 	 *
-	 * Because metrics are emitted at runtime (via EMF in Lambda) while
-	 * dashboard widgets are created at build time (CDK synth), the construct
-	 * cannot auto-discover what metrics will exist. You must declare them
-	 * here so widgets are pre-created — they will show "Insufficient data"
-	 * until the first emission.
+	 * Metrics are **app-scoped**, not compute-scoped: a CloudWatch namespace is
+	 * a semantic grouping any compute can emit into, so it is rendered once
+	 * app-wide rather than per compute. (Logs and traces, by contrast, are
+	 * compute-scoped and are rendered automatically for whichever computes have
+	 * a Logger / Tracer attached — see the compute-grouped sections.)
 	 *
 	 * @example
 	 * ```typescript
-	 * metricConfigs: [
-	 *   { name: 'RequestCount' },
-	 *   { name: 'Latency', stat: 'p99', period: 300, title: 'P99 Latency' },
-	 *   { name: 'ErrorRate', stat: 'Average' }
-	 * ]
+	 * metrics: { metrics, metricConfigs: [{ name: 'OrdersPlaced' }, { name: 'Latency', stat: 'p99' }] }
 	 * ```
 	 */
-	metricConfigs?: MetricConfig[];
+	metrics?: MetricsSource | MetricsSource[];
+
+	// ── Dashboard-specific config ──────────────────────────────────────────
 
 	/**
 	 * Default time range for the dashboard view.
@@ -182,16 +210,26 @@ export interface DashboardOptions {
 }
 
 /**
- * Resolved configuration after merging BB instances with fallbacks.
+ * A single app-wide metrics source resolved from a {@link MetricsSource} — its
+ * namespace, default dimensions, and its own metric configs.
+ */
+export interface ResolvedMetricsSource {
+	namespace: string;
+	defaultDimensions?: Record<string, string>;
+	metricConfigs: MetricConfig[];
+}
+
+/**
+ * Resolved configuration after normalizing options.
  * Used internally by the CDK construct.
+ *
+ * Logs / traces are not represented here — they are compute-scoped and resolved
+ * per compute at build time from whether each compute has a Logger / Tracer attached.
  */
 export interface ResolvedDashboardConfig {
 	title: string;
 	dashboardName: string;
-	metricsNamespace: string | undefined;
-	metricsDefaultDimensions: Record<string, string> | undefined;
-	logGroupName: string | undefined;
-	tracingEnabled: boolean;
-	metricConfigs: MetricConfig[];
+	/** App-wide metrics sources, one per {@link MetricsSource} passed in. */
+	metrics: ResolvedMetricsSource[];
 	defaultTimeRange: string;
 }

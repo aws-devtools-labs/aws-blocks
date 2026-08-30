@@ -13,6 +13,7 @@ import assert from 'node:assert';
 import { afterEach, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { Compute } from './compute/compute.js';
 import { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
@@ -41,6 +42,20 @@ class TestCompute extends Compute {
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	// Observability hooks are irrelevant to config-registry tests — stub them so
+	// this test double satisfies Compute's abstract contract.
+	protected applyLogRetention(): void {}
+	protected applyTracing(): void {}
+	protected healthWidgets(): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(): IWidget[][] {
+		return [];
 	}
 }
 

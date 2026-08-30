@@ -2,14 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
+import {
+	BLOCKS_RPC_PREFIX,
+	blocksNodejsBundling,
+	DEFAULT_NODE_RUNTIME,
+	ensureApiGatewayAccount,
+} from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { type CfnLogGroup, LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { LambdaComputeProps } from './types.js';
+import { buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './widgets.js';
 
 export type { LambdaComputeProps } from './types.js';
 
@@ -180,6 +189,52 @@ export class LambdaCompute extends Compute {
 	 * app resolve different copies of this package.
 	 */
 	static isLambdaCompute(x: unknown): x is LambdaCompute {
-		return typeof x === 'object' && x !== null && (x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true;
+		return (
+			typeof x === 'object' &&
+			x !== null &&
+			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
+		);
+	}
+
+	protected applyLogRetention(retentionDays: number): void {
+		// `this.logGroup` is a concrete L2 LogGroup this compute created, so its
+		// defaultChild is always the CfnLogGroup — reconfigure retention on the
+		// one group the function already writes to rather than spawning a
+		// competing `/aws/lambda/<fn>` group.
+		(this.logGroup.node.defaultChild as CfnLogGroup).retentionInDays = retentionDays;
+	}
+
+	protected applyTracing(): void {
+		(this.fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
+		this.executionRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+				resources: ['*'],
+			}),
+		);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Defense-in-depth: dashboardSection only calls this when logging is on,
+		// but guard anyway so the builder can never emit an empty/misleading
+		// log section for a compute with no Logger attached.
+		if (!this.isLoggerEnabled) {
+			throw new Error(`Compute "${this.id}": loggingWidgets requires a Logger — call enableLogging() first`);
+		}
+		// Query the compute's own log group (the one wired into the function),
+		// not the AWS default `/aws/lambda/<fn>` name — the function writes to
+		// `this.logGroup`, whose name CDK generates.
+		return buildLoggingWidgets(this.logGroup.logGroupName, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }

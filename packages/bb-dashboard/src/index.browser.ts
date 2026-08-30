@@ -14,6 +14,7 @@ export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
+	MetricsSource,
 	LoggerBBRef,
 	TracerBBRef,
 } from './types.js';
