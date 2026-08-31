@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { after, before, describe, it } from 'node:test';
-import { _setSynthSecretFetcher } from '@aws-blocks/hosting';
+import { _setSynthSecretFetcher } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
@@ -141,7 +141,7 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              branches: [{ branch: 'main', stages: [] }],
+          branches: [{ branch: 'main', stages: [] }],
             }),
           ),
         /empty.*stages/i,
@@ -158,10 +158,10 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              branches: [
-                { branch: 'main', stages: [{ name: 'beta' }] },
-                { branch: 'main', stages: [{ name: 'prod' }] },
-              ],
+          branches: [
+            { branch: 'main', stages: [{ name: 'beta' }] },
+            { branch: 'main', stages: [{ name: 'prod' }] },
+          ],
             }),
           ),
         /duplicate branch name.*main/i,
@@ -195,10 +195,10 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              source: {
-                repo: MOCK_REPO,
-                connectionArn: 'not-a-valid-arn',
-              },
+          source: {
+            repo: MOCK_REPO,
+            connectionArn: 'not-a-valid-arn',
+          },
             }),
           ),
         /connectionArn.*arn:aws:/,
@@ -215,10 +215,10 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              source: {
-                repo: 'my-app-no-owner',
-                connectionArn: MOCK_CONNECTION_ARN,
-              },
+          source: {
+            repo: 'my-app-no-owner',
+            connectionArn: MOCK_CONNECTION_ARN,
+          },
             }),
           ),
         /owner\/repo/,
@@ -237,14 +237,14 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              crossAccountKeys: false,
+          crossAccountKeys: false,
               branches: [
                 {
-                  branch: 'main',
+            branch: 'main',
                   stages: [
                     {
-                      name: 'prod',
-                      env: { account: '222222222222', region: 'us-east-1' },
+              name: 'prod',
+              env: { account: '222222222222', region: 'us-east-1' },
                     },
                   ],
                 },
@@ -267,14 +267,14 @@ describe('Pipeline', () => {
             stack,
             'TestPipeline',
             defaultPipelineProps({
-              crossAccountKeys: true,
+          crossAccountKeys: true,
               branches: [
                 {
-                  branch: 'main',
+            branch: 'main',
                   stages: [
                     {
-                      name: 'prod',
-                      env: { account: '222222222222', region: 'us-east-1' },
+              name: 'prod',
+              env: { account: '222222222222', region: 'us-east-1' },
                     },
                   ],
                 },
@@ -296,8 +296,8 @@ describe('Pipeline', () => {
             defaultPipelineProps({
               branches: [
                 {
-                  branch: 'main',
-                  stages: [{ name: 'beta', bakeTime: Duration.minutes(0) }],
+            branch: 'main',
+            stages: [{ name: 'beta', bakeTime: Duration.minutes(0) }],
                 },
               ],
             }),
@@ -318,8 +318,8 @@ describe('Pipeline', () => {
             defaultPipelineProps({
               branches: [
                 {
-                  branch: 'main',
-                  stages: [{ name: 'beta', bakeTime: Duration.minutes(120) }],
+            branch: 'main',
+            stages: [{ name: 'beta', bakeTime: Duration.minutes(120) }],
                 },
               ],
             }),
@@ -337,11 +337,11 @@ describe('Pipeline', () => {
               repo: 'org/app',
               connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/test-id',
             },
-            branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
             stageFactory: (scope) => {
               new cdk.Stack(scope, 'AppStack');
             },
-          }),
+        }),
         /Stack scope.*not an App|sync constructor requires a Stack/,
       );
     });
@@ -356,12 +356,12 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'feature/my-feature',
-              stages: [{ name: 'alpha' }],
-            },
-          ],
+        branches: [
+          {
+            branch: 'feature/my-feature',
+            stages: [{ name: 'alpha' }],
+          },
+        ],
         }),
       );
 
@@ -380,12 +380,12 @@ describe('Pipeline', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            branches: [
-              {
-                branch: 'release/v1.0@beta',
-                stages: [{ name: 'beta' }],
-              },
-            ],
+          branches: [
+            {
+              branch: 'release/v1.0@beta',
+              stages: [{ name: 'beta' }],
+            },
+          ],
           }),
         );
       });
@@ -401,16 +401,16 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
-            },
-            {
-              branch: 'develop',
-              stages: [{ name: 'alpha' }],
-            },
-          ],
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true }],
+          },
+          {
+            branch: 'develop',
+            stages: [{ name: 'alpha' }],
+          },
+        ],
         }),
       );
 
@@ -428,16 +428,16 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'prod' }],
-            },
-            {
-              branch: 'develop',
-              stages: [{ name: 'alpha' }],
-            },
-          ],
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'prod' }],
+          },
+          {
+            branch: 'develop',
+            stages: [{ name: 'alpha' }],
+          },
+        ],
         }),
       );
 
@@ -468,12 +468,12 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
+        branches: [
+          {
+            branch: 'main',
               stages: [{ name: 'beta' }, { name: 'prod', requireApproval: true, approvalComment: 'Ready for prod?' }],
-            },
-          ],
+          },
+        ],
         }),
       );
 
@@ -503,12 +503,12 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'beta' }],
-            },
-          ],
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }],
+          },
+        ],
         }),
       );
 
@@ -532,16 +532,16 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
+        branches: [
+          {
+            branch: 'main',
               stages: [{ name: 'prod', requireApproval: true }],
-            },
-            {
-              branch: 'develop',
+          },
+          {
+            branch: 'develop',
               stages: [{ name: 'alpha' }],
-            },
-          ],
+          },
+        ],
         }),
       );
 
@@ -584,12 +584,12 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'beta', bakeTime: Duration.minutes(5) }],
-            },
-          ],
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta', bakeTime: Duration.minutes(5) }],
+          },
+        ],
         }),
       );
 
@@ -631,20 +631,20 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'beta' }, { name: 'prod' }],
-            },
-            {
-              branch: 'develop',
-              stages: [{ name: 'alpha' }],
-            },
-          ],
-          stageFactory: (scope, stageConfig) => {
-            calledStages.push(stageConfig.name);
-            new Stack(scope, 'AppStack', { env: stageConfig.env });
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'beta' }, { name: 'prod' }],
           },
+          {
+            branch: 'develop',
+            stages: [{ name: 'alpha' }],
+          },
+        ],
+        stageFactory: (scope, stageConfig) => {
+          calledStages.push(stageConfig.name);
+          new Stack(scope, 'AppStack', { env: stageConfig.env });
+        },
         }),
       );
 
@@ -667,16 +667,16 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          branches: [
-            {
-              branch: 'main',
+        branches: [
+          {
+            branch: 'main',
               stages: [{ name: 'beta', env: { account: '111111111111', region: 'us-west-2' } }, { name: 'prod' }],
-            },
-          ],
-          stageFactory: (scope, stageConfig) => {
-            receivedEnvs.push(stageConfig.env);
-            new Stack(scope, 'AppStack', { env: stageConfig.env });
           },
+        ],
+        stageFactory: (scope, stageConfig) => {
+          receivedEnvs.push(stageConfig.env);
+          new Stack(scope, 'AppStack', { env: stageConfig.env });
+        },
         }),
       );
 
@@ -694,22 +694,22 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-            triggerOnPush: true,
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+          triggerOnPush: true,
+        },
+        branches: [
+          {
+            branch: 'main',
+            triggerOnPush: false,
+            stages: [{ name: 'prod' }],
           },
-          branches: [
-            {
-              branch: 'main',
-              triggerOnPush: false,
-              stages: [{ name: 'prod' }],
-            },
-            {
-              branch: 'develop',
-              stages: [{ name: 'alpha' }],
-            },
-          ],
+          {
+            branch: 'develop',
+            stages: [{ name: 'alpha' }],
+          },
+        ],
         }),
       );
 
@@ -725,9 +725,9 @@ describe('Pipeline', () => {
           Match.objectLike({
             Actions: Match.arrayWith([
               Match.objectLike({
-                Configuration: Match.objectLike({
-                  DetectChanges: false,
-                }),
+            Configuration: Match.objectLike({
+              DetectChanges: false,
+            }),
               }),
             ]),
           }),
@@ -744,17 +744,17 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-            triggerOnPush: false,
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+          triggerOnPush: false,
+        },
+        branches: [
+          {
+            branch: 'main',
+            stages: [{ name: 'prod' }],
           },
-          branches: [
-            {
-              branch: 'main',
-              stages: [{ name: 'prod' }],
-            },
-          ],
+        ],
         }),
       );
 
@@ -782,9 +782,9 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          synth: {
-            commands: ['pnpm install', 'pnpm build', 'pnpm cdk synth'],
-          },
+        synth: {
+          commands: ['pnpm install', 'pnpm build', 'pnpm cdk synth'],
+        },
         }),
       );
 
@@ -800,10 +800,10 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          synth: {
-            commands: ['npm ci', 'npx cdk synth'],
-            env: { NODE_ENV: 'production' },
-          },
+        synth: {
+          commands: ['npm ci', 'npx cdk synth'],
+          env: { NODE_ENV: 'production' },
+        },
         }),
       );
 
@@ -830,10 +830,10 @@ describe('Pipeline', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            synth: {
-              commands: ['npm ci', 'npx cdk synth'],
-              primaryOutputDirectory: 'packages/infra/cdk.out',
-            },
+          synth: {
+            commands: ['npm ci', 'npx cdk synth'],
+            primaryOutputDirectory: 'packages/infra/cdk.out',
+          },
           }),
         );
       });
@@ -850,10 +850,10 @@ describe('Pipeline', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            synth: {
-              commands: ['npm ci', 'npx cdk synth'],
-              dockerEnabled: true,
-            },
+          synth: {
+            commands: ['npm ci', 'npx cdk synth'],
+            dockerEnabled: true,
+          },
           }),
         );
       });
@@ -920,7 +920,7 @@ describe('Pipeline', () => {
         stack,
         'TestPipeline',
         defaultPipelineProps({
-          selfMutation: false,
+        selfMutation: false,
         }),
       );
 
@@ -984,8 +984,8 @@ describe('Pipeline', () => {
           defaultPipelineProps({
             branches: [
               {
-                branch: 'main',
-                stages: [{ name: 'beta', config: { anything: 'goes' } }],
+            branch: 'main',
+            stages: [{ name: 'beta', config: { anything: 'goes' } }],
               },
             ],
           }),
@@ -1061,10 +1061,10 @@ describe('Pipeline.create (async stageFactory)', () => {
     await assert.rejects(
       () =>
         Pipeline.create(stack, 'TestPipeline', {
-          source: { repo: 'invalid-repo', connectionArn: MOCK_CONNECTION_ARN },
-          branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
-          stageFactory: async () => {},
-        }),
+        source: { repo: 'invalid-repo', connectionArn: MOCK_CONNECTION_ARN },
+        branches: [{ branch: 'main', stages: [{ name: 'beta' }] }],
+        stageFactory: async () => {},
+      }),
       /owner\/repo/,
     );
   });
@@ -1079,17 +1079,17 @@ describe('triggerFilters', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
-          triggerFilters: ['packages/backend/**'],
+      source: {
+        repo: MOCK_REPO,
+        connectionArn: MOCK_CONNECTION_ARN,
+        triggerFilters: ['packages/backend/**'],
+      },
+      branches: [
+        {
+          branch: 'main',
+          stages: [{ name: 'beta' }],
         },
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta' }],
-          },
-        ],
+      ],
       }),
     );
 
@@ -1121,16 +1121,16 @@ describe('triggerFilters', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        source: {
-          repo: MOCK_REPO,
-          connectionArn: MOCK_CONNECTION_ARN,
+      source: {
+        repo: MOCK_REPO,
+        connectionArn: MOCK_CONNECTION_ARN,
+      },
+      branches: [
+        {
+          branch: 'main',
+          stages: [{ name: 'beta' }],
         },
-        branches: [
-          {
-            branch: 'main',
-            stages: [{ name: 'beta' }],
-          },
-        ],
+      ],
       }),
     );
 
@@ -1157,10 +1157,10 @@ describe('ARN validation', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            source: {
-              repo: MOCK_REPO,
-              connectionArn: 'arn:aws-us-gov:codeconnections:us-gov-west-1:123456789012:connection/abc-def-123',
-            },
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'arn:aws-us-gov:codeconnections:us-gov-west-1:123456789012:connection/abc-def-123',
+        },
           }),
         ),
     );
@@ -1176,10 +1176,10 @@ describe('ARN validation', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            source: {
-              repo: MOCK_REPO,
-              connectionArn: 'arn:aws-cn:codeconnections:cn-north-1:123456789012:connection/abc-def-123',
-            },
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'arn:aws-cn:codeconnections:cn-north-1:123456789012:connection/abc-def-123',
+        },
           }),
         ),
     );
@@ -1195,10 +1195,10 @@ describe('ARN validation', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            source: {
-              repo: MOCK_REPO,
-              connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc-def-123',
-            },
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc-def-123',
+        },
           }),
         ),
     );
@@ -1214,10 +1214,10 @@ describe('ARN validation', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            source: {
-              repo: MOCK_REPO,
-              connectionArn: 'not-an-arn-at-all',
-            },
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'not-an-arn-at-all',
+        },
           }),
         ),
       /connectionArn.*must be a valid CodeConnections ARN/,
@@ -1238,8 +1238,8 @@ describe('cross-account validation', () => {
           defaultPipelineProps({
             branches: [
               {
-                branch: 'main',
-                stages: [{ name: 'beta' }],
+          branch: 'main',
+          stages: [{ name: 'beta' }],
               },
             ],
           }),
@@ -1259,11 +1259,11 @@ describe('cross-account validation', () => {
           defaultPipelineProps({
             branches: [
               {
-                branch: 'main',
+          branch: 'main',
                 stages: [
                   {
-                    name: 'prod',
-                    env: { account: '222222222222', region: 'us-east-1' },
+            name: 'prod',
+            env: { account: '222222222222', region: 'us-east-1' },
                   },
                 ],
               },
@@ -1285,14 +1285,14 @@ describe('cross-account validation', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            crossAccountKeys: false,
+        crossAccountKeys: false,
             branches: [
               {
-                branch: 'main',
+          branch: 'main',
                 stages: [
                   {
-                    name: 'prod',
-                    env: { account: '222222222222', region: 'us-east-1' },
+            name: 'prod',
+            env: { account: '222222222222', region: 'us-east-1' },
                   },
                 ],
               },
@@ -1313,7 +1313,7 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: undefined,
+      synth: undefined,
       }),
     );
 
@@ -1323,11 +1323,11 @@ describe('synth defaults and DX warnings', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              build: Match.objectLike({
-                commands: Match.arrayWith(['npm ci', 'npx cdk synth']),
-              }),
+          phases: Match.objectLike({
+            build: Match.objectLike({
+              commands: Match.arrayWith(['npm ci', 'npx cdk synth']),
             }),
+          }),
           }),
         ),
       }),
@@ -1342,9 +1342,9 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          commands: ['yarn install', 'yarn cdk synth'],
-        },
+      synth: {
+        commands: ['yarn install', 'yarn cdk synth'],
+      },
       }),
     );
 
@@ -1354,11 +1354,11 @@ describe('synth defaults and DX warnings', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              build: Match.objectLike({
-                commands: Match.arrayWith(['yarn install', 'yarn cdk synth']),
-              }),
+          phases: Match.objectLike({
+            build: Match.objectLike({
+              commands: Match.arrayWith(['yarn install', 'yarn cdk synth']),
             }),
+          }),
           }),
         ),
       }),
@@ -1373,9 +1373,9 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          installCommands: ['n 22'],
-        },
+      synth: {
+        installCommands: ['n 22'],
+      },
       }),
     );
 
@@ -1385,11 +1385,11 @@ describe('synth defaults and DX warnings', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              install: Match.objectLike({
-                commands: Match.arrayWith(['n 22']),
-              }),
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              commands: Match.arrayWith(['n 22']),
             }),
+          }),
           }),
         ),
       }),
@@ -1419,9 +1419,9 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
-        },
+      synth: {
+        buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
+      },
       }),
     );
 
@@ -1442,9 +1442,9 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          computeType: codebuild.ComputeType.SMALL,
-        },
+      synth: {
+        computeType: codebuild.ComputeType.SMALL,
+      },
       }),
     );
 
@@ -1460,9 +1460,9 @@ describe('synth defaults and DX warnings', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          computeType: codebuild.ComputeType.MEDIUM,
-        },
+      synth: {
+        computeType: codebuild.ComputeType.MEDIUM,
+      },
       }),
     );
 
@@ -1492,13 +1492,13 @@ describe('stage stack discovery', () => {
       defaultPipelineProps({
         branches: [
           {
-            branch: 'main',
-            stages: [{ name: 'prod' }],
+        branch: 'main',
+        stages: [{ name: 'prod' }],
           },
         ],
-        stageFactory: (scope) => {
-          new Stack(scope, 'custom-prod-stack');
-        },
+      stageFactory: (scope) => {
+        new Stack(scope, 'custom-prod-stack');
+      },
       }),
     );
 
@@ -1533,14 +1533,14 @@ describe('stage stack discovery', () => {
       defaultPipelineProps({
         branches: [
           {
-            branch: 'main',
-            stages: [{ name: 'prod' }],
+        branch: 'main',
+        stages: [{ name: 'prod' }],
           },
         ],
-        stageFactory: (scope) => {
-          new Stack(scope, 'FrontendStack');
-          new Stack(scope, 'BackendStack');
-        },
+      stageFactory: (scope) => {
+        new Stack(scope, 'FrontendStack');
+        new Stack(scope, 'BackendStack');
+      },
       }),
     );
 
@@ -1581,9 +1581,9 @@ describe('stage stack discovery', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            stageFactory: () => {
-              // Intentionally empty — creates no stacks
-            },
+        stageFactory: () => {
+          // Intentionally empty — creates no stacks
+        },
           }),
         ),
       /stage.*beta.*contains no stacks/i,
@@ -1600,13 +1600,13 @@ describe('stage stack discovery', () => {
       defaultPipelineProps({
         branches: [
           {
-            branch: 'main',
-            stages: [{ name: 'beta' }],
+        branch: 'main',
+        stages: [{ name: 'beta' }],
           },
         ],
-        stageFactory: (scope) => {
-          new Stack(scope, 'blocks-pipeline-demo-prod');
-        },
+      stageFactory: (scope) => {
+        new Stack(scope, 'blocks-pipeline-demo-prod');
+      },
       }),
     );
 
@@ -1640,14 +1640,14 @@ describe('additional validation tests', () => {
     assert.throws(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-          },
-          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-          stageFactory: minimalStageFactory,
-          appFile: './index.cdk.ts',
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+        },
+        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+        stageFactory: minimalStageFactory,
+        appFile: './index.cdk.ts',
+      }),
       /stageFactory.*appFile|appFile.*stageFactory/,
     );
   });
@@ -1659,13 +1659,13 @@ describe('additional validation tests', () => {
     assert.throws(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-          },
-          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-          appFile: './index.cdk.ts',
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+        },
+        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+        appFile: './index.cdk.ts',
+      }),
       /Pipeline\.create/,
     );
   });
@@ -1677,14 +1677,14 @@ describe('additional validation tests', () => {
     assert.throws(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-            triggerFilters: ['src/**'],
-          },
-          branches: [{ branch: 'main', stages: [{ name: 'prod' }], triggerOnPush: true }],
-          stageFactory: minimalStageFactory,
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+          triggerFilters: ['src/**'],
+        },
+        branches: [{ branch: 'main', stages: [{ name: 'prod' }], triggerOnPush: true }],
+        stageFactory: minimalStageFactory,
+      }),
       /triggerOnPush/,
     );
   });
@@ -1696,13 +1696,13 @@ describe('additional validation tests', () => {
     assert.throws(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-          },
-          branches: [{ branch: 'main', stages: [{ name: 'prod/v2' }] }],
-          stageFactory: minimalStageFactory,
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+        },
+        branches: [{ branch: 'main', stages: [{ name: 'prod/v2' }] }],
+        stageFactory: minimalStageFactory,
+      }),
       /invalid characters/,
     );
   });
@@ -1714,16 +1714,16 @@ describe('additional validation tests', () => {
     assert.throws(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: MOCK_CONNECTION_ARN,
-          },
-          branches: [
-            { branch: 'feature/foo', stages: [{ name: 'beta' }] },
-            { branch: 'feature_foo', stages: [{ name: 'beta' }] },
-          ],
-          stageFactory: minimalStageFactory,
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: MOCK_CONNECTION_ARN,
+        },
+        branches: [
+          { branch: 'feature/foo', stages: [{ name: 'beta' }] },
+          { branch: 'feature_foo', stages: [{ name: 'beta' }] },
+        ],
+        stageFactory: minimalStageFactory,
+      }),
       /duplicate ID/,
     );
   });
@@ -1735,13 +1735,13 @@ describe('additional validation tests', () => {
     assert.doesNotThrow(
       () =>
         new Pipeline(stack, 'P', {
-          source: {
-            repo: MOCK_REPO,
-            connectionArn: 'arn:aws:codestar-connections:us-east-1:123456789012:connection/abc-def-123',
-          },
-          branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
-          stageFactory: minimalStageFactory,
-        }),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'arn:aws:codestar-connections:us-east-1:123456789012:connection/abc-def-123',
+        },
+        branches: [{ branch: 'main', stages: [{ name: 'prod' }] }],
+        stageFactory: minimalStageFactory,
+      }),
     );
   });
 });
@@ -1821,11 +1821,11 @@ describe('synth partialBuildSpec', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              install: Match.objectLike({
-                'runtime-versions': Match.objectLike({ nodejs: 22 }),
-              }),
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
             }),
+          }),
           }),
         ),
       }),
@@ -1840,9 +1840,9 @@ describe('synth partialBuildSpec', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          partialBuildSpec: null,
-        },
+      synth: {
+        partialBuildSpec: null,
+      },
       }),
     );
 
@@ -1872,11 +1872,11 @@ describe('synth partialBuildSpec', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          partialBuildSpec: codebuild.BuildSpec.fromObject({
-            phases: { install: { 'runtime-versions': { nodejs: 20 } } },
-          }),
-        },
+      synth: {
+        partialBuildSpec: codebuild.BuildSpec.fromObject({
+          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+        }),
+      },
       }),
     );
 
@@ -1886,11 +1886,11 @@ describe('synth partialBuildSpec', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              install: Match.objectLike({
-                'runtime-versions': Match.objectLike({ nodejs: 20 }),
-              }),
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 20 }),
             }),
+          }),
           }),
         ),
       }),
@@ -1905,11 +1905,11 @@ describe('synth partialBuildSpec', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          partialBuildSpec: codebuild.BuildSpec.fromObject({
-            phases: { install: { 'runtime-versions': { nodejs: 20 } } },
-          }),
-        },
+      synth: {
+        partialBuildSpec: codebuild.BuildSpec.fromObject({
+          phases: { install: { 'runtime-versions': { nodejs: 20 } } },
+        }),
+      },
       }),
     );
 
@@ -1938,9 +1938,9 @@ describe('synth partialBuildSpec', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          env: { NODE_OPTIONS: '--max-old-space-size=4096' },
-        },
+      synth: {
+        env: { NODE_OPTIONS: '--max-old-space-size=4096' },
+      },
       }),
     );
 
@@ -1952,11 +1952,11 @@ describe('synth partialBuildSpec', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              install: Match.objectLike({
-                'runtime-versions': Match.objectLike({ nodejs: 22 }),
-              }),
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
             }),
+          }),
           }),
         ),
       }),
@@ -1979,9 +1979,9 @@ describe('synth partialBuildSpec', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        synth: {
-          installCommands: ['corepack enable'],
-        },
+      synth: {
+        installCommands: ['corepack enable'],
+      },
       }),
     );
 
@@ -1991,12 +1991,12 @@ describe('synth partialBuildSpec', () => {
       Source: Match.objectLike({
         BuildSpec: Match.serializedJson(
           Match.objectLike({
-            phases: Match.objectLike({
-              install: Match.objectLike({
-                'runtime-versions': Match.objectLike({ nodejs: 22 }),
-                commands: Match.arrayWith(['corepack enable']),
-              }),
+          phases: Match.objectLike({
+            install: Match.objectLike({
+              'runtime-versions': Match.objectLike({ nodejs: 22 }),
+              commands: Match.arrayWith(['corepack enable']),
             }),
+          }),
           }),
         ),
       }),
@@ -2014,7 +2014,7 @@ describe('_sourceOverride (internal test hook)', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
       }),
     );
 
@@ -2043,7 +2043,7 @@ describe('_sourceOverride (internal test hook)', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
       }),
     );
 
@@ -2069,7 +2069,7 @@ describe('_sourceOverride (internal test hook)', () => {
       stack,
       'TestPipeline',
       defaultPipelineProps({
-        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+      _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
       }),
     );
 
@@ -2091,11 +2091,11 @@ describe('_sourceOverride (internal test hook)', () => {
           stack,
           'TestPipeline',
           defaultPipelineProps({
-            source: {
-              repo: MOCK_REPO,
-              connectionArn: 'not-an-arn-at-all',
-            },
-            _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
+        source: {
+          repo: MOCK_REPO,
+          connectionArn: 'not-an-arn-at-all',
+        },
+        _sourceOverride: CodePipelineSource.s3(bucket, 'source.zip'),
           }),
         ),
       /connectionArn.*must be a valid CodeConnections ARN/,

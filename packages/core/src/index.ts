@@ -7,18 +7,14 @@
 export {
 	type ConfigValue,
 	config,
-	configEnvVarName,
 	isConfig,
 	isManagedValue,
 	isSecret,
 	type ManagedValue,
-	parameterName,
 	type SecretValue,
 	secret,
-	secretEnvVarName,
-	storeForKind,
 	type ValueKind,
-} from '@aws-blocks/hosting/secret';
+} from '@aws-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
 export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
 export { type BuildingBlockMeta, Scope, type ScopeOptions, type ScopeParent } from './common/index.js';

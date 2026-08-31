@@ -6,11 +6,11 @@
 // so the test can assert the resolved value matches what the CLI wrote — proving
 // the end-to-end path: CLI write → store → IAM grant → getSecret/getConfig read.
 //
-// Imports the getters from the CDK-free `@aws-blocks/hosting/secret` subpath so
+// Imports the getters from the CDK-free `@aws-blocks/hosting` value API so
 // no CDK is pulled into the SSR runtime bundle.
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
-import { getConfig, getSecret } from '@aws-blocks/hosting/secret';
+import { getConfig, getSecret } from '@aws-blocks/hosting';
 
 export const dynamic = 'force-dynamic';
 

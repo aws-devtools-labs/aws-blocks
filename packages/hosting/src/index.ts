@@ -1,31 +1,25 @@
-export { FrameworkAdapterFn, NextjsAdapterOptions } from './adapters/index.js';
-export {
-	generateBuildId,
-	generateBuildIdFunctionCode,
-	HostingConstruct,
-	HostingConstructProps,
-	HostingDomainConfig,
-	HostingWafConfig,
-} from './constructs/hosting_construct.js';
-export type { SkewProtectionConfig } from './constructs/skew_protection.js';
-export { HostingError } from './hosting_error.js';
-export {
-	CacheConfig,
-	ComputeResource,
-	CustomHeader,
-	DeployManifest,
-	ImageConfig,
-	MiddlewareConfig,
-	Redirect,
-	Rewrite,
-	RouteBehavior,
-} from './manifest/types.js';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * `@aws-blocks/hosting` — the **CDK-free value API**: the two intent functions
+ * (`secret()` → Secrets Manager, `config()` → SSM) and the runtime resolvers
+ * (`getSecret`/`getConfig`). Safe to import from application/runtime code (SSR
+ * routes, Lambda, the edge runtime) — it pulls in no CDK, no `fast-glob`, and no
+ * `node:fs`.
+ *
+ * Build-time tooling lives elsewhere so it never enters a runtime bundle: the CDK
+ * construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI +
+ * typegen engines on `@aws-blocks/hosting/scripts`.
+ *
+ * @module
+ */
+
 // Two intent functions (I1, Approach B): secret() → Secrets Manager, config() → SSM.
 export {
 	type ConfigValue,
 	cacheTtlEnvVarName,
 	config,
-	configEnvVarName,
 	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
 	defaultPrefixForKind,
@@ -36,41 +30,21 @@ export {
 	isSecret,
 	MANAGED_BRAND,
 	type ManagedValue,
-	parameterName,
+	type ManagedValueOptions,
 	type SecretStore,
 	type SecretValue,
 	secret,
-	secretEnvVarName,
 	secretStoreLocator,
-	storeForKind,
 	type ValueKind,
 } from './secret.js';
-// Shared CLI core (secret/config × set/list/remove) — consumers wrap with a fixed kind + label/prefix.
+// Runtime resolvers — typed against the (typegen-augmented) key registries.
 export {
-	listValues,
-	removeValue,
-	runValueCli,
-	setValue,
-	type ValueCliOptions,
-} from './secret-cli.js';
-// CDK-aware resolution engine — marker/BYO → infra wiring. Used by core.Hosting,
-// a standalone hosting app, and (synth helpers) pipeline.
-export {
-	_setSynthSecretFetcher,
-	type ByoBinding,
-	collectSynthMarkers,
-	type DomainNameInput,
-	type EnvValue,
-	isCdkParameter,
-	isCdkSecret,
-	type KindStoreOptions,
-	partitionEnvironment,
-	resolveDomainNames,
-	resolveSecretsAtSynth,
-	type SecretFetcher,
-	type StoreConfig,
-	wireByo,
-	wireManagedValue,
-} from './secret-resolve.js';
-export { _resetSecretCache, _setSecretFetcher, getConfig, getSecret } from './secret-runtime.js';
-export { FrameworkType, HostingProps, HostingResources } from './types.js';
+	type ConfigKey,
+	type ConfigValueOf,
+	getConfig,
+	getSecret,
+	type HostingConfigRegistry,
+	type HostingSecretRegistry,
+	type SecretKey,
+	type SecretValueOf,
+} from './secret-runtime.js';

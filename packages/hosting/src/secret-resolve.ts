@@ -27,11 +27,12 @@ import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IParameter } from 'aws-cdk-lib/aws-ssm';
 import { HostingError } from './hosting_error.js';
 import {
-	cacheTtlEnvVarName,
 	type ConfigValue,
+	cacheTtlEnvVarName,
 	configEnvVarName,
 	defaultPrefixForKind,
 	envVarNameForKind,
+	jsonFlagEnvVarName,
 	fallbackEnvVarName,
 	isManagedValue,
 	type ManagedValue,
@@ -112,6 +113,7 @@ function optsForKind(kind: ValueKind, cfg: StoreConfig): Required<Pick<KindStore
 
 /**
  * Split an environment map into plain literals, managed markers, and BYO handles.
+ * @internal
  */
 export function partitionEnvironment(environment: Record<string, EnvValue> | undefined): {
 	plain: Record<string, string>;
@@ -142,7 +144,8 @@ export function partitionEnvironment(environment: Record<string, EnvValue> | und
 	return { plain, managed, byo };
 }
 
-/** Every managed marker that requires a synth-time fetch (domain markers only). */
+/** Every managed marker that requires a synth-time fetch (domain markers only). * @internal
+ */
 export function collectSynthMarkers(domainName: DomainNameInput | undefined): ManagedValue[] {
 	const byKey = new Map<string, ManagedValue>();
 	for (const name of toDomainArray(domainName)) {
@@ -160,6 +163,7 @@ function toDomainArray(domainName: DomainNameInput | undefined): Array<string | 
  * Resolve managed markers to plaintext at synth time via each marker's derived
  * store + per-kind prefix. Throws an actionable error if a referenced value was
  * never set.
+ * @internal
  */
 export async function resolveSecretsAtSynth(
 	markers: ManagedValue[],
@@ -207,7 +211,86 @@ export async function resolveSecretsAtSynth(
 	return resolved;
 }
 
-/** Resolve domain markers to literals using the synth-resolved value map. */
+/**
+ * Confirms a locator EXISTS without fetching its value — a secret must never enter
+ * the synth process. Resolves when present; throws `ParameterNotFound` /
+ * `ResourceNotFoundException` when absent.
+ * @internal
+ */
+export type SynthExistsChecker = (locator: string, store: SecretStore) => Promise<void>;
+let synthExistsOverride: SynthExistsChecker | null = null;
+
+/** Override the synth-time existence checker. **For testing only.** @internal */
+export function _setSynthExistsChecker(checker: SynthExistsChecker | null): void {
+	synthExistsOverride = checker;
+}
+
+/** Metadata-only existence probe: `DescribeSecret` (SM) / `GetParameter` without decryption (SSM). */
+function defaultSynthExistsChecker(): SynthExistsChecker {
+	return async (locator, store) => {
+		if (store === 'secrets-manager') {
+			const { SecretsManagerClient, DescribeSecretCommand } = await import('@aws-sdk/client-secrets-manager');
+			await new SecretsManagerClient({}).send(new DescribeSecretCommand({ SecretId: locator }));
+			return;
+		}
+		const { SSMClient, GetParameterCommand } = await import('@aws-sdk/client-ssm');
+		// WithDecryption:false — confirm presence without materialising a SecureString value.
+		await new SSMClient({}).send(new GetParameterCommand({ Name: locator, WithDecryption: false }));
+	};
+}
+
+/**
+ * Fail synth when a referenced `environment` marker has no value set — **existence
+ * only, never a value fetch** (a secret must not enter the synth process). This is
+ * the same deploy-time failure the domain path gives ({@link resolveSecretsAtSynth}),
+ * applied to runtime `environment` markers so a missing value fails at deploy rather
+ * than on a customer request. When a `stage` is set, a stage-specific value OR the
+ * shared default satisfies the check. Skips silently when existence cannot be
+ * determined (e.g. no credentials during a local `cdk synth`); throws only on a
+ * definitive not-found.
+ * @internal
+ */
+export async function assertMarkersExistAtSynth(markers: ManagedValue[], cfg: StoreConfig = {}): Promise<void> {
+	if (markers.length === 0) return;
+	const isNotFound = (error: unknown): boolean => {
+		const name = (error as { name?: string })?.name;
+		return name === 'ParameterNotFound' || name === 'ResourceNotFoundException';
+	};
+	const check = synthExistsOverride ?? defaultSynthExistsChecker();
+
+	await Promise.all(
+		markers.map(async (marker) => {
+			const store = storeForKind(marker.kind);
+			const { prefix, stage } = optsForKind(marker.kind, cfg);
+			const primary = secretStoreLocator(marker.key, { prefix, store, stage });
+			const fallback = stage ? secretStoreLocator(marker.key, { prefix, store }) : undefined;
+
+			try {
+				await check(primary, store);
+				return; // exists
+			} catch (error: unknown) {
+				if (!isNotFound(error)) return; // couldn't determine (no creds/etc.) — don't block synth
+			}
+			if (fallback) {
+				try {
+					await check(fallback, store);
+					return; // shared default exists
+				} catch (error: unknown) {
+					if (!isNotFound(error)) return;
+				}
+			}
+			throw new HostingError('UnresolvedSecretError', {
+				message: `${marker.kind} '${marker.key}' is referenced (environment) but not set${
+					stage ? ` for stage '${stage}' nor the shared default` : ''
+				}.`,
+				resolution: `Set it before deploying:\n  ${marker.kind} set ${marker.key} …${stage ? ` --stage ${stage}` : ''}`,
+			});
+		}),
+	);
+}
+
+/** Resolve domain markers to literals using the synth-resolved value map. * @internal
+ */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {
 	const arr = toDomainArray(domainName).map((name) => {
 		if (!isManagedValue(name)) return name;
@@ -235,6 +318,7 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * stage's compute can therefore always read the shared value (that is what makes
  * the fallback work), so treat the shared entry as readable by every stage that
  * shares this prefix and put stage-private values under the stage locator only.
+ * @internal
  */
 export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, cfg: StoreConfig = {}): void {
 	const { key, kind } = marker;
@@ -250,6 +334,9 @@ export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedVal
 	if (cacheTtlSeconds && cacheTtlSeconds > 0) {
 		fn.addEnvironment(cacheTtlEnvVarName(kind), String(Math.floor(cacheTtlSeconds)));
 	}
+	// A schema means the value is JSON: flag it so the runtime getter parses it
+	// (returning the schema's inferred type that typegen puts on the getter).
+	if (marker.schema) fn.addEnvironment(jsonFlagEnvVarName(kind, key), '1');
 
 	for (const locator of [...new Set([primary, ...(fallback ? [fallback] : [])])]) {
 		grantStoreRead(fn, locator, store);
@@ -261,6 +348,7 @@ export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedVal
  * Wire a BYO (existing) CDK handle: grant read via the handle's own `grantRead`
  * (which also covers KMS for the handle's key) and inject its locator under the
  * kind-appropriate env prefix, so `getSecret`/`getConfig` resolve it identically.
+ * @internal
  */
 export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, cfg: StoreConfig = {}): void {
 	const { key, kind, handle } = binding;
@@ -321,7 +409,8 @@ const kmsDecryptGranted = new WeakMap<cdk.aws_lambda.Function, Set<string>>();
 export type SecretFetcher = (locator: string) => Promise<string>;
 let synthFetcherOverride: SecretFetcher | null = null;
 
-/** Override the synth-time fetcher. **For testing only.** */
+/** Override the synth-time fetcher. **For testing only.** * @internal
+ */
 export function _setSynthSecretFetcher(fetcher: SecretFetcher | null): void {
 	synthFetcherOverride = fetcher;
 }

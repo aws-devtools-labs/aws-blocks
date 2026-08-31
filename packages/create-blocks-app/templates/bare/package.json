@@ -21,12 +21,14 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "secret": "tsx aws-blocks/scripts/secret.ts",
+    "typegen": "tsx aws-blocks/scripts/typegen.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
     "lit-html": "^3.2.0"
   },
   "devDependencies": {

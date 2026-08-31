@@ -2,13 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import {
-  defaultPrefixForKind,
-  isCdkSecret,
-  isManagedValue,
-  resolveSecretsAtSynth,
-  secretStoreLocator,
-} from '@aws-blocks/hosting';
+import { defaultPrefixForKind, isManagedValue, secretStoreLocator } from '@aws-blocks/hosting';
+import { isCdkSecret, resolveSecretsAtSynth } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';

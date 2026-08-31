@@ -13,20 +13,21 @@
  * @module
  */
 
+import type { ManagedValue } from '@aws-blocks/hosting';
 import {
 	type ByoBinding,
 	type DomainNameInput as LeafDomainNameInput,
 	type EnvValue as LeafEnvValue,
+	assertMarkersExistAtSynth as leafAssertMarkersExistAtSynth,
 	collectSynthMarkers as leafCollectSynthMarkers,
 	partitionEnvironment as leafPartitionEnvironment,
 	resolveDomainNames as leafResolveDomainNames,
 	resolveSecretsAtSynth as leafResolveSecretsAtSynth,
-	wireByo as leafWireByo,
-	wireManagedValue as leafWireManagedValue,
-	type ManagedValue,
 	type SecretFetcher,
 	type StoreConfig,
-} from '@aws-blocks/hosting';
+	wireByo as leafWireByo,
+	wireManagedValue as leafWireManagedValue,
+} from '@aws-blocks/hosting/constructs';
 import type * as cdk from 'aws-cdk-lib';
 import { blocksStoreConfig } from './secret-naming.js';
 
@@ -80,6 +81,15 @@ export async function resolveSecretsAtSynth(
 /** Resolve domain markers to literals using the synth-resolved value map. */
 export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<string, string>): string | string[] {
 	return leafResolveDomainNames(domainName, resolved);
+}
+
+/**
+ * Fail synth (deploy) when a referenced `environment` marker has no value set —
+ * existence only, never fetching the value. Uses the Blocks namespaces (with an
+ * optional per-kind `storeConfig` override), matching how the values are wired.
+ */
+export async function assertMarkersExistAtSynth(markers: ManagedValue[], storeConfig?: StoreConfig): Promise<void> {
+	return leafAssertMarkersExistAtSynth(markers, mergeBlocksStoreConfig(storeConfig));
 }
 
 /**

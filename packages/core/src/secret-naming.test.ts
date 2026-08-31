@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { secretStoreLocator } from '@aws-blocks/hosting/secret';
+import { secretStoreLocator } from '@aws-blocks/hosting';
 import {
 	BLOCKS_CONFIG_PARAMETER_PREFIX,
 	BLOCKS_SECRET_PARAMETER_PREFIX,

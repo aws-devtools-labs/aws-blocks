@@ -25,8 +25,8 @@
       "default": "./dist/index.js"
     },
     "./constructs": {
-      "types": "./dist/constructs/hosting_construct.d.ts",
-      "default": "./dist/constructs/hosting_construct.js"
+      "types": "./dist/constructs/index.d.ts",
+      "default": "./dist/constructs/index.js"
     },
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
@@ -36,16 +36,17 @@
       "types": "./dist/hosting_error.d.ts",
       "default": "./dist/hosting_error.js"
     },
-    "./secret": {
-      "types": "./dist/secret-exports.d.ts",
-      "default": "./dist/secret-exports.js"
+    "./scripts": {
+      "types": "./dist/scripts.d.ts",
+      "default": "./dist/scripts.js"
     }
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "hosting-secret": "./dist/secret-cli-bin.js",
-    "hosting-config": "./dist/config-cli-bin.js"
+    "hosting-config": "./dist/config-cli-bin.js",
+    "hosting-typegen": "./dist/typegen-cli-bin.js"
   },
   "scripts": {
     "build": "tsc --build && npm run bundle:handlers",
@@ -64,7 +65,8 @@
     "local-pkg": "^0.5.0",
     "parse-cache-control": "^1.0.1",
     "semver": "^7.6.0",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "@standard-schema/spec": "^1.1.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
@@ -77,10 +79,14 @@
   "peerDependencies": {
     "@opennextjs/aws": ">=3.10.0",
     "aws-cdk-lib": "^2.257.0",
-    "constructs": "^10.6.0"
+    "constructs": "^10.6.0",
+    "typescript": ">=5.3.0"
   },
   "peerDependenciesMeta": {
     "@opennextjs/aws": {
+      "optional": true
+    },
+    "typescript": {
       "optional": true
     }
   }

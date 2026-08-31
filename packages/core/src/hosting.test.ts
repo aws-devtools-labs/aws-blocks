@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
+import { _setSynthExistsChecker } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -104,6 +105,35 @@ describe('Hosting', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     clearRouteRegistry();
   });
+
+	// ── Deploy-time existence check (key change 4) ───────────────
+
+	describe('environment marker existence check (Hosting.create)', () => {
+		it('rejects at deploy when a declared environment secret has no value', async () => {
+			createSpaBuildOutput(tmpDir);
+			const app = new App();
+			const stack = new Stack(app, 'MissingEnvSecretStack');
+			// Stub the synth existence probe to report "not set" — rejects before any
+			// CDK construction, so this needs no assets and no AWS.
+			_setSynthExistsChecker(async () => {
+				const e = new Error('missing') as Error & { name: string };
+				e.name = 'ResourceNotFoundException';
+				throw e;
+			});
+			try {
+				await assert.rejects(
+					Hosting.create(stack, 'Hosting', {
+						root: tmpDir,
+						api: MOCK_API,
+						environment: { MISSING_SECRET: secret('MISSING_SECRET') },
+					}),
+					/MISSING_SECRET.*not set/s,
+				);
+			} finally {
+				_setSynthExistsChecker(null);
+			}
+		});
+	});
 
   // ── SPA tests ────────────────────────────────────────────────
 
@@ -518,7 +548,11 @@ describe('Hosting', () => {
       const cacheBehaviors = distConfig.CacheBehaviors ?? [];
 
       const apiPattern = cacheBehaviors.find((b: any) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/*`);
-      assert.strictEqual(apiPattern, undefined, `Should NOT have ${BLOCKS_RPC_PREFIX}/* behavior when api is omitted`);
+			assert.strictEqual(
+				apiPattern,
+				undefined,
+				`Should NOT have ${BLOCKS_RPC_PREFIX}/* behavior when api is omitted`,
+			);
     });
 
     // Regression: /api/* is the framework SSR namespace; Blocks must
@@ -543,7 +577,11 @@ describe('Hosting', () => {
       const apiWildcard = cacheBehaviors.find((b: any) => b.PathPattern === '/api/*');
 
       assert.strictEqual(apiExact, undefined, '/api must not be claimed by Blocks (framework SSR API namespace)');
-      assert.strictEqual(apiWildcard, undefined, '/api/* must not be claimed by Blocks (framework SSR API namespace)');
+			assert.strictEqual(
+				apiWildcard,
+				undefined,
+				'/api/* must not be claimed by Blocks (framework SSR API namespace)',
+			);
     });
 
     it('works without api prop (static-only site)', () => {
@@ -627,7 +665,11 @@ describe('Hosting', () => {
       for (const [, fn] of Object.entries(lambdaFns)) {
         const env = (fn as any).Properties?.Environment?.Variables;
         if (env) {
-          assert.strictEqual(env.BLOCKS_API_URL, undefined, 'BLOCKS_API_URL should not be set when api is omitted');
+					assert.strictEqual(
+						env.BLOCKS_API_URL,
+						undefined,
+						'BLOCKS_API_URL should not be set when api is omitted',
+					);
         }
       }
     });
@@ -727,7 +769,11 @@ describe('Hosting', () => {
       const cacheBehaviors = distConfig.CacheBehaviors ?? [];
       const webhookPatterns = cacheBehaviors.filter((b: any) => b.PathPattern === '/webhooks/*');
 
-      assert.strictEqual(webhookPatterns.length, 1, 'Should have exactly one /webhooks/* behavior despite two routes');
+			assert.strictEqual(
+				webhookPatterns.length,
+				1,
+				'Should have exactly one /webhooks/* behavior despite two routes',
+			);
     });
 
     it('strips {param} segments from mixed param+wildcard routes for CloudFront patterns', () => {
@@ -755,7 +801,10 @@ describe('Hosting', () => {
       const patterns = cacheBehaviors.map((b: any) => b.PathPattern);
 
       assert.ok(patterns.includes('/proxy/*'), 'Should strip {version} and produce /proxy/*');
-      assert.ok(!patterns.includes('/proxy/{version}/*'), 'Should NOT have literal {version} in CloudFront pattern');
+			assert.ok(
+				!patterns.includes('/proxy/{version}/*'),
+				'Should NOT have literal {version} in CloudFront pattern',
+			);
     });
 
     it('converts param-only routes to wildcard patterns for CloudFront', () => {
@@ -1170,7 +1219,11 @@ describe('Hosting', () => {
       const distributions = template.findResources('AWS::CloudFront::Distribution');
       const distKeys = Object.keys(distributions);
       const distConfig = (distributions[distKeys[0]] as any).Properties.DistributionConfig;
-      assert.strictEqual(distConfig.WebACLId, existingAclArn, 'Distribution should reference the provided WebACL ARN');
+			assert.strictEqual(
+				distConfig.WebACLId,
+				existingAclArn,
+				'Distribution should reference the provided WebACL ARN',
+			);
     });
   });
 
@@ -1673,11 +1726,14 @@ describe('Hosting', () => {
       // A deployment must upload `.blocks-sandbox/config.json` with the
       // no-cache directive (this is the placeholder upload).
       const noCacheDeploy = deployments.find(
-        (p) => includes(p).includes('.blocks-sandbox/config.json') && cc(p) === 'no-cache, no-store, must-revalidate',
+				(p) =>
+					includes(p).includes('.blocks-sandbox/config.json') &&
+					cc(p) === 'no-cache, no-store, must-revalidate',
       );
       assert.ok(
         noCacheDeploy,
-        'placeholder .blocks-sandbox/config.json must be uploaded with ' + '"no-cache, no-store, must-revalidate"',
+				'placeholder .blocks-sandbox/config.json must be uploaded with ' +
+					'"no-cache, no-store, must-revalidate"',
       );
 
       // No deployment may cover the placeholder with the 1-year mutable

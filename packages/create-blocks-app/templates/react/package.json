@@ -20,12 +20,14 @@
     "preview": "vite preview",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "secret": "tsx aws-blocks/scripts/secret.ts",
+    "typegen": "tsx aws-blocks/scripts/typegen.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.3.0"

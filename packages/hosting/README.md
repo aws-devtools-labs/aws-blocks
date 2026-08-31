@@ -33,7 +33,10 @@ Use `HostingConstruct` directly when you need:
 ## Main exports
 
 ```ts
-// Root entry point
+// Root entry point: the CDK-free value API (safe to import in SSR/runtime code)
+import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting';
+
+// Sub-path: the construct, manifest types, and the CDK resolution engine
 import {
   HostingConstruct,
   HostingConstructProps,
@@ -45,20 +48,18 @@ import {
   ComputeResource,
   FrameworkAdapterFn,
   HostingError,
-} from '@aws-blocks/hosting';
-
-// Sub-path: construct only
-import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+} from '@aws-blocks/hosting/constructs';
 
 // Sub-path: adapters only
 import { nextjsAdapter, nuxtAdapter, astroAdapter, spaAdapter } from '@aws-blocks/hosting/adapters';
 
 // Sub-path: typed errors
 import { HostingError } from '@aws-blocks/hosting/error';
-
-// Sub-path: secrets & config (CDK-free — safe to import in SSR/runtime code)
-import { secret, config, getSecret, getConfig } from '@aws-blocks/hosting/secret';
 ```
+
+> The value API is on the bare `@aws-blocks/hosting` entry so an SSR/runtime bundle
+> can import `getSecret`/`getConfig` without pulling in CDK. The construct and the
+> resolution engine live on `/constructs`.
 
 ## Secrets & config
 
@@ -74,8 +75,8 @@ owns everything else (the CLI write, the IAM grant, the runtime read):
 ### Declare — in your hosting infra
 
 ```ts
-import { HostingConstruct } from '@aws-blocks/hosting';
-import { secret, config } from '@aws-blocks/hosting/secret';
+import { HostingConstruct } from '@aws-blocks/hosting/constructs';
+import { secret, config } from '@aws-blocks/hosting';
 
 new HostingConstruct(stack, 'Web', {
   manifest, // produced by a framework adapter (see "Main exports")
@@ -112,8 +113,8 @@ locator, so `getSecret` / `getConfig` resolve it identically (managed
 ### Read — in your SSR / API / runtime code
 
 ```ts
-// Import from the CDK-free subpath so no CDK is pulled into the runtime bundle:
-import { getSecret, getConfig } from '@aws-blocks/hosting/secret';
+// The value API is the bare entry (CDK-free), so no CDK is pulled into the runtime bundle:
+import { getSecret, getConfig } from '@aws-blocks/hosting';
 
 const key = await getSecret('STRIPE_KEY'); // Secrets Manager
 const flags = await getConfig('FEATURE_FLAGS'); // SSM
@@ -123,6 +124,71 @@ Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
 the value in a `.env` file. On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
+
+### Type-safe keys — autocomplete + typo errors, zero code
+
+By default `getSecret` / `getConfig` accept any `string`. Run `hosting-typegen`
+(wire it as `"typegen": "hosting-typegen"` and, ideally, a `"predev"` hook) to make
+them **type-safe with no call-site change**:
+
+```bash
+npx hosting-typegen           # scan secret()/config() calls → .blocks/hosting-values.d.ts
+npx hosting-typegen --watch   # regenerate on every save (run alongside your dev server)
+npx hosting-typegen --check   # CI: fail if that file is stale
+```
+
+**In a Blocks app you get this for free** — the Blocks dev server (`npm run dev`)
+auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself,
+so keys update as you type with no second command. (It's a no-op if the app declares
+no secrets, and never blocks the dev server.) For a standalone hosting app, run
+`hosting-typegen --watch` alongside your dev server, or add a `"predev"` hook. Either
+way, add `hosting-typegen --check` in CI to catch a stale committed file.
+
+It statically scans your `secret('...')` / `config('...')` calls (no app execution,
+no AWS credentials) and generates a `.d.ts` that narrows the getters to exactly your
+declared keys — so a typo, or reading a `config` key with `getSecret` (the wrong
+store), is a **compile error**, and your editor autocompletes the valid keys:
+
+```ts
+await getSecret('STRIPE_KEY'); // ✅ declared with secret()
+await getSecret('STRIPE_KYE'); // ❌ compile error — not a declared secret key
+```
+
+Add the generated file to your `tsconfig.json` `include` and let the tool own it
+(it is regenerated, never hand-edited):
+
+```jsonc
+{ "include": ["src", "aws-blocks", ".blocks/**/*.d.ts"] }
+```
+
+The keys come straight from your `secret()`/`config()` calls — the single source of
+truth — so the types can't drift from what you wired. The file is safe to delete
+(the keys just fall back to `string`) and safe to `.gitignore` and regenerate.
+Because it is derived only from string-literal keys, a `secret(myVar)` with a
+non-literal key is reported and skipped; and a synth-only `domain` / `connectionArn`
+key may appear in autocomplete even though it is not readable at runtime.
+
+### Typed, parsed values with a schema
+
+Pass a schema (Zod, Valibot, ArkType — any Standard Schema) to get a **typed,
+parsed** value instead of a `string`:
+
+```ts
+// declare
+import { z } from 'zod';
+environment: { FEATURE_FLAGS: config('FEATURE_FLAGS', { schema: z.object({ beta: z.boolean() }) }) }
+
+// read — no JSON.parse, no `any`
+const { beta } = await getConfig('FEATURE_FLAGS');   // typed as { beta: boolean }
+```
+
+`typegen` infers the schema's output type (via a TypeScript `Program`) and inlines
+it into the generated `.d.ts`, so `getConfig`/`getSecret` **return that type**. At
+runtime the value is JSON-parsed automatically (a per-key flag is set at synth). The
+schema type is typed as `StandardSchemaV1`, so the library is your choice. Note this
+is parse-to-type: the schema object isn't shipped to the runtime (it can't cross the
+synth→runtime bundle boundary), so it parses to the declared type rather than
+deep-re-validating on read.
 
 ### Set the values (out of band, never in git)
 

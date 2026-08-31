@@ -26,6 +26,8 @@
  * @module
  */
 
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+
 /**
  * Which backing store physically holds a value. An implementation detail — the
  * developer chooses the *function* (`secret()` vs `config()`), and the store is
@@ -46,6 +48,13 @@ export interface SecretValue {
 	readonly key: string;
 	/** Always `'secret'` (→ Secrets Manager). */
 	readonly kind: 'secret';
+	/**
+	 * Optional value schema (Zod/Valibot/ArkType — any Standard Schema). When set,
+	 * `getSecret('<key>')` **returns the schema's output type** (typegen inlines it)
+	 * and the runtime **JSON-parses** the stored value. Carried for synth wiring
+	 * (the parse flag) and typegen type inference; never serialized to the template.
+	 */
+	readonly schema?: StandardSchemaV1<unknown>;
 }
 
 /** Marker returned by {@link config} — a non-sensitive value in SSM Parameter Store. */
@@ -55,6 +64,24 @@ export interface ConfigValue {
 	readonly key: string;
 	/** Always `'config'` (→ SSM Parameter Store). */
 	readonly kind: 'config';
+	/**
+	 * Optional value schema (Zod/Valibot/ArkType — any Standard Schema). When set,
+	 * `getConfig('<key>')` **returns the schema's output type** (typegen inlines it)
+	 * and the runtime **JSON-parses** the stored value. Carried for synth wiring
+	 * (the parse flag) and typegen type inference; never serialized to the template.
+	 */
+	readonly schema?: StandardSchemaV1<unknown>;
+}
+
+/** Options for {@link secret} / {@link config}. */
+export interface ManagedValueOptions {
+	/**
+	 * A Standard Schema (Zod, Valibot, ArkType, …) describing the value. Typing it
+	 * as {@link StandardSchemaV1} keeps this API library-neutral. When provided, the
+	 * runtime getter JSON-parses the stored value and (via typegen) returns the
+	 * schema's inferred output type instead of `string`.
+	 */
+	readonly schema?: StandardSchemaV1<unknown>;
 }
 
 /** Either managed marker. */
@@ -100,9 +127,9 @@ function assertKey(fn: 'secret' | 'config', key: string): void {
  * const key = await getSecret('STRIPE_KEY');
  * ```
  */
-export function secret(key: string): SecretValue {
+export function secret(key: string, options: ManagedValueOptions = {}): SecretValue {
 	assertKey('secret', key);
-	return { [MANAGED_BRAND]: true, key, kind: 'secret' };
+	return { [MANAGED_BRAND]: true, key, kind: 'secret', ...(options.schema ? { schema: options.schema } : {}) };
 }
 
 /**
@@ -119,9 +146,9 @@ export function secret(key: string): SecretValue {
  * const flags = await getConfig('FEATURE_FLAGS');
  * ```
  */
-export function config(key: string): ConfigValue {
+export function config(key: string, options: ManagedValueOptions = {}): ConfigValue {
 	assertKey('config', key);
-	return { [MANAGED_BRAND]: true, key, kind: 'config' };
+	return { [MANAGED_BRAND]: true, key, kind: 'config', ...(options.schema ? { schema: options.schema } : {}) };
 }
 
 /** Type guard: a marker produced by {@link secret}. */
@@ -203,4 +230,13 @@ export function fallbackEnvVarName(envVarName: string): string {
 /** Per-kind runtime cache-TTL env var (seconds). */
 export function cacheTtlEnvVarName(kind: ValueKind): string {
 	return kind === 'secret' ? 'HOSTING_SECRET_CACHE_TTL' : 'HOSTING_CONFIG_CACHE_TTL';
+}
+
+/**
+ * Env var flag set at synth when a marker declares a `schema`. Its presence tells
+ * the runtime getter to `JSON.parse` the stored string, so the returned value
+ * matches the schema's inferred type that typegen puts on `getSecret`/`getConfig`.
+ */
+export function jsonFlagEnvVarName(kind: ValueKind, key: string): string {
+	return kind === 'secret' ? `HOSTING_SECRET_JSON_${key}` : `HOSTING_CONFIG_JSON_${key}`;
 }

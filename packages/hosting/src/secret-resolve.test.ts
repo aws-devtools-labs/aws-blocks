@@ -10,6 +10,8 @@ import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { config, secret } from './secret.js';
 import {
+	_setSynthExistsChecker,
+	assertMarkersExistAtSynth,
 	collectSynthMarkers,
 	partitionEnvironment,
 	resolveDomainNames,
@@ -17,6 +19,115 @@ import {
 	wireByo,
 	wireManagedValue,
 } from './secret-resolve.js';
+
+void describe('assertMarkersExistAtSynth() — deploy-time existence check', () => {
+	const notFound = (name: string) => {
+		const e = new Error('missing') as Error & { name: string };
+		e.name = name;
+		return e;
+	};
+
+	void it('throws UnresolvedSecretError when a marker is not set', async () => {
+		_setSynthExistsChecker(async () => {
+			throw notFound('ResourceNotFoundException');
+		});
+		try {
+			await assert.rejects(assertMarkersExistAtSynth([secret('MISSING_KEY')]), /MISSING_KEY.*not set/s);
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+
+	void it('resolves when every marker exists', async () => {
+		_setSynthExistsChecker(async () => {}); // exists
+		try {
+			await assert.doesNotReject(assertMarkersExistAtSynth([secret('A'), config('B')]));
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+
+	void it('never fetches the value — the checker gets a locator + store, not the value', async () => {
+		const seen: Array<{ locator: string; store: string }> = [];
+		_setSynthExistsChecker(async (locator, store) => {
+			seen.push({ locator, store });
+		});
+		try {
+			await assertMarkersExistAtSynth([secret('TOKEN'), config('FLAGS')]);
+			assert.equal(seen.length, 2);
+			assert.ok(seen.some((s) => s.store === 'secrets-manager' && s.locator.includes('TOKEN')));
+			assert.ok(seen.some((s) => s.store === 'ssm' && s.locator.includes('FLAGS')));
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+
+	void it('skips (does not throw) when existence cannot be determined — e.g. no credentials', async () => {
+		_setSynthExistsChecker(async () => {
+			throw notFound('CredentialsProviderError'); // not a NotFound → indeterminate
+		});
+		try {
+			await assert.doesNotReject(assertMarkersExistAtSynth([secret('X')]));
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+
+	void it('accepts the shared default when the stage-specific value is absent', async () => {
+		const calls: string[] = [];
+		_setSynthExistsChecker(async (locator) => {
+			calls.push(locator);
+			if (locator.includes('/beta/')) throw notFound('ParameterNotFound'); // stage missing
+			// shared default (no /beta/ segment) exists
+		});
+		try {
+			await assert.doesNotReject(
+				assertMarkersExistAtSynth([config('SHARED')], { configStore: { stage: 'beta' } }),
+			);
+			assert.ok(calls.length >= 2, 'should probe the stage locator then fall back to the shared one');
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+
+	void it('is a no-op for an empty marker list', async () => {
+		let called = false;
+		_setSynthExistsChecker(async () => {
+			called = true;
+		});
+		try {
+			await assertMarkersExistAtSynth([]);
+			assert.equal(called, false);
+		} finally {
+			_setSynthExistsChecker(null);
+		}
+	});
+});
+
+void describe('wireManagedValue() — JSON parse flag for schema markers', () => {
+	const stubSchema = {
+		'~standard': { version: 1 as const, vendor: 'test', validate: (value: unknown) => ({ value }) },
+	};
+
+	void it('injects HOSTING_CONFIG_JSON_<KEY> only when the marker declares a schema', () => {
+		const stack = new cdk.Stack(new cdk.App(), 'S', { env: { account: '111111111111', region: 'us-east-1' } });
+		const fn = new lambda.Function(stack, 'Fn', {
+			runtime: lambda.Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			code: lambda.Code.fromInline('exports.handler=()=>{}'),
+		});
+		wireManagedValue(fn, config('FLAGS', { schema: stubSchema }), { configStore: { prefix: '/blocks/config' } });
+		wireManagedValue(fn, config('PLAIN'), { configStore: { prefix: '/blocks/config' } });
+		const t = Template.fromStack(stack);
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.objectLike({ HOSTING_CONFIG_JSON_FLAGS: '1' }) },
+		});
+		// PLAIN has no schema → no JSON flag.
+		t.hasResourceProperties('AWS::Lambda::Function', {
+			Environment: { Variables: Match.not(Match.objectLike({ HOSTING_CONFIG_JSON_PLAIN: Match.anyValue() })) },
+		});
+	});
+});
 
 void describe('partitionEnvironment()', () => {
 	void it('splits plain / managed (secret+config) / BYO', () => {

@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { configEnvVarName, secretEnvVarName } from './secret.js';
+import { configEnvVarName, jsonFlagEnvVarName, secretEnvVarName } from './secret.js';
 import { _resetSecretCache, _setSecretFetcher, getConfig, getSecret } from './secret-runtime.js';
 
 void describe('getSecret() / getConfig() runtime resolvers', () => {
@@ -12,6 +12,32 @@ void describe('getSecret() / getConfig() runtime resolvers', () => {
 	afterEach(() => {
 		process.env = { ...envBackup };
 		_resetSecretCache();
+	});
+
+	void it('JSON-parses the value when the schema (JSON) flag is set — from the store', async () => {
+		delete process.env.FLAGS;
+		process.env[configEnvVarName('FLAGS')] = '/blocks/config/FLAGS';
+		process.env[jsonFlagEnvVarName('config', 'FLAGS')] = '1';
+		_setSecretFetcher(async () => JSON.stringify({ beta: true, count: 3 }));
+		assert.deepStrictEqual(await getConfig('FLAGS'), { beta: true, count: 3 });
+	});
+
+	void it('JSON-parses the value when the flag is set — from process.env (local dev)', async () => {
+		process.env.FLAGS = JSON.stringify({ beta: false });
+		process.env[jsonFlagEnvVarName('config', 'FLAGS')] = '1';
+		assert.deepStrictEqual(await getConfig('FLAGS'), { beta: false });
+	});
+
+	void it('returns the raw string when no flag is set (no schema)', async () => {
+		process.env.RAW = '{"looks":"like json"}';
+		delete process.env[jsonFlagEnvVarName('config', 'RAW')];
+		assert.strictEqual(await getConfig('RAW'), '{"looks":"like json"}');
+	});
+
+	void it('throws a clear error when a flagged value is not valid JSON', async () => {
+		process.env.BADJSON = 'not json';
+		process.env[jsonFlagEnvVarName('config', 'BADJSON')] = '1';
+		await assert.rejects(getConfig('BADJSON'), /not valid JSON/);
 	});
 
 	void it('resolves from process.env first (local dev)', async () => {
