@@ -190,12 +190,6 @@ export interface PreviewOverrides {
    */
   cdn?: boolean;
   /**
-   * Keep response caching and incremental page regeneration. **Off by default
-   * in preview** — pages are served frozen from the build and don't regenerate
-   * in the background.
-   */
-  cache?: boolean;
-  /**
    * Keep on-the-fly image optimization. **Off by default in preview** — images
    * are served unoptimized from their source.
    */

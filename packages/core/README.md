@@ -313,6 +313,23 @@ new Hosting(stack, 'Web', {
 
 The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
 
+#### Preview mode (fast, disposable deploys)
+
+For ephemeral environments — PR previews, per-branch sandboxes, demos — the `preview` prop deploys a **cheap, disposable** shape: the app stays functional while uncritical services scale down (no CDN, no caching/regeneration, no image optimization, no monitoring). It is **strictly opt-in** — omitting `preview` (or `false`) deploys the full production shape in **every** stage, so preview never changes an existing app's behavior implicitly.
+
+```typescript
+// full production shape (default — sandbox and production alike)
+new Hosting(stack, 'Web', { root, api: blocksStack });
+
+// opt in to the cheapest preview: no CDN, no cache, no image optimization
+new Hosting(stack, 'Web', { root, api: blocksStack, preview: true });
+
+// keep specific capabilities — a production-like, CDN-fronted preview
+new Hosting(stack, 'Web', { root, api: blocksStack, preview: { cdn: true } });
+```
+
+The object form (`PreviewOverrides`) is **service-neutral** — you name a capability to *keep* (`cdn`, `cache`, `imageOptimization`), not the underlying infrastructure. With the CDN off, the app is served from a single regional origin at the domain root (responses buffered, no streaming); a synth **warning** fires if that no-CDN shape runs outside a sandbox deploy. See the `preview` / `PreviewOverrides` JSDoc for the full contract.
+
 ## Building Blocks
 
 Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):

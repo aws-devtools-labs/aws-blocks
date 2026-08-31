@@ -122,17 +122,28 @@ Each knob lands at exactly one seam (table in §5). **Adding a knob = one field 
 > #1 below.) The API also evolved from the raw-knob shape sketched here to a
 > service-neutral capability object (`PreviewOverrides`); see `packages/core/src/hosting.ts`.
 
-A single **preview** concept on `Hosting`, **opt-in** via the `preview` prop:
+A single **preview** concept on `Hosting`, **opt-in** via the `preview` prop.
+The public surface is **service-neutral capabilities** (`PreviewOverrides`) —
+say WHAT to keep, not HOW it's built — so it never leaks framework/infra terms:
 
 ```ts
 // HostingProps (new field)
-preview?: boolean | {
-  /** Master switch. Default: derived from `sandboxMode` CDK context. */
+preview?: boolean | PreviewOverrides;
+
+interface PreviewOverrides {
+  /** Turn preview on/off. Opt-in — omitting it (object form) leaves it off. */
   enabled?: boolean;
-  /** Phase 2, opt-in: skip the CloudFront distribution and return a direct origin URL. */
-  bypassCdn?: boolean;
-};
+  /** Keep a CDN in front (CloudFront, WAF, custom domain, streaming). Off by default in preview. */
+  cdn?: boolean;
+  /** Keep response caching / incremental regeneration. Off by default in preview. */
+  cache?: boolean;
+  /** Keep on-the-fly image optimization. Off by default in preview. */
+  imageOptimization?: boolean;
+}
 ```
+
+The resolver maps each capability to the internal `PreviewProfile` knobs
+(`bypassCdn`, `skipIsr`, `skipImageOptimization`, …).
 
 Resolution (so it stays predictable and prod is never affected):
 1. `preview: true` / `preview.enabled: true` → on, else
