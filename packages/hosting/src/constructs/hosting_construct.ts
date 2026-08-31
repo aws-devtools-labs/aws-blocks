@@ -56,6 +56,7 @@ import { WafConstruct } from './waf_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { CdnConstruct } from './cdn_construct.js';
+import { BypassOriginConstruct } from './bypass_origin.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
 import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
@@ -128,6 +129,39 @@ export type HostingConstructProps = {
    */
   skipRegionValidation?: boolean;
 
+  /**
+   * Preview `bypassCdn` — skip the CloudFront distribution and serve the whole
+   * app (static + SSR + backend API) from a single API-Gateway origin
+   * ({@link BypassOriginConstruct}). Same-origin (cookies + no CORS), no
+   * CloudFront to create/propagate. When set, `distribution` is undefined.
+   * Framework-agnostic (routes off the manifest). Intended strictly for
+   * throwaway preview environments. See `docs/design/HOSTING-PREVIEW-MODE.md` §5c.
+   */
+  bypassCdn?: boolean;
+
+  /**
+   * Backend API Gateway URL (`https://…/aws-blocks/api`) to proxy through the
+   * `bypassCdn` single origin so `/aws-blocks/*` + `/auth/*` are same-origin
+   * (relative `apiUrl` works, cookies flow). Set by the core `Hosting` wrapper
+   * from `props.api.apiUrl` when bypassing. Ignored unless `bypassCdn`.
+   */
+  bypassApiProxyUrl?: string;
+
+  /**
+   * Preview `skipIsr` — skip the ISR / on-demand-revalidation infra (cache
+   * bucket, DynamoDB tag table, SQS queue + DLQ, revalidation Lambda, seed).
+   * Framework-agnostic: gates the manifest's `cache` block regardless of
+   * adapter. SSR pages still render; only revalidation is disabled.
+   */
+  skipIsr?: boolean;
+
+  /**
+   * Preview `skipImageOptimization` — skip the image-optimization Lambda even
+   * when the manifest declares it. `/_next/image` (Nuxt IPX, etc.) degrades to
+   * the source image in preview.
+   */
+  skipImageOptimization?: boolean;
+
   /** Custom domain configuration. */
   domain?: HostingDomainConfig;
   /** WAF configuration. */
@@ -191,6 +225,14 @@ export type HostingConstructProps = {
       type: 'whitelist' | 'blacklist';
       countries: string[];
     };
+    /**
+     * Whether to create the deploy-time CloudFront invalidation that flushes
+     * the previous build's cached HTML after an SSR deploy. Defaults to
+     * `true`. Set `false` for a fresh/throwaway distribution (preview
+     * `fastTeardown`) where nothing is cached yet — skips one custom resource.
+     * @default true
+     */
+    deployInvalidation?: boolean;
     /**
      * Default TTL for SSR/compute cache behaviors when the origin response
      * does not include a `Cache-Control` header. Set this to enable
@@ -334,7 +376,14 @@ export type HostingConstructProps = {
  */
 export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
-  readonly distribution: Distribution;
+  /**
+   * The CloudFront distribution serving the site.
+   *
+   * **Undefined in preview `bypassCdn` mode**, where the site is served
+   * directly from an S3 static-website endpoint (no CloudFront). Guard access
+   * accordingly.
+   */
+  readonly distribution?: Distribution;
   readonly distributionUrl: string;
   readonly computeFunctions: Map<
     string,
@@ -400,6 +449,16 @@ export class HostingConstruct extends Construct {
     }
     const buildId = manifest.buildId ?? generateBuildId();
 
+    // ---- Preview bypassCdn ----
+    // Skip the CloudFront distribution and serve the whole app from a single
+    // API-Gateway origin (BypassOriginConstruct) — same-origin (cookies + no
+    // CORS), no CloudFront to create/propagate. Framework-agnostic: routes off
+    // the manifest. Applied LATE (at the CloudFront site §6) so storage +
+    // compute + a single asset upload are reused; here we just capture the
+    // flag. `distribution` stays undefined in this mode.
+    // See docs/design/HOSTING-PREVIEW-MODE.md §5c.
+    const bypassCdn = props.bypassCdn === true;
+
     // Skew-protection cookie must not outlive the build artifacts it pins
     // to. A `maxAge` longer than `buildRetentionDays` lets a returning
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
@@ -447,7 +506,14 @@ export class HostingConstruct extends Construct {
     const hasCompute = computeEntries.length > 0;
 
     for (const [name, resource] of computeEntries) {
-      if (resource.type === 'edge') {
+      // Honor the manifest `placement` contract: a `type: 'edge'` resource is
+      // built as Lambda@Edge ONLY when placement is global. `placement:
+      // 'regional'` (preview B2 — edge routes moved off Lambda@Edge) falls
+      // through to the regional-Lambda path below, so no us-east-1 edge stack
+      // is created. The adapter normally also downgrades `type` to 'handler'
+      // for regional edge routes; this guard keeps the construct correct even
+      // if a manifest carries `type: 'edge'` with regional placement.
+      if (resource.type === 'edge' && resource.placement !== 'regional') {
         const edgeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
           name,
           computeResource: resource,
@@ -482,6 +548,12 @@ export class HostingConstruct extends Construct {
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
+        // Under bypassCdn the SSR compute is invoked via a buffered API Gateway
+        // HttpLambdaIntegration (private — no public Function URL). An
+        // http-server (LWA) compute must therefore run buffered; its default
+        // response_stream reply 500s behind a buffered invoke. (handler/edge
+        // computes ignore this.) Preview drops SSR streaming — a perf feature.
+        bufferedInvoke: bypassCdn && isSsrCompute,
         environment: props.compute?.environment,
       });
 
@@ -495,7 +567,16 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 3. Cache infrastructure (ISR) ----
-    if (manifest.cache && manifest.cache.driver === 'nitro-s3') {
+    // Preview `skipIsr` drops the ISR *revalidation* cluster (tag table, SQS
+    // queue + DLQ, revalidation Lambda — all individually gated by
+    // manifest.cache flags below, which the adapter turns off under skipIsr).
+    // For the OpenNext path it KEEPS the S3 incremental cache + build seed so
+    // prerendered pages (pure SSG *and* ISR) are still served frozen from the
+    // build snapshot — SSG is not ISR, so skipping revalidation must not
+    // re-render static pages per request. The Nitro path still drops its cache
+    // under skipIsr (Nuxt prerendered pages are frozen via static S3 files, not
+    // this cache), so it keeps the `!skipIsr` guard.
+    if (!props.skipIsr && manifest.cache && manifest.cache.driver === 'nitro-s3') {
       // Nitro path: a single S3 bucket fronts Nitro's `useStorage('cache')`
       // mount via the plugin the adapter injected at build time. No DDB,
       // no SQS, no separate worker — Nitro handles refresh inline.
@@ -530,8 +611,12 @@ export class HostingConstruct extends Construct {
           Stack.of(this).region,
         );
       }
-    } else if (manifest.cache) {
-      // OpenNext path (default when `driver` is absent or 'opennext').
+    } else if (manifest.cache && manifest.cache.driver !== 'nitro-s3') {
+      // OpenNext path (default when `driver` is absent or 'opennext'). Runs even
+      // under `skipIsr` — the cache bucket, build seed, and compute read grant
+      // are what keep SSG/ISR pages frozen; the revalidation sub-resources
+      // (tag table, queue, revalidation Lambda) are gated on their own
+      // manifest.cache flags, which the adapter sets false under skipIsr.
       // S3 bucket for ISR cache
       this.cacheBucket = new Bucket(this, 'CacheBucket', {
         removalPolicy: RemovalPolicy.DESTROY,
@@ -541,8 +626,10 @@ export class HostingConstruct extends Construct {
         lifecycleRules: [{ expiration: Duration.days(30) }],
       });
 
-      // DynamoDB table for tag-based revalidation
-      if (manifest.cache.tagRevalidation) {
+      // DynamoDB table for tag-based revalidation. Also suppressed under
+      // skipIsr (belt-and-suspenders with the adapter, which sets the flag
+      // false): preview keeps the cache but never the revalidation infra.
+      if (manifest.cache.tagRevalidation && !props.skipIsr) {
         this.cacheTable = new Table(this, 'CacheTagTable', {
           partitionKey: { name: 'tag', type: AttributeType.STRING },
           sortKey: { name: 'path', type: AttributeType.STRING },
@@ -560,8 +647,9 @@ export class HostingConstruct extends Construct {
       }
 
       // SQS queue for async revalidation (FIFO required — OpenNext sends
-      // MessageDeduplicationId and MessageGroupId with revalidation messages)
-      if (manifest.cache.revalidationQueue) {
+      // MessageDeduplicationId and MessageGroupId with revalidation messages).
+      // Suppressed under skipIsr — preview uses OpenNext's `dummy` queue.
+      if (manifest.cache.revalidationQueue && !props.skipIsr) {
         // Hold a reference to the DLQ on the construct so the
         // monitoring construct can attach an alarm to it later.
         this.revalidationDlq = new Queue(this, 'RevalidationDLQ', {
@@ -743,7 +831,9 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    // Preview `skipImageOptimization` drops it (framework-agnostic); /_next/image
+    // degrades to the source image.
+    if (!props.skipImageOptimization && manifest.imageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {
@@ -1044,6 +1134,52 @@ export class HostingConstruct extends Construct {
       }
     }
 
+    // ---- 6-bis. Preview bypassCdn: API-Gateway single origin (no CloudFront) ----
+    // Storage (§1) + compute (§2) + ISR/image/middleware (§3-5) are already
+    // built above. Instead of CloudFront (§6-11), serve everything from ONE
+    // API Gateway: static assets from S3, the catch-all from the SSR server
+    // Lambda, and /aws-blocks/*+/auth/* proxied to the backend API — all
+    // same-origin (fixes cookie auth) with no distribution. Then return, so
+    // WAF/DNS/monitoring/CloudFront and the cdn-coupled error pages are skipped.
+    if (bypassCdn) {
+      const manifestWithBuildIdBypass: DeployManifest = { ...manifest, buildId };
+      // Single asset upload to builds/<id>/ (previews don't need the atomic
+      // cache-control tiers). BypassOrigin maps request paths to this prefix.
+      new BucketDeployment(this, 'BypassAssets', {
+        sources: [Source.asset(manifest.staticAssets.directory)],
+        destinationBucket: this.bucket,
+        destinationKeyPrefix: `builds/${buildId}`,
+        prune: false,
+        // Exclude the build-time placeholder `.blocks-sandbox/config.json`
+        // (`{_placeholder:true}`). The real runtime config (with the same-origin
+        // `apiUrl`) is written to the SAME key by `BlocksConfigDeployment`; if
+        // this asset upload also carried the placeholder it could clobber the
+        // real config (asset-upload ordering isn't guaranteed relative to the
+        // config deployment). Excluding it here makes the real config the ONLY
+        // writer of that key — order-independent. Without this the browser
+        // client can't resolve the API URL and every authed call fails.
+        exclude: ['.blocks-sandbox/config.json'],
+      });
+      const serverComputeName = ['default', 'server'].find((n) =>
+        this.computeFunctions.has(n),
+      );
+      const bypass = new BypassOriginConstruct(this, 'BypassOrigin', {
+        manifest: manifestWithBuildIdBypass,
+        buildId,
+        bucket: this.bucket,
+        computeFunctions: this.computeFunctions,
+        serverComputeName,
+        backendApiUrl: props.bypassApiProxyUrl,
+      });
+      this.distributionUrl = bypass.url;
+      new CfnOutput(this, 'HostingUrl', {
+        value: this.distributionUrl,
+        description: 'Preview site URL (API-Gateway single origin, no CloudFront)',
+      });
+      // `distribution` intentionally left undefined; skip §6-11 CloudFront wiring.
+      return;
+    }
+
     // ---- 6. WAF (conditional) ----
     // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
     const effectiveWebAclArn = props.waf?.webAclArn ?? props.cdn?.webAclArn;
@@ -1156,6 +1292,7 @@ export class HostingConstruct extends Construct {
       ssrDefaultTtl: props.cdn?.ssrDefaultTtl,
       webAclArn: effectiveWebAclArn ?? props.cdn?.webAclArn,
       quotas: props.cdn?.quotas,
+      deployInvalidation: props.cdn?.deployInvalidation,
       customErrorPages: props.errorPages
         ? {
             notFound: !!props.errorPages.notFound,

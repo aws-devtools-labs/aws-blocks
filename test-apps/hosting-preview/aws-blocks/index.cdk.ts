@@ -17,8 +17,8 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
 const stackName = sandboxMode
-  ? `blocks-hosting-ssr-astro-${getSandboxId(projectRoot)}${suffix ? `-${suffix}` : ''}`
-  : `blocks-hosting-ssr-astro-prod-${suffix || 'default'}`;
+  ? `blocks-hosting-preview-${getSandboxId(projectRoot)}${suffix ? `-${suffix}` : ''}`
+  : `blocks-hosting-preview-prod-${suffix || 'default'}`;
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -29,20 +29,18 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
-// Astro static (multi-page) deploy. No `compute` block: a static Astro site
-// has no SSR Lambda — every route is prerendered to its own index.html and
-// served from S3. `api: blocksStack` still wires the single-origin
-// /aws-blocks/* CloudFront proxy so client-side fetches reach the backend
-// with no CORS.
+// Hosting — preview mode FULLY ENABLED: the cheapest, disposable shape
+// (no CDN → single regional origin, buffered; no cache/ISR; no image-opt).
 
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
-  buildCommand: 'npx astro build',
+  buildCommand: 'npm run build',
   buildOutputDir: 'dist',
-  framework: 'astro',
+  framework: 'spa',
   api: blocksStack,
+  preview: true,
 });
 
-cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-ssr-astro');
+cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-preview');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
 cdk.Tags.of(blocksStack).add('blocks:created-at', new Date().toISOString().split('T')[0]);

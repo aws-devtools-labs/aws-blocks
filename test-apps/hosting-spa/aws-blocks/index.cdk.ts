@@ -30,6 +30,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 
 // Hosting — SPA (static site served via CloudFront)
+
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
   buildCommand: 'npm run build',

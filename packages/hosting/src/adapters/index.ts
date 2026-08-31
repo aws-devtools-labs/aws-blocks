@@ -182,15 +182,80 @@ export const detectFramework = (projectDir: string): string => {
 };
 
 /**
+ * Deploy-mode options that influence how an adapter builds/emits a manifest.
+ *
+ * Kept separate from framework-specific adapter options so the orchestrator
+ * (`Hosting`) can pass one deploy-mode object regardless of framework; each
+ * adapter uses only the fields it understands.
+ */
+export interface AdapterBuildOptions {
+  /**
+   * B2 — deploy Next.js `runtime: 'edge'` routes as regional Lambdas
+   * (`placement: 'regional'`) instead of Lambda@Edge. Only the Next.js
+   * adapter acts on this; others ignore it.
+   */
+  edgeToRegional?: boolean;
+  /**
+   * C (preview `bypassCdn`) — build the SSR bundle for an HTTP API v2 origin
+   * at the domain root: buffered `aws-apigw-v2` converter (no streaming). Only
+   * the Next.js adapter acts on this today; others ignore it.
+   */
+  bypassCdn?: boolean;
+  /**
+   * D1 (preview `skipIsr`) — Next.js: disable the incremental/tag cache at
+   * build so the server function has no cache dependency (and no cache infra
+   * is emitted). Others ignore it (the construct skips their cache infra).
+   */
+  skipIsr?: boolean;
+  /**
+   * D2 (preview `skipImageOptimization`) — Next.js: skip the `sharp` install
+   * and drop `manifest.imageOptimization` so no image Lambda is built/deployed.
+   */
+  skipImageOptimization?: boolean;
+  /**
+   * E1 (preview) — pin Next.js's build ID to this deterministic value so a
+   * code-only re-deploy produces byte-identical static assets and CDK skips the
+   * full S3 re-upload. Only the Next.js adapter acts on it. Preview-only.
+   */
+  deterministicBuildId?: string;
+}
+
+/**
  * Get the adapter function for the given framework type.
  * @param framework - the framework type
  * @param buildOutputDir - explicit build output directory (for SPA/static)
+ * @param options - deploy-mode options (e.g. preview edge→regional)
  * @returns the adapter function
  */
 export const getAdapter = (
   framework: string,
   buildOutputDir?: string,
+  options?: AdapterBuildOptions,
 ): FrameworkAdapterFn => {
+  // Next.js is the only adapter that acts on AdapterBuildOptions today
+  // (edge→regional). Construct it directly so the options reach it, rather
+  // than through the zero-arg registry wrapper.
+  if (framework === 'nextjs') {
+    return (projectDir: string) =>
+      nextjsAdapter({
+        projectDir,
+        edgeToRegional: options?.edgeToRegional,
+        bypassCdn: options?.bypassCdn,
+        skipIsr: options?.skipIsr,
+        skipImageOptimization: options?.skipImageOptimization,
+        deterministicBuildId: options?.deterministicBuildId,
+      });
+  }
+
+  // Nuxt/Nitro act on `bypassCdn` (force the `node-server` preset so SSR runs
+  // as a buffered LWA http-server behind the bypass's private API Gateway
+  // integration, not a streaming `aws-lambda` handler). Construct directly so
+  // the option reaches the adapter, like nextjs above.
+  if (framework === 'nuxt' || framework === 'nitro') {
+    return (projectDir: string) =>
+      nitroAdapter({ projectDir, bypassCdn: options?.bypassCdn });
+  }
+
   const entry = adapterRegistry.get(framework);
   if (!entry) {
     throw new HostingError('UnsupportedFrameworkError', {

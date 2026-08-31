@@ -12,6 +12,7 @@ export const computeResourceSchema = z
     entrypoint: z.string().optional(),
     port: z.number().positive().optional(),
     placement: z.enum(['regional', 'global']),
+    edgeRegional: z.boolean().optional(),
     streaming: z.boolean().optional(),
     runtime: z.string().optional(),
     memorySize: z.number().positive().optional(),

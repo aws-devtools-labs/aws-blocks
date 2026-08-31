@@ -230,6 +230,17 @@ export type ComputeResource = {
   /** Where to deploy */
   placement: 'regional' | 'global';
 
+  /**
+   * True when this compute is a `runtime: 'edge'` route that preview mode
+   * downgraded to a regional Lambda (edge→regional). Such a route is NOT known
+   * to the KVS edge router (which only routes the shared server/image origins),
+   * so the CDN gives it a DEDICATED CloudFront behavior pointing at its Function
+   * URL. Regular regional multi-computes (e.g. a plain `api` handler) are routed
+   * via the KVS table and must NOT get a dedicated behavior — leave this unset
+   * for them. Only meaningful for `placement: 'regional'` computes.
+   */
+  edgeRegional?: boolean;
+
   /** Whether to enable response streaming */
   streaming?: boolean;
 

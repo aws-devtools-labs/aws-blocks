@@ -178,6 +178,29 @@ void describe('ComputeConstruct', () => {
       });
     });
 
+    void it('uses BUFFERED LWA mode when bufferedInvoke is set (bypassCdn SSR)', () => {
+      // Under bypassCdn the SSR compute is invoked by a buffered API Gateway
+      // HttpLambdaIntegration (private — no public Function URL). LWA must run
+      // buffered; its default response_stream reply 500s behind a buffered
+      // invoke. Preview trades away SSR streaming (a perf feature).
+      const bundle = createBundleDir();
+      fs.writeFileSync(path.join(bundle, 'server.js'), '// server');
+      const stack = createStack();
+
+      new ComputeConstruct(stack, 'Compute', {
+        name: 'default',
+        computeResource: httpServerResource(bundle),
+        bufferedInvoke: true,
+      });
+      const template = Template.fromStack(stack);
+
+      template.hasResourceProperties('AWS::Lambda::Function', {
+        Environment: {
+          Variables: Match.objectLike({ AWS_LWA_INVOKE_MODE: 'buffered' }),
+        },
+      });
+    });
+
     void it('includes Lambda Web Adapter layer', () => {
       const bundle = createBundleDir();
       fs.writeFileSync(path.join(bundle, 'server.js'), '// server');

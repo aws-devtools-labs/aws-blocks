@@ -463,6 +463,9 @@ jobs:
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+          - framework: preview
+            app-dir: test-apps/hosting-preview
+            script: test:e2e:hosting-preview
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}

@@ -90,3 +90,43 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
     assert.match(hint, /rollback is off|automatic rollback/i);
   });
 });
+
+describe('buildSandboxDeployArgs — hotswap (re-deploy)', () => {
+  const hot = buildSandboxDeployArgs({
+    outDir: '.blocks-sandbox',
+    projectRoot: '/app',
+    backendPath: 'aws-blocks/index.ts',
+    hotswap: true,
+  });
+
+  it('uses --hotswap-fallback for a re-deploy', () => {
+    assert.ok(hot.includes('--hotswap-fallback'), `expected --hotswap-fallback in: ${hot.join(' ')}`);
+  });
+
+  it('pairs hotswap with --express so the fallback deploy is also fast', () => {
+    // --hotswap-fallback and --express are orthogonal: the former decides
+    // WHETHER to touch CloudFormation, the latter HOW the CloudFormation deploy
+    // runs. When a non-hotswappable change forces the fallback, we still want it
+    // to run in Express Mode, not a plain slow deploy — so both flags are passed.
+    assert.ok(hot.includes('--express'), `hotswap should pair with --express: ${hot.join(' ')}`);
+  });
+
+  it('does NOT pass --method with hotswap (--express implies its own method)', () => {
+    // --express selects its own deployment method, so --method direct is not
+    // needed alongside it here; keeping it off avoids a redundant/conflicting flag.
+    assert.ok(!hot.includes('--method'), `hotswap must not pass --method: ${hot.join(' ')}`);
+  });
+
+  it('keeps the non-interactive contract + outputs + sandbox context', () => {
+    assert.deepStrictEqual(hot.slice(0, 4), ['exec', 'cdk', '--', 'deploy']);
+    assert.ok(hot.includes('--all'));
+    assert.strictEqual(valueAfter(hot, '--require-approval'), 'never');
+    assert.strictEqual(valueAfter(hot, '--outputs-file'), '.blocks-sandbox/outputs.json');
+  });
+
+  it('first deploy (hotswap:false) stays on Express Mode, not hotswap', () => {
+    const first = buildSandboxDeployArgs({ outDir: 'o', projectRoot: '/a', backendPath: 'b.ts' });
+    assert.ok(first.includes('--express'), 'first deploy uses Express Mode');
+    assert.ok(!first.includes('--hotswap-fallback'), 'first deploy does not hotswap');
+  });
+});

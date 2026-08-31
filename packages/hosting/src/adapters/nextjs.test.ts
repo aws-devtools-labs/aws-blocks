@@ -17,6 +17,7 @@ import {
   stripBakedBasePath,
   nextPatternToCloudFront,
   normalizeTrailingNamedWildcard,
+  pinNextBuildId,
 } from './nextjs.js';
 import { deployManifestSchema } from '../manifest/schema.js';
 import type { DeployManifest } from '../manifest/types.js';
@@ -2153,5 +2154,104 @@ void describe('nextPatternToCloudFront', () => {
   void it('leaves a clean pattern unchanged', () => {
     assert.strictEqual(nextPatternToCloudFront('/api/edge'), '/api/edge');
     assert.strictEqual(nextPatternToCloudFront('/*'), '/*');
+  });
+});
+
+void describe('pinNextBuildId (preview deterministic build ID)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pinbid-'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('wraps a next.config.ts to inject generateBuildId, and restores it', () => {
+    const cfg = path.join(dir, 'next.config.ts');
+    const original = "const c = { output: 'standalone' };\nexport default c;\n";
+    fs.writeFileSync(cfg, original);
+
+    const restore = pinNextBuildId(dir, 'preview');
+    assert.ok(restore, 'returns a restore fn when it wraps');
+
+    // Original moved aside; wrapper written in its place.
+    const baseFile = path.join(dir, 'next.config.blocks-base.ts');
+    assert.ok(fs.existsSync(baseFile), 'original moved to base file');
+    assert.strictEqual(fs.readFileSync(baseFile, 'utf8'), original);
+    const wrapper = fs.readFileSync(cfg, 'utf8');
+    assert.match(wrapper, /generateBuildId/);
+    assert.match(wrapper, /"preview"/, 'injects the given build id');
+    assert.match(wrapper, /import blocksBase from/, 'ESM wrapper for .ts');
+    assert.match(wrapper, /cfg\.generateBuildId \?\?/, 'respects a user-defined build id at runtime');
+
+    restore!();
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), original, 'original restored');
+    assert.ok(!fs.existsSync(baseFile), 'base file removed on restore');
+  });
+
+  it('is a no-op when the config already defines generateBuildId', () => {
+    const cfg = path.join(dir, 'next.config.ts');
+    const original =
+      "export default { generateBuildId: async () => 'mine' };\n";
+    fs.writeFileSync(cfg, original);
+
+    const restore = pinNextBuildId(dir, 'preview');
+    assert.strictEqual(restore, undefined, 'no wrap when user set generateBuildId');
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), original, 'config untouched');
+    assert.ok(!fs.existsSync(path.join(dir, 'next.config.blocks-base.ts')));
+  });
+
+  it('is a no-op when there is no next.config', () => {
+    assert.strictEqual(pinNextBuildId(dir, 'preview'), undefined);
+  });
+
+  it('emits a CJS wrapper for next.config.cjs', () => {
+    const cfg = path.join(dir, 'next.config.cjs');
+    fs.writeFileSync(cfg, "module.exports = { output: 'standalone' };\n");
+    const restore = pinNextBuildId(dir, 'preview');
+    assert.ok(restore);
+    const wrapper = fs.readFileSync(cfg, 'utf8');
+    assert.match(wrapper, /require\(/, 'CJS wrapper uses require');
+    assert.match(wrapper, /module\.exports =/, 'CJS wrapper uses module.exports');
+    restore!();
+  });
+
+  it('emits a CJS wrapper for next.config.js in a CommonJS project', () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'x' }));
+    const cfg = path.join(dir, 'next.config.js');
+    fs.writeFileSync(cfg, "module.exports = { output: 'standalone' };\n");
+    const restore = pinNextBuildId(dir, 'preview');
+    assert.ok(restore);
+    assert.match(fs.readFileSync(cfg, 'utf8'), /module\.exports =/);
+    restore!();
+  });
+
+  it('emits an ESM wrapper for next.config.js in a module project', () => {
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'x', type: 'module' }),
+    );
+    const cfg = path.join(dir, 'next.config.js');
+    fs.writeFileSync(cfg, "export default { output: 'standalone' };\n");
+    const restore = pinNextBuildId(dir, 'preview');
+    assert.ok(restore);
+    assert.match(fs.readFileSync(cfg, 'utf8'), /export default async function/);
+    restore!();
+  });
+
+  it('does not clobber a pre-existing base file (stale from a crashed build)', () => {
+    fs.writeFileSync(path.join(dir, 'next.config.ts'), "export default {};\n");
+    fs.writeFileSync(path.join(dir, 'next.config.blocks-base.ts'), 'stale');
+    assert.strictEqual(pinNextBuildId(dir, 'preview'), undefined);
+  });
+
+  it('restore is idempotent', () => {
+    const cfg = path.join(dir, 'next.config.mjs');
+    const original = 'export default {};\n';
+    fs.writeFileSync(cfg, original);
+    const restore = pinNextBuildId(dir, 'preview')!;
+    restore();
+    restore(); // second call must not throw or re-corrupt
+    assert.strictEqual(fs.readFileSync(cfg, 'utf8'), original);
   });
 });

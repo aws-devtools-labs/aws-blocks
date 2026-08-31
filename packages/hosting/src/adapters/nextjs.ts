@@ -39,6 +39,47 @@ export type NextjsAdapterOptions = {
   configPath?: string;
   /** Skip the OpenNext build step (use pre-existing .open-next/ output) */
   skipBuild?: boolean;
+  /**
+   * B2 (preview) — generate the OpenNext edge-function block with
+   * `placement: 'regional'` so `runtime: 'edge'` routes build as regional
+   * Lambdas instead of Lambda@Edge. The resulting compute is recorded on the
+   * manifest with `placement: 'regional'`; the L3 construct honors it and
+   * skips `experimental.EdgeFunction` (no us-east-1 edge stack).
+   */
+  edgeToRegional?: boolean;
+  /**
+   * C (preview `bypassCdn`) — build the SSR bundle for an **HTTP API v2**
+   * origin (served at the domain root) instead of the CloudFront-fronted REST
+   * API: emit `converter: 'aws-apigw-v2'` + the buffered `aws-lambda` wrapper
+   * (HTTP API has no response streaming), and skip the streaming-wrapper patch.
+   */
+  bypassCdn?: boolean;
+  /**
+   * D1 (preview `skipIsr`) — generate the OpenNext config with
+   * `dangerous: { disableIncrementalCache, disableTagCache }` so no cache /
+   * revalidation infra is emitted and the server function is built without a
+   * cache dependency.
+   */
+  skipIsr?: boolean;
+  /**
+   * D2 (preview `skipImageOptimization`) — skip installing `sharp` into the
+   * image bundle (the slow synthesis step) and drop `manifest.imageOptimization`
+   * so the L3 builds no image Lambda.
+   */
+  skipImageOptimization?: boolean;
+  /**
+   * E1 (preview) — pin Next.js's build ID to this deterministic value for the
+   * build by temporarily wrapping `next.config` with a `generateBuildId`. Next
+   * otherwise generates a random build ID per build, which renames the
+   * `_next/static/<buildId>/` asset folder every deploy — changing the CDK
+   * asset hash and forcing a full S3 re-upload of otherwise byte-identical
+   * static assets (the dominant cost of a preview code-only re-deploy). With a
+   * stable build ID an unchanged (or server-only) build produces identical
+   * assets, so CDK skips the upload. Respects a user-defined `generateBuildId`.
+   * Preview-only — production keeps Next's per-build random ID (correct cache
+   * busting for a long-lived CDN).
+   */
+  deterministicBuildId?: string;
 };
 
 // ---- OpenNext output types (internal) ----
@@ -114,12 +155,30 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild } = options;
+  const {
+    projectDir,
+    configPath,
+    skipBuild,
+    edgeToRegional,
+    bypassCdn,
+    skipIsr,
+    skipImageOptimization,
+    deterministicBuildId,
+  } = options;
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
 
   if (!skipBuild) {
+    // E1 (preview): pin Next's build ID for the duration of the build so a
+    // code-only re-deploy produces byte-identical static assets (CDK then skips
+    // the full S3 re-upload). Always restored in the finally below. No-op in
+    // production (deterministicBuildId undefined) or when the user already sets
+    // `generateBuildId`.
+    const restoreBuildId = deterministicBuildId
+      ? pinNextBuildId(projectDir, deterministicBuildId)
+      : undefined;
+    try {
     // L3 routes the SSR Lambda through API Gateway REST + STREAM. REST sends
     // payload v1, OpenNext defaults to v2 — force the v1 converter + streaming
     // wrapper for `default`. OpenNext's `--config-path` flag silently fails
@@ -146,12 +205,23 @@ export const nextjsAdapter = (
         runNextBuild(projectDir);
       }
       const edgeRoutes = detectEdgeRoutes(projectDir);
-      cleanupConfig = installGeneratedOpenNextConfig(projectDir, edgeRoutes);
+      cleanupConfig = installGeneratedOpenNextConfig(
+        projectDir,
+        edgeRoutes,
+        edgeToRegional,
+        bypassCdn,
+        skipIsr,
+      );
     }
     try {
       runOpenNextBuild(projectDir, configPath);
     } finally {
       cleanupConfig?.();
+    }
+    } finally {
+      // Restore next.config immediately after the builds — the post-build
+      // patches below operate on `.open-next` output, not the config.
+      restoreBuildId?.();
     }
 
     // Warn when the installed @opennextjs/aws is outside the version
@@ -164,7 +234,12 @@ export const nextjsAdapter = (
 
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
-    patchStreamingWrapperForApiGateway(openNextDir);
+    // Skipped under bypassCdn: that path builds with the buffered `aws-lambda`
+    // wrapper for HTTP API v2 (which has no response streaming), so there is
+    // no streaming wrapper to patch.
+    if (!bypassCdn) {
+      patchStreamingWrapperForApiGateway(openNextDir);
+    }
 
     // Patch each edge bundle's process import banner for Lambda@Edge
     // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
@@ -173,18 +248,25 @@ export const nextjsAdapter = (
     // are non-writable per spec — it is not a Node-version quirk).
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
-    // Patch the image-optimization bundle for the Next.js 16 image-optimizer
-    // signature change. See patchImageOptimizerForNext16.
-    patchImageOptimizerForNext16(openNextDir, projectDir);
+    // Image-optimization patches + the (slow) linux-x64 `sharp` install.
+    // Skipped under preview `skipImageOptimization`: no image Lambda is
+    // deployed (manifest.imageOptimization is dropped below), so there is
+    // nothing to patch and the sharp install — the dominant synthesis cost —
+    // is pure waste.
+    if (!skipImageOptimization) {
+      // Patch the image-optimization bundle for the Next.js 16 image-optimizer
+      // signature change. See patchImageOptimizerForNext16.
+      patchImageOptimizerForNext16(openNextDir, projectDir);
 
-    // Patch the image-optimization bundle so a disallowed image type (e.g. an
-    // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
-    // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
-    patchImageOptimizerSvgStatus(openNextDir);
+      // Patch the image-optimization bundle so a disallowed image type (e.g. an
+      // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
+      // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
+      patchImageOptimizerSvgStatus(openNextDir);
 
-    // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
-    // See installLinuxSharpForImageOptimizer.
-    installLinuxSharpForImageOptimizer(openNextDir);
+      // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
+      // See installLinuxSharpForImageOptimizer.
+      installLinuxSharpForImageOptimizer(openNextDir);
+    }
   }
 
   // Note: Injecting config files into server bundles is an integration-layer
@@ -215,7 +297,7 @@ export const nextjsAdapter = (
     );
   }
 
-  const manifest = translateOpenNextOutput(output, openNextDir);
+  const manifest = translateOpenNextOutput(output, openNextDir, edgeToRegional, skipIsr);
 
   // Lift simple Next.js redirects() / headers() rules out of the OpenNext
   // Lambda and into CloudFront. This eliminates a Lambda invocation for
@@ -264,6 +346,12 @@ export const nextjsAdapter = (
   // stripBakedBasePath. MUST run after applyAssetPrefix (which sets
   // manifest.basePath and appends trailing-slash redirects).
   stripBakedBasePath(manifest);
+
+  // D2 (preview skipImageOptimization): drop the image-opt entry so the L3
+  // builds no image Lambda. `/_next/image` degrades to the source image.
+  if (skipImageOptimization) {
+    delete manifest.imageOptimization;
+  }
 
   return manifest;
 };
@@ -1080,6 +1168,106 @@ const validateUserOpenNextConfig = (
   });
 };
 
+/** Is this project ESM (`package.json` `"type": "module"`)? Governs the CJS/ESM shape of the injected wrapper. */
+const isEsmProject = (projectDir: string): boolean => {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8'),
+    ) as { type?: string };
+    return pkg.type === 'module';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Pin Next.js's build ID to `buildId` for the duration of the build by
+ * temporarily wrapping the user's `next.config` with a `generateBuildId`.
+ *
+ * WHY: Next generates a random build ID per build, which renames the
+ * `_next/static/<buildId>/` asset folder every time. That rename changes the
+ * CDK asset hash even when every file is byte-identical, forcing a full S3
+ * re-upload of the static bundle on every re-deploy — the dominant cost of a
+ * preview code-only re-deploy. A stable build ID makes an unchanged (or
+ * server-only) build produce identical assets, so CDK skips the upload.
+ *
+ * Mechanism: rename `next.config.<ext>` → `next.config.blocks-base.<ext>` and
+ * write a thin wrapper that re-exports it with `generateBuildId` merged in
+ * (respecting a user-defined one). Returns a restore function — ALWAYS call it
+ * in a `finally`. Returns `undefined` (no-op) when there's no config to wrap,
+ * the user already defines `generateBuildId`, or a stale base file is present.
+ *
+ * Preview-only: production passes no `deterministicBuildId`, keeping Next's
+ * per-build random ID (correct cache-busting for a long-lived CDN).
+ */
+export const pinNextBuildId = (
+  projectDir: string,
+  buildId: string,
+): (() => void) | undefined => {
+  const configFile = ['ts', 'mjs', 'cjs', 'js']
+    .map((ext) => path.join(projectDir, `next.config.${ext}`))
+    .find((p) => fs.existsSync(p));
+  // No config → Next uses defaults; nothing to wrap.
+  if (!configFile) return undefined;
+
+  const original = fs.readFileSync(configFile, 'utf8');
+  // Respect a user-defined build ID — never override intent.
+  if (/generateBuildId/.test(original)) return undefined;
+
+  const ext = path.extname(configFile).slice(1);
+  const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
+  // A stale base file (e.g. a previous crashed build) — don't clobber it.
+  if (fs.existsSync(baseFile)) return undefined;
+
+  const isCjs = ext === 'cjs' || (ext === 'js' && !isEsmProject(projectDir));
+  const id = JSON.stringify(buildId);
+  // Extensionless relative specifier — Next's config loader resolves it for
+  // .ts/.mjs/.js/.cjs alike (verified against next.config.ts).
+  const spec = JSON.stringify('./next.config.blocks-base');
+  // `// @ts-nocheck` — this is a generated shim, and a `.ts` config in a
+  // project with a type-checked `next build` (default) would otherwise fail on
+  // the untyped `phase`/`ctx` params ("implicitly has an 'any' type").
+  const wrapper = isCjs
+    ? `// @ts-nocheck
+// AWS Blocks preview: deterministic build ID (auto-restored after build).
+const blocksBase = require(${spec});
+const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
+module.exports = async (phase, ctx) => {
+  const cfg = typeof blocksResolved === 'function' ? await blocksResolved(phase, ctx) : await blocksResolved;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+};
+`
+    : `// @ts-nocheck
+// AWS Blocks preview: deterministic build ID (auto-restored after build).
+import blocksBase from ${spec};
+export default async function blocksPreviewConfig(phase, ctx) {
+  const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+}
+`;
+
+  fs.renameSync(configFile, baseFile);
+  fs.writeFileSync(configFile, wrapper, 'utf8');
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    // Remove the wrapper and move the original back. Best-effort: a failure
+    // here must not mask the build's own error.
+    try {
+      fs.rmSync(configFile, { force: true });
+    } catch {
+      // ignore
+    }
+    try {
+      fs.renameSync(baseFile, configFile);
+    } catch {
+      // ignore
+    }
+  };
+};
+
 /**
  * Generate <projectDir>/open-next.config.ts with `aws-apigw-v1` + streaming
  * wrapper so OpenNext picks them up on its next build. Returns a cleanup
@@ -1095,9 +1283,36 @@ const validateUserOpenNextConfig = (
 const installGeneratedOpenNextConfig = (
   projectDir: string,
   edgeRoutes: EdgeRoute[] = [],
+  edgeToRegional = false,
+  bypassCdn = false,
+  skipIsr = false,
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
-  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes);
+  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, edgeToRegional);
+  // D1 (preview skipIsr): drop the ISR *revalidation* machinery but KEEP the
+  // S3 incremental cache — so prerendered pages (pure SSG *and* ISR) are still
+  // served frozen from the build-time cache instead of re-rendered on every
+  // request. Concretely: keep `incrementalCache` (default S3), turn OFF the tag
+  // cache (`disableTagCache` → no DynamoDB tag table), and use the `dummy` queue
+  // so the server never enqueues background revalidation (no SQS/revalidation
+  // Lambda). Pure SSG stays frozen forever; ISR pages serve the build snapshot
+  // without revalidating — which is exactly what a throwaway preview wants.
+  // (Previously this also set `disableIncrementalCache: true`, which threw away
+  // the cache and made pure SSG re-render per request — SSG is not ISR.)
+  const dangerousBlock = skipIsr ? `\n  dangerous: {\n    disableTagCache: true,\n  },` : '';
+  // Under skipIsr, override the queue to OpenNext's no-op `dummy` so the SSR
+  // function has no SQS dependency (revalidation is intentionally disabled).
+  const queueOverride = skipIsr ? '\n      queue: "dummy",' : '';
+  // Default (CloudFront + REST-API STREAM) path: v1 converter + the streaming
+  // wrapper. Under `bypassCdn` the SSR Lambda is fronted by an HTTP API v2
+  // origin at the domain root, which sends payload v2 and CANNOT stream — so
+  // build the `default` function BUFFERED: v2 converter + the plain
+  // `aws-lambda` wrapper (and the streaming-wrapper patch is skipped, see the
+  // adapter build flow). Trade-off: SSR responses are buffered in preview
+  // (no progressive/streaming render); production keeps streaming.
+  const defaultOverride = bypassCdn
+    ? "converter: 'aws-apigw-v2',\n      wrapper: 'aws-lambda',"
+    : "converter: 'aws-apigw-v1',\n      wrapper: 'aws-lambda-streaming',";
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
   // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
@@ -1109,10 +1324,9 @@ const config = {
   default: {
     minify: true,
     override: {
-      converter: 'aws-apigw-v1',
-      wrapper: 'aws-lambda-streaming',
+      ${defaultOverride}${queueOverride}
     },
-  },${edgeBlock}
+  },${edgeBlock}${dangerousBlock}
 };
 export default config;
 `;
@@ -1169,7 +1383,10 @@ export default config;
  * no API Gateway in front, so the body-hash 403 issue doesn't apply
  * here (Lambda@Edge invocation isn't OAC-signed by CloudFront).
  */
-const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
+const renderEdgeFunctionsBlock = (
+  edgeRoutes: EdgeRoute[],
+  edgeToRegional = false,
+): string => {
   if (edgeRoutes.length === 0) return '';
   // Escape backslashes first (so the slash inserted by quote-escape isn't
   // itself doubled), then escape single quotes. Without this CodeQL flags
@@ -1177,14 +1394,25 @@ const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
   // emit invalid JS into the generated open-next.config.ts.
   const quote = (s: string) =>
     `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  // B2 (preview): keep the Next.js edge RUNTIME (the route source demands it)
+  // but flip WHERE it runs. `placement: 'regional'` makes OpenNext emit the
+  // function as a regular regional Lambda origin (served via a Function URL),
+  // not a Lambda@Edge replica — so no us-east-1 edge-lambda-stack. The
+  // regional origin is HTTP-invoked, so it uses the Function-URL converter
+  // (`aws-apigw-v2`) + streaming wrapper, matching how OpenNext fronts a
+  // regional split function. `placement: 'global'` keeps the production
+  // Lambda@Edge path (`aws-cloudfront` origin-request converter).
+  const placement = edgeToRegional ? 'regional' : 'global';
+  const override = edgeToRegional
+    ? "converter: 'aws-apigw-v2',\n        wrapper: 'aws-lambda-streaming',"
+    : "converter: 'aws-cloudfront',\n        wrapper: 'aws-lambda',";
   const entries = edgeRoutes
     .map(
       (route, i) => `    edge${i + 1}: {
       runtime: 'edge',
-      placement: 'global',
+      placement: '${placement}',
       override: {
-        converter: 'aws-cloudfront',
-        wrapper: 'aws-lambda',
+        ${override}
       },
       routes: [${quote(route.module)}],
       patterns: [${quote(route.pattern)}],
@@ -1899,6 +2127,8 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
 const translateOpenNextOutput = (
   output: OpenNextOutput,
   openNextDir: string,
+  edgeToRegional = false,
+  skipIsr = false,
 ): DeployManifest => {
   const manifest: DeployManifest = {
     version: 1,
@@ -1919,7 +2149,19 @@ const translateOpenNextOutput = (
       // Skip S3 origin and imageOptimizer (handled separately via manifest.imageOptimization)
       if (name === 's3' || name === 'imageOptimizer') continue;
 
-      const computeResource = mapOriginToCompute(name, origin, openNextDir);
+      // A regionalized edge split lands here (not `edgeFunctions`) when OpenNext
+      // moves it into `origins`. We generate these function keys as `edge<N>`
+      // (see renderEdgeFunctionsBlock), so under edge→regional a compute named
+      // `edge<N>` is a downgraded edge route → mark it so the CDN gives it a
+      // dedicated behavior (the KVS router doesn't know it). Regular multi-
+      // computes (`default`/`server`/`api`) are never named this way.
+      const isEdgeRegional = edgeToRegional && /^edge\d+$/.test(name);
+      const computeResource = mapOriginToCompute(
+        name,
+        origin,
+        openNextDir,
+        isEdgeRegional,
+      );
       if (computeResource) {
         manifest.compute[name] = computeResource;
       }
@@ -1948,14 +2190,33 @@ const translateOpenNextOutput = (
       ];
       const bundle = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
 
-      manifest.compute[name] = {
-        type: 'edge',
-        bundle,
-        handler: fn.handler ?? 'index.handler',
-        placement: 'global',
-        streaming: false,
-        runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
-      };
+      // B2 (preview): when we asked OpenNext for `placement: 'regional'`,
+      // record the compute as a regional handler so the L3 construct builds a
+      // normal in-region Lambda (with a Function URL origin) instead of
+      // `experimental.EdgeFunction`. OpenNext normally moves a regional split
+      // function into `output.origins` (caught by the loop above), but honor
+      // the flag here too so the manifest is correct regardless of which
+      // section OpenNext emits it under.
+      manifest.compute[name] = edgeToRegional
+        ? {
+            type: 'handler',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'regional',
+            // Mark as an edge→regional downgrade so the CDN gives it a dedicated
+            // behavior (the KVS router doesn't know this split route).
+            edgeRegional: true,
+            streaming: true,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          }
+        : {
+            type: 'edge',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'global',
+            streaming: false,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          };
     }
   }
 
@@ -2011,11 +2272,15 @@ const translateOpenNextOutput = (
 
         manifest.cache = {
           computeResource: primaryComputeName,
+          // Under skipIsr we keep the S3 incremental cache + seed (frozen SSG)
+          // but provision NO revalidation infra: no tag table, no SQS queue, no
+          // revalidation Lambda (the server uses the `dummy` queue).
           tagRevalidation: tagCacheEnabled,
-          revalidationQueue: true,
-          revalidationFunction: hasRevalidationFn
-            ? { bundle: revalidationFnDir, handler: 'index.handler' }
-            : undefined,
+          revalidationQueue: !skipIsr,
+          revalidationFunction:
+            !skipIsr && hasRevalidationFn
+              ? { bundle: revalidationFnDir, handler: 'index.handler' }
+              : undefined,
           ...(seedDirectory ? { seedDirectory } : {}),
           ...(initFunction ? { initFunction } : {}),
         };
@@ -2067,6 +2332,7 @@ const mapOriginToCompute = (
   name: string,
   origin: OpenNextOrigin,
   openNextDir: string,
+  edgeRegional = false,
 ): ComputeResource | undefined => {
   const bundleDir = path.join(openNextDir, 'server-functions', name);
 
@@ -2084,6 +2350,9 @@ const mapOriginToCompute = (
       bundle: effectiveBundle,
       handler: origin.handler ?? 'index.handler',
       placement: 'regional',
+      // Only edge→regional downgrades get the marker (dedicated CDN behavior);
+      // a regular regional origin stays KVS-routed.
+      ...(edgeRegional ? { edgeRegional: true } : {}),
       streaming: origin.streaming ?? true,
       runtime: origin.runtime ?? FRAMEWORK_COMPUTE_RUNTIME,
       memorySize: origin.memorySize,

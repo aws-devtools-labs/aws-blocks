@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { BLOCKS_RPC_PREFIX } from '../constants.js';
 
 const IS_SSR = typeof window === 'undefined';
 
@@ -127,7 +128,21 @@ async function resolveApiUrl(): Promise<string> {
   } catch {
     // Config doesn't exist
   }
-  
+
+  // 5. Browser same-origin default. Blocks always mounts the RPC endpoint at
+  //    `/aws-blocks/api` under the app's OWN origin — the CloudFront path and
+  //    the bypassCdn single origin both serve it same-origin — so a relative
+  //    URL resolves correctly from the browser. This keeps interactive auth
+  //    working even when the deploy-time config.json is missing or a stale
+  //    placeholder (a real failure mode we hit under bypassCdn). Only reached
+  //    after the config.json fetch above yields no usable apiUrl, so a properly
+  //    deployed cross-domain apiUrl still wins.
+  if (!IS_SSR) {
+    const validated = validateAndCache(BLOCKS_RPC_PREFIX, 'browser same-origin default');
+    console.log('[Blocks] Using API (browser same-origin default):', validated);
+    return validated;
+  }
+
   // Fallback — no config found
   throw new Error(
     'Blocks API URL not configured. Ensure:\n' +

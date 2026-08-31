@@ -6,6 +6,7 @@ import * as os from 'os';
 import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import { experimental } from 'aws-cdk-lib/aws-cloudfront';
 import { HostingConstruct } from './hosting_construct.js';
 import { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
@@ -3330,5 +3331,299 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
     for (const p of prefixes) {
       assert.match(p, /^builds\/cc-test-3\//, `prefix ${p} is under the build id`);
     }
+  });
+});
+
+// ================================================================
+// Preview B2 — edge routes deployed regionally (placement contract)
+// ================================================================
+
+void describe('HostingConstruct — preview edge→regional (B2)', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // A realistic manifest: a regional SSR server plus one edge-runtime route.
+  // The only difference between the two tests is the edge route's `placement`,
+  // which is the contract the construct must honor. `type: 'edge'` is kept
+  // even for the regional case to exercise the defensive placement path (the
+  // adapter downgrades type to 'handler', but the construct must be correct
+  // regardless).
+  const edgeRouteManifest = (
+    staticDir: string,
+    bundleDir: string,
+    placement: 'regional' | 'global',
+  ): DeployManifest => ({
+    version: 1,
+    compute: {
+      default: {
+        type: 'handler',
+        bundle: bundleDir,
+        handler: 'index.handler',
+        placement: 'regional',
+        streaming: true,
+        runtime: 'nodejs24.x',
+      },
+      edge1: {
+        type: 'edge',
+        bundle: bundleDir,
+        handler: 'index.handler',
+        placement,
+        // The adapter marks an edge→regional downgrade so the CDN gives it a
+        // dedicated behavior; the global (Lambda@Edge) case is left unmarked.
+        ...(placement === 'regional' ? { edgeRegional: true } : {}),
+        streaming: placement === 'regional',
+        runtime: 'nodejs24.x',
+      },
+    },
+    staticAssets: { directory: staticDir },
+    routes: [
+      { pattern: '/_next/static/*', target: 'static' },
+      { pattern: '/edge/*', target: 'edge1' },
+      { pattern: '/*', target: 'default' },
+    ],
+    buildId: 'edge-b2-1',
+  });
+
+  void it('builds a regional Lambda (not Lambda@Edge) when placement is regional', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: edgeRouteManifest(staticDir, bundleDir, 'regional'),
+      skipRegionValidation: true,
+    });
+
+    const fn = construct.computeFunctions.get('edge1');
+    assert.ok(fn, 'edge1 compute function exists');
+    assert.ok(
+      !(fn instanceof experimental.EdgeFunction),
+      'regional placement must NOT create a Lambda@Edge function',
+    );
+    // A regional, non-SSR compute is fronted by a Function URL (no us-east-1
+    // edge-lambda-stack, no CloudFront edge association).
+    assert.ok(
+      construct.computeFunctionUrls.has('edge1'),
+      'regional edge route gets a Function URL origin',
+    );
+    // The regional edge route must get a DEDICATED CloudFront behavior
+    // pointing at its Function URL origin (otherwise CloudFront routes it to
+    // the default server Lambda / KVS router and 500s — the deploy-found bug).
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({ PathPattern: '/edge/*' }),
+        ]),
+      }),
+    });
+    // …and the edge1 Function URL is granted CloudFront invoke (OAC).
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunctionUrl',
+      Principal: 'cloudfront.amazonaws.com',
+    });
+
+    // Synth must succeed and produce a single stack (no support edge stack).
+    const assembly = App.of(stack)!.synth();
+    const edgeStacks = assembly.stacks.filter((s) =>
+      s.stackName.includes('edge-lambda-stack'),
+    );
+    assert.strictEqual(
+      edgeStacks.length,
+      0,
+      'no edge-lambda-stack is synthesized for a regional edge route',
+    );
+  });
+
+  void it('still builds Lambda@Edge when placement is global (production path preserved)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    // Lambda@Edge on a non-us-east-1 stack uses the cross-region support
+    // stack; give the stack an explicit env so EdgeFunction resolves.
+    const app = new App();
+    const stack = new Stack(app, 'EdgeStack', {
+      env: { account: '123456789012', region: 'eu-west-1' },
+    });
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: edgeRouteManifest(staticDir, bundleDir, 'global'),
+      skipRegionValidation: true,
+    });
+
+    const fn = construct.computeFunctions.get('edge1');
+    assert.ok(
+      fn instanceof experimental.EdgeFunction,
+      'global placement builds a Lambda@Edge function',
+    );
+  });
+});
+
+// ================================================================
+// Preview C — bypassCdn (static/SPA served from an S3 website)
+// ================================================================
+
+void describe('HostingConstruct — preview bypassCdn (C)', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('static/SPA: HTTP API v2 single origin (root), no CloudFront', () => {
+    const staticDir = createStaticDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: { ...spaManifest(staticDir), staticAssets: { directory: staticDir, spaFallback: true } },
+      bypassCdn: true,
+    });
+
+    // No CloudFront — served from an HTTP API v2 single origin at the root.
+    assert.strictEqual(construct.distribution, undefined, 'no distribution in bypass mode');
+    assert.ok(construct.distributionUrl, 'a single-origin URL is exposed');
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    // The asset-proxy Lambda serves static from the private bucket.
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ SPA_FALLBACK: '1' }),
+      }),
+    });
+    // Assets uploaded to builds/<id>/.
+    template.resourceCountIs('Custom::CDKBucketDeployment', 1);
+  });
+
+  void it('SSR: HTTP API v2 single origin fronts the SSR Lambda, no CloudFront', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: ssrManifest(staticDir, bundleDir),
+      bypassCdn: true,
+      skipRegionValidation: true,
+    });
+
+    // SSR bypass now works (was: threw). No CloudFront; the SSR Lambda exists.
+    assert.strictEqual(construct.distribution, undefined);
+    assert.ok(construct.computeFunctions.has('default'), 'SSR Lambda built');
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::CloudFront::Distribution', 0);
+    template.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+    // The catch-all ($default) route wires to the SSR function via a v2 integration.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: '$default',
+    });
+  });
+
+  void it('SSR bypass with a backend API proxies /aws-blocks + /auth same-origin', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: ssrManifest(staticDir, bundleDir),
+      bypassCdn: true,
+      bypassApiProxyUrl: 'https://backend.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api',
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    // /aws-blocks and /auth greedy routes exist on the single-origin HTTP API.
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'ANY /aws-blocks/{proxy+}',
+    });
+    template.hasResourceProperties('AWS::ApiGatewayV2::Route', {
+      RouteKey: 'ANY /auth/{proxy+}',
+    });
+  });
+});
+
+// ================================================================
+// Preview D1/D2 — skip ISR + skip image optimization
+// ================================================================
+
+void describe('HostingConstruct — preview skipIsr / skipImageOptimization', () => {
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  void it('skipIsr drops the DynamoDB tag table + SQS revalidation queue', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        cache: { computeResource: 'default', tagRevalidation: true, revalidationQueue: true },
+      },
+      skipIsr: true,
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::DynamoDB::Table', 0);
+    template.resourceCountIs('AWS::SQS::Queue', 0);
+  });
+
+  void it('without skipIsr the ISR infra is created (control)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        cache: { computeResource: 'default', tagRevalidation: true, revalidationQueue: true },
+      },
+      skipRegionValidation: true,
+    });
+
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::DynamoDB::Table', 1);
+    template.resourceCountIs('AWS::SQS::Queue', 2); // queue + DLQ
+  });
+
+  void it('skipImageOptimization builds no image Lambda', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        imageOptimization: { bundle: bundleDir, handler: 'index.handler', formats: ['image/webp'], sizes: [640, 1080] },
+      },
+      skipImageOptimization: true,
+      skipRegionValidation: true,
+    });
+
+    assert.strictEqual(
+      construct.node.tryFindChild('ImageOptimization'),
+      undefined,
+      'no ImageOptimization compute construct',
+    );
+  });
+
+  void it('without skipImageOptimization the image Lambda is created (control)', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const construct = new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        ...ssrManifest(staticDir, bundleDir),
+        imageOptimization: { bundle: bundleDir, handler: 'index.handler', formats: ['image/webp'], sizes: [640, 1080] },
+      },
+      skipRegionValidation: true,
+    });
+
+    assert.ok(
+      construct.node.tryFindChild('ImageOptimization'),
+      'ImageOptimization compute construct present',
+    );
   });
 });

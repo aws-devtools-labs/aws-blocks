@@ -64,6 +64,13 @@ export type NitroAdapterOptions = {
    * call the framework CLI directly.
    */
   buildCommand?: string[];
+  /**
+   * Preview `bypassCdn` — build the `node-server` preset (LWA http-server)
+   * rather than `aws-lambda`, so SSR serves through the bypass's buffered
+   * API Gateway `HttpLambdaIntegration` (no public Function URL) regardless of
+   * the app's `awsLambda.streaming` setting. An explicit {@link preset} wins.
+   */
+  bypassCdn?: boolean;
 };
 
 /** Subset of `.output/nitro.json` we rely on. */
@@ -248,8 +255,16 @@ type NitroRouteRule = {
  * @returns framework-agnostic DeployManifest ready for the L3 construct
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
-  const { projectDir, skipBuild, preset, buildCommand } = options;
-  const effectivePreset = preset ?? 'aws-lambda';
+  const { projectDir, skipBuild, preset, buildCommand, bypassCdn } = options;
+  // Preview bypassCdn: build the `node-server` preset (an http-server compute
+  // run via the Lambda Web Adapter) instead of `aws-lambda`. The bypass fronts
+  // SSR with a buffered API Gateway HttpLambdaIntegration (no public Function
+  // URL); the `aws-lambda` preset with `awsLambda.streaming: true` emits a
+  // streamifyResponse handler whose streamed reply that buffered invoke can't
+  // parse (→ 500). `node-server` + LWA in buffered mode serves cleanly and
+  // ignores the streaming flag. Preview trades away SSR streaming (a perf
+  // feature) — consistent with dropping CDN caching / image-opt.
+  const effectivePreset = preset ?? (bypassCdn ? 'node-server' : 'aws-lambda');
 
   const outputDir = path.join(projectDir, '.output');
   const nitroJsonPath = path.join(outputDir, 'nitro.json');
@@ -1363,6 +1378,21 @@ const usesIsrFeatures = (
 };
 
 /**
+ * LWA startup wrapper for the `node-server` preset. The Lambda Web Adapter's
+ * `/opt/bootstrap` runs `$_HANDLER` as a child process; Nitro's `index.mjs`
+ * has no shebang, so bash would try to parse it as a shell script. Wrap it in
+ * a `run.sh` that execs node (prefers the managed-runtime node binary).
+ */
+const NODE_SERVER_RUN_SH_FILENAME = 'run.sh';
+const NODE_SERVER_RUN_SH_SOURCE = `#!/bin/sh
+cd "$(dirname "$0")"
+if [ -x /var/lang/bin/node ]; then
+  exec /var/lang/bin/node index.mjs
+fi
+exec node index.mjs
+`;
+
+/**
  * Map a Nitro preset (+ relevant config flags) to the right
  * ComputeResource shape.
  */
@@ -1373,10 +1403,18 @@ const presetToCompute = (
 ): ComputeResource => {
   // Plain Node HTTP server presets — front via the Lambda Web Adapter.
   if (preset === 'node-server' || preset === 'node') {
+    // LWA's `/opt/bootstrap` execs `$_HANDLER` as a child process; Nitro's
+    // `index.mjs` has no shebang, so bash would parse it as a shell script
+    // (→ exit 127). Wrap it in a `run.sh` that execs node — mirrors the
+    // Astro/SvelteKit http-server adapters.
+    fs.writeFileSync(path.join(serverDir, NODE_SERVER_RUN_SH_FILENAME), NODE_SERVER_RUN_SH_SOURCE, {
+      encoding: 'utf-8',
+      mode: 0o755,
+    });
     return {
       type: 'http-server',
       bundle: serverDir,
-      entrypoint: 'index.mjs',
+      entrypoint: NODE_SERVER_RUN_SH_FILENAME,
       port: 3000,
       placement: 'regional',
       runtime: FRAMEWORK_COMPUTE_RUNTIME,

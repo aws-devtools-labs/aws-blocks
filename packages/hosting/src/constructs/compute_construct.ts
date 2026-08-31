@@ -106,6 +106,15 @@ export type ComputeConstructProps = {
    */
   skipFunctionUrl?: boolean;
   /**
+   * Invoke an `http-server` (Lambda Web Adapter) compute in BUFFERED mode
+   * instead of `response_stream`. Set by the L3 for preview `bypassCdn`, where
+   * the SSR compute is fronted by a buffered API Gateway `HttpLambdaIntegration`
+   * (no streaming Function URL). Preview trades away SSR streaming (a perf
+   * feature) for a functional, secure single-origin — the Lambda stays private
+   * (no public Function URL). No effect on `handler`/`edge` computes.
+   */
+  bufferedInvoke?: boolean;
+  /**
    * Additional environment variables to inject into the Lambda function.
    * Merged with (and overrides) the manifest's compute resource environment.
    */
@@ -209,7 +218,15 @@ export class ComputeConstruct extends Construct {
             removalPolicy: RemovalPolicy.DESTROY,
           });
 
-    if (computeResource.type === 'handler') {
+    // B2 (preview) — a `type: 'edge'` resource with `placement: 'regional'`
+    // keeps the Next.js edge runtime bundle but runs as an ordinary regional
+    // Lambda (fronted by a Function URL) instead of Lambda@Edge. Placement is
+    // the source of truth for WHERE it runs, so route it through the plain
+    // handler builder below and skip the `experimental.EdgeFunction` path.
+    const isRegionalEdge =
+      computeResource.type === 'edge' && computeResource.placement === 'regional';
+
+    if (computeResource.type === 'handler' || isRegionalEdge) {
       // Native Lambda handler — no Web Adapter needed
       this.function = new LambdaFunction(this, 'Function', {
         runtime: this.resolveRuntime(computeResource.runtime, props.name),
@@ -254,7 +271,11 @@ export class ComputeConstruct extends Construct {
         ],
         environment: {
           AWS_LAMBDA_EXEC_WRAPPER: '/opt/bootstrap',
-          AWS_LWA_INVOKE_MODE: 'response_stream',
+          // Buffered when invoked via API Gateway's buffered HttpLambdaIntegration
+          // (preview bypassCdn — no streaming Function URL); streaming otherwise
+          // (Function URL / REST-API STREAM). A response_stream reply behind a
+          // buffered invoke can't be parsed by API Gateway → 500.
+          AWS_LWA_INVOKE_MODE: props.bufferedInvoke ? 'buffered' : 'response_stream',
           PORT: String(port),
           ...computeResource.environment,
           ...props.environment,
@@ -325,8 +346,10 @@ export class ComputeConstruct extends Construct {
       });
     }
 
-    // Function URL — skipped for edge (unsupported) or SSR (REST API instead).
-    if (computeResource.type !== 'edge' && !props.skipFunctionUrl) {
+    // Function URL — skipped for Lambda@Edge (unsupported) or SSR (REST API
+    // instead). A regional-placed edge route (B2) IS a normal Lambda, so it
+    // gets a Function URL like any other regional compute origin.
+    if ((computeResource.type !== 'edge' || isRegionalEdge) && !props.skipFunctionUrl) {
       const invokeMode =
         computeResource.streaming !== false
           ? InvokeMode.RESPONSE_STREAM

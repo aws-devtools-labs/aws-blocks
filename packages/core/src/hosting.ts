@@ -103,6 +103,148 @@ export type ComputeConfig = {
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
 
 /**
+ * Resolved deploy-mode decision for a single {@link Hosting} instance.
+ *
+ * "Preview mode" trades production-grade edge features for a faster deploy
+ * on ephemeral, throwaway environments (PR previews, per-branch sandboxes).
+ * The profile is resolved **once** in the {@link Hosting} constructor and
+ * fanned out to the adapter (build) and the L3 construct (infra). Every knob
+ * is independent and individually overridable, so adding a new preview
+ * optimization is a matter of adding one field here and honoring it at one
+ * seam — the construct never branches on "preview" itself, only on the
+ * concrete prop/manifest field each knob drives.
+ *
+ * See `docs/design/HOSTING-PREVIEW-MODE.md` for the full rationale.
+ */
+export interface PreviewProfile {
+  /** Master switch. When false, every knob below is off regardless of its own value. */
+  enabled: boolean;
+  /**
+   * A1 — skip prod-only, always-on resources that a preview never needs:
+   * CloudWatch monitoring (SNS/KMS/alarms), CloudFront access logging, and
+   * cookie skew protection. Each is still overridable by passing the
+   * corresponding prop explicitly.
+   */
+  trimResources: boolean;
+  /**
+   * A2 — optimize for a throwaway stack: skip the first-deploy CloudFront
+   * invalidation (nothing is cached yet on a fresh distribution). Fast
+   * teardown (`RemovalPolicy.DESTROY`) is applied at the app/stack level via
+   * a Mixin in the sandbox deploy path, so it is not re-applied here.
+   */
+  fastTeardown: boolean;
+  /**
+   * B2 — deploy Next.js `runtime: 'edge'` routes as **regional** Lambdas
+   * (`placement: 'regional'`) instead of Lambda@Edge, eliminating the
+   * us-east-1 `edge-lambda-stack` and its slow replication/teardown. The
+   * adapter records the placement on the manifest; the L3 construct honors it.
+   */
+  edgeToRegional: boolean;
+  /**
+   * C — skip the CloudFront distribution entirely and expose the SSR origin
+   * (API Gateway) URL directly. The biggest speedup but the largest divergence
+   * from production, so it stays **opt-in even when preview is enabled**.
+   */
+  bypassCdn: boolean;
+  /**
+   * D1 — skip the ISR / on-demand-revalidation machinery (DynamoDB tag table,
+   * SQS queue + DLQ, revalidation Lambda, cache seed). Previews don't need
+   * revalidation; SSR pages still render. The Next.js adapter also disables the
+   * incremental cache at build time so the server function has no cache
+   * dependency.
+   */
+  skipIsr: boolean;
+  /**
+   * D2 — skip the image-optimization Lambda (and, for Next.js, the `sharp`
+   * install that dominates synthesis). `/_next/image` degrades to the source
+   * image in preview.
+   */
+  skipImageOptimization: boolean;
+}
+
+/**
+ * Public preview overrides — a small, **service-neutral** set of capabilities
+ * to keep (or let scale down) in a preview environment.
+ *
+ * These say WHAT to keep, not HOW it's built, so they read the same regardless
+ * of the underlying compute topology and don't leak framework internals. The
+ * framework maps each capability to the concrete infrastructure (see
+ * {@link resolvePreviewProfile}). For the common case, pass `preview: true` and
+ * override nothing.
+ *
+ * One rule: when preview is on, **everything scales down by default** — name a
+ * capability to keep it.
+ */
+export interface PreviewOverrides {
+  /**
+   * Turn preview on/off. Preview is **opt-in** — omitting this (in the object
+   * form) leaves it off, the same as not passing `preview` at all. Set `true`
+   * to enable the scale-down while keeping the capabilities named below.
+   */
+  enabled?: boolean;
+  /**
+   * Keep a content-delivery layer in front of the app — edge caching, WAF,
+   * custom domain, and streaming responses. **Off by default in preview**
+   * (the app is served from a single regional origin, responses buffered). Set
+   * `cdn: true` to opt up to a CDN-fronted, production-like preview.
+   */
+  cdn?: boolean;
+  /**
+   * Keep on-the-fly image optimization. **Off by default in preview** — images
+   * are served unoptimized from their source.
+   */
+  imageOptimization?: boolean;
+}
+
+/**
+ * Resolve the {@link PreviewProfile} from the user prop.
+ *
+ * Preview is **strictly opt-in**: it is on only when the caller sets
+ * `preview: true` (or `preview.enabled: true`) and off otherwise. Deploying as
+ * a sandbox does **not** auto-enable it, so an app that never sets `preview`
+ * behaves identically in a sandbox and in production. Each knob defaults to the
+ * master `enabled` value except `bypassCdn` and `skipImageOptimization`, which
+ * are opt-out capabilities (kept only when the caller asks).
+ *
+ * The `node` argument is retained for signature stability (it no longer reads
+ * context); the sandbox-deploy warning is computed at the call site.
+ */
+export function resolvePreviewProfile(
+  preview: HostingProps['preview'],
+  _node: Construct['node'],
+): PreviewProfile {
+  const obj = typeof preview === 'object' ? preview : undefined;
+  const enabled =
+    typeof preview === 'boolean' ? preview : (obj?.enabled ?? false);
+  // Map the public, service-neutral capabilities ({@link PreviewOverrides}) to
+  // the internal scale-down knobs. Callers say WHAT to keep (a capability);
+  // this decides HOW (the concrete infra knob), so the public surface never
+  // leaks framework/infra terms and survives new compute topologies.
+  // `dropped(keep, keptByDefault)` = the internal "skip/bypass" flag: a
+  // capability is scaled down when preview is on AND the caller didn't ask to
+  // keep it (falling back to its preview default).
+  const dropped = (keep: boolean | undefined, keptByDefault: boolean) =>
+    enabled && !(keep ?? keptByDefault);
+  return {
+    enabled,
+    // Monitoring/logging/alarms/skew are always trimmed in preview for now
+    // (no public capability yet — can be surfaced post-release if asked).
+    trimResources: enabled,
+    // Always optimized for a throwaway stack when preview is on.
+    fastTeardown: enabled,
+    edgeToRegional: enabled,
+    // `cdn` — dropped by default (no CloudFront); set `cdn: true` to opt up to
+    // a CDN-fronted, prod-like preview.
+    bypassCdn: dropped(obj?.cdn, false),
+    // Response caching / incremental regeneration is always off in preview for
+    // now (no public capability yet — add post-release if asked).
+    skipIsr: enabled,
+    // `imageOptimization` — dropped by default.
+    skipImageOptimization: dropped(obj?.imageOptimization, false),
+  };
+}
+
+/**
  * Structural interface for the Blocks backend stack.
  *
  * Accepts any object that exposes an `apiUrl` — typically a {@link BlocksStack}
@@ -336,6 +478,44 @@ export interface HostingProps {
    * @default { enabled: true }
    */
   skewProtection?: SkewProtectionConfig;
+
+  /**
+   * Preview (fast-deploy) mode for ephemeral environments — PR previews and
+   * per-branch sandboxes. A **cheap, disposable** deploy that keeps the app
+   * functional while scaling down uncritical services (performance, edge
+   * features, streaming). Express **intent**, not infrastructure.
+   *
+   * Preview is **strictly opt-in**: omitting it (or leaving it `false`) deploys
+   * exactly today's shape in every stage — sandbox and production alike. It only
+   * ever affects a deploy when you turn it on.
+   *
+   * - `true` / `false` — turn preview on or off.
+   * - object ({@link PreviewOverrides}) — turn preview on and keep specific
+   *   capabilities, e.g. `{ cdn: true }` for a production-like, CDN-fronted
+   *   preview, or `{ imageOptimization: true }`.
+   * - **omitted** — preview is off; the app deploys with its full production
+   *   shape (CloudFront, ISR, image optimization, monitoring).
+   *
+   * When on, **everything scales down by default**: no CDN (single regional
+   * origin, buffered responses), no response caching / regeneration, no image
+   * optimization, and no monitoring/logging/alarms. Name a capability in the
+   * object form to keep it.
+   *
+   * @example
+   * ```ts
+   * // default: full production shape in every stage
+   * new Hosting(stack, 'Web', { root, api: blocksStack });
+   *
+   * // opt in to the cheapest preview (no CDN, no cache, no image-opt)
+   * new Hosting(stack, 'Web', { root, preview: true });
+   *
+   * // production-like preview: keep the CDN (CloudFront, custom domain, streaming)
+   * new Hosting(stack, 'Web', { root, preview: { cdn: true } });
+   * ```
+   *
+   * @default false (preview off — full production shape)
+   */
+  preview?: boolean | PreviewOverrides;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -389,7 +569,11 @@ export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
   public readonly bucket: cdk.aws_s3.Bucket;
   /** The CloudFront distribution. */
-  public readonly distribution: cdk.aws_cloudfront.Distribution;
+  /**
+   * The CloudFront distribution. **Undefined in preview `bypassCdn` mode**,
+   * where the site is served directly from an S3 static-website endpoint.
+   */
+  public readonly distribution?: cdk.aws_cloudfront.Distribution;
   /** The public URL of the deployed site (https://...). */
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
@@ -403,6 +587,29 @@ export class Hosting extends Construct {
     super(scope, id);
 
     const root = resolve(props.root);
+
+    // ── 0. Resolve deploy mode (preview profile) ─────────────────
+    //    Resolved once, fanned out to the adapter (build) and the L3
+    //    construct (infra). See PreviewProfile for the per-knob contract.
+    const preview = resolvePreviewProfile(props.preview, this.node);
+    if (preview.enabled) {
+      console.log(
+        `🏃 Hosting preview mode: trimResources=${preview.trimResources} ` +
+          `fastTeardown=${preview.fastTeardown} edgeToRegional=${preview.edgeToRegional} bypassCdn=${preview.bypassCdn}`,
+      );
+    }
+    // Safety guard: `bypassCdn` removes CloudFront entirely (single API Gateway
+    // origin) — intended for ephemeral previews, not production. Warn (don't
+    // throw, so an explicit no-CDN production choice stays possible) when it's
+    // active outside a sandbox deploy (`--context sandboxMode=true`), so an
+    // accidental one is loud.
+    const isSandboxDeploy = this.node.tryGetContext('sandboxMode') === 'true';
+    if (preview.bypassCdn && !isSandboxDeploy) {
+      cdk.Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:bypassCdn-non-sandbox',
+        'Hosting preview.bypassCdn is enabled on a non-sandbox deploy: the app is served from a single API Gateway origin with NO CloudFront — no edge cache, no WAF, no custom domain, buffered (non-streaming) SSR, a ~6 MB response cap, and image endpoints serve the source image unoptimized. This is intended for ephemeral preview environments; do not use it for production traffic.',
+      );
+    }
 
     // ── 1. Detect framework ──────────────────────────────────────
     const framework = props.framework ?? detectFramework(root);
@@ -457,11 +664,41 @@ export class Hosting extends Construct {
     if (props.api?.apiUrl) {
       process.env.BLOCKS_API_URL = props.api.apiUrl;
     }
-    const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
+    const adapter =
+      props.customAdapter ??
+      getAdapter(framework, buildOutputDir, {
+        // B2: when on, the Next.js adapter emits `runtime: 'edge'` routes with
+        // `placement: 'regional'` so they deploy as regional Lambdas, not
+        // Lambda@Edge. The manifest carries the placement; the L3 construct
+        // honors it.
+        edgeToRegional: preview.edgeToRegional,
+        // C: bypassCdn builds the SSR bundle for an HTTP API v2 root origin
+        // (buffered aws-apigw-v2, no streaming) instead of the REST-API STREAM.
+        bypassCdn: preview.bypassCdn,
+        // D1/D2: skip ISR (disable the incremental cache at build so the server
+        // function has no cache dependency) and the sharp install (image-opt).
+        skipIsr: preview.skipIsr,
+        skipImageOptimization: preview.skipImageOptimization,
+        // E1: pin Next's build ID in preview so a code-only re-deploy yields
+        // byte-identical static assets and CDK skips the full S3 re-upload (the
+        // dominant re-deploy cost). Production keeps Next's random per-build ID.
+        deterministicBuildId: preview.enabled ? 'preview' : undefined,
+      });
     const manifest: DeployManifest = adapter(root);
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
+    // Preview mode uses a STABLE buildId so re-deploys hotswap. The per-deploy
+    // random buildId drives the atomic `builds/<id>/` cutover (zero-downtime
+    // prod) but bakes into the asset prefix, the SSR Lambda code key, the
+    // BucketDeployment prefix, and the bypass API name — churning all of them
+    // every deploy, which is non-hotswappable → hotswap always falls back.
+    // A preview is a single, throwaway environment with no zero-downtime
+    // requirement, so a fixed buildId (overwrite-in-place) is correct and lets
+    // a code-only change hotswap (only the Lambda code + asset content differ,
+    // both hotswappable). Production keeps the per-deploy atomic buildId.
+    if (preview.enabled) {
+      manifest.buildId = 'preview';
+    } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }
 
@@ -556,34 +793,69 @@ export class Hosting extends Construct {
         }
       : undefined;
 
+    // A1 — in preview, default the always-on, prod-only resources to OFF.
+    // An explicit user prop always wins (so `monitoring: { enabled: true }`
+    // re-enables it even in a preview).
+    const trimmedMonitoring =
+      props.monitoring ?? (preview.trimResources ? { enabled: false } : undefined);
+    const trimmedLogging =
+      props.logging ?? (preview.trimResources ? { enabled: false } : undefined);
+    const trimmedSkewProtection =
+      props.skewProtection ?? (preview.trimResources ? { enabled: false } : undefined);
+
+    // A2 — skip the first-deploy CloudFront invalidation on a throwaway stack.
+    // Only meaningful alongside the existing cdn props, so fold it in.
+    const cdnProps: HostingConstructProps['cdn'] =
+      props.contentSecurityPolicy ||
+      props.priceClass ||
+      props.geoRestriction ||
+      props.quotas ||
+      preview.fastTeardown
+        ? {
+            contentSecurityPolicy: props.contentSecurityPolicy,
+            priceClass: props.priceClass,
+            geoRestriction: props.geoRestriction,
+            quotas: props.quotas,
+            ...(preview.fastTeardown ? { deployInvalidation: false } : {}),
+          }
+        : undefined;
+
     const hostingProps: HostingConstructProps = {
       manifest,
+      // C — skip CloudFront; serve the whole app from a single API-Gateway
+      // origin. `bypassApiProxyUrl` lets that origin proxy `/aws-blocks/*` +
+      // `/auth/*` to the backend API same-origin (so the relative `apiUrl` in
+      // config.json works and cookies flow — no CORS).
+      bypassCdn: preview.bypassCdn,
+      bypassApiProxyUrl: preview.bypassCdn ? props.api?.apiUrl : undefined,
+      // D1/D2 — framework-agnostic resource skips (the construct honors these
+      // regardless of adapter; the Next adapter also trims the build).
+      skipIsr: preview.skipIsr,
+      skipImageOptimization: preview.skipImageOptimization,
       compute: normalizedCompute,
       domain: props.domain,
       waf: props.waf,
       storage: props.retainOnDelete != null
         ? { retainOnDelete: props.retainOnDelete }
         : undefined,
-      cdn: (props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas)
-        ? {
-            contentSecurityPolicy: props.contentSecurityPolicy,
-            priceClass: props.priceClass,
-            geoRestriction: props.geoRestriction,
-            quotas: props.quotas,
-          }
-        : undefined,
-      logging: props.logging,
+      cdn: cdnProps,
+      logging: trimmedLogging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
-      monitoring: props.monitoring,
-      skewProtection: props.skewProtection,
+      monitoring: trimmedMonitoring,
+      skewProtection: trimmedSkewProtection,
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
-    if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
+    // The same-origin API proxy (`/aws-blocks/*` through the same domain, no
+    // CORS) is done via CloudFront behaviors normally. In preview `bypassCdn`
+    // mode there is no distribution — the API-Gateway single origin proxies
+    // `/aws-blocks/*` + `/auth/*` instead (via `bypassApiProxyUrl`), so it is
+    // still same-origin and the relative `apiUrl` works.
+    if (props.api && hosting.distribution) {
+      this.addApiBehaviors(hosting.distribution, props.api.apiUrl);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -613,6 +885,12 @@ export class Hosting extends Construct {
     // ── 8. Deploy config.json with resolved CDK tokens ───────────
     const buildId = manifest.buildId;
     if (buildId) {
+      // Both CloudFront and the bypass API-Gateway single origin serve assets
+      // from `builds/<id>/`, and the API proxy is same-origin either way, so
+      // config.json uses the same `builds/<id>/.blocks-sandbox` prefix + the
+      // relative `apiUrl` in both. Only the CloudFront invalidation wiring is
+      // distribution-specific — skipped in bypass (no distribution).
+      const bypassCdn = !hosting.distribution;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [
           s3deploy.Source.jsonData('config.json', this.buildConfigJson(props)),
@@ -620,19 +898,24 @@ export class Hosting extends Construct {
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
-        distribution: hosting.distribution,
-        // The skew-protection viewer-request CloudFront function rewrites the
-        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
-        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
-        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
-        // a no-op for config.json. Invalidate the post-rewrite key too. (The
-        // primary guard against staleness is step 5a's no-cache placeholder;
-        // this is defense-in-depth so a post-deploy invalidation actually
-        // clears any edge entry at its real key.)
-        distributionPaths: [
-          `/builds/${buildId}/.blocks-sandbox/*`,
-          '/.blocks-sandbox/*',
-        ],
+        ...(bypassCdn
+          ? {}
+          : {
+              distribution: hosting.distribution,
+              // The skew-protection viewer-request CloudFront function rewrites
+              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
+              // BEFORE the cache lookup, so the real edge cache key lives under
+              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
+              // matches that key and is a no-op for config.json. Invalidate the
+              // post-rewrite key too. (The primary guard against staleness is
+              // step 5a's no-cache placeholder; this is defense-in-depth so a
+              // post-deploy invalidation actually clears any edge entry at its
+              // real key.)
+              distributionPaths: [
+                `/builds/${buildId}/.blocks-sandbox/*`,
+                '/.blocks-sandbox/*',
+              ],
+            }),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
@@ -650,9 +933,20 @@ export class Hosting extends Construct {
       // (and vary by deploy shape), so the previous
       // `tryFindChild('AssetDeployment')` never matched and the dependency
       // was silently never wired.
+      // Match by `instanceof` AND by constructor name: an app with a linked /
+      // duplicate `aws-cdk-lib` (a real setup — file:-linked framework packages)
+      // gets a SECOND BucketDeployment class, so `instanceof` against OUR class
+      // silently misses the hosting construct's deployments (created with the
+      // app's class). The name check is robust across that dual-package boundary
+      // so the config deployment reliably depends on — and runs AFTER — every
+      // asset upload (else a placeholder config.json can clobber the real one).
       const assetDeployments = hosting.node
         .findAll()
-        .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+        .filter(
+          (c): c is s3deploy.BucketDeployment =>
+            c instanceof s3deploy.BucketDeployment ||
+            c.constructor?.name === 'BucketDeployment',
+        );
       for (const dep of assetDeployments) {
         configDeployment.node.addDependency(dep);
       }
@@ -704,8 +998,10 @@ export class Hosting extends Construct {
   /**
    * Build the config.json payload from props.
    *
-   * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
-   * so the frontend fetches through the same CloudFront domain (no CORS).
+   * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+   * the frontend fetches through the same origin (no CORS) — the CloudFront
+   * domain normally, or the API-Gateway single origin under `bypassCdn` (which
+   * proxies `/aws-blocks/*` same-origin). Either way it's relative.
    */
   private buildConfigJson(props: HostingProps): Record<string, unknown> {
     return {
@@ -717,7 +1013,10 @@ export class Hosting extends Construct {
   /**
    * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
    */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+  private addApiBehaviors(
+    distribution: cdk.aws_cloudfront.Distribution,
+    apiUrl: string,
+  ): void {
     const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
     const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
@@ -734,8 +1033,8 @@ export class Hosting extends Construct {
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
     };
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -744,7 +1043,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -770,7 +1069,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
     }
   }
 }
