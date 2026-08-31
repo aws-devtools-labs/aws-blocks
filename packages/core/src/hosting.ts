@@ -177,8 +177,9 @@ export interface PreviewProfile {
  */
 export interface PreviewOverrides {
   /**
-   * Force preview on/off explicitly. Omit to derive it from the deploy stage
-   * (on under `--context sandboxMode=true`, off for production).
+   * Turn preview on/off. Preview is **opt-in** — omitting this (in the object
+   * form) leaves it off, the same as not passing `preview` at all. Set `true`
+   * to enable the scale-down while keeping the capabilities named below.
    */
   enabled?: boolean;
   /**
@@ -202,21 +203,25 @@ export interface PreviewOverrides {
 }
 
 /**
- * Resolve the {@link PreviewProfile} from the user prop and CDK context.
+ * Resolve the {@link PreviewProfile} from the user prop.
  *
- * Precedence: an explicit `preview` prop wins; otherwise preview is enabled
- * when the deploy sets `--context sandboxMode=true` (the sandbox deploy path
- * already does). Each knob defaults to the master `enabled` value except
- * `bypassCdn`, which is opt-in even under preview.
+ * Preview is **strictly opt-in**: it is on only when the caller sets
+ * `preview: true` (or `preview.enabled: true`) and off otherwise. Deploying as
+ * a sandbox does **not** auto-enable it, so an app that never sets `preview`
+ * behaves identically in a sandbox and in production. Each knob defaults to the
+ * master `enabled` value except `bypassCdn` and `skipImageOptimization`, which
+ * are opt-out capabilities (kept only when the caller asks).
+ *
+ * The `node` argument is retained for signature stability (it no longer reads
+ * context); the sandbox-deploy warning is computed at the call site.
  */
 export function resolvePreviewProfile(
   preview: HostingProps['preview'],
-  node: Construct['node'],
+  _node: Construct['node'],
 ): PreviewProfile {
-  const sandbox = node.tryGetContext('sandboxMode') === 'true';
   const obj = typeof preview === 'object' ? preview : undefined;
   const enabled =
-    typeof preview === 'boolean' ? preview : (obj?.enabled ?? sandbox);
+    typeof preview === 'boolean' ? preview : (obj?.enabled ?? false);
   // Map the public, service-neutral capabilities ({@link PreviewOverrides}) to
   // the internal scale-down knobs. Callers say WHAT to keep (a capability);
   // this decides HOW (the concrete infra knob), so the public surface never
@@ -486,13 +491,16 @@ export interface HostingProps {
    * functional while scaling down uncritical services (performance, edge
    * features, streaming). Express **intent**, not infrastructure.
    *
+   * Preview is **strictly opt-in**: omitting it (or leaving it `false`) deploys
+   * exactly today's shape in every stage — sandbox and production alike. It only
+   * ever affects a deploy when you turn it on.
+   *
    * - `true` / `false` — turn preview on or off.
    * - object ({@link PreviewOverrides}) — turn preview on and keep specific
    *   capabilities, e.g. `{ cdn: true }` for a production-like, CDN-fronted
    *   preview, or `{ imageOptimization: true }`.
-   * - **omitted** — preview auto-enables when the deploy sets
-   *   `--context sandboxMode=true` (the sandbox deploy path does this), and is
-   *   off otherwise. Production deploys are never affected.
+   * - **omitted** — preview is off; the app deploys with its full production
+   *   shape (CloudFront, ISR, image optimization, monitoring).
    *
    * When on, **everything scales down by default**: no CDN (single regional
    * origin, buffered responses), no response caching / regeneration, no image
@@ -501,17 +509,17 @@ export interface HostingProps {
    *
    * @example
    * ```ts
-   * // auto: preview when deployed as a sandbox, production otherwise
+   * // default: full production shape in every stage
    * new Hosting(stack, 'Web', { root, api: blocksStack });
    *
-   * // force the cheapest preview (no CDN, no cache, no image-opt)
+   * // opt in to the cheapest preview (no CDN, no cache, no image-opt)
    * new Hosting(stack, 'Web', { root, preview: true });
    *
    * // production-like preview: keep the CDN (CloudFront, custom domain, streaming)
    * new Hosting(stack, 'Web', { root, preview: { cdn: true } });
    * ```
    *
-   * @default derived from the `sandboxMode` CDK context
+   * @default false (preview off — full production shape)
    */
   preview?: boolean | PreviewOverrides;
 }

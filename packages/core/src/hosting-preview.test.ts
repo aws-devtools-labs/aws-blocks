@@ -10,7 +10,7 @@ import { resolvePreviewProfile } from './hosting.js';
 const nodeWith = (context: Record<string, string> = {}) =>
   new cdk.App({ context }).node;
 
-test('preview off by default when no prop and no sandbox context', () => {
+test('preview off by default when no prop is passed', () => {
   const p = resolvePreviewProfile(undefined, nodeWith());
   assert.deepStrictEqual(p, {
     enabled: false,
@@ -23,16 +23,18 @@ test('preview off by default when no prop and no sandbox context', () => {
   });
 });
 
-test('preview auto-enables from sandboxMode context and scales EVERYTHING down (CDN off by default)', () => {
+test('preview is STRICTLY opt-in — sandboxMode context does NOT auto-enable it', () => {
+  // The invariant: an app that never sets `preview` deploys identically in a
+  // sandbox and in production. sandboxMode must not flip any knob.
   const p = resolvePreviewProfile(undefined, nodeWith({ sandboxMode: 'true' }));
   assert.deepStrictEqual(p, {
-    enabled: true,
-    trimResources: true,
-    fastTeardown: true,
-    edgeToRegional: true,
-    bypassCdn: true, // cdn capability defaults off → no CloudFront
-    skipIsr: true,
-    skipImageOptimization: true,
+    enabled: false,
+    trimResources: false,
+    fastTeardown: false,
+    edgeToRegional: false,
+    bypassCdn: false,
+    skipIsr: false,
+    skipImageOptimization: false,
   });
 });
 
@@ -47,18 +49,22 @@ test('preview: true = maximum scale-down (no CDN, no cache, no image-opt)', () =
   assert.strictEqual(p.skipImageOptimization, true);
 });
 
-test('preview: false wins over sandbox context (production-safety default)', () => {
+test('preview: false stays off even under sandbox context', () => {
   const p = resolvePreviewProfile(false, nodeWith({ sandboxMode: 'true' }));
   assert.strictEqual(p.enabled, false);
   assert.strictEqual(p.bypassCdn, false);
   assert.strictEqual(p.trimResources, false);
 });
 
-test('cdn:true keeps the CDN (CDN-fronted, production-like preview)', () => {
-  const p = resolvePreviewProfile(
-    { cdn: true },
-    nodeWith({ sandboxMode: 'true' }),
-  );
+test('object form without enabled stays off (opt-in) — sandbox context ignored', () => {
+  // A capability object with no `enabled` does NOT turn preview on.
+  const p = resolvePreviewProfile({ cdn: true }, nodeWith({ sandboxMode: 'true' }));
+  assert.strictEqual(p.enabled, false);
+  assert.strictEqual(p.bypassCdn, false);
+});
+
+test('enabled:true + cdn:true keeps the CDN (CDN-fronted, production-like preview)', () => {
+  const p = resolvePreviewProfile({ enabled: true, cdn: true }, nodeWith());
   assert.strictEqual(p.enabled, true);
   assert.strictEqual(p.bypassCdn, false, 'cdn kept → not bypassed');
   // other capabilities still scale down

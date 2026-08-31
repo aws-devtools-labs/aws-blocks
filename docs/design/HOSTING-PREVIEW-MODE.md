@@ -81,7 +81,7 @@ Skip the distribution entirely and hand back a direct origin URL:
 The per-sandbox stack persists between `npm run sandbox` runs, so 2nd+ deploys are **UpdateStack** (distribution config diff) not Create — already much faster than the first. Worth documenting and *not* destroying the stack between iterations. Combined with Express Mode (§2), incremental preview iterations are already the fast case; the pain is the **first** deploy, which A/B/C target.
 
 ### E. Deploy-mechanism levers (already covered by core — listed for completeness)
-`--method direct`, `--express`, `--require-approval never`. Nothing for hosting to do here except make sure preview mode is *on* whenever `sandboxMode` is.
+`--method direct`, `--express`, `--require-approval never`. These are the deploy-mechanism half and apply to every sandbox deploy; preview mode (the resource-shape half) is a separate, opt-in choice on `Hosting` — the two compose but are independent.
 
 ## 4b. Scalable architecture — one profile, one seam per knob
 
@@ -115,7 +115,14 @@ Each knob lands at exactly one seam (table in §5). **Adding a knob = one field 
 
 ## 5. Recommended design
 
-A single **preview** concept on `Hosting`, defaulting **on** whenever the deploy is a sandbox, overridable explicitly:
+> **Decision (shipped):** preview is **strictly opt-in** via the `preview` prop
+> — it does **not** auto-derive from `sandboxMode`. An app that never sets
+> `preview` deploys its full production shape in every stage, so preview can
+> never silently change an existing app's behavior. (This resolves open question
+> #1 below.) The API also evolved from the raw-knob shape sketched here to a
+> service-neutral capability object (`PreviewOverrides`); see `packages/core/src/hosting.ts`.
+
+A single **preview** concept on `Hosting`, **opt-in** via the `preview` prop:
 
 ```ts
 // HostingProps (new field)
@@ -127,10 +134,10 @@ preview?: boolean | {
 };
 ```
 
-Resolution order (so it stays predictable and prod is never affected):
-1. explicit `preview.enabled` prop, else
-2. `this.node.tryGetContext('sandboxMode') === 'true'`, else
-3. `false`.
+Resolution (so it stays predictable and prod is never affected):
+1. `preview: true` / `preview.enabled: true` → on, else
+2. `false` (the default — including under `sandboxMode`; preview never
+   auto-enables from the deploy stage).
 
 When `preview` is on, apply these **defaults** (each still overridable by an explicit prop, so nothing is a hard override that could surprise a user who opts back in):
 
@@ -157,7 +164,7 @@ When `preview` is on, apply these **defaults** (each still overridable by an exp
 - **Phase 2 (approach B):** edge→regional degradation for Next edge/middleware apps.
 - **Phase 3 (approach C, opt-in):** `bypassCdn` for SSR (API GW URL) first; decide the SPA story from measured need.
 
-**Guardrails (per AGENTS.md core rules):** preview mode must never leak into production — it keys off `sandboxMode`, is documented as sandbox-only, and the production deploy path (`deploy.ts`) passes neither the flag nor Express Mode. Any change to the public `HostingProps`/return shape is a **breaking-change surface** and needs maintainer sign-off + a changeset before merge.
+**Guardrails (per AGENTS.md core rules):** preview mode must never leak into production — it is **opt-in** (off unless the app sets `preview`), so it can't change an app's shape implicitly, and a `bypassCdn` preview on a non-sandbox deploy raises a synth warning. Any change to the public `HostingProps`/return shape is a **breaking-change surface** and needs maintainer sign-off + a changeset before merge.
 
 ## 5b. Implementation status (branch `feat/hosting-preview-mode`)
 
@@ -227,7 +234,7 @@ Protocol per app: baseline `npm run sandbox` (cold) → destroy → preview-mode
 > Deploying to real AWS costs time and money and touches a live account — not started here without an explicit go-ahead. See §7.
 
 ## 7. Open questions for maintainers
-1. Is auto-deriving preview from `sandboxMode` the right default, or should preview be strictly explicit?
+1. ~~Is auto-deriving preview from `sandboxMode` the right default, or should preview be strictly explicit?~~ **Resolved: strictly explicit / opt-in.** Preview never auto-enables from the deploy stage, so it can't change an app's behavior unless the app opts in.
 2. `bypassCdn` (approach C) diverges from prod and adds a prod-unused code path — worth the "seconds" payoff, or is Phase 1 + Express Mode enough?
 3. SPA static-preview URL without CloudFront: S3 website (HTTP-only) vs a public Function URL shim vs minimal-CloudFront — which is acceptable?
 4. Degrading edge→regional (approach B) silently changes runtime semantics in preview — acceptable, or must it be explicit per app?

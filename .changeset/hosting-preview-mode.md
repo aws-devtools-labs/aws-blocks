@@ -8,10 +8,10 @@ Add hosting **preview mode** — a fast, cheap, disposable deploy shape for
 ephemeral environments (PR previews, per-branch sandboxes, demos).
 
 `Hosting` gains a `preview` prop: `true`/`false`, or a small object of
-**service-neutral capabilities** to keep (`PreviewOverrides`). It auto-enables
-when the deploy sets `--context sandboxMode=true` (the sandbox deploy path
-already does) and is off for production, so the production path is never
-affected.
+**service-neutral capabilities** to keep (`PreviewOverrides`). Preview is
+**strictly opt-in** — omitting the prop (the default) deploys today's full
+production shape in every stage, sandbox and production alike. It only ever
+affects a deploy when you turn it on, so existing apps are untouched.
 
 **The public surface is intent, not infrastructure** — it never exposes
 framework or AWS-topology terms. One rule: preview scales everything down; name
@@ -74,10 +74,10 @@ omitting `preview` in a non-sandbox deploy preserves today's behavior exactly.
 Example:
 
 ```ts
-// auto: preview when deployed as a sandbox, production otherwise
+// default: full production shape in every stage (preview off)
 new Hosting(stack, 'Web', { root, api: blocksStack });
 
-// force the cheapest preview (no CDN, no cache, no image optimization)
+// opt in to the cheapest preview (no CDN, no cache, no image optimization)
 new Hosting(stack, 'Web', { root, framework: 'nextjs', preview: true });
 
 // production-like preview: keep the CDN (CloudFront, custom domain, streaming)
