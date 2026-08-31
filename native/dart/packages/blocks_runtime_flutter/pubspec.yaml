@@ -13,7 +13,9 @@ dependencies:
   flutter:
     sdk: flutter
   blocks_runtime: ^0.1.2
-  flutter_secure_storage: ^11.0.0
+  # 11.x needs compileSdk 37, which current stable Flutter/AGP can't target.
+  # Upstream: https://github.com/juliansteenbakker/flutter_secure_storage/issues/1224
+  flutter_secure_storage: ^10.3.1
   url_launcher: ^6.2.0
   app_links: ^7.0.0
 

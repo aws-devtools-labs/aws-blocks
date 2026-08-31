@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import type { LambdaComputeProps } from './types.js';
 
@@ -13,7 +14,9 @@ export type { LambdaComputeProps } from './types.js';
 
 /**
  * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
- * Gateway REST API. The compute *owns* these resources.
+ * Gateway REST API. The compute *owns* these resources — a BlocksStack /
+ * BlocksBackend's `handler` / `gateway` / `apiUrl` delegate to its default
+ * compute's.
  *
  * The function assumes the shared execution role (`this.executionRole`), so
  * Building Block grants reach it via that role. The handler entry and
@@ -29,8 +32,10 @@ export class LambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
 	/** The API Gateway REST API fronting {@link fn}. */
 	readonly apiGateway: apigateway.RestApi;
+	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
+	readonly apiUrl: string;
 
-	constructor(scope: ScopeParent, id: string, _options?: LambdaComputeProps) {
+	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
 		super(id, { parent: scope });
 
 		// Entry + BLOCKS_STACK_NAME are derived from the owning stack/backend
@@ -40,6 +45,11 @@ export class LambdaCompute extends Compute {
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: DEFAULT_NODE_RUNTIME,
+			// Default to arm64 (Graviton) — ~20% cheaper at equal performance, and
+			// transparent for the framework's own pure-JS bundles. `architecture` is
+			// internal for now (see types.ts); a customer override arrives with the
+			// public compute-configuration surface.
+			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
 			memorySize: 2048,
@@ -48,11 +58,23 @@ export class LambdaCompute extends Compute {
 				NODE_ENV: 'production',
 				BLOCKS_STACK_NAME: this.backendStackName,
 			},
-			bundling: {
+			// blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
+			// CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing
+			// at Lambda load. See core's ./cdk/bundling.ts.
+			bundling: blocksNodejsBundling({
 				minify: true,
 				esbuildArgs: { '--conditions': 'aws-runtime' },
-			},
+			}),
 		});
+
+		// Allowed CORS origins come from the stack's `defaults` (e.g. the sandbox
+		// preset allows localhost so a local dev frontend can reach the deployed
+		// API). Comma-joined to match how the runtime `getCorsPatterns()` parses
+		// CORS_ALLOWED_ORIGINS.
+		const allowedOrigins = this.defaults.allowedOrigins;
+		if (allowedOrigins.length > 0) {
+			this.fn.addEnvironment('CORS_ALLOWED_ORIGINS', allowedOrigins.join(','));
+		}
 
 		this.apiGateway = new apigateway.RestApi(this, 'API', {
 			restApiName: 'Blocks API',
@@ -71,6 +93,8 @@ export class LambdaCompute extends Compute {
 		apiResource.addMethod('OPTIONS', integration);
 
 		this.apiGateway.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+
+		this.apiUrl = `${this.apiGateway.url}${BLOCKS_RPC_PREFIX.slice(1)}`;
 	}
 
 	setEnv(key: string, value: string): void {

@@ -25,6 +25,8 @@ export {
 	BlocksPresets,
 	BlocksStack,
 	blocksNodejsBundling,
+	type CoreBlocksBackendProps,
+	type CoreBlocksStackProps,
 	DEFAULT_NODE_RUNTIME,
 	finalizeConfigRegistry,
 	registerConfig,
