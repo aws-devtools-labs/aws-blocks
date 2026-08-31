@@ -79,7 +79,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   }
   /** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
   get handlerLogGroup(): cdk.aws_logs.ILogGroup {
-    return this.requireDefaultCompute().handlerLogGroup;
+    return this.requireDefaultCompute().logGroup;
   }
 
   private requireDefaultCompute(): LambdaShapedCompute {

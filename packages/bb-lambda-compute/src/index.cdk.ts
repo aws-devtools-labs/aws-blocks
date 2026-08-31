@@ -35,8 +35,13 @@ export class LambdaCompute extends Compute {
 	readonly apiGateway: apigateway.RestApi;
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
-	/** The handler's CloudWatch log group. `bb-logger` reconfigures its retention. */
-	readonly handlerLogGroup: LogGroup;
+	/**
+	 * The handler's CloudWatch log group. `bb-logger` reconfigures its retention.
+	 * Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the
+	 * inherited {@link Scope.handlerLogGroup} accessor, which resolves back to
+	 * the owning stack/backend's default compute (i.e. this).
+	 */
+	readonly logGroup: LogGroup;
 
 	constructor(scope: ScopeParent, id: string, options?: LambdaComputeProps) {
 		super(id, { parent: scope });
@@ -46,7 +51,7 @@ export class LambdaCompute extends Compute {
 		// the stack-wide default instead of AWS's infinite default, and gives
 		// bb-logger one group to reconfigure rather than a second, colliding one.
 		// Torn down with the stack (logs are not durable state).
-		this.handlerLogGroup = new LogGroup(this, 'HandlerLogGroup', {
+		this.logGroup = new LogGroup(this, 'HandlerLogGroup', {
 			retention: this.defaults.logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
@@ -65,7 +70,7 @@ export class LambdaCompute extends Compute {
 			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,
-			logGroup: this.handlerLogGroup,
+			logGroup: this.logGroup,
 			memorySize: 2048,
 			timeout: cdk.Duration.seconds(60 * 15),
 			environment: {
