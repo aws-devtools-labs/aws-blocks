@@ -11,7 +11,6 @@ import {
   type ScopeParent,
   type ScopeOptions,
   computeScopeFullId,
-  assertValidStackName,
 } from '../common/index.js';
 import { setupBlocksInfra, BlocksBackend, assertCdkConditionActive } from './blocks-backend.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
@@ -99,10 +98,6 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 
   static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
     assertCdkConditionActive();
-
-    // Fail fast: an invalid stack name otherwise passes synth and only fails
-    // minutes into CloudFormation provisioning with an opaque error.
-    assertValidStackName(id);
 
     // Detect ambient pipeline stage scope set by Pipeline appFile imports
     const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
