@@ -76,6 +76,17 @@ export interface AsyncJobTransition {
 }
 
 // @public
+export class BatchSubmitFailedError extends Error {
+    constructor(message: string, jobIds: Array<string | null>, failed: BatchSubmitResult['failed']);
+    // (undocumented)
+    readonly failed: BatchSubmitResult['failed'];
+    // (undocumented)
+    readonly jobIds: Array<string | null>;
+    // (undocumented)
+    readonly name: "BatchSubmitFailedException";
+}
+
+// @public
 export interface BatchSubmitResult {
     failed: Array<{
         index: number;
