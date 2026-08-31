@@ -10,7 +10,7 @@ import type {
 	CronJobEvent,
 	CronJobOptions,
 } from './types.js';
-import { CronJobErrors } from './errors.js';
+import { validateSchedule, validateTimezone } from './schedule.js';
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
@@ -20,6 +20,12 @@ export class CronJob<T = void> extends Scope {
 
 	constructor(scope: ScopeParent, id: string, options: CronJobOptions<T>) {
 		super(id, { parent: scope });
+
+		// Fail fast at synth: an invalid schedule/timezone otherwise passes synth
+		// and is only rejected by EventBridge minutes into the deploy. Mirrors the
+		// validation the mock already runs, so local dev and deploy agree.
+		validateSchedule(options.schedule);
+		if (options.timezone !== undefined) validateTimezone(options.timezone);
 
 		const lambdaArn = this.handler.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this), lambdaArn);
