@@ -23,7 +23,7 @@ interface MockTxHandle { active: boolean; tracker: TransactionTracker; }
  * Preprocess a SQL statement for execution on the DSQL mock (PGlite).
  *
  * 1. Validates the statement against DSQL compatibility rules (throws on
- *    unsupported features like FK, TRUNCATE, SERIAL, etc.).
+ *    unsupported features like TRUNCATE, SERIAL, etc.).
  * 2. Rejects DDL statements — in production the app Lambda only has
  *    dsql:DbConnect (DML-only). DDL must go in migration files.
  * 3. Normalizes DSQL-only syntax that PGlite doesn't understand — currently

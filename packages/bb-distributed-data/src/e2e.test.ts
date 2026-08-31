@@ -298,10 +298,10 @@ describe('DistributedDatabase — public API with migrations', () => {
   // ── DSQL Validation Guardrails ─────────────────────────────────────────
 
   describe('DSQL validation at query time', () => {
-    it('rejects FOREIGN KEY', async () => {
+    it('accepts FOREIGN KEY syntax before the runtime DDL permission check', async () => {
       await assert.rejects(
         () => db.execute(sql`CREATE TABLE bad_fk (id TEXT, ref TEXT REFERENCES users(id))`),
-        { name: 'DsqlValidationError' }
+        { name: 'DsqlPermissionError' }
       );
     });
 
@@ -319,10 +319,10 @@ describe('DistributedDatabase — public API with migrations', () => {
       );
     });
 
-    it('rejects CREATE VIEW', async () => {
+    it('rejects CREATE VIEW at runtime', async () => {
       await assert.rejects(
         () => db.execute(sql`CREATE VIEW user_names AS SELECT name FROM users`),
-        { name: 'DsqlValidationError' }
+        { name: 'DsqlPermissionError' }
       );
     });
 

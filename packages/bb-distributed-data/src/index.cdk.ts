@@ -18,6 +18,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
+import { validateMigrations } from './validation.js';
 
 export class DistributedDatabase extends Scope {
   constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
@@ -70,6 +71,7 @@ export class DistributedDatabase extends Scope {
 
     // Resolve migrations path if provided
     const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
+    if (resolvedMigrationsPath) validateMigrations(readMigrationsDir(resolvedMigrationsPath));
     const migrationsHash = resolvedMigrationsPath ? hashMigrationsDir(resolvedMigrationsPath) : 'no-migrations';
 
     // Migration/provisioning Lambda — always created to provision the app DB role.
@@ -138,6 +140,15 @@ function hashMigrationsDir(dir: string): string {
     hash.update(readFileSync(join(dir, file), 'utf-8'));
   }
   return hash.digest('hex').slice(0, 16);
+}
+
+function readMigrationsDir(dir: string): Record<string, string> {
+  return Object.fromEntries(
+    readdirSync(dir)
+      .filter(file => file.endsWith('.sql'))
+      .sort()
+      .map(file => [file, readFileSync(join(dir, file), 'utf-8')]),
+  );
 }
 
 export { sql, createKyselyAdapter } from '@aws-blocks/data-common';

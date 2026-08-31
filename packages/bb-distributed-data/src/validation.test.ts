@@ -10,6 +10,8 @@ describe('validateStatement', () => {
     assert.doesNotThrow(() => validateStatement('SELECT * FROM users'));
     assert.doesNotThrow(() => validateStatement("INSERT INTO users VALUES ('1', 'Alice')"));
     assert.doesNotThrow(() => validateStatement('CREATE TABLE users (id TEXT PRIMARY KEY)'));
+    assert.doesNotThrow(() => validateStatement('CREATE TABLE posts (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id))'));
+    assert.doesNotThrow(() => validateStatement('CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'));
     assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON users(name)'));
   });
 
@@ -22,15 +24,11 @@ describe('validateStatement', () => {
   });
 
   const rejects = [
-    // REFERENCES is a foreign key — DSQL has no referential integrity enforcement
-    ['FOREIGN KEY', 'CREATE TABLE t (id TEXT, x TEXT REFERENCES users(id))'],
-    // Triggers require PL/pgSQL runtime — not available in DSQL
+    // CREATE TRIGGER is not supported
     ['CREATE TRIGGER', 'CREATE TRIGGER t BEFORE INSERT ON u FOR EACH ROW EXECUTE FUNCTION f()'],
-    // Views are not supported — materialize queries in application code
-    ['CREATE VIEW', 'CREATE VIEW v AS SELECT 1'],
     // PL/pgSQL procedural language is not available — only SQL-language functions
     ['PL/pgSQL', "CREATE FUNCTION f() RETURNS INT AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql"],
-    // SERIAL is syntactic sugar for a sequence — DSQL has no sequence support
+    // SERIAL must be rewritten to an identity column with an explicit CACHE
     ['SERIAL', 'CREATE TABLE t (id SERIAL PRIMARY KEY)'],
     // TRUNCATE is not implemented — use DELETE FROM for the same effect
     ['TRUNCATE', 'TRUNCATE TABLE users'],
@@ -48,14 +46,8 @@ describe('validateStatement', () => {
     ['TEMP TABLE', 'CREATE TEMP TABLE t (id INT)'],
     // DSQL uses fixed Repeatable Read isolation — cannot be changed per-transaction
     ['ISOLATION LEVEL', 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'],
-    // DSQL only supports C collation — locale-aware sorting is not available
+    // Locale-aware collations are not available
     ['COLLATE', 'SELECT * FROM t ORDER BY name COLLATE "en_US"'],
-    // DROP COLUMN is not in DSQL's supported ALTER TABLE subset — rebuild the table instead
-    ['DROP COLUMN', 'ALTER TABLE t DROP COLUMN x'],
-    // Postgres allows omitting the COLUMN keyword — same DROP COLUMN action, same rejection
-    ['DROP COLUMN shorthand', 'ALTER TABLE t DROP x'],
-    ['DROP COLUMN IF EXISTS shorthand', 'ALTER TABLE t DROP IF EXISTS x'],
-    ['DROP COLUMN quoted shorthand', 'ALTER TABLE t DROP "identity"'],
   ] as const;
 
   for (const [label, sql] of rejects) {
@@ -65,9 +57,9 @@ describe('validateStatement', () => {
   }
 
   it('allows supported ALTER TABLE forms that contain DROP', () => {
-    // Per the DSQL ALTER TABLE grammar, the ALTER COLUMN ... DROP actions and
-    // DROP CONSTRAINT are supported — must not be confused with the
-    // unsupported DROP [COLUMN].
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP COLUMN c'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP c'));
+    assert.doesNotThrow(() => validateStatement('ALTER TABLE t DROP IF EXISTS c'));
     // https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html
     assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY'));
     assert.doesNotThrow(() => validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT'));
@@ -80,12 +72,28 @@ describe('validateStatement', () => {
   });
 
   it('allows a supported ALTER TABLE followed by an unrelated statement in one batch', () => {
-    // The DROP COLUMN rule must not match across a statement boundary: the
-    // ALTER TABLE here is a supported DROP DEFAULT, and the DROP TABLE that
-    // follows the semicolon belongs to a different statement.
     assert.doesNotThrow(() =>
       validateStatement('ALTER TABLE t ALTER COLUMN c DROP DEFAULT; DROP TABLE archived'),
     );
+  });
+
+  it('allows DROP IDENTITY followed by another statement in one batch', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('ALTER TABLE t ALTER COLUMN c DROP IDENTITY; SELECT 1'),
+    );
+  });
+
+  it('uses dsql-lint diagnostics and suggestions', () => {
+    assert.throws(
+      () => validateStatement('CREATE TABLE copy AS SELECT 1 AS id'),
+      /Create the table with explicit column definitions/,
+    );
+  });
+
+  it('allows supported expression collations', () => {
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "C" FROM t'));
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "POSIX" FROM t'));
+    assert.doesNotThrow(() => validateStatement('SELECT name COLLATE "default" FROM t'));
   });
 });
 
@@ -144,7 +152,8 @@ describe('validateMigrations', () => {
   it('passes valid migrations', () => {
     assert.doesNotThrow(() => validateMigrations({
       '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY)',
-      '002.sql': "INSERT INTO t (id) VALUES ('1')",
+      '002.sql': 'CREATE TABLE child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES t(id))',
+      '003.sql': "INSERT INTO t (id) VALUES ('1')",
     }));
   });
 
@@ -162,7 +171,7 @@ describe('validateMigrations', () => {
 
   it('rejects unsupported features', () => {
     assert.throws(() => validateMigrations({
-      '001.sql': 'CREATE TABLE t (id TEXT REFERENCES other(id))',
+      '001.sql': 'ALTER TABLE t ENABLE ROW LEVEL SECURITY',
     }), { name: 'DsqlMigrationValidationError' });
   });
 });
@@ -190,33 +199,30 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // DSQL-compatible: CHECK constraints are supported (only FK is not)
+  // DSQL-compatible: CHECK constraints are supported
   it('allows CHECK constraints', () => {
     assert.doesNotThrow(() => validateStatement(
       'CREATE TABLE products (id TEXT PRIMARY KEY, price INT CHECK (price > 0))'
     ));
   });
 
-  // DSQL-compatible: UNIQUE constraints work (just not FK)
+  // DSQL-compatible: UNIQUE constraints work
   it('allows UNIQUE constraint', () => {
     assert.doesNotThrow(() => validateStatement(
       'CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL)'
     ));
   });
 
-  // DSQL-compatible: partial indexes are supported
-  it('allows partial index with ASYNC', () => {
-    assert.doesNotThrow(() => validateStatement(
-      'CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'
-    ));
+  it('rejects partial index with ASYNC', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
-  // Rejected: JSONB is not a supported storage type in DSQL — use JSON instead.
-  // JSONB is only available as a query runtime cast (::jsonb).
-  it('rejects JSONB column definition', () => {
-    assert.throws(
-      () => validateStatement('CREATE TABLE events (id TEXT PRIMARY KEY, payload JSONB NOT NULL)'),
-      { name: 'DsqlValidationError' }
+  it('allows JSONB column definition', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE TABLE events (id TEXT PRIMARY KEY, payload JSONB NOT NULL)')
     );
   });
 
@@ -234,7 +240,7 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // Rejected: BIGSERIAL is a sequence under the hood — DSQL has no sequences
+  // Rejected: BIGSERIAL must be rewritten to an identity column with an explicit cache
   it('rejects BIGSERIAL (sequence-backed auto-increment)', () => {
     assert.throws(
       () => validateStatement('CREATE TABLE logs (id BIGSERIAL PRIMARY KEY, msg TEXT)'),
@@ -242,32 +248,26 @@ describe('validateStatement — complex scenarios', () => {
     );
   });
 
-  // Rejected: REFERENCES in column definition is a foreign key constraint
-  it('rejects inline REFERENCES in multi-column CREATE TABLE', () => {
-    assert.throws(
-      () => validateStatement(
-        'CREATE TABLE comments (id TEXT PRIMARY KEY, post_id TEXT REFERENCES posts(id), body TEXT)'
-      ),
-      { name: 'DsqlValidationError' }
+  it('allows inline REFERENCES in multi-column CREATE TABLE', () => {
+    assert.doesNotThrow(() => validateStatement(
+      'CREATE TABLE comments (id TEXT PRIMARY KEY, post_id TEXT REFERENCES posts(id), body TEXT)'
+    ));
+  });
+
+  it('allows FOREIGN KEY as table constraint', () => {
+    assert.doesNotThrow(() => validateStatement(
+      'CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'
+    ));
+  });
+
+  it('allows CREATE OR REPLACE VIEW', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE OR REPLACE VIEW active_users AS SELECT * FROM users WHERE active')
     );
   });
 
-  // Rejected: explicit FOREIGN KEY in table constraint form
-  it('rejects FOREIGN KEY as table constraint', () => {
-    assert.throws(
-      () => validateStatement(
-        'CREATE TABLE comments (id TEXT, post_id TEXT, FOREIGN KEY (post_id) REFERENCES posts(id))'
-      ),
-      { name: 'DsqlValidationError' }
-    );
-  });
-
-  // Rejected: CREATE OR REPLACE VIEW is still a view
-  it('rejects CREATE OR REPLACE VIEW', () => {
-    assert.throws(
-      () => validateStatement('CREATE OR REPLACE VIEW active_users AS SELECT * FROM users WHERE active'),
-      { name: 'DsqlValidationError' }
-    );
+  it('allows standalone sequences with an explicit cache', () => {
+    assert.doesNotThrow(() => validateStatement('CREATE SEQUENCE order_ids CACHE 65536'));
   });
 
   // Rejected: TEMPORARY TABLE — DSQL doesn't support session-scoped temp tables
@@ -351,7 +351,7 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  // Rejected: COLLATE in column definition — DSQL only supports C collation
+  // Rejected: locale-aware COLLATE in a column definition
   it('rejects COLLATE in column definition', () => {
     assert.throws(
       () => validateStatement('CREATE TABLE t (name TEXT COLLATE "en_US.utf8")'),
@@ -504,21 +504,6 @@ describe('validateStatement — unsupported features after bind parameters', () 
     );
   });
 
-  it('rejects REFERENCES that appears after a positional parameter', () => {
-    assert.throws(
-      () => validateStatement('INSERT INTO t (a) VALUES ($1) /* then */ ; CREATE TABLE c (id TEXT REFERENCES t(id))'),
-      { name: 'DsqlValidationError' }
-    );
-  });
-
-  it('rejects a foreign key in a parameterized multi-column INSERT context', () => {
-    // Two params surrounding the violation — the classic real-world shape.
-    assert.throws(
-      () => validateStatement('CREATE TABLE c (a TEXT DEFAULT $1, post_id TEXT REFERENCES posts(id), b TEXT DEFAULT $2)'),
-      { name: 'DsqlValidationError' }
-    );
-  });
-
   it('still allows a clean parameterized query with no unsupported features', () => {
     assert.doesNotThrow(() => validateStatement('UPDATE accounts SET balance = $1 WHERE id = $2'));
     assert.doesNotThrow(() => validateStatement('INSERT INTO users (id, name, email) VALUES ($1, $2, $3)'));
@@ -535,19 +520,22 @@ describe('validateStatement — index key sort order', () => {
   it('rejects DESC on an index key', () => {
     assert.throws(
       () => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at DESC)'),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 
   it('rejects DESC on a CREATE INDEX ASYNC key', () => {
     assert.throws(
       () => validateStatement('CREATE INDEX ASYNC idx_persons_user_recent ON persons (user_id, last_encounter_at DESC)'),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 
   it('rejects an explicit ASC on an index key', () => {
-    assert.throws(() => validateStatement('CREATE INDEX idx ON t (col ASC)'), /sort order/i);
+    assert.throws(
+      () => validateStatement('CREATE INDEX idx ON t (col ASC)'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
   it('allows NULLS FIRST / NULLS LAST on an index key (supported by DSQL)', () => {
@@ -555,16 +543,22 @@ describe('validateStatement — index key sort order', () => {
     assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t (col NULLS LAST)'));
   });
 
-  it('allows a plain CREATE INDEX without sort order', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at)'));
+  it('rejects a plain CREATE INDEX without ASYNC', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX idx ON persons (user_id, last_encounter_at)'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
-  it('allows a partial index whose WHERE mentions a column like "description"', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t (name) WHERE description IS NOT NULL'));
+  it('rejects a partial index whose WHERE mentions a column like "description"', () => {
+    assert.throws(
+      () => validateStatement('CREATE INDEX ASYNC idx ON t (name) WHERE description IS NOT NULL'),
+      { name: 'DsqlValidationError' },
+    );
   });
 
   it('allows an expression index without sort order', () => {
-    assert.doesNotThrow(() => validateStatement('CREATE INDEX idx ON t ((lower(name)))'));
+    assert.doesNotThrow(() => validateStatement('CREATE INDEX ASYNC idx ON t ((lower(name)))'));
   });
 
   it('does not flag ORDER BY ... DESC in a SELECT (no false positive outside CREATE INDEX)', () => {

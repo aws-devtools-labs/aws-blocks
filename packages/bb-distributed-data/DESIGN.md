@@ -28,8 +28,8 @@ bb-distributed-data (this package)
 ## Why a Separate Block (Not an Engine Flag on Database)
 
 1. **Transaction semantics differ** — OCC means callbacks may need retry. Different API contract.
-2. **Feature set is a strict subset** — FK, RLS, triggers, views absent. An engine flag hides this until deploy time.
-3. **Mock parity goes in opposite directions** — PGlite is too permissive for DSQL. A separate block can have a restrictive mock.
+2. **SQL feature compatibility differs** — RLS, triggers, procedures, and PL/pgSQL functions are not supported. An engine flag hides this until deploy time.
+3. **Mock parity goes in opposite directions** — PGlite accepts PostgreSQL syntax that DSQL does not. A separate block can have a restrictive mock.
 4. **"When to use" guidance is completely different** — customers shouldn't accidentally pick DSQL.
 5. **Multi-region is a first-class capability** — not a bolt-on option.
 
@@ -45,37 +45,18 @@ bb-distributed-data (this package)
 ### DsqlMockEngine (Local Dev)
 
 - PGlite wrapped with a validation layer
-- `validateStatement()` rejects unsupported SQL before execution
+- `validateStatement()` runs `dsql-lint` before execution
 - `TransactionTracker` enforces DDL/DML separation and 3,000-row limit
 - `simulateConflict()` test helper for OCC testing
 - Error translation matches production behavior
 
 ## Validation Layer
 
-The core insight: PGlite supports everything DSQL doesn't. Without validation, code works locally but breaks in production — the worst failure mode. The mock actively restricts PGlite to match DSQL's subset.
+PGlite accepts PostgreSQL syntax that DSQL may not. The mock runs `@aws/dsql-lint` before execution.
 
 ### Statement Validation
 
-`validateStatement(sql)` strips string literals and comments, then checks regex patterns:
-
-| Pattern | Rejects |
-|---------|---------|
-| `FOREIGN KEY` / `REFERENCES` | FK constraints |
-| `CREATE TRIGGER` | Triggers |
-| `CREATE VIEW` | Views |
-| `LANGUAGE plpgsql` | PL/pgSQL functions |
-| `SERIAL` / `BIGSERIAL` | Sequences |
-| `TRUNCATE` | Use DELETE FROM |
-| `LISTEN` / `NOTIFY` | Async notifications |
-| `CREATE EXTENSION` | Extensions |
-| `ADD COLUMN ... DEFAULT` | Column default on ALTER |
-| `ALTER DEFAULT PRIVILEGES` | Not supported by DSQL |
-| `CREATE POLICY` / `ENABLE ROW LEVEL SECURITY` | RLS |
-| `CREATE TEMP TABLE` | Temporary tables |
-| `SET TRANSACTION ISOLATION LEVEL` | Fixed Repeatable Read |
-| `COLLATE` | C collation only |
-| `CREATE INDEX ... ASC/DESC` | Sort direction on index keys (NULLS FIRST/LAST is allowed) |
-| `ALTER TABLE ... DROP [COLUMN]` | Not in DSQL's supported ALTER TABLE subset (`DROP CONSTRAINT` and `ALTER COLUMN ... DROP DEFAULT/NOT NULL/EXPRESSION/IDENTITY` are supported) |
+`validateStatement(sql)` runs `dsql-lint` and reports its compatibility diagnostics and suggested rewrites.
 
 ### Transaction Tracking
 
@@ -173,8 +154,7 @@ The `DistributedDatabase` class does not wrap errors — engines handle translat
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
 | No real OCC conflicts | Single-connection PGlite has no concurrency | `simulateConflict()` test helper |
-| PGlite supports JSONB columns | DSQL rejects JSONB as a column type (use JSON instead; JSONB available as runtime cast only) | Validator rejects JSONB in DDL |
-| System collation vs C only | String sorting may differ | Reject explicit COLLATE |
+| Available collations differ | String sorting may differ | `dsql-lint` rejects unsupported explicit collations |
 | No 60-min connection timeout | Dev sessions are short | Document only |
 | No 10 MiB / 5-min tx limits | Impractical to measure locally | Document only |
 | CREATE INDEX ASYNC is synchronous | Index immediately available locally | Log warning |

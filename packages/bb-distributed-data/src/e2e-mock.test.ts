@@ -30,6 +30,7 @@ describe('DistributedDatabase E2E (mock)', () => {
     await engine.withDdl(async () => {
       await db.execute(sql`CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE)`);
       await db.execute(sql`CREATE TABLE accounts (id TEXT PRIMARY KEY, balance INT NOT NULL DEFAULT 0)`);
+      await db.execute(sql`CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id))`);
     });
   });
 
@@ -92,8 +93,17 @@ describe('DistributedDatabase E2E (mock)', () => {
     assert.equal(result, 'ok');
   });
 
-  it('rejects FK at query time', async () => {
-    await assert.rejects(() => db.execute(sql`CREATE TABLE bad (id TEXT REFERENCES users(id))`), { name: 'DsqlValidationError' });
+  it('accepts FK syntax before the runtime DDL permission check', async () => {
+    await assert.rejects(() => db.execute(sql`CREATE TABLE bad (id TEXT REFERENCES users(id))`), { name: 'DsqlPermissionError' });
+  });
+
+  it('enforces foreign keys', async () => {
+    await db.execute(sql`INSERT INTO users (id, name) VALUES (${'fk-user'}, ${'FK User'})`);
+    await db.execute(sql`INSERT INTO memberships (id, user_id) VALUES (${'valid-membership'}, ${'fk-user'})`);
+    await assert.rejects(
+      () => db.execute(sql`INSERT INTO memberships (id, user_id) VALUES (${'invalid-membership'}, ${'missing-user'})`),
+      { name: DistributedDatabaseErrors.QueryFailed },
+    );
   });
 
   it('rejects DDL+DML in transaction', async () => {
@@ -139,7 +149,7 @@ describe('Migration runner E2E', () => {
 
   it('rejects invalid migrations', async () => {
     await assert.rejects(() => engine.withDdl(() => runMigrations(engine, {
-      '004.sql': 'CREATE TABLE bad (id TEXT REFERENCES t(id))',
+      '004.sql': 'ALTER TABLE t ENABLE ROW LEVEL SECURITY',
     })), { name: 'DsqlMigrationValidationError' });
   });
 });
@@ -195,31 +205,36 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
-  it('accepts a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
-    await assert.doesNotReject(
-      () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`))
+  it('rejects a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`)),
+      { name: 'DsqlValidationError' },
     );
   });
 
-  it('still supports a plain CREATE INDEX (no ASYNC)', async () => {
-    await assert.doesNotReject(
-      () => engine.withDdl(() => db.execute(sql`CREATE INDEX idx_users_plain ON users(id)`))
+  it('rejects a plain CREATE INDEX (no ASYNC)', async () => {
+    await assert.rejects(
+      () => engine.withDdl(() => db.execute(sql`CREATE INDEX idx_users_plain ON users(id)`)),
+      { name: 'DsqlValidationError' },
     );
   });
 
   it('rejects CREATE INDEX ASYNC with a DESC sort order on a key', async () => {
     await assert.rejects(
       () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_email_desc ON users (email DESC)`)),
-      /sort order/i,
+      { name: 'DsqlValidationError' },
     );
   });
 
-  it('rejects ALTER TABLE DROP COLUMN', async () => {
+  it('applies ALTER TABLE DROP COLUMN', async () => {
     await engine.withDdl(() => db.execute(sql`CREATE TABLE legacy (id TEXT PRIMARY KEY, obsolete TEXT)`));
-    await assert.rejects(
-      () => engine.withDdl(() => db.execute(sql`ALTER TABLE legacy DROP COLUMN obsolete`)),
-      /DROP COLUMN/i,
-    );
+    await engine.withDdl(() => db.execute(sql`ALTER TABLE legacy DROP COLUMN obsolete`));
+    const columns = await db.query<{ column_name: string }>(sql`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'legacy'
+    `);
+    assert.deepEqual(columns.map(column => column.column_name), ['id']);
   });
 
   it('does not strip ASYNC outside of CREATE INDEX (column named "async")', async () => {

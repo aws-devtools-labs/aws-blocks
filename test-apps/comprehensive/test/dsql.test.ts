@@ -102,16 +102,6 @@ export function dsqlTests(getApi: () => typeof apiType) {
       await api.dsqlDelete(id);
     });
 
-    test('DSQL - rejects FOREIGN KEY at query time', async () => {
-      const api = getApi();
-      const result = await api.dsqlRejectForeignKey();
-      // Mock returns DsqlValidationError (client-side), real DSQL returns QueryFailedException (server-side)
-      assert.ok(
-        result.error === 'DsqlValidationError' || result.error === 'QueryFailedException',
-        `Expected DsqlValidationError or QueryFailedException, got: ${result.error}`
-      );
-    });
-
     test('DSQL - rejects TRUNCATE at query time', async () => {
       const api = getApi();
       const result = await api.dsqlRejectTruncate();

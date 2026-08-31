@@ -260,3 +260,20 @@ test('CDK: migration CustomResource has migrationsHash property', () => {
     rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   }
 });
+
+test('CDK: invalid DSQL migration fails at synth', () => {
+  rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  mkdirSync(MIGRATIONS_DIR, { recursive: true });
+  writeFileSync(join(MIGRATIONS_DIR, '001_create.sql'), 'ALTER TABLE t ENABLE ROW LEVEL SECURITY');
+
+  try {
+    assert.throws(
+      () => synth((stack) => {
+        new DistributedDatabase(scope(stack), 'mydsql', { migrationsPath: MIGRATIONS_DIR });
+      }),
+      /row level security/i,
+    );
+  } finally {
+    rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
+  }
+});

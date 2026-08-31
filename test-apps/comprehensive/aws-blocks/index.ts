@@ -1753,15 +1753,6 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
-  async dsqlRejectForeignKey() {
-    try {
-      await dsql.execute(sql`CREATE TABLE bad_fk (id TEXT, ref TEXT REFERENCES dsql_items(id))`);
-      return { error: null };
-    } catch (e: any) {
-      return { error: e.name };
-    }
-  },
-
   async dsqlRejectTruncate() {
     try {
       await dsql.execute(sql`TRUNCATE TABLE dsql_items`);
