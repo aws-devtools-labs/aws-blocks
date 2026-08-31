@@ -1,50 +1,89 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-export { ApiNamespace, type BlocksContext, type ApiHandler } from './api.js';
-export { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
-export { ApiError, isBlocksError, hasAuthError, DEFAULT_API_ERROR_NAME } from './errors.js';
-export { EventSourceMapping } from './lambda-handler.js';
-export { BlocksStackProps } from './common/index.js';
-export { registerSdkIdentifiers, getSdkIdentifiers, getAllSdkIdentifiers, _resetSdkRegistry } from './common/sdk-registry.js';
-export { getConfig, getConfigSync, preloadConfig, loadConfigToProcessEnv, _resetConfigCache } from './common/config.js';
-export { BlocksStack, Scope, SandboxDisableDeletionProtection, BlocksBackend, registerConfig, finalizeConfigRegistry, synthGuard, DEFAULT_NODE_RUNTIME, SHARED_HANDLER_TIMEOUT_SECONDS, blocksNodejsBundling, type BlocksBackendProps, type CoreBlocksStackProps, type CoreBlocksBackendProps } from './cdk/index.js';
+// Declare functions for infra (secret/config). The runtime getters
+// (getSecret/getConfig) are imported from '@aws-blocks/hosting' — core's own
+// getConfig (backend config loader, above) owns that name here.
 export {
-  type BlocksDefaults,
-  BlocksPresets,
+	type ConfigValue,
+	config,
+	DEFAULT_CONFIG_PARAMETER_PREFIX,
+	DEFAULT_SECRET_PARAMETER_PREFIX,
+	isConfig,
+	isManagedValue,
+	isSecret,
+	type ManagedValue,
+	type SecretValue,
+	secret,
+	type ValueKind,
+} from '@aws-blocks/hosting';
+export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export {
+	BlocksBackend,
+	type BlocksBackendProps,
+	type BlocksDefaults,
+	BlocksPresets,
+	BlocksStack,
+	blocksNodejsBundling,
+	type CoreBlocksBackendProps,
+	type CoreBlocksStackProps,
+	DEFAULT_NODE_RUNTIME,
+	finalizeConfigRegistry,
+	registerConfig,
+	SandboxDisableDeletionProtection,
+	Scope,
+	SHARED_HANDLER_TIMEOUT_SECONDS,
+	synthGuard,
 } from './cdk/index.js';
+export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
+export { BlocksStackProps } from './common/index.js';
 export {
-  Hosting,
-  type HostingProps,
-  type BlocksStackApi,
-  type FrameworkType,
-  type ComputeConfig,
-  type HostingDomainConfig,
-  type HostingWafConfig,
+	_resetSdkRegistry,
+	getAllSdkIdentifiers,
+	getSdkIdentifiers,
+	registerSdkIdentifiers,
+} from './common/sdk-registry.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from './errors.js';
+export {
+	type BlocksStackApi,
+	type ComputeConfig,
+	type FrameworkType,
+	Hosting,
+	type HostingDomainConfig,
+	type HostingProps,
+	type HostingWafConfig,
 } from './hosting.js';
+export { EventSourceMapping } from './lambda-handler.js';
 export {
-  RawRoute,
-  RawRouteErrors,
-  type RawRouteOptions,
-  type HttpMethod,
+	__PIPELINE_STAGE_SCOPE__,
+	type BranchConfig,
+	DeployStage,
+	type DeployStageProps,
+	Pipeline,
+	type PipelineProps,
+	type PipelineSourceConfig,
+	type PipelineStageConfig,
+	type PipelineSynthConfig,
+} from './pipeline/index.js';
+export {
+	type HttpMethod,
+	RawRoute,
+	RawRouteErrors,
+	type RawRouteOptions,
 } from './raw-route.cdk.js';
 export {
-  registerRoute,
-  matchRoute,
-  getRegisteredRoutes,
-  clearRouteRegistry,
-  lockRouteRegistry,
-  unlockRouteRegistry,
-  type RegisteredRoute,
+	clearRouteRegistry,
+	getRegisteredRoutes,
+	lockRouteRegistry,
+	matchRoute,
+	type RegisteredRoute,
+	registerRoute,
+	unlockRouteRegistry,
 } from './raw-route.js';
 export {
-  Pipeline,
-  DeployStage,
-  __PIPELINE_STAGE_SCOPE__,
-  type DeployStageProps,
-  type BranchConfig,
-  type PipelineProps,
-  type PipelineSourceConfig,
-  type PipelineSynthConfig,
-  type PipelineStageConfig,
-} from './pipeline/index.js';
+	BLOCKS_CONFIG_PARAMETER_PREFIX,
+	BLOCKS_SECRET_PARAMETER_PREFIX,
+	blocksConfigParameterName,
+	blocksSecretParameterName,
+} from './secret-naming.js';

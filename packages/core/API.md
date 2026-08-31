@@ -4,6 +4,16 @@
 
 ```ts
 
+import { config } from '@aws-blocks/hosting';
+import { ConfigValue } from '@aws-blocks/hosting';
+import { isConfig } from '@aws-blocks/hosting';
+import { isManagedValue } from '@aws-blocks/hosting';
+import { isSecret } from '@aws-blocks/hosting';
+import { ManagedValue } from '@aws-blocks/hosting';
+import { secret } from '@aws-blocks/hosting';
+import { SecretValue } from '@aws-blocks/hosting';
+import { ValueKind } from '@aws-blocks/hosting';
+
 // @public
 export class ApiError extends Error {
     constructor(message: string, status: number, options?: {
@@ -56,6 +66,10 @@ export interface BuildingBlockMeta {
 // @public
 export function clearRouteRegistry(): void;
 
+export { config }
+
+export { ConfigValue }
+
 // @public
 export const DEFAULT_API_ERROR_NAME = "ApiError";
 
@@ -93,11 +107,19 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
     name: N;
 };
 
+export { isConfig }
+
+export { isManagedValue }
+
+export { isSecret }
+
 // @public
 export function loadConfigToProcessEnv(): Promise<void>;
 
 // @public
 export function lockRouteRegistry(): void;
+
+export { ManagedValue }
 
 // @public
 export function matchRoute(method: string, path: string): {
@@ -195,8 +217,14 @@ export type ScopeParent = Scope | {
     id: string;
 };
 
+export { secret }
+
+export { SecretValue }
+
 // @public
 export function unlockRouteRegistry(): void;
+
+export { ValueKind }
 
 // (No @packageDocumentation comment for this package)
 

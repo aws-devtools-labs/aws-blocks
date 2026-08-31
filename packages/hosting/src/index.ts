@@ -1,23 +1,50 @@
-export { FrameworkType, HostingProps, HostingResources } from './types.js';
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * `@aws-blocks/hosting` — the **CDK-free value API**: the two intent functions
+ * (`secret()` → Secrets Manager, `config()` → SSM) and the runtime resolvers
+ * (`getSecret`/`getConfig`). Safe to import from application/runtime code (SSR
+ * routes, Lambda, the edge runtime) — it pulls in no CDK, no `fast-glob`, and no
+ * `node:fs`.
+ *
+ * Build-time tooling lives elsewhere so it never enters a runtime bundle: the CDK
+ * construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI +
+ * typegen engines on `@aws-blocks/hosting/scripts`.
+ *
+ * @module
+ */
+
+// Two intent functions (I1, Approach B): secret() → Secrets Manager, config() → SSM.
 export {
-  DeployManifest,
-  RouteBehavior,
-  ComputeResource,
-  CacheConfig,
-  ImageConfig,
-  MiddlewareConfig,
-  Redirect,
-  Rewrite,
-  CustomHeader,
-} from './manifest/types.js';
-export { FrameworkAdapterFn, NextjsAdapterOptions } from './adapters/index.js';
-export { HostingError } from './hosting_error.js';
+	type ConfigValue,
+	cacheTtlEnvVarName,
+	config,
+	DEFAULT_CONFIG_PARAMETER_PREFIX,
+	DEFAULT_SECRET_PARAMETER_PREFIX,
+	defaultPrefixForKind,
+	envVarNameForKind,
+	fallbackEnvVarName,
+	isConfig,
+	isManagedValue,
+	isSecret,
+	MANAGED_BRAND,
+	type ManagedValue,
+	type ManagedValueOptions,
+	type SecretStore,
+	type SecretValue,
+	secret,
+	secretStoreLocator,
+	type ValueKind,
+} from './secret.js';
+// Runtime resolvers — typed against the (typegen-augmented) key registries.
 export {
-  HostingConstruct,
-  HostingConstructProps,
-  HostingDomainConfig,
-  HostingWafConfig,
-  generateBuildId,
-  generateBuildIdFunctionCode,
-} from './constructs/hosting_construct.js';
-export type { SkewProtectionConfig } from './constructs/skew_protection.js';
+	type ConfigKey,
+	type ConfigValueOf,
+	getConfig,
+	getSecret,
+	type HostingConfigRegistry,
+	type HostingSecretRegistry,
+	type SecretKey,
+	type SecretValueOf,
+} from './secret-runtime.js';
