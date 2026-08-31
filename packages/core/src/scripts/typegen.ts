@@ -15,4 +15,4 @@
  * @module
  */
 
-export { runTypegenCli } from '@aws-blocks/hosting';
+export { runTypegenCli } from '@aws-blocks/hosting/scripts';

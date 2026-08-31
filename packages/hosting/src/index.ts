@@ -3,14 +3,14 @@
 
 /**
  * `@aws-blocks/hosting` — the **CDK-free value API**: the two intent functions
- * (`secret()` → Secrets Manager, `config()` → SSM), the runtime resolvers
- * (`getSecret`/`getConfig`), the shared CLI core, and the typegen engine. Safe to
- * import from application/runtime code (SSR routes, Lambda) — it pulls in no CDK.
+ * (`secret()` → Secrets Manager, `config()` → SSM) and the runtime resolvers
+ * (`getSecret`/`getConfig`). Safe to import from application/runtime code (SSR
+ * routes, Lambda, the edge runtime) — it pulls in no CDK, no `fast-glob`, and no
+ * `node:fs`.
  *
- * The CDK construct and the resolution engine live on the `/constructs` subpath
- * ({@link file://./constructs/index.ts}); the runtime getters are re-exported from
- * there too via that module's imports, but application code only ever needs this
- * entry and `/constructs`.
+ * Build-time tooling lives elsewhere so it never enters a runtime bundle: the CDK
+ * construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI +
+ * typegen engines on `@aws-blocks/hosting/scripts`.
  *
  * @module
  */
@@ -37,14 +37,6 @@ export {
 	secretStoreLocator,
 	type ValueKind,
 } from './secret.js';
-// Shared CLI core (secret/config × set/list/remove) — consumers wrap with a fixed kind + label/prefix.
-export {
-	listValues,
-	removeValue,
-	runValueCli,
-	setValue,
-	type ValueCliOptions,
-} from './secret-cli.js';
 // Runtime resolvers — typed against the (typegen-augmented) key registries.
 export {
 	type ConfigKey,
@@ -56,23 +48,3 @@ export {
 	type SecretKey,
 	type SecretValueOf,
 } from './secret-runtime.js';
-// Typegen engine (drives `hosting-typegen`).
-export {
-	DEFAULT_MARKER_MODULES,
-	DEFAULT_TYPEGEN_INCLUDE,
-	DEFAULT_TYPEGEN_MODULE,
-	DEFAULT_TYPEGEN_MODULES,
-	DEFAULT_TYPEGEN_OUT,
-	type DynamicCallSite,
-	type GenerateOptions,
-	generateHostingValuesDts,
-	renderHostingValuesDts,
-	runTypegenCli,
-	type ScanResult,
-	scanValueKeys,
-	type TypegenCliDeps,
-	type TypegenOptions,
-	type TypegenResult,
-	type WatchOptions,
-	watchHostingValues,
-} from './secret-typegen.js';

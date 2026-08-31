@@ -35,6 +35,10 @@
     "./error": {
       "types": "./dist/hosting_error.d.ts",
       "default": "./dist/hosting_error.js"
+    },
+    "./scripts": {
+      "types": "./dist/scripts.d.ts",
+      "default": "./dist/scripts.js"
     }
   },
   "main": "dist/index.js",

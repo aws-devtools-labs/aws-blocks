@@ -126,7 +126,7 @@ export interface DevServerOptions {
  */
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
-    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting');
+    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
     const scan = await scanValueKeys();
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
