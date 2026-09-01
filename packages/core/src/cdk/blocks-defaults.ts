@@ -27,6 +27,14 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
+	 * CORS origins the compute's API accepts, as regular-expression patterns
+	 * matched against the request `Origin` header. Empty means no cross-origin
+	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
+	 * frontend can reach a deployed API; `production` allows none by default.
+	 */
+	allowedOrigins: string[];
+
+	/**
 	 * Whether stateful resources that support continuous backups keep them on by
 	 * default — e.g. DynamoDB Point-in-Time Recovery, letting you restore to any
 	 * second in the retention window. On in `production`, off in `sandbox` (where
@@ -54,12 +62,14 @@ export const BlocksPresets = {
 	sandbox: {
 		removalPolicy: RemovalPolicy.DESTROY,
 		deletionProtection: false,
+		allowedOrigins: ['^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$'],
 		pointInTimeRecovery: false,
 	},
 	/** Durable, protected posture for permanent deployments. */
 	production: {
 		removalPolicy: RemovalPolicy.RETAIN,
 		deletionProtection: true,
+		allowedOrigins: [],
 		pointInTimeRecovery: true,
 	},
 } satisfies Record<string, BlocksDefaults>;
