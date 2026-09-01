@@ -75,10 +75,21 @@ export function parseScheduleForMock(expr: string): ParsedSchedule {
 	try {
 		return parseSchedule(expr);
 	} catch (err) {
-		// Reclassify ONLY when the parse failure is due to an advanced cron form the
-		// mock doesn't model (not a genuinely invalid value like minute 100 or an
-		// inverted range — those stay InvalidSchedule).
-		if (!usesUnsupportedCronForm(expr)) throw err;
+		// Reclassify as "unsupported in mock" ONLY when the parse failure is
+		// attributable to an advanced cron form (L/W/#, year) AND the rest of the
+		// expression is otherwise well-formed. A genuinely bad field (minute 100,
+		// an inverted range) must still throw InvalidSchedule even when a year or
+		// marker is also present — otherwise we'd claim a deploy-doomed schedule
+		// "will deploy". We test this by normalizing the markers/year to valid
+		// placeholders and re-parsing: if it now parses, the marker was the only
+		// problem; if it still throws, a real field is bad.
+		const normalized = normalizeUnsupportedCron(expr);
+		if (normalized === null) throw err; // no advanced form → the failure is a genuine error
+		try {
+			parseSchedule(normalized);
+		} catch {
+			throw err; // a non-marker field is also invalid → keep InvalidSchedule
+		}
 		const e = new Error(
 			`${CronJobErrors.ScheduleNotSupported}: "${expr}" is valid for EventBridge and will deploy, ` +
 				'but the local mock cannot simulate it (advanced cron forms like L/W/#, or a year field). ' +
@@ -90,17 +101,28 @@ export function parseScheduleForMock(expr: string): ParsedSchedule {
 }
 
 /**
- * True if `expr` is a 6-field cron using a form EventBridge supports but the mock
- * parser doesn't model: `L`/`W`/`#` in a day field, or an explicit (non-`*`/`?`)
- * year field. Used to tell "can't simulate locally" apart from "invalid".
+ * If `expr` is a 6-field cron using a form EventBridge supports but the mock
+ * parser doesn't model (`L`/`W`/`#` in a day field, or an explicit non-`*`/`?`
+ * year), return an equivalent expression with those markers/year replaced by
+ * valid placeholders — so the OTHER fields' validity can be re-checked by
+ * re-parsing. Returns `null` when the expression uses no such form (in which
+ * case a parse failure is a genuine error, not a mock limitation).
  */
-function usesUnsupportedCronForm(expr: string): boolean {
+function normalizeUnsupportedCron(expr: string): string | null {
 	const m = expr.match(CRON_RE);
-	if (!m) return false;
+	if (!m) return null;
 	const fields = m[1].trim().split(/\s+/);
-	if (fields.length !== 6) return false;
-	const [, , dayOfMonth, , dayOfWeek, year] = fields;
-	return /[LW#]/i.test(dayOfMonth) || /[LW#]/i.test(dayOfWeek) || (year !== '*' && year !== '?');
+	if (fields.length !== 6) return null;
+	let [minute, hour, dom, month, dow, year] = fields;
+	const hasMarker = /[LW#]/i.test(dom) || /[LW#]/i.test(dow);
+	const hasYear = year !== '*' && year !== '?';
+	if (!hasMarker && !hasYear) return null;
+	// Replace only the unsupported bits with valid placeholders; leave the rest so
+	// a bad minute/hour/month/range still fails the re-parse.
+	if (/[LW#]/i.test(dom)) dom = '1'; // valid day-of-month
+	if (/[LW#]/i.test(dow)) dow = '?'; // valid day-of-week (mock treats ? as "any")
+	year = '*';
+	return `cron(${minute} ${hour} ${dom} ${month} ${dow} ${year})`;
 }
 
 /** Validate a `rate(...)` match and return its interval in ms. Throws on a bad unit/value. */

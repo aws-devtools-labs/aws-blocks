@@ -65,8 +65,15 @@ describe('parseScheduleForMock (local firing) — distinguishes unsupported from
 		});
 	}
 
-	// Genuinely invalid stays InvalidSchedule (the gate rejects these too).
-	for (const bad of ['rate(10 seconds)', 'cron(0 9 * * *)', 'nonsense']) {
+	// Genuinely invalid stays InvalidSchedule — even when a year/marker is ALSO present,
+	// a bad field must not be excused as "unsupported but deployable".
+	for (const bad of [
+		'rate(10 seconds)',
+		'cron(0 9 * * *)',
+		'nonsense',
+		'cron(100 9 * * ? 2025)', // minute 100 invalid + year present
+		'cron(0 9 30-10 * ? 2025)', // inverted day-of-month range + year present
+	]) {
 		test(`"${bad}" → InvalidSchedule`, () => {
 			assert.throws(
 				() => parseScheduleForMock(bad),
