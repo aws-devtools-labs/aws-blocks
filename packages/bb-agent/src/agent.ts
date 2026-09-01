@@ -55,6 +55,8 @@ const DEFAULT_MAX_TOOL_ITERATIONS = 20;
 const MODEL_CALL_COUNT_KEY = '__bbAgentModelCallCount';
 const TOOL_CALL_COUNT_KEY = '__bbAgentToolCallCount';
 const COUNTED_TOOL_USE_IDS_KEY = '__bbAgentCountedToolUseIds';
+/** Id of the turn the counters belong to, so a new turn can zero them lazily. */
+const TURN_ID_KEY = '__bbAgentCapTurnId';
 
 /**
  * Validate a runaway-protection cap: a positive integer, `false` to disable, or
@@ -265,15 +267,24 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// this coexists with the HITL hook.
 		// The counters live in `appState`, which the SessionManager persists, so they
 		// keep counting across a HITL interrupt + resume() — the cap bounds a whole
-		// logical turn, not just one execution segment. A fresh turn (no
-		// interruptResponses) resets them.
+		// logical turn, not just one execution segment.
+		// The reset is LAZY (inside the hooks), not done here: the SessionManager
+		// restores the snapshot's appState during `stream()`, i.e. after this point, so
+		// a reset written here would be overwritten by the previous turn's counts and
+		// the budget would leak from turn to turn. Instead a fresh turn gets a new turn
+		// id and the first hook to run notices the stored id is stale and zeroes the
+		// counters; a resume passes no id, so it continues on the persisted counts.
 		let capExceeded: string | undefined;
-		if (!interruptResponses) {
+		const turnId = interruptResponses ? undefined : ulid();
+		const startTurnIfNew = (): void => {
+			if (!turnId || strandsAgent.appState.get(TURN_ID_KEY) === turnId) return;
+			strandsAgent.appState.set(TURN_ID_KEY, turnId);
 			strandsAgent.appState.set(MODEL_CALL_COUNT_KEY, 0);
 			strandsAgent.appState.set(TOOL_CALL_COUNT_KEY, 0);
 			strandsAgent.appState.set(COUNTED_TOOL_USE_IDS_KEY, []);
-		}
+		};
 		const bumpCount = (key: string): number => {
+			startTurnIfNew();
 			const next = (Number(strandsAgent.appState.get(key)) || 0) + 1;
 			strandsAgent.appState.set(key, next);
 			return next;
@@ -282,6 +293,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// turn resumes, so count each toolUseId at most once — otherwise an approved
 		// call would be charged twice against the cap.
 		const countToolCall = (toolUseId: string): number => {
+			startTurnIfNew();
 			const seen = (strandsAgent.appState.get(COUNTED_TOOL_USE_IDS_KEY) as string[] | undefined) ?? [];
 			if (seen.includes(toolUseId)) return Number(strandsAgent.appState.get(TOOL_CALL_COUNT_KEY)) || 0;
 			strandsAgent.appState.set(COUNTED_TOOL_USE_IDS_KEY, [...seen, toolUseId]);

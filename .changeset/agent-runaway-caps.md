@@ -33,7 +33,10 @@ but the new default changes the runtime behavior of every existing agent — a
 turn that legitimately exceeds 20 model or tool calls is now cut off unless the
 customer opts out — so it ships as `minor` rather than `patch` to surface that
 clearly. The counts cover a whole logical turn: they live in the agent's
-persisted session state, so a turn paused on a human-in-the-loop interrupt keeps
-its budget across `resume()`. A cap value must be a positive integer or `false`;
-anything else throws `InvalidModelConfigException`. The umbrella
+persisted session state, and the per-turn reset is keyed on a turn id applied
+lazily (the session snapshot is restored inside `stream()`, so an up-front reset
+would be overwritten and the budget would leak into the next turn), so a turn
+paused on a human-in-the-loop interrupt keeps its budget across `resume()` while
+a new message always starts a fresh one. A cap value must be a positive integer
+or `false`; anything else throws `InvalidModelConfigException`. The umbrella
 `@aws-blocks/blocks` gets the same bump because it re-exports `AgentConfig`.
