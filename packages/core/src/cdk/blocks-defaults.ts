@@ -88,6 +88,13 @@ export interface BlocksDefaults {
 	 * {@link logRetention}). Off by default for disposable sandboxes to avoid the
 	 * extra log group and the account-level CloudWatch Logs role requirement; on
 	 * for production so requests are auditable.
+	 *
+	 * Enabling this provisions the account-level API Gateway CloudWatch Logs
+	 * role, which is an account/region-level singleton. It is therefore safe for
+	 * **one Blocks stack per region**: a second Blocks stack in the same
+	 * account+region that also enables access logging can, on teardown, leave the
+	 * survivor's access logging broken. See `ensureApiGatewayAccount` for the
+	 * full multi-stack teardown caveat.
 	 */
 	accessLogging: boolean;
 }

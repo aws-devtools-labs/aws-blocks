@@ -8,6 +8,7 @@
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-app-setting": patch
 "@aws-blocks/bb-dashboard": patch
+"@aws-blocks/bb-lambda-compute": patch
 ---
 
 Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
