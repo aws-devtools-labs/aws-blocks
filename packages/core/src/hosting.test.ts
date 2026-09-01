@@ -1775,24 +1775,34 @@ describe('Hosting', () => {
       );
     });
 
-    it('invalidates the post-rewrite cache key (/builds/<id>/.blocks-sandbox/*)', () => {
-      // The viewer-request skew-protection function rewrites the URI to
-      // `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the cache
-      // lookup, so the real edge cache key lives under `/builds/<id>/`.
-      // Invalidating only `/.blocks-sandbox/*` never matches it.
+    it('does NOT emit a CloudFront invalidation on any BucketDeployment', () => {
+      // A BucketDeployment given a `distribution` waits for the CloudFront
+      // invalidation to be CONFIRMED, which hangs on a fresh stack CREATE
+      // (aws-cdk#15891): CREATE_FAILED → ~30-minute rollback → cancelled E2E
+      // jobs. config.json is served with `max-age=60, must-revalidate` and the
+      // placeholder is registered no-cache, so the invalidation was
+      // defense-in-depth only. The CDK BucketDeployment renders
+      // DistributionId / DistributionPaths only when `distribution` is set, so
+      // their absence proves no invalidation is wired.
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, 'InvalidationPathStack');
       new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
 
-      // Assert via Template + Match so a CDK property rename fails loudly here
-      // rather than silently skipping a structural-heuristic lookup.
-      Template.fromStack(stack).hasResourceProperties(
-        'Custom::CDKBucketDeployment',
-        Match.objectLike({
-          DistributionPaths: Match.arrayWith([Match.stringLikeRegexp('^/builds/.+/\\.blocks-sandbox/\\*$')]),
-        }),
-      );
+      const tpl = Template.fromStack(stack).toJSON();
+      const deployments = Object.entries(
+        tpl.Resources as Record<string, { Type: string; Properties?: object }>,
+      ).filter(([, r]) => r.Type === 'Custom::CDKBucketDeployment');
+      assert.ok(deployments.length > 0, 'expected BucketDeployments in the template, else this assertion is vacuous');
+
+      const offenders = deployments
+        .filter(([, r]) => {
+          const props = r.Properties ?? {};
+          return 'DistributionId' in props || 'DistributionPaths' in props;
+        })
+        .map(([id]) => id);
+
+      assert.deepStrictEqual(offenders, [], 'no BucketDeployment may invalidate CloudFront (aws-cdk#15891)');
     });
   });
 });
