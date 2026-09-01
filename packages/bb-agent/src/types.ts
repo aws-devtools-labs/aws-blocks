@@ -101,11 +101,12 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * call *count*, not tokens or wall-clock — pair it with a billing/CloudWatch
 	 * alarm for defense in depth.
 	 *
-	 * Scope: the count is per execution segment and **resets when a turn is
-	 * resumed after a human-in-the-loop interrupt** (`resume()` starts a fresh
-	 * segment). It does not bound a whole multi-segment conversation turn.
+	 * Scope: the count covers the whole turn, including across a human-in-the-loop
+	 * interrupt — it is kept in the agent's session state, so `resume()` continues
+	 * on the same budget rather than starting a fresh one. Must be a positive
+	 * integer or `false`; anything else throws `InvalidModelConfigException`.
 	 */
-	maxLLMCalls?: number | false;
+	maxLlmCalls?: number | false;
 	/**
 	 * Safety cap on the number of **tool calls per turn**.
 	 *
@@ -113,8 +114,9 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * Parallel tool batches count each individual call. Raise it for agents that
 	 * legitimately chain many tools in a single turn, or set it to `false` to
 	 * disable the cap entirely. When the cap is hit the turn is stopped and the
-	 * client receives an `error` chunk instead of `done`. Like `maxLLMCalls`, the
-	 * count is per execution segment and resets on `resume()` after an interrupt.
+	 * client receives an `error` chunk instead of `done`. Like `maxLlmCalls`, the
+	 * count covers the whole turn (it survives `resume()` after an interrupt) and
+	 * must be a positive integer or `false`.
 	 */
 	maxToolIterations?: number | false;
 	/** Controls how text chunks are published to the client via Realtime.

@@ -544,20 +544,20 @@ describe('CannedProvider', () => {
 // ── runaway protection caps ──────────────────────────────────────────────────
 
 describe('runaway protection caps', () => {
-	test('maxLLMCalls stops a turn that keeps calling the model', async () => {
+	test('maxLlmCalls stops a turn that keeps calling the model', async () => {
 		// A tool prompt drives two model calls (initial call → tool → follow-up call).
-		// With maxLLMCalls: 1 the second BeforeModelCallEvent trips the cap and cancels
+		// With maxLlmCalls: 1 the second BeforeModelCallEvent trips the cap and cancels
 		// the turn, surfacing an error chunk (so complete() rejects).
 		const scope = new Scope('test-cap-llm');
 		const agent = new Agent(scope, 'capllm', {
 			systemPrompt: 'test',
-			maxLLMCalls: 1,
+			maxLlmCalls: 1,
 			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
 			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
 		});
 		const result = await agent.stream('run getStatus', { userId: 'test-user' });
 		await assert.rejects(() => result.complete(), (err: any) => {
-			assert.match(err.message, /maxLLMCalls/);
+			assert.match(err.message, /maxLlmCalls/);
 			return true;
 		});
 	});
@@ -612,6 +612,55 @@ describe('runaway protection caps', () => {
 		const result = await agent.stream('run alpha and bravo', { userId: 'test-user' });
 		const chunk = await result.complete();
 		assert.strictEqual(chunk.type, 'done', 'disabling the cap should let the turn complete');
+	});
+
+	test('an invalid cap value is rejected at construction', async () => {
+		const scope = new Scope('test-cap-invalid');
+		const model = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+		let n = 0;
+		for (const value of [0, -1, 1.5, Number.NaN]) {
+			assert.throws(
+				() => new Agent(scope, `capbad${n++}`, { systemPrompt: 'test', model, maxLlmCalls: value }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig && /positive integer or false/.test(err.message),
+				`maxLlmCalls: ${value} should be rejected`,
+			);
+			assert.throws(
+				() => new Agent(scope, `capbad${n++}`, { systemPrompt: 'test', model, maxToolIterations: value }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig && /positive integer or false/.test(err.message),
+				`maxToolIterations: ${value} should be rejected`,
+			);
+		}
+		// Valid values must still construct.
+		new Agent(scope, 'capok1', { systemPrompt: 'test', model, maxLlmCalls: 1, maxToolIterations: 99 });
+		new Agent(scope, 'capok2', { systemPrompt: 'test', model, maxLlmCalls: false, maxToolIterations: false });
+	});
+
+	test('a cap trip leaves paired, explained history', async () => {
+		// A tool call cancelled by the cap still gets an AfterToolCallEvent from Strands
+		// (the cancellation is the result), so every persisted 'tool-call' keeps its
+		// 'tool-result' partner — no dangling tool_use to break the next turn. runAgent
+		// additionally records why the turn stopped.
+		const scope = new Scope('test-cap-history');
+		const agent = new Agent(scope, 'caphist', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream('run alpha and bravo', { conversationId: convId, userId: 'test-user' });
+		await assert.rejects(() => result.complete());
+
+		const history = await agent.getConversation(convId);
+		const toolCalls = history.filter(m => m.role === 'tool-call');
+		const toolResults = history.filter(m => m.role === 'tool-result');
+		assert.ok(toolCalls.length > 0, 'sanity: a tool call was persisted before the cap fired');
+		assert.strictEqual(toolResults.length, toolCalls.length, 'every persisted tool-call needs a matching tool-result');
+		const stopRecord = history.find(m => m.role === 'assistant' && /maxToolIterations/.test(JSON.stringify(m.metadata ?? '')));
+		assert.ok(stopRecord, 'history should record why the turn stopped');
 	});
 });
 

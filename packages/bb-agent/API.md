@@ -29,7 +29,7 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     description?: string;
     inferenceOnly?: boolean;
     logger?: ChildLogger;
-    maxLLMCalls?: number | false;
+    maxLlmCalls?: number | false;
     maxToolIterations?: number | false;
     // (undocumented)
     model?: {

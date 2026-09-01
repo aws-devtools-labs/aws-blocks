@@ -36,9 +36,11 @@ Two storage backends, same FileBucket BB:
 
 ## Runaway-protection caps
 
-`AgentConfig.maxLLMCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
+`AgentConfig.maxLlmCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
 
-**Scope is per execution segment, not per logical conversation turn.** The counters live in a single `runAgent` invocation, so a turn that pauses on a HITL interrupt and is resumed via `resume()` starts a fresh count. This is intentional: it's a lightweight, compute-agnostic backstop that needs no cross-process state, and the interrupt→resume path is naturally throttled (each resume needs an approval; trustable auto-approval stays within one segment, which the cap already counts). Bounding a whole multi-segment turn (or on-demand stop/poll) would require persisting counts alongside the session and is deliberately out of scope — on-demand cancellation is a separate, compute-agnostic API-design task.
+**Scope is the whole logical turn, including across HITL resumes.** The counters are stored in the Strands agent's `appState` (keys `__bbAgentModelCallCount` / `__bbAgentToolCallCount`), which the `SessionManager` persists with the session snapshot — the same mechanism the `trusted:<tool>` flags use. `runAgent` resets them only on the initial path (no `interruptResponses`), so a turn that pauses on an interrupt and continues via `resume()` keeps counting on its existing budget. Locals in `runAgent` would reset on every resume, letting an auto-approving or trusted-tool resume loop re-enter itself indefinitely — exactly the runaway these caps exist to stop.
+
+A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strands reports the cancellation as the call's result), so the `tool-call` row already written to the message table keeps its `tool-result` partner — no dangling `tool_use` is left for the next turn to replay. `runAgent` additionally writes an `assistant` row carrying the stop reason in `metadata.error`, so a reloaded conversation explains why it ended.
 
 ## Infrastructure (CDK)
 

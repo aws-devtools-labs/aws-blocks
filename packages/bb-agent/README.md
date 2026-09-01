@@ -136,7 +136,7 @@ The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to
 | `inferenceOnly` | `boolean` | Skip persistence infra. Default: `false`. |
 | `conversation` | `ConversationManagerConfig` | How the agent trims message history (sliding-window or summarizing). |
 | `streamingMode` | `'token' \| 'block'` | How text chunks are published to the client. Default: `'block'`. |
-| `maxLLMCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
+| `maxLlmCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
 | `maxToolIterations` | `number \| false` | Max tool calls per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
 
 ### Model Configuration
@@ -363,35 +363,35 @@ const agent = new Agent(scope, 'support', {
 
 ### Limiting runaway cost
 
-An agent runs a reason→act loop: each iteration is one **model call**, optionally followed by tool calls, and a model call that requests no tools ends the turn. A misbehaving agent — or a prompt that induces one — can loop this cycle far longer than intended, an unbounded loop can run up unexpected cost.
+An agent runs a reason→act loop: each iteration is one **model call**, optionally followed by tool calls, and a model call that requests no tools ends the turn. A misbehaving agent — or a prompt that induces one — can loop this cycle far longer than intended; an unbounded loop can run up unexpected cost.
 
 > **These caps are a safety backstop, not a way to guide the agent.** The defaults exist only to stop a runaway from racking up cost — they are *not* tuned for your agent and should not be used to shape its behavior. An agent that legitimately needs more steps or tools will be cut off mid-task at the default. **Set these values deliberately for your own agent** based on how many steps and tool calls a healthy turn takes, so a normal turn always completes and only genuine runaways are stopped.
 
 Two per-turn safety caps bound this, and **both default to `20`**:
 
-- **`maxLLMCalls`** — the maximum number of model invocations in a single turn. This is the most direct spend guard (model calls are the billing unit), and because every tool round needs a model call it transitively bounds tool loops too.
+- **`maxLlmCalls`** — the maximum number of model invocations in a single turn. This is the most direct spend guard (model calls are the billing unit), and because every tool round needs a model call it transitively bounds tool loops too.
 - **`maxToolIterations`** — the maximum number of tool calls in a single turn (parallel tool batches count each call).
 
-When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`. The count is per execution segment and resets on `resume()` — a turn that pauses on a [tool-approval interrupt](#tool-approval-human-in-the-loop) and is resumed starts a fresh budget, so the cap bounds each segment rather than a whole multi-segment turn.
+When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`. The counts cover the whole turn, including across a [tool-approval interrupt](#tool-approval-human-in-the-loop): they are kept in the agent's session state, so a turn that pauses for approval and continues via `resume()` keeps its existing budget instead of starting a fresh one. Only a new message starts a new budget.
 
 ```typescript
 const agent = new Agent(scope, 'support', {
   systemPrompt: '...',
-  maxLLMCalls: 40,          // agent legitimately reasons over many steps
+  maxLlmCalls: 40,          // agent legitimately reasons over many steps
   maxToolIterations: 60,    // ...and chains many tools per turn
 });
 
 // Or disable a cap entirely with `false`:
 const unbounded = new Agent(scope, 'batch', {
   systemPrompt: '...',
-  maxLLMCalls: false,       // no per-turn model-call limit
-  maxToolIterations: false,  
+  maxLlmCalls: false,       // no per-turn model-call limit
+  maxToolIterations: false,
 });
 ```
 
 Raise the caps for agents that legitimately take many steps so they aren't cut off mid-task, or set a cap to `false` to disable it — tuning these to your agent is part of delivering a good agentic experience, not just a cost lever. The caps bound call *count*, not tokens or wall-clock — for real cost protection, also configure a [billing alarm](https://docs.aws.amazon.com/cost-management/latest/userguide/monitor-charges.html) or a CloudWatch alarm on Bedrock spend.
 
-When sizing the caps for an agent that uses [tool approval](#tool-approval-human-in-the-loop), note the interrupt interaction: a `trustable` tool that's been trusted runs without interrupting, so its calls stay within the current segment and count against that segment's cap; a tool that interrupts for explicit approval only continues after `resume()`, which starts a fresh segment with a fresh budget.
+When sizing the caps for an agent that uses [tool approval](#tool-approval-human-in-the-loop), remember that approved and trusted tool calls both count: a `trustable` tool that's been trusted runs without interrupting, and a tool approved through `resume()` continues on the same budget, so a long approve-and-continue turn can still reach the cap.
 
 ## Tools
 
