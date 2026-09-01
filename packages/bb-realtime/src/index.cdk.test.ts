@@ -101,12 +101,22 @@ test('CDK: a per-stack throttling override wins on the WebSocket stage', () => {
 	});
 });
 
-test('CDK: production enables WebSocket access logging + the account CloudWatch role', () => {
-	const stack = setup(BlocksPresets.production, 'RtAccessLogProdStack');
+test('CDK: opt-in enables WebSocket access logging + the account CloudWatch role', () => {
+	// Access logging is opt-in (off in both presets), so enable it explicitly.
+	const stack = setup({ ...BlocksPresets.production, accessLogging: true }, 'RtAccessLogProdStack');
 	const template = Template.fromStack(stack);
 	template.resourceCountIs('AWS::ApiGateway::Account', 1);
 	template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
 		AccessLogSettings: Match.objectLike({ DestinationArn: Match.anyValue(), Format: Match.anyValue() }),
+	});
+});
+
+test('CDK: access logging is off by default (production preset) — no account role', () => {
+	const stack = setup(BlocksPresets.production, 'RtAccessLogDefaultOffStack');
+	const template = Template.fromStack(stack);
+	template.resourceCountIs('AWS::ApiGateway::Account', 0);
+	template.hasResourceProperties('AWS::ApiGatewayV2::Stage', {
+		AccessLogSettings: Match.absent(),
 	});
 });
 

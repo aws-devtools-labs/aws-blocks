@@ -1,10 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { Annotations } from 'aws-cdk-lib';
 import type { CfnLogGroup } from 'aws-cdk-lib/aws-logs';
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { LoggingOptions } from './types.js';
+
+/**
+ * Marks the explicit retention a `Logger` last wrote to the shared handler log
+ * group, so a second `Logger` setting a *different* explicit value can warn
+ * about the silent last-wins (both target the one group).
+ */
+const EXPLICIT_RETENTION = Symbol.for('BLOCKS_LOGGER_EXPLICIT_RETENTION');
 
 // Re-export public types and errors (no runtime dependencies)
 export { LoggingErrors } from './errors.js';
@@ -24,7 +32,9 @@ export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } f
  * default. A bare `new Logger(scope, id)` leaves the group's retention
  * untouched: because every Logger targets the same shared group, writing the
  * default back would let the last-constructed Logger silently clobber a
- * `retention` an earlier Logger set (order-dependent).
+ * `retention` an earlier Logger set (order-dependent). If two Loggers set
+ * *different* explicit `retention` values, the last one still wins, but a synth
+ * warning is emitted so the ambiguity isn't silent.
  */
 export class Logger extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: LoggingOptions) {
@@ -50,7 +60,21 @@ export class Logger extends Scope {
 						'`defaults.logRetention` instead.',
 				);
 			}
+			// All Loggers reconfigure the one shared handler group, so the last
+			// explicit `retention` wins. Warn at synth if a different Logger already
+			// pinned a conflicting value — silent last-wins is otherwise invisible.
+			const prior = (cfnLogGroup as unknown as Record<symbol, number | undefined>)[EXPLICIT_RETENTION];
+			if (prior !== undefined && prior !== options.retention) {
+				Annotations.of(this).addWarningV2(
+					'@aws-blocks/bb-logger:retention-conflict',
+					`Logger "${id}" sets handler log retention to ${options.retention} day(s), overriding an ` +
+						`earlier Logger's explicit ${prior} day(s) — all Loggers share the one handler log group, ` +
+						'so the last-constructed value wins. Set a single explicit `retention` (or rely on the ' +
+						'stack-wide `defaults.logRetention`) to avoid the ambiguity.',
+				);
+			}
 			cfnLogGroup.retentionInDays = options.retention;
+			(cfnLogGroup as unknown as Record<symbol, number | undefined>)[EXPLICIT_RETENTION] = options.retention;
 		}
 	}
 }

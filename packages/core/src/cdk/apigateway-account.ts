@@ -55,10 +55,11 @@ export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {
 		],
 	});
 
+	// `cloudWatchRoleArn: role.roleArn` already gives CDK an implicit dependency
+	// on the role, so no explicit node.addDependency is needed.
 	const account = new CfnAccount(stack, 'BlocksApiGatewayAccount', {
 		cloudWatchRoleArn: role.roleArn,
 	});
-	account.node.addDependency(role);
 
 	(stack as unknown as Record<symbol, CfnAccount | undefined>)[ACCOUNT_KEY] = account;
 	return account;

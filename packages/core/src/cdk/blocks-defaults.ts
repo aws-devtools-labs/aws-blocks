@@ -85,16 +85,17 @@ export interface BlocksDefaults {
 	/**
 	 * Whether to emit structured JSON access logs from every Blocks-managed API
 	 * Gateway stage to a dedicated CloudWatch log group (retention follows
-	 * {@link logRetention}). Off by default for disposable sandboxes to avoid the
-	 * extra log group and the account-level CloudWatch Logs role requirement; on
-	 * for production so requests are auditable.
+	 * {@link logRetention}).
 	 *
-	 * Enabling this provisions the account-level API Gateway CloudWatch Logs
-	 * role, which is an account/region-level singleton. It is therefore safe for
-	 * **one Blocks stack per region**: a second Blocks stack in the same
-	 * account+region that also enables access logging can, on teardown, leave the
-	 * survivor's access logging broken. See `ensureApiGatewayAccount` for the
-	 * full multi-stack teardown caveat.
+	 * **Off by default in both presets** — opt in with a per-stack override
+	 * (`defaults: { ...BlocksPresets.production, accessLogging: true }`). It is
+	 * off by default (rather than on for production) because enabling it
+	 * provisions the account-level API Gateway CloudWatch Logs role, which is an
+	 * account/region-level singleton: a second Blocks stack in the same
+	 * account+region that also enables access logging can repoint that role on
+	 * deploy or, on teardown, leave the survivor's access logging broken.
+	 * Enabling it is therefore safe for **one Blocks stack per region** — see
+	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 */
 	accessLogging: boolean;
 }
@@ -131,6 +132,10 @@ export const BlocksPresets = {
 		pointInTimeRecovery: true,
 		logRetention: RetentionDays.ONE_YEAR,
 		throttling: { rateLimit: 1000, burstLimit: 2000 },
-		accessLogging: true,
+		// Off by default even in production: enabling access logging mutates the
+		// account/region-level API Gateway CloudWatch role (a singleton). Opt in
+		// per stack once you've confirmed a single Blocks stack owns it in the
+		// region — see the `accessLogging` field doc.
+		accessLogging: false,
 	},
 } satisfies Record<string, BlocksDefaults>;

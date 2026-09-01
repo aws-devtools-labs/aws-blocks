@@ -13,7 +13,7 @@
 import { test, describe } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { Logger } from './index.cdk.js';
 
@@ -82,5 +82,23 @@ describe('Logger CDK retention', () => {
 		new Logger(parent, 'bare'); // must NOT clobber the 14 above
 		const template = Template.fromStack(stack);
 		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 14 });
+	});
+
+	test('two Loggers with conflicting explicit retention: last wins, with a synth warning', () => {
+		const { stack, parent } = setup(BlocksPresets.production);
+		new Logger(parent, 'first', { retention: 14 });
+		new Logger(parent, 'second', { retention: 30 });
+		const template = Template.fromStack(stack);
+		// Last explicit value wins on the shared group.
+		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+		// …but the clobber is surfaced as a synth warning, not silent.
+		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retention'));
+	});
+
+	test('two Loggers with the SAME explicit retention: no conflict warning', () => {
+		const { stack, parent } = setup(BlocksPresets.production);
+		new Logger(parent, 'first', { retention: 30 });
+		new Logger(parent, 'second', { retention: 30 });
+		Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('retention-conflict|overriding'));
 	});
 });

@@ -272,8 +272,11 @@ describe('LambdaCompute stage throttling (defaults.throttling)', () => {
 });
 
 describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
-	test('production enables JSON access logging + the account CloudWatch role', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogProd', BlocksPresets.production);
+	// Access logging is opt-in (off in both presets), so enable it explicitly.
+	const withAccessLogging = { ...BlocksPresets.production, accessLogging: true };
+
+	test('opt-in enables JSON access logging + the account CloudWatch role', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogProd', withAccessLogging);
 		new LambdaCompute(parent, 'extra');
 		const template = Template.fromStack(stack);
 		// The account-level CloudWatch role is provisioned exactly once.
@@ -284,11 +287,21 @@ describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
 	});
 
 	test('the production access-log group is RETAINed (audit trail survives teardown)', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogRetain', BlocksPresets.production);
+		const { stack, parent } = setup('LambdaComputeAccessLogRetain', withAccessLogging);
 		new LambdaCompute(parent, 'extra');
 		// The access-log group follows defaults.removalPolicy (RETAIN in prod).
 		Template.fromStack(stack).hasResource('AWS::Logs::LogGroup', {
 			DeletionPolicy: 'Retain',
+		});
+	});
+
+	test('off by default (production preset) — no stage AccessLogSetting, no account role', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogDefaultOff', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::Account', 0);
+		template.hasResourceProperties('AWS::ApiGateway::Stage', {
+			AccessLogSetting: Match.absent(),
 		});
 	});
 
@@ -300,5 +313,20 @@ describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
 		template.hasResourceProperties('AWS::ApiGateway::Stage', {
 			AccessLogSetting: Match.absent(),
 		});
+	});
+
+	test('two access-logging stages in one stack share a single ApiGateway::Account', () => {
+		// The `ensureApiGatewayAccount` Symbol.for sharing exists so multiple
+		// access-logging stages in one stack (e.g. the default compute + a
+		// bb-realtime WebSocket stage, both calling the same helper) emit exactly
+		// one account-level role rather than colliding. Two computes exercise the
+		// identical shared-account path.
+		const { stack, parent } = setup('LambdaComputeSharedAccount', withAccessLogging);
+		new LambdaCompute(parent, 'a');
+		new LambdaCompute(parent, 'b');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::Account', 1);
+		// Both stages still get access logging.
+		template.resourceCountIs('AWS::ApiGateway::Stage', 2);
 	});
 });

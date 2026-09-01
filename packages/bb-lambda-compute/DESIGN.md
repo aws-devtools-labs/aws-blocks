@@ -46,8 +46,8 @@ supplies the implementation.
   - the root gets a catch-all proxy so all other paths reach the function.
   - **Throttling** — the stage's method throttle comes from `defaults.throttling`
     (sandbox 200/400, production 1000/2000).
-  - **Access logging** — when `defaults.accessLogging` is true (production
-    preset), the stage writes structured JSON access logs to a dedicated
+  - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+    both presets), the stage writes structured JSON access logs to a dedicated
     CloudWatch log group (retention = `defaults.logRetention`, removal policy =
     `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
     sandbox DESTROYs). `cloudWatchRole` is disabled on the `RestApi` so it does

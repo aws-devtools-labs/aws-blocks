@@ -211,8 +211,6 @@ export function materialize(
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(5),
-      // Own the migration Lambda's log group so its retention follows the
-      // stack-wide default instead of AWS's infinite retention.
       logGroup: new LogGroup(scope, `${name}MigrationLogs`, {
         retention: options.logRetention,
         removalPolicy: cdk.RemovalPolicy.DESTROY,

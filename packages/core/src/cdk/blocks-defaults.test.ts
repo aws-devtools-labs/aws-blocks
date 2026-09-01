@@ -26,14 +26,17 @@ describe('BlocksPresets', () => {
 		assert.strictEqual(BlocksPresets.production.pointInTimeRecovery, true);
 	});
 
-	test('sandbox keeps logs briefly and skips access logging', () => {
+	test('sandbox keeps logs briefly', () => {
 		assert.strictEqual(BlocksPresets.sandbox.logRetention, RetentionDays.ONE_WEEK);
-		assert.strictEqual(BlocksPresets.sandbox.accessLogging, false);
 	});
 
-	test('production keeps logs a year and enables access logging', () => {
+	test('production keeps logs a year', () => {
 		assert.strictEqual(BlocksPresets.production.logRetention, RetentionDays.ONE_YEAR);
-		assert.strictEqual(BlocksPresets.production.accessLogging, true);
+	});
+
+	test('access logging is off by default in BOTH presets (opt-in; mutates an account singleton)', () => {
+		assert.strictEqual(BlocksPresets.sandbox.accessLogging, false);
+		assert.strictEqual(BlocksPresets.production.accessLogging, false);
 	});
 
 	test('sandbox caps tighter (200/400) than production (1000/2000)', () => {

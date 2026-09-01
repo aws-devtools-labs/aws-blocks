@@ -100,8 +100,8 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
   **On a WebSocket stage the throttle unit is messages per second across the
   connection** (not HTTP requests): API Gateway meters `$default`-route messages,
   not connects.
-- **Access logging** — when `defaults.accessLogging` is true (production
-  preset), the stage writes structured JSON access logs to a dedicated
+- **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+  both presets), the stage writes structured JSON access logs to a dedicated
   CloudWatch log group (retention = `defaults.logRetention`, removal policy =
   `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
   sandbox DESTROYs). This requires the account-level API Gateway
