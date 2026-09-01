@@ -341,7 +341,7 @@ export function toDeleteObjects(listed: {
 /** Collect a stack's S3 bucket physical names (paginated — a large stack has
  * >100 resources, so a single page can miss the hosting bucket that blocks the
  * delete). Returns [] if the stack is already gone / not accessible. */
-async function listStackBucketNames(cfn: CloudFormationClient, stackName: string): Promise<string[]> {
+export async function listStackBucketNames(cfn: CloudFormationClient, stackName: string): Promise<string[]> {
 	const { ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
 	const buckets: string[] = [];
 	let token: string | undefined;
@@ -358,7 +358,7 @@ async function listStackBucketNames(cfn: CloudFormationClient, stackName: string
 /** Empty a versioned bucket: delete every object version + delete marker in
  * pages of 1000 (the DeleteObjects limit). Stops if a page reports per-key
  * errors (object-lock / retention) so it can't loop forever. */
-async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
+export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
 	const { ListObjectVersionsCommand, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
 	while (true) {
 		const listed = await s3.send(new ListObjectVersionsCommand({ Bucket: bucket, MaxKeys: 1000 }));
@@ -385,6 +385,12 @@ async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
 	try {
 		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
 		const { S3Client } = await import('@aws-sdk/client-s3');
+		// Clients use the ambient region (AWS_REGION / profile). A Lambda@Edge app
+		// synthesizes a second stack pinned to us-east-1; if `cdk ls` surfaced such a
+		// cross-region stack, listStackBucketNames would query the wrong region and
+		// the per-stack error is caught + skipped below. Low impact in practice —
+		// edge-lambda stacks don't own S3 buckets — but noted for a future
+		// per-stack-region follow-up if that changes.
 		const cfn = new CloudFormationClient({});
 		const s3 = new S3Client({});
 		for (const stackName of stackNames) {
@@ -413,13 +419,19 @@ function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): 
 		const out = execFileSync(
 			'npm',
 			['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', `npm exec tsx -- -C cdk ${backendPath}`],
-			{ env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+			// Capture stderr so a genuine synth/`cdk ls` failure can be logged below
+			// rather than being indistinguishable from "app has zero stacks".
+			{ env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
 		);
 		return out
 			.split('\n')
 			.map((s) => s.trim())
 			.filter(Boolean);
-	} catch {
+	} catch (e) {
+		// Warn (don't stay silent): if this returns [] on a real failure, the retry
+		// skips bucket-emptying — the exact silent-no-op this change exists to avoid.
+		const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
+		console.warn(`  ⚠️  could not list sandbox stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
 		return [];
 	}
 }
@@ -461,6 +473,8 @@ export async function destroySandbox(backendPath: string) {
           //     CREATE failed, so the bucket blocks the delete and the stack (with
           //     its IAM roles) leaks. Empty them out-of-band here.
           //  2. VPC ENIs that take 60-120s to detach (the backoff below).
+          // Resolve stack names once and reuse across retries — the app's stack
+          // topology doesn't change between destroy attempts.
           if (stackNames === undefined) stackNames = listSandboxStackNames(backendPath, cdkEnv);
           if (stackNames.length > 0) {
             console.log("\n🧹 Emptying versioned S3 buckets before retry...");
