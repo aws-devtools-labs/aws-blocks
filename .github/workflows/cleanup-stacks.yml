@@ -46,8 +46,12 @@ jobs:
           # Emptying out-of-band lets the subsequent delete-stack succeed.
           empty_stack_buckets() {
             local STACK="$1" B BUCKETS PAYLOAD
-            BUCKETS=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
-              --query "StackResources[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
+            # Use list-stack-resources (paginated), NOT describe-stack-resources —
+            # the latter caps at 100 resources and on a large OpenNext SSR stack omits
+            # the very HostingStorageHostingBucket that blocks the delete, so it never
+            # gets emptied.
+            BUCKETS=$(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket'].PhysicalResourceId" \
               --output text 2>/dev/null || echo "")
             for B in $BUCKETS; do
               [ -z "$B" ] && continue
