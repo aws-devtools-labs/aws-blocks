@@ -47,7 +47,15 @@ jobs:
           fetch-depth: 0
       - id: check
         run: |
-          if git diff --name-only origin/main...HEAD | grep -qE '^(packages|test-apps)/'; then
+          # CI-definition changes count as source changes for the E2E gate.
+          # A PR that only edits this workflow, the composite actions the E2E
+          # jobs `uses:`, or the stale-stack cleanup workflow alters E2E
+          # *behaviour* (e.g. stale-stack reuse vs a fresh CREATE) — so the E2E
+          # matrix must actually run to validate it. Listed explicitly rather
+          # than a blanket `.github/workflows/**` so unrelated workflow edits
+          # (issue triage, publishing, docs bots) don't pay for the full
+          # expensive E2E matrix.
+          if git diff --name-only origin/main...HEAD | grep -qE '^(packages/|test-apps/|\.github/workflows/pr-checks\.yml$|\.github/workflows/cleanup-stacks\.yml$|\.github/actions/)'; then
             echo "source-changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "source-changed=false" >> "$GITHUB_OUTPUT"
