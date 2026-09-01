@@ -7,6 +7,7 @@
 "@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-app-setting": patch
+"@aws-blocks/bb-dashboard": patch
 ---
 
 Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
@@ -29,5 +30,11 @@ Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and
 - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
 - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
 - **Access logging** (production default `true`) requires the account-level API Gateway CloudWatch Logs role. This is provisioned per Blocks stack and is safe for **one Blocks stack per region** — see `ensureApiGatewayAccount()` for the multi-stack teardown caveat.
+
+`bb-dashboard` now points its log widgets at the framework-owned handler log
+group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
+`/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
+CDK-generated name, so the old convention would leave the "Recent Errors" /
+"Log Volume" widgets querying an empty group.
 
 Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.

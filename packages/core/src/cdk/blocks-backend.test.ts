@@ -30,14 +30,19 @@ class StubLambdaCompute extends Compute {
 	readonly fn: lambda.NodejsFunction;
 	readonly apiGateway: apigateway.RestApi;
 	readonly apiUrl: string;
+	readonly logGroup: cdk.aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
 		super(id, { parent: scope });
+		this.logGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		});
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
 			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
 			handler: 'handler',
 			role: this.executionRole,
+			logGroup: this.logGroup,
 			environment: { BLOCKS_STACK_NAME: this.backendStackName },
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },
 		});
