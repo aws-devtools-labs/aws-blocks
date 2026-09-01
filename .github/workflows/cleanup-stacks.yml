@@ -57,7 +57,7 @@ jobs:
               # whole step instead of falling through to the empty-guard below.
               while :; do
                 PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
-                  | jq -c '{Objects: [(.Versions // []) + (.DeleteMarkers // [])] | map({Key, VersionId})}' 2>/dev/null || echo "")
+                  | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // [])) | map({Key, VersionId})}' 2>/dev/null || echo "")
                 [ -z "$PAYLOAD" ] && break
                 [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
                 # delete-objects exits 0 even when individual keys fail (legal hold,
