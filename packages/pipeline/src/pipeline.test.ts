@@ -1703,7 +1703,42 @@ describe('additional validation tests', () => {
         branches: [{ branch: 'main', stages: [{ name: 'prod/v2' }] }],
         stageFactory: minimalStageFactory,
       }),
-      /invalid characters/,
+      /stage name 'prod\/v2' is invalid/,
+    );
+  });
+
+  it('throws fast on an underscore in the stage name (would break the derived CFN stack name)', () => {
+    const app = new App();
+    const stack = new Stack(app, 'UnderscoreStageNameStack');
+
+    // A stage named `qa_east` yields the stack name `qa_east-<id>`, which
+    // CloudFormation rejects — but only minutes into provisioning. This must
+    // fail at synth instead, with a suggested valid name.
+    assert.throws(
+      () => new Pipeline(stack, 'P', {
+        source: { repo: MOCK_REPO, connectionArn: MOCK_CONNECTION_ARN },
+        branches: [{ branch: 'main', stages: [{ name: 'qa_east' }] }],
+        stageFactory: minimalStageFactory,
+      }),
+      (e: unknown) => {
+        const msg = (e as Error).message;
+        assert.match(msg, /stage name 'qa_east' is invalid/);
+        assert.match(msg, /no underscores/);
+        assert.match(msg, /Try 'qa-east'/); // sanitized suggestion
+        return true;
+      },
+    );
+  });
+
+  it('allows a valid hyphenated stage name', () => {
+    const app = new App();
+    const stack = new Stack(app, 'ValidStageNameStack');
+    assert.doesNotThrow(
+      () => new Pipeline(stack, 'P', {
+        source: { repo: MOCK_REPO, connectionArn: MOCK_CONNECTION_ARN },
+        branches: [{ branch: 'main', stages: [{ name: 'qa-east' }] }],
+        stageFactory: minimalStageFactory,
+      }),
     );
   });
 
