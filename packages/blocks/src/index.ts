@@ -159,12 +159,12 @@ export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distrib
 export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions as DTPutOptions, DeleteOptions as DTDeleteOptions, QueryOptions as DTQueryOptions, ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 
 /**
- * **Real-time pub/sub messaging backed by AppSync Events.**
+ * **Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.**
  *
  * Use for pushing data to connected browser clients: chat, notifications,
  * live dashboards, collaborative editing. Typed namespaces with schema
- * validation on publish. Local dev uses WebSocket bridge; production uses
- * AppSync Events API.
+ * validation on publish. Local dev uses a WebSocket bridge; production uses
+ * API Gateway WebSocket with DynamoDB-backed connection tracking.
  *
  * Package: `@aws-blocks/bb-realtime`
  * Full docs: `README.md` in the package directory above.
