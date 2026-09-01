@@ -8,7 +8,8 @@ import {
   HttpLambdaIntegration,
   HttpUrlIntegration,
 } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import { ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Fn } from 'aws-cdk-lib';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
@@ -96,7 +97,7 @@ export class BypassOriginConstruct extends Construct {
       .replace(/\/+$/, '');
 
     const assetFn = new LambdaFunction(this, 'AssetProxy', {
-      runtime: Runtime.NODEJS_22_X,
+      runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
       timeout: Duration.seconds(15),
       memorySize: 256,

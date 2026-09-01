@@ -373,8 +373,8 @@ export type HostingResources = {
   /**
    * The CloudFront distribution serving the site.
    *
-   * Undefined in preview `bypassCdn` mode (served from an S3 static-website
-   * endpoint, no CloudFront).
+   * Undefined in preview `bypassCdn` mode (served from a single HTTP API v2
+   * origin at the domain root, no CloudFront).
    */
   distribution?: Distribution;
 

@@ -56,9 +56,10 @@ export type NextjsAdapterOptions = {
   bypassCdn?: boolean;
   /**
    * D1 (preview `skipIsr`) — generate the OpenNext config with
-   * `dangerous: { disableIncrementalCache, disableTagCache }` so no cache /
-   * revalidation infra is emitted and the server function is built without a
-   * cache dependency.
+   * `dangerous: { disableTagCache: true }` and switch the revalidation queue to
+   * `"dummy"`, so no tag-cache / revalidation infra is emitted. The S3
+   * incremental cache is deliberately kept (so prerendered/SSG pages stay
+   * frozen and serve without regeneration).
    */
   skipIsr?: boolean;
   /**

@@ -379,8 +379,8 @@ export class HostingConstruct extends Construct {
   /**
    * The CloudFront distribution serving the site.
    *
-   * **Undefined in preview `bypassCdn` mode**, where the site is served
-   * directly from an S3 static-website endpoint (no CloudFront). Guard access
+   * **Undefined in preview `bypassCdn` mode**, where the site is served from a
+   * single HTTP API v2 origin at the domain root (no CloudFront). Guard access
    * accordingly.
    */
   readonly distribution?: Distribution;

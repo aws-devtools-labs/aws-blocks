@@ -7,6 +7,7 @@ import { App, Stack } from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import { BypassOriginConstruct } from './bypass_origin.js';
 import type { DeployManifest } from '../manifest/types.js';
 
@@ -57,8 +58,8 @@ describe('BypassOriginConstruct', () => {
   it('creates one HTTP API v2 origin + an asset-proxy Lambda', () => {
     const t = synth(baseManifest({ staticAssets: { directory: '/tmp', immutablePaths: ['assets/*'] } }));
     t.resourceCountIs('AWS::ApiGatewayV2::Api', 1);
-    // asset-proxy Lambda (inline) is always created
-    t.hasResourceProperties('AWS::Lambda::Function', { Runtime: 'nodejs22.x' });
+    // asset-proxy Lambda (inline) is always created, on the shared default runtime
+    t.hasResourceProperties('AWS::Lambda::Function', { Runtime: DEFAULT_NODE_RUNTIME.name });
   });
 
   it('static/SPA site: has a $default route + a Lambda invoke permission (the $default fix)', () => {

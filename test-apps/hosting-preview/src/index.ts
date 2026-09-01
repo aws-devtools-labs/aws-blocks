@@ -139,7 +139,7 @@ async function loadNotes() {
       return;
     }
     hide('notes-empty');
-    list.innerHTML = notesList.map((note: any) => `
+    list.innerHTML = notesList.map((note) => `
       <div class="card note-item" data-testid="note-item" data-note-id="${escapeAttr(note.id)}">
         <div class="note-body">
           <strong>${escapeHtml(note.title)}</strong>

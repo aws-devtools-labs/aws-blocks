@@ -568,10 +568,10 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
 export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
   public readonly bucket: cdk.aws_s3.Bucket;
-  /** The CloudFront distribution. */
   /**
    * The CloudFront distribution. **Undefined in preview `bypassCdn` mode**,
-   * where the site is served directly from an S3 static-website endpoint.
+   * where the site is served from a single HTTP API v2 origin at the domain
+   * root (no CloudFront). Guard access accordingly.
    */
   public readonly distribution?: cdk.aws_cloudfront.Distribution;
   /** The public URL of the deployed site (https://...). */
