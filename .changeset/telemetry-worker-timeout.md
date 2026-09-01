@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/core": patch
 "@aws-blocks/create-blocks-app": patch
+"@aws-blocks/blocks": patch
 ---
 
 fix(telemetry): stop the send worker aborting in-flight events at 500ms
