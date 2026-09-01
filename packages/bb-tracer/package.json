@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-tracer",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -38,8 +38,8 @@
     "test": "node --test --test-concurrency=1 dist/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-logger": "^0.1.4",
-    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/bb-logger": "^0.1.5",
+    "@aws-blocks/core": "^0.3.0",
     "aws-xray-sdk-core": "^3.9.0"
   },
   "devDependencies": {
