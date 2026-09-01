@@ -44,12 +44,24 @@ jobs:
             for B in $BUCKETS; do
               [ -z "$B" ] && continue
               # Delete in pages of 1000 (the delete-objects limit) until empty.
+              # The `|| echo ""` keeps the substitution total: under `set -eo pipefail`
+              # a jq error on empty/null stdin (empty bucket) would otherwise abort the
+              # whole step instead of falling through to the empty-guard below.
               while :; do
                 PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
-                  | jq -c '{Objects: [(.Versions // []) + (.DeleteMarkers // [])] | map({Key, VersionId})}' 2>/dev/null)
+                  | jq -c '{Objects: [(.Versions // []) + (.DeleteMarkers // [])] | map({Key, VersionId})}' 2>/dev/null || echo "")
                 [ -z "$PAYLOAD" ] && break
-                [ "$(echo "$PAYLOAD" | jq '.Objects | length')" = "0" ] && break
-                aws s3api delete-objects --bucket "$B" --delete "$PAYLOAD" >/dev/null 2>&1 || break
+                [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
+                # delete-objects exits 0 even when individual keys fail (legal hold,
+                # retention lock, or keys the role can't delete) and reports them in
+                # `.Errors`. We re-list from the start each pass, so an object that
+                # never disappears would loop forever until the job timeout — break on
+                # any reported Errors (no forward progress), not just a non-zero exit.
+                RESP=$(aws s3api delete-objects --bucket "$B" --delete "$PAYLOAD" --output json 2>/dev/null) || break
+                if echo "$RESP" | jq -e '(.Errors // []) | length > 0' >/dev/null 2>&1; then
+                  echo "⚠️  undeletable objects in $B (legal hold / retention / access denied); skipping"
+                  break
+                fi
               done
             done
           }
@@ -103,12 +115,29 @@ jobs:
             TRIGGERED=$((TRIGGERED + 1))
           done
 
+          # Early-warning: stacks still stuck in DELETE_FAILED (failed on a prior run
+          # and not cleared this run). Best-effort — surfaced as a warning so the
+          # silent backlog growth that exhausted the quota can't recur unnoticed,
+          # without hard-failing this best-effort cleanup job.
+          STILL_FAILED=0
+          for PREFIX in blocks-test- blocks-hosting- bb-test-; do
+            CNT=$(aws cloudformation list-stacks \
+              --stack-status-filter DELETE_FAILED \
+              --query "length(StackSummaries[?starts_with(StackName, '${PREFIX}')])" \
+              --output text 2>/dev/null || echo 0)
+            STILL_FAILED=$((STILL_FAILED + CNT))
+          done
+
           echo ""
           echo "## Stack Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (not e2e / too new): $SKIPPED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$STILL_FAILED" -gt 0 ]; then
+            echo "::warning::$STILL_FAILED e2e stack(s) still in DELETE_FAILED after cleanup"
+          fi
 
       - name: Find and delete stale Amplify sandbox stacks
         if: always()
@@ -169,11 +198,23 @@ jobs:
             TRIGGERED=$((TRIGGERED + 1))
           done
 
+          # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
+          # DELETE_FAILED (commonly the managed DynamoDB table) surfaced as a warning
+          # so the backlog can't grow silently and exhaust the AppSync API quota.
+          STILL_FAILED=$(aws cloudformation list-stacks \
+            --stack-status-filter DELETE_FAILED \
+            --query "length(StackSummaries[?starts_with(StackName, 'amplify-amplifygen2-') || starts_with(StackName, 'amplify-amplifyinteroptest-')])" \
+            --output text 2>/dev/null || echo 0)
+
           echo ""
           echo "## Amplify Sandbox Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$STILL_FAILED" -gt 0 ]; then
+            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
+          fi
 
       - name: Cleanup orphaned CloudFront Response Headers Policies
         if: always()
