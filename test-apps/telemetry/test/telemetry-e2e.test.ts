@@ -85,6 +85,7 @@ interface SpawnResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
+  timedOut: boolean;
 }
 
 /**
@@ -123,14 +124,16 @@ function runCommand(
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
 
+    let timedOut = false;
     const timer = globalThis.setTimeout(() => {
+      timedOut = true;
       try { process.kill(-child.pid!, 'SIGKILL'); } catch {}
     }, timeoutMs);
 
     child.on('close', (code) => {
       clearTimeout(timer);
       // Wait a moment for the detached telemetry subprocess to finish
-      globalThis.setTimeout(() => resolve({ stdout, stderr, exitCode: code }), 5000);
+      globalThis.setTimeout(() => resolve({ stdout, stderr, exitCode: code, timedOut }), 5000);
     });
   });
 }
@@ -474,7 +477,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, timeoutMs: 60_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'create-blocks-app');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -605,10 +608,10 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       // Then destroy it
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 300_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox:destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -629,7 +632,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'FAIL');
@@ -648,7 +651,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         telemetryFile, timeoutMs: 300_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'SUCCESS');
@@ -656,7 +659,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       // Cleanup: destroy the production stack
       await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 120_000,
+        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 300_000,
       });
     });
   });
@@ -674,7 +677,7 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
         env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'FAIL');
@@ -692,10 +695,10 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
 
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile, timeoutMs: 120_000,
+        telemetryFile, timeoutMs: 300_000,
       });
 
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode} timedOut=${result.timedOut}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
