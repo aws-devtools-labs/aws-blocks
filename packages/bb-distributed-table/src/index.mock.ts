@@ -266,7 +266,14 @@ export class DistributedTable<
 			const dir = options.order === 'desc' ? -1 : 1;
 			items.sort((a, b) => {
 				const av = (a as any)[skField], bv = (b as any)[skField];
-				return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
+				const primary = av < bv ? -1 : av > bv ? 1 : 0;
+				// Tie-break on the base-table primary key. On a GSI the sort key need
+				// not be unique, so equal sort-key values must NOT fall back to Map
+				// insertion order (which varies by write order / disk reload) — that's
+				// the mock-vs-DynamoDB divergence. DynamoDB orders index ties by the
+				// base-table key, and the whole index (ties included) reverses under
+				// `order: 'desc'`.
+				return (primary !== 0 ? primary : this.compareByBaseKey(a, b)) * dir;
 			});
 		}
 
@@ -357,6 +364,24 @@ export class DistributedTable<
 				throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
 			}
 		}
+	}
+
+	/**
+	 * Deterministic tie-break for `query` ordering: compare two items by the
+	 * base-table primary key (partition key, then sort key). Used when an index
+	 * sort-key value is shared by multiple items, so results don't depend on Map
+	 * insertion order. Returns a stable -1/0/1.
+	 */
+	private compareByBaseKey(a: T, b: T): number {
+		const pk = this.keyConfig.partitionKey;
+		const ap = (a as any)[pk], bp = (b as any)[pk];
+		if (ap !== bp) return ap < bp ? -1 : 1;
+		const sk = this.keyConfig.sortKey;
+		if (sk) {
+			const as = (a as any)[sk], bs = (b as any)[sk];
+			if (as !== bs) return as < bs ? -1 : 1;
+		}
+		return 0;
 	}
 
 	private serializeKey(key: TableKey<T, K>): string {

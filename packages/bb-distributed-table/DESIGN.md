@@ -81,6 +81,8 @@ orders.query({
 
 The `order` field maps to DynamoDB's `ScanIndexForward` parameter (`'desc'` → `ScanIndexForward: false`). It defaults to `'asc'`.
 
+**Ordering ties (GSI):** a GSI sort key need not be unique, so multiple items can share one sort-key value. DynamoDB orders such ties by the base-table primary key; the mock does the same (tie-break on partition key then sort key), rather than by Map insertion order — otherwise mock results would depend on write order / disk-reload order and diverge from deployed behavior. Under `order: 'desc'` the whole index order, ties included, reverses.
+
 ### D-DT-7: TTL via options field
 
 **Decision:** TTL is configured via `ttl: 'fieldName'` in the constructor options, not as a separate method or decorator.
