@@ -45,16 +45,7 @@ function scheduleError(expr: string): Error {
 export function parseSchedule(expr: string): ParsedSchedule {
 	const rateMatch = expr.match(RATE_RE);
 	if (rateMatch) {
-		const value = parseInt(rateMatch[1], 10);
-		const rawUnit = rateMatch[2].toLowerCase();
-		const unit = rawUnit.replace(/s$/, '');
-		const isPlural = rawUnit.endsWith('s');
-		if (value === 1 && isPlural) throw scheduleError(expr);
-		if (value > 1 && !isPlural) throw scheduleError(expr);
-		const multipliers: Record<string, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000 };
-		const ms = multipliers[unit];
-		if (!ms || value <= 0) throw scheduleError(expr);
-		return { type: 'rate', intervalMs: value * ms };
+		return { type: 'rate', intervalMs: parseRate(rateMatch, expr) };
 	}
 
 	const cronMatch = expr.match(CRON_RE);
@@ -65,14 +56,47 @@ export function parseSchedule(expr: string): ParsedSchedule {
 	throw scheduleError(expr);
 }
 
+/** Validate a `rate(...)` match and return its interval in ms. Throws on a bad unit/value. */
+function parseRate(rateMatch: RegExpMatchArray, expr: string): number {
+	const value = parseInt(rateMatch[1], 10);
+	const rawUnit = rateMatch[2].toLowerCase();
+	const unit = rawUnit.replace(/s$/, '');
+	const isPlural = rawUnit.endsWith('s');
+	if (value === 1 && isPlural) throw scheduleError(expr);
+	if (value > 1 && !isPlural) throw scheduleError(expr);
+	const multipliers: Record<string, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000 };
+	const ms = multipliers[unit];
+	if (!ms || value <= 0) throw scheduleError(expr);
+	return value * ms;
+}
+
 /**
- * Validate a schedule expression, throwing `CronJobErrors.InvalidSchedule` if it
- * is not a valid `rate()`/`cron()` expression. Thin wrapper over
- * {@link parseSchedule} for call sites (e.g. the CDK layer) that only need the
- * validation, not the parsed result.
+ * Validate a schedule expression for the **synth gate** (the CDK layer), throwing
+ * `CronJobErrors.InvalidSchedule` for expressions EventBridge is guaranteed to
+ * reject, without rejecting advanced-but-valid cron the mock parser doesn't model.
+ *
+ * Deliberately **more lenient than {@link parseSchedule}** (which the mock uses to
+ * actually fire locally). Because this gates the deploy, it must not produce
+ * false negatives (see DESIGN.md D-CJ-4):
+ * - `rate(...)`: fully validated (unit ∈ minute/hour/day, plural agreement, value ≥ 1)
+ *   — this is where `rate(10 seconds)` and friends are caught.
+ * - `cron(...)`: only the **6-field shape** is checked; field-level semantics
+ *   (`L`/`W`/`#`, year ranges, named days) are left to EventBridge, since the mock
+ *   models only a subset and gating on it would reject valid schedules.
  */
 export function validateSchedule(expr: string): void {
-	parseSchedule(expr);
+	const rateMatch = expr.match(RATE_RE);
+	if (rateMatch) {
+		parseRate(rateMatch, expr); // throws on an invalid rate; interval unused here
+		return;
+	}
+	const cronMatch = expr.match(CRON_RE);
+	if (cronMatch) {
+		// AWS/EventBridge cron is 6 fields: minute hour day-of-month month day-of-week year.
+		if (cronMatch[1].trim().split(/\s+/).length !== 6) throw scheduleError(expr);
+		return;
+	}
+	throw scheduleError(expr);
 }
 
 /** Throw `CronJobErrors.InvalidTimezone` if `tz` is not a valid IANA timezone. */
