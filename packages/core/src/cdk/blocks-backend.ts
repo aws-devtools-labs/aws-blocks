@@ -12,6 +12,7 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 /**
@@ -290,7 +291,7 @@ export class BlocksBackend extends Construct {
     addBlocksStackMetadata(cdk.Stack.of(backend));
 
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(backend, backend.handler);
+    finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
     return backend;
   }

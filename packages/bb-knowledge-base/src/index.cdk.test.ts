@@ -182,7 +182,11 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
   // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
-  finalizeConfigRegistry(stack, stack.handler);
+  // Grant config read to the handler's role and stamp the coordinates on the
+  // handler — the same target as before the shared-role refactor.
+  finalizeConfigRegistry(stack, stack.handler.role!, [
+    { setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as any,
+  ]);
   const template = Template.fromStack(stack);
 
   const configBlob = JSON.stringify(
