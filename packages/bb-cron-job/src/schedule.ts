@@ -28,11 +28,17 @@ export interface CronFields {
 }
 export type ParsedSchedule = RateSchedule | CronSchedule;
 
-const RATE_RE = /^rate\((\d+)\s+(minutes?|hours?|days?)\)$/i;
+// EventBridge requires lowercase `rate`/`cron`, so both are case-sensitive (no /i).
+const RATE_RE = /^rate\((\d+)\s+(minutes?|hours?|days?)\)$/;
 const CRON_RE = /^cron\((.+)\)$/;
 
 function scheduleError(expr: string): Error {
-	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid cron or rate expression`);
+	// Name the actual constraint. A `rate(`-shaped expression that got here failed the
+	// unit/value rules (e.g. the flagship `rate(10 seconds)`), so point at those.
+	const detail = /^rate\s*\(/.test(expr)
+		? 'a rate must be "rate(<n> minute|minutes|hour|hours|day|days)" with n ≥ 1 (EventBridge’s minimum is 1 minute; seconds are not supported)'
+		: 'expected "rate(<n> minutes|hours|days)" or a 6-field "cron(...)" expression';
+	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid schedule — ${detail}`);
 	err.name = CronJobErrors.InvalidSchedule;
 	return err;
 }
@@ -54,6 +60,47 @@ export function parseSchedule(expr: string): ParsedSchedule {
 	}
 
 	throw scheduleError(expr);
+}
+
+/**
+ * Parse a schedule for the **mock's local firing**, distinguishing "invalid" from
+ * "valid but not simulatable locally". If {@link parseSchedule} can't parse the
+ * expression but the synth gate ({@link validateSchedule}) accepts it, the
+ * expression is a valid EventBridge schedule the mock just can't model (e.g. a
+ * cron with `L`/`W`/`#` or a year field) — surface that as
+ * `CronJobErrors.ScheduleNotSupported`, so local dev doesn't call a deployable
+ * schedule "invalid".
+ */
+export function parseScheduleForMock(expr: string): ParsedSchedule {
+	try {
+		return parseSchedule(expr);
+	} catch (err) {
+		// Reclassify ONLY when the parse failure is due to an advanced cron form the
+		// mock doesn't model (not a genuinely invalid value like minute 100 or an
+		// inverted range — those stay InvalidSchedule).
+		if (!usesUnsupportedCronForm(expr)) throw err;
+		const e = new Error(
+			`${CronJobErrors.ScheduleNotSupported}: "${expr}" is valid for EventBridge and will deploy, ` +
+				'but the local mock cannot simulate it (advanced cron forms like L/W/#, or a year field). ' +
+				'Deploy to a sandbox to exercise it.',
+		);
+		e.name = CronJobErrors.ScheduleNotSupported;
+		throw e;
+	}
+}
+
+/**
+ * True if `expr` is a 6-field cron using a form EventBridge supports but the mock
+ * parser doesn't model: `L`/`W`/`#` in a day field, or an explicit (non-`*`/`?`)
+ * year field. Used to tell "can't simulate locally" apart from "invalid".
+ */
+function usesUnsupportedCronForm(expr: string): boolean {
+	const m = expr.match(CRON_RE);
+	if (!m) return false;
+	const fields = m[1].trim().split(/\s+/);
+	if (fields.length !== 6) return false;
+	const [, , dayOfMonth, , dayOfWeek, year] = fields;
+	return /[LW#]/i.test(dayOfMonth) || /[LW#]/i.test(dayOfWeek) || (year !== '*' && year !== '?');
 }
 
 /** Validate a `rate(...)` match and return its interval in ms. Throws on a bad unit/value. */

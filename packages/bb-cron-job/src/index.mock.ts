@@ -14,7 +14,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
 
-import { parseSchedule, validateTimezone, type CronFields, type RateSchedule, type CronSchedule } from './schedule.js';
+import { parseScheduleForMock, validateTimezone, type CronFields, type RateSchedule, type CronSchedule } from './schedule.js';
 
 /**
  * Scheduled task execution backed by EventBridge Scheduler and Lambda.
@@ -73,7 +73,7 @@ export class CronJob<T = void> extends Scope {
 			validateTimezone(options.timezone);
 		}
 
-		this._schedule = parseSchedule(options.schedule);
+		this._schedule = parseScheduleForMock(options.schedule);
 
 		if (this._enabled) {
 			this._start();

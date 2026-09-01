@@ -77,6 +77,7 @@ Local Mock
 - **Fail fast** — clear mistakes (`rate(10 seconds)`, malformed shape) fail at synth/local dev, not after a 2-minute deploy.
 - **No partial state** — if the mock constructor throws, no timer is started.
 - **No false negatives at the gate** — the CDK synth check is a superset of what EventBridge accepts for cron, so it never blocks a schedule EventBridge would run. (Trade-off: the **mock** still can't *fire* advanced cron forms locally — those work on deploy but not in local dev; see the Mock vs AWS table.)
+- **Local "unsupported" ≠ "invalid"** — when the mock can't model an advanced-but-valid form (`L`/`W`/`#`, year field), it throws `CronJobErrors.ScheduleNotSupported` (not `InvalidSchedule`), so local dev doesn't call a deployable schedule "invalid". Genuinely bad values (e.g. minute `100`, an inverted range, `rate(10 seconds)`) still throw `InvalidSchedule` in both the mock and the gate.
 
 ### D-CJ-5: Shared IAM role across CronJob instances
 

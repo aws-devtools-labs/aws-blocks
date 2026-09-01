@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
 import { CronJobErrors } from './errors.js';
-import { validateSchedule, validateTimezone } from './schedule.js';
+import { parseScheduleForMock, validateSchedule, validateTimezone } from './schedule.js';
 
 describe('validateSchedule (synth-time guard)', () => {
 	// Includes advanced EventBridge cron the mock parser doesn't model (L, W, #, named-day
@@ -29,7 +29,8 @@ describe('validateSchedule (synth-time guard)', () => {
 	// rate(10 seconds) is the card's headline case — EventBridge's minimum is 1 minute.
 	// cron rejections here are structural only (wrong field count / not a rate|cron shape);
 	// field-level semantics are deferred to EventBridge to avoid false negatives.
-	const invalid = ['rate(10 seconds)', 'rate(0 minutes)', 'rate(1 minutes)', 'rate(5 minute)', 'every 5 minutes', 'cron(0 9 * * *)', 'cron(0 9 * * ? * extra)', ''];
+	// 'Rate(...)' / 'Cron(...)' are rejected: EventBridge requires lowercase, so the gate is case-sensitive.
+	const invalid = ['rate(10 seconds)', 'rate(0 minutes)', 'rate(1 minutes)', 'rate(5 minute)', 'every 5 minutes', 'cron(0 9 * * *)', 'cron(0 9 * * ? * extra)', 'Rate(5 minutes)', 'CRON(0 9 * * ? *)', ''];
 	for (const bad of invalid) {
 		test(`rejects invalid "${bad}" with InvalidScheduleExpression`, () => {
 			assert.throws(
@@ -49,5 +50,33 @@ describe('validateTimezone (synth-time guard)', () => {
 			() => validateTimezone('Mars/Phobos'),
 			(e: unknown) => isBlocksError(e, CronJobErrors.InvalidTimezone),
 		);
+	});
+});
+
+describe('parseScheduleForMock (local firing) — distinguishes unsupported from invalid', () => {
+	// Advanced EventBridge cron the gate accepts but the mock parser can't simulate:
+	// surfaces as ScheduleNotSupported, NOT InvalidSchedule.
+	for (const adv of ['cron(0 10 L * ? *)', 'cron(0 10 LW * ? *)']) {
+		test(`"${adv}" → ScheduleNotSupported (not InvalidSchedule)`, () => {
+			assert.throws(
+				() => parseScheduleForMock(adv),
+				(e: unknown) => isBlocksError(e, CronJobErrors.ScheduleNotSupported),
+			);
+		});
+	}
+
+	// Genuinely invalid stays InvalidSchedule (the gate rejects these too).
+	for (const bad of ['rate(10 seconds)', 'cron(0 9 * * *)', 'nonsense']) {
+		test(`"${bad}" → InvalidSchedule`, () => {
+			assert.throws(
+				() => parseScheduleForMock(bad),
+				(e: unknown) => isBlocksError(e, CronJobErrors.InvalidSchedule),
+			);
+		});
+	}
+
+	test('a schedule the mock CAN model parses fine', () => {
+		assert.doesNotThrow(() => parseScheduleForMock('cron(0 9 ? * MON-FRI *)'));
+		assert.doesNotThrow(() => parseScheduleForMock('rate(5 minutes)'));
 	});
 });
