@@ -33,8 +33,15 @@ jobs:
       - name: Find and delete stale e2e stacks
         run: |
           CUTOFF=$(date -d '2 hours ago' +%s)
+          # Wall-clock budget for the inline empty+trigger loop. Emptying large
+          # versioned buckets is synchronous, so cap total work well under the
+          # job's 60-min timeout and defer the rest to the next run — rather than
+          # risk re-introducing the timeout this redesign removed.
+          DEADLINE=$((SECONDS + 2400)) # 40 minutes
           TRIGGERED=0
-          SKIPPED=0
+          TRIGGER_FAILED=0
+          SKIPPED_NOT_E2E=0
+          SKIPPED_TOO_NEW=0
 
           # Empty every S3 bucket in a stack, including all object versions and
           # delete markers. Hosting/test buckets are versioned, so CloudFormation
@@ -61,7 +68,7 @@ jobs:
               # whole step instead of falling through to the empty-guard below.
               while :; do
                 PAYLOAD=$(aws s3api list-object-versions --bucket "$B" --max-items 1000 --output json 2>/dev/null \
-                  | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // [])) | map({Key, VersionId})}' 2>/dev/null || echo "")
+                  | jq -c '{Objects: ((.Versions // []) + (.DeleteMarkers // []) | map({Key, VersionId}))}' 2>/dev/null || echo "")
                 [ -z "$PAYLOAD" ] && break
                 [ "$(echo "$PAYLOAD" | jq '.Objects | length' 2>/dev/null || echo 0)" = "0" ] && break
                 # delete-objects exits 0 even when individual keys fail (legal hold,
@@ -89,13 +96,20 @@ jobs:
           done
 
           for STACK in $STACKS; do
+            # Stop if we've spent the time budget; remaining stacks are picked up
+            # on the next scheduled run.
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              echo "⏱️  Time budget reached; deferring remaining stacks to the next run"
+              break
+            fi
+
             # Verify this is an e2e-test stack
             PURPOSE=$(aws cloudformation describe-stacks --stack-name "$STACK" \
               --query "Stacks[0].Tags[?Key=='blocks:purpose'].Value | [0]" --output text 2>/dev/null || echo "")
 
             if [[ "$PURPOSE" != e2e-* ]]; then
               echo "⏭️  Skipping $STACK (not tagged blocks:purpose=e2e-*)"
-              SKIPPED=$((SKIPPED + 1))
+              SKIPPED_NOT_E2E=$((SKIPPED_NOT_E2E + 1))
               continue
             fi
 
@@ -109,22 +123,27 @@ jobs:
               CREATED_TS=$(date -d "$CREATION_TIME" +%s 2>/dev/null || echo "0")
               if [ "$CREATED_TS" -gt "$CUTOFF" ]; then
                 echo "⏭️  Skipping $STACK (created $CREATION_TIME, less than 2 hours old)"
-                SKIPPED=$((SKIPPED + 1))
+                SKIPPED_TOO_NEW=$((SKIPPED_TOO_NEW + 1))
                 continue
               fi
             fi
 
-            # Empty versioned buckets first so the delete can complete, then trigger
-            # the delete WITHOUT waiting. CloudFront-backed hosting stacks take
-            # 15-20 min each to delete; waiting serially blew past this job's 60-min
-            # timeout, so it was cancelled every run and never drained the backlog.
-            # Fire-and-forget lets CloudFormation delete asynchronously; a stack that
-            # doesn't finish is retried on the next scheduled run.
+            # Empty the versioned buckets (see empty_stack_buckets above for why),
+            # then trigger the delete WITHOUT waiting. Fire-and-forget lets
+            # CloudFormation delete asynchronously — CloudFront-backed hosting stacks
+            # take 15-20 min each, and waiting serially is what blew past the 60-min
+            # timeout; anything that doesn't finish is retried on the next run.
+            # Count only deletes we actually triggered, so the summary is a trigger
+            # count, not an attempt count.
             echo "🧹 Emptying buckets for $STACK"
             empty_stack_buckets "$STACK"
-            echo "🗑️  Delete triggered: $STACK (created $CREATION_TIME)"
-            aws cloudformation delete-stack --stack-name "$STACK" || echo "⚠️  delete-stack call failed for $STACK (will retry next run)"
-            TRIGGERED=$((TRIGGERED + 1))
+            if aws cloudformation delete-stack --stack-name "$STACK"; then
+              echo "🗑️  Delete triggered: $STACK (created $CREATION_TIME)"
+              TRIGGERED=$((TRIGGERED + 1))
+            else
+              echo "⚠️  delete-stack call failed for $STACK (will retry next run)"
+              TRIGGER_FAILED=$((TRIGGER_FAILED + 1))
+            fi
           done
 
           # Early-warning: stacks still stuck in DELETE_FAILED (failed on a prior run
@@ -143,7 +162,9 @@ jobs:
           echo ""
           echo "## Stack Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- Skipped (not e2e / too new): $SKIPPED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (not e2e): $SKIPPED_NOT_E2E" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Skipped (< 2h old): $SKIPPED_TOO_NEW" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -160,6 +181,7 @@ jobs:
           # (each holds an AppSync GraphQL API and exhausts the per-region quota).
           CUTOFF=$(date -d '2 hours ago' +%s)
           TRIGGERED=0
+          TRIGGER_FAILED=0
 
           # Root sandbox stacks only: end in "-sandbox-<hex>" (skip nested -blocksCD/-data/-auth/-amplifyData stacks).
           # The middle identifier segment is matched loosely ([a-z0-9]+) so a future change to
@@ -205,9 +227,13 @@ jobs:
             # table), leaking the very quota this job exists to free. A persistent
             # failure here is usually the Amplify managed DynamoDB table (its
             # table-manager Lambda role lacks dynamodb:DescribeTable) — a real upstream bug.
-            echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
-            aws cloudformation delete-stack --stack-name "$STACK" || true
-            TRIGGERED=$((TRIGGERED + 1))
+            if aws cloudformation delete-stack --stack-name "$STACK"; then
+              echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
+              TRIGGERED=$((TRIGGERED + 1))
+            else
+              echo "⚠️  delete-stack call failed for $STACK (will retry next run)"
+              TRIGGER_FAILED=$((TRIGGER_FAILED + 1))
+            fi
           done
 
           # Early-warning tally (see the e2e step) — Amplify sandboxes still stuck in
@@ -221,6 +247,7 @@ jobs:
           echo ""
           echo "## Amplify Sandbox Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
