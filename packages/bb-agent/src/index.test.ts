@@ -543,6 +543,34 @@ describe('CannedProvider', () => {
 
 // ── runaway protection caps ──────────────────────────────────────────────────
 
+/** Run one turn, auto-approving every interrupt, until a terminal chunk arrives. */
+async function runAutoApproving(agent: any, message: string, conversationId: string, userId: string, maxResumes = 5) {
+	const chunks: any[] = [];
+	const result = await agent.stream(message, { conversationId, userId });
+	const channel = await result.channel;
+	const sub = channel.subscribe((chunk: any) => { chunks.push(chunk); });
+
+	const waitFor = async (predicate: () => any) => {
+		for (let i = 0; i < 200; i++) {
+			const hit = predicate();
+			if (hit) return hit;
+			await new Promise(r => setTimeout(r, 25));
+		}
+		return undefined;
+	};
+
+	let resumes = 0;
+	let terminal = await waitFor(() => chunks.find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt'));
+	while (terminal?.type === 'interrupt' && resumes < maxResumes) {
+		resumes++;
+		const seen = chunks.length;
+		await agent.resume(result.channelId, terminal.interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), { conversationId, userId });
+		terminal = await waitFor(() => chunks.slice(seen).find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt'));
+	}
+	sub.unsubscribe();
+	return { chunks, terminal, resumes };
+}
+
 describe('runaway protection caps', () => {
 	test('maxLlmCalls stops a turn that keeps calling the model', async () => {
 		// A tool prompt drives two model calls (initial call → tool → follow-up call).
@@ -661,6 +689,87 @@ describe('runaway protection caps', () => {
 		assert.strictEqual(toolResults.length, toolCalls.length, 'every persisted tool-call needs a matching tool-result');
 		const stopRecord = history.find(m => m.role === 'assistant' && /maxToolIterations/.test(JSON.stringify(m.metadata ?? '')));
 		assert.ok(stopRecord, 'history should record why the turn stopped');
+	});
+
+	test('maxLlmCalls keeps counting after resume() — the pre-resume call still counts', async () => {
+		// Segment 1 spends one model call (it emits the toolUse, then needsApproval
+		// interrupts). The resumed segment spends one more (the post-tool follow-up), so
+		// the turn total is 2. With maxLlmCalls: 1 a per-turn count must trip on that
+		// follow-up; with per-segment counters the resumed segment restarts at 0, the
+		// follow-up is call #1, and the turn completes — so this discriminates the two.
+		const scope = new Scope('test-cap-resume-llm');
+		const agent = new Agent(scope, 'caprl', {
+			systemPrompt: 'test',
+			maxLlmCalls: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { terminal, resumes, chunks } = await runAutoApproving(agent, 'what is the weather?', convId, 'test-user');
+
+		assert.strictEqual(resumes, 1, 'the tool should have interrupted once for approval');
+		assert.ok(terminal, 'the turn should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'error', `expected the cap to trip after resume, got ${terminal.type}`);
+		assert.match(terminal.error, /maxLlmCalls/, 'the error should name the cap that tripped');
+
+		// History must stay paired and explain itself.
+		const history = await agent.getConversation(convId);
+		const resumeToolCalls = history.filter(m => m.role === 'tool-call');
+		const resumeToolResults = history.filter(m => m.role === 'tool-result');
+		assert.strictEqual(resumeToolResults.length, resumeToolCalls.length, 'every tool-call needs a matching tool-result');
+		assert.ok(history.some(m => m.role === 'assistant' && /maxLlmCalls/.test(JSON.stringify(m.metadata ?? ''))), 'history should record why the turn stopped');
+		assert.ok(chunks.some((c: any) => c.type === 'tool-call'), 'sanity: a tool call happened');
+	});
+
+	test('an approved tool call is charged once, not twice, across resume()', async () => {
+		// The same toolUseId re-emits BeforeToolCallEvent when the turn resumes. With
+		// maxToolIterations: 1 a double charge would trip the cap on a single approved
+		// call; deduping by toolUseId must let the turn finish.
+		const scope = new Scope('test-cap-resume-dedupe');
+		const agent = new Agent(scope, 'caprd', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { terminal, resumes } = await runAutoApproving(agent, 'what is the weather?', convId, 'test-user');
+
+		assert.strictEqual(resumes, 1, 'the tool should have interrupted once for approval');
+		assert.ok(terminal, 'the turn should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'done', `a single approved tool call must not trip maxToolIterations: 1, got ${terminal.type}: ${terminal.error ?? ''}`);
+	});
+
+	test('a second message on the same conversation gets a fresh budget', async () => {
+		// The counters live in the session-persisted appState, so a new message must
+		// start a fresh budget. Each tool turn spends 2 model calls, so with
+		// maxLlmCalls: 2 both turns must complete on their own budget; if the counts
+		// leak across turns (the session snapshot restoring the previous turn's count
+		// over an eager reset) turn 2 trips immediately.
+		const scope = new Scope('test-cap-turns');
+		const agent = new Agent(scope, 'capturns', {
+			systemPrompt: 'test',
+			maxLlmCalls: 2,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+
+		const first = await (await agent.stream('what is the weather?', { conversationId: convId, userId: 'test-user' })).complete();
+		assert.strictEqual(first.type, 'done', 'turn 1 should complete');
+
+		const second = await agent.stream('what is the weather?', { conversationId: convId, userId: 'test-user' });
+		const chunks: any[] = [];
+		const ch = await second.channel;
+		const sub = ch.subscribe((c: any) => { chunks.push(c); });
+		let terminal: any;
+		for (let i = 0; i < 200 && !terminal; i++) {
+			terminal = chunks.find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt');
+			if (!terminal) await new Promise(r => setTimeout(r, 25));
+		}
+		sub.unsubscribe();
+		assert.ok(terminal, 'turn 2 should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'done', `turn 2 must get a fresh budget, got ${terminal.type}: ${terminal.error ?? ''}`);
 	});
 });
 
