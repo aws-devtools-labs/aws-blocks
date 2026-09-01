@@ -27,8 +27,24 @@ export interface AppSettingOptions<T = string> {
 	value?: T;
 	/** Runtime validation schema. Accepts any StandardSchemaV1 implementation (Zod, Valibot, ArkType). When provided, T is inferred from the schema. */
 	schema?: StandardSchemaV1<T>;
-	/** When true, creates an SSM SecureString parameter encrypted with the default aws/ssm KMS key. */
+	/** When true, creates an SSM SecureString parameter. Encrypted with the default `aws/ssm` KMS key unless `kmsKeyArn` is set. */
 	secret?: boolean;
+	/**
+	 * ARN of a **customer-managed KMS key** used to encrypt this secret's
+	 * SecureString value. When omitted, SSM uses the default `aws/ssm`
+	 * AWS-managed key. Use a CMK when you need to control the decrypt/grant scope
+	 * (e.g. cross-account access, key rotation, or a dedicated key policy).
+	 *
+	 * Only valid together with `secret: true`. The CDK layer grants the shared
+	 * handler `kms:Decrypt` (plus `kms:Encrypt` for stack-managed secrets it
+	 * writes) on this key, and the runtime `put()` passes the key so an overwrite
+	 * does not silently fall back to the default key. Changing this on an existing
+	 * secret re-encrypts its current value under the new key at deploy time.
+	 *
+	 * @example
+	 * new AppSetting(scope, 'apiKey', { secret: true, kmsKeyArn: myKey.keyArn });
+	 */
+	kmsKeyArn?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
