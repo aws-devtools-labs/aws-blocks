@@ -133,7 +133,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 	/**
 	 * @param scope - Blocks scope parent (determines resource naming and CDK discovery)
-	 * @param id - unique agent ID (used in resource names, keep short for AppSync namespace limits)
+	 * @param id - unique agent ID (used in resource names; keep it short for AWS resource naming limits)
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)
 	 * @param createSnapshotStorage - factory that receives the internal FileBucket and returns the appropriate SnapshotStorage
