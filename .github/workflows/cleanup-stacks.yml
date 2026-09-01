@@ -2,12 +2,20 @@ name: Cleanup Stale E2E Stacks
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Every 4 hours
+    - cron: '0 */2 * * *' # Every 2 hours
   workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
+
+# Never let two cleanup runs overlap (a slow drain + the next scheduled tick
+# would double-trigger deletes and race on the same buckets). Let the in-flight
+# run finish rather than cancelling it — cancellation is what made the old runs
+# show up as "cancelled" and never complete.
+concurrency:
+  group: cleanup-stale-stacks
+  cancel-in-progress: false
 
 jobs:
   cleanup:
