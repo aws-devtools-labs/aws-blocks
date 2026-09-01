@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, mock } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert';
 import type { CloudFormationCustomResourceDeleteEvent } from 'aws-lambda';
 import { isRetryableMigrationError, withRetry } from './migration-lambda.js';
@@ -64,6 +64,39 @@ test('writer-not-ready error is retryable', async () => {
 test('a genuine SQL error is not retryable', async () => {
   const e = await errorFromEngine('DatabaseErrorException', 'ERROR: syntax error at or near "CREAT"; SQLState: 42601');
   assert.strictEqual(isRetryableMigrationError(e), false);
+});
+
+test('a transient connection failure is retryable', async () => {
+  // SQLState 08xxx -> ConnectionFailed. Deliberately in scope: a connection
+  // failure mid-deploy is what the backoff exists for. The trade is that a
+  // genuinely unreachable database takes ~2 minutes to fail the deploy instead
+  // of failing immediately.
+  const e = await errorFromEngine('DatabaseErrorException', 'ERROR: connection failure; SQLState: 08006');
+  assert.strictEqual(isRetryableMigrationError(e), true);
+});
+
+test('raw SDK error names are retryable without the engine', async () => {
+  // Defense for a caller that does not route through DataApiEngine, which
+  // rewrites error.name. Nothing does today; this documents the intent.
+  const resuming = Object.assign(new Error(RESUMING_MESSAGE), { name: 'DatabaseResumingException' });
+  const badRequest = Object.assign(new Error('Bad request'), { name: 'BadRequestException' });
+  assert.strictEqual(isRetryableMigrationError(resuming), true);
+  assert.strictEqual(isRetryableMigrationError(badRequest), true);
+});
+
+test('a non-retryable error fails immediately without retrying', async () => {
+  const e = await errorFromEngine('DatabaseErrorException', 'ERROR: syntax error at or near "CREAT"; SQLState: 42601');
+  let attempts = 0;
+  await assert.rejects(
+    () => withRetry(async () => {
+      attempts++;
+      throw e;
+    }),
+    // Identity, not just the name: the original error has to reach the caller
+    // unwrapped so CloudFormation surfaces the real SQL error.
+    (err: unknown) => err === e,
+  );
+  assert.strictEqual(attempts, 1);
 });
 
 test('withRetry retries an auto-pause resume error until the cluster is awake', async () => {
