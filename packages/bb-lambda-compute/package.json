@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-lambda-compute",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -38,7 +38,7 @@
     "test": "node --test dist/index.cdk.test.js dist/compute-resolution.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.2.0"
+    "@aws-blocks/core": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

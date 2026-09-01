@@ -581,10 +581,24 @@ function validateBakeTime<TConfig>(stageConfig: PipelineStageConfig<TConfig>): v
 }
 
 function validateStageName<TConfig>(stageConfig: PipelineStageConfig<TConfig>): void {
-  if (!/^[a-zA-Z0-9_-]+$/.test(stageConfig.name)) {
+  const name = stageConfig.name;
+  // The stage name becomes a prefix of the derived CloudFormation stack name
+  // (`<stageName>-<stackId>`), which CloudFormation requires to match
+  // /^[A-Za-z][A-Za-z0-9-]*$/. A name with an underscore — or a leading digit —
+  // passes a looser check but makes CloudFormation reject the stack name only
+  // after minutes of provisioning. Enforce the stack-name contract here so it
+  // fails fast at synth with an actionable message.
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(name)) {
+    const suggestion =
+      name
+        .replace(/[^A-Za-z0-9-]+/g, '-')
+        .replace(/^[^A-Za-z]+/, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'stage';
     throw new Error(
-      `Pipeline: stage name '${stageConfig.name}' contains invalid characters. ` +
-        'Use only letters, numbers, hyphens, and underscores.',
+      `Pipeline: stage name '${name}' is invalid — it becomes part of the CloudFormation ` +
+      'stack name, which must start with a letter and contain only letters, numbers, and ' +
+      `hyphens (no underscores). Try '${suggestion}'.`,
     );
   }
 }
