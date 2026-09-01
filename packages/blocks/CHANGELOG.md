@@ -1,5 +1,220 @@
 # @aws-blocks/blocks
 
+## 0.4.0
+
+### Minor Changes
+
+- 08ab129: Add `pointInTimeRecovery: boolean | { retentionDays: number }` to `BlocksDefaults` (and to `BlocksPresets`: `true` in `production`, `false` in `sandbox`).
+  
+  This extends the stack-wide infrastructure-defaults posture with the continuous-backup knob, so a Building Block whose service supports it (DynamoDB Point-in-Time Recovery) can resolve its default from `scope.defaults.pointInTimeRecovery` — read independently, the same way as `removalPolicy` and `deletionProtection`. `true` enables backups with the service default window, `false` disables them, and `{ retentionDays: n }` pins the window (the block validates `n` against its service's range) — on/off and window are one field since a window only means anything when backups are on. Blocks whose service has no equivalent simply ignore it. `bb-distributed-table` is the first consumer.
+  
+  > The property **name** (`pointInTimeRecovery`) and its `{ retentionDays }` shape are a public `@aws-blocks/core/cdk` surface addition and want API-BR sign-off before release.
+
+### Patch Changes
+
+- 1ff9d03: `AppSetting`: support a customer-managed KMS key for secrets via `kmsKeyArn`.
+  
+  Secret (`SecureString`) parameters were always encrypted with the default `aws/ssm` AWS-managed key, so their decrypt scope couldn't be controlled (e.g. for cross-account access or a dedicated key policy). Passing `kmsKeyArn` (also accepted by `AppSetting.fromExisting`) now encrypts the secret with that customer-managed key:
+  
+  - the bulk-init Custom Resource creates the parameter with the CMK (`KeyId`);
+  - the shared handler is granted `kms:Decrypt`/`Encrypt` scoped to that specific key ARN (instead of the `aws/ssm` `ViaService` wildcard);
+  - the runtime `put()` re-specifies the key on overwrite so it doesn't silently fall back to `aws/ssm`;
+  - adding/changing/removing `kmsKeyArn` on an already-deployed secret re-encrypts its current value under the new key at deploy time, so decryption keeps working after a key rotation.
+  
+  `kmsKeyArn` is only valid with `secret: true` and must be a non-empty ARN. The default (no `kmsKeyArn`) is unchanged.
+- 5798492: feat(bb-async-job): batch SQS messages by default, with a configurable batching window
+  
+  `AsyncJob` triggered its Lambda with `batchSize: 1`, so every queued job cost a
+  full invocation. The default is now `batchSize: 10` with a new
+  `maxBatchingWindowSeconds` option (0–300, default 5) that trades latency for
+  fuller batches. SQS partial batch failure reporting is always enabled, so only
+  the failed records of a batch are redelivered.
+  
+  Both options are now range-checked in the `AsyncJob` constructor, so an
+  out-of-range value fails fast at synth time with `InvalidOptionException` naming
+  the option instead of surfacing as an opaque CloudFormation error mid-deploy:
+  `batchSize` must be 1–10 without a batching window (1–10000 with one), and
+  `maxBatchingWindowSeconds` must be 0–300.
+  
+  Retry semantics are unchanged. SQS tracks `ApproximateReceiveCount` per message
+  and partial batch responses redeliver only failed records, so `maxRetries` still
+  means "attempts for this message" and the DLQ `maxReceiveCount` keeps its
+  meaning at any batch size.
+  
+  This is a `patch` bump. Every package here is pre-1.0, where a `minor` bump is
+  this repo's signal for a breaking change; this change is not breaking — the new
+  default is a behavior change with an opt-out (`batchSize: 1` /
+  `maxBatchingWindowSeconds: 0`), and both options are new and optional. The
+  umbrella `@aws-blocks/blocks` gets the same bump because it re-exports
+  `AsyncJob` and `AsyncJobOptions`.
+  
+  `@aws-blocks/core/cdk` now exports `SHARED_HANDLER_TIMEOUT_SECONDS`, the shared
+  handler Lambda's timeout, so resources that must size their own timeouts against
+  it stop re-hardcoding `900`.
+  
+  The main queue's visibility timeout is now `SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds`
+  seconds instead of a flat `900`. A message becomes invisible when the poller
+  receives it, before the batching window elapses and before the handler runs, so
+  a flat 900s let SQS redeliver a message whose invocation was still running.
+  
+  `bb-agent` opts out of the new defaults with `batchSize: 1` and
+  `maxBatchingWindowSeconds: 0`. It submits an internal job per interactive agent
+  turn (plus a second on HITL resume) and the caller is blocked on that job
+  starting, so a batching window would add up to 5s of latency to a human-facing
+  path; `batchSize: 1` also keeps one failing turn from sharing a batch with
+  others, which matters because the handler is not idempotent. Both the runtime
+  and CDK construction sites set the same options so they synthesize an identical
+  event source mapping.
+- ca8cfb6: feat(bb-async-job): submitBatch auto-chunks batches larger than SQS limits
+  
+  `submitBatch` previously rejected any batch over 10 payloads with
+  `BatchTooLarge`, so a caller with more than 10 jobs had to reimplement SQS's
+  chunking rules by hand. It now accepts up to 10,000 payloads and packs them
+  into `SendMessageBatch` requests bounded by both SQS per-request limits — at
+  most 10 entries and at most 256 KB of aggregate message body — sent with
+  bounded concurrency (at most 5 requests in flight) rather than one long serial
+  loop. Each batch entry's `Id` is the payload's original index, so the returned
+  `jobIds` stay in input order and every id is the same SQS `MessageId` that
+  `getStatus()` / `waitUntilComplete()` look up. `BatchTooLarge` is now thrown
+  only when a batch exceeds the 10,000-payload soft cap — a guardrail against a
+  single call fanning out to an unbounded number of SQS requests.
+  
+  A batch spanning multiple chunks is **not atomic**: an earlier chunk can land
+  before a later one fails. The all-or-nothing signal is unchanged — a partial
+  failure still throws `BatchSubmitFailed` — but the thrown error (now a typed
+  `BatchSubmitFailedError`) reflects the partial reality across all chunks:
+  `.jobIds` carries the real `MessageId` for every entry that made it onto the
+  queue (with `null` at each failed index) and `.failed[]` lists every failure
+  sorted by index, so a caller can retry only the failed indexes instead of
+  re-submitting the whole batch. Two failure kinds feed `.failed[]`: an
+  entry-level rejection is scoped to its index, while a transport-level `send()`
+  rejection (throttling, connection, auth) fails that whole chunk and
+  short-circuits the chunks not yet started (`code: 'BatchSubmitAborted'`) instead
+  of hammering an unhealthy endpoint. An entry SQS returns in neither list becomes
+  a `MissingResult` failure so a `null` id never escapes as a success.
+  
+  On full success the `trackStatus` write is now best-effort — a failure recording
+  `queued` (e.g. DynamoDB throttling on a large fan-out) is logged rather than
+  thrown, since the handler backfills the record anyway; otherwise a bookkeeping
+  error would make a caller re-submit an already-enqueued batch. `recordQueuedBatch`
+  also issues its conditional writes in groups of 25 (mirroring `BatchWriteItem`)
+  rather than one unbounded `Promise.all`.
+  
+  The mock runtime submits one message at a time and never partially fails, so the
+  transport/abort paths are AWS-only; it enforces the same soft cap and validates
+  every payload before enqueuing any, matching the AWS runtime.
+  
+  This is a `patch` bump: pre-1.0, this repo uses `minor` to signal a breaking
+  change, and this is not breaking — a batch of ≤10 behaves exactly as before, no
+  public type changed (`BatchSubmitFailedError` is additive), and the previous
+  `BatchTooLarge` threshold simply moved from 10 to 10,000. `@aws-blocks/blocks`
+  gets the same bump because it re-exports `AsyncJob`.
+- f00adb0: feat(core): resolve `Scope.compute`; the default compute owns the handler + gateway
+  
+  Add a `Scope.compute` getter that resolves the compute a block runs on: the
+  nearest `_compute` assigned on the block or an ancestor scope, else the owning
+  stack/backend's default compute.
+  
+  The default is a `LambdaCompute` that now **owns** the Lambda function + API
+  Gateway. `setupBlocksInfra` no longer creates them; `BlocksStack` /
+  `BlocksBackend` expose `handler` / `gateway` / `apiUrl` as getters that delegate
+  to the default compute. The compute is created in `create()` before the backend
+  module is imported, so a block reading `this.compute` in its constructor
+  resolves to it. `_compute` is internal (no public option yet).
+  
+  Core no longer imports a concrete compute: `create()` requires a
+  `defaultComputeFactory` on its props (`CoreBlocksStackProps` /
+  `CoreBlocksBackendProps` — the public `BlocksStackProps` / `BlocksBackendProps`
+  plus that factory) and calls it to build the default. The umbrella
+  `@aws-blocks/blocks` supplies `LambdaCompute` by spreading the factory onto the
+  props in a thin `create()` wrapper, so apps built on `@aws-blocks/blocks` are
+  unaffected — their call site is unchanged.
+  
+  **Breaking (direct `@aws-blocks/core` consumers only):** core no longer provides
+  a built-in default compute. `BlocksStack.create()` / `BlocksBackend.create()`
+  now require a `defaultComputeFactory` field on the props (typed
+  `CoreBlocksStackProps` / `CoreBlocksBackendProps`); props without it no longer
+  type-check (and it throws at synth if forced). This break is inherent to moving
+  the Lambda + API Gateway out of core — it is not specific to how the factory is
+  passed. Migrate by either:
+  
+  - using `@aws-blocks/blocks` (`import { BlocksStack } from '@aws-blocks/blocks/cdk'`),
+    which injects a Lambda default for you — the recommended path; or
+  - supplying your own factory on the props:
+    `BlocksStack.create(scope, id, { ...props, defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute') })`,
+    which requires depending on `@aws-blocks/bb-lambda-compute` and the internal
+    `@aws-blocks/core/cdk/internal` types.
+  
+  **Resource replacement on redeploy:** because the Lambda function and API
+  Gateway now live under the default compute's construct path
+  (`.../DefaultCompute/...`), their CloudFormation logical IDs change, so a
+  redeploy **replaces** the function + API Gateway and the API URL changes. These
+  are internal resources, not a customer-facing contract. Any consumer with an
+  already-deployed stack — in particular an Amplify Gen2 frontend wired to the
+  current API Gateway URL (this repo carries a Gen2 nested-stack regression test,
+  so Gen2 integration is real) — should confirm they can absorb a URL change
+  before upgrading.
+- de4f209: `KnowledgeBase.retrieve`: validate `maxResults` consistently across the mock and AWS runtimes.
+  
+  `maxResults` was normalized with `Math.min(Math.max(v ?? 10, 1), 100)`, which silently passed fractional and non-finite values (`1.5`, `NaN`, `Infinity`) straight through — the mock and the AWS `RetrieveCommand` then diverged, and Bedrock rejects a non-integer `numberOfResults`. A new shared `normalizeMaxResults` helper (used by both runtimes) keeps the documented clamp for finite integers and now rejects fractional/non-finite values up front with `KnowledgeBaseErrors.ValidationError`, before any search or Bedrock request.
+  
+  Fixes #430.
+- f00adb0: `LambdaCompute`: default the function to **arm64 (AWS Graviton)**.
+  
+  The compute's Lambda now defaults to `Architecture.ARM_64` instead of CDK's `x86_64` default. arm64 Lambda is ~20% cheaper per GB-second than x86_64 at equivalent performance. Because `LambdaCompute` is the default compute for every `@aws-blocks/blocks` app, the shared handler runs on Graviton out of the box.
+  
+  The framework's own Building Blocks are pure-JavaScript esbuild bundles with no architecture-specific native code, so the switch is transparent for them. A backend `entry` bundle is the customer's own handler plus whatever they import, though — so an app that bundles an **x86-only native dependency** into its backend should be aware of the default. There is no per-app override yet; a customer-facing way to pin the architecture (`architecture` on `LambdaComputeProps` is present but internal for now) will be exposed alongside the public compute-configuration surface.
+  
+  > **Behavior change on next deploy:** the handler function's architecture is `arm64` (an in-place update on an existing function).
+- 27346f3: Make AuthOIDC `requireAuth()` throw `ApiError(401, NotAuthenticatedException)` so the documented `handle401()` 401-redirect pattern works for a signed-out protected call.
+  
+  Previously `requireAuth()` threw a bare `Error` with no `status`. Over the JSON-RPC boundary `errorResponseFromCatch` serializes a non-`ApiError` as code `500`, so the client received an `ApiError` with `status === 500`. The README's `if (handle401(e, provider)) return;` helper only acts on `err instanceof ApiError && err.status === 401`, so it never matched and the app never redirected to sign-in — the error just surfaced. This aligns AuthOIDC with AuthCognito, whose `requireAuth()` already throws `ApiError(401, …)`. The error name is preserved, so existing `isBlocksError(e, AuthOIDCErrors.NotAuthenticated)` checks are unaffected.
+- 5bfae0a: Reject oversized JSON-RPC request bodies at the shared parser. `parseRpcRequest` now caps the body at 10 MiB (`MAX_RPC_BODY_BYTES`, the same limit API Gateway enforces in production) and returns a `413` error named `PayloadTooLarge` before parsing or dispatch. In production API Gateway rejects an oversized body at the edge before the Lambda runs; enforcing the same limit at the parser means the local dev server rejects the same body instead of buffering it and wedging the local database (e.g. PGlite). Because both the Lambda handler and the dev server route through this one parser, the cap lives in a single place, and `decodeRpcResponse` surfaces it client-side as `ApiError.status === 413`.
+- 0ac3879: `sandbox` / `deploy`: fail fast with an actionable message when AWS credentials are missing or expired.
+  
+  Both commands previously spent ~10 seconds synthesizing the CDK app before the first AWS call, so an unconfigured or expired credential surfaced only afterwards — as an opaque CDK/CloudFormation error that didn't name the real cause. `startSandbox` and `deploy` now run a bounded STS `GetCallerIdentity` check up front and, on a real credential error (missing/expired/invalid), exit immediately with guidance (`aws configure` / `aws sso login`, `AWS_PROFILE`, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) instead of wasting the synth.
+  
+  The check is deliberately conservative: it only blocks on a genuine credential error (surfacing the SDK error *name*, never the raw message, which can embed an ARN/account id); a network or service error warns and lets the deploy proceed; and it skips (with a warning) when no region is set in `AWS_REGION` / `AWS_DEFAULT_REGION`, rather than guessing a region in the wrong partition (GovCloud/China). The scaffolded `sandbox` template entrypoint now `.catch`es and exits cleanly, matching `deploy`, so the guidance prints without an unhandled-rejection stack trace.
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [ca8cfb6]
+- Updated dependencies [08ab129]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [de4f209]
+- Updated dependencies [f00adb0]
+- Updated dependencies [27346f3]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+- Updated dependencies [9bd5b3e]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-async-job@0.1.5
+  - @aws-blocks/bb-agent@0.3.5
+  - @aws-blocks/bb-distributed-table@0.1.6
+  - @aws-blocks/bb-lambda-compute@0.3.0
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/bb-file-bucket@0.1.5
+  - @aws-blocks/bb-data@0.2.6
+  - @aws-blocks/bb-knowledge-base@0.2.2
+  - @aws-blocks/bb-email-client@0.1.5
+  - @aws-blocks/bb-auth-cognito@0.1.8
+  - @aws-blocks/bb-auth-oidc@0.1.9
+  - @aws-blocks/bb-distributed-data@0.1.7
+  - @aws-blocks/hosting@0.2.0
+  - @aws-blocks/bb-auth-basic@0.1.7
+  - @aws-blocks/bb-realtime@0.1.5
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-cron-job@0.1.5
+  - @aws-blocks/bb-dashboard@0.1.4
+  - @aws-blocks/bb-logger@0.1.5
+  - @aws-blocks/bb-metrics@0.1.5
+  - @aws-blocks/bb-tracer@0.1.7
+
 ## 0.3.1
 
 ### Patch Changes
