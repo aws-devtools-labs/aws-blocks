@@ -8,13 +8,17 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
 	deriveNames,
+	findCustomerWorkspaceRoot,
 	findMonorepoRoot,
 	insertBetweenMarkers,
 	normalizeClassName,
+	normalizeWorkspaces,
 	parseArgs,
+	scopeFromPkgName,
 	substituteTokens,
 	toKebabCase,
 	validateClassName,
+	workspacesCover,
 } from './index.js';
 
 describe('name validation', () => {
@@ -124,6 +128,61 @@ describe('mode detection', () => {
 		try {
 			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'random-app' }));
 			assert.strictEqual(await findMonorepoRoot(dir), null);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe('workspaces helpers', () => {
+	test('normalizeWorkspaces handles array, object, and missing forms', () => {
+		assert.deepEqual(normalizeWorkspaces(['packages/*']), ['packages/*']);
+		assert.deepEqual(normalizeWorkspaces({ packages: ['apps/*', 'libs/*'] }), ['apps/*', 'libs/*']);
+		assert.deepEqual(normalizeWorkspaces(undefined), []);
+	});
+	test('scopeFromPkgName extracts the npm scope', () => {
+		assert.strictEqual(scopeFromPkgName('@acme/app'), 'acme');
+		assert.strictEqual(scopeFromPkgName('plain-app'), null);
+		assert.strictEqual(scopeFromPkgName(undefined), null);
+	});
+	test('workspacesCover matches exact entries and parent globs', () => {
+		assert.strictEqual(workspacesCover(['packages/*'], 'packages/bb-foo'), true);
+		assert.strictEqual(workspacesCover(['packages/**'], 'packages/bb-foo'), true);
+		assert.strictEqual(workspacesCover(['packages/bb-foo'], 'packages/bb-foo'), true);
+		assert.strictEqual(workspacesCover(['apps/*'], 'packages/bb-foo'), false);
+		assert.strictEqual(workspacesCover([], 'packages/bb-foo'), false);
+	});
+});
+
+describe('customer-mode detection', () => {
+	test('detects a customer workspace (workspaces, but not the Blocks repo)', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'cb-cust-'));
+		try {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['packages/*'] }));
+			const nested = join(dir, 'src');
+			mkdirSync(nested, { recursive: true });
+			const found = await findCustomerWorkspaceRoot(nested);
+			assert.strictEqual(found?.root, dir);
+			assert.strictEqual(found?.pkg.name, '@acme/app');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test('does NOT treat the AWS Blocks monorepo as a customer workspace', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'cb-blk-'));
+		try {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ workspaces: ['packages/blocks'] }));
+			mkdirSync(join(dir, 'packages', 'blocks'), { recursive: true });
+			assert.strictEqual(await findCustomerWorkspaceRoot(dir), null);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test('returns null when there are no workspaces', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'cb-none-'));
+		try {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'plain-app' }));
+			assert.strictEqual(await findCustomerWorkspaceRoot(dir), null);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
