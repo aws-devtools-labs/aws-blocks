@@ -9,6 +9,7 @@ Add `@aws-blocks/create-block` — a scaffolder for new Building Blocks.
 The CLI auto-detects its context:
 
 - **Contributor mode** (run inside the aws-blocks monorepo): also wires the block into `@aws-blocks/blocks` (runtime + CDK re-exports, dependency, and vendorize map, via idempotent HTML markers), the root `workspaces`, the `comprehensive` test app, and a changeset; then regenerates the README catalog via `sync-docs`.
-- **External mode** (run anywhere else): generates a standalone `@<scope>/bb-<name>` package tagged `keywords: ["aws-blocks"]` with a self-contained build, no monorepo wiring.
+- **Customer mode** (run inside your own npm-workspaces repo): generates `packages/bb-<name>`, registers it in your root `workspaces` (unless an existing glob like `packages/*` already covers it), and `npm install`s so your app can `import` it with no publish step. Does not modify your app's `package.json` or source. The npm scope is derived from your root package name (or `--scope`).
+- **External mode** (run anywhere else): generates a standalone `@<scope>/bb-<name>` package tagged `keywords: ["aws-blocks"]` with a self-contained build, no workspace wiring.
 
 Zero runtime dependencies (Node stdlib only). Flags: `--type`, `--dir`, `--scope`, `--yes`, `--skip-install`, `--skip-verify`, `--dry-run`.

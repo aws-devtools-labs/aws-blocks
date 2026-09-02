@@ -80,7 +80,7 @@ export function substituteTokens(content: string, tokens: { className: string; p
 	return content.replace(/__BB_CLASS__/g, tokens.className).replace(/__BB_PKG_NAME__/g, tokens.pkgName);
 }
 
-export type Mode = 'contributor' | 'external';
+export type Mode = 'contributor' | 'customer' | 'external';
 
 // ─── Filesystem helpers ──────────────────────────────────────────────────────
 
@@ -139,6 +139,61 @@ export async function findMonorepoRoot(startDir: string): Promise<string | null>
 		if (parent === dir) return null;
 		dir = parent;
 	}
+}
+
+/** npm `workspaces` may be a string array or `{ packages: [...] }`. Return the globs. */
+export function normalizeWorkspaces(ws: unknown): string[] {
+	if (Array.isArray(ws)) return ws.filter((w): w is string => typeof w === 'string');
+	if (ws && typeof ws === 'object' && Array.isArray((ws as { packages?: unknown }).packages)) {
+		return (ws as { packages: unknown[] }).packages.filter((w): w is string => typeof w === 'string');
+	}
+	return [];
+}
+
+/**
+ * Walk up from `startDir` for a *customer* monorepo root: a `package.json` that
+ * declares npm `workspaces` but is NOT the AWS Blocks framework repo (that's
+ * contributor mode). Returns `{ root, pkg }` or `null` (→ standalone external).
+ */
+export async function findCustomerWorkspaceRoot(startDir: string): Promise<{ root: string; pkg: WorkspacePkg } | null> {
+	let dir = resolve(startDir);
+	for (;;) {
+		const pkgPath = join(dir, 'package.json');
+		if (await exists(pkgPath)) {
+			try {
+				const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as WorkspacePkg;
+				const ws = normalizeWorkspaces(pkg.workspaces);
+				const isBlocksRepo = ws.includes('packages/blocks') && (await exists(join(dir, 'packages', 'blocks')));
+				if (ws.length > 0 && !isBlocksRepo) return { root: dir, pkg };
+			} catch {
+				// Unparseable package.json — keep walking up.
+			}
+		}
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+interface WorkspacePkg {
+	name?: string;
+	workspaces?: string[] | { packages?: string[] };
+}
+
+/** Extract an npm scope from a package name (`@acme/app` → `acme`). */
+export function scopeFromPkgName(name: unknown): string | null {
+	if (typeof name !== 'string') return null;
+	const m = name.match(/^@([^/]+)\//);
+	return m ? m[1] : null;
+}
+
+/** Does an existing `workspaces` glob already cover `packages/<folder>`? */
+export function workspacesCover(ws: string[], entry: string): boolean {
+	if (ws.includes(entry)) return true;
+	const slash = entry.lastIndexOf('/');
+	if (slash < 0) return false;
+	const parent = entry.slice(0, slash);
+	return ws.includes(`${parent}/*`) || ws.includes(`${parent}/**`);
 }
 
 /** Recursively list every file (not directory) under `root`, as absolute paths. */
@@ -374,6 +429,41 @@ async function wireContributor(root: string, names: DerivedNames, dryRun: boolea
 	return { edits, warnings };
 }
 
+/**
+ * Customer-mode wiring: register `packages/<folder>` in the customer's root
+ * `workspaces` so `npm install` links it and their app can import it without
+ * publishing. Skips the edit when an existing glob (e.g. `packages/*`) already
+ * covers it. Does not touch the app's own package.json or source.
+ */
+async function wireCustomer(
+	root: string,
+	customerPkg: WorkspacePkg,
+	names: DerivedNames,
+	dryRun: boolean,
+): Promise<WireResult> {
+	const edits: string[] = [];
+	const warnings: string[] = [];
+	const entry = `packages/${names.folder}`;
+	const ws = normalizeWorkspaces(customerPkg.workspaces);
+
+	if (workspacesCover(ws, entry)) {
+		edits.push(`workspaces already cover ${entry} (no package.json edit needed)`);
+	} else {
+		const pkgPath = join(root, 'package.json');
+		const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
+		if (Array.isArray(pkg.workspaces)) {
+			pkg.workspaces.push(entry);
+		} else if (pkg.workspaces && Array.isArray(pkg.workspaces.packages)) {
+			pkg.workspaces.packages.push(entry);
+		} else {
+			pkg.workspaces = [entry];
+		}
+		if (!dryRun) await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+		edits.push(`root package.json → workspaces += "${entry}"`);
+	}
+	return { edits, warnings };
+}
+
 function starterComprehensiveTest(className: string, pkgName: string): string {
 	return `// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
@@ -470,8 +560,12 @@ Modes (auto-detected):
   contributor   run inside the aws-blocks monorepo → generates packages/bb-<name>
                 and wires it into @aws-blocks/blocks, the root workspaces, the
                 comprehensive test app, and a changeset.
+  customer      run inside your own npm-workspaces repo → generates
+                packages/bb-<name>, registers it in your root workspaces, and
+                npm-installs so your app can import it (no publish). App code
+                is not modified.
   external      run anywhere else → generates a standalone @<scope>/bb-<name>
-                package (keywords: ["aws-blocks"]), no monorepo wiring.
+                package (keywords: ["aws-blocks"]), no workspace wiring.
 `);
 }
 
@@ -520,17 +614,25 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	// Detect mode.
-	const root = await findMonorepoRoot(cwd);
-	const mode: Mode = root ? 'contributor' : 'external';
-	const scope = opts.scope ?? 'your-org';
+	// Detect mode: AWS Blocks monorepo (contributor) → customer workspace → standalone.
+	const monorepoRoot = await findMonorepoRoot(cwd);
+	const customer = monorepoRoot ? null : await findCustomerWorkspaceRoot(cwd);
+	const mode: Mode = monorepoRoot ? 'contributor' : customer ? 'customer' : 'external';
+
+	// Resolve the npm scope + derived names.
+	const scope =
+		mode === 'customer'
+			? (opts.scope ?? scopeFromPkgName(customer?.pkg?.name) ?? 'app')
+			: (opts.scope ?? 'your-org');
 	const names = deriveNames(className, mode, scope);
 
 	// Resolve target directory.
 	const targetDir =
 		mode === 'contributor'
-			? join(root as string, 'packages', names.folder)
-			: resolve(cwd, opts.dir ?? names.folder);
+			? join(monorepoRoot as string, 'packages', names.folder)
+			: mode === 'customer'
+				? join((customer as { root: string }).root, 'packages', names.folder)
+				: resolve(cwd, opts.dir ?? names.folder);
 
 	if (await exists(targetDir)) {
 		const isEmpty = (await readdir(targetDir).catch(() => [])).length === 0;
@@ -544,7 +646,11 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	console.log('');
 	console.log(`  Block:     ${names.className}  (${type})`);
 	console.log(`  Package:   ${names.pkgName}`);
-	console.log(`  Mode:      ${mode}${mode === 'contributor' ? ` (monorepo: ${root})` : ''}`);
+	const contextRoot =
+		mode === 'contributor' ? monorepoRoot : mode === 'customer' ? (customer as { root: string }).root : null;
+	console.log(
+		`  Mode:      ${mode}${contextRoot ? ` (${mode === 'contributor' ? 'monorepo' : 'workspace'}: ${contextRoot})` : ''}`,
+	);
 	console.log(`  Target:    ${targetDir}`);
 	console.log('');
 	if (opts.dryRun) console.log('  (--dry-run: no files will be written)\n');
@@ -556,11 +662,16 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	// Generate.
 	const planned: PlannedWrite[] = [];
 	await copyTemplate(type, targetDir, { className: names.className, pkgName: names.pkgName }, opts.dryRun, planned);
-	if (mode === 'external') await fixupForExternal(targetDir, names.className, opts.dryRun);
+	// Contributor mode uses the monorepo's shared build (scripts/, tsconfig.base);
+	// customer + external need a self-contained build.
+	if (mode !== 'contributor') await fixupForExternal(targetDir, names.className, opts.dryRun);
 
 	let wire: WireResult | null = null;
 	if (mode === 'contributor') {
-		wire = await wireContributor(root as string, names, opts.dryRun);
+		wire = await wireContributor(monorepoRoot as string, names, opts.dryRun);
+	} else if (mode === 'customer') {
+		const c = customer as { root: string; pkg: WorkspacePkg };
+		wire = await wireCustomer(c.root, c.pkg, names, opts.dryRun);
 	}
 
 	if (opts.dryRun) {
@@ -575,31 +686,44 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 
 	console.log(`\nCreated ${planned.length} files in ${relative(cwd, targetDir) || '.'}`);
 	if (wire) {
-		console.log('Wired:');
+		console.log(mode === 'contributor' ? 'Wired:' : 'Linked:');
 		for (const e of wire.edits) console.log(`  ~ ${e}`);
 		for (const w of wire.warnings) console.log(`  ! ${w}`);
-		// Regenerate the README catalog table (idempotent, safe to fail).
-		try {
-			execSync('npm run sync-docs', { cwd: root as string, stdio: 'pipe' });
-			console.log('  ~ packages/blocks/README.md catalog (npm run sync-docs)');
-		} catch (e) {
-			console.log(`  ! npm run sync-docs failed (run it manually): ${(e as Error).message.split('\n')[0]}`);
+		if (mode === 'contributor') {
+			// Regenerate the README catalog table (idempotent, safe to fail).
+			try {
+				execSync('npm run sync-docs', { cwd: monorepoRoot as string, stdio: 'pipe' });
+				console.log('  ~ packages/blocks/README.md catalog (npm run sync-docs)');
+			} catch (e) {
+				console.log(`  ! npm run sync-docs failed (run it manually): ${(e as Error).message.split('\n')[0]}`);
+			}
 		}
 	}
 
-	// External install.
-	if (mode === 'external' && !opts.skipInstall) {
+	// Install so the workspace symlink / package deps resolve. Customer installs
+	// at the workspace root (links the sub-package); external installs in-package.
+	const installCwd =
+		mode === 'customer' ? (customer as { root: string }).root : mode === 'external' ? targetDir : null;
+	if (installCwd && !opts.skipInstall) {
 		try {
-			execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
+			execSync('npm install', { cwd: installCwd, stdio: 'inherit' });
 		} catch {
-			console.log('! npm install failed — run it manually in the new package.');
+			console.log('! npm install failed — run it manually.');
 		}
 	}
 
-	// Verify.
-	if (mode === 'contributor' && !opts.skipVerify) {
+	// Verify (build + test the new package). Skipped when install was skipped in
+	// customer/external mode, since the workspace link wouldn't exist yet.
+	const verifyRoot =
+		mode === 'contributor'
+			? (monorepoRoot as string)
+			: mode === 'customer'
+				? (customer as { root: string }).root
+				: null;
+	const canVerify = mode === 'contributor' || !opts.skipInstall;
+	if (verifyRoot && canVerify && !opts.skipVerify) {
 		console.log('\nVerifying (build + test)...');
-		if (!verify(root as string, names.pkgName)) {
+		if (!verify(verifyRoot, names.pkgName)) {
 			console.log('! Verification failed — inspect the build output above.');
 		}
 	}
@@ -616,6 +740,10 @@ function printNextSteps(mode: Mode, names: DerivedNames, type: BlockType): void 
 		console.log(`     (aws-blocks/index.ts and test/${names.suffix}.test.ts — zero type casts).`);
 		console.log(`  3. Fill in the TODO summaries in packages/blocks/src/index.ts and the changeset.`);
 		console.log('  4. npm run build && npm run lint:deps && npm test && npm run test:e2e:local');
+	} else if (mode === 'customer') {
+		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
+		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
+		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
 		console.log(`  1. cd ${names.folder} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);

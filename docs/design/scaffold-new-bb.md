@@ -112,10 +112,17 @@ edits (not string templating).
 - **Invocation:** `npm create @aws-blocks/block@latest MyBlock` (a new
   `packages/create-block` package, bin `create-block`), plus a repo convenience alias
   `npm run new:bb` for contributors.
-- **Auto-detect mode** (same trick as `create-blocks-app` detecting Amplify): if run
-  from inside the `aws-blocks` monorepo → **contributor mode** (generate package + do all
-  6 touchpoints). Otherwise → **external mode** (generate a standalone `@your-org/bb-*`,
-  no monorepo wiring, `keywords: ["aws-blocks"]`).
+- **Auto-detect mode** (same trick as `create-blocks-app` detecting Amplify), in priority
+  order:
+  - **contributor** — inside the `aws-blocks` monorepo → generate package + do all 6
+    touchpoints.
+  - **customer** — inside *your own* npm-workspaces repo → generate `packages/bb-*`,
+    register it in your root `workspaces` (unless a `packages/*` glob already covers it),
+    and `npm install` so your app can import it without publishing. App code untouched;
+    scope derived from your root package name (or `--scope`). This is the "scaffold **and
+    link** a subpackage" case.
+  - **external** — anywhere else → standalone `@<scope>/bb-*`, `keywords: ["aws-blocks"]`,
+    no workspace wiring.
 - **Prompts / flags:** block class name (PascalCase, no "BB" prefix) → package name
   `bb-{kebab}`; `--type primitive|composite` (`--client-facing` = v2 pointer);
   `--dir`, `--yes`, `--skip-install`, `--dry-run`.
