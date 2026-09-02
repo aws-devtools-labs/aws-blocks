@@ -37,10 +37,15 @@ const CANNED_RESPONSES: Record<string, string> = {
 
 const DEFAULT_RESPONSE = 'This is a canned mock response. No real model was called. [canned]';
 
+/**
+ * Pick a canned text response by keyword, matched on word boundaries for the same reason
+ * tool matching is: substring matching fired `order` inside "reorder" and `help` inside
+ * "helper", the same false-positive class the tool matcher avoids.
+ */
 function matchResponse(prompt: string): string {
 	const lower = prompt.toLowerCase();
 	for (const [keyword, response] of Object.entries(CANNED_RESPONSES)) {
-		if (lower.includes(keyword)) return response;
+		if (promptMentionsWord(lower, keyword)) return response;
 	}
 	return DEFAULT_RESPONSE;
 }
@@ -117,32 +122,58 @@ function getToolResultText(messages: Message[]): string {
 	return results.join(' | ');
 }
 
+/** Sentinel for a property whose shape carries no usable signal (distinct from a legitimate `null`/`0`/`false`). */
+const NO_PLACEHOLDER = Symbol('no-placeholder');
+
+/**
+ * Resolve one property's placeholder value, or `NO_PLACEHOLDER` if its shape gives no signal.
+ * Order matters: an authored `default` (from Zod `.default()`) is the most realistic value, then
+ * a fixed `const`/`enum` member, then a union variant, then a per-type placeholder. `!== undefined`
+ * rather than truthiness so a `default` of `0`, `false`, or `''` is honored.
+ */
+function placeholderForProperty(prop: any): any {
+	if (prop?.default !== undefined) return prop.default;
+	if (prop?.const !== undefined) return prop.const;
+	if (prop?.enum?.length) return prop.enum[0];
+	// Zod unions (`z.union`, `z.discriminatedUnion`) surface as anyOf/oneOf; any one
+	// satisfying variant is enough for a mock, so take the first that resolves.
+	const variants = prop?.anyOf ?? prop?.oneOf;
+	if (Array.isArray(variants)) {
+		for (const variant of variants) {
+			const resolved = placeholderForProperty(variant);
+			if (resolved !== NO_PLACEHOLDER) return resolved;
+		}
+	}
+	switch (prop?.type) {
+		case 'string': return 'sample';
+		case 'number':
+		case 'integer': return 1;
+		case 'boolean': return true;
+		case 'array': return [];
+		case 'object': return generatePlaceholderInput(prop);
+		default: return NO_PLACEHOLDER;
+	}
+}
+
 /** Generate placeholder input from a JSON Schema. Produces values that pass validation. */
 function generatePlaceholderInput(schema: any): any {
 	if (!schema || typeof schema !== 'object') return {};
-	if (schema.type === 'object' && schema.properties) {
-		const result: Record<string, any> = {};
-		for (const [key, prop] of Object.entries(schema.properties) as [string, any][]) {
-			// Schema default (from Zod `.default()`) is the most realistic value — prefer it,
-			// and populate fields whose only signal is a default with no recognized `type`.
-			if (prop.default !== undefined) {
-				result[key] = prop.default;
-			} else if (prop.type === 'string') {
-				if (prop.enum?.length) result[key] = prop.enum[0];
-				else result[key] = 'sample';
-			} else if (prop.type === 'number' || prop.type === 'integer') {
-				result[key] = 1;
-			} else if (prop.type === 'boolean') {
-				result[key] = true;
-			} else if (prop.type === 'array') {
-				result[key] = [];
-			} else if (prop.type === 'object') {
-				result[key] = generatePlaceholderInput(prop);
-			}
+	if (schema.type !== 'object' || !schema.properties) return {};
+	const required: unknown[] = Array.isArray(schema.required) ? schema.required : [];
+	const result: Record<string, any> = {};
+	for (const [key, prop] of Object.entries(schema.properties) as [string, any][]) {
+		const value = placeholderForProperty(prop);
+		if (value !== NO_PLACEHOLDER) {
+			result[key] = value;
+		} else if (required.includes(key)) {
+			// An unrecognized shape (untyped, or a union of only unrecognized variants) yields no
+			// placeholder. Omitting a *required* field makes the emitted call fail validation before
+			// the tool ever runs, so fall back to a string. Optional fields stay omitted: absence is
+			// valid there, and inventing a wrong-typed value would break calls that used to work.
+			result[key] = 'sample';
 		}
-		return result;
 	}
-	return {};
+	return result;
 }
 
 const warnedExampleKeys = new Set<string>();

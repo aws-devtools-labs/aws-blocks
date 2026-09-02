@@ -334,6 +334,19 @@ describe('CannedProvider', () => {
 		assert.ok(text.includes('22°C'), 'should contain weather data');
 	});
 
+	// Keyword text matching must respect word boundaries for the same reason tool matching
+	// does, or "reorder" returns the order response and "helper" returns the help response.
+	test('does not return a keyword response when the keyword is only a substring', async () => {
+		const provider = new CannedProvider();
+		const chunks: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: 'please reorder the list alphabetically' }] }] as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+		}
+		const text = chunks.join('');
+		assert.ok(!text.includes('#12345'), `"reorder" must not return the order response, got: ${text}`);
+		assert.ok(text.includes('No real model was called'), 'should fall through to the default response');
+	});
+
 	test('triggers tool call when prompt matches tool name', async () => {
 		const provider = new CannedProvider();
 		let toolName: string | undefined;
@@ -501,6 +514,36 @@ describe('CannedProvider', () => {
 		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }];
 		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
 		assert.deepStrictEqual(input, { query: 'sample' });
+	});
+
+	test('resolves a union (anyOf) field from its first usable variant', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 1 });
+	});
+
+	test('resolves a const field to its fixed value', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { kind: { const: 'archive' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { kind: 'archive' });
+	});
+
+	// A required field of an unrecognized shape used to be dropped entirely, so the emitted
+	// call failed schema validation before the tool ever ran.
+	test('fills a required field whose shape yields no placeholder', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} }, required: ['mystery'] } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { mystery: 'sample' });
+	});
+
+	test('leaves an optional field whose shape yields no placeholder omitted', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, {}, 'absence is valid for an optional field; do not invent a wrong-typed value');
 	});
 
 	test('responds to tool result with acknowledgment', async () => {
