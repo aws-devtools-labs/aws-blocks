@@ -45,16 +45,31 @@ function matchResponse(prompt: string): string {
 	return DEFAULT_RESPONSE;
 }
 
+const wordPatternCache = new Map<string, RegExp>();
+
 /**
- * Match a single word against the prompt on word boundaries (case-insensitive).
+ * Compile a word-boundary matcher for a word or phrase, cached by phrase.
  * Uses `\b...\b` rather than substring `includes()` so a tool word like "cat"
  * (from `getCat`) is NOT triggered by an unrelated word like "category", and
- * "pass" (from `getPass`) is not triggered by "password". The word is regex-
- * escaped so punctuation in tool names can't break the pattern.
+ * "pass" (from `getPass`) is not triggered by "password". Regex metacharacters are
+ * escaped so punctuation in tool names can't break the pattern, and internal
+ * whitespace becomes `\s+` so a multi-word phrase tolerates irregular spacing.
+ * Compiled patterns are cached because matching re-runs for every tool on every
+ * `stream()` call, and the key space is bounded by the agent's tool and trigger set.
  */
+function wordBoundaryPattern(phrase: string): RegExp {
+	let pattern = wordPatternCache.get(phrase);
+	if (!pattern) {
+		const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+		pattern = new RegExp(`\\b${escaped}\\b`);
+		wordPatternCache.set(phrase, pattern);
+	}
+	return pattern;
+}
+
+/** Match a word against an already-lowercased prompt on word boundaries. */
 function promptMentionsWord(lowerPrompt: string, word: string): boolean {
-	const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`\\b${escaped}\\b`).test(lowerPrompt);
+	return wordBoundaryPattern(word).test(lowerPrompt);
 }
 
 /** Find ALL tools mentioned in the prompt (for parallel tool calls). */
@@ -74,9 +89,7 @@ function findAllToolMatches(prompt: string, toolSpecs?: { name: string }[], hint
 		const triggers = hints?.get(t.name)?.triggers;
 		return triggers?.some(tr => {
 			const low = tr.trim().toLowerCase();
-			if (!low) return false;
-			const escaped = low.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-			return new RegExp(`\\b${escaped}\\b`).test(lower);
+			return low ? wordBoundaryPattern(low).test(lower) : false;
 		}) ?? false;
 	}).map(t => t.name);
 }
@@ -132,6 +145,30 @@ function generatePlaceholderInput(schema: any): any {
 	return {};
 }
 
+const warnedExampleKeys = new Set<string>();
+
+/**
+ * Warn (once per tool+field) when a `cannedExamples` key isn't a field of the tool's
+ * inputSchema — almost always a typo in the hint. Only ever reached through the canned
+ * provider, which is local-dev-only, so this never warns in a deployed agent. The value
+ * is still merged through and nothing throws: a bad hint must not break local dev.
+ * Skipped when the schema exposes no `properties`, where unknown keys are unknowable.
+ */
+function warnUnknownExampleKeys(toolName: string, examples: Record<string, unknown>, inputSchema?: any): void {
+	const properties = inputSchema?.properties;
+	if (!properties) return;
+	for (const key of Object.keys(examples)) {
+		if (key in properties) continue;
+		const seen = `${toolName}.${key}`;
+		if (warnedExampleKeys.has(seen)) continue;
+		warnedExampleKeys.add(seen);
+		console.warn(
+			`[canned] cannedExamples for tool "${toolName}" sets "${key}", which is not a field of its ` +
+			`parameters schema (${Object.keys(properties).join(', ') || 'none'}). Check for a typo — the value is still sent.`,
+		);
+	}
+}
+
 /**
  * Look up a tool's inputSchema from toolSpecs and generate placeholder input, shallow-merging
  * any `cannedExamples` (from hints) on top so realistic values win over generated placeholders.
@@ -140,7 +177,9 @@ function getToolInput(toolName: string, toolSpecs?: { name: string; inputSchema?
 	const spec = toolSpecs?.find(t => t.name === toolName);
 	const base = spec?.inputSchema ? generatePlaceholderInput(spec.inputSchema) : {};
 	const examples = hints?.get(toolName)?.examples;
-	return JSON.stringify(examples ? { ...base, ...examples } : base);
+	if (!examples) return JSON.stringify(base);
+	warnUnknownExampleKeys(toolName, examples, spec?.inputSchema);
+	return JSON.stringify({ ...base, ...examples });
 }
 
 let toolCallCounter = 0;
