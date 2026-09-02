@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
-import { emptyBucket, listStackBucketNames, toDeleteObjects } from './sandbox.js';
+import { emptyBucket, listStackBucketNames, runDestroyWithRetries, toDeleteObjects } from './sandbox.js';
 
 // The teardown bucket-emptying must delete BOTH live versions and delete
 // markers — a versioned bucket left with either still blocks `cdk destroy`.
@@ -116,5 +116,76 @@ describe('emptyBucket', () => {
 		await emptyBucket({ send } as unknown as S3Client, 'bucket');
 		assert.strictEqual(lists, 1); // did NOT re-list after Errors
 		assert.strictEqual(deletes, 1);
+	});
+});
+
+// The sev2 fix is the wiring: on a destroy failure, buckets get emptied BEFORE
+// the retry. runDestroyWithRetries takes its side effects as deps so we can
+// exercise that ordering without spawning cdk.
+describe('runDestroyWithRetries', () => {
+	it('empties buckets before retrying a failed destroy', async () => {
+		const events: string[] = [];
+		let attempts = 0;
+		await runDestroyWithRetries({
+			runDestroy: () => {
+				attempts++;
+				events.push(`destroy#${attempts}`);
+				if (attempts === 1) throw new Error('bucket not empty');
+			},
+			listStackNames: () => {
+				events.push('list');
+				return ['stackA', 'stackB'];
+			},
+			emptyBuckets: async (names) => {
+				events.push(`empty:${names.join(',')}`);
+			},
+			sleep: async () => {
+				events.push('sleep');
+			},
+			retryDelays: [1],
+		});
+		assert.strictEqual(attempts, 2);
+		// buckets emptied (with the resolved stack names) before the retry destroy
+		assert.deepStrictEqual(events, ['destroy#1', 'list', 'empty:stackA,stackB', 'sleep', 'destroy#2']);
+	});
+
+	it('does not empty or sleep when the first destroy succeeds', async () => {
+		let emptied = false;
+		let slept = false;
+		let listed = false;
+		await runDestroyWithRetries({
+			runDestroy: () => {},
+			listStackNames: () => {
+				listed = true;
+				return [];
+			},
+			emptyBuckets: async () => {
+				emptied = true;
+			},
+			sleep: async () => {
+				slept = true;
+			},
+		});
+		assert.strictEqual(emptied, false);
+		assert.strictEqual(slept, false);
+		assert.strictEqual(listed, false);
+	});
+
+	it('throws after exhausting retries', async () => {
+		let attempts = 0;
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					attempts++;
+					throw new Error('still failing');
+				},
+				listStackNames: () => [],
+				emptyBuckets: async () => {},
+				sleep: async () => {},
+				retryDelays: [1, 1],
+			}),
+			/still failing/,
+		);
+		assert.strictEqual(attempts, 3); // initial attempt + 2 retries
 	});
 });

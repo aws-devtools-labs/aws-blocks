@@ -1587,6 +1587,14 @@ export class HostingConstruct extends Construct {
     // empties the objects — the CR isn't needed to clean them up. This was
     // observed leaking distributions on the high-volume Amplify SSR-adapter e2e
     // (deployment-type=standalone), which consumes this construct.
+    //
+    // We deliberately do NOT retain the bucket's Custom::S3AutoDeleteObjects CR,
+    // even though it's also a delete-time handler on the teardown path: it only
+    // empties its own bucket (an S3-only op, no CloudFront invalidation or
+    // cross-service call), so it's far less wedge-prone, and it's the mechanism
+    // that actually removes the objects. Retaining it would instead leave every
+    // bucket non-empty and blocking. Only the BucketDeployment CR — whose
+    // delete-time invalidation is the wedge — is retained.
     for (const child of this.node.findAll()) {
       if (CfnResource.isCfnResource(child) && child.cfnResourceType === 'Custom::CDKBucketDeployment') {
         child.applyRemovalPolicy(RemovalPolicy.RETAIN);
