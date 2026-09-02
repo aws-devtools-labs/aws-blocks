@@ -12,6 +12,7 @@ import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 /**
@@ -207,6 +208,10 @@ export class BlocksBackend extends Construct {
   get apiUrl(): string {
     return this.requireDefaultCompute().apiUrl;
   }
+  /** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+  get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+    return this.requireDefaultCompute().logGroup;
+  }
 
   private requireDefaultCompute(): LambdaShapedCompute {
     if (!this._defaultCompute) {
@@ -290,7 +295,7 @@ export class BlocksBackend extends Construct {
     addBlocksStackMetadata(cdk.Stack.of(backend));
 
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(backend, backend.handler);
+    finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
     return backend;
   }

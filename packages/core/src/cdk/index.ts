@@ -17,6 +17,7 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 export {
@@ -29,8 +30,10 @@ export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
   type BlocksDefaults,
+  type BlocksThrottling,
   BlocksPresets,
 } from './blocks-defaults.js';
 export { synthGuard } from './synth-guard.js';
@@ -74,6 +77,10 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   /** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
   get apiUrl(): string {
     return this.requireDefaultCompute().apiUrl;
+  }
+  /** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+  get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+    return this.requireDefaultCompute().logGroup;
   }
 
   private requireDefaultCompute(): LambdaShapedCompute {
@@ -124,7 +131,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
       }
     }
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(stack, stack.handler);
+    finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
@@ -242,6 +249,17 @@ export class Scope extends Construct {
       throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
     }
     return name;
+  }
+
+  /**
+   * The shared handler Lambda's CloudWatch log group (the default compute's).
+   * Resolves the same way as {@link handler} — via the owning
+   * BlocksStack/BlocksBackend. `bb-logger` uses this to reconfigure retention on
+   * the single, framework-owned group rather than creating a second one that
+   * would collide on the log-group name.
+   */
+  get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+    return this.root.handlerLogGroup;
   }
 
   get fullId(): string {

@@ -28,10 +28,11 @@ export interface LoggingOptions {
 	 */
 	defaultContext?: Record<string, unknown>;
 	/**
-	 * CloudWatch Logs retention period. When set, creates a LogGroup with this
-	 * retention policy and RemovalPolicy.DESTROY for clean CDK stack teardown.
-	 * When omitted, Lambda's auto-created log group applies (logs never expire).
-	 * Ignored in local dev.
+	 * CloudWatch Logs retention period for the shared handler log group. When
+	 * set, it overrides the stack-wide `defaults.logRetention` on the single,
+	 * framework-owned handler log group (the Logger does not create its own
+	 * group). When omitted, the stack-wide default retention applies. Ignored in
+	 * local dev.
 	 */
 	retention?: RetentionDays;
 }
