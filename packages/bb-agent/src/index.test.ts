@@ -425,6 +425,37 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(input, { limit: 10, query: 'sample' });
 	});
 
+	test('cannedExamples win over a schema default on the same field', async () => {
+		const hints = new Map([['listItems', { examples: { limit: 5 } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		// Full precedence chain is cannedExamples > schema default > generic placeholder;
+		// this pins the top link, where a field carries both an example and a default.
+		assert.deepStrictEqual(input, { limit: 5 }, 'the cannedExamples value must beat the schema default');
+	});
+
+	test('warns on a cannedExamples field missing from the tool schema, but still sends it', async () => {
+		const hints = new Map([['fetchPage', { examples: { rul: 'https://example.com' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'fetchPage', description: '', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } }];
+		const originalWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (msg: unknown) => { warnings.push(String(msg)); };
+		let input: any;
+		try {
+			input = await collectToolInput(provider, 'fetchPage now', toolSpecs);
+		} finally {
+			console.warn = originalWarn;
+		}
+		assert.ok(
+			warnings.some(w => w.includes('fetchPage') && w.includes('"rul"')),
+			`the typo'd field should be reported, got ${JSON.stringify(warnings)}`,
+		);
+		// A bad hint is surfaced, never enforced: nothing throws and the value still ships.
+		assert.deepStrictEqual(input, { url: 'sample', rul: 'https://example.com' });
+	});
+
 	test('cannedTriggers fire a tool for a single-word keyword beyond its name', async () => {
 		const hints = new Map([['searchDocs', { triggers: ['find'] }]]);
 		const provider = new CannedProvider({ hints });
