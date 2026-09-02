@@ -41,8 +41,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     removalPolicy?: 'destroy' | 'retain';
     streamingMode?: 'token' | 'block';
     // (undocumented)
-    structuredOutput?: z.ZodType;
-    // (undocumented)
     systemPrompt: string;
     toolContextSchema?: z.ZodType<TContext>;
     tools?: ToolsConfig<TContext>;
@@ -284,6 +282,8 @@ export interface ToolCallRecord {
 
 // @public (undocumented)
 export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z.ZodType = z.ZodType<any>> {
+    cannedExamples?: Record<string, JSONValue>;
+    cannedTriggers?: string[];
     // (undocumented)
     description: string;
     handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;
