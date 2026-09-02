@@ -12,13 +12,14 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { AppSetting } from './index.cdk.js';
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
 	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly id: string;
+	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
@@ -35,12 +36,22 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production, stackId = 'TestStack'): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'TestStack');
+	const stack = new StubBlocksStack(app, stackId);
+	stack.defaults = defaults;
 	const parent = new Scope('app');
 	return { stack, parent };
 }
+
+test('CDK: the secret-init Lambda log group adopts defaults.logRetention', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox, 'SecretRetentionStack');
+	new AppSetting(parent, 'my-secret', { secret: true, name: '/myapp/secret-key' });
+	const template = Template.fromStack(stack);
+	// The secret-init Lambda now owns an explicit log group whose retention
+	// follows the stack-wide default (sandbox → one week) instead of infinite.
+	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+});
 
 test('CDK: secret AppSetting SSM policy is scoped to specific parameter ARN (not wildcard)', () => {
 	const { stack, parent } = setup();

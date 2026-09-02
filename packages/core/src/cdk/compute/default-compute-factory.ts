@@ -20,6 +20,7 @@ export interface LambdaShapedCompute extends Compute {
 	readonly fn: cdk.aws_lambda_nodejs.NodejsFunction;
 	readonly apiGateway: cdk.aws_apigateway.RestApi;
 	readonly apiUrl: string;
+	readonly logGroup: cdk.aws_logs.ILogGroup;
 }
 
 /**

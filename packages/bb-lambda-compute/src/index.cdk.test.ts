@@ -216,3 +216,117 @@ describe('LambdaCompute architecture (Graviton default)', () => {
 		});
 	});
 });
+
+// The compute owns the handler log group + the API Gateway stage, so the
+// stack-wide logRetention / throttling / accessLogging defaults are adopted here.
+describe('LambdaCompute handler log-group retention (defaults.logRetention)', () => {
+	test('production keeps handler logs for a year (365 days)', () => {
+		const { stack, parent } = setup('LambdaComputeLogProd', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		assert.ok(compute.logGroup, 'LambdaCompute should expose .logGroup');
+		// The function points at the framework-owned group (not Lambda's
+		// infinite-retention auto group).
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+	});
+
+	test('sandbox keeps handler logs for a week (7 days)', () => {
+		const { stack, parent } = setup('LambdaComputeLogSandbox', BlocksPresets.sandbox);
+		new LambdaCompute(parent, 'extra');
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+	});
+});
+
+describe('LambdaCompute stage throttling (defaults.throttling)', () => {
+	test('production carries the 1000/2000 rate + burst default', () => {
+		const { stack, parent } = setup('LambdaComputeThrottleProd', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra');
+		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+			MethodSettings: Match.arrayWith([
+				Match.objectLike({ HttpMethod: '*', ResourcePath: '/*', ThrottlingRateLimit: 1000, ThrottlingBurstLimit: 2000 }),
+			]),
+		});
+	});
+
+	test('sandbox caps the stage tighter (200/400)', () => {
+		const { stack, parent } = setup('LambdaComputeThrottleSandbox', BlocksPresets.sandbox);
+		new LambdaCompute(parent, 'extra');
+		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+			MethodSettings: Match.arrayWith([
+				Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
+			]),
+		});
+	});
+
+	test('a per-stack throttling override wins over the preset', () => {
+		const { stack, parent } = setup('LambdaComputeThrottleOverride', {
+			...BlocksPresets.production,
+			throttling: { rateLimit: 50, burstLimit: 75 },
+		});
+		new LambdaCompute(parent, 'extra');
+		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+			MethodSettings: Match.arrayWith([
+				Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 }),
+			]),
+		});
+	});
+});
+
+describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
+	// Access logging is opt-in (off in both presets), so enable it explicitly.
+	const withAccessLogging = { ...BlocksPresets.production, accessLogging: true };
+
+	test('opt-in enables JSON access logging + the account CloudWatch role', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogProd', withAccessLogging);
+		new LambdaCompute(parent, 'extra');
+		const template = Template.fromStack(stack);
+		// The account-level CloudWatch role is provisioned exactly once.
+		template.resourceCountIs('AWS::ApiGateway::Account', 1);
+		template.hasResourceProperties('AWS::ApiGateway::Stage', {
+			AccessLogSetting: Match.objectLike({ DestinationArn: Match.anyValue(), Format: Match.anyValue() }),
+		});
+	});
+
+	test('the production access-log group is RETAINed (audit trail survives teardown)', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogRetain', withAccessLogging);
+		new LambdaCompute(parent, 'extra');
+		// The access-log group follows defaults.removalPolicy (RETAIN in prod).
+		Template.fromStack(stack).hasResource('AWS::Logs::LogGroup', {
+			DeletionPolicy: 'Retain',
+		});
+	});
+
+	test('off by default (production preset) — no stage AccessLogSetting, no account role', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogDefaultOff', BlocksPresets.production);
+		new LambdaCompute(parent, 'extra');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::Account', 0);
+		template.hasResourceProperties('AWS::ApiGateway::Stage', {
+			AccessLogSetting: Match.absent(),
+		});
+	});
+
+	test('sandbox disables access logging (no stage AccessLogSetting, no account role)', () => {
+		const { stack, parent } = setup('LambdaComputeAccessLogSandbox', BlocksPresets.sandbox);
+		new LambdaCompute(parent, 'extra');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::Account', 0);
+		template.hasResourceProperties('AWS::ApiGateway::Stage', {
+			AccessLogSetting: Match.absent(),
+		});
+	});
+
+	test('two access-logging stages in one stack share a single ApiGateway::Account', () => {
+		// The `ensureApiGatewayAccount` Symbol.for sharing exists so multiple
+		// access-logging stages in one stack (e.g. the default compute + a
+		// bb-realtime WebSocket stage, both calling the same helper) emit exactly
+		// one account-level role rather than colliding. Two computes exercise the
+		// identical shared-account path.
+		const { stack, parent } = setup('LambdaComputeSharedAccount', withAccessLogging);
+		new LambdaCompute(parent, 'a');
+		new LambdaCompute(parent, 'b');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ApiGateway::Account', 1);
+		// Both stages still get access logging.
+		template.resourceCountIs('AWS::ApiGateway::Stage', 2);
+	});
+});

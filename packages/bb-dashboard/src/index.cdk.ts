@@ -66,7 +66,10 @@ export class Dashboard extends Scope {
 		super(id, { parent: scope });
 
 		const functionName = this.handler.functionName;
-		const config = resolveConfig(id, options, functionName, this.fullId);
+		// Point log widgets at the framework-owned handler log group (its name is
+		// generated, not `/aws/lambda/<fn>`), so "Recent Errors" / "Log Volume"
+		// resolve to the group the handler actually writes to.
+		const config = resolveConfig(id, options, functionName, this.fullId, this.handlerLogGroup.logGroupName);
 		this.dashboardName = config.dashboardName;
 
 		const region = Stack.of(this).region;

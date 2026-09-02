@@ -30,12 +30,36 @@ supplies the implementation.
   CDK/mock) entry points. It assumes the **shared Blocks execution role**
   (`this.executionRole`) rather than an auto-generated per-function role, so
   Building Block grants — which target that shared role — reach it.
+- **A CloudWatch log group** for the function (`logGroup`), passed as the
+  function's `logGroup` so its retention follows the stack-wide
+  `defaults.logRetention` instead of AWS's infinite default. It is a single
+  framework-owned group (not a second `/aws/lambda/<fn>` group), so `bb-logger`
+  reconfigures it and `bb-dashboard` reads its name via `scope.handlerLogGroup`.
+  Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the inherited
+  `Scope.handlerLogGroup` accessor. `RemovalPolicy.DESTROY` — the handler's
+  operational stdout is not durable state.
 - **An API Gateway REST API** fronting the function:
   - the `/aws-blocks` resource gets a proxy so `RawRoute` sub-paths reach the
     function;
   - `/aws-blocks/api` gets explicit `POST` + `OPTIONS` methods (the JSON-RPC
     endpoint);
   - the root gets a catch-all proxy so all other paths reach the function.
+  - **Throttling** — the stage's method throttle comes from `defaults.throttling`
+    (sandbox 200/400, production 1000/2000).
+  - **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+    both presets), the stage writes structured JSON access logs to a dedicated
+    CloudWatch log group (retention = `defaults.logRetention`, removal policy =
+    `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
+    sandbox DESTROYs). `cloudWatchRole` is disabled on the `RestApi` so it does
+    not mint its own `AWS::ApiGateway::Account`; instead the shared account-level
+    CloudWatch Logs role is provisioned once per stack via
+    `ensureApiGatewayAccount()`, and the stage depends on it so a clean-account
+    first deploy applies the account setting before the stage is created.
+    Note: a production (RETAINed) access-log group is **orphaned** on stack
+    teardown and is the operator's to clean up. The group is intentionally left
+    unnamed (CDK-generated physical name) so a teardown-then-redeploy mints a
+    fresh name and can't collide — do not pin a stable `logGroupName`, or a
+    RETAINed group from a prior delete would fail the next create.
 
 Public surface (CDK layer):
 
@@ -43,6 +67,7 @@ Public surface (CDK layer):
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The function backing this compute. |
 | `apiGateway` | `RestApi` | The REST API fronting `fn`. |
+| `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from `defaults.logRetention`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
 
 `fn` and `apiGateway` exist only on the CDK layer (they are `aws-cdk-lib`
