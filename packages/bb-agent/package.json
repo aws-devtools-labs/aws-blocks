@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-agent",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -43,12 +43,12 @@
     "test": "node --test dist/index.test.js && node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
-    "@aws-blocks/bb-async-job": "^0.1.4",
-    "@aws-blocks/bb-distributed-table": "^0.1.5",
-    "@aws-blocks/bb-file-bucket": "^0.1.4",
-    "@aws-blocks/bb-logger": "^0.1.4",
-    "@aws-blocks/bb-realtime": "^0.1.4",
-    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/bb-async-job": "^0.1.5",
+    "@aws-blocks/bb-distributed-table": "^0.1.6",
+    "@aws-blocks/bb-file-bucket": "^0.1.5",
+    "@aws-blocks/bb-logger": "^0.1.5",
+    "@aws-blocks/bb-realtime": "^0.1.5",
+    "@aws-blocks/core": "^0.3.0",
     "@aws-sdk/client-bedrock": "^3.700.0",
     "@opentelemetry/api": "^1.9.0",
     "@strands-agents/sdk": "~1.3.0",

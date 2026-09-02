@@ -1,22 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { pathToFileURL } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
-import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
-import { pathToFileURL } from 'node:url';
-import { DEFAULT_NODE_RUNTIME } from './node-version.js';
-import { blocksNodejsBundling } from './bundling.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
-import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
-import type { BlocksDefaults } from './blocks-defaults.js';
-import { initializeVpc, finalizeVpc } from './vpc.js';
-import type { BlocksVpcOptions, VpcContext } from './vpc-types.js';
-import { BLOCKS_NAMESPACE, BLOCKS_RPC_PREFIX } from '../constants.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import type { BlocksDefaults } from './blocks-defaults.js';
+import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
+import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
+import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+import { addBlocksStackMetadata } from './stack-metadata.js';
+import { finalizeVpc, initializeVpc } from './vpc.js';
+import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
  * Validate that the Node.js process was started with `--conditions=cdk`.
@@ -27,23 +26,23 @@ import { registerBuiltinRoutes } from '../builtin-routes.js';
  * no real infrastructure (no tables, no IAM, no Lambda configs).
  */
 export function assertCdkConditionActive(): void {
-  const nodeOptions = process.env.NODE_OPTIONS ?? '';
-  const execArgv = process.execArgv ?? [];
+	const nodeOptions = process.env.NODE_OPTIONS ?? '';
+	const execArgv = process.execArgv ?? [];
 
-  const hasCdkCondition =
-    execArgv.some(arg => arg === '--conditions=cdk') ||
-    execArgv.some((arg, i) => (arg === '--conditions' || arg === '-C') && execArgv[i + 1] === 'cdk') ||
-    nodeOptions.includes('--conditions=cdk') ||
-    /(?:--conditions|-C)\s+cdk/.test(nodeOptions);
+	const hasCdkCondition =
+		execArgv.some((arg) => arg === '--conditions=cdk') ||
+		execArgv.some((arg, i) => (arg === '--conditions' || arg === '-C') && execArgv[i + 1] === 'cdk') ||
+		nodeOptions.includes('--conditions=cdk') ||
+		/(?:--conditions|-C)\s+cdk/.test(nodeOptions);
 
-  if (!hasCdkCondition) {
-    throw new Error(
-      'Missing --conditions=cdk: Building Blocks will silently load mock implementations instead of CDK constructs.\n\n' +
-      'Fix: Set NODE_OPTIONS="--conditions=cdk" before running CDK synth:\n' +
-      '  NODE_OPTIONS="--conditions=cdk" npx cdk synth\n\n' +
-      'Or use the Blocks CLI commands (npm run deploy / npm run sandbox) which set this automatically.',
-    );
-  }
+	if (!hasCdkCondition) {
+		throw new Error(
+			'Missing --conditions=cdk: Building Blocks will silently load mock implementations instead of CDK constructs.\n\n' +
+				'Fix: Set NODE_OPTIONS="--conditions=cdk" before running CDK synth:\n' +
+				'  NODE_OPTIONS="--conditions=cdk" npx cdk synth\n\n' +
+				'Or use the Blocks CLI commands (npm run deploy / npm run sandbox) which set this automatically.',
+		);
+	}
 }
 
 /**
@@ -54,184 +53,143 @@ export function assertCdkConditionActive(): void {
 export const SHARED_HANDLER_TIMEOUT_SECONDS = 60 * 15;
 
 export interface BlocksBackendProps {
-  backendHandlerPath: string;
-  backendCDKPath: string;
-  /**
-   * Stack-wide infrastructure defaults applied to every Building Block (removal
-   * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
-   * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
-   * individual fields as needed. A per-block option always wins over the
-   * corresponding stack default.
-   */
-  defaults: BlocksDefaults;
-  /**
-   * Place the app's compute and VPC-resident resources in a VPC.
-   * Pass a standard CDK VPC — Blocks handles Lambda placement,
-   * endpoint provisioning (based on BB requirements), and SG wiring.
-   *
-   * Omit for no VPC (default — Lambda runs in AWS-managed network).
-   */
-  vpc?: BlocksVpcOptions;
+	backendHandlerPath: string;
+	backendCDKPath: string;
+	/**
+	 * Stack-wide infrastructure defaults applied to every Building Block (removal
+	 * policy, deletion protection, …). See {@link BlocksDefaults}. Start from
+	 * `BlocksPresets.sandbox` or `BlocksPresets.production` and override
+	 * individual fields as needed. A per-block option always wins over the
+	 * corresponding stack default.
+	 */
+	defaults: BlocksDefaults;
+	/**
+	 * Place the app's compute and VPC-resident resources in a VPC.
+	 * Pass a standard CDK VPC — Blocks handles Lambda placement,
+	 * endpoint provisioning (based on BB requirements), and SG wiring.
+	 *
+	 * Omit for no VPC (default — Lambda runs in AWS-managed network).
+	 */
+	vpc?: BlocksVpcOptions;
 }
 
-/** Shared infra setup — creates Lambda + API Gateway on the given scope. */
-export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string, vpcContext?: VpcContext) {
-  // Fail fast with an actionable message at the create() call site if `defaults`
-  // is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
-  // object) — otherwise the first Building Block to read `scope.defaults` throws
-  // a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
-  if (!props.defaults) {
-    throw new Error(
-      'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
-      '`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
-    );
-  }
+/**
+ * Core's `create()` props: the public {@link BlocksBackendProps} plus the
+ * required `defaultComputeFactory`, spread on by the umbrella (`@aws-blocks/blocks`).
+ * Customers use {@link BlocksBackendProps} and never set the factory.
+ *
+ * @internal
+ */
+export interface CoreBlocksBackendProps extends BlocksBackendProps {
+	/** Builds the backend's default compute. Injected by `@aws-blocks/blocks`. */
+	defaultComputeFactory: DefaultComputeFactory;
+}
 
-  // ── Shared execution role ──────────────────────────────────────────────
-  // A single IAM role that every Building Block grants to. Provisioned here so
-  // it exists before the backend module is imported (Building Blocks reach it
-  // via `scope.executionRole`). Block grants sit on the role's default (inline)
-  // policy. AWSLambdaBasicExecutionRole is attached so the handler retains
-  // CloudWatch Logs permissions.
-  //
-  // INVARIANT: this must be a mutable, framework-owned `iam.Role` — never an
-  // imported role (`Role.fromRoleArn`/`fromRoleName`), which is immutable by
-  // default. On an immutable role, every Building Block's `grant*()` /
-  // `addToPrincipalPolicy()` silently becomes a no-op (returns false, no error),
-  // so permissions would quietly vanish. If a bring-your-own-role option is ever
-  // added, it must resolve to a mutable role (`{ mutable: true }`).
-  const executionRole = new iam.Role(scope, 'BlocksRole', {
-    // CompositePrincipal (rather than a bare ServicePrincipal) so additional
-    // compute types can assume this same shared role as they are introduced
-    // (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
-    assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
-    managedPolicies: [
-      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
-      // When Lambda is placed in a VPC it needs ENI management permissions
-      ...(vpcContext ? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')] : []),
-    ],
-  });
+/**
+ * Shared infra setup — provisions the stack-level resources that are NOT owned
+ * by a compute: the shared execution role, resource groups, and console-redirect
+ * routes.
+ */
+export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
+	// Fail fast with an actionable message at the create() call site if `defaults`
+	// is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
+	// object) — otherwise the first Building Block to read `scope.defaults` throws
+	// a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
+	if (!props.defaults) {
+		throw new Error(
+			'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
+				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
+		);
+	}
 
-  const handlerProps: lambda.NodejsFunctionProps = {
-    entry: props.backendHandlerPath,
-    runtime: DEFAULT_NODE_RUNTIME,
-    handler: 'handler',
-    role: executionRole,
-    memorySize: 2048,
-    timeout: cdk.Duration.seconds(SHARED_HANDLER_TIMEOUT_SECONDS),
-    environment: {
-      NODE_ENV: 'production',
-      /**
-       * BLOCKS_STACK_NAME is used at runtime to derive physical resource names
-       * (DynamoDB table names, env var prefixes). It must match the CDK-time
-       * fullId of the BlocksStack/BlocksBackend so resource lookups work correctly.
-       *
-       * For BlocksStack: this equals the stack name (id).
-       * For BlocksBackend: the caller overrides this after construction to include
-       * the parent stack name for deployment uniqueness.
-       */
-      BLOCKS_STACK_NAME: id ?? cdk.Stack.of(scope).stackName,
-    },
-    // blocksNodejsBundling shims import.meta.* to CommonJS equivalents so a
-    // CJS-bundled `fileURLToPath(import.meta.url)` resolves instead of throwing at
-    // Lambda load. See ./bundling.ts.
-    bundling: blocksNodejsBundling({
-      minify: true,
-      esbuildArgs: { '--conditions': 'aws-runtime' },
-    }),
-    // VPC placement, when a VPC is configured. Spread conditionally so the
-    // non-VPC path leaves these unset (CDK treats undefined as "no VPC").
-    ...(vpcContext
-      ? {
-          vpc: vpcContext.vpc,
-          vpcSubnets: vpcContext.lambdaSubnets,
-          securityGroups: [vpcContext.lambdaSecurityGroup],
-        }
-      : {}),
-  };
+	// ── Shared execution role ───────────────────────────────────────────────
+	// A single IAM role that every Building Block grants to. Provisioned here so
+	// it exists before the backend module is imported (Building Blocks reach it
+	// via `scope.executionRole`). Block grants sit on the role's default (inline)
+	// policy. AWSLambdaBasicExecutionRole is attached so compute functions retain
+	// CloudWatch Logs permissions.
+	//
+	// INVARIANT: this must be a mutable, framework-owned `iam.Role` — never an
+	// imported role (`Role.fromRoleArn`/`fromRoleName`), which is immutable by
+	// default. On an immutable role, every Building Block's `grant*()` /
+	// `addToPrincipalPolicy()` silently becomes a no-op (returns false, no error),
+	// so permissions would quietly vanish. If a bring-your-own-role option is ever
+	// added, it must resolve to a mutable role (`{ mutable: true }`).
+	const executionRole = new iam.Role(scope, 'BlocksRole', {
+		// CompositePrincipal (rather than a bare ServicePrincipal) so additional
+		// compute types can assume this same shared role as they are introduced
+		// (e.g. ECS tasks via ecs-tasks.amazonaws.com), by adding principals here.
+		assumedBy: new iam.CompositePrincipal(new iam.ServicePrincipal('lambda.amazonaws.com')),
+		managedPolicies: [
+			iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+			// When Lambda is placed in a VPC it needs ENI management permissions
+			...(props.vpc
+				? [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')]
+				: []),
+		],
+	});
 
-  const handler = new lambda.NodejsFunction(scope, 'Handler', handlerProps);
+	// ── Resource Groups ───────────────────────────────────────────────────
+	let rootStack = cdk.Stack.of(scope);
+	while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
+	const groupPrefix = id && id !== rootStack.stackName ? `${rootStack.stackName}-${id}` : rootStack.stackName;
 
-  // In sandbox mode, allow localhost origins so the local dev frontend can
-  // reach the deployed Lambda API via CORS.
-  const isSandbox =
-    scope.node.tryGetContext('sandboxMode') === 'true' ||
-    scope.node.tryGetContext('sandboxMode') === true;
-  if (isSandbox) {
-    handler.addEnvironment('CORS_ALLOWED_ORIGINS', '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$');
-  }
+	new CfnGroup(scope, 'StackResources', {
+		name: `${groupPrefix}-resources`,
+		resourceQuery: {
+			type: 'CLOUDFORMATION_STACK_1_0',
+			query: {
+				resourceTypeFilters: [
+					'AWS::CloudWatch::Dashboard',
+					'AWS::Cognito::UserPool',
+					'AWS::DynamoDB::Table',
+					'AWS::Logs::LogGroup',
+					'AWS::RDS::DBCluster',
+					'AWS::RDS::DBInstance',
+					'AWS::S3::Bucket',
+					'AWS::SQS::Queue',
+				],
+				stackIdentifier: cdk.Stack.of(scope).stackId,
+			},
+		},
+	});
 
-  const api = new apigateway.RestApi(scope, 'API', {
-    restApiName: 'Blocks API',
-    deployOptions: { cachingEnabled: false },
-  });
+	new CfnGroup(scope, 'StackSettings', {
+		name: `${groupPrefix}-settings`,
+		resourceQuery: {
+			type: 'TAG_FILTERS_1_0',
+			query: {
+				resourceTypeFilters: ['AWS::SSM::Parameter'],
+				tagFilters: [{ key: 'aws-blocks-stack', values: [rootStack.stackName] }],
+			},
+		},
+	});
 
-  const integration = new apigateway.LambdaIntegration(handler);
+	// ── Console redirect routes ───────────────────────────────────────────
+	const region = cdk.Fn.ref('AWS::Region');
+	const resourcesUrl = cdk.Fn.join('', [
+		'https://',
+		region,
+		'.console.aws.amazon.com/resource-groups/group/',
+		`${groupPrefix}-resources`,
+		'?region=',
+		region,
+	]);
+	const settingsUrl = cdk.Fn.join('', [
+		'https://',
+		region,
+		'.console.aws.amazon.com/resource-groups/group/',
+		`${groupPrefix}-settings`,
+		'?region=',
+		region,
+	]);
 
-  // Build the nested resource tree for /aws-blocks/api.
-  // Intermediate resource gets a proxy so sub-paths (RawRoutes) still reach Lambda.
-  const awsBlocksResource = api.root.addResource(BLOCKS_NAMESPACE.slice(1));
-  awsBlocksResource.addProxy({ defaultIntegration: integration, anyMethod: true });
-  
-  const apiResource = awsBlocksResource.addResource('api');
-  apiResource.addMethod('POST', integration);
-  apiResource.addMethod('OPTIONS', integration);
+	registerConfig(scope, 'BB_RESOURCES_GROUP_URL', resourcesUrl);
+	registerConfig(scope, 'BB_SETTINGS_GROUP_URL', settingsUrl);
 
-  api.root.addProxy({ defaultIntegration: integration, anyMethod: true });
+	registerBuiltinRoutes();
 
-  // ── Resource Groups ────────────────────────────────────────────────────
-  let rootStack = cdk.Stack.of(scope);
-  while (rootStack.nestedStackParent) rootStack = rootStack.nestedStackParent;
-  const groupPrefix = (id && id !== rootStack.stackName) ? `${rootStack.stackName}-${id}` : rootStack.stackName;
-
-  new CfnGroup(scope, 'StackResources', {
-    name: `${groupPrefix}-resources`,
-    resourceQuery: {
-      type: 'CLOUDFORMATION_STACK_1_0',
-      query: {
-        resourceTypeFilters: [
-          'AWS::CloudWatch::Dashboard',
-          'AWS::Cognito::UserPool',
-          'AWS::DynamoDB::Table',
-          'AWS::Logs::LogGroup',
-          'AWS::RDS::DBCluster',
-          'AWS::RDS::DBInstance',
-          'AWS::S3::Bucket',
-          'AWS::SQS::Queue',
-        ],
-        stackIdentifier: cdk.Stack.of(scope).stackId,
-      },
-    },
-  });
-
-  new CfnGroup(scope, 'StackSettings', {
-    name: `${groupPrefix}-settings`,
-    resourceQuery: {
-      type: 'TAG_FILTERS_1_0',
-      query: {
-        resourceTypeFilters: ['AWS::SSM::Parameter'],
-        tagFilters: [{ key: 'aws-blocks-stack', values: [rootStack.stackName] }],
-      },
-    },
-  });
-
-  // ── Console redirect routes ────────────────────────────────────────────
-  const region = cdk.Fn.ref('AWS::Region');
-  const resourcesUrl = cdk.Fn.join('', [
-    'https://', region, '.console.aws.amazon.com/resource-groups/group/',
-    `${groupPrefix}-resources`, '?region=', region,
-  ]);
-  const settingsUrl = cdk.Fn.join('', [
-    'https://', region, '.console.aws.amazon.com/resource-groups/group/',
-    `${groupPrefix}-settings`, '?region=', region,
-  ]);
-
-  registerConfig(scope, 'BB_RESOURCES_GROUP_URL', resourcesUrl);
-  registerConfig(scope, 'BB_SETTINGS_GROUP_URL', settingsUrl);
-
-  registerBuiltinRoutes();
-
-  return { handler, gateway: api, apiUrl: `${api.url}${BLOCKS_RPC_PREFIX.slice(1)}`, executionRole };
+	return { executionRole };
 }
 
 /**
@@ -252,105 +210,136 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
  * ```
  */
 export class BlocksBackend extends Construct {
-  public readonly apiUrl: string;
-  public readonly gateway: apigateway.RestApi;
-  public readonly handler: cdk.aws_lambda_nodejs.NodejsFunction;
-  public readonly backendHandlerPath: string;
-  /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
-  public readonly executionRole: iam.IRole;
-  /** Infrastructure defaults for Building Blocks created under this backend. */
-  public readonly defaults: BlocksDefaults;
+	public readonly backendHandlerPath: string;
+	/** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+	public readonly executionRole: iam.IRole;
+	/** Infrastructure defaults for Building Blocks created under this backend. */
+	public readonly defaults: BlocksDefaults;
+	/** The default compute (owns the Lambda function + API Gateway); set in `create()`. @internal */
+	_defaultCompute?: Compute;
 
-  /**
-   * The fullId used by child Scopes to compute their env var names,
-   * construct IDs, and physical resource names (e.g., DynamoDB table names).
-   *
-   * Includes the CDK stack name to ensure physical resources are unique
-   * per deployment. This matches what the runtime sees via BLOCKS_STACK_NAME.
-   *
-   * IMPORTANT: this value MUST be token-free. Child Scopes embed `fullId` in
-   * CDK construct IDs (e.g. `${fullId}DsqlMigrationFn`), and CDK forbids
-   * unresolved tokens in construct IDs ("ID components may not include
-   * unresolved tokens"). It is also used to build env-var keys that must match
-   * byte-for-byte between synth time and runtime.
-   *
-   * A nested stack (e.g. Amplify Gen2 `backend.createStack('blocks')`) has a
-   * tokenized `stackName` that only resolves at deploy time. We therefore walk
-   * up to the top-level stack, whose name is concrete at synth time and still
-   * unique per deployment. The `Token.isUnresolved` guard is a defensive
-   * fallback to the (token-free) construct id should no resolvable name exist.
-   */
-  get fullId(): string {
-    let stack = cdk.Stack.of(this);
-    while (stack.nestedStackParent) {
-      stack = stack.nestedStackParent;
-    }
-    const stackName = stack.stackName;
-    if (cdk.Token.isUnresolved(stackName)) {
-      return this.node.id;
-    }
-    return `${stackName}-${this.node.id}`;
-  }
+	/** The default compute's Lambda function. To be removed once consumers move to the multi-compute model. */
+	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
+		return this.requireDefaultCompute().fn;
+	}
+	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+	get gateway(): apigateway.RestApi {
+		return this.requireDefaultCompute().apiGateway;
+	}
+	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	get apiUrl(): string {
+		return this.requireDefaultCompute().apiUrl;
+	}
+	/** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+		return this.requireDefaultCompute().logGroup;
+	}
 
-  private _vpcOptions?: BlocksVpcOptions;
+	private requireDefaultCompute(): LambdaShapedCompute {
+		if (!this._defaultCompute) {
+			throw new Error(
+				'Blocks backend not fully initialized — access .handler/.gateway/.apiUrl after BlocksBackend.create() resolves.',
+			);
+		}
+		return this._defaultCompute as LambdaShapedCompute;
+	}
 
-  private constructor(scope: Construct, id: string, props: BlocksBackendProps) {
-    super(scope, id);
+	/**
+	 * The fullId used by child Scopes to compute their env var names,
+	 * construct IDs, and physical resource names (e.g., DynamoDB table names).
+	 *
+	 * Includes the CDK stack name to ensure physical resources are unique
+	 * per deployment. This matches what the runtime sees via BLOCKS_STACK_NAME.
+	 *
+	 * IMPORTANT: this value MUST be token-free. Child Scopes embed `fullId` in
+	 * CDK construct IDs (e.g. `${fullId}DsqlMigrationFn`), and CDK forbids
+	 * unresolved tokens in construct IDs ("ID components may not include
+	 * unresolved tokens"). It is also used to build env-var keys that must match
+	 * byte-for-byte between synth time and runtime.
+	 *
+	 * A nested stack (e.g. Amplify Gen2 `backend.createStack('blocks')`) has a
+	 * tokenized `stackName` that only resolves at deploy time. We therefore walk
+	 * up to the top-level stack, whose name is concrete at synth time and still
+	 * unique per deployment. The `Token.isUnresolved` guard is a defensive
+	 * fallback to the (token-free) construct id should no resolvable name exist.
+	 */
+	get fullId(): string {
+		let stack = cdk.Stack.of(this);
+		while (stack.nestedStackParent) {
+			stack = stack.nestedStackParent;
+		}
+		const stackName = stack.stackName;
+		if (cdk.Token.isUnresolved(stackName)) {
+			return this.node.id;
+		}
+		return `${stackName}-${this.node.id}`;
+	}
 
-    this.backendHandlerPath = props.backendHandlerPath;
-    this._vpcOptions = props.vpc;
+	private _vpcOptions?: BlocksVpcOptions;
 
-    // Expose self to Building Blocks at CDK time
-    (globalThis as any).CURRENT_BLOCKS_STACK = this;
+	private constructor(scope: Construct, id: string, props: BlocksBackendProps) {
+		super(scope, id);
 
-    // Store defaults on the backend (not the stack) so several BlocksBackends
-    // in one stack each keep their own posture; Building Blocks resolve them by
-    // walking up to their owning backend (see Scope.defaults).
-    this.defaults = props.defaults;
+		this.backendHandlerPath = props.backendHandlerPath;
+		this._vpcOptions = props.vpc;
 
-    // Initialize VPC context before BBs are constructed (so BBs can discover it)
-    let vpcContext: VpcContext | undefined;
-    if (props.vpc) {
-      vpcContext = initializeVpc(this, props.vpc);
-    }
+		// Expose self to Building Blocks at CDK time
+		(globalThis as any).CURRENT_BLOCKS_STACK = this;
 
-    const infra = setupBlocksInfra(this, props, id, vpcContext);
-    this.handler = infra.handler;
-    this.gateway = infra.gateway;
-    this.apiUrl = infra.apiUrl;
-    this.executionRole = infra.executionRole;
+		// Store defaults on the backend (not the stack) so several BlocksBackends
+		// in one stack each keep their own posture; Building Blocks resolve them by
+		// walking up to their owning backend (see Scope.defaults).
+		this.defaults = props.defaults;
 
-    // Override BLOCKS_STACK_NAME to include the parent stack name so runtime
-    // resource lookups (DynamoDB table names) match the CDK-time fullId
-    // and are unique per deployment.
-    this.handler.addEnvironment('BLOCKS_STACK_NAME', this.fullId);
-  }
+		// Initialize VPC context before the default compute is created and before
+		// BBs are constructed, so both can discover it: the default compute
+		// (LambdaCompute) reads it via getVpcContext(this) to place its function in
+		// the VPC, and BBs (e.g. bb-data) read it to co-locate their resources.
+		if (props.vpc) {
+			initializeVpc(this, props.vpc);
+		}
 
-  static async create(scope: Construct, id: string, props: BlocksBackendProps) {
-    assertCdkConditionActive();
-    const backend = new BlocksBackend(scope, id, props);
-    // file:// URL (not a raw path) so the cache-busting query works on Windows,
-    // where an absolute path like `D:\...` is rejected as URL scheme `d:`.
-    const backendUrl = pathToFileURL(props.backendCDKPath);
-    backendUrl.searchParams.set('stack', id);
-    const mod = await import(backendUrl.href);
-    if (typeof mod.default === 'function') {
-      try {
-        await mod.default(backend);
-      } catch (error) {
-        throw new Error(`Error executing default export function for backend "${id}": ${error instanceof Error ? error.message : error}`, { cause: error });
-      }
-    }
-    addBlocksStackMetadata(cdk.Stack.of(backend));
+		const infra = setupBlocksInfra(this, props, id);
+		this.executionRole = infra.executionRole;
+		// The default compute (and thus handler/gateway) is created in create(),
+		// after construction — it derives BLOCKS_STACK_NAME from this.fullId.
+	}
 
-    // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(backend, backend.handler);
+	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
+		assertCdkConditionActive();
+		const backend = new BlocksBackend(scope, id, props);
+		// Create the default compute before importing the backend: it OWNS the
+		// Lambda function + API Gateway (which back .handler/.gateway/.apiUrl), and
+		// a block reading `this.compute` in its constructor (during that import)
+		// must resolve to it. The factory is supplied by the umbrella
+		// @aws-blocks/blocks (which injects LambdaCompute) via props, so core never
+		// imports the concrete compute class.
+		backend._defaultCompute = props.defaultComputeFactory(backend);
+		// file:// URL (not a raw path) so the cache-busting query works on Windows,
+		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
+		const backendUrl = pathToFileURL(props.backendCDKPath);
+		backendUrl.searchParams.set('stack', id);
+		const mod = await import(backendUrl.href);
+		if (typeof mod.default === 'function') {
+			try {
+				await mod.default(backend);
+			} catch (error) {
+				throw new Error(
+					`Error executing default export function for backend "${id}": ${error instanceof Error ? error.message : error}`,
+					{ cause: error },
+				);
+			}
+		}
+		addBlocksStackMetadata(cdk.Stack.of(backend));
 
-    // Finalize VPC: collect requirements → deduplicate → provision endpoints
-    if (backend._vpcOptions) {
-      finalizeVpc(backend, backend._vpcOptions);
-    }
+		// Finalize BB config → S3 (after all BBs have registered their config)
+		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
-    return backend;
-  }
+		// Finalize VPC: collect requirements → deduplicate → provision endpoints
+		if (backend._vpcOptions) {
+			finalizeVpc(backend, backend._vpcOptions);
+		}
+
+		return backend;
+	}
 }

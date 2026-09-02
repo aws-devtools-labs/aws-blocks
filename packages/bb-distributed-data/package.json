@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-distributed-data",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
@@ -37,9 +37,9 @@
     "test": "node --test 'dist/**/*.test.js'"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.2.0",
+    "@aws-blocks/core": "^0.3.0",
     "@aws-blocks/data-common": "^0.1.4",
-    "@aws-blocks/bb-logger": "^0.1.4",
+    "@aws-blocks/bb-logger": "^0.1.5",
     "@aws-sdk/dsql-signer": "^3.700.0",
     "@electric-sql/pglite": "^0.2.0",
     "pg": "^8.13.0"

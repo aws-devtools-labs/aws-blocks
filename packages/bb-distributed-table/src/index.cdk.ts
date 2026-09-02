@@ -7,6 +7,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
@@ -247,7 +248,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 
 		// Add GSI manager if indexes are defined
 		if (config.indexes && Object.keys(config.indexes).length > 0) {
-			const gsiProvider = getOrCreateGsiProvider(cdk.Stack.of(this));
+			const gsiProvider = getOrCreateGsiProvider(cdk.Stack.of(this), this.defaults.logRetention);
 			gsiProvider.addTableArn(this.table.tableArn, isSandbox);
 
 			const indexesWithTypes: Record<string, any> = {};
@@ -301,7 +302,7 @@ interface SharedGsiProvider {
 	addTableArn: (tableArn: string, isSandbox: boolean) => void;
 }
 
-function getOrCreateGsiProvider(stack: cdk.Stack): SharedGsiProvider {
+function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): SharedGsiProvider {
 	const existing = (stack as any)[GSI_PROVIDER_KEY] as SharedGsiProvider | undefined;
 	if (existing) return existing;
 
@@ -310,11 +311,18 @@ function getOrCreateGsiProvider(stack: cdk.Stack): SharedGsiProvider {
 	const tableArns: string[] = [];
 	const sandboxTableArns: string[] = [];
 
+	// Own the GSI-manager Lambdas' log groups so their retention follows the
+	// stack-wide default instead of AWS's infinite retention. Torn down with the
+	// stack (logs are not durable state).
 	const gsiManagerLambda = new LambdaFunction(stack, 'BlocksGsiManager', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
 		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
 		timeout: Duration.minutes(15),
+		logGroup: new LogGroup(stack, 'BlocksGsiManagerLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
 	});
 
 	const gsiIsCompleteLambda = new LambdaFunction(stack, 'BlocksGsiIsComplete', {
@@ -322,6 +330,10 @@ function getOrCreateGsiProvider(stack: cdk.Stack): SharedGsiProvider {
 		handler: 'index.isCompleteHandler',
 		code: Code.fromAsset(join(__dirname, 'gsi-manager-lambda')),
 		timeout: Duration.minutes(1),
+		logGroup: new LogGroup(stack, 'BlocksGsiIsCompleteLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
 	});
 
 	// Production permissions — lazily resolved so ARNs accumulate as tables register

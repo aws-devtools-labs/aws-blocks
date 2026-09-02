@@ -24,6 +24,7 @@
  */
 
 export { Compute } from './compute/compute.js';
+export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // Reserved `/aws-blocks` path segment, needed by concrete computes (e.g.
 // LambdaCompute in @aws-blocks/bb-lambda-compute) to build their API route tree.
 export { BLOCKS_NAMESPACE } from '../constants.js';

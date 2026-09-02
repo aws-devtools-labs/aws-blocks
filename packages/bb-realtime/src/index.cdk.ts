@@ -13,17 +13,18 @@
  * subsequent ones reuse it.
  */
 
-import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
-import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, ensureApiGatewayAccount, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import * as cdk from 'aws-cdk-lib';
+import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
+import { LogGroupLogDestination, WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
+import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
 
 export { RealtimeErrors } from './errors.js';
@@ -31,9 +32,9 @@ export type {
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
-	RealtimeSubscription,
-	RealtimeServer,
 	RealtimeOptions,
+	RealtimeServer,
+	RealtimeSubscription,
 } from './types.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
@@ -47,7 +48,14 @@ const connectionsSchema: StandardSchemaV1<any> = {
 			if (typeof value === 'object' && value !== null) {
 				for (const v of Object.values(value as Record<string, unknown>)) {
 					if (typeof v === 'number') {
-						return { issues: [{ message: 'expected string', path: [Object.keys(value as any).find(k => (value as any)[k] === v)!] }] };
+						return {
+							issues: [
+								{
+									message: 'expected string',
+									path: [Object.keys(value as any).find((k) => (value as any)[k] === v)!],
+								},
+							],
+						};
 					}
 				}
 			}
@@ -65,7 +73,11 @@ interface SharedInfra {
 	stage: WebSocketStage;
 }
 
-function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunction, parent: BuildingBlockScope): SharedInfra {
+function getOrCreateSharedInfra(
+	stack: cdk.Stack,
+	handler: cdk.aws_lambda.IFunction,
+	parent: BuildingBlockScope,
+): SharedInfra {
 	const existing = (stack as any)[SHARED_KEY] as SharedInfra | undefined;
 	if (existing) return existing;
 
@@ -93,11 +105,46 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 		},
 	});
 
+	// Structured JSON access logging on the WebSocket stage, when the stack-wide
+	// default enables it. Needs the account-level CloudWatch Logs role — shared
+	// with (and typically already provisioned by) the core REST API stage.
+	let accessLogGroup: LogGroup | undefined;
+	let apiGatewayAccount: cdk.aws_apigateway.CfnAccount | undefined;
+	if (parent.defaults.accessLogging) {
+		apiGatewayAccount = ensureApiGatewayAccount(stack);
+		accessLogGroup = new LogGroup(stack, 'BlocksRtAccessLogs', {
+			retention: parent.defaults.logRetention,
+			// Access logs are the request audit trail — follow the stack-wide
+			// removal policy (production RETAIN) so they survive a teardown.
+			removalPolicy: parent.defaults.removalPolicy,
+		});
+	}
+
 	const stage = new WebSocketStage(stack, 'BlocksRtStage', {
 		webSocketApi: wsApi,
 		stageName: 'rt',
 		autoDeploy: true,
+		// Cap message throughput on the connection from the stack-wide default.
+		// On a WebSocket stage the throttle unit is messages/second across the
+		// connection (not HTTP requests) — see DESIGN.md.
+		throttle: {
+			rateLimit: parent.defaults.throttling.rateLimit,
+			burstLimit: parent.defaults.throttling.burstLimit,
+		},
+		...(accessLogGroup
+			? {
+					accessLogSettings: {
+						destination: new LogGroupLogDestination(accessLogGroup),
+						format: AccessLogFormat.jsonWithStandardFields(),
+					},
+				}
+			: {}),
 	});
+
+	// The stage must be created after the account setting is in place.
+	if (apiGatewayAccount) {
+		stage.node.addDependency(apiGatewayAccount);
+	}
 
 	// API Gateway Management API: postToConnection for fan-out + subscribe responses
 	wsApi.grantManageConnections(handler);
@@ -148,7 +195,13 @@ export class Realtime extends BuildingBlockScope {
 	// build; calling them at module top-level (which runs during synth) would
 	// otherwise fail with a cryptic `X is not a function`. These stubs turn that
 	// into an actionable message.
-	publish(..._args: unknown[]): never { return synthGuard('Realtime', 'publish'); }
-	subscribe(..._args: unknown[]): never { return synthGuard('Realtime', 'subscribe'); }
-	getChannel(..._args: unknown[]): never { return synthGuard('Realtime', 'getChannel'); }
+	publish(..._args: unknown[]): never {
+		return synthGuard('Realtime', 'publish');
+	}
+	subscribe(..._args: unknown[]): never {
+		return synthGuard('Realtime', 'subscribe');
+	}
+	getChannel(..._args: unknown[]): never {
+		return synthGuard('Realtime', 'getChannel');
+	}
 }

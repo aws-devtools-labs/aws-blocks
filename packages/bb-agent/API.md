@@ -29,6 +29,8 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     description?: string;
     inferenceOnly?: boolean;
     logger?: ChildLogger;
+    maxLlmCalls?: number | false;
+    maxToolIterations?: number | false;
     // (undocumented)
     model?: {
         deployed?: ModelConfig | ModelConfig[];
@@ -38,8 +40,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
     streamingMode?: 'token' | 'block';
-    // (undocumented)
-    structuredOutput?: z.ZodType;
     // (undocumented)
     systemPrompt: string;
     toolContextSchema?: z.ZodType<TContext>;
@@ -282,6 +282,8 @@ export interface ToolCallRecord {
 
 // @public (undocumented)
 export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z.ZodType = z.ZodType<any>> {
+    cannedExamples?: Record<string, JSONValue>;
+    cannedTriggers?: string[];
     // (undocumented)
     description: string;
     handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;

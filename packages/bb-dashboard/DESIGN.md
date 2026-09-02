@@ -59,14 +59,14 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 - **UX improvement** — Showing "Insufficient data" is better than widgets missing entirely until first emission
 - **Opt-in** — Customers who don't use custom metrics leave this empty
 
-### D-DB-6: Auto-derived log group name
+### D-DB-6: Log group name from the framework-owned handler group
 
-**Decision:** When a `logger` BB is provided, Dashboard automatically derives the log group name from the Lambda function name using `/aws/lambda/${functionName}`.
+**Decision:** When a `logger` BB is provided, Dashboard points its log widgets at the shared handler's CloudWatch log group via `scope.handlerLogGroup.logGroupName`. It falls back to the `/aws/lambda/${functionName}` convention only when a group name isn't supplied.
 
 **Rationale:**
-- **Standard pattern** — AWS Lambda always creates logs in `/aws/lambda/{FunctionName}` by default
+- **Framework-owned group** — the BlocksStack/BlocksBackend now provisions a dedicated handler log group (so its retention follows `defaults.logRetention`); that group has a CDK-generated name, **not** `/aws/lambda/{FunctionName}`. Reconstructing the old convention would point the widgets at a group the handler no longer writes to.
 - **Zero configuration** — No need to pass `logGroupName` explicitly if a Logger BB is connected
-- **Consistency** — If Logger BB exists, its logs are automatically queried
+- **Consistency** — If Logger BB exists, the handler's actual logs are automatically queried
 - **Fallback** — If no Logger BB is provided, no log widgets appear (expected behavior)
 
 ### D-DB-7: Scope, composition guidance, and cost model
