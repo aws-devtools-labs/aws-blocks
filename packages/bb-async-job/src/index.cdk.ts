@@ -7,6 +7,7 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Scope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
@@ -82,6 +83,17 @@ export class AsyncJob<T = unknown> extends Scope {
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
 		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 
+		// The queue is consumed by an SQS event source on the compute's own
+		// Lambda, so a AsyncJob currently requires a Lambda compute. Other
+		// compute types need a different consumption path (e.g. runtime polling)
+		// that does not exist yet — fail loud at synth rather than provision a
+		// queue nothing consumes (submitted jobs would silently pile up). Matches
+		// the CronJob / Realtime guards.
+		const compute = this.compute;
+		if (!(compute instanceof LambdaCompute)) {
+			throw new Error(`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`);
+		}
+
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),
 			retentionPeriod: Duration.days(14),
@@ -112,18 +124,22 @@ export class AsyncJob<T = unknown> extends Scope {
 			enforceSSL: true,
 		});
 
-		this.queue.grantSendMessages(this.handler);
+		this.queue.grantSendMessages(this.executionRole);
 		registerConfig(
 			this,
 			`BLOCKS_QUEUE_URL_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
 			this.queue.queueUrl
 		);
+		registerConfig(this, `BLOCKS_HANDLER_OWNER_${this.fullId}`, compute.fullId);
 
+		// The event source attaches to the compute's own function (guaranteed a
+		// Lambda compute by the guard above).
+		//
 		// Partial batch responses MUST stay on for any batchSize > 1: without them a
 		// single failing record makes SQS treat the whole batch as handled and delete
 		// every message in it (silent loss). The runtime handler already returns
 		// `{ batchItemFailures }`, so this is never configurable.
-		this.handler.addEventSource(
+		compute.fn.addEventSource(
 			new SqsEventSource(this.queue, {
 				batchSize,
 				reportBatchItemFailures: true,

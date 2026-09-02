@@ -20,6 +20,7 @@ import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import { Scope, synthGuard, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -163,7 +164,14 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 export class Realtime extends Scope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope });
-		getOrCreateSharedInfra(cdk.Stack.of(this), this.handler, this);
+		// The WebSocket routes integrate directly with the compute's function, so
+		// Realtime currently requires a Lambda compute; other compute types need a
+		// different WebSocket integration — not yet supported.
+		const compute = this.compute;
+		if (!(compute instanceof LambdaCompute)) {
+			throw new Error(`Realtime "${this.fullId}" currently supports only a Lambda compute.`);
+		}
+		getOrCreateSharedInfra(cdk.Stack.of(this), compute.fn, this);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {
