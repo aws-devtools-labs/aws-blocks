@@ -40,7 +40,12 @@ function synth(build: (stack: cdk.Stack) => void) {
 	(globalThis as any).CURRENT_BLOCKS_STACK = stack;
 	try {
 		build(stack);
-		finalizeConfigRegistry(stack, handler);
+		// Grant config read to the handler's role and stamp the `BLOCKS_CONFIG_*`
+		// coordinates on the handler function — the same target as before the
+		// shared-role refactor, so the template assertions are unchanged.
+		finalizeConfigRegistry(stack, handler.role!, [
+			{ setEnv: (key: string, value: string) => handler.addEnvironment(key, value) } as any,
+		]);
 		return Template.fromStack(stack);
 	} finally {
 		delete (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -88,7 +93,7 @@ stack.handler = handler;
 stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
 new AuthCognito(stack, 'auth');
-finalizeConfigRegistry(stack, handler);
+finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
 const tables = Object.entries(resources)

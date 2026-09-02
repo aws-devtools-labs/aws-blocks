@@ -17,6 +17,7 @@ import { addBlocksStackMetadata } from './stack-metadata.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import type { Compute } from './compute/compute.js';
+import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 
 export {
@@ -124,7 +125,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
       }
     }
     // Finalize BB config → S3 (after all BBs have registered their config)
-    finalizeConfigRegistry(stack, stack.handler);
+    finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
     new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
 
