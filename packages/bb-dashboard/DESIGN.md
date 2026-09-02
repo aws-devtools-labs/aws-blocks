@@ -10,7 +10,7 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 
 ### D-DB-1: Structural typing for observability BB composition
 
-**Decision:** `options.logger`, `options.metrics`, and `options.tracer` use structural typing. The Dashboard BB accepts any object with `fullId` or `namespace` properties, not specific BB class instances.
+**Decision:** `options.metrics` uses structural typing (`MetricsBBRef`: any object with `namespace` and optional `defaultDimensions`), not the Metrics BB class. (Logger/Tracer are no longer dashboard inputs — they attach to a compute, and the compute self-reports; see D-DB-8.)
 
 **Rationale:**
 - **Loose coupling** — Dashboard doesn't depend on Logger, Metrics, or Tracer BB class definitions
@@ -59,15 +59,15 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 - **UX improvement** — Showing "Insufficient data" is better than widgets missing entirely until first emission
 - **Opt-in** — Customers who don't use custom metrics leave this empty
 
-### D-DB-6: Auto-derived log group name
+### D-DB-6: Compute-derived log group name
 
-**Decision:** When a `logger` BB is provided, Dashboard automatically derives the log group name from the Lambda function name using `/aws/lambda/${functionName}`.
+**Decision:** The compute derives its own log group name (`/aws/lambda/${functionName}` for `LambdaCompute`) inside its `loggingWidgets` builder; the Dashboard never computes a log group name.
 
 **Rationale:**
-- **Standard pattern** — AWS Lambda always creates logs in `/aws/lambda/{FunctionName}` by default
-- **Zero configuration** — No need to pass `logGroupName` explicitly if a Logger BB is connected
-- **Consistency** — If Logger BB exists, its logs are automatically queried
-- **Fallback** — If no Logger BB is provided, no log widgets appear (expected behavior)
+- **Standard pattern** — AWS Lambda always creates logs in `/aws/lambda/{FunctionName}` by default; a container compute would derive its own stream instead
+- **Zero configuration** — No `logGroupName` to pass anywhere; attaching a Logger to the compute is the only signal
+- **Right owner** — The log group belongs to the compute's physical resources, so only the compute can name it correctly (see D-DB-8)
+- **Fallback** — A compute with no Logger attached reports no `logging` section, so no log widgets appear (expected behavior)
 
 ### D-DB-7: Scope, composition guidance, and cost model
 
@@ -76,8 +76,93 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 **Rationale:**
 - **When it fits** — Teams that want operational visibility into a deployed application without hand-building CloudWatch dashboards.
 - **When it does not** — Fully custom widget layouts are better served by the CloudWatch console directly; data-inspection admin UIs belong in `AdminSite`, not here. (complements D-DB-3, which covers why we lean on CloudWatch's native dashboard over a custom UI)
-- **Composition guidance** — Connect all three observability BBs (Metrics, Logger, Tracer) for full visibility; use `title` to distinguish dashboards across multi-stage deployments; keep the default widget set for standard apps and use `widgets` only for custom additions.
+- **Composition guidance** — For full visibility, attach a Logger and Tracer to the compute (their sections appear automatically) and pass Metrics source(s) to the dashboard; use `title` to distinguish dashboards across multi-stage deployments.
 - **Cost model** — CloudWatch Dashboards are free for up to 3 dashboards (50 metrics each); beyond that they cost $3/dashboard/month. There is no runtime cost — dashboards are read-only views over existing CloudWatch data. This is the concrete pricing behind D-DB-3's "zero runtime cost" claim.
+
+## Multi-Compute Dashboard (Implemented)
+
+> **Status:** implemented. The dashboard is organized **by compute**: it takes an
+> explicit `computes?: Compute | Compute[]` option (defaulting to the app's
+> default compute via `this.compute`), renders one group per compute (health
+> always; logs/traces only when a Logger/Tracer is attached to that compute),
+> and renders app-wide metrics sections after the compute groups — one per
+> `MetricsSource`. The removed `logger`/`tracer` options were a breaking change.
+
+### The two axes: compute-scoped vs app-scoped observability
+
+The four sections split cleanly by what they derive from:
+
+| Section | Scope | Derives from | On the dashboard |
+|---|---|---|---|
+| Health (Invocations/Errors/Duration, or CPU/Memory for containers) | **compute** | the compute's own service/function metrics | grouped under its compute |
+| Logs | **compute** | the compute's log group (`/aws/lambda/{fn}`, or the container's stream) | grouped under its compute |
+| Traces | **compute** | X-Ray filtered to the compute's function/service | grouped under its compute |
+| Metrics | **app** | a CloudWatch namespace (EMF; defaults to the Metrics BB's `fullId`) | one app-wide section, **not** per compute |
+
+Health/logs/traces are defined by a compute's *physical resources*, so they belong grouped under their compute. Metrics are a semantic, app-level namespace that any compute can emit into — containers change only the *emission wiring* (a container needs the CloudWatch agent / FireLens to auto-extract EMF, vs Lambda's turnkey stdout path) and optionally invite a per-compute *dimension*; neither binds a namespace to a compute. So metrics stays app-wide.
+
+### Target layout
+
+One dashboard, grouped by compute, with metrics as a trailing app-wide section:
+
+```
+# <app> dashboard
+## Compute — api (Lambda)
+   health   (always)
+   logs     (only if a Logger targets this compute)
+   traces   (only if a Tracer targets this compute)
+## Compute — worker (Container)
+   health
+   logs
+## Metrics (app-wide)
+   namespace "orders": OrdersPlaced, Latency p99 …
+   namespace "billing": …
+```
+
+### D-DB-8: Compute is the grouping unit; the compute self-reports its section
+
+**Decision:** For compute-scoped sections, the dashboard takes the computes to
+render and asks each to self-report through a **single public entry**,
+`compute.dashboardSection(region): ComputeDashboardSection` (core), returning
+`{ label, health, logging?, tracing? }`. The `loggerEnabled` / `tracerEnabled`
+flags are **private** on `Compute` — flipped only by `enableLogging()` /
+`enableTracing()` (which Logger/Tracer call), never settable from outside — and
+the per-kind builders (`healthWidgets` / `loggingWidgets` / `tracingWidgets`)
+are `protected`, so a caller cannot obtain log/trace widgets for a compute that
+has no Logger/Tracer attached.
+
+**Rationale:**
+- Log group and trace target belong to the compute, not to the Logger/Tracer BB — so the compute is the only thing that can build the right widgets for a given compute.
+- Keeps the dashboard a **pure aggregator** (it never computes a query itself), consistent with D-DB-3 and the "thin block" principle.
+- Presence (a Logger/Tracer *exists* for this compute) drives the section: `dashboardSection` includes `logging`/`tracing` only when the corresponding enable method was called.
+- Encapsulation: sections can't be fabricated or bypassed — the flag and the infra move together through the enable methods (template-method pattern), and the gating lives in one place.
+
+### D-DB-9: Metrics stays an explicit, app-wide input
+
+**Decision:** Metrics is **not** part of the per-compute grouping and is **not** auto-discovered. It is an explicit option `metrics?: MetricsSource | MetricsSource[]`, where each `MetricsSource` pairs a Metrics BB with **its own** `metricConfigs` (metric names are namespace-specific, so configs are per-source, not dashboard-wide). Each source renders once as an app-wide section, one per namespace, after the compute groups.
+
+**Rationale:**
+- A namespace is app-level and receives from any compute; auto-including it per compute would duplicate it across every compute group.
+- Nothing about a Metrics BB registers against a compute (unlike Logger/Tracer), so the compute has no signal to self-report metrics.
+- Pairing configs with their source prevents cross-namespace ambiguity: `OrdersPlaced` belongs to the orders namespace, not billing.
+- Per-compute disambiguation, when wanted, is a `defaultDimensions` choice on the Metrics BB — not a namespace-to-compute binding.
+
+### D-DB-10: Explicit `computes` option, defaulting to the default compute
+
+**Decision:** The dashboard takes `computes?: Compute | Compute[]`. When omitted, it renders `[this.compute]` — the app's default compute — not every compute registered on the stack.
+
+**Rationale:**
+- Consistent with D-DB-2: the caller names exactly which computes appear. Not every compute belongs on every dashboard (customers may want one dashboard per compute, or a curated subset), and a Logger/Tracer may not be attached to every compute.
+- Avoids any construction-order dependency on the compute registry: registry enumeration at Dashboard-construction time would silently miss computes created after the dashboard. The explicit list has no timing problem.
+- Single-compute apps need no argument — the default produces the same dashboard as before, plus a compute header.
+
+### Layout (as implemented, `widgets.ts`)
+
+Per compute (in the order given): `## 🔧 {label}` header (label = the compute's
+scope `id`), health rows always, then `### 🔍 Traces` and `### 📋 Logs` only when
+present in the section. Then one `## 📊 Metrics — {namespace}` section per
+`MetricsSource`. Single-compute apps render one group — the pre-multi-compute
+dashboard plus a header row.
 
 ## Infrastructure (CDK)
 
@@ -99,11 +184,11 @@ Creates a single CloudWatch Dashboard resource:
 **When `metrics` is provided:**
 5. **Individual Metric Graphs** — One dedicated GraphWidget per MetricConfig entry. Each widget displays the metric with the configured stat and period (defaults: Sum, 60s), titled with metric name or custom title. Dimensions, when specified, narrow the metric scope to specific resources.
 
-**When `logger` is provided:**
+**When a Logger is attached to the compute:**
 6. **Recent Errors** — Log Insights query: `fields @timestamp, @message | filter @message like /ERROR/ or level = "error" | sort @timestamp desc | limit 20`
 7. **Log Volume** — `AWS/Logs` → IncomingLogEvents (Sum, 300s)
 
-**When `tracer` is provided:**
+**When a Tracer is attached to the compute:**
 8. **Traces** — X-Ray trace widget showing a list of recent traces
 
 ### Widget Layout
@@ -113,13 +198,15 @@ CloudWatch Dashboards use a 24-column grid. The auto-generated layout stacks sec
 ```
 Row 0 (y=0):  [Lambda Invocations (12w, 6h)] [Lambda Errors (12w, 6h)]
 Row 1 (y=6):  [Lambda Duration (12w, 6h)]     [Concurrent Executions (12w, 6h)]
-Row 2+:       [Metric pairs (12w, 6h each)]   ← two metrics per row when `metrics` provided
-Row M:        [Traces (24w, 9h)]               ← only if `tracer` provided (X-Ray trace map)
-Row N:        [Recent Errors (24w, 6h)]        ← only if `logger` provided
-Row N+1:      [Log Volume (24w, 6h)]           ← only if `logger` provided
+Row T:        [Traces (24w, 9h)]               ← only if a Tracer is attached (X-Ray trace map)
+Row N:        [Recent Errors (24w, 6h)]        ← only if a Logger is attached
+Row N+1:      [Log Volume (24w, 6h)]           ← only if a Logger is attached
+Row M+:       [Metric pairs (12w, 6h each)]   ← two metrics per row, per MetricsSource, after the compute groups
 ```
 
-Rows collapse upward when their condition is not met. For example, if only `logger` is provided (no metrics or tracing):
+(Section-header text widgets separate the groups; within a compute group the order is health → traces → logs, and app-wide metrics sections follow all compute groups.)
+
+Rows collapse upward when their condition is not met. For example, if only a Logger is attached (no metrics or tracing):
 
 ```
 Row 0 (y=0):  [Lambda Invocations (12w, 6h)] [Lambda Errors (12w, 6h)]
@@ -213,50 +300,52 @@ Dashboard accepts observability BB instances as constructor parameters. This is 
 
 ### BB Integration via Structural Typing
 
-Dashboard parameters use structural typing. `metrics` accepts any object with a `namespace` property (the resolved CloudWatch namespace) and an optional `defaultDimensions` property; `logger` and `tracer` accept any object with `fullId`. This means the real BB instances satisfy the interfaces via duck typing without importing their exact types, keeping the Dashboard BB decoupled.
+Dashboard parameters use structural typing. Each `MetricsSource.metrics` accepts any object with a `namespace` property (the resolved CloudWatch namespace) and an optional `defaultDimensions` property. Logger/Tracer are not dashboard parameters — they attach to a compute (`enableLogging`/`enableTracing`), and the dashboard reads each compute's self-reported `dashboardSection`. This keeps the Dashboard BB decoupled from the observability BB classes.
 
 **Metrics namespace and dimensions resolution:**
 1. `metrics.namespace` → used if metrics BB provided
 2. `metrics.defaultDimensions` → merged into widget queries so they target the correct dimensioned metric stream (per-metric dimensions from `MetricConfig` take precedence on conflict)
 3. No metrics BB → no custom metrics widgets
 
-**Example (full BB composition):**
+**Example (full observability):**
 ```typescript
+new Logger(scope, 'logger');   // attaches to the compute → its logs section appears
+new Tracer(scope, 'tracer');   // attaches to the compute → its traces section appears
+const metrics = new Metrics(scope, 'metrics');
+
 const dashboard = new Dashboard(scope, 'dashboard', {
-  logger,   // Logger BB — enables log widgets
-  metrics,  // Metrics BB — uses resolved namespace
-  tracer,   // Tracer BB — enables trace widgets
-  metricConfigs: [{ name: 'OrdersPlaced' }, { name: 'Latency' }, { name: 'ErrorRate' }],
+  // computes omitted → the app's default compute
+  metrics: {
+    metrics,
+    metricConfigs: [{ name: 'OrdersPlaced' }, { name: 'Latency' }, { name: 'ErrorRate' }],
+  },
 });
 ```
 
 ### Data Flow
 
 ```
-┌──────────────┐     BB instance (namespace)       ┌──────────────┐
-│   Metrics    │ ──────────────────────────────► │              │
-│  (namespace) │                                  │              │
-└──────────────┘                                  │              │
-                                                 │              │
-┌──────────────┐     BB instance (fullId)         │  Dashboard   │──► CloudWatch Dashboard (CDK)
-│   Logger     │ ──────────────────────────────► │  (CDK only)  │──► CfnOutput (URL)
-│  (fullId)    │                                  │              │──► Optional API route
-└──────────────┘                                  │              │
-                                                 │              │
-┌──────────────┐     BB instance (fullId)         │              │
-│   Tracer     │ ──────────────────────────────► │              │
-│  (fullId)    │                                  │              │
-└──────────────┘                                  └──────────────┘
+┌──────────────┐  enableLogging()  ┌──────────────┐
+│   Logger     │ ────────────────► │              │
+└──────────────┘                   │   Compute    │  dashboardSection(region)
+┌──────────────┐  enableTracing()  │  (per unit)  │ ──────────────────────────┐
+│   Tracer     │ ────────────────► │              │                           ▼
+└──────────────┘                   └──────────────┘                  ┌──────────────┐
+                                                                    │  Dashboard   │──► CloudWatch Dashboard (CDK)
+┌──────────────┐     MetricsSource (namespace + configs)            │  (CDK only)  │──► CfnOutput (URL)
+│   Metrics    │ ─────────────────────────────────────────────────► │              │──► Optional API route
+└──────────────┘                                                    └──────────────┘
 ```
 
-### What Dashboard Reads from Each BB
+Logger/Tracer never talk to the Dashboard: they attach to their compute, and
+the Dashboard asks each compute for its self-reported section.
 
-| BB | Information Extracted | Used For |
+### What Dashboard Reads from Each Input
+
+| Input | Information Extracted | Used For |
 |----|----------------------|----------|
-| **Metrics** | `namespace` (resolved CloudWatch namespace), `defaultDimensions` (optional) | Querying custom metrics in the namespace with correct dimension filtering |
-| **Logger** | `fullId` (presence → derives log group) | Log Insights query widget |
-| **Tracer** | `fullId` (presence → implies X-Ray active) | X-Ray trace list widget |
-| **(always)** | Lambda function name (from Scope) | Lambda built-in metrics (Invocations, Errors, Duration) |
+| **Compute** (per `computes` entry) | `dashboardSection(region)` → `{ label, health, logging?, tracing? }` | The compute's group: header, health widgets, plus logs/traces widgets when a Logger/Tracer is attached |
+| **Metrics** (per `MetricsSource`) | `namespace` (resolved CloudWatch namespace), `defaultDimensions` (optional), per-source `metricConfigs` | Querying custom metrics in the namespace with correct dimension filtering |
 
 ### Why Not Auto-Discovery?
 
@@ -298,11 +387,10 @@ Dashboard intentionally does **not** walk the scope tree to auto-discover BBs be
 ### Unit Tests (`packages/bb-dashboard/src/index.test.ts`)
 
 - Widget builder functions produce correct CloudWatch Dashboard JSON format
-- Lambda health widgets are always generated regardless of options
-- Metrics widgets only appear when `metrics` option is provided
-- Logging widgets only appear when `logger` option is provided
-- Trace widgets only appear when `tracer` option is provided
-- `metricConfigs` option creates pre-configured metric widgets
+- Health widgets are always generated for every compute section
+- Metrics widgets only appear when the `metrics` option is provided (one section per `MetricsSource`)
+- Logging/trace widgets only appear when the compute's section reports them (Logger/Tracer attached)
+- Per-source `metricConfigs` create pre-configured metric widgets
 - Widget layout collapses rows correctly when conditions are not met
 - Mock logs expected console message and route returns null URL
 

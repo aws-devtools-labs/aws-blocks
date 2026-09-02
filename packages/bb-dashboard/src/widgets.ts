@@ -6,71 +6,11 @@
  * Produces IWidget arrays for the L2 Dashboard construct.
  */
 import { Duration } from 'aws-cdk-lib';
-import {
-	GraphWidget,
-	LogQueryWidget,
-	Metric,
-	TextWidget,
-	ConcreteWidget,
-} from 'aws-cdk-lib/aws-cloudwatch';
+import { GraphWidget, Metric, TextWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import type { ResolvedDashboardConfig, DashboardOptions, MetricConfig } from './types.js';
+import type { ComputeDashboardSection } from '@aws-blocks/core/cdk/internal';
+import type { ResolvedDashboardConfig, ResolvedMetricsSource, DashboardOptions, MetricConfig } from './types.js';
 import { DashboardErrors } from './errors.js';
-
-// ── Trace widget (no L2 construct exists) ───────────────────────────────────
-
-/**
- * Custom widget that renders an X-Ray trace list in the CloudWatch Dashboard.
- *
- * CloudWatch supports a `"type": "trace"` widget, but CDK does not provide
- * an L2 construct for it. This class extends `ConcreteWidget` to produce
- * the correct JSON.
- *
- * @example
- * ```typescript
- * new TraceWidget({
- *   title: 'Traces',
- *   functionName: 'my-handler',
- *   region: 'us-east-1',
- * });
- * ```
- */
-export class TraceWidget extends ConcreteWidget {
-	private readonly props: TraceWidgetProps;
-
-	constructor(props: TraceWidgetProps) {
-		super(props.width ?? 24, props.height ?? 9);
-		this.props = props;
-	}
-
-	toJson(): any[] {
-		return [
-			{
-				type: 'trace',
-				width: this.width,
-				height: this.height,
-				x: this.x ?? 0,
-				y: this.y ?? 0,
-				properties: {
-					title: this.props.title ?? 'Traces',
-					region: this.props.region,
-					filters: {
-						query: `service(id(name: "${this.props.functionName}", type: "AWS::Lambda::Function"))`,
-						group: 'Default',
-					},
-				},
-			},
-		];
-	}
-}
-
-export interface TraceWidgetProps {
-	title?: string;
-	functionName: string;
-	region: string;
-	width?: number;
-	height?: number;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -89,92 +29,6 @@ function validateMetricConfig(metric: MetricConfig): void {
 	if (period !== undefined && period < 1) {
 		throw blocksError(DashboardErrors.InvalidMetricConfig, `Metric period must be >= 1 seconds, got: ${period}`);
 	}
-}
-
-// ── Lambda health widgets (always included) ─────────────────────────────────
-
-/**
- * Build Lambda health widgets: Invocations, Errors, Duration, ConcurrentExecutions.
- * Returns two rows of two 12-wide GraphWidgets each.
- */
-export function buildLambdaWidgets(functionName: string, region: string): IWidget[][] {
-	const invocations = new GraphWidget({
-		title: 'Lambda Invocations',
-		width: 12,
-		height: 6,
-		region,
-		left: [
-			new Metric({
-				namespace: 'AWS/Lambda',
-				metricName: 'Invocations',
-				dimensionsMap: { FunctionName: functionName },
-				statistic: 'Sum',
-				period: Duration.seconds(60),
-			}),
-		],
-	});
-
-	const errors = new GraphWidget({
-		title: 'Lambda Errors',
-		width: 12,
-		height: 6,
-		region,
-		left: [
-			new Metric({
-				namespace: 'AWS/Lambda',
-				metricName: 'Errors',
-				dimensionsMap: { FunctionName: functionName },
-				statistic: 'Sum',
-				period: Duration.seconds(60),
-			}),
-		],
-	});
-
-	const duration = new GraphWidget({
-		title: 'Lambda Duration',
-		width: 12,
-		height: 6,
-		region,
-		left: [
-			new Metric({
-				namespace: 'AWS/Lambda',
-				metricName: 'Duration',
-				dimensionsMap: { FunctionName: functionName },
-				statistic: 'Average',
-				period: Duration.seconds(60),
-				label: 'Average',
-			}),
-			new Metric({
-				namespace: 'AWS/Lambda',
-				metricName: 'Duration',
-				dimensionsMap: { FunctionName: functionName },
-				statistic: 'p99',
-				period: Duration.seconds(60),
-				label: 'p99',
-			}),
-		],
-	});
-
-	const concurrency = new GraphWidget({
-		title: 'Lambda Concurrent Executions',
-		width: 12,
-		height: 6,
-		region,
-		left: [
-			new Metric({
-				namespace: 'AWS/Lambda',
-				metricName: 'ConcurrentExecutions',
-				dimensionsMap: { FunctionName: functionName },
-				statistic: 'Maximum',
-				period: Duration.seconds(60),
-			}),
-		],
-	});
-
-	return [
-		[invocations, errors],
-		[duration, concurrency],
-	];
 }
 
 // ── Metrics widgets ─────────────────────────────────────────────────────────
@@ -257,62 +111,6 @@ export function buildMetricsWidgets(
 	return [[placeholder]];
 }
 
-// ── Logging widgets ─────────────────────────────────────────────────────────
-
-/**
- * Build log widgets: a Log Insights query for recent errors + log volume graph.
- */
-export function buildLoggingWidgets(logGroupName: string, region: string): IWidget[][] {
-	const logQuery = new LogQueryWidget({
-		title: 'Recent Errors',
-		width: 24,
-		height: 6,
-		region,
-		logGroupNames: [logGroupName],
-		queryLines: [
-			'fields @timestamp, @message',
-			'filter @message like /ERROR/ or level = "error"',
-			'sort @timestamp desc',
-			'limit 20',
-		],
-	});
-
-	const logVolume = new GraphWidget({
-		title: 'Log Volume',
-		width: 24,
-		height: 6,
-		region,
-		left: [
-			new Metric({
-				namespace: 'AWS/Logs',
-				metricName: 'IncomingLogEvents',
-				dimensionsMap: { LogGroupName: logGroupName },
-				statistic: 'Sum',
-				period: Duration.seconds(300),
-			}),
-		],
-	});
-
-	return [[logQuery], [logVolume]];
-}
-
-// ── Tracing widgets ─────────────────────────────────────────────────────────
-
-/**
- * Build trace widget using the custom TraceWidget class.
- */
-export function buildTracingWidgets(functionName: string, region: string): IWidget[][] {
-	const traceWidget = new TraceWidget({
-		title: 'Traces',
-		functionName,
-		region,
-		width: 24,
-		height: 9,
-	});
-
-	return [[traceWidget]];
-}
-
 // ── Section headers ─────────────────────────────────────────────────────
 
 function sectionHeader(text: string): IWidget[] {
@@ -328,39 +126,54 @@ function sectionHeader(text: string): IWidget[] {
 // ── Main builder ────────────────────────────────────────────────────────
 
 /**
- * Build the complete set of dashboard widget rows from resolved configuration.
+ * Build the complete set of dashboard widget rows.
  *
- * Returns an array of widget rows (each row is an array of IWidget).
- * Each row will be added to the Dashboard via `addWidgets()`.
+ * The dashboard is organized **by compute**: each compute contributes a group
+ * (health, plus logs / traces when attached), rendered in the order the
+ * computes are given. App-wide **metrics** sections follow, one per namespace —
+ * metrics are not compute-scoped, so they render once at the end.
  *
- * @param config - Resolved dashboard configuration.
- * @param functionName - Lambda function name for base health widgets.
+ * Returns an array of widget rows (each row is an array of IWidget) to add to
+ * the Dashboard via `addWidgets()`.
+ *
+ * @param computes - Per-compute self-reported sections, in display order.
+ * @param config - Resolved dashboard configuration (metrics + metricConfigs).
  * @param region - AWS region string.
  * @returns Array of widget rows for the Dashboard.
  */
-export function buildDashboardWidgets(config: ResolvedDashboardConfig, functionName: string, region: string): IWidget[][] {
+export function buildDashboardWidgets(
+	computes: ComputeDashboardSection[],
+	config: ResolvedDashboardConfig,
+	region: string,
+): IWidget[][] {
 	const rows: IWidget[][] = [];
 
-	// Lambda handler section
-	rows.push(sectionHeader('## 🔧 Lambda Handler'));
-	rows.push(...buildLambdaWidgets(functionName, region));
+	// Compute-scoped groups: one per compute, in registration order. Each compute
+	// self-reports its health/logs/traces rows, so the dashboard makes no
+	// single-function assumption. For the default single-compute app this is one
+	// group with the usual Invocations/Errors/Duration/Concurrency widgets.
+	for (const compute of computes) {
+		rows.push(sectionHeader(`## 🔧 ${compute.label}`));
+		rows.push(...compute.health);
 
-	// Metrics section
-	if (config.metricsNamespace) {
-		rows.push(sectionHeader('## 📊 Metrics'));
-		rows.push(...buildMetricsWidgets(config.metricsNamespace, config.metricConfigs, region, config.metricsDefaultDimensions));
+		// Traces — present only when a Tracer is attached to this compute.
+		if (compute.tracing) {
+			rows.push(sectionHeader('### 🔍 Traces'));
+			rows.push(...compute.tracing);
+		}
+
+		// Logs — present only when a Logger is attached to this compute.
+		if (compute.logging) {
+			rows.push(sectionHeader('### 📋 Logs'));
+			rows.push(...compute.logging);
+		}
 	}
 
-	// Tracing section
-	if (config.tracingEnabled) {
-		rows.push(sectionHeader('## 🔍 Traces'));
-		rows.push(...buildTracingWidgets(functionName, region));
-	}
-
-	// Logging section
-	if (config.logGroupName) {
-		rows.push(sectionHeader('## 📋 Logs'));
-		rows.push(...buildLoggingWidgets(config.logGroupName, region));
+	// App-wide metrics sections — not compute-scoped, so rendered once per
+	// namespace after the compute groups, each from its own metric configs.
+	for (const metrics of config.metrics) {
+		rows.push(sectionHeader(`## 📊 Metrics — ${metrics.namespace}`));
+		rows.push(...buildMetricsWidgets(metrics.namespace, metrics.metricConfigs, region, metrics.defaultDimensions));
 	}
 
 	return rows;
@@ -376,32 +189,30 @@ export function buildDashboardWidgets(config: ResolvedDashboardConfig, functionN
  *
  * @param id - Dashboard construct ID used as fallback for title.
  * @param options - User-provided dashboard configuration.
- * @param functionName - Lambda function name for auto-deriving logGroupName.
  * @param scopeFullId - Fully-qualified scope identifier (includes stack name) used as the
  *   default dashboardName to ensure uniqueness across environments/deployments.
  */
-export function resolveConfig(id: string, options?: DashboardOptions, functionName?: string, scopeFullId?: string): ResolvedDashboardConfig {
-	const metricsNamespace = options?.metrics ? options.metrics.namespace : undefined;
-
-	const metricsDefaultDimensions = options?.metrics?.defaultDimensions
-		&& Object.keys(options.metrics.defaultDimensions).length > 0
-		? options.metrics.defaultDimensions
-		: undefined;
-
-	const logGroupName = options?.logger && functionName
-		? `/aws/lambda/${functionName}`
-		: undefined;
-
-	const tracingEnabled = options?.tracer !== undefined;
+export function resolveConfig(id: string, options?: DashboardOptions, scopeFullId?: string): ResolvedDashboardConfig {
+	// Normalize the single-or-array `metrics` option into a list of app-wide
+	// sources. Each carries its own metricConfigs (namespace-specific); empty
+	// defaultDimensions are dropped so widget queries stay clean.
+	const sources = options?.metrics === undefined
+		? []
+		: Array.isArray(options.metrics)
+			? options.metrics
+			: [options.metrics];
+	const metrics: ResolvedMetricsSource[] = sources.map((source) => ({
+		namespace: source.metrics.namespace,
+		defaultDimensions: source.metrics.defaultDimensions && Object.keys(source.metrics.defaultDimensions).length > 0
+			? source.metrics.defaultDimensions
+			: undefined,
+		metricConfigs: source.metricConfigs ?? [],
+	}));
 
 	return {
 		title: options?.title ?? id,
 		dashboardName: (options?.dashboardName ?? scopeFullId ?? id).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255),
-		metricsNamespace,
-		metricsDefaultDimensions,
-		logGroupName,
-		tracingEnabled,
-		metricConfigs: options?.metricConfigs ?? [],
+		metrics,
 		defaultTimeRange: options?.defaultTimeRange ?? '-PT3H',
 	};
 }

@@ -4,6 +4,7 @@
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import type { Compute } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { DashboardOptions } from './types.js';
 import { buildDashboardWidgets, resolveConfig } from './widgets.js';
@@ -15,6 +16,7 @@ export type {
 	ResolvedDashboardConfig,
 	MetricConfig,
 	MetricsBBRef,
+	MetricsSource,
 	LoggerBBRef,
 	TracerBBRef,
 } from './types.js';
@@ -34,17 +36,20 @@ export type {
  *
  * @example
  * ```typescript
- * // Minimal — Lambda health widgets only
+ * // Minimal — one health section per compute in the app.
  * const dashboard = new Dashboard(scope, 'dashboard');
  * ```
  *
  * @example
  * ```typescript
- * // With observability BB composition
+ * // Logs/traces appear automatically for any compute that has a Logger/Tracer
+ * // attached — you don't pass them to the dashboard. Metrics are app-wide and
+ * // passed explicitly (one section per namespace).
+ * new Logger(scope, 'logger');   // → this compute's logs section
+ * new Tracer(scope, 'tracer');   // → this compute's traces section
+ * const metrics = new Metrics(scope, 'metrics');
  * const dashboard = new Dashboard(scope, 'dashboard', {
- *   logger,
  *   metrics,
- *   tracer,
  *   metricConfigs: [
  *     { name: 'OrdersPlaced' },
  *     { name: 'Latency', stat: 'p99', period: 300 },
@@ -65,12 +70,25 @@ export class Dashboard extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
 		super(id, { parent: scope });
 
-		const functionName = this.handler.functionName;
-		const config = resolveConfig(id, options, functionName, this.fullId);
+		const config = resolveConfig(id, options, this.fullId);
 		this.dashboardName = config.dashboardName;
 
 		const region = Stack.of(this).region;
-		const widgetRows = buildDashboardWidgets(config, functionName, region);
+		// The dashboard is organized by compute: render a group per compute the
+		// caller passed in, defaulting to the app's single default compute
+		// (`this.compute`) when none is given. Each compute self-reports its
+		// section — health always, plus logs/traces only when a Logger/Tracer is
+		// attached to that compute (`dashboardSection` gates internally), so we
+		// can't render an empty section. Metrics are app-wide (rendered once
+		// per namespace). Taking computes explicitly avoids any construction-order
+		// dependency: the caller names exactly which computes appear.
+		const computes: Compute[] = options?.computes === undefined
+			? [this.compute]
+			: Array.isArray(options.computes)
+				? options.computes
+				: [options.computes];
+		const computeSections = computes.map((compute) => compute.dashboardSection(region));
+		const widgetRows = buildDashboardWidgets(computeSections, config, region);
 
 		new CwDashboard(this, 'Resource', {
 			dashboardName: config.dashboardName,

@@ -10,6 +10,8 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BLOCKS_RPC_PREFIX } from '../constants.js';
@@ -51,6 +53,18 @@ class StubLambdaCompute extends Compute {
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	protected provisionLogGroup(_retention: RetentionDays): void {}
+	protected applyTracing(): void {}
+	protected healthWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(_region: string): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(_region: string): IWidget[][] {
+		return [];
 	}
 }
 
