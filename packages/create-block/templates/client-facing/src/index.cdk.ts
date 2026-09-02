@@ -26,19 +26,17 @@ export class __BB_CLASS__ extends Scope {
 			// `fromExisting`: bind to a pre-existing table and grant the Lambda access.
 			this.table = Table.fromTableName(this, 'table', options.table.tableName);
 		} else {
-			const removalPolicy =
-				options?.removalPolicy === 'destroy'
-					? RemovalPolicy.DESTROY
-					: options?.removalPolicy === 'retain'
-						? RemovalPolicy.RETAIN
-						: this.defaults.removalPolicy;
+			// Defaults to DESTROY so throwaway stacks tear down cleanly; pass
+			// `removalPolicy: 'retain'` for production data. (Inside the AWS Blocks
+			// monorepo you can instead resolve `this.defaults.removalPolicy` from
+			// the stack preset — that API isn't in the published core yet.)
+			const removalPolicy = options?.removalPolicy === 'retain' ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
 
 			this.table = new Table(this, 'table', {
 				tableName: this.fullId.substring(0, 255),
 				partitionKey: { name: 'pk', type: AttributeType.STRING },
 				billingMode: BillingMode.PAY_PER_REQUEST,
 				removalPolicy,
-				deletionProtection: this.defaults.deletionProtection,
 			});
 		}
 
