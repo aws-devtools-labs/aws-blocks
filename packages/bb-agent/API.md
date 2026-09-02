@@ -41,8 +41,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     removalPolicy?: 'destroy' | 'retain';
     streamingMode?: 'token' | 'block';
     // (undocumented)
-    structuredOutput?: z.ZodType;
-    // (undocumented)
     systemPrompt: string;
     toolContextSchema?: z.ZodType<TContext>;
     tools?: ToolsConfig<TContext>;

@@ -85,7 +85,6 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 */
 	toolContextSchema?: z.ZodType<TContext>;
 	conversation?: ConversationManagerConfig;
-	structuredOutput?: z.ZodType;
 	/**
 	 * Safety cap on the number of **model (Bedrock) invocations per turn**.
 	 *
