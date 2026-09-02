@@ -5,6 +5,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -21,7 +22,9 @@ export type { AppSettingOptions } from './types.js';
  * - String parameters use `aws-cdk-lib/aws-ssm.StringParameter` directly.
  * - SecureString parameters use a Custom Resource Lambda because
  *   CloudFormation cannot natively create SecureString parameters.
- * - SecureString parameters are encrypted with the default `aws/ssm` KMS key.
+ * - SecureString parameters are encrypted with the default `aws/ssm` KMS key,
+ *   or with a customer-managed key when `kmsKeyArn` is provided (the handler is
+ *   then granted `kms:Decrypt`/`Encrypt` on that specific key ARN).
  */
 export class AppSetting<T = string> extends Scope {
 	/**
@@ -40,7 +43,7 @@ export class AppSetting<T = string> extends Scope {
 	static fromExisting<T = string>(
 		scope: ScopeParent,
 		id: string,
-		options: { name: string; secret?: boolean },
+		options: { name: string; secret?: boolean; kmsKeyArn?: string },
 	): AppSetting<T> {
 		const opts: InternalAppSettingOptions<T> = { ...options, external: true };
 		return new AppSetting<T>(scope, id, opts);
@@ -70,6 +73,25 @@ export class AppSetting<T = string> extends Scope {
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
+		}
+
+		if (options.kmsKeyArn !== undefined) {
+			if (!options.secret) {
+				const err = new Error(
+					`AppSetting '${id}': 'kmsKeyArn' is only valid with 'secret: true'. ` +
+					`Non-secret String parameters are not encrypted.`
+				);
+				err.name = AppSettingErrors.ValidationFailed;
+				throw err;
+			}
+			if (options.kmsKeyArn.trim() === '') {
+				const err = new Error(
+					`AppSetting '${id}': 'kmsKeyArn' must be a non-empty KMS key ARN. ` +
+					`Omit it to use the default aws/ssm key.`
+				);
+				err.name = AppSettingErrors.ValidationFailed;
+				throw err;
+			}
 		}
 
 		if (options.secret && options.value !== undefined) {
@@ -130,21 +152,33 @@ export class AppSetting<T = string> extends Scope {
 			// then fail tagging it (AddTagsToResource needs ssm:GetParameters).
 			// We only need runtime read access, granted below.
 			if (!external) {
-				registerSecret(cdk.Stack.of(this), parameterName);
+				registerSecret(cdk.Stack.of(this), parameterName, this.defaults.logRetention, options.kmsKeyArn);
 			}
 
-			// Grant handler KMS access for the default aws/ssm key. External secrets
-			// are read-only (Decrypt only); stack-managed secrets also need Encrypt
-			// so the app can write the value via put().
-			this.handler.addToRolePolicy(new iam.PolicyStatement({
-				actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
-				resources: ['*'],
-				conditions: {
-					StringEquals: {
-						'kms:ViaService': `ssm.${cdk.Stack.of(this).region}.amazonaws.com`,
+			// Grant the handler KMS access. External secrets are read-only (Decrypt
+			// only); stack-managed secrets also need Encrypt so the app can write the
+			// value via put(). Standard-tier SecureStrings only use Encrypt/Decrypt
+			// (no GenerateDataKey — that's advanced-tier envelope encryption).
+			if (options.kmsKeyArn) {
+				// Customer-managed key: grant on the specific key ARN. NOTE: the key's
+				// own key policy must also allow this role (we can't edit a BYO key's
+				// policy from here) — see the README.
+				this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
+					actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
+					resources: [options.kmsKeyArn],
+				}));
+			} else {
+				// Default aws/ssm key: scope the wildcard with a ViaService condition.
+				this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
+					actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
+					resources: ['*'],
+					conditions: {
+						StringEquals: {
+							'kms:ViaService': `ssm.${cdk.Stack.of(this).region}.amazonaws.com`,
+						},
 					},
-				},
-			}));
+				}));
+			}
 		} else if (!external) {
 			// ── String parameter via CDK construct ──────────────────────────
 			const param = new ssm.StringParameter(this, 'Param', {
@@ -159,7 +193,7 @@ export class AppSetting<T = string> extends Scope {
 
 		// Grant handler SSM access on this parameter. External parameters are owned
 		// elsewhere, so the app only reads them (no ssm:PutParameter).
-		this.handler.addToRolePolicy(new iam.PolicyStatement({
+		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: external ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
 			resources: [parameterArn],
 		}));
@@ -174,101 +208,133 @@ export class AppSetting<T = string> extends Scope {
 
 const SECRET_BULK_KEY = Symbol.for('BLOCKS_SECRET_BULK_INIT');
 
+interface SecretParam {
+	name: string;
+	/** Customer-managed KMS key ARN, or undefined for the default aws/ssm key. */
+	keyId?: string;
+}
+
 interface SecretBulkState {
-	parameterNames: string[];
+	params: SecretParam[];
 }
 
 /**
- * Register a secret parameter name. On first call, creates the shared Lambda,
- * Provider, and a single CustomResource. All subsequent calls just append to
- * the parameter list (resolved lazily at synth time).
+ * Register a secret parameter (and its optional customer-managed KMS key). On
+ * first call, creates the shared Lambda, Provider, and a single CustomResource.
+ * All subsequent calls just append to the parameter list (resolved lazily at
+ * synth time).
  */
-function registerSecret(stack: cdk.Stack, parameterName: string): void {
+function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: RetentionDays, keyId?: string): void {
 	let state = (stack as any)[SECRET_BULK_KEY] as SecretBulkState | undefined;
 	if (state) {
-		state.parameterNames.push(parameterName);
+		state.params.push({ name: parameterName, keyId });
 		return;
 	}
 
 	// First secret in this stack — create all shared infrastructure
-	state = { parameterNames: [parameterName] };
+	state = { params: [{ name: parameterName, keyId }] };
 	(stack as any)[SECRET_BULK_KEY] = state;
 
 	const secretInitFn = new lambda.Function(stack, 'BlocksSecretInitFn', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
+		// Own the log group so its retention follows the stack-wide default
+		// instead of AWS's infinite retention.
+		logGroup: new LogGroup(stack, 'BlocksSecretInitLogs', {
+			retention: logRetention,
+			removalPolicy: cdk.RemovalPolicy.DESTROY,
+		}),
 		code: lambda.Code.fromInline(`
-			const { SSMClient, PutParameterCommand, DeleteParameterCommand, AddTagsToResourceCommand } = require('@aws-sdk/client-ssm');
-			const crypto = require('crypto');
-			const client = new SSMClient({});
-			exports.handler = async (event) => {
-				const names = event.ResourceProperties.ParameterNames || [];
-				const stackName = event.ResourceProperties.StackName || '';
-				const tags = stackName ? [{ Key: 'aws-blocks-stack', Value: stackName }] : [];
-				const oldNames = (event.OldResourceProperties || {}).ParameterNames || [];
-				if (event.RequestType === 'Delete') {
-					for (const name of names) {
-						try { await client.send(new DeleteParameterCommand({ Name: name })); } catch {}
-					}
-					return { PhysicalResourceId: 'bb-secrets-bulk' };
-				}
-				if (event.RequestType === 'Create') {
-					for (const name of names) {
-						const secret = crypto.randomBytes(32).toString('base64url');
-						try {
-							await client.send(new PutParameterCommand({
-								Name: name, Value: secret, Type: 'SecureString', Overwrite: false, Tags: tags,
-							}));
-						} catch (e) {
-							if (e.name !== 'ParameterAlreadyExists') throw e;
-							if (tags.length) {
-								await client.send(new AddTagsToResourceCommand({ ResourceType: 'Parameter', ResourceId: name, Tags: tags }));
-							}
+				const { SSMClient, GetParameterCommand, PutParameterCommand, DeleteParameterCommand, AddTagsToResourceCommand } = require('@aws-sdk/client-ssm');
+				const crypto = require('crypto');
+				const client = new SSMClient({});
+				async function putSecret(p, tags) {
+					const secret = crypto.randomBytes(32).toString('base64url');
+					const input = { Name: p.name, Value: secret, Type: 'SecureString', Overwrite: false, Tags: tags };
+					// A CMK ARN pins the SecureString to a customer-managed key; omit for the default aws/ssm key.
+					if (p.keyId) input.KeyId = p.keyId;
+					try {
+						await client.send(new PutParameterCommand(input));
+					} catch (e) {
+						if (e.name !== 'ParameterAlreadyExists') throw e;
+						if (tags.length) {
+							await client.send(new AddTagsToResourceCommand({ ResourceType: 'Parameter', ResourceId: p.name, Tags: tags }));
 						}
 					}
-					return { PhysicalResourceId: 'bb-secrets-bulk' };
 				}
-				if (event.RequestType === 'Update') {
-					const added = names.filter(n => !oldNames.includes(n));
-					const removed = oldNames.filter(n => !names.includes(n));
-					for (const name of added) {
-						const secret = crypto.randomBytes(32).toString('base64url');
-						try {
-							await client.send(new PutParameterCommand({
-								Name: name, Value: secret, Type: 'SecureString', Overwrite: false, Tags: tags,
-							}));
-						} catch (e) {
-							if (e.name !== 'ParameterAlreadyExists') throw e;
-							if (tags.length) {
-								await client.send(new AddTagsToResourceCommand({ ResourceType: 'Parameter', ResourceId: name, Tags: tags }));
-							}
+				// Re-encrypt an EXISTING secret under a new (or removed) KMS key, preserving its
+				// current value. Without this, changing kmsKeyArn leaves the value encrypted under
+				// the old key while the app's IAM grant flips to the new key, so the next get()
+				// fails with AccessDenied.
+				async function reencrypt(p) {
+					const cur = await client.send(new GetParameterCommand({ Name: p.name, WithDecryption: true }));
+					const value = cur.Parameter && cur.Parameter.Value;
+					if (value === undefined || value === null) return;
+					const input = { Name: p.name, Value: value, Type: 'SecureString', Overwrite: true };
+					if (p.keyId) input.KeyId = p.keyId; // omit => back to the default aws/ssm key
+					await client.send(new PutParameterCommand(input));
+				}
+				// A pre-CMK deployment stored ParameterNames (string[]); map it to the {name} shape.
+				function readOld(op) {
+					if (Array.isArray(op.Parameters)) return op.Parameters;
+					if (Array.isArray(op.ParameterNames)) return op.ParameterNames.map((n) => ({ name: n }));
+					return [];
+				}
+				exports.handler = async (event) => {
+					const params = event.ResourceProperties.Parameters || [];
+					const stackName = event.ResourceProperties.StackName || '';
+					const tags = stackName ? [{ Key: 'aws-blocks-stack', Value: stackName }] : [];
+					const oldParams = readOld(event.OldResourceProperties || {});
+					const names = params.map(p => p.name);
+					const oldByName = Object.fromEntries(oldParams.map(p => [p.name, p]));
+					if (event.RequestType === 'Delete') {
+						for (const name of names) {
+							try { await client.send(new DeleteParameterCommand({ Name: name })); } catch {}
 						}
+						return { PhysicalResourceId: 'bb-secrets-bulk' };
 					}
-					for (const name of removed) {
-						try { await client.send(new DeleteParameterCommand({ Name: name })); } catch {}
+					if (event.RequestType === 'Create') {
+						for (const p of params) await putSecret(p, tags);
+						return { PhysicalResourceId: 'bb-secrets-bulk' };
+					}
+					if (event.RequestType === 'Update') {
+						for (const p of params) {
+							const old = oldByName[p.name];
+							if (!old) { await putSecret(p, tags); continue; }        // newly added
+							if ((old.keyId || '') !== (p.keyId || '')) await reencrypt(p); // key changed => re-key, preserving value
+							// else: unchanged — leave the runtime-managed value alone
+						}
+						for (const name of Object.keys(oldByName)) {
+							if (!names.includes(name)) { try { await client.send(new DeleteParameterCommand({ Name: name })); } catch {} }
+						}
+						return { PhysicalResourceId: 'bb-secrets-bulk' };
 					}
 					return { PhysicalResourceId: 'bb-secrets-bulk' };
-				}
-				return { PhysicalResourceId: 'bb-secrets-bulk' };
-			};
-		`),
+				};
+			`),
 	});
 
 	secretInitFn.addToRolePolicy(new iam.PolicyStatement({
-		actions: ['ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
+		// GetParameter is needed to read a secret's current value when re-keying it.
+		actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
 		resources: cdk.Lazy.list({
-			produce: () => state!.parameterNames.map(name =>
+			produce: () => state!.params.map(p =>
 				stack.formatArn({
 					service: 'ssm',
 					resource: 'parameter',
-					resourceName: name.replace(/^\//, ''),
+					resourceName: p.name.replace(/^\//, ''),
 				})
 			),
 		}),
 	}));
 
+	// SSM SecureString encryption goes through KMS via the SSM service. Scoping to
+	// `kms:ViaService = ssm.<region>` covers both the default aws/ssm key and any
+	// customer-managed key used above (the CMK's own key policy must also allow
+	// this role). Encrypt = create/re-key; Decrypt = read the current value when
+	// re-keying. Standard-tier SecureStrings don't use GenerateDataKey.
 	secretInitFn.addToRolePolicy(new iam.PolicyStatement({
-		actions: ['kms:Encrypt'],
+		actions: ['kms:Encrypt', 'kms:Decrypt'],
 		resources: ['*'],
 		conditions: {
 			StringEquals: {
@@ -284,7 +350,7 @@ function registerSecret(stack: cdk.Stack, parameterName: string): void {
 	new cdk.CustomResource(stack, 'BlocksSecretsBulk', {
 		serviceToken: provider.serviceToken,
 		properties: {
-			ParameterNames: cdk.Lazy.list({ produce: () => state!.parameterNames }),
+			Parameters: cdk.Lazy.any({ produce: () => state!.params }),
 			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
 		},
 	});

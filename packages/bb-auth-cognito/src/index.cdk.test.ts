@@ -26,16 +26,26 @@ function synth(build: (stack: cdk.Stack) => void) {
 	// BlocksStack has a private ctor; build a plain Stack + placeholder Handler
 	// Lambda so AuthCognito can register config via the config registry.
 	const stack = new cdk.Stack(app, 'TestStack');
+	const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	});
 	const handler = new lambda.Function(stack, 'Handler', {
 		runtime: DEFAULT_NODE_RUNTIME,
 		handler: 'index.handler',
 		code: lambda.Code.fromInline('exports.handler = async () => {};'),
+		role: executionRole,
 	});
 	(stack as any).handler = handler;
+	(stack as any).executionRole = executionRole;
 	(globalThis as any).CURRENT_BLOCKS_STACK = stack;
 	try {
 		build(stack);
-		finalizeConfigRegistry(stack, handler);
+		// Grant config read to the handler's role and stamp the `BLOCKS_CONFIG_*`
+		// coordinates on the handler function — the same target as before the
+		// shared-role refactor, so the template assertions are unchanged.
+		finalizeConfigRegistry(stack, handler.role!, [
+			{ setEnv: (key: string, value: string) => handler.addEnvironment(key, value) } as any,
+		]);
 		return Template.fromStack(stack);
 	} finally {
 		delete (globalThis as any).CURRENT_BLOCKS_STACK;
@@ -70,15 +80,20 @@ import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
 
 const app = new cdk.App();
 const stack = new cdk.Stack(app, 'TestStack');
+const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+	assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+});
 const handler = new lambda.Function(stack, 'Handler', {
 	runtime: DEFAULT_NODE_RUNTIME,
 	handler: 'index.handler',
 	code: lambda.Code.fromInline('exports.handler = async () => {};'),
+	role: executionRole,
 });
 stack.handler = handler;
+stack.executionRole = executionRole;
 globalThis.CURRENT_BLOCKS_STACK = stack;
 new AuthCognito(stack, 'auth');
-finalizeConfigRegistry(stack, handler);
+finalizeConfigRegistry(stack, handler.role, [{ setEnv: (k, v) => handler.addEnvironment(k, v) }]);
 
 const resources = Template.fromStack(stack).toJSON().Resources;
 const tables = Object.entries(resources)

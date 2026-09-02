@@ -6,6 +6,52 @@ import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
 import type { api as apiType } from 'aws-blocks';
 
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isDeployed = ENV === 'sandbox' || ENV === 'production';
+
+const RESULT_POLL_INTERVAL_MS = 100;
+
+/**
+ * Wall-clock budget, deliberately not an attempt count: a fixed number of
+ * fetch+sleep iterations spends less real time the faster the environment reads,
+ * so the effective budget would shrink exactly where it is needed most. Deployed
+ * runs pay for the SQS maxBatchingWindowSeconds=5 window, delivery, and a Lambda
+ * cold start before the handler even begins.
+ */
+const RESULT_POLL_BUDGET_MS = isDeployed ? 60_000 : 15_000;
+
+/**
+ * Polls `fetch` until it resolves to a truthy value or the wall-clock budget expires.
+ * Always fetches at least once. Any falsy value counts as "not ready", so callers whose
+ * ready state could legitimately be falsy (`0`, `false`, `[]`) must wrap it in a truthy
+ * sentinel.
+ */
+async function pollForResult<T>(
+  fetch: () => Promise<T | null>,
+  budgetMs: number = RESULT_POLL_BUDGET_MS
+): Promise<T | null> {
+  const deadline = Date.now() + budgetMs;
+  let result: T | null = null;
+  do {
+    result = await fetch();
+    if (result) break;
+    await setTimeout(RESULT_POLL_INTERVAL_MS);
+  } while (Date.now() < deadline);
+  return result;
+}
+
+/**
+ * Budget for a delayed job: the delay itself plus the full standard budget. Note the
+ * delaySeconds tests only assert non-execution at t~=0, not continuously throughout the
+ * delay window.
+ */
+function delayedPollBudgetMs(delaySeconds: number): number {
+  return delaySeconds * 1000 + RESULT_POLL_BUDGET_MS;
+}
+
+/** Delay requested by the delaySeconds tests, and the basis for their poll budget. */
+const DELAY_SECONDS = 2;
+
 export function asyncJobTests(getApi: () => typeof apiType) {
   describe('AsyncJob BB', () => {
     test('AsyncJob - submit and verify handler execution', async () => {
@@ -14,13 +60,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const { jobId } = await api.asyncJobSubmit(`single-${testId}`, 'hello');
       assert.ok(typeof jobId === 'string');
 
-      // Poll for handler completion (mock processes on next tick)
-      let result = null;
-      for (let i = 0; i < 20; i++) {
-        result = await api.asyncJobGetResult(`single-${testId}`);
-        if (result) break;
-        await setTimeout(100);
-      }
+      const result = await pollForResult(() => api.asyncJobGetResult(`single-${testId}`));
 
       assert.ok(result, 'handler should have written result');
       assert.strictEqual(result.value, 'hello');
@@ -41,14 +81,12 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const { jobIds } = await api.asyncJobSubmitBatch(items);
       assert.strictEqual(jobIds.length, 3);
 
-      // Poll for all three results
-      for (let i = 0; i < 20; i++) {
+      await pollForResult(async () => {
         const results = await Promise.all(
           items.map(item => api.asyncJobGetResult(item.key))
         );
-        if (results.every((r) => r !== null)) break;
-        await setTimeout(100);
-      }
+        return results.every((r) => r !== null) ? results : null;
+      });
 
       for (const item of items) {
         const result = await api.asyncJobGetResult(item.key);
@@ -65,12 +103,15 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       );
     });
 
-    test('AsyncJob - submitBatch throws BatchTooLarge', async () => {
+    test('AsyncJob - submitBatch auto-chunks a batch larger than 10', async () => {
       const api = getApi();
-      await assert.rejects(
-        () => api.asyncJobSubmitBatchTooMany(),
-        /BatchTooLargeException/
+      const { jobIds } = await api.asyncJobSubmitLargeBatch();
+      assert.strictEqual(jobIds.length, 25, 'a jobId per payload, no truncation');
+      assert.ok(
+        jobIds.every((id: string | null) => typeof id === 'string' && id.length > 0),
+        'every entry enqueued with a real id'
       );
+      assert.strictEqual(new Set(jobIds).size, 25, 'every jobId is unique');
     });
 
     // Schema Validation Tests
@@ -79,13 +120,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const { jobId } = await api.asyncJobSubmitValidated('alice@example.com', 'Welcome', 'Hello Alice');
       assert.ok(typeof jobId === 'string');
 
-      // Poll for handler completion
-      let result = null;
-      for (let i = 0; i < 20; i++) {
-        result = await api.asyncJobGetValidatedResult(jobId);
-        if (result) break;
-        await setTimeout(100);
-      }
+      const result = await pollForResult(() => api.asyncJobGetValidatedResult(jobId));
 
       assert.ok(result, 'handler should have written result');
       assert.strictEqual(result.to, 'alice@example.com');
@@ -117,21 +152,16 @@ export function asyncJobTests(getApi: () => typeof apiType) {
       const testId = Date.now().toString(36);
       const key = `delayed-${testId}`;
 
-      await api.asyncJobSubmitDelayed(key, 'delayed-value', 2);
+      await api.asyncJobSubmitDelayed(key, 'delayed-value', DELAY_SECONDS);
 
       // Should NOT be written yet
       const immediate = await api.asyncJobGetResult(key);
       assert.strictEqual(immediate, null, 'handler should not have run yet');
 
-      // Wait for delay + processing
-      await setTimeout(3000);
-
-      let result = null;
-      for (let i = 0; i < 10; i++) {
-        result = await api.asyncJobGetResult(key);
-        if (result) break;
-        await setTimeout(200);
-      }
+      const result = await pollForResult(
+        () => api.asyncJobGetResult(key),
+        delayedPollBudgetMs(DELAY_SECONDS)
+      );
 
       assert.ok(result, 'handler should have run after delay');
       assert.strictEqual(result.value, 'delayed-value');
@@ -145,7 +175,7 @@ export function asyncJobTests(getApi: () => typeof apiType) {
         { key: `batch-delayed-${testId}-1`, value: 'b' },
       ];
 
-      await api.asyncJobSubmitBatchDelayed(items, 2);
+      await api.asyncJobSubmitBatchDelayed(items, DELAY_SECONDS);
 
       // Should NOT be written yet
       for (const item of items) {
@@ -153,16 +183,11 @@ export function asyncJobTests(getApi: () => typeof apiType) {
         assert.strictEqual(immediate, null, `handler for ${item.key} should not have run yet`);
       }
 
-      // Wait for delay + processing
-      await setTimeout(3000);
-
       for (const item of items) {
-        let result = null;
-        for (let i = 0; i < 10; i++) {
-          result = await api.asyncJobGetResult(item.key);
-          if (result) break;
-          await setTimeout(200);
-        }
+        const result = await pollForResult(
+          () => api.asyncJobGetResult(item.key),
+          delayedPollBudgetMs(DELAY_SECONDS)
+        );
         assert.ok(result, `handler should have run for ${item.key}`);
         assert.strictEqual(result.value, item.value);
       }

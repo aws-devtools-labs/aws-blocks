@@ -44,16 +44,21 @@ const VECTOR_INDEX_TYPE = s3vectors.CfnIndex.CFN_RESOURCE_TYPE_NAME;
 // resolve through CURRENT_BLOCKS_STACK (mirrors the production BlocksStack).
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
+  public readonly executionRole: cdk.aws_iam.IRole;
   public readonly id: string;
   public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
+    this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+      assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
     this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
       runtime: DEFAULT_NODE_RUNTIME,
       handler: 'index.handler',
       code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+      role: this.executionRole,
     });
   }
 }
@@ -177,7 +182,11 @@ test('CDK: registers the DATA_SOURCE_ID config (wired to the data source) and su
   // BucketDeployment; the rendered config blob in the synthesized template
   // carries the DATA_SOURCE_ID key bound to the data source's DataSourceId, and
   // the handler is wired to read it from S3. (Mirrors bb-auth-cognito's CDK test.)
-  finalizeConfigRegistry(stack, stack.handler);
+  // Grant config read to the handler's role and stamp the coordinates on the
+  // handler — the same target as before the shared-role refactor.
+  finalizeConfigRegistry(stack, stack.handler.role!, [
+    { setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as any,
+  ]);
   const template = Template.fromStack(stack);
 
   const configBlob = JSON.stringify(

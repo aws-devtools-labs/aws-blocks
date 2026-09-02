@@ -26,8 +26,19 @@ const setting = new AppSetting(scope, id, options)
 | `name` | `string` | No | SSM parameter path. When omitted, derived from the scope tree as `/${fullId}`, guaranteeing uniqueness within the stack. |
 | `value` | `T` | No | Initial value. Required for non-secret parameters. Must not be provided when `secret` is set. |
 | `schema` | `StandardSchemaV1<T>` | No | Runtime validation schema (Zod, Valibot, ArkType). Infers `T` from the schema. Cannot be used with `secret`. |
-| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the `aws/ssm` KMS key. Cannot be used with `schema` or `value`. |
+| `secret` | `boolean` | No | When `true`, creates an SSM SecureString encrypted with the default `aws/ssm` KMS key (or `kmsKeyArn` when set). Cannot be used with `schema` or `value`. |
+| `kmsKeyArn` | `string` | No | ARN of a customer-managed KMS key to encrypt the SecureString, instead of the default `aws/ssm` key. Only valid with `secret: true`. See the note below. |
 | `logger` | `ChildLogger` | No | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
+
+> **Customer-managed KMS key (`kmsKeyArn`):** Provide a CMK ARN to control the
+> decrypt/grant scope of a secret (e.g. cross-account access or a dedicated key
+> policy). The construct grants the shared handler `kms:Decrypt` (plus
+> `kms:Encrypt` for secrets it writes) on that specific key ARN. Because AWS
+> Blocks does not own a bring-your-own key, **the key's own key policy must also
+> allow the app's Lambda execution role** to use it (or delegate to IAM via the
+> account-root statement CDK adds to same-account keys). Adding or changing
+> `kmsKeyArn` on an already-deployed secret re-encrypts its current value under
+> the new key on the next deploy, so decryption keeps working.
 
 > **Naming:** When you omit `name`, the framework derives a unique SSM path from
 > the construct scope tree (`/${fullId}`). This is the recommended approach — it

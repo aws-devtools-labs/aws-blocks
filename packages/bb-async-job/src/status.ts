@@ -12,7 +12,7 @@ import type {
 	AsyncJobTransition,
 	WaitUntilCompleteOptions,
 } from './types.js';
-import { AsyncJobErrors } from './errors.js';
+import { AsyncJobErrors, blocksError } from './errors.js';
 
 /** Child scope id of the status table. Must match between the runtime and CDK entry points. */
 export const STATUS_TABLE_ID = 'status';
@@ -26,6 +26,13 @@ const DEFAULT_POLL_INTERVAL_MS = 250;
 /** Attempts allowed for either compare-and-swap in {@link JobStatusTracker}. */
 const MAX_CAS_ATTEMPTS = 5;
 const CAS_BACKOFF_MS = 20;
+
+/**
+ * How many `queued` writes {@link JobStatusTracker.recordQueuedBatch} issues in
+ * parallel per group. Mirrors DynamoDB's `BatchWriteItem` limit of 25 so a large
+ * `submitBatch` fan-out does not fire an unbounded number of writes at once.
+ */
+const STATUS_WRITE_GROUP = 25;
 
 /** Stored shape: the public record plus bookkeeping the caller never sees. */
 interface StatusRecord extends AsyncJobStatus {
@@ -81,12 +88,6 @@ export const statusTableOptions = {
 	key: { partitionKey: 'jobId' },
 	ttl: 'expiresAt',
 } as const;
-
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return err;
-}
 
 /**
  * Resolve after `ms` milliseconds, rejecting early with the signal's abort
@@ -266,12 +267,21 @@ export class JobStatusTracker {
 	 *
 	 * Deliberately individual conditional writes rather than one `putBatch`:
 	 * DynamoDB's `BatchWriteItem` cannot carry a condition expression, so a batch
-	 * write would reintroduce the clobber described on {@link recordQueued}. A
-	 * batch is at most 10 items, so the puts are issued in parallel.
+	 * write would reintroduce the clobber described on {@link recordQueued}.
+	 *
+	 * Since `submitBatch` auto-chunks, an unbounded number of jobs can arrive here,
+	 * so the writes are issued in fixed-size groups ({@link STATUS_WRITE_GROUP})
+	 * rather than one `Promise.all` over the whole batch — firing thousands of
+	 * conditional `PutItem`s at once risks throttling the table on exactly the bulk
+	 * write this is meant to support. The group size mirrors DynamoDB's own
+	 * `BatchWriteItem` limit of 25.
 	 */
 	async recordQueuedBatch(jobs: Array<{ jobId: string; submittedAt: string }>): Promise<void> {
 		if (jobs.length === 0) return;
-		await Promise.all(jobs.map(j => this.recordQueued(j.jobId, j.submittedAt)));
+		for (let i = 0; i < jobs.length; i += STATUS_WRITE_GROUP) {
+			const group = jobs.slice(i, i + STATUS_WRITE_GROUP);
+			await Promise.all(group.map(j => this.recordQueued(j.jobId, j.submittedAt)));
+		}
 	}
 
 	/**

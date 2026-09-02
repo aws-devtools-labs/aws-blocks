@@ -1,8 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { KindStoreOptions } from '@aws-blocks/hosting/constructs';
+import type { ConfigValue, SecretValue } from '@aws-blocks/hosting';
 import type * as cdk from 'aws-cdk-lib';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
+import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IFileSetProducer } from 'aws-cdk-lib/pipelines';
 
 /**
@@ -39,8 +42,15 @@ export interface PipelineSourceConfig {
    * @see https://docs.aws.amazon.com/dtconsole/latest/userguide/connections-create-github.html
    *
    * @example 'arn:aws:codeconnections:us-east-1:123456789:connection/abc-def'
+   *
+   * Accepts a `config('CONNECTION_ARN')` marker (SSM) to keep the ARN out of
+   * source. It is resolved at **synth time** and inlined as a literal into the
+   * template (the CodePipeline service needs a literal ARN), so this requires the
+   * async `await Pipeline.create(...)` path. A `secret()` is intentionally **not**
+   * accepted here: a synth-inlined value lands in the template, which would defeat
+   * the point of a secret — and a connection ARN is a reference, not a credential.
    */
-  readonly connectionArn: string;
+  readonly connectionArn: string | ConfigValue;
 
   /**
    * Whether to trigger the pipeline on push to the branch.
@@ -351,6 +361,51 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
   readonly synth?: PipelineSynthConfig;
 
   /**
+   * Secrets made available to the build/deploy commands that run in the synth
+   * CodeBuild project (`npm ci`, a frontend build, `npx cdk synth`, publish
+   * steps, etc.) as environment variables.
+   *
+   * Unlike {@link PipelineSourceConfig.connectionArn} — which the CodePipeline
+   * *service* consumes and is therefore resolved at synth time — these are
+   * consumed by your *build commands* and are fetched by CodeBuild **at build
+   * time** on every run. That means:
+   * - The value is never inlined into the CloudFormation template; only the
+   *   store locator is referenced. CodeBuild also masks the value in build logs.
+   * - Rotating the value takes effect on the next build with **no redeploy**.
+   * - The CodeBuild role is automatically granted read on that one secret.
+   *
+   * Each entry maps an environment variable name to a `secret('...')` marker or a
+   * BYO `ISecret` handle. Build-time credentials are secrets, so this surface is
+   * **Secrets-Manager-only** (a `config` marker is a type error here). CodeBuild
+   * fetches each per build, masks it in logs, and never inlines it. Readable in
+   * your synth `commands` as `$NAME`.
+   *
+   * @example
+   * ```ts
+   * buildSecrets: {
+   *   NPM_TOKEN: secret('NPM_TOKEN'),
+   *   DOCKERHUB_PASSWORD: secret('DOCKERHUB_PASSWORD'),
+   * },
+   * synth: { commands: ['npm ci', 'docker login -u me -p $DOCKERHUB_PASSWORD', 'npx cdk synth'] },
+   * ```
+   */
+  readonly buildSecrets?: Record<string, SecretValue | ISecret>;
+
+  /**
+   * Namespace config for the pipeline's **secret** markers (Secrets Manager) —
+   * governs `buildSecrets` and a `secret('...')` `connectionArn`. Defaults to the
+   * neutral `/hosting/secrets` prefix. The CLI that sets the values and this
+   * deploy must agree on the prefix.
+   */
+  readonly secretStore?: KindStoreOptions;
+
+  /**
+   * Namespace config for the pipeline's **config** markers (SSM Parameter Store) —
+   * governs a `config('...')` `connectionArn`. Defaults to `/hosting/config`.
+   */
+  readonly configStore?: KindStoreOptions;
+
+  /**
    * Branch configurations. Each entry creates a separate CodePipeline.
    *
    * A single source repository can have multiple branch pipelines, each
@@ -376,10 +431,7 @@ export interface PipelineProps<TConfig = Record<string, unknown>> {
    * @param scope - The CDK Stage construct to add stacks to.
    * @param stageConfig - The full stage configuration including name, env, and user-defined config.
    */
-  readonly stageFactory?: (
-    scope: cdk.Stage,
-    stageConfig: PipelineStageConfig<TConfig>,
-  ) => void | Promise<void>;
+  readonly stageFactory?: (scope: cdk.Stage, stageConfig: PipelineStageConfig<TConfig>) => void | Promise<void>;
 
   /**
    * Path to the CDK app file to import for each stage.

@@ -22,12 +22,17 @@ const MIGRATIONS_DIR = '.bb-data/__test_cdk_migrations__';
 function synth(build: (stack: cdk.Stack) => void): Template {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'TestStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
   });
   (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     build(stack);
@@ -67,13 +72,18 @@ test('CDK: per-block removalPolicy is independent of deletion protection', () =>
   // RETAINed on stack delete but not deletion-protected.
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'IndepStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
   });
   (stack as any).handler = handler;
   (stack as any).defaults = BlocksPresets.sandbox;
+  (stack as any).executionRole = executionRole;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     new DistributedDatabase(scope(stack), 'mydsql', { removalPolicy: 'retain' });
@@ -90,15 +100,20 @@ test('CDK: per-block removalPolicy is independent of deletion protection', () =>
 test('CDK: sandbox defaults disable deletion protection', () => {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, 'SandboxStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
   const handler = new lambda.Function(stack, 'Handler', {
     runtime: DEFAULT_NODE_RUNTIME,
     handler: 'index.handler',
     code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
   });
   (stack as any).handler = handler;
   // The cluster's removal/protection follows the stack-wide defaults (resolved
   // via the globalThis fallback here), not the sandboxMode context.
   (stack as any).defaults = BlocksPresets.sandbox;
+  (stack as any).executionRole = executionRole;
   (globalThis as any).CURRENT_BLOCKS_STACK = stack;
   try {
     new DistributedDatabase(scope(stack), 'mydsql');
@@ -130,19 +145,39 @@ test('CDK: handler gets dsql:DbConnect policy (least privilege)', () => {
   });
 });
 
-// --- Environment variables ---
+// --- Runtime config (endpoint + region) ---
 
-test('CDK: handler gets ENDPOINT and REGION env vars', () => {
-  const template = synth((stack) => {
-    new DistributedDatabase(scope(stack), 'mydsql');
+test('CDK: registers ENDPOINT and REGION via the config registry (not handler env vars)', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
   });
-  const fns = template.findResources('AWS::Lambda::Function');
-  const handlerFn = Object.entries(fns).find(([id]) => id.startsWith('Handler'));
-  assert.ok(handlerFn, 'Handler Lambda should exist');
-  const env = (handlerFn![1] as any).Properties?.Environment?.Variables ?? {};
-  const envKeys = Object.keys(env);
-  assert.ok(envKeys.some(k => k.includes('ENDPOINT')), `Expected ENDPOINT env var, got: ${envKeys}`);
-  assert.ok(envKeys.some(k => k.includes('REGION')), `Expected REGION env var, got: ${envKeys}`);
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql');
+
+    // Endpoint + region now flow through the config registry (loaded into
+    // process.env at cold start) like every other block — not a direct env var
+    // on the handler.
+    const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as
+      | { entries: Map<string, unknown> }
+      | undefined;
+    assert.ok(registry, 'config registry exists on the stack');
+    const keys = [...registry.entries.keys()];
+    assert.ok(keys.some(k => k.includes('ENDPOINT')), `Expected an ENDPOINT config key, got: ${keys}`);
+    assert.ok(keys.some(k => k.includes('REGION')), `Expected a REGION config key, got: ${keys}`);
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
 });
 
 // --- CfnOutput ---
@@ -173,6 +208,33 @@ test('CDK: migration/provisioning resources always created', () => {
     JSON.stringify(p).includes('dsql:DbConnectAdmin')
   );
   assert.ok(hasDsqlGrant, 'Migration Lambda should have dsql:DbConnectAdmin');
+});
+
+test('CDK: DSQL migration Lambda log group adopts defaults.logRetention', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'DsqlMigrationRetentionStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql');
+    const template = Template.fromStack(stack);
+    // The always-created migration Lambda now owns an explicit log group whose
+    // retention follows the stack-wide default (sandbox → one week).
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
 });
 
 test('CDK: migration resources created when migrationsPath is provided', () => {

@@ -21,7 +21,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
+
 import { Scope } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
@@ -290,11 +290,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
 
 		// 6. Env vars + IAM
-		const fn = this.handler as lambda.Function;
 		registerConfig(this, env.USER_POOL_ID, this.userPool.userPoolId);
 		registerConfig(this, env.CLIENT_ID, this.userPoolClient.userPoolClientId);
 		registerConfig(this, env.REGION, cdk.Stack.of(this).region);
-		this.grantCognitoPermissions(fn);
+		this.grantCognitoPermissions(this.executionRole);
 	}
 
 	/**
@@ -320,10 +319,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 
 	// ─── IAM helpers ──────────────────────────────────────────────────────
 
-	private grantCognitoPermissions(fn: lambda.Function): void {
+	private grantCognitoPermissions(role: iam.IRole): void {
 		const poolArn = this.userPool.userPoolArn;
 		// Client-facing actions — work on the signed-in user via their access token.
-		fn.addToRolePolicy(new iam.PolicyStatement({
+		role.addToPrincipalPolicy(new iam.PolicyStatement({
 			actions: [
 				'cognito-idp:SignUp',
 				'cognito-idp:ConfirmSignUp',
@@ -367,7 +366,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		if (admin) {
 			const adminActions = adminIamActions(admin.actions);
 			if (adminActions.length > 0) {
-				fn.addToRolePolicy(new iam.PolicyStatement({
+				role.addToPrincipalPolicy(new iam.PolicyStatement({
 					actions: adminActions,
 					resources: [poolArn],
 				}));

@@ -14,9 +14,11 @@
  */
 
 import * as cdk from 'aws-cdk-lib';
-import { WebSocketApi, WebSocketStage } from 'aws-cdk-lib/aws-apigatewayv2';
+import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-lib/aws-apigatewayv2';
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
+import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { Scope, synthGuard, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
@@ -91,11 +93,46 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 		},
 	});
 
+	// Structured JSON access logging on the WebSocket stage, when the stack-wide
+	// default enables it. Needs the account-level CloudWatch Logs role — shared
+	// with (and typically already provisioned by) the core REST API stage.
+	let accessLogGroup: LogGroup | undefined;
+	let apiGatewayAccount: cdk.aws_apigateway.CfnAccount | undefined;
+	if (parent.defaults.accessLogging) {
+		apiGatewayAccount = ensureApiGatewayAccount(stack);
+		accessLogGroup = new LogGroup(stack, 'BlocksRtAccessLogs', {
+			retention: parent.defaults.logRetention,
+			// Access logs are the request audit trail — follow the stack-wide
+			// removal policy (production RETAIN) so they survive a teardown.
+			removalPolicy: parent.defaults.removalPolicy,
+		});
+	}
+
 	const stage = new WebSocketStage(stack, 'BlocksRtStage', {
 		webSocketApi: wsApi,
 		stageName: 'rt',
 		autoDeploy: true,
+		// Cap message throughput on the connection from the stack-wide default.
+		// On a WebSocket stage the throttle unit is messages/second across the
+		// connection (not HTTP requests) — see DESIGN.md.
+		throttle: {
+			rateLimit: parent.defaults.throttling.rateLimit,
+			burstLimit: parent.defaults.throttling.burstLimit,
+		},
+		...(accessLogGroup
+			? {
+					accessLogSettings: {
+						destination: new LogGroupLogDestination(accessLogGroup),
+						format: AccessLogFormat.jsonWithStandardFields(),
+					},
+				}
+			: {}),
 	});
+
+	// The stage must be created after the account setting is in place.
+	if (apiGatewayAccount) {
+		stage.node.addDependency(apiGatewayAccount);
+	}
 
 	// API Gateway Management API: postToConnection for fan-out + subscribe responses
 	wsApi.grantManageConnections(handler);

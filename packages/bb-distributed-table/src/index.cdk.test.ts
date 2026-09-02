@@ -27,16 +27,21 @@ const userSchema = z.object({
 
 class StubBlocksStack extends cdk.Stack {
 	public readonly handler: cdk.aws_lambda.Function;
+	public readonly executionRole: cdk.aws_iam.IRole;
 	public readonly id: string;
 	public defaults: BlocksDefaults = BlocksPresets.production;
 	constructor(scope: Construct, id: string) {
 		super(scope, id);
 		this.id = id;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
+		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
+			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+		});
 		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'index.handler',
 			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+			role: this.executionRole,
 		});
 	}
 }
@@ -356,6 +361,20 @@ test('CDK: a per-block protection option overrides the stack defaults', () => {
 	const template = Template.fromStack(stack);
 	template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
 	template.hasResourceProperties('AWS::DynamoDB::Table', { DeletionProtectionEnabled: true });
+});
+
+test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox);
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	// The GSI manager + isComplete Lambdas now own explicit log groups whose
+	// retention follows the stack-wide default (sandbox → one week), instead of
+	// AWS's infinite default.
+	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
