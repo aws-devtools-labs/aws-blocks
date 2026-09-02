@@ -37,6 +37,40 @@ const jobPayloadSchema = z.object({
 const TOOL_CONTEXT_KEY = '__bbAgentToolContext';
 
 /**
+ * Default runaway-protection caps applied per turn when `AgentConfig` does not
+ * override them. See `AgentConfig.maxLlmCalls` / `maxToolIterations`.
+ *
+ * 20 is a backstop, not a tuned budget: healthy interactive turns in the agent
+ * samples and in Strands' own examples settle at a handful of model/tool calls
+ * (a plan step, one or two tool rounds, a final answer), so 20 leaves roughly an
+ * order of magnitude of headroom before it engages, while still cutting a
+ * reason->act loop off long before it becomes a noticeable Bedrock bill. Agents
+ * that legitimately take more steps are expected to raise the value (or set it
+ * to `false`) deliberately.
+ */
+const DEFAULT_MAX_LLM_CALLS = 20;
+const DEFAULT_MAX_TOOL_ITERATIONS = 20;
+
+/** `appState` keys holding the per-turn cap counters, so they survive `resume()`. */
+const MODEL_CALL_COUNT_KEY = '__bbAgentModelCallCount';
+const TOOL_CALL_COUNT_KEY = '__bbAgentToolCallCount';
+const COUNTED_TOOL_USE_IDS_KEY = '__bbAgentCountedToolUseIds';
+/** Id of the turn the counters belong to, so a new turn can zero them lazily. */
+const TURN_ID_KEY = '__bbAgentCapTurnId';
+
+/**
+ * Validate a runaway-protection cap: a positive integer, `false` to disable, or
+ * `undefined` for the default. Rejects `0`/negatives/non-integers/`NaN`, which
+ * would otherwise either kill every turn or silently disable the cap.
+ */
+function validateCap(name: string, value: number | false | undefined): void {
+	if (value === false || value === undefined) return;
+	if (!Number.isInteger(value) || value < 1) {
+		throw blocksAgentError(AgentErrors.InvalidModelConfig, `'${name}' must be a positive integer or false to disable the cap, got ${String(value)}.`);
+	}
+}
+
+/**
  * Lazily import the Strands SDK runtime, caching the module after the first load.
  *
  * Importing the Agent BB must not eagerly evaluate `@strands-agents/sdk`: the
@@ -142,6 +176,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = config?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.config = config;
+		validateCap('maxLlmCalls', config.maxLlmCalls);
+		validateCap('maxToolIterations', config.maxToolIterations);
 		this.toolMap = resolveTools<TContext>(config.tools);
 		this.modelConfig = modelConfig;
 
@@ -210,12 +246,83 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * NOT called directly — stream() submits to AsyncJob, which invokes this.
 	 *
 	 * Flow: AsyncJob handler → runAgent() → Strands agent.stream() → publishes chunks to Realtime BB
-	 * TODO add comments for args
+	 *
+	 * @param message - the user message that starts the turn (ignored on the resume path)
+	 * @param conversationId - conversation to load/persist history for; undefined means no persistence
+	 * @param channelId - Realtime channel the stream chunks are published to
+	 * @param userId - owner of the conversation, stored on every persisted message
+	 * @param interruptResponses - approval responses when resuming a turn paused on a HITL interrupt
+	 * @param context - per-call tool context, threaded to tool handlers via Strands invocationState
 	 */
 	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext): Promise<void> {
-		const { InterruptResponseContent, ModelStreamUpdateEvent, BeforeToolCallEvent, AfterToolCallEvent, AgentResultEvent } = await loadStrands();
+		const { InterruptResponseContent, ModelStreamUpdateEvent, BeforeModelCallEvent, BeforeToolCallEvent, AfterToolCallEvent, AgentResultEvent } = await loadStrands();
 		const strandsAgent = await this.createStrandsAgent(conversationId, context);
 		const startTime = Date.now();
+
+		// Runaway-protection caps (see AgentConfig.maxLlmCalls / maxToolIterations).
+		// Enforced by counting Strands' hooks and cancelling the agent once a cap is
+		// exceeded — cancellation surfaces below as stopReason 'cancelled'.
+		// Registered here (not in createStrandsAgent) so the `capExceeded` reason stays
+		// in scope for the result handling; Strands runs multiple hooks per event, so
+		// this coexists with the HITL hook.
+		// The counters live in `appState`, which the SessionManager persists, so they
+		// keep counting across a HITL interrupt + resume() — the cap bounds a whole
+		// logical turn, not just one execution segment.
+		// The reset is LAZY (inside the hooks), not done here: the SessionManager
+		// restores the snapshot's appState during `stream()`, i.e. after this point, so
+		// a reset written here would be overwritten by the previous turn's counts and
+		// the budget would leak from turn to turn. Instead a fresh turn gets a new turn
+		// id and the first hook to run notices the stored id is stale and zeroes the
+		// counters; a resume passes no id, so it continues on the persisted counts.
+		let capExceeded: string | undefined;
+		const turnId = interruptResponses ? undefined : ulid();
+		const startTurnIfNew = (): void => {
+			if (!turnId || strandsAgent.appState.get(TURN_ID_KEY) === turnId) return;
+			strandsAgent.appState.set(TURN_ID_KEY, turnId);
+			strandsAgent.appState.set(MODEL_CALL_COUNT_KEY, 0);
+			strandsAgent.appState.set(TOOL_CALL_COUNT_KEY, 0);
+			strandsAgent.appState.set(COUNTED_TOOL_USE_IDS_KEY, []);
+		};
+		const bumpCount = (key: string): number => {
+			startTurnIfNew();
+			const next = (Number(strandsAgent.appState.get(key)) || 0) + 1;
+			strandsAgent.appState.set(key, next);
+			return next;
+		};
+		// A tool call paused on a HITL interrupt re-emits BeforeToolCallEvent when the
+		// turn resumes, so count each toolUseId at most once — otherwise an approved
+		// call would be charged twice against the cap.
+		const countToolCall = (toolUseId: string): number => {
+			startTurnIfNew();
+			const seen = (strandsAgent.appState.get(COUNTED_TOOL_USE_IDS_KEY) as string[] | undefined) ?? [];
+			if (seen.includes(toolUseId)) return Number(strandsAgent.appState.get(TOOL_CALL_COUNT_KEY)) || 0;
+			strandsAgent.appState.set(COUNTED_TOOL_USE_IDS_KEY, [...seen, toolUseId]);
+			return bumpCount(TOOL_CALL_COUNT_KEY);
+		};
+		// `false` disables a cap (→ Infinity, never trips); undefined uses the default.
+		// Values are validated in the constructor (positive integer or false).
+		const maxLlmConfig = this.config.maxLlmCalls ?? DEFAULT_MAX_LLM_CALLS;
+		const maxToolsConfig = this.config.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+		const maxLlm = maxLlmConfig === false ? Number.POSITIVE_INFINITY : maxLlmConfig;
+		const maxTools = maxToolsConfig === false ? Number.POSITIVE_INFINITY : maxToolsConfig;
+		// Both cancels pull weight: `event.cancel` skips this specific over-cap call (so
+		// it never reaches the provider — same mechanism as the deny path in
+		// createStrandsAgent, which uses it alone and lets the turn continue), while
+		// `strandsAgent.cancel()` additionally unwinds the loop so nothing after it runs.
+		strandsAgent.addHook(BeforeModelCallEvent, (event) => {
+			if (bumpCount(MODEL_CALL_COUNT_KEY) > maxLlm) {
+				capExceeded ??= `exceeded maxLlmCalls (${maxLlm})`;
+				event.cancel = 'maxLlmCalls exceeded';
+				strandsAgent.cancel();
+			}
+		});
+		strandsAgent.addHook(BeforeToolCallEvent, (event) => {
+			if (countToolCall(event.toolUse.toolUseId) > maxTools) {
+				capExceeded ??= `exceeded maxToolIterations (${maxTools})`;
+				event.cancel = 'maxToolIterations exceeded';
+				strandsAgent.cancel();
+			}
+		});
 
 		// Only persist user message on initial path (not resume)
 		if (!interruptResponses && conversationId && this.messages) {
@@ -300,6 +407,30 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		const latencyMs = Date.now() - startTime;
 		this.log.info('runAgent done', { textLength: fullText.length, latencyMs, interrupted });
+
+		// A runaway-protection cap (maxLlmCalls / maxToolIterations) cancelled the turn.
+		// Cancellation ends the stream normally (no throw, stopReason 'cancelled'), and
+		// `capExceeded` is only ever set by the cap hooks above — so surface it as an
+		// error chunk and skip the final persist + 'done' below.
+		if (capExceeded) {
+			const stoppedError = `Agent stopped: ${capExceeded}.`;
+			this.log.warn('runAgent stopped by cap', {
+				reason: capExceeded,
+				modelCallCount: Number(strandsAgent.appState.get(MODEL_CALL_COUNT_KEY)) || 0,
+				toolCallCount: Number(strandsAgent.appState.get(TOOL_CALL_COUNT_KEY)) || 0,
+			});
+			if (conversationId && this.messages) {
+				// Record why the turn stopped, mirroring the AsyncJob error handler — a
+				// reloaded conversation would otherwise just end without explanation.
+				// The cancelled tool call itself stays paired: Strands still emits
+				// AfterToolCallEvent for a call cancelled via `event.cancel` (carrying the
+				// cancellation as the result), which the loop above persists as
+				// 'tool-result', so no dangling tool_use is left behind for the next turn.
+				await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
+			}
+			await this.rt.publish('chunks', channelId, { type: 'error', error: stoppedError });
+			return;
+		}
 
 		// If interrupted, don't persist final message or publish done — agent is paused
 		if (interrupted) return;
