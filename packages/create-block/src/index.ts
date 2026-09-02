@@ -5,7 +5,7 @@
 
 import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -246,16 +246,39 @@ async function copyTemplate(
 }
 
 /**
- * External mode fixup: the shipped template's `prebuild` calls the monorepo's
- * `scripts/generate-version.mjs`, which does not exist outside the repo. Rewrite
- * it to an inline Node one-liner that writes `src/version.ts`, and add the
- * `aws-blocks` discovery keyword.
+ * Resolve a registry-installable range for an `@aws-blocks/*` dependency. The
+ * templates pin the versions used *inside the monorepo*, which don't match the
+ * published registry — so outside contributor mode we re-pin to the latest
+ * published version (`^x.y.z`). Falls back to `latest` when offline / unknown.
+ */
+function resolvePublishedRange(pkgName: string): string {
+	try {
+		const v = execSync(`npm view ${pkgName} version`, {
+			encoding: 'utf-8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}).trim();
+		if (/^\d+\.\d+\.\d+/.test(v)) return `^${v}`;
+	} catch {
+		// Offline or unpublished — fall back to the floating tag.
+	}
+	return 'latest';
+}
+
+/**
+ * External / customer mode fixup: make the generated package build and install
+ * outside the monorepo. The shipped template's `prebuild` calls the monorepo's
+ * `scripts/generate-version.mjs` and its deps pin monorepo-internal versions —
+ * neither works from the registry. Rewrite `prebuild` to an inline Node
+ * one-liner, re-pin `@aws-blocks/*` deps to published versions, add the
+ * `aws-blocks` discovery keyword, and swap the tsconfig for a standalone one.
  */
 async function fixupForExternal(targetDir: string, className: string, dryRun: boolean): Promise<void> {
 	const pkgPath = join(targetDir, 'package.json');
 	const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
 		scripts?: Record<string, string>;
 		keywords?: string[];
+		dependencies?: Record<string, string>;
+		peerDependencies?: Record<string, string>;
 	};
 	pkg.scripts ??= {};
 	// Inline version generator — no dependency on the monorepo's scripts/.
@@ -265,7 +288,23 @@ async function fixupForExternal(targetDir: string, className: string, dryRun: bo
 		`'export const BB_NAME = \\'${className}\\';\\n' + ` +
 		`'export const BB_VERSION = \\'' + require('./package.json').version + '\\';\\n')"`;
 	pkg.keywords = Array.from(new Set([...(pkg.keywords ?? []), 'aws-blocks']));
+	// Re-pin @aws-blocks/* deps to versions that exist on the registry.
+	for (const deps of [pkg.dependencies, pkg.peerDependencies]) {
+		if (!deps) continue;
+		for (const name of Object.keys(deps)) {
+			if (name.startsWith('@aws-blocks/')) deps[name] = resolvePublishedRange(name);
+		}
+	}
 	if (!dryRun) await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+	// The CDK *synth test's* harness depends on how @aws-blocks/core attaches a
+	// block to its Stack, which varies by core version — so it isn't portable to
+	// an arbitrary installed core. Drop it from out-of-monorepo packages; the
+	// runtime + parity tests (the customer-relevant, portable ones) still ship,
+	// and the CDK construct itself (index.cdk.ts) is unchanged. Author a CDK test
+	// against your own stack setup if you need one.
+	const cdkTest = join(targetDir, 'src', 'index.cdk.test.ts');
+	if (!dryRun && (await exists(cdkTest))) await rm(cdkTest);
 
 	// The shipped tsconfig extends the monorepo base and references sibling
 	// packages by path — neither exists outside the repo. Replace it with a
@@ -292,6 +331,40 @@ async function fixupForExternal(targetDir: string, className: string, dryRun: bo
 		};
 		if (!dryRun) await writeFile(tsconfigPath, `${JSON.stringify(standalone, null, 2)}\n`);
 	}
+}
+
+/**
+ * Contributor fixup: re-pin the generated block's `@aws-blocks/*` deps to the
+ * monorepo's *current local* versions (`^x.y.z`, as sibling BBs do). The
+ * templates carry a snapshot version that drifts as core is bumped; without this
+ * the pinned range stops matching the local workspace and npm won't link it.
+ */
+async function repinContributorDeps(root: string, targetDir: string, dryRun: boolean): Promise<void> {
+	const pkgPath = join(targetDir, 'package.json');
+	const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
+		dependencies?: Record<string, string>;
+		peerDependencies?: Record<string, string>;
+	};
+	let changed = false;
+	for (const deps of [pkg.dependencies, pkg.peerDependencies]) {
+		if (!deps) continue;
+		for (const name of Object.keys(deps)) {
+			if (!name.startsWith('@aws-blocks/')) continue;
+			const local = name.slice('@aws-blocks/'.length);
+			try {
+				const sibling = JSON.parse(await readFile(join(root, 'packages', local, 'package.json'), 'utf-8')) as {
+					version?: string;
+				};
+				if (sibling.version) {
+					deps[name] = `^${sibling.version}`;
+					changed = true;
+				}
+			} catch {
+				// Not a local package (or unreadable) — leave the template pin as-is.
+			}
+		}
+	}
+	if (changed && !dryRun) await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
 // ─── Contributor-mode monorepo wiring ────────────────────────────────────────
@@ -668,6 +741,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 
 	let wire: WireResult | null = null;
 	if (mode === 'contributor') {
+		await repinContributorDeps(monorepoRoot as string, targetDir, opts.dryRun);
 		wire = await wireContributor(monorepoRoot as string, names, opts.dryRun);
 	} else if (mode === 'customer') {
 		const c = customer as { root: string; pkg: WorkspacePkg };
