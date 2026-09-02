@@ -334,6 +334,19 @@ describe('CannedProvider', () => {
 		assert.ok(text.includes('22°C'), 'should contain weather data');
 	});
 
+	// Keyword text matching must respect word boundaries for the same reason tool matching
+	// does, or "reorder" returns the order response and "helper" returns the help response.
+	test('does not return a keyword response when the keyword is only a substring', async () => {
+		const provider = new CannedProvider();
+		const chunks: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: 'please reorder the list alphabetically' }] }] as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+		}
+		const text = chunks.join('');
+		assert.ok(!text.includes('#12345'), `"reorder" must not return the order response, got: ${text}`);
+		assert.ok(text.includes('No real model was called'), 'should fall through to the default response');
+	});
+
 	test('triggers tool call when prompt matches tool name', async () => {
 		const provider = new CannedProvider();
 		let toolName: string | undefined;
@@ -382,6 +395,157 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(started, ['getOrder']);
 	});
 
+	// Collect the parsed tool input from the first tool call in a stream.
+	const collectToolInput = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<any> => {
+		let input: any;
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'toolUseInputDelta') {
+				input = JSON.parse(event.delta.input);
+			}
+		}
+		return input;
+	};
+
+	// Collect the names of every tool call started in a stream.
+	const collectToolStarts = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<string[]> => {
+		const started: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+		}
+		return started;
+	};
+
+	test('cannedExamples are shallow-merged over generated placeholder input', async () => {
+		const hints = new Map([['searchDocs', { examples: { query: 'how do I get started' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		// Example query wins; unspecified `limit` falls back to the generic integer placeholder.
+		assert.deepStrictEqual(input, { query: 'how do I get started', limit: 1 });
+	});
+
+	test('respects schema default values over generic placeholders', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10 });
+	});
+
+	test('mixes schema defaults with generic placeholders per field', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 }, query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10, query: 'sample' });
+	});
+
+	test('cannedExamples win over a schema default on the same field', async () => {
+		const hints = new Map([['listItems', { examples: { limit: 5 } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		// Full precedence chain is cannedExamples > schema default > generic placeholder;
+		// this pins the top link, where a field carries both an example and a default.
+		assert.deepStrictEqual(input, { limit: 5 }, 'the cannedExamples value must beat the schema default');
+	});
+
+	test('warns on a cannedExamples field missing from the tool schema, but still sends it', async () => {
+		const hints = new Map([['fetchPage', { examples: { rul: 'https://example.com' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'fetchPage', description: '', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } }];
+		const originalWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (msg: unknown) => { warnings.push(String(msg)); };
+		let input: any;
+		try {
+			input = await collectToolInput(provider, 'fetchPage now', toolSpecs);
+		} finally {
+			console.warn = originalWarn;
+		}
+		assert.ok(
+			warnings.some(w => w.includes('fetchPage') && w.includes('"rul"')),
+			`the typo'd field should be reported, got ${JSON.stringify(warnings)}`,
+		);
+		// A bad hint is surfaced, never enforced: nothing throws and the value still ships.
+		assert.deepStrictEqual(input, { url: 'sample', rul: 'https://example.com' });
+	});
+
+	test('cannedTriggers fire a tool for a single-word keyword beyond its name', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['find'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'help me find the answer', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('cannedTriggers fire a tool for a multi-word phrase', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('single-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['cat'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'what category is this', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "cat" must not fire on "category"');
+	});
+
+	test('multi-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['log in'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'check the backlog in the queue', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "log in" must not fire on "backlog in"');
+	});
+
+	test('multi-word cannedTriggers tolerate flexible internal whitespace', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look   up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs'], 'multiple spaces between words should still match');
+	});
+
+	test('generates generic placeholder when no example or default is given', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		assert.deepStrictEqual(input, { query: 'sample' });
+	});
+
+	test('resolves a union (anyOf) field from its first usable variant', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 1 });
+	});
+
+	test('resolves a const field to its fixed value', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { kind: { const: 'archive' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { kind: 'archive' });
+	});
+
+	// A required field of an unrecognized shape used to be dropped entirely, so the emitted
+	// call failed schema validation before the tool ever ran.
+	test('fills a required field whose shape yields no placeholder', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} }, required: ['mystery'] } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { mystery: 'sample' });
+	});
+
+	test('leaves an optional field whose shape yields no placeholder omitted', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, {}, 'absence is valid for an optional field; do not invent a wrong-typed value');
+	});
+
 	test('responds to tool result with acknowledgment', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
@@ -414,6 +578,35 @@ describe('CannedProvider', () => {
 		const done = await result.complete();
 		assert.strictEqual(done.type, 'done');
 		assert.ok(done.text && done.text.length > 0, 'should have response text');
+	});
+
+	// End-to-end: exercises the full createStrandsAgent -> createStrandsModel -> CannedProvider
+	// plumbing. A prompt that only matches a `cannedTriggers` keyword must fire the tool, and the
+	// emitted call must carry the `cannedExamples` input.
+	test('canned hints plumb through the Agent end-to-end', async () => {
+		const scope = new Scope('test-canned-hints');
+		const agent = new Agent(scope, 'hints', {
+			inferenceOnly: false,
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				searchDocs: tool({
+					description: 'Search documentation',
+					parameters: z.object({ query: z.string() }),
+					handler: async ({ input }) => ({ echoed: input.query }),
+					cannedExamples: { query: 'how do I get started' },
+					cannedTriggers: ['find'],
+				}),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream('help me find the answer', { conversationId: convId, userId: 'test-user' });
+		await result.complete();
+		const messages = await agent.getConversation(convId);
+		const toolCall = messages.find(m => m.role === 'tool-call');
+		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
+		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
+		assert.deepStrictEqual(toolCall.metadata.toolInput, { query: 'how do I get started' });
 	});
 
 	test("getConversation with limit returns most recent messages", async () => {
