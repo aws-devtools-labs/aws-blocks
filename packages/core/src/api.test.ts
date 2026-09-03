@@ -23,3 +23,28 @@ test('Different ApiNamespace names should not collide', () => {
   assert.strictEqual((api1 as any)[API_NAMESPACE_MARKER], 'api1');
   assert.strictEqual((api2 as any)[API_NAMESPACE_MARKER], 'api2');
 });
+
+// ApiNamespace records its name on the scope's resolved compute (CDK
+// synth), while staying a silent no-op where no compute is resolvable.
+test('ApiNamespace records its name on a resolvable compute', () => {
+  const compute = { namespaces: [] as string[] };
+  new ApiNamespace({ id: 'app', compute } as never, 'myapi', () => ({ ping: () => 'ok' }));
+  assert.deepStrictEqual(compute.namespaces, ['myapi']);
+});
+
+test('ApiNamespace is a no-op recorder when the scope has no compute', () => {
+  // The common Scope (mock/runtime) has no `compute`; recording must not throw
+  // and the handler is still tagged and returned unchanged.
+  const handler = new ApiNamespace(new Scope('no-compute'), 'plainapi', () => ({ x: () => 1 }));
+  assert.strictEqual((handler as any)[API_NAMESPACE_MARKER], 'plainapi');
+});
+
+test('ApiNamespace records a namespace at most once per compute', () => {
+  // `namespaces` is a set of names: recording the same name twice (e.g. a
+  // re-imported module during synth) must not append a duplicate.
+  const compute = { namespaces: [] as string[] };
+  const scopeLike = { id: 'app', compute } as never;
+  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
+  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
+  assert.deepStrictEqual(compute.namespaces, ['dup']);
+});
