@@ -1,7 +1,10 @@
 # Design draft — a scaffolder for new Building Blocks (`create-block`)
 
-> Status: **DRAFT for discussion.** Nothing implemented yet. This captures what a
-> Block is, what wiring a new one requires today, and a proposed CLI to automate it.
+> Status: **Implemented** as `@aws-blocks/create-block` (this PR). This doc records
+> the original design rationale — what a Block is, what wiring a new one requires,
+> and why the CLI is shaped the way it is. The §7 open questions are all resolved:
+> one auto-detecting CLI (contributor / customer / external), all three block
+> shapes, published bin + `npm run new:bb`, and HTML-marker umbrella edits.
 
 ## 1. What we're building
 
@@ -137,15 +140,13 @@ edits (not string templating).
 - **Verifies:** ends by running `npm run build -w @aws-blocks/bb-{name} && npm test -w …`
   (skippable) so the author starts from green.
 
-## 7. Open decisions (need your call)
+## 7. Decisions (resolved — reflected in the implementation)
 
-1. **Audience/scope for v1** — contributor-in-monorepo (with the 6 touchpoints), external
-   custom BB (standalone, no wiring), or one CLI that auto-detects and does both?
-2. **Block types in v1** — Primitive + Composite (cover the common cases), or add
-   Client-facing now?
-3. **Packaging** — published `npm create @aws-blocks/block` bin, a repo-only
-   `scripts/`+`npm run new:bb`, or both?
-4. **Umbrella re-export editing** — insert via HTML markers we add to `index.ts` /
-   `index.cdk.ts` (robust) vs. anchored alphabetical insertion into the existing
-   hand-maintained lists (no file changes, more fragile).
-```
+1. **Audience/scope** — ✅ one CLI that auto-detects: **contributor** (in the
+   monorepo, does the 6 touchpoints), **customer** (in a user's own npm-workspaces
+   repo, scaffolds + links a subpackage), and **external** (standalone, no wiring).
+2. **Block types** — ✅ all three: primitive, composite, client-facing.
+3. **Packaging** — ✅ both: a publishable `create-block` bin (`npm create
+   @aws-blocks/block`) and the repo `npm run new:bb`.
+4. **Umbrella re-export editing** — ✅ HTML markers in `index.ts` / `index.cdk.ts`
+   (idempotent, re-runnable).

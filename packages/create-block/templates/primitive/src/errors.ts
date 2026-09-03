@@ -7,6 +7,6 @@
  * cross the wire by `name`, so the same guard works server- and client-side.
  */
 export const __BB_CLASS__Errors = {
-	/** A conditional write or delete precondition was not met. */
-	ConditionalCheckFailed: 'ConditionalCheckFailedException',
+	/** TODO: rename/extend for this block's real failure modes. */
+	InvalidInput: 'InvalidInputException',
 } as const;

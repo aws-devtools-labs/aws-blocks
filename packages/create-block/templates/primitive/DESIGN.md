@@ -5,22 +5,20 @@ AWS implementations. Delete the guidance below once filled in.
 
 ## Infrastructure (CDK)
 
-`index.cdk.ts` provisions a DynamoDB table named `fullId.substring(0, 255)`
-(`PAY_PER_REQUEST`, partition key `pk`) and grants the shared Blocks Lambda
-read/write access. `fromExisting()` binds to a pre-deployed table and provisions
-nothing. Every runtime method is stubbed with `synthGuard` so a top-level call
-during synth fails loudly.
+`index.cdk.ts` provisions this block's resources (named off `this.fullId` so the
+runtime can derive the same name) and grants the shared Blocks Lambda access.
+Every runtime method is stubbed with `synthGuard` so a top-level call during
+synth fails loudly.
 
 ## Runtime (AWS)
 
-`index.aws.ts` resolves the table name from the SDK-identifier registry **at call
-time** (`getSdkIdentifiers(this)`), then issues `GetCommand` / `PutCommand` /
-`DeleteCommand` against DynamoDB.
+`index.aws.ts` resolves resource identifiers from the registry **at call time**
+(`getSdkIdentifiers(this)`) and calls AWS via the SDK.
 
 ## Mock Implementation
 
-`index.mock.ts` keeps an in-memory `Map` persisted to `.bb-data/{fullId}/store.json`
-so values survive dev-server restarts.
+`index.mock.ts` implements the same surface locally (in-memory or on-disk under
+`.bb-data/{fullId}/`) so `npm run dev` and tests need no AWS account.
 
 ### Mock vs AWS Behavior Differences
 
