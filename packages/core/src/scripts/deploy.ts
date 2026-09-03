@@ -11,10 +11,75 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs } from './deploy-stream.js';
+import { getStackName } from './stack-id.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
   projectRoot: string;
+}
+
+/**
+ * Whether a stack in CloudFormation status `status` will next deploy as an
+ * UPDATE change set (so `--revert-drift` is valid) rather than a CREATE.
+ *
+ * REVERT_DRIFT is a deployment mode CFN allows ONLY on UPDATE change sets, and
+ * several statuses resolve in DescribeStacks yet still deploy as CREATE — so
+ * "a stack row exists" is not the same question as "the next deploy is an
+ * UPDATE". We answer by EXCLUDING the states that are effectively a CREATE, so
+ * every genuinely-created, deployable state (CREATE_COMPLETE, UPDATE_COMPLETE,
+ * UPDATE_ROLLBACK_COMPLETE, IMPORT_COMPLETE, …) is updatable by default:
+ *
+ *  - `REVIEW_IN_PROGRESS`: a change set was created but never executed, so the
+ *    stack was never successfully created — the next deploy is a CREATE.
+ *  - any `ROLLBACK_*` (ROLLBACK_COMPLETE / ROLLBACK_FAILED / ROLLBACK_IN_PROGRESS):
+ *    the initial create failed or is rolling back; CDK treats this as a failed
+ *    initial creation and deletes-and-recreates the stack, so the next deploy is
+ *    again a CREATE. (Note: this is the bare `ROLLBACK_` prefix only —
+ *    `UPDATE_ROLLBACK_*` are genuine UPDATE targets and remain updatable.)
+ *  - any `DELETE_*`: the stack is gone or going (DELETE_COMPLETE already surfaces
+ *    as "does not exist"; DELETE_IN_PROGRESS is a transient non-deployable
+ *    window) — not an UPDATE.
+ */
+export function isUpdatableStackStatus(status: string | undefined): boolean {
+  return !!status && status !== 'REVIEW_IN_PROGRESS' && !status.startsWith('ROLLBACK_') && !status.startsWith('DELETE_');
+}
+
+/**
+ * Whether the production CloudFormation stack `stackName` is present AND in a
+ * state whose next deploy is an UPDATE (see {@link isUpdatableStackStatus}).
+ *
+ * Used to gate `--revert-drift` on the production deploy: REVERT_DRIFT is a
+ * CloudFormation deployment mode allowed only on UPDATE change sets, so it may
+ * be emitted only when the stack already exists AND is updatable — never on a
+ * first/CREATE deploy, nor when a present-but-not-created status (e.g.
+ * REVIEW_IN_PROGRESS / ROLLBACK_COMPLETE / DELETE_*) means CFN still runs a
+ * CREATE change set, which it hard-rejects the flag on.
+ *
+ * Best-effort and fail-safe: a `does not exist` / ValidationError means "no
+ * stack" (CREATE → `false`). On ANY OTHER error (throttle, network,
+ * permissions, missing SDK) we also return `false` and warn — losing drift
+ * reconciliation for this one run is strictly safer than breaking the deploy.
+ * Reuses the region/credentials already resolved into the environment.
+ */
+export async function productionStackIsUpdatable(stackName: string): Promise<boolean> {
+  try {
+    const { CloudFormationClient, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
+    const cfn = new CloudFormationClient({});
+    const res = await cfn.send(new DescribeStacksCommand({ StackName: stackName }));
+    const status = res.Stacks?.[0]?.StackStatus;
+    return isUpdatableStackStatus(status);
+  } catch (e) {
+    const message = (e as Error).message ?? '';
+    // A missing stack is the expected first-deploy case: DescribeStacks throws a
+    // ValidationError whose message contains "does not exist".
+    if (/does not exist/i.test(message) || (e as { name?: string }).name === 'ValidationError') {
+      return false;
+    }
+    // Any other failure (throttle/network/permissions) must not break the deploy;
+    // fall back to omitting --revert-drift for this run.
+    console.warn(`  ⚠️  could not determine whether stack ${stackName} exists (${message}); skipping --revert-drift`);
+    return false;
+  }
 }
 
 export async function deploy(options: DeployOptions) {
@@ -66,11 +131,20 @@ export async function deploy(options: DeployOptions) {
     console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
 
     try {
+      // `--revert-drift` (CFN REVERT_DRIFT deployment mode) is valid only on an
+      // UPDATE change set; CFN rejects it on a first/CREATE deploy. Emit it only
+      // when the production stack already exists AND is in an updatable state
+      // (not REVIEW_IN_PROGRESS/ROLLBACK_COMPLETE/DELETE_*, which still deploy as
+      // CREATE) so the first deploy succeeds and later deploys still reconcile
+      // dev-loop drift.
+      const stackName = getStackName({ sandbox: false, projectRoot: options.projectRoot });
+      const revertDrift = await productionStackIsUpdatable(stackName);
       await runStreaming(
         "npx",
         buildCdkDeployArgs({
           projectRoot: options.projectRoot,
           outputsFile: '.blocks-sandbox/outputs.json',
+          revertDrift,
         }),
         {
           label: 'cdk deploy',

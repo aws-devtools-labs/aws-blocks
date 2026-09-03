@@ -76,7 +76,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     // A production deploy must keep a reviewable change set and full
     // stabilization with rollback: neither `--express` nor `--method direct`
     // (both sandbox-only speedups) may appear in buildCdkDeployArgs.
-    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json', revertDrift: true });
     assert.ok(!prod.includes('--express'), `production deploy must not use --express: ${prod.join(' ')}`);
     assert.ok(!prod.includes('--method'), `production deploy must not use --method: ${prod.join(' ')}`);
   });

@@ -201,6 +201,16 @@ export interface CdkDeployArgsOptions {
   projectRoot: string;
   /** Path (relative to the project root) CDK writes stack outputs to. */
   outputsFile: string;
+  /**
+   * When `true`, emit `--revert-drift` to reconcile drift (e.g. from the
+   * hotswap dev loop) against the template on an UPDATE deploy. Must be `false`
+   * for a first/CREATE deploy: `--revert-drift` maps to the CloudFormation
+   * REVERT_DRIFT deployment mode, which CFN rejects on a CREATE change set
+   * ("Change set of type CREATE is not supported for change sets with
+   * deployment mode REVERT_DRIFT"). The caller resolves this by checking
+   * whether the target stack already exists.
+   */
+  revertDrift: boolean;
 }
 
 /**
@@ -219,18 +229,22 @@ export interface CdkDeployArgsOptions {
  *   deploy does not have, and a half-rendered bar is not a usable progress
  *   signal in a log file.
  */
-export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOptions): string[] {
+export function buildCdkDeployArgs({ projectRoot, outputsFile, revertDrift }: CdkDeployArgsOptions): string[] {
   return [
     'cdk',
     'deploy',
     '--require-approval',
     'never',
     // reconcile drift (e.g. from the hotswap dev loop) against the template.
+    // Gated on `revertDrift`: `--revert-drift` maps to the CloudFormation
+    // REVERT_DRIFT deployment mode, allowed only on UPDATE change sets — CFN
+    // rejects it on a first/CREATE deploy — so the caller passes `true` only
+    // when the target stack already exists.
     // Requires an aws-cdk CLI new enough to expose `--revert-drift`; our pinned
     // `^2.1138.0` is the validated floor (the hermetic real-CDK probe in
     // deploy-stream.test.ts runs this argv against exactly that pin). The flag is
     // unavailable on older CLIs, where it would surface as an unknown option.
-    '--revert-drift',
+    ...(revertDrift ? ['--revert-drift'] : []),
     '--ci',
     '--progress',
     'events',

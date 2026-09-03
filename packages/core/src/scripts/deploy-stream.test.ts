@@ -19,6 +19,7 @@ import {
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
+import { isUpdatableStackStatus } from './deploy.js';
 
 const isWindows = process.platform === 'win32';
 // The end-to-end signal tests below deliver a *process-group* signal
@@ -149,7 +150,7 @@ describe('formatElapsed', () => {
 // keeps them line-oriented when there is no TTY. Dropping either flag restores
 // the 0-byte stdout, so the argv is pinned here.
 describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
-  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json', revertDrift: true });
 
   it('sends CDK logs to stdout instead of stderr', () => {
     assert.ok(args.includes('--ci'), `expected --ci in: ${args.join(' ')}`);
@@ -159,8 +160,18 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[args.indexOf('--progress') + 1], 'events');
   });
 
-  it('reconciles hotswap/dev-loop drift on a full deploy', () => {
+  it('reconciles hotswap/dev-loop drift on an UPDATE deploy (revertDrift: true)', () => {
     assert.ok(args.includes('--revert-drift'), `expected --revert-drift in: ${args.join(' ')}`);
+  });
+
+  it('omits --revert-drift on a first/CREATE deploy (revertDrift: false)', () => {
+    // REVERT_DRIFT is a CloudFormation deployment mode valid only on UPDATE
+    // change sets; CFN rejects it on CREATE. So a fresh deploy must not carry it.
+    const createArgs = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json', revertDrift: false });
+    assert.ok(!createArgs.includes('--revert-drift'), `first/CREATE deploy must not use --revert-drift: ${createArgs.join(' ')}`);
+    // Gating the drift flag must not disturb the observability contract.
+    assert.ok(createArgs.includes('--ci'), `expected --ci in: ${createArgs.join(' ')}`);
+    assert.strictEqual(createArgs[createArgs.indexOf('--progress') + 1], 'events');
   });
 
   it('keeps the existing non-interactive deploy contract', () => {
@@ -562,6 +573,9 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
     const deployArgs = buildCdkDeployArgs({
       projectRoot: assembly,
       outputsFile: join(assembly, 'outputs.json'),
+      // Exercise the UPDATE-deploy argv so the probe still carries --revert-drift
+      // and proves the pinned CLI parses it.
+      revertDrift: true,
     })
       .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
       .filter((arg) => arg !== '--ci');
@@ -740,6 +754,39 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
       executionMarker?.startsWith(PROBE_MARKER),
       `the real-CDK stream-routing probe did not run: expected a ${PROBE_MARKER} line on stdout`,
     );
+  });
+});
+
+// ── revert-drift gating: which stack statuses are an UPDATE ─────────────────
+// The finding this revision fixes: `--revert-drift` is valid only on an UPDATE
+// change set, but several statuses resolve in DescribeStacks yet still deploy as
+// CREATE (REVIEW_IN_PROGRESS = never executed; ROLLBACK_COMPLETE = failed create,
+// must be recreated; DELETE_* = gone/going). `isUpdatableStackStatus` must reject
+// exactly those and accept every genuinely-created, deployable state.
+describe('isUpdatableStackStatus — only an UPDATE-bound status enables --revert-drift', () => {
+  it('rejects statuses whose next deploy is really a CREATE', () => {
+    // No stack row at all → definitely a CREATE.
+    assert.strictEqual(isUpdatableStackStatus(undefined), false);
+    // Change set created but never executed → never successfully created.
+    assert.strictEqual(isUpdatableStackStatus('REVIEW_IN_PROGRESS'), false);
+    // Failed initial create → CFN requires delete-then-recreate.
+    assert.strictEqual(isUpdatableStackStatus('ROLLBACK_COMPLETE'), false);
+    // A ROLLBACK_FAILED initial create is likewise a failed creation CDK
+    // deletes-and-recreates → next deploy is a CREATE, so not updatable.
+    assert.strictEqual(isUpdatableStackStatus('ROLLBACK_FAILED'), false);
+    // Gone or going → not deployable as an UPDATE.
+    assert.strictEqual(isUpdatableStackStatus('DELETE_IN_PROGRESS'), false);
+    assert.strictEqual(isUpdatableStackStatus('DELETE_COMPLETE'), false);
+  });
+
+  it('accepts genuinely-created, deployable states', () => {
+    assert.strictEqual(isUpdatableStackStatus('CREATE_COMPLETE'), true);
+    assert.strictEqual(isUpdatableStackStatus('UPDATE_COMPLETE'), true);
+    assert.strictEqual(isUpdatableStackStatus('UPDATE_ROLLBACK_COMPLETE'), true);
+    // UPDATE_ROLLBACK_* are UPDATE-type failures, not a failed CREATE — the
+    // broadened startsWith('ROLLBACK_') exclusion must NOT catch them.
+    assert.strictEqual(isUpdatableStackStatus('UPDATE_ROLLBACK_FAILED'), true);
+    assert.strictEqual(isUpdatableStackStatus('IMPORT_COMPLETE'), true);
   });
 });
 
