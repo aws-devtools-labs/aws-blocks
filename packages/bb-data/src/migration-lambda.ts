@@ -29,6 +29,8 @@ export const isRetryableMigrationError = (e: unknown): boolean =>
     e.name === DatabaseErrors.ConnectionFailed ||
     TRANSIENT_DATA_API_ERROR_NAMES.has(e.name) ||
     e.name === 'BadRequestException' ||
+    // JDBC-style but load-bearing: only check for a not-yet-ready writer, whose
+    // name the engine rewrites while leaving the message intact.
     e.message.includes('Communications link failure')
   );
 
