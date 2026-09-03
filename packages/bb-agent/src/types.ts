@@ -85,7 +85,39 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 */
 	toolContextSchema?: z.ZodType<TContext>;
 	conversation?: ConversationManagerConfig;
-	structuredOutput?: z.ZodType;
+	/**
+	 * Safety cap on the number of **model (Bedrock) invocations per turn**.
+	 *
+	 * The agent runs a reason→act loop where each iteration is one model call,
+	 * optionally followed by tool calls; a model call that requests no tools ends
+	 * the turn. Model calls are the unit Bedrock bills for, so this is the most
+	 * direct guard against a runaway agent that loops indefinitely — and because
+	 * every tool round needs a model call, it transitively bounds tool loops too.
+	 *
+	 * When the cap is hit the turn is stopped and the client receives an `error`
+	 * chunk instead of `done`. Raise it for agents that legitimately reason over
+	 * many steps, or set it to `false` to disable the cap entirely. This bounds
+	 * call *count*, not tokens or wall-clock — pair it with a billing/CloudWatch
+	 * alarm for defense in depth.
+	 *
+	 * Scope: the count covers the whole turn, including across a human-in-the-loop
+	 * interrupt — it is kept in the agent's session state, so `resume()` continues
+	 * on the same budget rather than starting a fresh one. Must be a positive
+	 * integer or `false`; anything else throws `InvalidModelConfigException`.
+	 */
+	maxLlmCalls?: number | false;
+	/**
+	 * Safety cap on the number of **tool calls per turn**.
+	 *
+	 * Bounds tool-loop runaways specifically (a turn that keeps invoking tools).
+	 * Parallel tool batches count each individual call. Raise it for agents that
+	 * legitimately chain many tools in a single turn, or set it to `false` to
+	 * disable the cap entirely. When the cap is hit the turn is stopped and the
+	 * client receives an `error` chunk instead of `done`. Like `maxLlmCalls`, the
+	 * count covers the whole turn (it survives `resume()` after an interrupt) and
+	 * must be a positive integer or `false`.
+	 */
+	maxToolIterations?: number | false;
 	/** Controls how text chunks are published to the client via Realtime.
 	 * - `'token'`: publish every text delta immediately
 	 * - `'block'` (default): buffer text and publish when a full content block completes
@@ -175,6 +207,31 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * - `interrupt` — pause the agent for human input
 	 */
 	handler: (args: ToolHandlerArgs<z.infer<TParams>, TContext>) => Promise<JSONValue>;
+	/**
+	 * Local-dev only. Realistic tool input for the `canned` mock provider. Shallow-merged
+	 * over the generated placeholder input (your fields win; unspecified fields fall back to
+	 * schema defaults / generic placeholders). The merge is one level deep — a nested-object
+	 * example replaces that whole generated sub-object rather than deep-merging into it.
+	 * Ignored by the bedrock/openai providers.
+	 */
+	cannedExamples?: Record<string, JSONValue>;
+	/**
+	 * Local-dev only. Extra keyword phrases that make the `canned` mock provider select this
+	 * tool, in addition to the tool name and its camelCase words. Single and multi-word phrases
+	 * match on word boundaries (so "log in" is not triggered by "backlog in"). Ignored by the
+	 * bedrock/openai providers.
+	 */
+	cannedTriggers?: string[];
+}
+
+/**
+ * Local-dev hints for the `canned` mock provider, keyed by tool name and threaded from
+ * `ToolDefinition.cannedExamples`/`cannedTriggers` into the provider (Strands strips these
+ * fields when converting tools, so they're plumbed explicitly). Ignored by real providers.
+ */
+export interface CannedToolHints {
+	examples?: Record<string, JSONValue>;
+	triggers?: string[];
 }
 
 /**

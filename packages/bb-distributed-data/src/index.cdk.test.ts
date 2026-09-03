@@ -210,6 +210,33 @@ test('CDK: migration/provisioning resources always created', () => {
   assert.ok(hasDsqlGrant, 'Migration Lambda should have dsql:DbConnectAdmin');
 });
 
+test('CDK: DSQL migration Lambda log group adopts defaults.logRetention', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'DsqlMigrationRetentionStack');
+  const executionRole = new cdk.aws_iam.Role(stack, 'BlocksRole', {
+    assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+  });
+  const handler = new lambda.Function(stack, 'Handler', {
+    runtime: DEFAULT_NODE_RUNTIME,
+    handler: 'index.handler',
+    code: lambda.Code.fromInline('exports.handler = async () => {};'),
+    role: executionRole,
+  });
+  (stack as any).handler = handler;
+  (stack as any).executionRole = executionRole;
+  (stack as any).defaults = BlocksPresets.sandbox;
+  (globalThis as any).CURRENT_BLOCKS_STACK = stack;
+  try {
+    new DistributedDatabase(scope(stack), 'mydsql');
+    const template = Template.fromStack(stack);
+    // The always-created migration Lambda now owns an explicit log group whose
+    // retention follows the stack-wide default (sandbox → one week).
+    template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
+  } finally {
+    delete (globalThis as any).CURRENT_BLOCKS_STACK;
+  }
+});
+
 test('CDK: migration resources created when migrationsPath is provided', () => {
   rmSync(MIGRATIONS_DIR, { recursive: true, force: true });
   mkdirSync(MIGRATIONS_DIR, { recursive: true });
