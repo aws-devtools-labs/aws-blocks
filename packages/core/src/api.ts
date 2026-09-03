@@ -72,23 +72,26 @@ type ComputeResolvingScope = { compute?: { namespaces?: string[] } };
  *
  * CDK-synth concern only: in the CDK bundle `scope.compute` resolves to the
  * namespace's compute (the stack default today), and we append the name to its
- * `namespaces` list. In the mock/runtime bundles — or a scopeless test — there
- * is no `compute`, so this is a silent no-op. The `compute` getter can also
- * throw before the default compute is initialized (outside synth); that too is
- * treated as "nothing to record". The public `ApiNamespace` signature is
- * unchanged; this is a purely internal side effect.
+ * `namespaces` list. In the mock/runtime bundles — or a scopeless test — the
+ * property is absent, so `scope.compute` is `undefined` and this is a silent
+ * no-op. The public `ApiNamespace` signature is unchanged; this is a purely
+ * internal side effect.
+ *
+ * No `try/catch`: `BlocksBackend.create()` initializes the default compute
+ * before it imports the backend module that constructs any `ApiNamespace`, so
+ * the `compute` getter always resolves at this call site. If it ever threw
+ * here it would signal a genuine lifecycle violation (an `ApiNamespace` built
+ * before `create()` resolved), which should surface rather than be swallowed.
  */
 function recordNamespaceOnCompute(scope: ScopeParent | null | undefined, name: string): void {
   // An API created without a Scope stays unrecorded and routes to the
   // default compute.
   if (!scope || typeof scope !== 'object') return;
-  try {
-    const compute = (scope as ComputeResolvingScope).compute;
-    if (compute && Array.isArray(compute.namespaces)) {
-      compute.namespaces.push(name);
-    }
-  } catch {
-    // compute resolution isn't available in this context — nothing to record.
+  const compute = (scope as ComputeResolvingScope).compute;
+  // Guard against duplicates so `namespaces` stays a set of names: a namespace
+  // could otherwise be recorded twice (e.g. a re-imported module during synth).
+  if (compute && Array.isArray(compute.namespaces) && !compute.namespaces.includes(name)) {
+    compute.namespaces.push(name);
   }
 }
 

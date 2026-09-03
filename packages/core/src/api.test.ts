@@ -38,3 +38,13 @@ test('ApiNamespace is a no-op recorder when the scope has no compute', () => {
   const handler = new ApiNamespace(new Scope('no-compute'), 'plainapi', () => ({ x: () => 1 }));
   assert.strictEqual((handler as any)[API_NAMESPACE_MARKER], 'plainapi');
 });
+
+test('ApiNamespace records a namespace at most once per compute', () => {
+  // `namespaces` is a set of names: recording the same name twice (e.g. a
+  // re-imported module during synth) must not append a duplicate.
+  const compute = { namespaces: [] as string[] };
+  const scopeLike = { id: 'app', compute } as never;
+  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
+  new ApiNamespace(scopeLike, 'dup', () => ({ ping: () => 'ok' }));
+  assert.deepStrictEqual(compute.namespaces, ['dup']);
+});
