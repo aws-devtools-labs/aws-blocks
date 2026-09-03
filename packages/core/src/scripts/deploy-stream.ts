@@ -225,6 +225,8 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
     'deploy',
     '--require-approval',
     'never',
+    // reconcile drift (e.g. from the hotswap dev loop) against the template
+    '--revert-drift',
     '--ci',
     '--progress',
     'events',

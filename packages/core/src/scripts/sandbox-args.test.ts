@@ -64,6 +64,14 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     assert.strictEqual(valueAfter(custom, '--context'), 'projectRoot=/other');
   });
 
+  it('does NOT leak the production --revert-drift flag into the sandbox path', () => {
+    // `--revert-drift` reconciles drift against the CloudFormation template on a
+    // full production deploy. The sandbox/dev loop deliberately drifts (that is
+    // what `cdk watch`/hotswap does), so the sandbox deploy must never carry it —
+    // it would fight the very hotswap it exists to enable.
+    assert.ok(!args.includes('--revert-drift'), `sandbox deploy must not use --revert-drift: ${args.join(' ')}`);
+  });
+
   it('does NOT leak express mode into the production deploy path', () => {
     // A production deploy must keep a reviewable change set and full
     // stabilization with rollback: neither `--express` nor `--method direct`

@@ -159,6 +159,10 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[args.indexOf('--progress') + 1], 'events');
   });
 
+  it('reconciles hotswap/dev-loop drift on a full deploy', () => {
+    assert.ok(args.includes('--revert-drift'), `expected --revert-drift in: ${args.join(' ')}`);
+  });
+
   it('keeps the existing non-interactive deploy contract', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
