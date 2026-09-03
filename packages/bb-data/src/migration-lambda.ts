@@ -40,6 +40,9 @@ export const isRetryableMigrationError = (e: unknown): boolean =>
  * (the writer instance may not be ready when the migration Lambda first fires),
  * and a scale-to-zero cluster needs to resume from auto-pause before it accepts
  * the first statement of a deploy.
+ *
+ * @throws the last underlying error once MAX_RETRIES retryable attempts are
+ *         exhausted, unwrapped, so the caller sees the real failure.
  */
 export const withRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
