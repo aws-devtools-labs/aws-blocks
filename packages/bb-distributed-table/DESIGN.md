@@ -81,7 +81,9 @@ orders.query({
 
 The `order` field maps to DynamoDB's `ScanIndexForward` parameter (`'desc'` → `ScanIndexForward: false`). It defaults to `'asc'`.
 
-**Ordering ties (GSI):** a GSI sort key need not be unique, so multiple items can share one sort-key value. DynamoDB orders such ties by the base-table primary key; the mock does the same (tie-break on partition key then sort key), rather than by Map insertion order — otherwise mock results would depend on write order / disk-reload order and diverge from deployed behavior. Under `order: 'desc'` the whole index order, ties included, reverses.
+**Ordering ties (GSI):** a GSI sort key need not be unique, so multiple items can share one sort-key value. The mock tie-breaks on the base-table primary key (partition key, then sort key) rather than on Map insertion order — otherwise results would depend on write order / disk-reload order. This **matches DynamoDB's observed ordering** for index rows with equal sort keys; AWS does not document a contractual guarantee for the tie order, so the mock is intentionally **deterministic even where DynamoDB's contract is unspecified** (a plus for reproducible tests — just don't rely on a specific tie order in production logic). Under `order: 'desc'` the whole index order, ties included, reverses.
+
+**String-ordering boundary:** the mock compares sort/base keys with JavaScript `<`/`>` (UTF-16 code-unit order), which can differ from DynamoDB's UTF-8 byte order for non-ASCII string keys. This applies to both the index sort-key comparison and the base-key tie-break, and is a pre-existing property of the mock — surfaced here so the parity discussion is complete.
 
 ### D-DT-7: TTL via options field
 

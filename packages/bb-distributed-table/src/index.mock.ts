@@ -381,6 +381,9 @@ export class DistributedTable<
 			const as = (a as any)[sk], bs = (b as any)[sk];
 			if (as !== bs) return as < bs ? -1 : 1;
 		}
+		// Unreachable for distinct rows: every item is keyed by its serialized base
+		// primary key, so two different entries always differ in base PK or SK.
+		// (String comparisons above use JS UTF-16 order — see DESIGN.md D-DT-6.)
 		return 0;
 	}
 
