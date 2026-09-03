@@ -38,6 +38,7 @@ versions/{key}/__deleted__        delete marker (sentinel)
 **D-FB-6: Versioning is opt-in with runtime API support**
 **Decision:** `versioned: true` enables S3 object versioning and unlocks version-aware methods (`listVersions`, `restoreVersion`, optional `versionId` on `get`/`delete`/`getUrl`/`getFileHandle`). Without the flag, the API surface is unchanged.
 **Rationale:** Versioning adds storage cost and complexity. Making it opt-in keeps the default simple. When enabled, the runtime API exposes the full version lifecycle — listing, retrieving specific versions, permanent deletion of individual versions, and restoring old versions. `restoreVersion` is implemented as a CopyObject from the old version (S3 has no native restore), which creates a new version that becomes current.
+**Update:** The **default flipped to ON** — see D-FB-10. The runtime API described here is unchanged; only the default value of `versioned` and its typing gate changed.
 
 **D-FB-7: Mock versioning uses filesystem directories**
 **Decision:** Versioned mock stores each version in `versions/{key}/v{n}` with monotonic IDs. Delete markers are `versions/{key}/__deleted__` sentinel files.
@@ -47,15 +48,33 @@ versions/{key}/__deleted__        delete marker (sentinel)
 **Decision:** The derived bucket name (`scope.fullId`) is validated against S3's naming rules (`bucket-name.ts`) before the bucket is constructed. An invalid name throws a `ValidationFailed` error with an actionable message. The same validator runs in the mock constructor so local dev (`bb dev`) fails identically — parity. `FileBucket.fromExisting(...)` skips validation since the name is externally owned.
 **Rationale:** S3 bucket names are globally unique and immutable. Truncating to fit 63 chars risks collisions, and a name that shifts between deploys (e.g. after a hash input changes) would orphan or replace the customer's data — a far worse outcome than a fast, fixable synth error. Erroring puts the fix in the developer's hands (shorten a scope id once; the name is then stable forever) and matches the manual-shortening pattern already used in `bb-agent`. This deliberately differs from DynamoDB-backed BBs (KVStore/DistributedTable) which `substring(0, 255)` — DynamoDB's 255 limit is generous and table names are internal, disposable, and not globally unique, so silent truncation is acceptable there.
 
+**D-FB-9: TLS enforced unconditionally (enforceSSL)**
+**Decision:** Every provisioned bucket (the data bucket and the opt-in access-log bucket) sets `enforceSSL: true`, so CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`. Not configurable.
+**Rationale:** All FileBucket traffic — SDK calls and presigned URLs alike — is already HTTPS, so enforcing TLS closes the in-transit exposure gap with zero functional cost. There is no legitimate reason a FileBucket consumer needs plaintext S3 access, so this is a hard default rather than an option. Covered by the `enforces SSL` CDK test.
+
+**D-FB-10: Versioning default ON — supersedes D-FB-6's opt-in default**
+**Decision:** `versioned` now defaults to `true`; consumers opt out with the literal `versioned: false`. The version-aware runtime API and its option typings (`GetOptionsFor` et al.) remain unchanged in shape, but the conditional types now select the non-versioned (optionless) form only for the literal `versioned: false` — a non-literal `boolean` or an absent value resolves to the versioned-aware form, matching the new runtime default.
+**Rationale:** Accidental overwrites and deletes are unrecoverable without versioning; defaulting it on makes the safe choice the default and matches the "secure by default" posture of D-FB-9. This is a **behavior/breaking change** for existing consumers (buckets that were non-versioned by default now enable versioning, which adds storage cost for prior versions), so it ships with a `minor` changeset bump under the pre-1.0 (0.x) convention that a minor signals a breaking change. The literal-`false` typing gate is a deliberate consequence of `extends { versioned: false }`: TypeScript cannot narrow a widened `boolean` to the `false` branch, so the versioned-aware typings are the safe fallback.
+
+**D-FB-11: Opt-in server access logging with a dedicated locked-down log bucket**
+**Decision:** `accessLogging: true` provisions a second, dedicated S3 bucket (all public access blocked, S3-managed encryption, `enforceSSL`) that receives the main bucket's server access logs under the `access-logs/` prefix. Logs expire via a lifecycle rule after `logRetentionDays` (default `DEFAULT_ACCESS_LOG_RETENTION_DAYS = 90`). `logRetentionDays` is validated at synth: when access logging is enabled, a non-positive or non-integer value throws — a degenerate `Duration.days(0)`/negative lifecycle would otherwise only surface at deploy. The value is inert (and therefore not validated) when `accessLogging` is off.
+**Rationale:** Access logging is off by default because it has a real cost (extra bucket, log storage) and most consumers don't need an audit trail; making it opt-in keeps the default lean. The log bucket is kept **separate** from the data bucket so log delivery can't loop back onto the bucket being logged. Validating `logRetentionDays` at synth follows the same fail-fast principle as D-FB-8 (bucket name) and the CORS guard (D-FB-12): misconfiguration fails loud at synth, not minutes into a deploy.
+
+**D-FB-12: Wildcard-origin CORS + mutating method rejected at synth**
+**Decision:** A CORS rule whose `allowedOrigins` includes `'*'` and whose `allowedMethods` includes a mutating method (`PUT`/`POST`/`DELETE`, the `MUTATING_CORS_METHODS` set) throws a synth-time `Error`. Wildcard + safe methods (`GET`/`HEAD`) is allowed; explicit origins + mutating methods is allowed.
+**Rationale:** A wildcard origin on a state-changing method lets any website issue authenticated cross-origin writes/deletes against the bucket — a CSRF-shaped exposure. Rather than silently deploying it, FileBucket fails loud at synth with an actionable message pointing the developer at explicit origins. A hard error (not a warning) was chosen deliberately: this PR supersedes the prior behavior where such a rule deployed unchallenged, and the user opted for the strict gate over a soft warning.
+
 ## Infrastructure (CDK)
 
-Creates a single S3 bucket:
+Creates a single S3 bucket (plus a dedicated log bucket when `accessLogging` is enabled):
 
 - **Bucket name:** Derived from `scope.fullId` (the bucket id joined to its parent scope ids with `-`). Validated at synth against S3's naming rules — see D-FB-6.
 - **Block public access:** All four settings enabled (BLOCK_ALL)
 - **Encryption:** S3-managed keys (SSE-S3)
-- **Versioning:** Disabled by default, enabled via `options.versioned`
-- **CORS:** Configured from `options.corsRules` if provided
+- **TLS:** Enforced unconditionally (`enforceSSL: true`) — a bucket policy denies any request where `aws:SecureTransport` is `false`. Not configurable. See D-FB-9.
+- **Versioning:** Enabled by default (secure default); opt out via `options.versioned: false`. See D-FB-10.
+- **Server access logging:** Opt-in via `options.accessLogging`; provisions a separate, locked-down log bucket whose logs expire after `options.logRetentionDays` (default 90, validated as a positive integer at synth). See D-FB-11.
+- **CORS:** Configured from `options.corsRules` if provided. A wildcard origin (`'*'`) combined with a mutating method (PUT/POST/DELETE) is rejected at synth. See D-FB-12.
 - **Lifecycle rules:** Configured from `options.lifecycleRules` if provided
 - **Removal policy:** DESTROY (sandbox), configurable for production
 - **Auto-delete objects:** Enabled when removal policy is DESTROY

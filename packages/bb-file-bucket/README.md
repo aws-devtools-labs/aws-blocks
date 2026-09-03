@@ -33,12 +33,16 @@ const bucket = new FileBucket(scope, id, options?)
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `versioned` | `boolean` | Enable S3 object versioning. Default: `false`. |
-| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. |
+| `versioned` | `boolean` | Enable S3 object versioning. **Default: `true`.** Pass `versioned: false` to opt out. Note: the version-aware method typings (`versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings. |
+| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. See [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
+| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: `false` (opt-in).** When `true`, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Ignored by the mock and browser runtimes. |
+| `logRetentionDays` | `number` | Days to retain server access logs before automatic expiration. Only applies when `accessLogging` is `true`. **Default: `90`.** Must be a positive integer — a value `<= 0` (or non-integer) throws at synth. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, CDK's default (RETAIN) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+
+All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
 ### PutOptions
 
@@ -59,6 +63,8 @@ CORS configuration for browser-based access. Supplied via the `corsRules` option
 | `allowedHeaders` | `string[]` | Optional. Request headers permitted in the actual request. |
 | `exposedHeaders` | `string[]` | Optional. Response headers exposed to the browser. |
 | `maxAge` | `number` | Optional. Seconds the browser may cache the preflight response. |
+
+> **Wildcard origins and mutating methods:** a CORS rule that combines a wildcard origin (`'*'`) with a mutating method (`PUT`, `POST`, or `DELETE`) **throws at synth** — it would let any site issue state-changing cross-origin requests. Specify explicit origins (e.g. `['https://app.example.com']`) for mutating methods. A wildcard origin with only safe methods (`GET`/`HEAD`) is allowed.
 
 ### LifecycleRule
 
@@ -186,6 +192,8 @@ const bucket = new FileBucket(scope, 'legacy', {
 
 ### Versioned Bucket
 
+Versioning is **on by default**, so the version-aware methods (`listVersions`, `restoreVersion`, and optional `versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are available without any option. Pass `versioned: false` to opt out (which also removes the `versionId` option typings). The example below passes `versioned: true` explicitly for clarity:
+
 ```typescript
 const bucket = new FileBucket(scope, 'docs', { versioned: true });
 
@@ -203,6 +211,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     await bucket.restoreVersion(name, versionId);
   },
 }));
+```
+
+### Access Logging
+
+Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after `logRetentionDays` (default 90):
+
+```typescript
+// Logs delivered to a separate locked-down bucket, expired after 30 days.
+const bucket = new FileBucket(scope, 'uploads', {
+  accessLogging: true,
+  logRetentionDays: 30,
+});
 ```
 
 ## Best Practices
