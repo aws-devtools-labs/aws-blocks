@@ -20,8 +20,9 @@ import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, finalizeConfigRegistry } from '@aws-blocks/core/cdk';
 import { Agent } from './index.cdk.js';
+import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 
 /**
  * Minimal StubBlocksStack: provides the shared executionRole + handler (which assumes it) and
@@ -54,6 +55,12 @@ function synth(): Template {
 	const parent = new Scope('app'); // roots to CURRENT_BLOCKS_STACK
 	// agentcoreAssetPath bypasses the synth-time co-bundle (which needs a BlocksStack backend path).
 	new Agent(parent, 'agent', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	// Finalize the config registry exactly as BlocksStack/BlocksBackend.create() does in production:
+	// the AgentCore Runtime is a registered Compute, so finalize stamps BLOCKS_CONFIG_BUCKET/KEY onto
+	// it through the standard compute distribution (no self-injection). Collect the registered
+	// AgentCore compute(s) from the tree and hand them to finalize like create() hands it getComputes().
+	const computes = stack.node.findAll().filter((c): c is AgentCoreRuntime => c instanceof AgentCoreRuntime);
+	finalizeConfigRegistry(stack, stack.executionRole, computes);
 	return Template.fromStack(stack);
 }
 
@@ -83,8 +90,9 @@ test('CDK: the loop runs as the shared execution role, which carries everything 
 	const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as { Properties?: Record<string, unknown> };
 	assert.ok(JSON.stringify(runtime.Properties ?? {}).includes('BlocksRole'), 'runtime executionRole should be the shared BlocksRole');
 	assert.ok(!json.includes('RuntimeRole'), 'no bespoke per-runtime role should be created');
-	// The container is given the config location so loadConfigToProcessEnv() loads the same full app
-	// config as the handler (delivers BLOCKS_RT_CALLBACK_URL + any config-backed BB values a tool needs).
+	// The container is stamped the config location by finalizeConfigRegistry (via the Compute contract,
+	// same distribution the Lambda compute goes through) so loadConfigToProcessEnv() loads the same full
+	// app config as the handler (delivers BLOCKS_RT_CALLBACK_URL + any config-backed BB values a tool needs).
 	const runtimeJson = JSON.stringify(runtime.Properties ?? {});
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_BUCKET'), 'runtime must be injected BLOCKS_CONFIG_BUCKET');
 	assert.ok(runtimeJson.includes('BLOCKS_CONFIG_KEY'), 'runtime must be injected BLOCKS_CONFIG_KEY');

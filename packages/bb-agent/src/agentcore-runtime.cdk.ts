@@ -28,7 +28,8 @@ import { join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { AgentCoreRuntime as AgentCoreRuntimeVersion, AgentRuntimeArtifact, Runtime } from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { getConfigLocation, registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { registerConfig } from '@aws-blocks/core/cdk';
+import { Compute } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { bundleAgentCoreAsset } from './agentcore-bundle.js';
 
@@ -43,11 +44,19 @@ export interface AgentCoreRuntimeProps {
 	agentcoreAssetPath?: string;
 }
 
-export class AgentCoreRuntime extends Scope {
+export class AgentCoreRuntime extends Compute {
 	/** The provisioned runtime, or undefined when no backend asset could be resolved (isolated tests). */
 	readonly runtime?: Runtime;
 	/** The runtime ARN (empty string when not provisioned). */
 	readonly runtimeArn: string;
+	/**
+	 * The AgentCore container's live environment map. Handed to the `Runtime` by reference — the
+	 * `Runtime` renders `environmentVariables` lazily at synth (from this same object) — so writes
+	 * applied after construction are reflected in the template. That's how {@link setEnv} lets
+	 * `finalizeConfigRegistry` stamp the config coordinates on this compute like any other. Undefined
+	 * when the runtime wasn't provisioned (isolated tests with no backend asset), where setEnv no-ops.
+	 */
+	private containerEnv?: Record<string, string>;
 
 	constructor(scope: ScopeParent, id: string, props: AgentCoreRuntimeProps) {
 		super(id, { parent: scope });
@@ -139,12 +148,29 @@ export class AgentCoreRuntime extends Scope {
 			stackAny[SHARED_GRANTS_KEY] = true;
 		}
 
-		// Inject the config location so the container loads the FULL app config via
-		// loadConfigToProcessEnv() — the same config the Lambda handler loads. That's how it gets
-		// BLOCKS_RT_CALLBACK_URL (registered by the Realtime BB) plus any other config-backed BB value
-		// an agent's tools touch; without it the container runs with empty config and those BBs fail.
-		// Idempotent (one config bucket per stack); IAM to read it is inherited via the shared role.
-		const { bucketName: configBucketName, key: configKey } = getConfigLocation(this);
+		// The container loads the FULL app config via loadConfigToProcessEnv() — the same config the
+		// Lambda handler loads — so it discovers BLOCKS_RT_CALLBACK_URL (registered by the Realtime BB)
+		// plus every other registerConfig() value a tool's BB may read; without it the container runs
+		// with empty config and those BBs fail. The config coordinates (BLOCKS_CONFIG_BUCKET/KEY) are
+		// NOT set here: this class is now a registered `Compute` (see `extends Compute`), so
+		// `finalizeConfigRegistry` stamps them via {@link setEnv} after every BB has registered its
+		// config — the SAME authoritative bucket+key it uploads the app's config entries to, through the
+		// SAME distribution the Lambda compute goes through (no parallel self-injection to drift from
+		// it). IAM to read the object is inherited via the shared execution role the container runs as:
+		// finalize grants read on the config object to that role once.
+		this.containerEnv = {
+			// The Agent's fullId so the container's getAgentInstance(BB_AGENT_ID) matches the
+			// Agent the co-bundled backend registers at import.
+			BB_AGENT_ID: props.agentFullId,
+			// The namespace the container rebuilds fullId (and every derived resource name) from.
+			// MUST be the owning stack/backend's canonical root id — the SAME value the Lambda
+			// handler and the Lambda compute use (`backendStackName`) — not the raw CFN stack name.
+			// They coincide for a top-level BlocksStack, but for a BlocksBackend embedded in a
+			// customer stack the handler uses the backend fullId while cdk.Stack.of(this).stackName
+			// is the customer stack name; using the latter would make the container derive names from
+			// the wrong namespace and miss its own tables/bucket/config.
+			BLOCKS_STACK_NAME: this.backendStackName,
+		};
 
 		const runtime = new Runtime(this, 'AgentRuntime', {
 			agentRuntimeArtifact: AgentRuntimeArtifact.fromCodeAsset({
@@ -157,24 +183,9 @@ export class AgentCoreRuntime extends Scope {
 			executionRole: role,
 			// Inbound auth defaults to IAM (SigV4): the RPC handler invokes with its own creds.
 			// The browser never invokes the runtime directly (it subscribes to Realtime).
-			environmentVariables: {
-				// The Agent's fullId so the container's getAgentInstance(BB_AGENT_ID) matches the
-				// Agent the co-bundled backend registers at import.
-				BB_AGENT_ID: props.agentFullId,
-				// The namespace the container rebuilds fullId (and every derived resource name) from.
-				// MUST be the owning stack/backend's canonical root id — the SAME value the Lambda
-				// handler and the Lambda compute use (`backendStackName`) — not the raw CFN stack name.
-				// They coincide for a top-level BlocksStack, but for a BlocksBackend embedded in a
-				// customer stack the handler uses the backend fullId while cdk.Stack.of(this).stackName
-				// is the customer stack name; using the latter would make the container derive names from
-				// the wrong namespace and miss its own tables/bucket/config.
-				BLOCKS_STACK_NAME: this.backendStackName,
-				// Config location so the container's loadConfigToProcessEnv() loads the full app config
-				// (same as the handler) — this delivers BLOCKS_RT_CALLBACK_URL and every other
-				// registerConfig() value a tool's BB may read. IAM to read it is inherited (shared role).
-				BLOCKS_CONFIG_BUCKET: configBucketName,
-				BLOCKS_CONFIG_KEY: configKey,
-			},
+			// Rendered lazily from `this.containerEnv`; finalizeConfigRegistry mutates that same object
+			// via setEnv() after construction to add the config coordinates, and the render picks it up.
+			environmentVariables: this.containerEnv,
 		});
 		this.runtime = runtime;
 		this.runtimeArn = runtime.agentRuntimeArn;
@@ -182,6 +193,21 @@ export class AgentCoreRuntime extends Scope {
 		// Expose THIS agent's runtime ARN to the Lambda runtime path so stream() can resolve it at
 		// call time. Per-agent (each agent has its own runtime), so it stays outside the shared guard.
 		registerConfig(this, `BB_AGENT_${props.agentFullId}_RUNTIME_ARN`, runtime.agentRuntimeArn);
+	}
+
+	/**
+	 * Inject a runtime configuration value (an environment variable) into the AgentCore container —
+	 * the {@link Compute} contract `finalizeConfigRegistry` calls on every registered compute. It
+	 * stamps BLOCKS_CONFIG_BUCKET / BLOCKS_CONFIG_KEY here (the authoritative config coordinates it
+	 * uploads the app's config entries to), so the container's loadConfigToProcessEnv() loads the
+	 * exact same config the Lambda handler does. Writes into {@link containerEnv}, the live object the
+	 * `Runtime` renders `environmentVariables` from lazily at synth (so a post-construction write like
+	 * finalize's is picked up). A no-op when the runtime wasn't provisioned (isolated tests with no
+	 * backend asset) — there is no container to configure.
+	 */
+	setEnv(key: string, value: string): void {
+		if (!this.containerEnv) return;
+		this.containerEnv[key] = value;
 	}
 
 	/**
