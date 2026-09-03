@@ -7,7 +7,7 @@ import { ApiError } from './errors.js';
 import { BLOCKS_RPC_PREFIX } from './constants.js';
 import { matchRoute, lockRouteRegistry } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
-import { loadConfigToProcessEnv } from './common/config.js';
+import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
 import {
   parseRpcRequest,
   successResponse,
@@ -297,6 +297,26 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
   async function initialize() {
     await loadConfigToProcessEnv();
 
+    // If the app has config coordinates (BLOCKS_CONFIG_BUCKET/KEY set) but the
+    // load didn't actually resolve the config, we're in the transient post-deploy
+    // S3 window where blocks-config.json isn't readable yet. loadConfigFromS3()
+    // deliberately does NOT cache that empty result, so throw a typed transient
+    // error here — BEFORE importing the backend — so the createLambdaHandler()
+    // catch resets initPromise and the next request re-runs initialize(), which
+    // re-fetches from S3 and picks up the now-present config. Without this throw,
+    // initialize() would succeed with empty config, `handler` would be assigned,
+    // and the `if (!handler)` guard below would never fire again, poisoning the
+    // container for its whole life (it would import the backend against empty
+    // process.env and serve "not configured" 500s forever).
+    //
+    // A genuinely config-less app does NOT throw: the no-bucket local-dev path
+    // and a real empty `{}` config both cache their result, so isConfigResolved()
+    // is true and the retry never spins. Once the blob is readable the successful
+    // load caches, so there is no unbounded per-request S3 re-fetch either.
+    if (process.env.BLOCKS_CONFIG_BUCKET && process.env.BLOCKS_CONFIG_KEY && !isConfigResolved()) {
+      throw new TransientConfigError();
+    }
+
     // Merge hosting-provided CORS origins into the main env var so the lazy
     // getCorsPatterns() sees a combined value on first access.
     // loadConfigToProcessEnv() won't override CORS_ALLOWED_ORIGINS if it's
@@ -398,6 +418,27 @@ class HandlerTimeoutError extends Error {
   constructor() {
     super('Handler timeout');
     this.name = 'HandlerTimeoutError';
+  }
+}
+
+/**
+ * Thrown by `initialize()` when the app has config coordinates
+ * (BLOCKS_CONFIG_BUCKET/KEY) but the S3 config load resolved empty because
+ * blocks-config.json wasn't readable yet — the transient window right after a
+ * deploy, before the BucketDeployment settles.
+ *
+ * It flows through the `createLambdaHandler()` init catch, which resets
+ * `initPromise` so the NEXT request re-runs `initialize()` and picks up the
+ * now-present config (config.ts does not cache a not-found result, so the retry
+ * re-fetches). A distinct type keeps the recovery path greppable and testable
+ * and separates it from real init failures, which surface with their own error.
+ *
+ * @internal Exported for testing only.
+ */
+export class TransientConfigError extends Error {
+  constructor() {
+    super('[Blocks] Config not readable yet (transient post-deploy S3 window); will retry on next request');
+    this.name = 'TransientConfigError';
   }
 }
 
