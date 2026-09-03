@@ -1575,6 +1575,32 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- CloudFormation resource-count guard ----
+    // Retain the CDKBucketDeployment custom resources so they are skipped on
+    // stack DELETE. A BucketDeployment CR runs a delete-time handler (object
+    // cleanup and, when configured, a CloudFront invalidation — aws-cdk#15891 /
+    // aws-cdk#23708); if that handler fails (e.g. the distribution is being
+    // deleted concurrently, or the role/bucket is already gone) the custom
+    // resource delete wedges the whole stack in DELETE_FAILED, which orphans the
+    // CloudFront distribution. Retaining the CR removes it from the teardown
+    // path entirely, so the stack (and its distribution) can delete cleanly.
+    // Safe because the bucket's own autoDeleteObjects / the sandbox teardown
+    // empties the objects — the CR isn't needed to clean them up. This was
+    // observed leaking distributions on the high-volume Amplify SSR-adapter e2e
+    // (deployment-type=standalone), which consumes this construct.
+    //
+    // We deliberately do NOT retain the bucket's Custom::S3AutoDeleteObjects CR,
+    // even though it's also a delete-time handler on the teardown path: it only
+    // empties its own bucket (an S3-only op, no CloudFront invalidation or
+    // cross-service call), so it's far less wedge-prone, and it's the mechanism
+    // that actually removes the objects. Retaining it would instead leave every
+    // bucket non-empty and blocking. Only the BucketDeployment CR — whose
+    // delete-time invalidation is the wedge — is retained.
+    for (const child of this.node.findAll()) {
+      if (CfnResource.isCfnResource(child) && child.cfnResourceType === 'Custom::CDKBucketDeployment') {
+        child.applyRemovalPolicy(RemovalPolicy.RETAIN);
+      }
+    }
+
     // A stack can hold at most 500 resources (a true hard limit — not
     // adjustable). The hosting construct emits many resources, and they
     // multiply with routes/behaviors/policies/asset-deployments, so a large
