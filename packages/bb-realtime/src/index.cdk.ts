@@ -26,6 +26,7 @@ import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
+import { RealtimeErrors } from './errors.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -169,7 +170,14 @@ export class Realtime extends Scope {
 		// different WebSocket integration — not yet supported.
 		const compute = this.compute;
 		if (!(compute instanceof LambdaCompute)) {
-			throw new Error(`Realtime "${this.fullId}" currently supports only a Lambda compute.`);
+			// Inline typed error (not the utils.js blocksError, which carries
+			// runtime-only deps) so this stays assertable via isBlocksError without
+			// pulling those into the CDK synth bundle.
+			const err = new Error(
+				`${RealtimeErrors.UnsupportedCompute}: Realtime "${this.fullId}" currently supports only a Lambda compute.`,
+			);
+			err.name = RealtimeErrors.UnsupportedCompute;
+			throw err;
 		}
 		getOrCreateSharedInfra(cdk.Stack.of(this), compute.fn, this);
 	}

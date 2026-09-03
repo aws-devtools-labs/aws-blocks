@@ -25,10 +25,16 @@ import { Template } from 'aws-cdk-lib/assertions';
 import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import { isBlocksError } from '@aws-blocks/core';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { Compute } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { CronJob, CronJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
+
+/** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
+class FakeCompute extends Compute {
+	setEnv(_key: string, _value: string): void {}
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
@@ -124,5 +130,15 @@ describe('CronJob synth-time schedule validation', () => {
 			() => new CronJob(stack, 'job', { schedule: 'rate(5 minutes)', handler: async () => {} }),
 		);
 		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 1);
+	});
+
+	test('rejects a non-Lambda compute at synth', async () => {
+		const stack = await makeStack('CronUnsupportedCompute');
+		const scoped = new Scope('scoped', { parent: stack });
+		scoped._compute = new FakeCompute('fake', { parent: stack });
+		assert.throws(
+			() => new CronJob(scoped, 'job', { schedule: 'rate(5 minutes)', handler: async () => {} }),
+			(e: unknown) => isBlocksError(e, CronJobErrors.UnsupportedCompute),
+		);
 	});
 });

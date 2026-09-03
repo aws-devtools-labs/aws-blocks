@@ -23,6 +23,8 @@ export const AsyncJobErrors = {
 	StatusNotTracked: 'StatusNotTrackedException',
 	/** Thrown at synth time when an `AsyncJobOptions` value is outside its supported range. */
 	InvalidOption: 'InvalidOptionException',
+	/** Thrown at synth time when the resolved compute is not a supported type (only Lambda today). */
+	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;
 
 /** Build a typed `AsyncJob` error whose `name` is one of {@link AsyncJobErrors}. */

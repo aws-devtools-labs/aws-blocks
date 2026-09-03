@@ -29,11 +29,18 @@ import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
+import { isBlocksError } from '@aws-blocks/core';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { Compute } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AsyncJob, AsyncJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
+
+/** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
+class FakeCompute extends Compute {
+	setEnv(_key: string, _value: string): void {}
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
@@ -97,6 +104,16 @@ describe('AsyncJob compute targeting', () => {
 		assert.ok(
 			!eventSourceTargets(template, fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
 			'event source does NOT target the default compute',
+		);
+	});
+
+	test('rejects a non-Lambda compute at synth', async () => {
+		const stack = await makeStack('AsyncUnsupportedCompute');
+		const scoped = new Scope('scoped', { parent: stack });
+		scoped._compute = new FakeCompute('fake', { parent: stack });
+		assert.throws(
+			() => new AsyncJob(scoped, 'jobs', { handler: async () => {}, trackStatus: false }),
+			(e: unknown) => isBlocksError(e, AsyncJobErrors.UnsupportedCompute),
 		);
 	});
 });

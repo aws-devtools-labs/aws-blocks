@@ -91,7 +91,10 @@ export class AsyncJob<T = unknown> extends Scope {
 		// the CronJob / Realtime guards.
 		const compute = this.compute;
 		if (!(compute instanceof LambdaCompute)) {
-			throw new Error(`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`);
+			throw blocksError(
+				AsyncJobErrors.UnsupportedCompute,
+				`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`,
+			);
 		}
 
 		this.dlq = new Queue(this, 'dlq', {
@@ -130,7 +133,15 @@ export class AsyncJob<T = unknown> extends Scope {
 			`BLOCKS_QUEUE_URL_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
 			this.queue.queueUrl
 		);
-		registerConfig(this, `BLOCKS_HANDLER_OWNER_${this.fullId}`, compute.fullId);
+		// Sanitize the id identically to the QUEUE_URL key above: config entries
+		// are loaded into `process.env` at runtime (loadConfigToProcessEnv), so
+		// the key must be a valid env var name, and the Phase-2 owner-match reader
+		// must reconstruct the same sanitized string byte-for-byte.
+		registerConfig(
+			this,
+			`BLOCKS_HANDLER_OWNER_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
+			compute.fullId
+		);
 
 		// The event source attaches to the compute's own function (guaranteed a
 		// Lambda compute by the guard above).

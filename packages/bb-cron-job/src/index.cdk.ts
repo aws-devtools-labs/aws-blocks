@@ -12,6 +12,7 @@ import type {
 	CronJobOptions,
 } from './types.js';
 import { validateSchedule, validateTimezone } from './schedule.js';
+import { CronJobErrors } from './errors.js';
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
@@ -33,7 +34,13 @@ export class CronJob<T = void> extends Scope {
 		// different scheduler target (e.g. EventBridge → ECS) — not yet supported.
 		const compute = this.compute;
 		if (!(compute instanceof LambdaCompute)) {
-			throw new Error(`CronJob "${this.fullId}" currently supports only a Lambda compute.`);
+			// Match the inline typed-error pattern used by schedule.ts (new Error +
+			// err.name) so this is assertable via isBlocksError.
+			const err = new Error(
+				`${CronJobErrors.UnsupportedCompute}: CronJob "${this.fullId}" currently supports only a Lambda compute.`,
+			);
+			err.name = CronJobErrors.UnsupportedCompute;
+			throw err;
 		}
 		const lambdaArn = compute.fn.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this), lambdaArn);
