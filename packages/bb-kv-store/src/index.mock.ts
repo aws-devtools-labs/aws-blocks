@@ -150,12 +150,18 @@ export class KVStore<T = string> extends Scope {
 
 		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
 
-		if (options?.ifNotExists && this.data.has(key)) {
-			throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
-		}
-		if (options?.ifValueEquals !== undefined) {
-			const current = this.data.get(key)?.value;
-			if (current !== JSON.stringify(options.ifValueEquals)) {
+		// Conditional write. `ifNotExists` and `ifValueEquals` compose with OR
+		// (mirrors the AWS `attribute_not_exists(pk) OR value = :expected`): the
+		// write succeeds when the key is absent OR its current value matches, and
+		// fails only when the key exists AND the value differs.
+		const wantAbsent = options?.ifNotExists === true;
+		const wantValue = options?.ifValueEquals !== undefined;
+		if (wantAbsent || wantValue) {
+			const exists = this.data.has(key);
+			const current = exists ? this.data.get(key)?.value : undefined;
+			const absentOk = wantAbsent && !exists;
+			const valueOk = wantValue && current === JSON.stringify(options?.ifValueEquals);
+			if (!absentOk && !valueOk) {
 				throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
 			}
 		}

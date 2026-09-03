@@ -13,6 +13,10 @@ export interface ConditionalWriteOptions<T = unknown> {
 	ifNotExists?: boolean;
 	/** Only write if the current value deep-equals this value (optimistic locking / compare-and-swap). */
 	ifValueEquals?: T;
+	// When BOTH `ifNotExists` and `ifValueEquals` are set they compose with OR:
+	// the write succeeds if the key is absent OR its current value matches — the
+	// optimistic "create it, or update it only if unchanged" pattern. It fails
+	// only when the key exists AND the value differs.
 }
 
 /**

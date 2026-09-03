@@ -103,13 +103,26 @@ export class KVStore<T = string> extends Scope {
 			Item: item,
 		};
 
+		// `ifNotExists` and `ifValueEquals` compose with OR: write when the key is
+		// absent OR its current value matches — the optimistic "create it, or update
+		// it only if unchanged" pattern. (AND would be unsatisfiable: a key can't be
+		// both absent and have a matching value.)
+		const conditions: string[] = [];
+		const names: Record<string, string> = {};
+		const values: Record<string, unknown> = {};
 		if (options?.ifNotExists) {
-			command.ConditionExpression = 'attribute_not_exists(#pk)';
-			command.ExpressionAttributeNames = { '#pk': 'pk' };
-		} else if (options && 'ifValueEquals' in options) {
-			command.ConditionExpression = '#value = :expected';
-			command.ExpressionAttributeNames = { '#value': 'value' };
-			command.ExpressionAttributeValues = { ':expected': JSON.stringify(options.ifValueEquals) };
+			conditions.push('attribute_not_exists(#pk)');
+			names['#pk'] = 'pk';
+		}
+		if (options && 'ifValueEquals' in options) {
+			conditions.push('#value = :expected');
+			names['#value'] = 'value';
+			values[':expected'] = JSON.stringify(options.ifValueEquals);
+		}
+		if (conditions.length > 0) {
+			command.ConditionExpression = conditions.join(' OR ');
+			command.ExpressionAttributeNames = names;
+			if (Object.keys(values).length > 0) command.ExpressionAttributeValues = values;
 		}
 
 		try {
