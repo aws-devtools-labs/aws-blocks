@@ -344,8 +344,11 @@ test('versioned: listVersions returns newest first', async () => {
 // ── Static type checks: conditional version types ───────────────────────────
 
 function _conditionalVersionTypeChecks() {
-	const plain = new FileBucket(scope, 'plain');
+	// Explicit opt-out selects the non-versioned option types.
+	const plain = new FileBucket(scope, 'plain', { versioned: false });
 	const versioned = new FileBucket(scope, 'versioned', { versioned: true });
+	// No options now defaults to versioned-aware typings (Default: true).
+	const dflt = new FileBucket(scope, 'dflt');
 
 	// Non-versioned: get/delete accept no options
 	plain.get('file.txt');
@@ -363,4 +366,32 @@ function _conditionalVersionTypeChecks() {
 	versioned.delete('file.txt');
 	versioned.delete('file.txt', { versionId: 'v1' });
 	versioned.getUrl('file.txt', { versionId: 'v1', expiresIn: 600 });
+
+	// Default (no options) is versioned-aware: versionId is accepted.
+	dflt.get('file.txt');
+	dflt.get('file.txt', { versionId: 'v1' });
+	dflt.delete('file.txt', { versionId: 'v1' });
+	dflt.getUrl('file.txt', { versionId: 'v1', expiresIn: 600 });
 }
+
+// ── Versioning on by default (new secure default) ───────────────────────────
+
+test('default (no options) bucket is versioned: put creates versions', async () => {
+	const bucket = new FileBucket(scope, 'default-versioned');
+	await bucket.put('file.txt', 'v1');
+	await bucket.put('file.txt', 'v2');
+	const versions = await bucket.listVersions('file.txt');
+	assert.strictEqual(versions.length, 2);
+	assert.strictEqual(versions[0].isCurrent, true);
+});
+
+test('versioned:false opt-out disables versioning at runtime', async () => {
+	const bucket = new FileBucket(scope, 'optout-versioned', { versioned: false });
+	await bucket.put('file.txt', 'v1');
+	await bucket.put('file.txt', 'v2');
+	const versions = await bucket.listVersions('file.txt');
+	assert.strictEqual(versions.length, 0);
+	const file = await bucket.get('file.txt');
+	assert.ok(file);
+	assert.strictEqual(file.body.toString(), 'v2');
+});

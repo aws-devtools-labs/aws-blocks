@@ -10,12 +10,38 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 // ── Constructor options ─────────────────────────────────────────────────────
 
 export interface FileBucketOptions {
-	/** Enable object versioning. Default: false. */
+	/**
+	 * Enable object versioning. Default: true. Pass `false` to opt out.
+	 *
+	 * Note for the version-aware method typings (`get`/`delete`/`getUrl`/
+	 * `getFileHandle`): selecting the NON-versioned (optionless) typings
+	 * requires the literal `versioned: false`. A non-literal `boolean` value
+	 * (e.g. one widened from a variable) — or omitting the option entirely —
+	 * resolves to the versioned-aware typings, which match the default-on
+	 * runtime behavior. See {@link GetOptionsFor} et al.
+	 */
 	versioned?: boolean;
 	/** CORS rules for browser-based access. */
 	corsRules?: CorsRule[];
 	/** Lifecycle rules for automatic object expiration or transitions. */
 	lifecycleRules?: LifecycleRule[];
+	/**
+	 * Enable S3 server access logging. Default: false (opt-in).
+	 *
+	 * When `true`, a dedicated, locked-down log bucket is provisioned
+	 * (all public access blocked, S3-managed encryption, SSL enforced) and
+	 * the main bucket delivers its access logs there under the
+	 * `access-logs/` prefix. Access logs are expired automatically after
+	 * `logRetentionDays` days.
+	 *
+	 * Ignored by the mock and browser runtimes (no AWS resource).
+	 */
+	accessLogging?: boolean;
+	/**
+	 * Days to retain server access logs before automatic expiration.
+	 * Only applies when `accessLogging` is `true`. Default: 90.
+	 */
+	logRetentionDays?: number;
 	/** Wrap an existing S3 bucket instead of creating one. */
 	bucket?: ExternalBucketRef;
 	/**
@@ -94,23 +120,31 @@ export interface VersionedGetUrlOptions extends GetUrlOptions {
 /**
  * Resolves the get options type based on whether versioning is enabled.
  * Versioned buckets accept `{ versionId }`, non-versioned accept no options.
+ * Versioning is on by default, so only an explicit `versioned: false` selects
+ * the non-versioned (optionless) shape. A non-literal `boolean` (widened from
+ * a variable) or an absent `versioned` resolves to the versioned-aware shape,
+ * matching the default-on runtime behavior.
  */
 export type GetOptionsFor<O extends FileBucketOptions> =
-	O extends { versioned: true } ? VersionedGetOptions : undefined;
+	O extends { versioned: false } ? undefined : VersionedGetOptions;
 
 /**
  * Resolves the delete options type based on whether versioning is enabled.
  * Versioned buckets accept `{ versionId }`, non-versioned accept no options.
+ * Versioning is on by default, so only an explicit `versioned: false` selects
+ * the non-versioned (optionless) shape.
  */
 export type DeleteOptionsFor<O extends FileBucketOptions> =
-	O extends { versioned: true } ? VersionedDeleteOptions : undefined;
+	O extends { versioned: false } ? undefined : VersionedDeleteOptions;
 
 /**
  * Resolves the getUrl/getFileHandle options type based on whether versioning is enabled.
  * Versioned buckets accept `{ expiresIn, versionId }`, non-versioned accept `{ expiresIn }`.
+ * Versioning is on by default, so only an explicit `versioned: false` selects
+ * the non-versioned shape.
  */
 export type GetUrlOptionsFor<O extends FileBucketOptions> =
-	O extends { versioned: true } ? VersionedGetUrlOptions : GetUrlOptions;
+	O extends { versioned: false } ? GetUrlOptions : VersionedGetUrlOptions;
 
 // ── Return types ────────────────────────────────────────────────────────────
 
