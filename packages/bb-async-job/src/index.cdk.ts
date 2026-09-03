@@ -87,8 +87,8 @@ export class AsyncJob<T = unknown> extends Scope {
 		// Lambda, so a AsyncJob currently requires a Lambda compute. Other
 		// compute types need a different consumption path (e.g. runtime polling)
 		// that does not exist yet — fail loud at synth rather than provision a
-		// queue nothing consumes (submitted jobs would silently pile up). Matches
-		// the CronJob / Realtime guards.
+		// queue nothing consumes (submitted jobs would silently pile up). The
+		// CronJob and Realtime blocks add the same guard in this change.
 		const compute = this.compute;
 		if (!(compute instanceof LambdaCompute)) {
 			throw blocksError(
