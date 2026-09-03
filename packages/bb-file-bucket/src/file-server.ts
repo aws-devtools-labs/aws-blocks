@@ -70,6 +70,16 @@ export function attach(httpServer: Server) {
 
 		// CORS for browser uploads/downloads
 		const origin = req.headers.origin || '*';
+		// Reflecting the request Origin (falling back to '*') is intentional: it
+		// lets a localhost cross-port dev server (e.g. Vite/webpack on a different
+		// port) call this local file-server. This dev file-server is local tooling
+		// only and NEVER deploys to AWS / production.
+		// It is safe because Access-Control-Allow-Credentials is deliberately NOT
+		// set, so the reflected origin carries no ambient credentials: presigned-URL
+		// auth is a query-string token, not a cookie / ambient session. That is what
+		// makes reflecting an arbitrary origin here safe.
+		// WARNING: do not re-add Access-Control-Allow-Credentials and do not
+		// 'tighten' this reflection without understanding the above.
 		res.setHeader('Access-Control-Allow-Origin', origin);
 		res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS');
 		res.setHeader('Access-Control-Allow-Headers', 'Content-Type');

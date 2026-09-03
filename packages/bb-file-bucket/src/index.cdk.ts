@@ -57,6 +57,13 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		const isSandbox = cdk.Stack.of(this).node.tryGetContext('sandboxMode') === 'true';
 		const destroy = options?.removalPolicy === 'destroy' || (isSandbox && options?.removalPolicy === undefined);
 
+		// Bucket name is derived from the scope chain. Validate against S3's
+		// naming rules at synth so an invalid name fails here rather than at
+		// `cdk deploy` (where CloudFormation rejects it with a cryptic error).
+		// Run this first: an unusable bucket name is the most fundamental synth
+		// error, so surface it before the option-level guards below.
+		validateBucketName(this.fullId);
+
 		// Reject unsafe CORS at synth: a wildcard origin ('*') combined with a
 		// mutating method (PUT/POST/DELETE) lets any site issue state-changing
 		// cross-origin requests. Fail loud here rather than deploying it.
@@ -86,10 +93,6 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			}
 		}
 
-		// Bucket name is derived from the scope chain. Validate against S3's
-		// naming rules at synth so an invalid name fails here rather than at
-		// `cdk deploy` (where CloudFormation rejects it with a cryptic error).
-		validateBucketName(this.fullId);
 
 		// Shared removal behavior for the main bucket and (if enabled) the
 		// access-log bucket. `autoDeleteObjects` is only valid with DESTROY.
