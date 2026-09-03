@@ -29,24 +29,19 @@ class StubBlocksStack extends cdk.Stack {
 function setup(): { stack: StubBlocksStack; parent: Scope } {
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'TestStack');
-	const parent = new Scope('app');
-	return { stack, parent };
+	return { stack, parent: new Scope('app') };
 }
 
-test('CDK: provisions a DynamoDB table', () => {
+test('CDK: the construct synthesizes within a stack', () => {
 	const { stack, parent } = setup();
-	new __BB_CLASS__(parent, 'store');
-	Template.fromStack(stack).resourceCountIs('AWS::DynamoDB::Table', 1);
-});
-
-test('CDK: fromExisting does not provision a table', () => {
-	const { stack, parent } = setup();
-	new __BB_CLASS__(parent, 'store', { table: __BB_CLASS__.fromExisting('preexisting-123') });
-	Template.fromStack(stack).resourceCountIs('AWS::DynamoDB::Table', 0);
+	new __BB_CLASS__(parent, 'thing');
+	// TODO: once you provision infra, assert it here, e.g.:
+	//   Template.fromStack(stack).resourceCountIs('AWS::DynamoDB::Table', 1);
+	assert.doesNotThrow(() => Template.fromStack(stack));
 });
 
 test('CDK: runtime methods throw during synth (synthGuard)', () => {
 	const { parent } = setup();
-	const store = new __BB_CLASS__(parent, 'store');
-	assert.throws(() => (store as unknown as { get: (k: string) => never }).get('k'), /synth/i);
+	const bb = new __BB_CLASS__(parent, 'thing');
+	assert.throws(() => (bb as unknown as { echo: (s: string) => never }).echo('x'), /synth/i);
 });

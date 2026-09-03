@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -14,10 +14,12 @@ import {
 	normalizeClassName,
 	normalizeWorkspaces,
 	parseArgs,
+	run,
 	scopeFromPkgName,
 	substituteTokens,
 	toKebabCase,
 	validateClassName,
+	validateScope,
 	workspacesCover,
 } from './index.js';
 
@@ -36,6 +38,24 @@ describe('name validation', () => {
 		assert.strictEqual(normalizeClassName('BBQueue'), 'Queue');
 		assert.strictEqual(normalizeClassName('bb-queue'), 'queue');
 		assert.strictEqual(normalizeClassName('SearchIndex'), 'SearchIndex');
+	});
+	test('does NOT mangle names that merely start with "Bb"', () => {
+		assert.strictEqual(normalizeClassName('BBox'), 'BBox');
+		assert.strictEqual(normalizeClassName('Bbox'), 'Bbox');
+	});
+});
+
+describe('scope validation', () => {
+	test('accepts valid npm scopes', () => {
+		assert.strictEqual(validateScope('acme').ok, true);
+		assert.strictEqual(validateScope('my-org').ok, true);
+		assert.strictEqual(validateScope('a1._-').ok, true);
+	});
+	test('rejects invalid scopes', () => {
+		assert.strictEqual(validateScope('Acme').ok, false); // uppercase
+		assert.strictEqual(validateScope('-bad').ok, false); // leading dash
+		assert.strictEqual(validateScope('has space').ok, false);
+		assert.strictEqual(validateScope('has"quote').ok, false);
 	});
 });
 
@@ -107,6 +127,11 @@ describe('arg parsing', () => {
 	test('rejects unknown flags and extra positionals', () => {
 		assert.throws(() => parseArgs(['--bogus']));
 		assert.throws(() => parseArgs(['A', 'B']));
+	});
+	test('rejects a value flag with no value or a flag as its value', () => {
+		assert.throws(() => parseArgs(['MyBlock', '--dir', '--yes']), /--dir requires a value/);
+		assert.throws(() => parseArgs(['MyBlock', '--scope']), /--scope requires a value/);
+		assert.throws(() => parseArgs(['MyBlock', '--type']), /--type requires a value/);
 	});
 });
 
@@ -187,4 +212,75 @@ describe('customer-mode detection', () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+});
+
+// End-to-end run() coverage for the file-writing / JSON-mutation paths that the
+// pure-helper tests can't reach. Hermetic: CREATE_BLOCK_SKIP_REGISTRY avoids the
+// npm-view call, and --skip-install/--skip-verify avoid shelling out.
+describe('run() integration — customer mode', () => {
+	function withWorkspace(fn: (dir: string) => Promise<void>) {
+		return async () => {
+			const dir = mkdtempSync(join(tmpdir(), 'cb-run-'));
+			const prev = process.env.CREATE_BLOCK_SKIP_REGISTRY;
+			process.env.CREATE_BLOCK_SKIP_REGISTRY = '1';
+			try {
+				await fn(dir);
+			} finally {
+				if (prev === undefined) delete process.env.CREATE_BLOCK_SKIP_REGISTRY;
+				else process.env.CREATE_BLOCK_SKIP_REGISTRY = prev;
+				rmSync(dir, { recursive: true, force: true });
+			}
+		};
+	}
+
+	test(
+		'scaffolds packages/bb-*, links it into workspaces, substitutes tokens',
+		withWorkspace(async (dir) => {
+			// workspaces glob does NOT cover packages/ → the entry must be appended.
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['apps/*'] }));
+			const code = await run(
+				['SearchCache', '--type', 'primitive', '--yes', '--skip-install', '--skip-verify'],
+				dir,
+			);
+			assert.strictEqual(code, 0);
+
+			const pkgDir = join(dir, 'packages', 'bb-search-cache');
+			const pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf-8'));
+			assert.strictEqual(pkg.name, '@acme/bb-search-cache');
+			assert.ok(pkg.keywords.includes('aws-blocks'));
+
+			const rootWs = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).workspaces;
+			assert.ok(rootWs.includes('packages/bb-search-cache'));
+
+			const mock = readFileSync(join(pkgDir, 'src', 'index.mock.ts'), 'utf-8');
+			assert.match(mock, /class SearchCache extends Scope/);
+			assert.doesNotMatch(mock, /__BB_CLASS__|__BB_PKG_NAME__/);
+
+			// standalone build helper written; core-coupled CDK synth test omitted
+			assert.ok(existsSync(join(pkgDir, 'scripts', 'generate-version.mjs')));
+			assert.ok(!existsSync(join(pkgDir, 'src', 'index.cdk.test.ts')));
+		}),
+	);
+
+	test(
+		'does not touch workspaces when a glob already covers packages/',
+		withWorkspace(async (dir) => {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['packages/*'] }));
+			const code = await run(['Widget', '--yes', '--skip-install', '--skip-verify'], dir);
+			assert.strictEqual(code, 0);
+			assert.deepEqual(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).workspaces, ['packages/*']);
+			assert.ok(existsSync(join(dir, 'packages', 'bb-widget', 'package.json')));
+		}),
+	);
+
+	test(
+		'--dry-run writes nothing',
+		withWorkspace(async (dir) => {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['apps/*'] }));
+			const code = await run(['SearchCache', '--yes', '--dry-run'], dir);
+			assert.strictEqual(code, 0);
+			assert.ok(!existsSync(join(dir, 'packages')));
+			assert.deepEqual(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).workspaces, ['apps/*']);
+		}),
+	);
 });

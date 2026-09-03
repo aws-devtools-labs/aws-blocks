@@ -3,7 +3,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -37,8 +37,23 @@ export interface CliOptions {
  * `KVStore`, not `BBKVStore`).
  */
 export function normalizeClassName(raw: string): string {
-	const stripped = raw.replace(/^bb[-_]?/i, '');
-	return stripped;
+	// Strip a leading BB prefix only when it's unambiguously a prefix: an explicit
+	// separator (`bb-`, `bb_`) or `bb` immediately followed by an uppercase letter
+	// (`BBKVStore` → `KVStore`). Leaves names like `BBox` untouched.
+	// `[Bb]{2}` matches the prefix in any case; the `(?=[A-Z])` lookahead stays
+	// case-sensitive (no `i` flag) so `BBox` isn't mangled into `ox`.
+	return raw.replace(/^[Bb]{2}(?:[-_]|(?=[A-Z]))/, '');
+}
+
+/** Validate an npm scope (the part after `@`, before `/`). */
+export function validateScope(scope: string): { ok: true } | { ok: false; reason: string } {
+	if (!/^[a-z0-9][a-z0-9._-]*$/.test(scope)) {
+		return {
+			ok: false,
+			reason: `--scope "${scope}" is not a valid npm scope (lowercase letters, digits, and ._- ; must not start with ._-)`,
+		};
+	}
+	return { ok: true };
 }
 
 export function validateClassName(name: string): { ok: true } | { ok: false; reason: string } {
@@ -218,31 +233,50 @@ interface PlannedWrite {
 }
 
 /**
- * Copy `templates/<type>/` into `targetDir`, substituting tokens in every file's
- * contents. In `--dry-run` mode nothing is written; the planned files are
- * returned instead.
+ * Copy one template directory into `targetDir`, substituting tokens in every
+ * file's contents. Overlaying (calling twice) overwrites files with the same
+ * relative path and records the write once. In `--dry-run` mode nothing is
+ * written; `planned` collects the resulting file set.
+ */
+async function copyDir(
+	templateDir: string,
+	targetDir: string,
+	tokens: { className: string; pkgName: string },
+	dryRun: boolean,
+	planned: Map<string, PlannedWrite>,
+): Promise<void> {
+	if (!(await exists(templateDir))) {
+		throw new Error(`Template not found: ${templateDir} (is create-block built?)`);
+	}
+	for (const src of await listFiles(templateDir)) {
+		const rel = relative(templateDir, src);
+		const dest = join(targetDir, rel);
+		planned.set(dest, { path: dest, action: planned.has(dest) ? 'overwrite' : 'create' });
+		if (dryRun) continue;
+		await mkdir(dirname(dest), { recursive: true });
+		await writeFile(dest, substituteTokens(await readFile(src, 'utf-8'), tokens));
+	}
+}
+
+/**
+ * Materialize `templates/<type>/` into `targetDir`. `client-facing` has no
+ * standalone copy of the runtime/cdk/mock files — it is the `primitive`
+ * skeleton with only its browser entry (and docs) overlaid — so the two never
+ * drift out of sync.
  */
 async function copyTemplate(
 	type: BlockType,
 	targetDir: string,
 	tokens: { className: string; pkgName: string },
 	dryRun: boolean,
-	planned: PlannedWrite[],
+	planned: Map<string, PlannedWrite>,
 ): Promise<void> {
-	const templateDir = join(TEMPLATES_DIR, type);
-	if (!(await exists(templateDir))) {
-		throw new Error(`Template not found: ${templateDir} (is create-block built?)`);
+	if (type === 'client-facing') {
+		await copyDir(join(TEMPLATES_DIR, 'primitive'), targetDir, tokens, dryRun, planned);
+		await copyDir(join(TEMPLATES_DIR, 'client-facing'), targetDir, tokens, dryRun, planned);
+		return;
 	}
-	const files = await listFiles(templateDir);
-	for (const src of files) {
-		const rel = relative(templateDir, src);
-		const dest = join(targetDir, rel);
-		planned.push({ path: dest, action: 'create' });
-		if (dryRun) continue;
-		await mkdir(dirname(dest), { recursive: true });
-		const raw = await readFile(src, 'utf-8');
-		await writeFile(dest, substituteTokens(raw, tokens));
-	}
+	await copyDir(join(TEMPLATES_DIR, type), targetDir, tokens, dryRun, planned);
 }
 
 /**
@@ -252,8 +286,11 @@ async function copyTemplate(
  * published version (`^x.y.z`). Falls back to `latest` when offline / unknown.
  */
 function resolvePublishedRange(pkgName: string): string {
+	// Escape hatch for hermetic tests (avoid a network call to the registry).
+	if (process.env.CREATE_BLOCK_SKIP_REGISTRY) return 'latest';
 	try {
-		const v = execSync(`npm view ${pkgName} version`, {
+		// execFileSync (argv array, no shell) — pkgName never touches a shell string.
+		const v = execFileSync('npm', ['view', pkgName, 'version'], {
 			encoding: 'utf-8',
 			stdio: ['ignore', 'pipe', 'ignore'],
 		}).trim();
@@ -264,15 +301,31 @@ function resolvePublishedRange(pkgName: string): string {
 	return 'latest';
 }
 
+/** A standalone `scripts/generate-version.mjs` for out-of-monorepo packages. */
+const STANDALONE_VERSION_SCRIPT = `#!/usr/bin/env node
+// Auto-generated by @aws-blocks/create-block. Regenerates src/version.ts from
+// the block name (argv[2]) and this package's version. Standalone — no monorepo.
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const bbName = process.argv[2];
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8'));
+writeFileSync(
+	new URL('../src/version.ts', import.meta.url),
+	\`// Auto-generated — do not edit manually\\nexport const BB_NAME = '\${bbName}';\\nexport const BB_VERSION = '\${pkg.version}';\\n\`,
+);
+`;
+
 /**
  * External / customer mode fixup: make the generated package build and install
  * outside the monorepo. The shipped template's `prebuild` calls the monorepo's
  * `scripts/generate-version.mjs` and its deps pin monorepo-internal versions —
- * neither works from the registry. Rewrite `prebuild` to an inline Node
- * one-liner, re-pin `@aws-blocks/*` deps to published versions, add the
- * `aws-blocks` discovery keyword, and swap the tsconfig for a standalone one.
+ * neither works from the registry. Point `prebuild` at a standalone
+ * `scripts/generate-version.mjs`, re-pin `@aws-blocks/*` deps to published
+ * versions, add the `aws-blocks` discovery keyword, drop the core-coupled CDK
+ * synth test, and swap the tsconfig for a standalone one.
  */
 async function fixupForExternal(targetDir: string, className: string, dryRun: boolean): Promise<void> {
+	if (dryRun) return; // nothing on disk to fix up in a preview
 	const pkgPath = join(targetDir, 'package.json');
 	const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
 		scripts?: Record<string, string>;
@@ -281,12 +334,10 @@ async function fixupForExternal(targetDir: string, className: string, dryRun: bo
 		peerDependencies?: Record<string, string>;
 	};
 	pkg.scripts ??= {};
-	// Inline version generator — no dependency on the monorepo's scripts/.
-	pkg.scripts.prebuild =
-		`node -e "require('fs').writeFileSync('src/version.ts', ` +
-		`'// Auto-generated on build — do not edit manually\\n' + ` +
-		`'export const BB_NAME = \\'${className}\\';\\n' + ` +
-		`'export const BB_VERSION = \\'' + require('./package.json').version + '\\';\\n')"`;
+	// Point prebuild at a small standalone .mjs (written below) instead of the
+	// monorepo's scripts/ — a real file avoids cross-shell quoting issues (npm
+	// runs scripts through cmd.exe on Windows).
+	pkg.scripts.prebuild = `node scripts/generate-version.mjs ${className}`;
 	pkg.keywords = Array.from(new Set([...(pkg.keywords ?? []), 'aws-blocks']));
 	// Re-pin @aws-blocks/* deps to versions that exist on the registry.
 	for (const deps of [pkg.dependencies, pkg.peerDependencies]) {
@@ -296,6 +347,13 @@ async function fixupForExternal(targetDir: string, className: string, dryRun: bo
 		}
 	}
 	if (!dryRun) await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+	// Write the standalone prebuild helper referenced by pkg.scripts.prebuild.
+	if (!dryRun) {
+		const scriptPath = join(targetDir, 'scripts', 'generate-version.mjs');
+		await mkdir(dirname(scriptPath), { recursive: true });
+		await writeFile(scriptPath, STANDALONE_VERSION_SCRIPT);
+	}
 
 	// The CDK *synth test's* harness depends on how @aws-blocks/core attaches a
 	// block to its Stack, which varies by core version — so it isn't portable to
@@ -340,6 +398,7 @@ async function fixupForExternal(targetDir: string, className: string, dryRun: bo
  * the pinned range stops matching the local workspace and npm won't link it.
  */
 async function repinContributorDeps(root: string, targetDir: string, dryRun: boolean): Promise<void> {
+	if (dryRun) return; // nothing on disk to re-pin in a preview
 	const pkgPath = join(targetDir, 'package.json');
 	const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as {
 		dependencies?: Record<string, string>;
@@ -401,103 +460,116 @@ async function wireContributor(root: string, names: DerivedNames, dryRun: boolea
 	const warnings: string[] = [];
 	const { className, suffix, folder, pkgName } = names;
 
+	// Both editors record whether they actually changed anything, so the printed
+	// summary distinguishes a real edit from "already present".
 	const editJson = async (path: string, mutate: (o: any) => void, label: string): Promise<void> => {
 		const obj = JSON.parse(await readFile(path, 'utf-8'));
+		const before = JSON.stringify(obj);
 		mutate(obj);
-		if (!dryRun) await writeFile(path, `${JSON.stringify(obj, null, 2)}\n`);
-		edits.push(label);
+		const changed = JSON.stringify(obj) !== before;
+		if (changed && !dryRun) await writeFile(path, `${JSON.stringify(obj, null, 2)}\n`);
+		edits.push(changed ? label : `${label} (already present)`);
 	};
 	const editText = async (path: string, mutate: (s: string) => string, label: string): Promise<void> => {
 		const before = await readFile(path, 'utf-8');
 		const after = mutate(before);
 		if (after !== before && !dryRun) await writeFile(path, after);
-		edits.push(label);
+		edits.push(after !== before ? label : `${label} (already present)`);
 	};
 
-	// 1. Root workspaces — append packages/<folder> if absent.
-	await editJson(
-		join(root, 'package.json'),
-		(o) => {
-			o.workspaces ??= [];
-			if (!o.workspaces.includes(`packages/${folder}`)) o.workspaces.push(`packages/${folder}`);
-		},
-		'root package.json → workspaces',
-	);
-
-	// 2. Umbrella runtime re-export (with JSDoc) + type re-export.
-	await editText(
-		join(root, 'packages/blocks/src/index.ts'),
-		(s) =>
-			insertBetweenMarkers(
-				s,
-				`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`README.md\` in the package directory above.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
-			),
-		'packages/blocks/src/index.ts → re-export',
-	);
-
-	// 3. Umbrella CDK re-export (terse).
-	await editText(
-		join(root, 'packages/blocks/src/index.cdk.ts'),
-		(s) =>
-			insertBetweenMarkers(
-				s,
-				`export { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
-			),
-		'packages/blocks/src/index.cdk.ts → re-export',
-	);
-
-	// 4. Umbrella package.json: dependency + vendorize map entry.
-	await editJson(
-		join(root, 'packages/blocks/package.json'),
-		(o) => {
-			o.dependencies ??= {};
-			o.dependencies[pkgName] = '^0.1.0';
-			o['aws-blocks'] ??= {};
-			o['aws-blocks'].vendorize ??= {};
-			o['aws-blocks'].vendorize[pkgName] = [className];
-		},
-		'packages/blocks/package.json → dependencies + vendorize',
-	);
-
-	// 5. Umbrella tsconfig project reference.
-	await editJson(
-		join(root, 'packages/blocks/tsconfig.json'),
-		(o) => {
-			o.references ??= [];
-			if (!o.references.some((r: any) => r.path === `../${folder}`)) {
-				o.references.push({ path: `../${folder}` });
-			}
-		},
-		'packages/blocks/tsconfig.json → reference',
-	);
-
-	// 6. Comprehensive test app: dependency + starter test.
-	const compPkg = join(root, 'test-apps/comprehensive/package.json');
-	if (await exists(compPkg)) {
+	// All touchpoints run inside try/finally so a mid-way failure still returns
+	// the edits that already landed (the caller prints them + the warning).
+	try {
+		// 1. Root workspaces — append packages/<folder> if absent.
 		await editJson(
-			compPkg,
+			join(root, 'package.json'),
+			(o) => {
+				o.workspaces ??= [];
+				if (!o.workspaces.includes(`packages/${folder}`)) o.workspaces.push(`packages/${folder}`);
+			},
+			'root package.json → workspaces',
+		);
+
+		// 2. Umbrella runtime re-export (with JSDoc) + type re-export.
+		await editText(
+			join(root, 'packages/blocks/src/index.ts'),
+			(s) =>
+				insertBetweenMarkers(
+					s,
+					`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`README.md\` in the package directory above.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
+				),
+			'packages/blocks/src/index.ts → re-export',
+		);
+
+		// 3. Umbrella CDK re-export (terse).
+		await editText(
+			join(root, 'packages/blocks/src/index.cdk.ts'),
+			(s) =>
+				insertBetweenMarkers(
+					s,
+					`export { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
+				),
+			'packages/blocks/src/index.cdk.ts → re-export',
+		);
+
+		// 4. Umbrella package.json: dependency + vendorize map entry.
+		await editJson(
+			join(root, 'packages/blocks/package.json'),
 			(o) => {
 				o.dependencies ??= {};
-				o.dependencies[pkgName] = '*';
+				o.dependencies[pkgName] = '^0.1.0';
+				o['aws-blocks'] ??= {};
+				o['aws-blocks'].vendorize ??= {};
+				o['aws-blocks'].vendorize[pkgName] = [className];
 			},
-			'test-apps/comprehensive/package.json → dependency',
+			'packages/blocks/package.json → dependencies + vendorize',
 		);
-		const testPath = join(root, `test-apps/comprehensive/test/${suffix}.test.ts`);
-		if (!(await exists(testPath))) {
-			const starter = starterComprehensiveTest(className, pkgName);
-			if (!dryRun) await writeFile(testPath, starter);
-			edits.push(`test-apps/comprehensive/test/${suffix}.test.ts → starter (author TODO)`);
-		}
-	} else {
-		warnings.push('test-apps/comprehensive not found — skipped test-app wiring');
-	}
 
-	// 7. Changeset.
-	const changesetName = `add-${folder}-${randomBytes(3).toString('hex')}`;
-	const changesetPath = join(root, `.changeset/${changesetName}.md`);
-	const changeset = `---\n"${pkgName}": minor\n"@aws-blocks/blocks": patch\n---\n\nAdd \`${className}\` Building Block (\`${pkgName}\`) and re-export it from \`@aws-blocks/blocks\`.\n\nTODO: describe what this block does and its public surface before release.\n`;
-	if (!dryRun) await writeFile(changesetPath, changeset);
-	edits.push(`.changeset/${changesetName}.md`);
+		// 5. Umbrella tsconfig project reference.
+		await editJson(
+			join(root, 'packages/blocks/tsconfig.json'),
+			(o) => {
+				o.references ??= [];
+				if (!o.references.some((r: any) => r.path === `../${folder}`)) {
+					o.references.push({ path: `../${folder}` });
+				}
+			},
+			'packages/blocks/tsconfig.json → reference',
+		);
+
+		// 6. Comprehensive test app: dependency + starter test.
+		const compPkg = join(root, 'test-apps/comprehensive/package.json');
+		if (await exists(compPkg)) {
+			await editJson(
+				compPkg,
+				(o) => {
+					o.dependencies ??= {};
+					o.dependencies[pkgName] = '*';
+				},
+				'test-apps/comprehensive/package.json → dependency',
+			);
+			const testPath = join(root, `test-apps/comprehensive/test/${suffix}.test.ts`);
+			if (!(await exists(testPath))) {
+				const starter = starterComprehensiveTest(className, pkgName);
+				if (!dryRun) await writeFile(testPath, starter);
+				edits.push(`test-apps/comprehensive/test/${suffix}.test.ts → starter (author TODO)`);
+			}
+		} else {
+			warnings.push('test-apps/comprehensive not found — skipped test-app wiring');
+		}
+
+		// 7. Changeset.
+		const changesetName = `add-${folder}-${randomBytes(3).toString('hex')}`;
+		const changesetPath = join(root, `.changeset/${changesetName}.md`);
+		const changeset = `---\n"${pkgName}": minor\n"@aws-blocks/blocks": patch\n---\n\nAdd \`${className}\` Building Block (\`${pkgName}\`) and re-export it from \`@aws-blocks/blocks\`.\n\nTODO: describe what this block does and its public surface before release.\n`;
+		if (!dryRun) await writeFile(changesetPath, changeset);
+		edits.push(`.changeset/${changesetName}.md`);
+	} catch (e) {
+		warnings.push(
+			`wiring stopped early: ${(e as Error).message}. ` +
+				`Completed: ${edits.join('; ') || 'nothing'}. Finish the remaining touchpoints by hand (see AGENTS.md).`,
+		);
+	}
 
 	return { edits, warnings };
 }
@@ -572,6 +644,16 @@ export function parseArgs(argv: string[]): CliOptions {
 	const opts: CliOptions = { yes: false, skipInstall: false, skipVerify: false, dryRun: false, help: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
+		// Consume the next token as this flag's value, rejecting a missing value
+		// or another flag (so `--dir --yes` errors instead of silently eating --yes).
+		const takeValue = (): string => {
+			const next = argv[i + 1];
+			if (next === undefined || next.startsWith('-')) {
+				throw new Error(`${arg} requires a value`);
+			}
+			i++;
+			return next;
+		};
 		switch (arg) {
 			case '--help':
 			case '-h':
@@ -591,13 +673,13 @@ export function parseArgs(argv: string[]): CliOptions {
 				opts.dryRun = true;
 				break;
 			case '--type':
-				opts.type = argv[++i] as BlockType;
+				opts.type = takeValue() as BlockType;
 				break;
 			case '--dir':
-				opts.dir = argv[++i];
+				opts.dir = takeValue();
 				break;
 			case '--scope':
-				opts.scope = argv[++i];
+				opts.scope = takeValue();
 				break;
 			default:
 				if (arg.startsWith('-')) throw new Error(`Unknown flag: ${arg}`);
@@ -669,6 +751,15 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		return 1;
 	}
 
+	// Validate a user-supplied --scope up front (it flows into package.json).
+	if (opts.scope) {
+		const scopeCheck = validateScope(opts.scope);
+		if (!scopeCheck.ok) {
+			console.error(`Error: ${scopeCheck.reason}`);
+			return 1;
+		}
+	}
+
 	// Resolve the block type.
 	let type = opts.type;
 	if (type && !BLOCK_TYPES.includes(type)) {
@@ -733,7 +824,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 	}
 
 	// Generate.
-	const planned: PlannedWrite[] = [];
+	const planned = new Map<string, PlannedWrite>();
 	await copyTemplate(type, targetDir, { className: names.className, pkgName: names.pkgName }, opts.dryRun, planned);
 	// Contributor mode uses the monorepo's shared build (scripts/, tsconfig.base);
 	// customer + external need a self-contained build.
@@ -750,7 +841,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 
 	if (opts.dryRun) {
 		console.log('Would create:');
-		for (const p of planned) console.log(`  + ${relative(cwd, p.path)}`);
+		for (const p of planned.values()) console.log(`  + ${relative(cwd, p.path)}`);
 		if (wire) {
 			console.log('Would wire:');
 			for (const e of wire.edits) console.log(`  ~ ${e}`);
@@ -758,7 +849,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		return 0;
 	}
 
-	console.log(`\nCreated ${planned.length} files in ${relative(cwd, targetDir) || '.'}`);
+	console.log(`\nCreated ${planned.size} files in ${relative(cwd, targetDir) || '.'}`);
 	if (wire) {
 		console.log(mode === 'contributor' ? 'Wired:' : 'Linked:');
 		for (const e of wire.edits) console.log(`  ~ ${e}`);
