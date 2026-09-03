@@ -10,7 +10,7 @@ import {
   type Field,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError } from '../errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -111,14 +111,7 @@ function translateError(e: unknown): never {
       }
     } else if (/unique constraint|duplicate key/i.test(msg)) {
       e.name = DatabaseErrors.UniqueConstraintViolation;
-    } else if (
-      e.name === 'ServiceUnavailableException' ||
-      e.name === 'InternalServerErrorException' ||
-      // A scale-to-zero cluster (minCapacity: 0) auto-pauses after ~5 minutes
-      // idle; the call that wakes it fails while it resumes. Transient, and
-      // retryable — not a bad statement.
-      e.name === 'DatabaseResumingException'
-    ) {
+    } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name)) {
       e.name = DatabaseErrors.ConnectionFailed;
     } else {
       e.name = DatabaseErrors.QueryFailed;

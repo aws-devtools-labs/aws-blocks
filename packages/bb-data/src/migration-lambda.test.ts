@@ -78,9 +78,15 @@ test('a transient connection failure is retryable', async () => {
 test('raw SDK error names are retryable without the engine', async () => {
   // Defense for a caller that does not route through DataApiEngine, which
   // rewrites error.name. Nothing does today; this documents the intent.
+  // The transient names come from the same set the engine classifies with, so
+  // the two sites cannot drift apart.
   const resuming = Object.assign(new Error(RESUMING_MESSAGE), { name: 'DatabaseResumingException' });
+  const unavailable = Object.assign(new Error('Service unavailable'), { name: 'ServiceUnavailableException' });
+  const internal = Object.assign(new Error('Internal error'), { name: 'InternalServerErrorException' });
   const badRequest = Object.assign(new Error('Bad request'), { name: 'BadRequestException' });
   assert.strictEqual(isRetryableMigrationError(resuming), true);
+  assert.strictEqual(isRetryableMigrationError(unavailable), true);
+  assert.strictEqual(isRetryableMigrationError(internal), true);
   assert.strictEqual(isRetryableMigrationError(badRequest), true);
 });
 

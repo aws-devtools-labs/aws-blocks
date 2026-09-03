@@ -4,7 +4,7 @@
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
 import { DataApiEngine } from './engines/data-api-engine.js';
-import { DatabaseErrors } from './errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES } from './errors.js';
 
 // Set by the CDK construct's environment config. Default is the Lambda deployment root
 // where CDK's afterBundling hook copies the .sql files.
@@ -27,8 +27,8 @@ const MAX_DELAY_MS = 30000;
 export const isRetryableMigrationError = (e: unknown): boolean =>
   e instanceof Error && (
     e.name === DatabaseErrors.ConnectionFailed ||
+    TRANSIENT_DATA_API_ERROR_NAMES.has(e.name) ||
     e.name === 'BadRequestException' ||
-    e.name === 'DatabaseResumingException' ||
     e.message.includes('Communications link failure')
   );
 
