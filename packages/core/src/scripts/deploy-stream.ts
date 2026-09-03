@@ -225,7 +225,11 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
     'deploy',
     '--require-approval',
     'never',
-    // reconcile drift (e.g. from the hotswap dev loop) against the template
+    // reconcile drift (e.g. from the hotswap dev loop) against the template.
+    // Requires an aws-cdk CLI new enough to expose `--revert-drift`; our pinned
+    // `^2.1138.0` is the validated floor (the hermetic real-CDK probe in
+    // deploy-stream.test.ts runs this argv against exactly that pin). The flag is
+    // unavailable on older CLIs, where it would surface as an unknown option.
     '--revert-drift',
     '--ci',
     '--progress',

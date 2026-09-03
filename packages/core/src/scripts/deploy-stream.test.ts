@@ -691,6 +691,46 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
     }
   });
 
+  // ── the flag this change adds ──────────────────────────────────────────────
+  // `--revert-drift` is why this module was touched, and the cheap unit test above
+  // (`args.includes('--revert-drift')`) only proves the argv *carries* the flag —
+  // an unknown option would sail past `includes` and only fail at deploy time.
+  // `probeArgv` is built from the production `buildCdkDeployArgs`, so `--revert-drift`
+  // already rides on every probe run: reaching FAILURE_REASON therefore means the
+  // pinned CLI parsed the whole argv, the flag included, and stopped at the
+  // credential check rather than rejecting an option. This sibling makes that
+  // guarantee explicit and adds the negative — the run must NOT have been rejected
+  // as an unknown option/argument, which is exactly how an older CLI without
+  // `--revert-drift` (below the pinned `^2.1138.0` floor) would fail.
+  it('the pinned CDK CLI accepts --revert-drift (parsed, not just present in argv)', { timeout: 180_000 }, (t) => {
+    const probe = probeOnce(t);
+    if (!probe) return;
+    assert.ok(
+      probeArgv('/probe-assembly', '--ci').includes('--revert-drift'),
+      'the probe must exercise the production argv, which carries --revert-drift',
+    );
+    // argv carries the flag + run reaches the credential check + no unknown-option error ⇒ the pinned CLI accepted --revert-drift.
+    for (const [flag, run] of [
+      ['--ci', probe.withCi],
+      ['--no-ci', probe.withoutCi],
+    ] as const) {
+      // Reaching the credential check proves the CLI parsed the whole argv,
+      // `--revert-drift` included, without rejecting an option.
+      assert.match(
+        run.stderr,
+        FAILURE_REASON,
+        `the ${flag} probe (carrying --revert-drift) never reached the credential check (exit ${run.status}). stderr: ${JSON.stringify(run.stderr.slice(0, 400))}`,
+      );
+      // The negative the presence test cannot make: an older/other CLI that did
+      // not know `--revert-drift` would have died here instead of at credentials.
+      assert.doesNotMatch(
+        run.stderr,
+        /Unknown (option|argument)|Unrecognized/i,
+        `the pinned CDK CLI rejected an option on the ${flag} probe — --revert-drift is unavailable on this CLI. stderr: ${JSON.stringify(run.stderr.slice(0, 400))}`,
+      );
+    }
+  });
+
   // Guards the guard. If the probe ever stops executing — a dropped dependency, a
   // reordered CI step, an early return sneaking back in — this fails instead of
   // the suite quietly shrinking to nothing.
