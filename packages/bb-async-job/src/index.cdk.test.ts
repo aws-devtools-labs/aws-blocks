@@ -48,6 +48,9 @@ let backendPath: string;
 let tmpDir: string;
 
 before(() => {
+	// Not for module resolution (the `.cdk.js` imports use explicit /cdk paths and
+	// are already resolved by now) — this satisfies `assertCdkConditionActive()`,
+	// which `BlocksStack.create()` calls and which reads `process.env.NODE_OPTIONS`.
 	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
 	tmpDir = mkdtempSync(join(__dirname, 'tmp-async-cdk-'));
 	handlerPath = join(tmpDir, 'handler.mjs');
