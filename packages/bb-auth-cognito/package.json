@@ -49,7 +49,7 @@
     "@aws-blocks/bb-kv-store": "^0.1.7",
     "@aws-blocks/bb-logger": "^0.1.5",
     "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
-    "aws-jwt-verify": "^5.0.0"
+    "aws-jwt-verify": "^5.2.1"
   },
   "devDependencies": {
     "@aws-crypto/client-node": "^4.0.0",
