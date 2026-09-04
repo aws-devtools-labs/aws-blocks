@@ -274,6 +274,14 @@ back, then expired by an S3 lifecycle rule.
   may expire before your next deploy (shrinking the rollback window). It never
   blocks a deploy and never affects the live build.
 
+> **Cleanup caveat:** a build is tagged superseded only during a normal deploy
+> cutover (an `Update` that flips `meta.b`). Builds that become stale outside
+> that path — every build already present before upgrading to this version, or
+> builds left by an aborted/rolled-back deploy — are never tagged, so the
+> lifecycle rule never expires them and they accumulate until you remove them
+> manually. This is safe (nothing deletes the live build), just not
+> self-cleaning for pre-existing artifacts.
+
 ```ts
 new Hosting(stack, 'Hosting', {
   root: './',

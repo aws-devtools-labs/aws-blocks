@@ -95,17 +95,24 @@ export function activeBuildId(entriesJson?: string): string | undefined {
 /**
  * Tag every object under `builds/<buildId>/` as SUPERSEDED so the
  * `DeleteOldBuilds` S3 lifecycle rule (which matches that tag) can reclaim it
- * (#480). Paginates the listing and tags each object version's current tag set.
+ * (#480). Paginates the listing and tags each object with bounded concurrency
+ * (15 in flight) to keep the cutover fast without overwhelming S3.
  *
  * Best-effort by contract: a failure here only means the old build lingers
  * UNtagged, which is safe — an untagged build is simply never matched by the
  * lifecycle rule, so it is not expired (it just isn't cleaned up yet). The NEW
  * (live) build is never passed here, so it is never a lifecycle target.
+ *
+ * Bounded by the custom-resource Lambda timeout: on a very large build the run
+ * may not tag every object before timing out, leaving some objects untagged.
+ * That is safe by the same contract — untagged objects are never expired, and
+ * the live build is never tagged regardless.
  */
 export async function supersedeBuild(
   bucket: string,
   buildId: string,
 ): Promise<void> {
+  const CONCURRENCY = 15;
   let token: string | undefined;
   do {
     const page = await s3.send(
@@ -115,16 +122,23 @@ export async function supersedeBuild(
         ContinuationToken: token,
       }),
     );
-    for (const obj of page.Contents ?? []) {
-      if (!obj.Key) continue;
-      await s3.send(
-        new PutObjectTaggingCommand({
-          Bucket: bucket,
-          Key: obj.Key,
-          Tagging: {
-            TagSet: [{ Key: BUILD_STATE_TAG_KEY, Value: BUILD_STATE_SUPERSEDED }],
-          },
-        }),
+    const keys = (page.Contents ?? [])
+      .map((obj) => obj.Key)
+      .filter((key): key is string => typeof key === 'string');
+    for (let i = 0; i < keys.length; i += CONCURRENCY) {
+      const chunk = keys.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        chunk.map((key) =>
+          s3.send(
+            new PutObjectTaggingCommand({
+              Bucket: bucket,
+              Key: key,
+              Tagging: {
+                TagSet: [{ Key: BUILD_STATE_TAG_KEY, Value: BUILD_STATE_SUPERSEDED }],
+              },
+            }),
+          ),
+        ),
       );
     }
     token = page.IsTruncated ? page.NextContinuationToken : undefined;

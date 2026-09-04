@@ -55,7 +55,7 @@ import { MonitoringConstruct } from './monitoring_construct.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
-import { StorageConstruct } from './storage_construct.js';
+import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
 import { WafConstruct } from './waf_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -419,7 +419,7 @@ export class HostingConstruct extends Construct {
     // viewer present a cookie for a build whose `builds/<id>/` prefix the
     // S3 lifecycle rule has already deleted → hard 403 on every asset.
     if (props.skewProtection?.enabled && props.skewProtection.maxAge) {
-      const retentionDays = props.storage?.buildRetentionDays ?? 30;
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
       const retentionSeconds = retentionDays * 24 * 60 * 60;
       if (props.skewProtection.maxAge > retentionSeconds) {
         throw new HostingError('InvalidSkewProtectionMaxAgeError', {
@@ -438,7 +438,7 @@ export class HostingConstruct extends Construct {
     // rewrite-proxy warning above: never block a deployable, working app).
     const deployIntervalDays = props.storage?.deployIntervalDays;
     if (deployIntervalDays != null) {
-      const retentionDays = props.storage?.buildRetentionDays ?? 30;
+      const retentionDays = props.storage?.buildRetentionDays ?? DEFAULT_BUILD_RETENTION_DAYS;
       if (deployIntervalDays >= retentionDays) {
         process.stderr.write(
           `⚠️  Hosting: storage.deployIntervalDays (${deployIntervalDays}d) is >= ` +

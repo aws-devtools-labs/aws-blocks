@@ -23,7 +23,8 @@ import { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
  * wouldn't even work end-to-end). Customers who genuinely need long
  * rollback windows can extend via `storage.buildRetentionDays`.
  */
-const DEFAULT_BUILD_RETENTION_DAYS = 30;
+export const DEFAULT_BUILD_RETENTION_DAYS = 30;
+
 
 /**
  * Build-state tag constants (issue #480). Defined in the dependency-free
@@ -49,7 +50,7 @@ export type StorageConstructProps = {
   encryption?: 'S3_MANAGED' | 'KMS';
   /** BYO KMS key for bucket encryption (requires encryption: 'KMS'). */
   encryptionKey?: IKey;
-  /** Days to retain build artifacts in S3. Default: 365. */
+  /** Days to retain build artifacts in S3. Default: 30. */
   buildRetentionDays?: number;
   /** Days to retain access logs. Default: 90. */
   logRetentionDays?: number;
