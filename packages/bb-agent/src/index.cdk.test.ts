@@ -15,46 +15,52 @@
  * Must run under `--conditions=cdk`; otherwise the internal BBs resolve to
  * their mock implementations and no CloudFormation resources are produced.
  */
-import { test, afterEach } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
-import type { Construct } from 'constructs';
 import { Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { Agent } from './index.cdk.js';
 
-class StubBlocksStack extends cdk.Stack {
-	public readonly handler: cdk.aws_lambda.Function;
-	public readonly executionRole: cdk.aws_iam.IRole;
-	public readonly id: string;
-	constructor(scope: Construct, id: string) {
-		super(scope, id);
-		this.id = id;
-		(globalThis as any).CURRENT_BLOCKS_STACK = this;
-		this.executionRole = new cdk.aws_iam.Role(this, 'BlocksRole', {
-			assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
-		});
-		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
-			runtime: DEFAULT_NODE_RUNTIME,
-			handler: 'index.handler',
-			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
-			role: this.executionRole,
-		});
-	}
-}
+// Inject LambdaCompute as the stack's default compute, the same way
+// @aws-blocks/blocks does for real apps. The Agent builds AsyncJob and Realtime
+// internally, both of which resolve `this.compute`, so a handler-only stub
+// stack (no default compute) can no longer synthesize it — `BlocksStack.create`
+// initializes the default compute the getter resolves to.
+const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 
-// synthAgent() installs its own stack as the ambient CURRENT_BLOCKS_STACK; clear it
-// afterwards so no test observes a stack left behind by the previous one (node
-// --test isolates files by default, so this is hygiene against future sharing).
-afterEach(() => {
-	delete (globalThis as any).CURRENT_BLOCKS_STACK;
+const __dirname = dirname(fileURLToPath(import.meta.url));
+let handlerPath: string;
+let backendPath: string;
+let tmpDir: string;
+
+before(() => {
+	process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --conditions=cdk`;
+	tmpDir = mkdtempSync(join(__dirname, 'tmp-agent-cdk-'));
+	handlerPath = join(tmpDir, 'handler.mjs');
+	writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
+	backendPath = join(tmpDir, 'backend.mjs');
+	writeFileSync(backendPath, 'export default () => {};\n');
 });
 
-function synthAgent(): any {
+after(() => {
+	rmSync(tmpDir, { recursive: true, force: true });
+});
+
+async function synthAgent(id: string): Promise<any> {
 	const app = new cdk.App();
-	const stack = new StubBlocksStack(app, 'teststack');
-	const parent = new Scope('app');
-	new Agent(parent, 'agent', { inferenceOnly: true });
+	const stack = await BlocksStack.create(app, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'agent', { inferenceOnly: true });
 
 	const mappings = Template.fromStack(stack).findResources('AWS::Lambda::EventSourceMapping');
 	const keys = Object.keys(mappings);
@@ -62,14 +68,14 @@ function synthAgent(): any {
 	return mappings[keys[0]].Properties;
 }
 
-test('CDK: the Agent job takes one message per invocation (no batching on the interactive path)', () => {
-	assert.strictEqual(synthAgent().BatchSize, 1);
+test('CDK: the Agent job takes one message per invocation (no batching on the interactive path)', async () => {
+	assert.strictEqual((await synthAgent('agent-batch')).BatchSize, 1);
 });
 
-test('CDK: the Agent job has no SQS batching window (no added latency for the caller)', () => {
-	assert.strictEqual(synthAgent().MaximumBatchingWindowInSeconds, 0);
+test('CDK: the Agent job has no SQS batching window (no added latency for the caller)', async () => {
+	assert.strictEqual((await synthAgent('agent-window')).MaximumBatchingWindowInSeconds, 0);
 });
 
-test('CDK: the Agent job still reports partial batch failures', () => {
-	assert.deepStrictEqual(synthAgent().FunctionResponseTypes, ['ReportBatchItemFailures']);
+test('CDK: the Agent job still reports partial batch failures', async () => {
+	assert.deepStrictEqual((await synthAgent('agent-partial')).FunctionResponseTypes, ['ReportBatchItemFailures']);
 });

@@ -4,13 +4,15 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope, blocksError } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type {
 	CronJobEvent,
 	CronJobOptions,
 } from './types.js';
 import { validateSchedule, validateTimezone } from './schedule.js';
+import { CronJobErrors } from './errors.js';
 
 export { CronJobErrors } from './errors.js';
 export type { CronJobEvent, CronJobOptions } from './types.js';
@@ -27,7 +29,19 @@ export class CronJob<T = void> extends Scope {
 		validateSchedule(options.schedule);
 		if (options.timezone !== undefined) validateTimezone(options.timezone);
 
-		const lambdaArn = this.handler.functionArn;
+		// The scheduler invokes the compute's function directly, so a CronJob
+		// currently requires a Lambda compute. Other compute types need a
+		// different scheduler target (e.g. EventBridge → ECS) — not yet supported.
+		// The brand check (not `instanceof`) survives duplicate bb-lambda-compute
+		// copies in one dependency tree.
+		const compute = this.compute;
+		if (!LambdaCompute.isLambdaCompute(compute)) {
+			throw blocksError(
+				CronJobErrors.UnsupportedCompute,
+				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
+			);
+		}
+		const lambdaArn = compute.fn.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this), lambdaArn);
 
 		// The payload EventBridge sends to the Lambda.
