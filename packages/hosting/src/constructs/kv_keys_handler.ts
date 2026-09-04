@@ -34,6 +34,12 @@ import {
 // with "Neither CRT nor JS SigV4a implementation is available". Importing it
 // for side effects forces esbuild to bundle it and registers the JS signer.
 import '@aws-sdk/signature-v4a';
+import {
+  S3Client,
+  ListObjectsV2Command,
+  PutObjectTaggingCommand,
+} from '@aws-sdk/client-s3';
+import { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
 
 type Entries = Record<string, string>;
 
@@ -41,6 +47,12 @@ type Event = {
   RequestType: 'Create' | 'Update' | 'Delete';
   ResourceProperties: {
     KvsArn: string;
+    /**
+     * Hosting bucket that holds `builds/<id>/...`. Enables supersede-tagging of
+     * the outgoing build at cutover (#480). Optional so older templates / unit
+     * tests that omit it simply skip tagging.
+     */
+    BucketName?: string;
     /** JSON string of the desired key→value map. */
     Entries: string;
   };
@@ -58,6 +70,80 @@ const MAX_BYTES_PER_REQUEST = 3 * 1024 * 1024;
 const client = new CloudFrontKeyValueStoreClient({
   sigv4aSigningRegionSet: ['*'],
 });
+
+const s3 = new S3Client({});
+
+/**
+ * Extract the active buildId (`meta.b`) from a stringified entries map. The
+ * KVS `meta` value is itself a JSON blob (`{"b":"<buildId>",...}`), so this
+ * double-parses: outer map → `meta` string → `.b`. Returns undefined on any
+ * malformed / missing input (callers treat undefined as "nothing to do").
+ * Exported for unit testing.
+ */
+export function activeBuildId(entriesJson?: string): string | undefined {
+  if (!entriesJson) return undefined;
+  try {
+    const entries = JSON.parse(entriesJson) as Entries;
+    if (typeof entries.meta !== 'string') return undefined;
+    const meta = JSON.parse(entries.meta) as { b?: unknown };
+    return typeof meta.b === 'string' ? meta.b : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Tag every object under `builds/<buildId>/` as SUPERSEDED so the
+ * `DeleteOldBuilds` S3 lifecycle rule (which matches that tag) can reclaim it
+ * (#480). Paginates the listing and tags each object with bounded concurrency
+ * (15 in flight) to keep the cutover fast without overwhelming S3.
+ *
+ * Best-effort by contract: a failure here only means the old build lingers
+ * UNtagged, which is safe — an untagged build is simply never matched by the
+ * lifecycle rule, so it is not expired (it just isn't cleaned up yet). The NEW
+ * (live) build is never passed here, so it is never a lifecycle target.
+ *
+ * Bounded by the custom-resource Lambda timeout: on a very large build the run
+ * may not tag every object before timing out, leaving some objects untagged.
+ * That is safe by the same contract — untagged objects are never expired, and
+ * the live build is never tagged regardless.
+ */
+export async function supersedeBuild(
+  bucket: string,
+  buildId: string,
+): Promise<void> {
+  const CONCURRENCY = 15;
+  let token: string | undefined;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: `builds/${buildId}/`,
+        ContinuationToken: token,
+      }),
+    );
+    const keys = (page.Contents ?? [])
+      .map((obj) => obj.Key)
+      .filter((key): key is string => typeof key === 'string');
+    for (let i = 0; i < keys.length; i += CONCURRENCY) {
+      const chunk = keys.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        chunk.map((key) =>
+          s3.send(
+            new PutObjectTaggingCommand({
+              Bucket: bucket,
+              Key: key,
+              Tagging: {
+                TagSet: [{ Key: BUILD_STATE_TAG_KEY, Value: BUILD_STATE_SUPERSEDED }],
+              },
+            }),
+          ),
+        ),
+      );
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+}
 
 const byteLen = (s: string): number => Buffer.byteLength(s, 'utf8');
 
@@ -193,5 +279,29 @@ export async function handler(event: Event): Promise<{ PhysicalResourceId: strin
       : {};
 
   await applyUpdate(KvsArn, desired, previous);
+
+  // #480: after the KVS pointer has flipped to the new build, tag the OUTGOING
+  // build's objects as superseded so the `DeleteOldBuilds` lifecycle rule can
+  // expire them. Order matters: we tag ONLY after applyUpdate() has committed
+  // the flip, so a failure here can never affect the build that is now live
+  // (the new build is never tagged). Best-effort — a failure leaves the old
+  // build untagged (not expired), which is safe; we log and continue so a
+  // transient S3 error never fails an otherwise-successful deploy.
+  if (event.RequestType === 'Update' && event.ResourceProperties.BucketName) {
+    const oldBuildId = activeBuildId(event.OldResourceProperties?.Entries);
+    const newBuildId = activeBuildId(entriesJson);
+    if (oldBuildId && oldBuildId !== newBuildId) {
+      try {
+        await supersedeBuild(event.ResourceProperties.BucketName, oldBuildId);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `Failed to tag superseded build ${oldBuildId}; it will not be expired by ` +
+            `the DeleteOldBuilds lifecycle rule until re-tagged. ${String(err)}`,
+        );
+      }
+    }
+  }
+
   return { PhysicalResourceId: physicalId };
 }

@@ -484,6 +484,34 @@ describe('Hosting', () => {
       }
       assert.ok(foundRetain, 'At least one bucket should have Retain deletion policy');
     });
+
+    it('forwards buildRetentionDays to the hosting bucket lifecycle rule (#480)', () => {
+      createSpaBuildOutput(tmpDir);
+
+      const app = new App();
+      const stack = new Stack(app, 'RetentionStack');
+
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        buildRetentionDays: 90,
+      });
+
+      const template = Template.fromStack(stack);
+      // Before the fix, core dropped buildRetentionDays (only retainOnDelete was
+      // forwarded), so this asserted 30. It must now reach the DeleteOldBuilds
+      // rule as 90.
+      template.hasResourceProperties('AWS::S3::Bucket', {
+        LifecycleConfiguration: Match.objectLike({
+          Rules: Match.arrayWith([
+            Match.objectLike({
+              Id: 'DeleteOldBuilds',
+              ExpirationInDays: 90,
+            }),
+          ]),
+        }),
+      });
+    });
   });
 
   // ── API integration tests ────────────────────────────────────

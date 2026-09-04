@@ -6,6 +6,7 @@ import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import type { IKeyValueStore } from 'aws-cdk-lib/aws-cloudfront';
+import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,13 @@ const HANDLER_BUNDLE = join(__dirname, 'kv_keys_handler_bundle.mjs');
 export type KvKeysProps = {
   /** The CloudFront KeyValueStore to write into. */
   store: IKeyValueStore;
+  /**
+   * The hosting bucket that holds `builds/<id>/...`. At the KVS cutover the
+   * handler tags the OUTGOING build's objects as superseded so the
+   * `DeleteOldBuilds` S3 lifecycle rule can expire them without ever touching
+   * the live build (#480). The handler is granted list + tag (never delete).
+   */
+  bucket: IBucket;
   /**
    * Desired key→value map. The custom resource diffs this against the
    * previously deployed entries (empty on Create) and applies the minimal set
@@ -80,6 +88,25 @@ export class KvKeys extends Construct {
       }),
     );
 
+    // #480: supersede-tagging of the OUTGOING build at cutover. Least
+    // privilege: the handler may LIST and TAG objects under `builds/*` only —
+    // it is deliberately granted NO delete permission. Actual expiry is done
+    // by the S3 `DeleteOldBuilds` lifecycle rule, so a bug in the handler can
+    // never delete the live build; worst case an old build lingers untagged.
+    handler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [props.bucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': ['builds/*'] } },
+      }),
+    );
+    handler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:PutObjectTagging'],
+        resources: [`${props.bucket.bucketArn}/builds/*`],
+      }),
+    );
+
     const provider = new Provider(this, 'Provider', {
       onEventHandler: handler,
     });
@@ -88,6 +115,7 @@ export class KvKeys extends Construct {
       serviceToken: provider.serviceToken,
       properties: {
         KvsArn: props.store.keyValueStoreArn,
+        BucketName: props.bucket.bucketName,
         // Stringify so CloudFormation sees a single property that changes
         // whenever any entry changes (triggers Update → diff → UpdateKeys).
         Entries: JSON.stringify(props.entries),

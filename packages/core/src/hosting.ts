@@ -264,6 +264,16 @@ export interface HostingProps {
   /** Retain the S3 bucket when the stack is deleted. Default: false. */
   retainOnDelete?: boolean;
 
+  /**
+   * Days to retain SUPERSEDED build artifacts in S3 before they are expired.
+   * Default: 30. The build currently referenced by CloudFront KVS (`meta.b`)
+   * is NEVER expired regardless of this value — only builds that have been
+   * replaced by a newer deploy are cleaned up (issue #480). Raise this to keep
+   * a longer rollback window. Must be at least `skewProtection.maxAge`
+   * (converted to days), or synth throws `InvalidSkewProtectionMaxAgeError`.
+   */
+  buildRetentionDays?: number;
+
   /** Custom Content-Security-Policy header value. */
   contentSecurityPolicy?: string;
 
@@ -671,7 +681,17 @@ export class Hosting extends Construct {
       environment: Object.keys(plainEnv).length ? plainEnv : undefined,
       domain: resolvedDomain,
       waf: props.waf,
-      storage: props.retainOnDelete != null ? { retainOnDelete: props.retainOnDelete } : undefined,
+      storage:
+        props.retainOnDelete != null || props.buildRetentionDays != null
+          ? {
+              ...(props.retainOnDelete != null
+                ? { retainOnDelete: props.retainOnDelete }
+                : {}),
+              ...(props.buildRetentionDays != null
+                ? { buildRetentionDays: props.buildRetentionDays }
+                : {}),
+            }
+          : undefined,
       cdn:
         props.contentSecurityPolicy || props.priceClass || props.geoRestriction || props.quotas
           ? {

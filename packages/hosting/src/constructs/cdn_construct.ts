@@ -775,6 +775,7 @@ export class CdnConstruct extends Construct {
     // ---- KvKeys: live KVS update, gated on asset upload (atomic cutover) ----
     const kvKeys = new KvKeys(this, 'RouteStoreKeys', {
       store: routeStore,
+      bucket, // #480: handler tags the outgoing build superseded at cutover
       entries: kvsEntries,
     });
     // The KV write that flips buildId/routes to the new build must happen only
