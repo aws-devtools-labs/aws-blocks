@@ -81,7 +81,7 @@ export interface FileBucketOptions {
     corsRules?: CorsRule[];
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
-    logRetentionDays?: number;
+    noncurrentVersionExpirationDays?: number;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }

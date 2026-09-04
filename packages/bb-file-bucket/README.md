@@ -34,13 +34,13 @@ const bucket = new FileBucket(scope, id, options?)
 | Option | Type | Description |
 |--------|------|-------------|
 | `versioned` | `boolean` | Enable S3 object versioning. **Default: `true`.** Pass `versioned: false` to opt out. Note: the version-aware method typings (`versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings. |
+| `noncurrentVersionExpirationDays` | `number` | Days after which **noncurrent** (superseded) object versions are permanently expired, bounding the storage cost that versioning would otherwise let grow unbounded. Only applies when versioning is enabled (the default). **Default: `90`.** Must be a positive integer — a non-positive or non-integer value throws at synth. There is no disable sentinel; to drop the rule entirely, disable versioning (`versioned: false`). Ignored by the mock and browser runtimes. |
 | `corsRules` | `CorsRule[]` | CORS rules for browser-based access. See [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
-| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: `false` (opt-in).** When `true`, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Ignored by the mock and browser runtimes. |
-| `logRetentionDays` | `number` | Days to retain server access logs before automatic expiration. Only applies when `accessLogging` is `true`. **Default: `90`.** Must be a positive integer — a value `<= 0` (or non-integer) throws at synth. |
+| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.accessLogging`)** when omitted — so a production-postured stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
-| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, CDK's default (RETAIN) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
 
 All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
@@ -215,13 +215,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 ### Access Logging
 
-Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after `logRetentionDays` (default 90):
+Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
 
 ```typescript
-// Logs delivered to a separate locked-down bucket, expired after 30 days.
+// Logs delivered to a separate locked-down bucket.
+// Retention follows the stack posture's logRetention default — not a per-block option.
 const bucket = new FileBucket(scope, 'uploads', {
   accessLogging: true,
-  logRetentionDays: 30,
 });
 ```
 
@@ -233,6 +233,7 @@ const bucket = new FileBucket(scope, 'uploads', {
 - Prefer `scan({ prefix })` over unscoped `scan()` to limit enumeration cost
 - For browser uploads/downloads returned from API methods, prefer `createUploadHandle`/`getFileHandle` over raw presigned URLs — they encode the fetch protocol into typed methods so the client can't misuse them
 - Use `deleteBatch()` instead of looping `delete()` for bulk operations
+- Versioning is **on by default**; noncurrent (superseded) versions are automatically expired after **90 days** (`noncurrentVersionExpirationDays`, default `90`) so version history doesn't grow storage cost unbounded. Tune the window per-block, or disable versioning (`versioned: false`) to drop the expiration rule along with versioning.
 
 ## Scaling & Cost (AWS)
 

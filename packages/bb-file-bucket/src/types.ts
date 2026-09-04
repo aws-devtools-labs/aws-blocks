@@ -31,17 +31,29 @@ export interface FileBucketOptions {
 	 * When `true`, a dedicated, locked-down log bucket is provisioned
 	 * (all public access blocked, S3-managed encryption, SSL enforced) and
 	 * the main bucket delivers its access logs there under the
-	 * `access-logs/` prefix. Access logs are expired automatically after
-	 * `logRetentionDays` days.
+	 * `access-logs/` prefix. Access logs are expired automatically after the
+	 * stack-wide `logRetention` default (see `BlocksDefaults.logRetention`);
+	 * `RetentionDays.INFINITE` keeps them indefinitely (no expiry rule).
 	 *
-	 * Ignored by the mock and browser runtimes (no AWS resource).
+	 * Resolves from the stack `defaults.accessLogging` when omitted, so a
+	 * production-postured stack can opt every FileBucket into logging without
+	 * a per-block option. Ignored by the mock and browser runtimes (no AWS
+	 * resource).
 	 */
 	accessLogging?: boolean;
 	/**
-	 * Days to retain server access logs before automatic expiration.
-	 * Only applies when `accessLogging` is `true`. Default: 90.
+	 * Days after which NONCURRENT object versions are permanently expired,
+	 * bounding the storage cost that versioning would otherwise let grow
+	 * unbounded. Only applies when versioning is enabled (the default).
+	 * Default: 90.
+	 *
+	 * Must be a positive integer; a non-positive or non-integer value is
+	 * rejected at synth. There is no "disable" sentinel — noncurrent-version
+	 * expiration is always on for a versioned bucket to cap version growth. To
+	 * opt out entirely, disable versioning (`versioned: false`), which drops
+	 * the rule. Ignored by the mock and browser runtimes (no AWS resource).
 	 */
-	logRetentionDays?: number;
+	noncurrentVersionExpirationDays?: number;
 	/** Wrap an existing S3 bucket instead of creating one. */
 	bucket?: ExternalBucketRef;
 	/**
