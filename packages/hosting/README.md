@@ -254,6 +254,36 @@ immediate — SSM Parameter Store has no recovery window.)
 └──────────────────────────────────────────────┘
 ```
 
+## Build retention & rollback
+
+Each deploy uploads its assets under an immutable `builds/<buildId>/` prefix and
+flips a CloudFront KeyValueStore pointer (`meta.b`) to the new build. Old builds
+are retained for `storage.buildRetentionDays` (default **30**) so you can roll
+back, then expired by an S3 lifecycle rule.
+
+- **The build currently being served is never expired**, no matter how long ago
+  it was deployed. Only *superseded* builds (ones a later deploy replaced) are
+  eligible for cleanup — they are tagged `aws-blocks:build-state=superseded` at
+  the cutover, and the lifecycle rule matches only that tag.
+- Raise `storage.buildRetentionDays` for a longer rollback window. It must be at
+  least `skewProtection.maxAge` (converted to days), or synth throws
+  `InvalidSkewProtectionMaxAgeError` — a skew cookie must not outlive the build
+  it pins to.
+- Optional `storage.deployIntervalDays` is an advisory hint: if you set it and
+  it is ≥ `buildRetentionDays`, synth prints a warning that superseded builds
+  may expire before your next deploy (shrinking the rollback window). It never
+  blocks a deploy and never affects the live build.
+
+```ts
+new Hosting(stack, 'Hosting', {
+  root: './',
+  storage: {
+    buildRetentionDays: 90,   // keep 90 days of rollback targets
+    deployIntervalDays: 30,   // advisory only
+  },
+});
+```
+
 ## Custom domains
 
 Configure a custom domain through the `domain` prop on `HostingConstruct`

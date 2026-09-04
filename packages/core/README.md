@@ -313,6 +313,17 @@ new Hosting(stack, 'Web', {
 
 The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
 
+Old builds are retained for rollback and expired by an S3 lifecycle rule after `buildRetentionDays` (default **30**). The build currently being served is never expired regardless of deploy cadence — only superseded builds are cleaned up. Raise the window with `buildRetentionDays` (it must be ≥ `skewProtection.maxAge` in days):
+
+```typescript
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  buildRetentionDays: 90,
+});
+```
+
+
 ## Building Blocks
 
 Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):

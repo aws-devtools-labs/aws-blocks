@@ -246,6 +246,8 @@ export type HostingConstructProps = {
     encryptionKey?: IKey;
     retainOnDelete?: boolean;
     buildRetentionDays?: number;
+    /** Advisory hint used at synth to warn when deploy cadence ≥ retention (#480). */
+    deployIntervalDays?: number;
     /** 3.3 — opt-in daily S3 inventory of `builds/`. */
     inventory?: { enabled: boolean };
     /**
@@ -425,6 +427,26 @@ export class HostingConstruct extends Construct {
           resolution:
             'Lower skewProtection.maxAge to at most storage.buildRetentionDays (in seconds), or raise storage.buildRetentionDays. A cookie that outlives the build prefix pins returning viewers to a deleted build → 403.',
         });
+      }
+    }
+
+    // #480: advisory (NOT fatal) — a deploy cadence at or beyond the retention
+    // window means a superseded build can age out before the next deploy,
+    // shrinking the rollback window. The IN-SERVICE build is never expired
+    // (only superseded builds carry the lifecycle tag), so this is a
+    // rollback-window note, not a 403 risk — hence warn, not throw (mirrors the
+    // rewrite-proxy warning above: never block a deployable, working app).
+    const deployIntervalDays = props.storage?.deployIntervalDays;
+    if (deployIntervalDays != null) {
+      const retentionDays = props.storage?.buildRetentionDays ?? 30;
+      if (deployIntervalDays >= retentionDays) {
+        process.stderr.write(
+          `⚠️  Hosting: storage.deployIntervalDays (${deployIntervalDays}d) is >= ` +
+            `storage.buildRetentionDays (${retentionDays}d). Superseded builds may be ` +
+            `expired before your next deploy, shrinking the rollback window. The build ` +
+            `currently being served is unaffected. Raise storage.buildRetentionDays to ` +
+            `keep more rollback targets available.\n`,
+        );
       }
     }
 

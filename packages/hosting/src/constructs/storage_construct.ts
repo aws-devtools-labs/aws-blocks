@@ -9,6 +9,7 @@ import {
   ObjectOwnership,
 } from 'aws-cdk-lib/aws-s3';
 import { IKey } from 'aws-cdk-lib/aws-kms';
+import { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
 
 // ---- Constants ----
 
@@ -24,6 +25,13 @@ import { IKey } from 'aws-cdk-lib/aws-kms';
  */
 const DEFAULT_BUILD_RETENTION_DAYS = 30;
 
+/**
+ * Build-state tag constants (issue #480). Defined in the dependency-free
+ * `build_tags` module so the esbuild-bundled KVS cutover handler can share
+ * them without pulling `aws-cdk-lib` into the Lambda bundle. Re-exported here
+ * for callers and tests that reason about the storage construct.
+ */
+export { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
 /** Default retention for access logs */
 const DEFAULT_ACCESS_LOG_RETENTION_DAYS = 90;
 
@@ -155,6 +163,12 @@ export class StorageConstruct extends Construct {
         {
           id: 'DeleteOldBuilds',
           prefix: 'builds/',
+          // #480: only expire builds explicitly marked superseded at the KVS
+          // cutover. The live build (KVS meta.b) is never tagged, so it is
+          // never matched by this rule and never expired — regardless of how
+          // long it has been since the last deploy. TagFilters are
+          // inclusion-only, so we tag the superseded builds, not the live one.
+          tagFilters: { [BUILD_STATE_TAG_KEY]: BUILD_STATE_SUPERSEDED },
           expiration: Duration.days(buildRetentionDays),
           enabled: true,
         },

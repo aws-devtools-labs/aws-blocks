@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { batches, computeDiff, deleteDrainSet } from './kv_keys_handler.js';
+import { batches, computeDiff, deleteDrainSet, activeBuildId } from './kv_keys_handler.js';
 
 // Regression for the Delete-path drain bug: CloudFormation does not send
 // OldResourceProperties on Delete, so the keys to drain must come from
@@ -118,5 +118,44 @@ describe('kv_keys_handler — batches (50-key / 3 MB boundaries)', () => {
 
   it('yields nothing for an empty diff (no-op path)', () => {
     assert.equal(collect([], []).length, 0);
+  });
+});
+
+// #480: the supersede-tagging at cutover keys off `activeBuildId`, which
+// extracts the live buildId (`meta.b`) from the stringified entries map. The
+// handler tags the OLD build superseded only when old !== new — so correct
+// extraction is what guarantees the live build is never tagged (never expired).
+describe('kv_keys_handler — activeBuildId (#480)', () => {
+  const entriesJson = (b: string): string =>
+    JSON.stringify({ r0: '[]', meta: JSON.stringify({ b, bp: '/', v: 1 }) });
+
+  it('extracts meta.b from a stringified entries map', () => {
+    assert.equal(activeBuildId(entriesJson('ms2z0nnb-6eec9615')), 'ms2z0nnb-6eec9615');
+  });
+
+  it('returns undefined for undefined / empty input', () => {
+    assert.equal(activeBuildId(undefined), undefined);
+    assert.equal(activeBuildId(''), undefined);
+  });
+
+  it('returns undefined when there is no meta key', () => {
+    assert.equal(activeBuildId(JSON.stringify({ r0: '[]' })), undefined);
+  });
+
+  it('returns undefined when meta has no b', () => {
+    assert.equal(activeBuildId(JSON.stringify({ meta: JSON.stringify({ bp: '/' }) })), undefined);
+  });
+
+  it('returns undefined on malformed JSON (never throws)', () => {
+    assert.equal(activeBuildId('not json'), undefined);
+    assert.equal(activeBuildId(JSON.stringify({ meta: 'not json' })), undefined);
+  });
+
+  it('distinguishes old vs new build so only a real cutover triggers tagging', () => {
+    const oldB = activeBuildId(entriesJson('old-1111'));
+    const newB = activeBuildId(entriesJson('new-2222'));
+    assert.notEqual(oldB, newB);
+    // Same build on both sides → no cutover → handler must not tag.
+    assert.equal(activeBuildId(entriesJson('same-3333')), activeBuildId(entriesJson('same-3333')));
   });
 });
