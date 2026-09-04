@@ -14,5 +14,13 @@
       "import": "./client.js",
       "default": "./index.ts"
     }
+  },
+  "dependencies": {
+    "@playwright/test": "^1.62.1",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "concurrently": "^10.0.5",
+    "svelte": "^5.57.0",
+    "vite": "^8.2.2"
   }
 }

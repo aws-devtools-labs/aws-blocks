@@ -59,25 +59,25 @@
     "@aws-sdk/client-secrets-manager": "^3.700.0",
     "@aws-sdk/client-ssm": "^3.700.0",
     "@aws-sdk/signature-v4a": "^3.1069.0",
+    "@standard-schema/spec": "^1.1.0",
     "cross-spawn": "^7.0.6",
     "fast-glob": "^3.3.2",
     "jiti": "^2.4.0",
     "local-pkg": "^0.5.0",
     "parse-cache-control": "^1.0.1",
     "semver": "^7.6.0",
-    "zod": "^3.25.0",
-    "@standard-schema/spec": "^1.1.0"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^20.0.0",
     "@types/parse-cache-control": "^1.0.4",
     "@types/semver": "^7.5.8",
-    "esbuild": "^0.27.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.3.0"
   },
   "peerDependencies": {
-    "@opennextjs/aws": ">=3.10.0",
+    "@opennextjs/aws": "^4.1.4",
     "aws-cdk-lib": "^2.257.0",
     "constructs": "^10.6.0",
     "typescript": ">=5.3.0"
