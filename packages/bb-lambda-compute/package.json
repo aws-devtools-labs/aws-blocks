@@ -30,6 +30,10 @@
       "aws-runtime": "./dist/index.aws.js",
       "types": "./dist/index.mock.d.ts",
       "default": "./dist/index.mock.js"
+    },
+    "./cdk": {
+      "types": "./dist/index.cdk.d.ts",
+      "default": "./dist/index.cdk.js"
     }
   },
   "scripts": {

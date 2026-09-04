@@ -176,6 +176,27 @@ export function isConfigResolved(): boolean {
 }
 
 /**
+ * Sanitize a Blocks identifier into a valid config/env-var key segment:
+ * uppercase, with every non-alphanumeric character replaced by `_`.
+ *
+ * Config entries are loaded into `process.env` at runtime (see
+ * {@link loadConfigToProcessEnv}), so a key must be a valid env-var name. This
+ * is the single rule both sides of a key share: whoever *writes* a config key
+ * (`registerConfig(\`PREFIX_${sanitizeConfigKey(id)}\`, …)`) and whoever *reads*
+ * it (`getConfigSync(\`PREFIX_${sanitizeConfigKey(id)}\`)`) MUST go through this
+ * function so they reconstruct a byte-identical key — a hand-inlined variant
+ * that drifts silently misses the lookup at runtime.
+ *
+ * @example
+ * ```typescript
+ * registerConfig(this, `BLOCKS_QUEUE_URL_${sanitizeConfigKey(this.fullId)}`, url);
+ * ```
+ */
+export function sanitizeConfigKey(id: string): string {
+	return id.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+}
+
+/**
  * Reset the config cache. **For testing only.**
  */
 export function _resetConfigCache(): void {
