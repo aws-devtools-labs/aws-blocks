@@ -13,13 +13,22 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { FileBucket } from './index.cdk.js';
 
+// Minimal BlocksStack-shaped parent. The production code path uses BlocksStack,
+// which exposes the shared `executionRole` (blocks grant to it) plus `handler`,
+// both living inside a `cdk.Stack`. We reproduce them here so FileBucket can
+// call grantReadWrite(this.executionRole) and still synth into a real stack. It
+// also carries `defaults` — Building Blocks resolve `scope.defaults` by walking
+// up to the owning BlocksStack/BlocksBackend, falling back to
+// `globalThis.CURRENT_BLOCKS_STACK`, which is this stub in these tests.
 class StubBlocksStack extends cdk.Stack {
   public readonly handler: cdk.aws_lambda.Function;
   public readonly executionRole: cdk.aws_iam.IRole;
   public readonly id: string;
+  public defaults: BlocksDefaults = BlocksPresets.production;
   constructor(scope: Construct, id: string) {
     super(scope, id);
     this.id = id;
@@ -36,11 +45,12 @@ class StubBlocksStack extends cdk.Stack {
   }
 }
 
-function setup(): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
   const app = new cdk.App();
   // S3 bucket names must be lowercase. The default-mode FileBucket derives
   // its bucket name from the scope chain, so keep ids lowercase.
   const stack = new StubBlocksStack(app, 'teststack');
+  stack.defaults = defaults;
   const parent = new Scope('app');
   return { stack, parent };
 }
@@ -126,6 +136,36 @@ test('CDK: versioned:false opt-out disables versioning', () => {
   assert.strictEqual((props as any).VersioningConfiguration, undefined);
 });
 
+// ── Posture routed through BlocksDefaults (PR review comment C) ──────────────
+
+test('CDK: default FileBucket adopts the SANDBOX removal posture (DESTROY + autoDelete)', () => {
+  const { stack, parent } = setup(BlocksPresets.sandbox);
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  // DESTROY removal policy plus the auto-delete custom resource CDK wires in
+  // only when autoDeleteObjects is true.
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+});
+
+test('CDK: default FileBucket adopts the PRODUCTION removal posture (RETAIN, no autoDelete)', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 0);
+});
+
+test('CDK: per-block removalPolicy overrides the resolved default', () => {
+  const { stack, parent } = setup(BlocksPresets.production);
+  new FileBucket(parent, 'uploads', { removalPolicy: 'destroy' });
+  const template = Template.fromStack(stack);
+  // Per-block 'destroy' wins over the production RETAIN default and enables
+  // autoDeleteObjects alongside it.
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Delete' });
+  template.resourceCountIs('Custom::S3AutoDeleteObjects', 1);
+});
+
 test('CDK: accessLogging provisions a locked-down log bucket with lifecycle + logging config', () => {
   const { stack, parent } = setup();
   new FileBucket(parent, 'uploads', { accessLogging: true });
@@ -161,12 +201,13 @@ test('CDK: accessLogging provisions a locked-down log bucket with lifecycle + lo
     (mainEntry[1].Properties as any).LoggingConfiguration,
     { DestinationBucketName: { Ref: logLogicalId }, LogFilePrefix: 'access-logs/' },
   );
-  // Log bucket expires access logs after the default retention (90 days).
+  // Log bucket expires access logs after the framework logRetention default
+  // (production preset => ONE_YEAR => 365 days).
   assert.ok(
     ((logResource.Properties as any).LifecycleConfiguration.Rules as any[]).some(
-      (r) => r.ExpirationInDays === 90 && r.Status === 'Enabled',
+      (r) => r.ExpirationInDays === 365 && r.Status === 'Enabled',
     ),
-    'log bucket must expire access logs after 90 days',
+    'log bucket must expire access logs after the production logRetention (365 days)',
   );
   // Log bucket blocks all public access.
   assert.deepStrictEqual((logResource.Properties as any).PublicAccessBlockConfiguration, {
@@ -177,66 +218,183 @@ test('CDK: accessLogging provisions a locked-down log bucket with lifecycle + lo
   });
 });
 
-test('CDK: accessLogging honors custom logRetentionDays', () => {
-  const { stack, parent } = setup();
-  new FileBucket(parent, 'uploads', { accessLogging: true, logRetentionDays: 7 });
+test('CDK: accessLogging resolves from defaults — a preset opting in creates the log bucket with no per-block option', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.production, accessLogging: true });
+  new FileBucket(parent, 'uploads');
   const template = Template.fromStack(stack);
-  template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
-    LifecycleConfiguration: Match.objectLike({
-      Rules: Match.arrayWith([
-        Match.objectLike({ ExpirationInDays: 7, Status: 'Enabled' }),
-      ]),
-    }),
-  }));
+  // No per-block accessLogging option, yet the resolved default enables it.
+  template.resourceCountIs('AWS::S3::Bucket', 2);
 });
 
-test('CDK: logRetentionDays of 0 throws at synth', () => {
-  const { parent } = setup();
-  assert.throws(
-    () => new FileBucket(parent, 'uploads', { accessLogging: true, logRetentionDays: 0 }),
-    (err: unknown) =>
-      err instanceof Error &&
-      /logRetentionDays must be a positive integer/.test(err.message) &&
-      /got 0/.test(err.message),
+test('CDK: access-log lifecycle expiration equals Duration.days(defaults.logRetention) — sandbox = 7', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.sandbox, accessLogging: true });
+  new FileBucket(parent, 'uploads', { removalPolicy: 'retain' });
+  const template = Template.fromStack(stack);
+  // The per-block 'retain' override wins over the sandbox DESTROY default: the
+  // main bucket is retained on teardown.
+  template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
+  const buckets = template.findResources('AWS::S3::Bucket');
+  const logEntry = Object.values(buckets).find(
+    (r) => (r.Properties as any).BucketName === undefined,
+  );
+  assert.ok(logEntry, 'expected a log bucket');
+  assert.ok(
+    ((logEntry!.Properties as any).LifecycleConfiguration.Rules as any[]).some(
+      (r) => r.ExpirationInDays === 7 && r.Status === 'Enabled',
+    ),
+    'log bucket must expire access logs after the sandbox logRetention (ONE_WEEK = 7 days)',
   );
 });
 
-test('CDK: negative logRetentionDays throws at synth', () => {
-  const { parent } = setup();
-  assert.throws(
-    () => new FileBucket(parent, 'uploads', { accessLogging: true, logRetentionDays: -1 }),
-    (err: unknown) =>
-      err instanceof Error &&
-      /logRetentionDays must be a positive integer/.test(err.message) &&
-      /got -1/.test(err.message),
-  );
-});
-
-test('CDK: non-integer logRetentionDays throws at synth', () => {
-  const { parent } = setup();
-  assert.throws(
-    () => new FileBucket(parent, 'uploads', { accessLogging: true, logRetentionDays: 1.5 }),
-    (err: unknown) =>
-      err instanceof Error &&
-      /logRetentionDays must be a positive integer/.test(err.message),
-  );
-});
-
-test('CDK: logRetentionDays is ignored (no throw) when accessLogging is off', () => {
-  const { parent } = setup();
-  // Without accessLogging the value is inert, so a non-positive value must
-  // NOT fail synth — there is no lifecycle to make degenerate.
-  assert.doesNotThrow(
-    () => new FileBucket(parent, 'uploads', { logRetentionDays: 0 }),
-  );
-});
-
-test('CDK: no access-log bucket is created when accessLogging is off', () => {
+test('CDK: no access-log bucket is created when accessLogging resolves false', () => {
   const { stack, parent } = setup();
   new FileBucket(parent, 'uploads');
   const template = Template.fromStack(stack);
   template.resourceCountIs('AWS::S3::Bucket', 1);
 });
+
+test('CDK: logRetention INFINITE omits the access-log lifecycle rule (logs kept indefinitely)', () => {
+  const { stack, parent } = setup({
+    ...BlocksPresets.production,
+    logRetention: RetentionDays.INFINITE,
+    accessLogging: true,
+  });
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  // Main bucket + log bucket both exist.
+  template.resourceCountIs('AWS::S3::Bucket', 2);
+  // The access-LOG bucket (the one without a derived BucketName) must carry NO
+  // LifecycleConfiguration at all — INFINITE means "never expire", so the rule
+  // is omitted rather than emitted at a spurious 9999-day expiry.
+  const buckets = template.findResources('AWS::S3::Bucket');
+  const logEntry = Object.values(buckets).find(
+    (r) => (r.Properties as any).BucketName === undefined,
+  );
+  assert.ok(logEntry, 'expected a log bucket');
+  assert.strictEqual(
+    (logEntry!.Properties as any).LifecycleConfiguration,
+    undefined,
+    'INFINITE logRetention must omit the access-log LifecycleConfiguration entirely',
+  );
+});
+
+test('CDK: per-block accessLogging:false overrides a defaults-enabled preset (?? treats explicit false as non-nullish)', () => {
+  const { stack, parent } = setup({ ...BlocksPresets.production, accessLogging: true });
+  new FileBucket(parent, 'uploads', { accessLogging: false });
+  const template = Template.fromStack(stack);
+  // Defaults opt logging in, but the explicit per-block `false` wins: only the
+  // main bucket is provisioned, no dedicated access-log bucket.
+  template.resourceCountIs('AWS::S3::Bucket', 1);
+});
+
+// ── Noncurrent-version expiration (PR review comment A) ──────────────────────
+
+test('CDK: versioned bucket expires noncurrent versions after the default 90 days', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads');
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
+    VersioningConfiguration: { Status: 'Enabled' },
+    LifecycleConfiguration: Match.objectLike({
+      Rules: Match.arrayWith([
+        Match.objectLike({
+          NoncurrentVersionExpiration: { NoncurrentDays: 90 },
+          Status: 'Enabled',
+        }),
+      ]),
+    }),
+  }));
+});
+
+test('CDK: noncurrentVersionExpirationDays is honored', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { noncurrentVersionExpirationDays: 30 });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::S3::Bucket', Match.objectLike({
+    LifecycleConfiguration: Match.objectLike({
+      Rules: Match.arrayWith([
+        Match.objectLike({ NoncurrentVersionExpiration: { NoncurrentDays: 30 } }),
+      ]),
+    }),
+  }));
+});
+
+test('CDK: noncurrentVersionExpirationDays of 0 throws at synth', () => {
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { noncurrentVersionExpirationDays: 0 }),
+    (err: unknown) =>
+      err instanceof Error &&
+      /noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+      /got 0/.test(err.message),
+  );
+});
+
+test('CDK: negative noncurrentVersionExpirationDays throws at synth', () => {
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { noncurrentVersionExpirationDays: -1 }),
+    (err: unknown) =>
+      err instanceof Error &&
+      /noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+      /got -1/.test(err.message),
+  );
+});
+
+test('CDK: non-integer noncurrentVersionExpirationDays throws at synth', () => {
+  const { parent } = setup();
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { noncurrentVersionExpirationDays: 1.5 }),
+    (err: unknown) =>
+      err instanceof Error &&
+      /noncurrentVersionExpirationDays must be a positive integer/.test(err.message),
+  );
+});
+
+test('CDK: versioned:false bucket has NO noncurrent-version expiration rule', () => {
+  const { stack, parent } = setup();
+  new FileBucket(parent, 'uploads', { versioned: false });
+  const template = Template.fromStack(stack);
+  const buckets = template.findResources('AWS::S3::Bucket');
+  const props = (Object.values(buckets)[0].Properties ?? {}) as any;
+  const rules: any[] = props.LifecycleConfiguration?.Rules ?? [];
+  assert.ok(
+    !rules.some((r) => r.NoncurrentVersionExpiration !== undefined),
+    'a non-versioned bucket must not carry a noncurrent-version expiration rule',
+  );
+});
+
+test('CDK: noncurrentVersionExpirationDays FORMAT is validated even when versioned:false', () => {
+  // The format guard is decoupled from the `versioned` gate: a malformed value
+  // must fail loudly at synth regardless of whether versioning is on, rather
+  // than being silently ignored because the rule would not be applied.
+  for (const bad of [0, -1, 1.5]) {
+    const { parent } = setup();
+    assert.throws(
+      () => new FileBucket(parent, 'uploads', { versioned: false, noncurrentVersionExpirationDays: bad }),
+      (err: unknown) =>
+        err instanceof Error &&
+        /noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+        new RegExp(`got ${bad}`).test(err.message),
+      `versioned:false with noncurrentVersionExpirationDays=${bad} must throw at synth`,
+    );
+  }
+});
+
+test('CDK: versioned:false with NO noncurrent option does not throw and adds no noncurrent rule', () => {
+  const { stack, parent } = setup();
+  assert.doesNotThrow(() => new FileBucket(parent, 'uploads', { versioned: false }));
+  const template = Template.fromStack(stack);
+  const buckets = template.findResources('AWS::S3::Bucket');
+  const props = (Object.values(buckets)[0].Properties ?? {}) as any;
+  const rules: any[] = props.LifecycleConfiguration?.Rules ?? [];
+  assert.ok(
+    !rules.some((r) => r.NoncurrentVersionExpiration !== undefined),
+    'versioned:false with no noncurrent option must add no noncurrent-version expiration rule',
+  );
+});
+
+// ── CORS synth guard (unchanged behavior) ───────────────────────────────────
 
 test('CDK: wildcard-origin CORS with a mutating method throws at synth', () => {
   const { parent } = setup();
