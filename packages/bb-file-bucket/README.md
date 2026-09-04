@@ -33,12 +33,16 @@ const bucket = new FileBucket(scope, id, options?)
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `versioned` | `boolean` | Enable S3 object versioning. Default: `false`. |
-| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. |
+| `versioned` | `boolean` | Enable S3 object versioning. **Default: `true`.** Pass `versioned: false` to opt out. Note: the version-aware method typings (`versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings. |
+| `noncurrentVersionExpirationDays` | `number` | Days after which **noncurrent** (superseded) object versions are permanently expired, bounding the storage cost that versioning would otherwise let grow unbounded. Only applies when versioning is enabled (the default). **Default: `90`.** Must be a positive integer — a non-positive or non-integer value throws at synth. There is no disable sentinel; to drop the rule entirely, disable versioning (`versioned: false`). Ignored by the mock and browser runtimes. |
+| `corsRules` | `CorsRule[]` | CORS rules for browser-based access. See [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
+| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.accessLogging`)** when omitted — so a production-postured stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
-| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, CDK's default (RETAIN) applies; pass `'destroy'` for sandbox / ephemeral stacks. Ignored by the mock and browser runtimes. |
+| `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
+
+All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
 ### PutOptions
 
@@ -59,6 +63,8 @@ CORS configuration for browser-based access. Supplied via the `corsRules` option
 | `allowedHeaders` | `string[]` | Optional. Request headers permitted in the actual request. |
 | `exposedHeaders` | `string[]` | Optional. Response headers exposed to the browser. |
 | `maxAge` | `number` | Optional. Seconds the browser may cache the preflight response. |
+
+> **Wildcard origins and mutating methods:** a CORS rule that combines a wildcard origin (`'*'`) with a mutating method (`PUT`, `POST`, or `DELETE`) **throws at synth** — it would let any site issue state-changing cross-origin requests. Specify explicit origins (e.g. `['https://app.example.com']`) for mutating methods. A wildcard origin with only safe methods (`GET`/`HEAD`) is allowed.
 
 ### LifecycleRule
 
@@ -186,6 +192,8 @@ const bucket = new FileBucket(scope, 'legacy', {
 
 ### Versioned Bucket
 
+Versioning is **on by default**, so the version-aware methods (`listVersions`, `restoreVersion`, and optional `versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are available without any option. Pass `versioned: false` to opt out (which also removes the `versionId` option typings). The example below passes `versioned: true` explicitly for clarity:
+
 ```typescript
 const bucket = new FileBucket(scope, 'docs', { versioned: true });
 
@@ -205,6 +213,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+### Access Logging
+
+Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
+
+```typescript
+// Logs delivered to a separate locked-down bucket.
+// Retention follows the stack posture's logRetention default — not a per-block option.
+const bucket = new FileBucket(scope, 'uploads', {
+  accessLogging: true,
+});
+```
+
 ## Best Practices
 
 - Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`). If a segment can contain URL-shaped or special characters (e.g. an OIDC `userId` of `${iss}:${sub}` like `https://issuer:sub`), wrap it in `encodeURIComponent()` first — the local mock normalizes `//` in keys via the filesystem, so an un-encoded `//` makes `scan({ prefix })` miss the file locally even though it works against S3.
@@ -213,6 +233,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 - Prefer `scan({ prefix })` over unscoped `scan()` to limit enumeration cost
 - For browser uploads/downloads returned from API methods, prefer `createUploadHandle`/`getFileHandle` over raw presigned URLs — they encode the fetch protocol into typed methods so the client can't misuse them
 - Use `deleteBatch()` instead of looping `delete()` for bulk operations
+- Versioning is **on by default**; noncurrent (superseded) versions are automatically expired after **90 days** (`noncurrentVersionExpirationDays`, default `90`) so version history doesn't grow storage cost unbounded. Tune the window per-block, or disable versioning (`versioned: false`) to drop the expiration rule along with versioning.
 
 ## Scaling & Cost (AWS)
 

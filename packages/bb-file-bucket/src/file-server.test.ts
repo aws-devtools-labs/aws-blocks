@@ -49,6 +49,28 @@ afterEach(() => {
 	server.close();
 });
 
+
+// ── CORS headers ────────────────────────────────────────────────────────────
+
+describe('file-server: CORS headers', () => {
+	test('OPTIONS preflight does NOT send Access-Control-Allow-Credentials', async () => {
+		// Reflecting an arbitrary Origin together with credentials:true is an
+		// unsafe combination; the dev server must not advertise credentialed CORS.
+		const res = await fetch(`http://localhost:${port}/.bb-file-bucket/fsrv-cors/ping.txt`, {
+			method: 'OPTIONS',
+			headers: { Origin: 'https://evil.example.com' },
+		});
+		assert.strictEqual(res.status, 200);
+		assert.strictEqual(
+			res.headers.get('access-control-allow-credentials'),
+			null,
+			'dev server must not send Access-Control-Allow-Credentials',
+		);
+		// The other CORS headers remain intact.
+		assert.strictEqual(res.headers.get('access-control-allow-origin'), 'https://evil.example.com');
+		assert.ok(res.headers.get('access-control-allow-methods'));
+	});
+});
 // ── Basic presigned URL round-trip ──────────────────────────────────────────
 
 describe('file-server: basic GET/PUT', () => {

@@ -1,0 +1,14 @@
+---
+"@aws-blocks/bb-file-bucket": minor
+---
+
+`FileBucket`: secure-by-default hardening. Several of these are **behavior/breaking changes** for existing consumers — because the package is pre-1.0 (0.x), this ships as a `minor` bump per the changesets convention that a `minor` signals a breaking change before 1.0.
+
+- **TLS enforced unconditionally.** Every provisioned bucket now sets `enforceSSL: true`, attaching a bucket policy that denies any request where `aws:SecureTransport` is `false`. Not configurable.
+- **Versioning defaults ON.** `versioned` now defaults to `true`; opt out with the literal `versioned: false`. **Breaking:** buckets that were previously non-versioned by default now enable versioning (prior versions accrue storage cost). The non-versioned option typings (no `versionId`) are selected only by the literal `versioned: false`; a non-literal `boolean` or an absent value resolves to the versioned-aware typings.
+- **Opt-in server access logging routed through stack posture.** New `accessLogging` option; when not set per-block it falls back to the stack `BlocksDefaults.accessLogging`. When enabled, a dedicated, locked-down log bucket (all public access blocked, S3-managed encryption, SSL enforced) receives the main bucket's access logs under the `access-logs/` prefix.
+- **Access-log retention follows the stack posture's `logRetention`.** Log expiration now derives from `BlocksDefaults.logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps logs indefinitely) instead of a per-block day count. **Breaking (within this unmerged PR):** the per-block `logRetentionDays` option has been **removed** — access-log retention is no longer configured per-block.
+- **Removal policy routed through stack posture.** `removalPolicy` still accepts an explicit per-block `'destroy'|'retain'`; when omitted it now falls back to `BlocksDefaults.removalPolicy` (`DESTROY` in sandbox, `RETAIN` in production), replacing the previous `sandboxMode`-context behavior.
+- **New `noncurrentVersionExpirationDays` option** (default `90`). With versioning on (the default), noncurrent object versions are automatically expired after this many days to bound the storage cost that versioning would otherwise let grow unbounded. Must be a positive integer — a non-positive or non-integer value throws at synth. Disable versioning (`versioned: false`) to drop the rule entirely.
+- **Removed `Access-Control-Allow-Credentials: true`** from the local dev file-server's CORS response headers (it should never have been sent for anonymous, token-scoped presigned-URL access).
+- **Wildcard-CORS + mutating method now throws at synth.** A CORS rule combining a wildcard origin (`'*'`) with a mutating method (`PUT`/`POST`/`DELETE`) is rejected at synth with an actionable error. **Breaking:** such rules previously deployed unchallenged. Specify explicit origins for mutating methods; wildcard + `GET`/`HEAD` remains allowed.

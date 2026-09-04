@@ -96,7 +96,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		if (!options?.bucket) validateBucketName(this.fullId);
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.dataDir = getMockDataDir(this);
-		this.versioned = options?.versioned ?? false;
+		this.versioned = options?.versioned ?? true;
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
 		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
 		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${this.fullId}` });
