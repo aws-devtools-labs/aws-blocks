@@ -82,6 +82,43 @@ export async function productionStackIsUpdatable(stackName: string): Promise<boo
   }
 }
 
+/**
+ * Resolve whether the production deploy should pass `--revert-drift`.
+ *
+ * Fail-safe end to end: ANY error while determining the stack — stack-NAME
+ * resolution (a committed `.blocks/config.json` with no `stackId`), the
+ * DescribeStacks call, a missing SDK, etc. — yields `false`, so the deploy
+ * proceeds WITHOUT drift reconciliation rather than failing. `--revert-drift`
+ * is only ever valid on an UPDATE change set anyway, so losing it for one run
+ * is strictly safer than aborting the deploy.
+ *
+ * The ENTIRE determination is wrapped here (outside {@link productionStackIsUpdatable},
+ * whose own try/catch only guards the DescribeStacks call): both the stack-NAME
+ * resolution — {@link getStackName} throws at the call site when `stackId` is
+ * absent, a throw that previously killed the whole production deploy before any
+ * `cdk deploy` ran — and the updatable check itself (`return await`, so a
+ * rejection there is caught here too).
+ *
+ * `resolveStackName` is injectable purely as a unit-test seam (its default is
+ * the real {@link getStackName}); tests pass a throwing resolver to prove the
+ * throw path is non-fatal without touching AWS.
+ */
+export async function shouldRevertDrift(
+  projectRoot: string,
+  resolveStackName: (projectRoot: string) => string = (p) => getStackName({ sandbox: false, projectRoot: p }),
+): Promise<boolean> {
+  try {
+    const stackName = resolveStackName(projectRoot);
+    return await productionStackIsUpdatable(stackName);
+  } catch (e) {
+    // Distinct from productionStackIsUpdatable's internal "could not determine
+    // whether stack ... exists" warn: here the determination itself failed
+    // (e.g. we never learned the stack NAME to ask about).
+    console.warn(`  ⚠️  could not resolve the production stack for --revert-drift (${e instanceof Error ? e.message : String(e)}); skipping --revert-drift`);
+    return false;
+  }
+}
+
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     console.log('🏗️  Preparing deployment...');
@@ -137,8 +174,7 @@ export async function deploy(options: DeployOptions) {
       // (not REVIEW_IN_PROGRESS/ROLLBACK_COMPLETE/DELETE_*, which still deploy as
       // CREATE) so the first deploy succeeds and later deploys still reconcile
       // dev-loop drift.
-      const stackName = getStackName({ sandbox: false, projectRoot: options.projectRoot });
-      const revertDrift = await productionStackIsUpdatable(stackName);
+      const revertDrift = await shouldRevertDrift(options.projectRoot);
       await runStreaming(
         "npx",
         buildCdkDeployArgs({

@@ -19,7 +19,7 @@ import {
   type OutputSink,
   type SignalRegistry,
 } from './deploy-stream.js';
-import { isUpdatableStackStatus } from './deploy.js';
+import { isUpdatableStackStatus, shouldRevertDrift } from './deploy.js';
 
 const isWindows = process.platform === 'win32';
 // The end-to-end signal tests below deliver a *process-group* signal
@@ -787,6 +787,33 @@ describe('isUpdatableStackStatus — only an UPDATE-bound status enables --rever
     // broadened startsWith('ROLLBACK_') exclusion must NOT catch them.
     assert.strictEqual(isUpdatableStackStatus('UPDATE_ROLLBACK_FAILED'), true);
     assert.strictEqual(isUpdatableStackStatus('IMPORT_COMPLETE'), true);
+  });
+});
+
+// ── revert-drift gating is fail-safe against stack-NAME resolution too ──────
+// The regression from PR #489: gating --revert-drift meant the production path
+// began resolving the stack name via getStackName(), which THROWS when the
+// committed .blocks/config.json has no stackId (e.g. a telemetry-only test-app
+// config). That throw is at the call site — OUTSIDE productionStackIsUpdatable's
+// try/catch, which only wraps DescribeStacks — so it killed the whole prod
+// deploy before any `cdk deploy` ran. shouldRevertDrift wraps the name
+// resolution too, so ANY gate error (name resolution included) yields false and
+// the deploy proceeds. The injectable resolver is the cast-free unit seam: a
+// throwing resolver exercises exactly that branch without touching AWS.
+describe('shouldRevertDrift — a stack-name resolution throw is non-fatal', () => {
+  it('returns false (never rejects) when the stack-name resolver throws', async () => {
+    let called = false;
+    const throwingResolver = (): string => {
+      called = true;
+      throw new Error('.blocks/config.json not found or missing stackId — telemetry-only config');
+    };
+    // Must resolve to false, not reject: a throw here previously aborted the deploy.
+    const result = await shouldRevertDrift('/some/project/root', throwingResolver);
+    assert.strictEqual(result, false, 'a throwing stack-name resolver must yield revertDrift=false, not a rejection');
+    assert.ok(called, 'the injected resolver must have been the throw source (no real AWS/getStackName call)');
+    // Note: the success branch (resolver returns a name) deliberately hits
+    // DescribeStacks and is left to integration coverage — this unit test proves
+    // only the throw→false branch and never touches AWS/network.
   });
 });
 
