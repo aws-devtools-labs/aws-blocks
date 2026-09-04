@@ -702,10 +702,9 @@ export class Hosting extends Construct {
       monitoring: props.monitoring
         ? {
             ...props.monitoring,
-            // Forward cloudFrontAlarm through as-is: undefined inherits the
-            // L3 default ('usEast1Stack'). To change the Blocks-app default
-            // to 'skip' later, replace the fallback on the next line.
-            cloudFrontAlarm: props.monitoring.cloudFrontAlarm ?? undefined,
+            // cloudFrontAlarm flows through the spread as-is: undefined inherits
+            // the L3 default ('usEast1Stack'). To change the Blocks-app default
+            // to 'skip' later, set it explicitly here.
           }
         : undefined,
       skewProtection: props.skewProtection,

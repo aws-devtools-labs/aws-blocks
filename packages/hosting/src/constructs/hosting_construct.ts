@@ -1218,6 +1218,9 @@ export class HostingConstruct extends Construct {
               `monitoring.cloudFrontAlarm: 'skip' to omit the CloudFront alarm.`,
           });
         } else {
+          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+          // than synthesize a mis-scoped us-east-1 support stack.
           const stage = Stage.of(this);
           if (!stage) {
             throw new HostingError('MonitoringStageRequiredError', {
