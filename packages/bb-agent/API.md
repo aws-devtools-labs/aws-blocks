@@ -198,6 +198,8 @@ export interface Message {
 // @public (undocumented)
 export interface ModelConfig {
     apiKey?: string | (() => Promise<string>);
+    // Warning: (ae-forgotten-export) The symbol "CacheConfig" needs to be exported by the entry point index.aws.d.ts
+    cacheConfig?: CacheConfig;
     // (undocumented)
     endpoint?: string;
     // Warning: (ae-forgotten-export) The symbol "GuardrailsConfig" needs to be exported by the entry point index.aws.d.ts

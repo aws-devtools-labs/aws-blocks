@@ -1466,6 +1466,19 @@ describe('BedrockModels presets', () => {
 		const model = await createStrandsModel(BedrockModels.BALANCED);
 		assert.ok(model, 'should create a model instance');
 	});
+
+	test('cacheConfig flows through createStrandsModel to BedrockModel', async () => {
+		const model = await createStrandsModel({ ...BedrockModels.BALANCED, cacheConfig: { strategy: 'auto' } });
+		assert.ok(model, 'should create a model instance');
+		const config = (model as { getConfig(): { cacheConfig?: { strategy: string } } }).getConfig();
+		assert.deepStrictEqual(config.cacheConfig, { strategy: 'auto' }, 'cacheConfig should reach the BedrockModel');
+	});
+
+	test('omitting cacheConfig leaves caching off', async () => {
+		const model = await createStrandsModel(BedrockModels.BALANCED);
+		const config = (model as { getConfig(): { cacheConfig?: { strategy: string } } }).getConfig();
+		assert.strictEqual(config.cacheConfig, undefined, 'caching should be off by default');
+	});
 });
 
 describe('OllamaModels presets', () => {
