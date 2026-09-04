@@ -7,6 +7,8 @@ import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Scope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
@@ -82,6 +84,22 @@ export class AsyncJob<T = unknown> extends Scope {
 		const maxBatchingWindowSeconds = options.maxBatchingWindowSeconds ?? 5;
 		validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 
+		// The queue is consumed by an SQS event source on the compute's own
+		// Lambda, so a AsyncJob currently requires a Lambda compute. Other
+		// compute types need a different consumption path (e.g. runtime polling)
+		// that does not exist yet — fail loud at synth rather than provision a
+		// queue nothing consumes (submitted jobs would silently pile up). The
+		// CronJob and Realtime blocks add the same guard in this change. The brand
+		// check (not `instanceof`) survives duplicate bb-lambda-compute copies in
+		// one dependency tree.
+		const compute = this.compute;
+		if (!LambdaCompute.isLambdaCompute(compute)) {
+			throw blocksError(
+				AsyncJobErrors.UnsupportedCompute,
+				`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`,
+			);
+		}
+
 		this.dlq = new Queue(this, 'dlq', {
 			queueName: `${this.fullId}-dlq`.substring(0, 80),
 			retentionPeriod: Duration.days(14),
@@ -112,18 +130,26 @@ export class AsyncJob<T = unknown> extends Scope {
 			enforceSSL: true,
 		});
 
-		this.queue.grantSendMessages(this.handler);
-		registerConfig(
-			this,
-			`BLOCKS_QUEUE_URL_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
-			this.queue.queueUrl
-		);
+		this.queue.grantSendMessages(this.executionRole);
+		// Config entries load into `process.env` at runtime (loadConfigToProcessEnv),
+		// so keys must be valid env var names. `sanitizeConfigKey` is the single
+		// shared rule the runtime reader must also use, so the writer and reader
+		// reconstruct a byte-identical key (see index.aws.ts).
+		const idKey = sanitizeConfigKey(this.fullId);
+		registerConfig(this, `BLOCKS_QUEUE_URL_${idKey}`, this.queue.queueUrl);
+		// Phase-2 owner-match seam: records which compute owns this handler. Nothing
+		// reads it until the container poller lands; same sanitized key so that
+		// future reader matches.
+		registerConfig(this, `BLOCKS_HANDLER_OWNER_${idKey}`, compute.fullId);
 
+		// The event source attaches to the compute's own function (guaranteed a
+		// Lambda compute by the guard above).
+		//
 		// Partial batch responses MUST stay on for any batchSize > 1: without them a
 		// single failing record makes SQS treat the whole batch as handled and delete
 		// every message in it (silent loss). The runtime handler already returns
 		// `{ batchItemFailures }`, so this is never configurable.
-		this.handler.addEventSource(
+		compute.fn.addEventSource(
 			new SqsEventSource(this.queue, {
 				batchSize,
 				reportBatchItemFailures: true,

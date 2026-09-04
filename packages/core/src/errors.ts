@@ -79,6 +79,27 @@ export function isBlocksError<N extends string>(e: unknown, name: N): e is Error
 }
 
 /**
+ * Build a named `Error` whose `name` is a BB error constant, so it is matchable
+ * with {@link isBlocksError} on both server and client. The name is also
+ * prefixed into the message for readable logs.
+ *
+ * This is the producer half of the {@link isBlocksError} contract: throw via
+ * this helper so the `name` a consumer matches on is set consistently. It has
+ * no runtime dependencies, so it is safe to use in every bundle — mock,
+ * aws-runtime, and CDK synth.
+ *
+ * @example
+ * ```typescript
+ * throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'Key already exists');
+ * ```
+ */
+export function blocksError(name: string, message: string): Error {
+	const err = new Error(`${name}: ${message}`);
+	err.name = name;
+	return err;
+}
+
+/**
  * Type guard for branching on a failed `AuthState` (the recommended
  * `setAuthState` client path) by its structured `errorName`.
  *
