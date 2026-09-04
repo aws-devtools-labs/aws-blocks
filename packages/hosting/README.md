@@ -335,6 +335,44 @@ phases around the deploy:
    (`app.example.com`) to the `DistributionDomainName` value. For an apex
    domain, use an ALIAS or ANAME record if your provider supports it.
 
+## Off-region CloudFront alarm parity
+
+AWS CloudFront metrics only publish in `us-east-1`. A CloudWatch alarm
+can only evaluate a metric in its own region, so the CloudFront 5xx
+alarm cannot be placed in a non-`us-east-1` hosting stack.
+
+When `HostingConstruct` detects that the stack's region is **not**
+`us-east-1` it automatically synthesizes a companion stack named
+`<stackName>-CfMonitoring` pinned to `us-east-1`. That stack:
+
+- creates its own encrypted SNS topic (the alarm action target),
+- wires the CloudFront 5xx rate alarm to that topic, and
+- emits a `MonitoringTopicArnUsEast1` CloudFormation output so operators
+  can subscribe their on-call pipeline to it.
+
+> **Requirement:** because the companion stack is region-pinned you must
+> set `env: { account, region }` on the parent hosting stack when
+> deploying outside `us-east-1`, exactly as you would for a WAF stack
+> (see `waf_construct.ts`). An unresolved (`Token.isUnresolved`) region
+> is left to the CDK to resolve at deploy time.
+
+To opt out — for example in a region where the CloudFront distribution
+is managed separately — set `monitoring.cloudFrontAlarm: 'skip'`. The
+construct emits a CDK warning and omits the alarm entirely.
+
+```ts
+new HostingConstruct(this, 'Hosting', {
+  // ...
+  monitoring: {
+    cloudFrontAlarm: 'skip', // suppress the us-east-1 companion stack
+  },
+});
+```
+
+The default value (`'usEast1Stack'`) creates the companion stack. In
+`us-east-1` no companion stack is created — the alarm stays local.
+
+
 ## Development
 
 ```bash

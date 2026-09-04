@@ -165,6 +165,49 @@ void describe('MonitoringConstruct', () => {
       // No alarm at all because no distribution / Lambda / DLQ given.
       template.resourceCountIs('AWS::CloudWatch::Alarm', 0);
     });
+
+    // Issue #481: off-region, the CloudFront alarm is deferred to a
+    // us-east-1 support stack by the parent instead of created here.
+    void it('is deferred (not created locally) when createCloudFrontAlarmLocally is false', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // No AWS/CloudFront alarm was created in this (regional) stack.
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
+    });
+
+    void it('still creates the regional alarms (SSR/image/DLQ) when the CF alarm is deferred', () => {
+      const stack = createStack();
+      const m = new MonitoringConstruct(stack, 'Monitoring', {
+        enabled: true,
+        distribution: newDistribution(stack),
+        ssrFunction: newLambda(stack, 'Ssr'),
+        imageFunction: newLambda(stack, 'Img'),
+        revalidationDlq: new Queue(stack, 'Dlq'),
+        createCloudFrontAlarmLocally: false,
+      });
+      const template = Template.fromStack(stack);
+
+      assert.strictEqual(m.cloudFrontAlarmDeferred, true);
+      // 4 regional alarms (2 SSR + 1 image + 1 DLQ); the CF alarm is deferred.
+      template.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+      assert.strictEqual(m.alarms.length, 4);
+      template.resourcePropertiesCountIs(
+        'AWS::CloudWatch::Alarm',
+        Match.objectLike({ Namespace: 'AWS/CloudFront' }),
+        0,
+      );
+    });
   });
 
   void describe('SSR Lambda alarms', () => {

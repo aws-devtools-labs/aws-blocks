@@ -351,6 +351,29 @@ export type HostingProps = {
      * is created.
      */
     snsTopicArn?: string;
+    /**
+     * How to handle the CloudFront 5xx alarm when the hosting stack is
+     * NOT in us-east-1.
+     *
+     * `AWS/CloudFront` metrics are published only in us-east-1, and a
+     * CloudWatch alarm can only evaluate a metric in its own region, so
+     * an off-region stack cannot host a working CloudFront alarm.
+     *
+     *  - `'usEast1Stack'` (default): synthesize a small hosting-owned
+     *    us-east-1 support stack that holds the alarm and its own SNS
+     *    topic. The topic ARN is surfaced as the `MonitoringTopicArnUsEast1`
+     *    CloudFormation output for the operator to subscribe to (in
+     *    addition to the regional `MonitoringTopicArn`). This REQUIRES an
+     *    explicit `env: { account, region }` on the stack — an
+     *    env-agnostic stack cannot create a second-region stack.
+     *  - `'skip'`: do not create the CloudFront alarm off-region; a synth
+     *    warning is emitted instead. No second stack; works env-agnostic.
+     *
+     * Ignored when the stack is already in us-east-1 (the alarm is created
+     * locally in the single regional stack, unchanged).
+     * @default 'usEast1Stack'
+     */
+    cloudFrontAlarm?: 'usEast1Stack' | 'skip';
   };
 
   /**

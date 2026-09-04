@@ -10,6 +10,8 @@ import {
   RemovalPolicy,
   Size,
   Stack,
+  Stage,
+  Token,
 } from 'aws-cdk-lib';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
@@ -52,6 +54,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
+import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
@@ -320,6 +323,17 @@ export type HostingConstructProps = {
     /** @default true */
     enabled?: boolean;
     snsTopicArn?: string;
+    /**
+     * How to handle the CloudFront 5xx alarm when this stack is not in
+     * us-east-1. CloudFront metrics only exist in us-east-1 and an alarm
+     * can't watch a metric cross-region (issue #481).
+     *  - 'usEast1Stack' (default): place the alarm in a hosting-owned
+     *    us-east-1 support stack (requires env: { account, region }).
+     *  - 'skip': omit the CloudFront alarm off-region (emit a warning).
+     * Ignored when the stack is already in us-east-1.
+     * @default 'usEast1Stack'
+     */
+    cloudFrontAlarm?: 'usEast1Stack' | 'skip';
   };
   /**
    * Cookie-based skew protection.
@@ -1150,6 +1164,15 @@ export class HostingConstruct extends Construct {
           : undefined;
       const ssrFn = ssrComputeName ? this.computeFunctions.get(ssrComputeName) : undefined;
       const imgFn = this.computeFunctions.get('image-optimization');
+
+      // CloudFront metrics only exist in us-east-1 and an alarm can't
+      // watch a metric cross-region (issue #481). Off-region, defer the
+      // CloudFront alarm to a dedicated us-east-1 support stack.
+      const hostingStack = Stack.of(this);
+      const region = hostingStack.region;
+      const regionResolved = !Token.isUnresolved(region);
+      const offRegion = regionResolved && region !== 'us-east-1';
+
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
         snsTopic: userTopic,
@@ -1159,6 +1182,7 @@ export class HostingConstruct extends Construct {
         ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
         imageFunction: imgFn instanceof LambdaFunction ? imgFn : undefined,
         revalidationDlq: this.revalidationDlq,
+        createCloudFrontAlarmLocally: !offRegion,
       });
       this.monitoringTopic = monitoring.topic;
       if (monitoring.topic) {
@@ -1166,6 +1190,63 @@ export class HostingConstruct extends Construct {
           value: monitoring.topic.topicArn,
           description: 'SNS topic for hosting alarms. Subscribe an email/Slack/PagerDuty endpoint here.',
         });
+      }
+
+      // Off-region CloudFront alarm handling.
+      if (this.distribution && monitoring.cloudFrontAlarmDeferred) {
+        const cfAlarmMode = props.monitoring?.cloudFrontAlarm ?? 'usEast1Stack';
+        if (cfAlarmMode === 'skip') {
+          Annotations.of(this).addWarningV2(
+            '@aws-blocks/hosting:CloudFrontAlarmSkipped',
+            `CloudFront 5xx alarm skipped: this stack is in ${region}, but ` +
+              `AWS/CloudFront metrics only exist in us-east-1 and an alarm ` +
+              `cannot watch a metric cross-region. Set ` +
+              `monitoring.cloudFrontAlarm: 'usEast1Stack' (requires ` +
+              `env: { account, region }) for real CloudFront 5xx coverage.`,
+          );
+        } else if (Token.isUnresolved(hostingStack.account)) {
+          // A cross-region stack needs a concrete account. Fail loud
+          // rather than silently drop CloudFront monitoring.
+          throw new HostingError('MonitoringEnvRequiredError', {
+            message:
+              `monitoring.cloudFrontAlarm: 'usEast1Stack' requires an explicit ` +
+              `env: { account, region } on the stack (region '${region}'), ` +
+              `because the CloudFront alarm must be placed in a separate ` +
+              `us-east-1 stack.`,
+            resolution:
+              `Add env: { account, region } to the Stack, or set ` +
+              `monitoring.cloudFrontAlarm: 'skip' to omit the CloudFront alarm.`,
+          });
+        } else {
+          // Belt-and-suspenders: only reachable for a Hosting construct with no enclosing App/Stage
+          // (CDK's App extends Stage, so Stage.of(this) resolves in normal use). Fail loud rather
+          // than synthesize a mis-scoped us-east-1 support stack.
+          const stage = Stage.of(this);
+          if (!stage) {
+            throw new HostingError('MonitoringStageRequiredError', {
+              message:
+                `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
+                `enclosing App/Stage was found for this construct.`,
+              resolution:
+                `Instantiate hosting within a CDK App (or Stage), or set ` +
+                `monitoring.cloudFrontAlarm: 'skip'.`,
+            });
+          }
+          // The us-east-1 CloudFront alarm must reference the regional
+          // distribution's id; CDK bridges that with its standard
+          // cross-region export reader/writer custom resources (added to
+          // both stacks automatically). The topic ARN is surfaced as an
+          // output OF the support stack (MonitoringTopicArnUsEast1) — not
+          // re-output here, to keep the wiring one-directional.
+          new UsEast1MonitoringStack(
+            stage,
+            `${hostingStack.stackName}-CfMonitoring`,
+            {
+              env: { account: hostingStack.account, region: 'us-east-1' },
+              distributionId: this.distribution.distributionId,
+            },
+          );
+        }
       }
     }
 
