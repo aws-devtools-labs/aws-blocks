@@ -52,6 +52,7 @@
       "require": "./dist/server/index.js"
     },
     "./scripts": "./dist/scripts/index.js",
+    "./scripts/generate-client-worker": "./dist/scripts/generate-client-worker.js",
     "./db-naming": {
       "types": "./dist/db-naming.d.ts",
       "default": "./dist/db-naming.js"
