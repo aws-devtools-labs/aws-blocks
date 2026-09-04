@@ -1,5 +1,17 @@
 # @aws-blocks/bb-kv-store
 
+## 0.1.8
+
+### Patch Changes
+
+- Updated dependencies [64ddd74]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+
 ## 0.1.7
 
 ### Patch Changes

@@ -1,5 +1,130 @@
 # @aws-blocks/bb-agent
 
+## 0.4.0
+
+### Minor Changes
+
+- 9111c0c: feat(bb-agent): cap model and tool calls per turn to bound runaway cost
+  
+  Adds two per-turn safety caps to `AgentConfig`, both defaulting to `20`:
+  
+  - `maxLlmCalls` — the maximum number of model (Bedrock) invocations in a single
+    turn. Model calls are the unit Bedrock bills for, so this is the most direct
+    guard against an agent that loops its reason→act cycle indefinitely; because
+    every tool round needs a model call, it transitively bounds tool loops too.
+  - `maxToolIterations` — the maximum number of tool calls in a single turn
+    (parallel tool batches count each call).
+  
+  When either cap is exceeded the turn is cancelled and the client receives an
+  `error` chunk (so `complete()` rejects) instead of `done`. Both caps are
+  enforced with in-loop Strands hooks, so they work identically on every compute
+  target with no cross-process signaling.
+  
+  Behavior change: turns are now capped at 20 model calls and 20 tool calls by
+  default. This is generous for a single turn, but agents that legitimately reason
+  over many steps or chain many tools must raise `maxLlmCalls` /
+  `maxToolIterations`, or set a cap to `false` to disable it. The caps bound call
+  *count*, not tokens or wall-clock — pair them with a billing or CloudWatch alarm
+  on Bedrock spend for real cost protection.
+  
+  This is a `minor` bump. Every package here is pre-1.0, where `minor` is this
+  repo's signal for a change that can alter existing behavior. The two options are
+  new and optional and there's an opt-out (raise the cap, or set it to `false`),
+  but the new default changes the runtime behavior of every existing agent — a
+  turn that legitimately exceeds 20 model or tool calls is now cut off unless the
+  customer opts out — so it ships as `minor` rather than `patch` to surface that
+  clearly. The counts cover a whole logical turn: they live in the agent's
+  persisted session state, and the per-turn reset is keyed on a turn id applied
+  lazily (the session snapshot is restored inside `stream()`, so an up-front reset
+  would be overwritten and the budget would leak into the next turn), so a turn
+  paused on a human-in-the-loop interrupt keeps its budget across `resume()` while
+  a new message always starts a fresh one. A cap value must be a positive integer
+  or `false`; anything else throws `InvalidModelConfigException`. The umbrella
+  `@aws-blocks/blocks` gets the same bump because it re-exports `AgentConfig`.
+- 2cb9d74: refactor(bb-agent): remove inert `structuredOutput` field from `AgentConfig`
+  
+  `AgentConfig` declared `structuredOutput?: z.ZodType`, but the field was never
+  implemented, read, or consumed anywhere — no JSDoc, no consumer, no docs, no
+  tests. It advertised a capability that does not exist, so setting it was a silent
+  no-op. The declaration is removed (along with its line in the generated
+  `API.md` report); no runtime behavior changes, because nothing ever read it.
+  
+  Structured output remains a planned future LLM-BB feature, tracked separately.
+  This change only deletes the dead placeholder surface — it does not add or design
+  any real structured-output support.
+  
+  This is a `minor` bump. Removing a property from an exported interface is a
+  breaking change to the public type surface, but every package here is pre-1.0,
+  where this repo's convention is that `minor` — not `major` — is the signal for a
+  breaking or behavior-altering change (see the `maxLlmCalls`/`maxToolIterations`
+  caps, which shipped as `minor` for exactly that reason). Practically the blast
+  radius is a compile error only: code that set `structuredOutput` was already
+  getting no-op behavior, so the error points at configuration that never did
+  anything and the fix is to delete it. The umbrella `@aws-blocks/blocks` gets the
+  same bump because it re-exports `AgentConfig`.
+
+### Patch Changes
+
+- d8a3901: Improve the local-dev `canned` provider's tool support with two optional tool hints (ignored by real providers) and schema-default awareness:
+  
+  - `cannedExamples` — realistic tool input, shallow-merged over generated placeholders instead of the generic `sample` values.
+  - `cannedTriggers` — extra keyword phrases that trigger a tool beyond its name (single- and multi-word phrases match on word boundaries, so `'log in'` won't fire on `"backlog in"`; internal whitespace is flexible).
+  - Generated placeholder input now respects schema `default` values (from Zod `.default()`).
+  
+  Also fixes three pre-existing rough edges in the same provider:
+  
+  - Generated input now resolves `const`, `enum`, and `anyOf`/`oneOf` (Zod union) properties. Previously a property that was a union, a const, or untyped and carried no `default` matched no branch and was dropped — and a *required* field of that shape made the emitted call fail schema validation before the tool ran. A required field of an otherwise unrecognized shape now falls back to a string; optional ones stay omitted, since absence is valid there.
+  - The canned *text* responses (`weather`/`order`/`help`) now match on word boundaries like tool matching does, so `"reorder"` no longer returns the order response and `"helper"` no longer returns the help response.
+  - A `cannedExamples` key that isn't a field of the tool's schema now logs a one-time warning naming the tool and field, since it is almost always a typo. It never throws and the value is still sent — a bad hint must not break local dev.
+  
+  Patch (not minor) per the pre-1.0 caret convention — the change is additive and backward-compatible.
+- 4a830a6: feat: route event-block resources to their resolved compute
+  
+  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
+  compute resolved at synth rather than the stack's shared handler:
+  
+  - AsyncJob attaches its SQS event source to the resolved compute's function;
+  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
+  - Realtime binds its shared WebSocket API integrations to the stack's **default**
+    compute (its routes are a stack-level singleton) and grants `postToConnection`
+    to the shared execution role, so `publish()` works from any compute.
+  
+  Each block requires a Lambda compute today and fails at synth with a typed
+  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
+  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
+  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
+  when two copies of `bb-lambda-compute` resolve in one dependency tree.
+  
+  On the default single-Lambda setup the resolved/default compute is the stack's
+  default, whose function is the shared handler — so this is non-breaking with no
+  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
+  execution role rather than the handler directly.
+  
+  New public surface (hence `minor`):
+  
+  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
+    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
+    (the single env-var-key sanitizer both config writers and runtime readers use).
+  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
+    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
+  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
+    error member.
+  
+  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
+  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
+  Test-only change — no runtime behavior change to the Agent.
+- Updated dependencies [64ddd74]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-realtime@0.2.0
+  - @aws-blocks/bb-distributed-table@0.1.7
+  - @aws-blocks/bb-async-job@0.2.0
+  - @aws-blocks/bb-file-bucket@0.1.6
+
 ## 0.3.5
 
 ### Patch Changes
