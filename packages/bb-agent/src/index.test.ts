@@ -681,7 +681,7 @@ describe('CannedProvider', () => {
 		const result = await agent.stream('hello', { userId: 'test-user' });
 		const ch = await result.channel;
 		ch.subscribe((chunk: any) => { chunks.push(chunk); });
-		// Wait for error to propagate through AsyncJob
+		// Wait for the in-process turn to publish its error chunk
 		await new Promise(resolve => setTimeout(resolve, 2000));
 		const textChunks = chunks.filter((c: any) => c.type === 'text-delta');
 		const errorChunk = chunks.find((c: any) => c.type === 'error');
@@ -983,6 +983,29 @@ describe('tool context', () => {
 		const result = await agent.stream('use whoAmI', { userId: 'u-1', context: { userId: 'u-1' } });
 		await result.complete();
 		assert.deepStrictEqual(seenContext, { userId: 'u-1' }, 'handler should receive the per-call context');
+	});
+
+	test('mock reproduces the AWS wire boundary: context is JSON round-tripped before reaching a tool', async () => {
+		// On AWS the loop runs in a container and context arrives via JSON (Date→string, Set→{}, undefined
+		// dropped). The mock must reproduce that so a serialization bug fails locally, not only after deploy.
+		const scope = new Scope('test-ctx-wire');
+		let seenContext: any;
+		const agent = new Agent(scope, 'cw', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ capture: tool({ description: 'captures the context',
+				parameters: z.object({}),
+				needsApproval: false,
+				handler: async ({ context }) => { seenContext = context; return { ok: true }; }, }) }),
+		});
+		const result = await agent.stream('use capture', {
+			userId: 'u',
+			context: { when: new Date('2020-01-01T00:00:00.000Z'), tags: new Set(['a']), note: undefined } as any,
+		});
+		await result.complete();
+		assert.strictEqual(seenContext.when, '2020-01-01T00:00:00.000Z', 'Date arrives as an ISO string, like on AWS');
+		assert.deepStrictEqual(seenContext.tags, {}, 'Set serializes to {} (silent data loss), like on AWS');
+		assert.ok(!('note' in seenContext), 'undefined field is dropped, like on AWS');
 	});
 
 	test('toolContextSchema validates context and throws on mismatch', async () => {
