@@ -34,7 +34,7 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
 export class Database extends BuildingBlockScope {
 	getVpcRequirements(): VpcRequirements {
 		// Aurora is reached over the RDS Data API, so it needs Secrets Manager + RDS
-		// Data interface endpoints. It does NOT declare a `runtimeSubnet`: the Data
+		// Data interface endpoints. It does NOT declare `requiresEgress`: the Data
 		// API is called from the shared Lambda over HTTPS (via those endpoints), so
 		// the Lambda's own placement is unconstrained. The cluster's placement is
 		// resolved by the Database construct itself via `selectSubnets`, not here.

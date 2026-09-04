@@ -15,15 +15,15 @@ the endpoints are created with `open: false` to suppress CDK's default
 "allow 443 from the entire VPC CIDR" rule. On a bring-your-own VPC this stops
 unrelated workloads from reaching every Blocks interface endpoint.
 
-**`VpcRequirements.subnetRole` is replaced by `runtimeSubnet`.** The old field
-was declared but never consumed. `runtimeSubnet` expresses a real, validated
-requirement: the subnet role the BB's parent runtime (the shared handler Lambda)
-must run in. `finalizeVpc` validates it against the Lambda's actual placement and
-fails synth with an actionable message on a mismatch — it never relocates the
-Lambda (that's the customer's explicit choice). `bb-distributed-data` (DSQL) now
-declares `runtimeSubnet: 'private-with-egress'`, turning a previously silent
-runtime failure (DSQL in isolated subnets deploys clean, then every call times
-out) into a build-time error.
+**`VpcRequirements.subnetRole` is replaced by `requiresEgress`.** The old field
+was declared but never consumed. `requiresEgress` expresses a real, validated
+capability: whether the BB's parent runtime (the shared handler Lambda) must be
+able to reach the internet. `finalizeVpc` validates it against the runtime's
+actual placement and fails synth with an actionable message on a mismatch — it
+never relocates the runtime (that's the customer's explicit choice).
+`bb-distributed-data` (DSQL) declares `requiresEgress: true`, turning a
+previously silent runtime failure (DSQL in isolated subnets deploys clean, then
+every call times out) into a build-time error.
 
 **`VpcContext.selectSubnets` is now instructive.** It takes the requesting BB and
 verifies the VPC actually has the requested subnet tier, throwing a BB-named,
