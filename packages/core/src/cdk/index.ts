@@ -29,7 +29,7 @@ export {
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
-export { registerConfig, finalizeConfigRegistry } from './config-registry.js';
+export { registerConfig, finalizeConfigRegistry, getConfigLocation } from './config-registry.js';
 export { ensureApiGatewayAccount } from './apigateway-account.js';
 export {
   type BlocksDefaults,
@@ -59,6 +59,12 @@ export interface CoreBlocksStackProps extends BlocksStackProps {
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
   public readonly id: string;
   public readonly backendHandlerPath: string;
+  /**
+   * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+   * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+   * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+   */
+  public readonly backendModulePath: string;
   /** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
   public readonly executionRole: cdk.aws_iam.IRole;
   /** Infrastructure defaults for Building Blocks created under this stack. */
@@ -95,6 +101,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
     this.id = id;
     this.backendHandlerPath = props.backendHandlerPath;
     this.defaults = props.defaults;
+    this.backendModulePath = props.backendCDKPath;
 
     // Set globalThis so Building Blocks attach directly to this stack
     (globalThis as any).CURRENT_BLOCKS_STACK = this;
