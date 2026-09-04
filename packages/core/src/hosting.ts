@@ -382,6 +382,21 @@ export interface HostingProps {
     enabled?: boolean;
     /** ARN of an existing SNS topic to send alarm actions to. */
     snsTopicArn?: string;
+    /**
+     * How to handle the CloudFront 5xx alarm when the app is deployed
+     * outside us-east-1. AWS/CloudFront metrics only exist in us-east-1
+     * and a CloudWatch alarm can't watch a metric cross-region, so the
+     * alarm cannot live in an off-region stack.
+     *  - `'usEast1Stack'`: place the alarm in a dedicated us-east-1
+     *    support stack (`<stackName>-CfMonitoring`) with its own SNS
+     *    topic, surfaced as the `MonitoringTopicArnUsEast1` output.
+     *    Requires `env: { account, region }` on the stack.
+     *  - `'skip'`: omit the CloudFront alarm off-region (emit a warning).
+     * Ignored when the stack is already in us-east-1.
+     *
+     * When omitted, inherits the underlying default (`'usEast1Stack'`).
+     */
+    cloudFrontAlarm?: 'usEast1Stack' | 'skip';
   };
 
   /**
@@ -684,7 +699,15 @@ export class Hosting extends Construct {
       logging: props.logging,
       buildCache: props.buildCache,
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
-      monitoring: props.monitoring,
+      monitoring: props.monitoring
+        ? {
+            ...props.monitoring,
+            // Forward cloudFrontAlarm through as-is: undefined inherits the
+            // L3 default ('usEast1Stack'). To change the Blocks-app default
+            // to 'skip' later, replace the fallback on the next line.
+            cloudFrontAlarm: props.monitoring.cloudFrontAlarm ?? undefined,
+          }
+        : undefined,
       skewProtection: props.skewProtection,
     };
 

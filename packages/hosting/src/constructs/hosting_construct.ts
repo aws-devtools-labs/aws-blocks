@@ -1220,7 +1220,7 @@ export class HostingConstruct extends Construct {
         } else {
           const stage = Stage.of(this);
           if (!stage) {
-            throw new HostingError('MonitoringEnvRequiredError', {
+            throw new HostingError('MonitoringStageRequiredError', {
               message:
                 `Cannot create the us-east-1 CloudFront monitoring stack: no ` +
                 `enclosing App/Stage was found for this construct.`,

@@ -1,5 +1,5 @@
-import { Construct } from 'constructs';
-import { CfnOutput, Duration, Stack, StackProps } from 'aws-cdk-lib';
+import type { Construct } from 'constructs';
+import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib';
 import {
   Alarm,
   ComparisonOperator,
@@ -7,8 +7,8 @@ import {
   TreatMissingData,
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { IKey } from 'aws-cdk-lib/aws-kms';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import type { IKey } from 'aws-cdk-lib/aws-kms';
+import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 import { createAlarmTopicKey } from './monitoring_construct.js';
 
 /**

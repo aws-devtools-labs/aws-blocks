@@ -9,13 +9,13 @@
  */
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { App, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 
 let tmpDir: string;

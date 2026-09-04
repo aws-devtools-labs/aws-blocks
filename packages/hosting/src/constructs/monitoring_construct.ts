@@ -8,12 +8,12 @@ import {
   TreatMissingData,
 } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
+import type { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
-import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
-import { Queue } from 'aws-cdk-lib/aws-sqs';
-import { ITopic, Topic } from 'aws-cdk-lib/aws-sns';
+import type { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import type { Queue } from 'aws-cdk-lib/aws-sqs';
+import { type ITopic, Topic } from 'aws-cdk-lib/aws-sns';
 
 /**
  * Default CloudWatch alarm wiring (P3.1 + P3.2).
