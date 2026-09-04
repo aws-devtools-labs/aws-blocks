@@ -166,6 +166,79 @@ export function isManagedValue(v: unknown): v is ManagedValue {
 	return typeof v === 'object' && v !== null && (v as Record<PropertyKey, unknown>)[MANAGED_BRAND] === true;
 }
 
+// ── JSON transport codec ─────────────────────────────────────────────────────
+//
+// A marker is branded with a `Symbol` and may carry a non-serializable `schema`,
+// so it does NOT survive `JSON.stringify`/`JSON.parse`: the symbol brand is
+// dropped and `isManagedValue()` then returns false on the far side. Any consumer
+// that carries a config object containing markers across a JSON boundary — e.g. an
+// orchestrator that serializes per-stage config into a build environment variable
+// and reads it back in a later phase — needs a lossless round-trip. This codec
+// provides one: markers encode to a tagged plain object and decode back into real
+// branded markers.
+//
+// Note: only `kind` + `key` are transported (the locator identity). A marker's
+// optional `schema` is not serializable and is intentionally dropped; re-declare
+// the schema on the far side if the runtime JSON-parse behavior is needed there.
+
+/** Stable tag identifying the JSON-transport form of a {@link ManagedValue}. */
+export const MANAGED_VALUE_JSON_TAG = '$aws-blocks/hosting.ManagedValue' as const;
+
+/** Plain, JSON-safe representation of a {@link ManagedValue} marker. */
+export interface ManagedValueJSON {
+	readonly [MANAGED_VALUE_JSON_TAG]: { readonly kind: ValueKind; readonly key: string };
+}
+
+/** Type guard: a value produced by {@link encodeManagedValue} (the JSON form). */
+export function isManagedValueJSON(v: unknown): v is ManagedValueJSON {
+	if (typeof v !== 'object' || v === null) return false;
+	const inner = (v as Record<string, unknown>)[MANAGED_VALUE_JSON_TAG];
+	return (
+		typeof inner === 'object' &&
+		inner !== null &&
+		((inner as ManagedValue).kind === 'secret' || (inner as ManagedValue).kind === 'config') &&
+		typeof (inner as ManagedValue).key === 'string'
+	);
+}
+
+/** Encode a marker into a JSON-safe tagged object that survives `JSON.stringify`. */
+export function encodeManagedValue(v: ManagedValue): ManagedValueJSON {
+	return { [MANAGED_VALUE_JSON_TAG]: { kind: v.kind, key: v.key } };
+}
+
+/** Decode a tagged object (see {@link encodeManagedValue}) back into a branded marker. */
+export function decodeManagedValue(v: ManagedValueJSON): ManagedValue {
+	const { kind, key } = v[MANAGED_VALUE_JSON_TAG];
+	return kind === 'secret' ? secret(key) : config(key);
+}
+
+/**
+ * A `JSON.stringify` replacer that encodes any {@link ManagedValue} markers it
+ * encounters into their JSON-safe form.
+ *
+ * @example
+ * ```ts
+ * const wire = JSON.stringify({ domain: config('DOMAIN') }, managedValueReplacer);
+ * ```
+ */
+export function managedValueReplacer(_key: string, value: unknown): unknown {
+	return isManagedValue(value) ? encodeManagedValue(value) : value;
+}
+
+/**
+ * A `JSON.parse` reviver that rehydrates encoded markers back into real branded
+ * markers, so `isManagedValue()` / `isSecret()` / `isConfig()` recognize them again.
+ *
+ * @example
+ * ```ts
+ * const restored = JSON.parse(wire, managedValueReviver);
+ * isConfig(restored.domain); // true
+ * ```
+ */
+export function managedValueReviver(_key: string, value: unknown): unknown {
+	return isManagedValueJSON(value) ? decodeManagedValue(value) : value;
+}
+
 // ── store path convention (single source of truth) ──────────────────────────
 
 /** Framework-neutral default prefix for **secrets** (Secrets Manager). */
