@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/hosting": minor
-"@aws-blocks/pipeline": minor
+"@aws-blocks/hosting": patch
+"@aws-blocks/pipeline": patch
 ---
 
 feat(hosting,pipeline): managed-value JSON codec + a public per-stage post-deploy hook
