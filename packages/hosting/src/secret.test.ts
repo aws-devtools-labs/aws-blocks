@@ -8,11 +8,17 @@ import {
 	configEnvVarName,
 	DEFAULT_CONFIG_PARAMETER_PREFIX,
 	DEFAULT_SECRET_PARAMETER_PREFIX,
+	decodeManagedValue,
+	encodeManagedValue,
 	fallbackEnvVarName,
 	isConfig,
 	isManagedValue,
+	isManagedValueJSON,
 	isSecret,
 	MANAGED_BRAND,
+	MANAGED_VALUE_JSON_TAG,
+	managedValueReplacer,
+	managedValueReviver,
 	parameterName,
 	secret,
 	secretEnvVarName,
@@ -98,5 +104,59 @@ void describe('paths, prefixes, env naming', () => {
 		assert.strictEqual(secretEnvVarName('K'), 'HOSTING_SECRET_PARAM_K');
 		assert.strictEqual(configEnvVarName('K'), 'HOSTING_CONFIG_PARAM_K');
 		assert.strictEqual(fallbackEnvVarName(secretEnvVarName('K')), 'HOSTING_SECRET_PARAM_K_FALLBACK');
+	});
+});
+
+void describe('managed value JSON codec', () => {
+	void it('a raw JSON round-trip loses the brand (motivates the codec)', () => {
+		const roundTripped = JSON.parse(JSON.stringify(secret('TOKEN')));
+		assert.strictEqual(isManagedValue(roundTripped), false);
+	});
+
+	void it('encode → decode restores a branded secret marker', () => {
+		const restored = decodeManagedValue(encodeManagedValue(secret('TOKEN')));
+		assert.ok(isSecret(restored));
+		assert.strictEqual(restored.key, 'TOKEN');
+		assert.strictEqual(restored.kind, 'secret');
+	});
+
+	void it('encode → decode restores a branded config marker', () => {
+		const restored = decodeManagedValue(encodeManagedValue(config('DOMAIN')));
+		assert.ok(isConfig(restored));
+		assert.strictEqual(restored.key, 'DOMAIN');
+	});
+
+	void it('encoded form is tagged and JSON-safe', () => {
+		const encoded = encodeManagedValue(config('DOMAIN'));
+		assert.deepStrictEqual(encoded, { [MANAGED_VALUE_JSON_TAG]: { kind: 'config', key: 'DOMAIN' } });
+		assert.ok(isManagedValueJSON(JSON.parse(JSON.stringify(encoded))));
+	});
+
+	void it('replacer + reviver survive a full JSON.stringify/parse round-trip in a nested object', () => {
+		const original = {
+			domain: config('DOMAIN'),
+			apiKey: secret('API_KEY'),
+			plain: 'literal',
+			nested: { flags: config('FLAGS') },
+		};
+		const wire = JSON.stringify(original, managedValueReplacer);
+		const restored = JSON.parse(wire, managedValueReviver) as typeof original;
+
+		assert.ok(isConfig(restored.domain) && restored.domain.key === 'DOMAIN');
+		assert.ok(isSecret(restored.apiKey) && restored.apiKey.key === 'API_KEY');
+		assert.strictEqual(restored.plain, 'literal');
+		assert.ok(isConfig(restored.nested.flags) && restored.nested.flags.key === 'FLAGS');
+	});
+
+	void it('reviver leaves non-marker values untouched', () => {
+		const restored = JSON.parse(JSON.stringify({ a: 1, b: 'x', c: [1, 2] }), managedValueReviver);
+		assert.deepStrictEqual(restored, { a: 1, b: 'x', c: [1, 2] });
+	});
+
+	void it('isManagedValueJSON rejects malformed shapes', () => {
+		assert.strictEqual(isManagedValueJSON({ [MANAGED_VALUE_JSON_TAG]: { kind: 'nope', key: 'K' } }), false);
+		assert.strictEqual(isManagedValueJSON({ [MANAGED_VALUE_JSON_TAG]: { kind: 'secret' } }), false);
+		assert.strictEqual(isManagedValueJSON({ kind: 'secret', key: 'K' }), false);
+		assert.strictEqual(isManagedValueJSON(null), false);
 	});
 });

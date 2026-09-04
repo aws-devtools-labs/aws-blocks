@@ -8,7 +8,14 @@ import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
-import { CodeBuildStep, CodePipeline, CodePipelineSource, ManualApprovalStep, ShellStep } from 'aws-cdk-lib/pipelines';
+import {
+  CodeBuildStep,
+  CodePipeline,
+  CodePipelineSource,
+  type IFileSetProducer,
+  ManualApprovalStep,
+  ShellStep,
+} from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -472,7 +479,7 @@ function buildCodePipeline<TConfig>(
   branchId: string,
   branchConfig: BranchConfig<TConfig>,
   props: PipelineProps<TConfig>,
-): CodePipeline {
+): { codePipeline: CodePipeline; source: IFileSetProducer } {
   const hasTriggerFilters = props.source.triggerFilters && props.source.triggerFilters.length > 0;
   if (branchConfig.triggerOnPush === true && hasTriggerFilters) {
     throw new Error(
@@ -523,7 +530,7 @@ function buildCodePipeline<TConfig>(
   // (SECRETS_MANAGER / PARAMETER_STORE). CodeBuild grants read + masks logs.
   const secretEnvVars = buildSecretEnvVars(props);
 
-  return new CodePipeline(construct, branchId, {
+  const codePipeline = new CodePipeline(construct, branchId, {
     synth: synthStep,
     selfMutation: props.selfMutation ?? true,
     crossAccountKeys: props.crossAccountKeys ?? false,
@@ -542,12 +549,18 @@ function buildCodePipeline<TConfig>(
       },
     },
   });
+
+  // Return the source alongside the pipeline so per-stage post steps can use it
+  // as their `input` (see the `postStage` hook) without rediscovering it.
+  return { codePipeline, source };
 }
 
 function addStageToCodePipeline<TConfig>(
   codePipeline: CodePipeline,
   stageConfig: PipelineStageConfig<TConfig>,
   deployStage: DeployStage<TConfig>,
+  source: IFileSetProducer,
+  props: PipelineProps<TConfig>,
 ): void {
   const pre: Array<ManualApprovalStep | ShellStep> = [];
   const post: Array<ShellStep | CodeBuildStep> = [];
@@ -560,15 +573,26 @@ function addStageToCodePipeline<TConfig>(
     );
   }
 
+  // Post-stage hook steps run after the stage deploys. Capture them so the bake
+  // step (below) can be made to depend on them.
+  const postStageSteps = props.postStage?.({ stage: deployStage, stageConfig, source }) ?? [];
+  post.push(...postStageSteps);
+
   if (stageConfig.bakeTime) {
     const seconds = stageConfig.bakeTime.toSeconds();
-    post.push(
-      new CodeBuildStep(`BakeTime-${stageConfig.name}`, {
-        commands: [`echo "Baking for ${seconds}s..." && sleep ${seconds}`],
-        buildEnvironment: { computeType: codebuild.ComputeType.SMALL },
-        timeout: cdk.Duration.minutes(stageConfig.bakeTime.toMinutes() + BAKE_TIMEOUT_BUFFER_MINUTES),
-      }),
-    );
+    const bakeStep = new CodeBuildStep(`BakeTime-${stageConfig.name}`, {
+      commands: [`echo "Baking for ${seconds}s..." && sleep ${seconds}`],
+      buildEnvironment: { computeType: codebuild.ComputeType.SMALL },
+      timeout: cdk.Duration.minutes(stageConfig.bakeTime.toMinutes() + BAKE_TIMEOUT_BUFFER_MINUTES),
+    });
+    // Baking validates the deployed stage, so it must begin only after every
+    // post-stage step has finished — otherwise the bake timer races them in
+    // parallel and can expire before the stage is fully live. An explicit step
+    // dependency serializes bake AFTER the post-stage steps.
+    for (const step of postStageSteps) {
+      bakeStep.addStepDependency(step);
+    }
+    post.push(bakeStep);
   }
 
   codePipeline.addStage(deployStage, { pre, post });
@@ -638,7 +662,7 @@ function createBranchPipelineSync<TConfig>(
   const safeBranch = branchConfig.branch.replace(/[^a-zA-Z0-9-]/g, '-');
   const branchId = `${id}-${safeBranch}`;
 
-  const codePipeline = buildCodePipeline(construct, branchId, branchConfig, props);
+  const { codePipeline, source } = buildCodePipeline(construct, branchId, branchConfig, props);
 
   for (const stageConfig of branchConfig.stages) {
     validateBakeTime(stageConfig);
@@ -654,7 +678,7 @@ function createBranchPipelineSync<TConfig>(
       );
     }
     validateStageStacks(stage, stageConfig.name, 'stageFactory');
-    addStageToCodePipeline(codePipeline, stageConfig, stage);
+    addStageToCodePipeline(codePipeline, stageConfig, stage, source, props);
   }
 
   addTriggerFilters(codePipeline, branchConfig, props);
@@ -674,7 +698,7 @@ async function createBranchPipelineAsync<TConfig>(
   const safeBranch = branchConfig.branch.replace(/[^a-zA-Z0-9-]/g, '-');
   const branchId = `${id}-${safeBranch}`;
 
-  const codePipeline = buildCodePipeline(construct, branchId, branchConfig, props);
+  const { codePipeline, source } = buildCodePipeline(construct, branchId, branchConfig, props);
 
   for (const stageConfig of branchConfig.stages) {
     validateBakeTime(stageConfig);
@@ -691,7 +715,7 @@ async function createBranchPipelineAsync<TConfig>(
     }
 
     validateStageStacks(stage, stageConfig.name, resolvedAppFile ? 'appFile' : 'stageFactory');
-    addStageToCodePipeline(codePipeline, stageConfig, stage);
+    addStageToCodePipeline(codePipeline, stageConfig, stage, source, props);
   }
 
   addTriggerFilters(codePipeline, branchConfig, props);
