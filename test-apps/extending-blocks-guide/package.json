@@ -20,8 +20,8 @@
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-table": "*",
     "@aws-blocks/core": "*",
-    "@aws-sdk/client-cloudformation": "^3.0.0",
-    "@aws-sdk/client-sqs": "^3.0.0",
+    "@aws-sdk/client-cloudformation": "^3.1123.0",
+    "@aws-sdk/client-sqs": "^3.1123.0",
     "@guide/bb-queue": "*",
     "zod": "^4.3.0"
   },
