@@ -52,8 +52,8 @@
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.5",
     "@aws-blocks/core": "^0.3.0",
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/s3-request-presigner": "^3.0.0"
+    "@aws-sdk/client-s3": "^3.1123.0",
+    "@aws-sdk/s3-request-presigner": "^3.1123.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
