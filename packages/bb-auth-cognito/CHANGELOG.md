@@ -1,5 +1,25 @@
 # @aws-blocks/bb-auth-cognito
 
+## 0.1.9
+
+### Patch Changes
+
+- 64ddd74: test: adapt CDK tests to the new config-registry finalize signature
+  
+  Test-only change: both packages' CDK tests were updated to call
+  `finalizeConfigRegistry` with its new `(root, executionRole, computes)`
+  signature. No runtime or public API change.
+- Updated dependencies [64ddd74]
+- Updated dependencies [646614b]
+- Updated dependencies [c45eb92]
+- Updated dependencies [4a830a6]
+- Updated dependencies [1da58fd]
+  - @aws-blocks/core@0.4.0
+  - @aws-blocks/bb-logger@0.1.6
+  - @aws-blocks/bb-app-setting@0.2.1
+  - @aws-blocks/auth-common@0.1.7
+  - @aws-blocks/bb-kv-store@0.1.8
+
 ## 0.1.8
 
 ### Patch Changes
