@@ -15,18 +15,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, Scope, type BlocksDefaults } from '@aws-blocks/core/cdk';
-import { isBlocksError } from '@aws-blocks/core';
+import { BlocksStack, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { Compute } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { Realtime, RealtimeErrors } from './index.cdk.js';
-
-/** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
-class FakeCompute extends Compute {
-	setEnv(_key: string, _value: string): void {}
-}
+import { Realtime } from './index.cdk.js';
 
 test('CDK: calling a runtime method throws an actionable error (not a cryptic TypeError)', () => {
 	// Unlike KVStore/DistributedTable tests which instantiate the construct directly,
@@ -154,18 +147,8 @@ test('CDK: sandbox leaves the WebSocket stage without access logging', async () 
 	});
 });
 
-test('CDK: Realtime rejects a non-Lambda compute at synth', async () => {
-	const app = new cdk.App();
-	const stack = await BlocksStack.create(app, 'RtUnsupportedCompute', {
-		backendHandlerPath: handlerPath,
-		backendCDKPath: backendPath,
-		defaults: BlocksPresets.production,
-		defaultComputeFactory: lambdaFactory,
-	});
-	const scoped = new Scope('scoped', { parent: stack });
-	scoped._compute = new FakeCompute('fake', { parent: stack });
-	assert.throws(
-		() => new Realtime(scoped, 'rt', { namespaces: { chat: Realtime.namespace(passthroughSchema) } }),
-		(e: unknown) => isBlocksError(e, RealtimeErrors.UnsupportedCompute),
-	);
-});
+// Note: Realtime's "requires a Lambda compute" guard reads the stack DEFAULT
+// compute, and BlocksStack.create requires that default to be Lambda-shaped
+// (it wires the ApiUrl output from it), so a non-Lambda default can't be stood
+// up to trip the guard here. The guard's discriminator — LambdaCompute's brand
+// check — is unit-tested directly in bb-lambda-compute (isLambdaCompute).

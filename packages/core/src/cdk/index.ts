@@ -228,6 +228,24 @@ export class Scope extends Construct {
   }
 
   /**
+   * The stack's default compute, **ignoring** any per-scope `_compute`
+   * assignment (unlike {@link compute}, which resolves the nearest assigned
+   * one). Use when a resource is a stack-level singleton that must bind to one
+   * deterministic compute regardless of the block's resolved compute — e.g.
+   * Realtime's shared WebSocket route integration, where one WebSocket API
+   * integrates to a single target and connection bookkeeping is compute-agnostic.
+   *
+   * @internal Not a customer surface; for framework/BB singleton infra only.
+   */
+  get defaultCompute(): Compute {
+    const defaultCompute = this.root._defaultCompute;
+    if (!defaultCompute) {
+      throw new Error('Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `defaultCompute`.');
+    }
+    return defaultCompute;
+  }
+
+  /**
    * The backend entry file the owning BlocksStack/BlocksBackend runs — the
    * single handler entry shared across the whole app.
    */

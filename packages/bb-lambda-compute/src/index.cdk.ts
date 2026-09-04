@@ -14,6 +14,14 @@ import type { LambdaComputeProps } from './types.js';
 export type { LambdaComputeProps } from './types.js';
 
 /**
+ * Process-global brand marking a {@link LambdaCompute} instance. Registered via
+ * `Symbol.for` (like core's `API_NAMESPACE_MARKER`) so identification works even
+ * when two copies of `bb-lambda-compute` resolve in one dependency tree — the
+ * case where `instanceof` fails because each copy has a distinct class object.
+ */
+const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
+
+/**
  * A Lambda-backed {@link Compute}: a `NodejsFunction` fronted by its own API
  * Gateway REST API. The compute *owns* these resources — a BlocksStack /
  * BlocksBackend's `handler` / `gateway` / `apiUrl` delegate to its default
@@ -29,6 +37,11 @@ export type { LambdaComputeProps } from './types.js';
  * cannot instantiate a compute until the customer-facing surface exists.
  */
 export class LambdaCompute extends Compute {
+	/**
+	 * Brand enabling cross-copy identification via {@link LambdaCompute.isLambdaCompute}.
+	 * @internal
+	 */
+	readonly [LAMBDA_COMPUTE_BRAND] = true;
 	/** The Lambda function backing this compute. */
 	readonly fn: lambda.NodejsFunction;
 	/** The API Gateway REST API fronting {@link fn}. */
@@ -157,5 +170,16 @@ export class LambdaCompute extends Compute {
 
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
+	}
+
+	/**
+	 * Type guard for a {@link LambdaCompute} that survives duplicate
+	 * `bb-lambda-compute` copies in one dependency tree — it checks the
+	 * process-global {@link LAMBDA_COMPUTE_BRAND} symbol rather than class
+	 * identity, so it does not misfire like `instanceof` when a block and the
+	 * app resolve different copies of this package.
+	 */
+	static isLambdaCompute(x: unknown): x is LambdaCompute {
+		return typeof x === 'object' && x !== null && (x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true;
 	}
 }

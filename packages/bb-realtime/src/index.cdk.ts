@@ -18,7 +18,7 @@ import { WebSocketApi, WebSocketStage, LogGroupLogDestination } from 'aws-cdk-li
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import { Scope, synthGuard, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
+import { Scope, synthGuard, ensureApiGatewayAccount, blocksError } from '@aws-blocks/core/cdk';
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -136,8 +136,12 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 		stage.node.addDependency(apiGatewayAccount);
 	}
 
-	// API Gateway Management API: postToConnection for fan-out + subscribe responses
-	wsApi.grantManageConnections(handler);
+	// API Gateway Management API: postToConnection for fan-out + subscribe responses.
+	// Grant to the shared execution role (not a single function) so publish()
+	// works from ANY compute — publishing is compute-agnostic (a public IAM call),
+	// and every compute assumes this role. Mirrors the data-block / AsyncJob grant
+	// pattern (grant the role, not one handler).
+	wsApi.grantManageConnections(parent.executionRole);
 
 	// Env vars for the Blocks handler Lambda
 	registerConfig(parent, 'BLOCKS_RT_WS_URL', stage.url);
@@ -165,19 +169,21 @@ function getOrCreateSharedInfra(stack: cdk.Stack, handler: cdk.aws_lambda.IFunct
 export class Realtime extends Scope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
 		super(id, { parent: scope });
-		// The WebSocket routes integrate directly with the compute's function, so
-		// Realtime currently requires a Lambda compute; other compute types need a
-		// different WebSocket integration — not yet supported.
-		const compute = this.compute;
-		if (!(compute instanceof LambdaCompute)) {
-			// Inline typed error (not the utils.js blocksError, which carries
-			// runtime-only deps) so this stays assertable via isBlocksError without
-			// pulling those into the CDK synth bundle.
-			const err = new Error(
-				`${RealtimeErrors.UnsupportedCompute}: Realtime "${this.fullId}" currently supports only a Lambda compute.`,
+		// The WebSocket routes are a stack-level singleton (one WS API per stack)
+		// that integrates to a single Lambda target, so bind them to the stack's
+		// DEFAULT compute deterministically — not this block's resolved compute.
+		// Connection bookkeeping is compute-agnostic (it only touches the shared
+		// connections table), and publish() works from any compute via the
+		// shared-role grant in getOrCreateSharedInfra. Realtime currently requires
+		// the default compute to be Lambda; container WebSocket integration is a
+		// later track. The brand check (not `instanceof`) survives duplicate
+		// bb-lambda-compute copies in one dependency tree.
+		const compute = this.defaultCompute;
+		if (!LambdaCompute.isLambdaCompute(compute)) {
+			throw blocksError(
+				RealtimeErrors.UnsupportedCompute,
+				`Realtime "${this.fullId}" currently requires a Lambda default compute.`,
 			);
-			err.name = RealtimeErrors.UnsupportedCompute;
-			throw err;
 		}
 		getOrCreateSharedInfra(cdk.Stack.of(this), compute.fn, this);
 	}

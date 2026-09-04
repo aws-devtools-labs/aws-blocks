@@ -8,6 +8,7 @@ import { Scope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard, SHARED_HANDLER_TIMEOUT_SECONDS } from '@aws-blocks/core/cdk';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AsyncJobContext,
@@ -88,9 +89,11 @@ export class AsyncJob<T = unknown> extends Scope {
 		// compute types need a different consumption path (e.g. runtime polling)
 		// that does not exist yet — fail loud at synth rather than provision a
 		// queue nothing consumes (submitted jobs would silently pile up). The
-		// CronJob and Realtime blocks add the same guard in this change.
+		// CronJob and Realtime blocks add the same guard in this change. The brand
+		// check (not `instanceof`) survives duplicate bb-lambda-compute copies in
+		// one dependency tree.
 		const compute = this.compute;
-		if (!(compute instanceof LambdaCompute)) {
+		if (!LambdaCompute.isLambdaCompute(compute)) {
 			throw blocksError(
 				AsyncJobErrors.UnsupportedCompute,
 				`AsyncJob "${this.fullId}" currently supports only a Lambda compute.`,
@@ -128,20 +131,16 @@ export class AsyncJob<T = unknown> extends Scope {
 		});
 
 		this.queue.grantSendMessages(this.executionRole);
-		registerConfig(
-			this,
-			`BLOCKS_QUEUE_URL_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
-			this.queue.queueUrl
-		);
-		// Sanitize the id identically to the QUEUE_URL key above: config entries
-		// are loaded into `process.env` at runtime (loadConfigToProcessEnv), so
-		// the key must be a valid env var name, and the Phase-2 owner-match reader
-		// must reconstruct the same sanitized string byte-for-byte.
-		registerConfig(
-			this,
-			`BLOCKS_HANDLER_OWNER_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
-			compute.fullId
-		);
+		// Config entries load into `process.env` at runtime (loadConfigToProcessEnv),
+		// so keys must be valid env var names. `sanitizeConfigKey` is the single
+		// shared rule the runtime reader must also use, so the writer and reader
+		// reconstruct a byte-identical key (see index.aws.ts).
+		const idKey = sanitizeConfigKey(this.fullId);
+		registerConfig(this, `BLOCKS_QUEUE_URL_${idKey}`, this.queue.queueUrl);
+		// Phase-2 owner-match seam: records which compute owns this handler. Nothing
+		// reads it until the container poller lands; same sanitized key so that
+		// future reader matches.
+		registerConfig(this, `BLOCKS_HANDLER_OWNER_${idKey}`, compute.fullId);
 
 		// The event source attaches to the compute's own function (guaranteed a
 		// Lambda compute by the guard above).

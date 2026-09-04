@@ -4,7 +4,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
-import { Scope } from '@aws-blocks/core/cdk';
+import { Scope, blocksError } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type {
@@ -32,15 +32,14 @@ export class CronJob<T = void> extends Scope {
 		// The scheduler invokes the compute's function directly, so a CronJob
 		// currently requires a Lambda compute. Other compute types need a
 		// different scheduler target (e.g. EventBridge → ECS) — not yet supported.
+		// The brand check (not `instanceof`) survives duplicate bb-lambda-compute
+		// copies in one dependency tree.
 		const compute = this.compute;
-		if (!(compute instanceof LambdaCompute)) {
-			// Match the inline typed-error pattern used by schedule.ts (new Error +
-			// err.name) so this is assertable via isBlocksError.
-			const err = new Error(
-				`${CronJobErrors.UnsupportedCompute}: CronJob "${this.fullId}" currently supports only a Lambda compute.`,
+		if (!LambdaCompute.isLambdaCompute(compute)) {
+			throw blocksError(
+				CronJobErrors.UnsupportedCompute,
+				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
 			);
-			err.name = CronJobErrors.UnsupportedCompute;
-			throw err;
 		}
 		const lambdaArn = compute.fn.functionArn;
 		const schedulerRole = getOrCreateSchedulerRole(cdk.Stack.of(this), lambdaArn);
