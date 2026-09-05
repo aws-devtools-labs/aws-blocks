@@ -28,6 +28,41 @@ stream() → AsyncJob.submit() → returns { channelId } immediately
                                          → SessionManager saves state to FileBucket
 ```
 
+## Client streaming API (compute-agnostic)
+
+The **client-facing** streaming surface is deliberately independent of *where*
+the agent loop runs. The runtime shows up at exactly one seam — the **transport**
+— so the same client code works over Lambda + Realtime today and other runtimes
+later. (The backend methods below are *not* part of this abstraction — they are
+the current Realtime runtime's implementation, which a different runtime would
+replace, not reuse.)
+
+```
+  CLIENT (browser) — compute-agnostic          BACKEND (Agent BB) — current runtime
+  createChat({ transport, api })               stream() → submit job → { channelId }
+    └─ sendMessage(msg)                         getChannel() → Realtime channel handle
+         fuses subscribe + run                  resume() → submit resume job
+         (no subscribe-before-send race)        runAgent() (private) → publishes chunks
+  transport = the ONE runtime-specific piece
+```
+
+- `ChatTransport` (`transport.ts`) has two primitives: `run(turn)` (produce) and
+  `subscribe(channelId)` (consume, an `AsyncIterable` with an `established`
+  promise). `createChat`'s easy default fuses them; the flexible cases (fan-out,
+  observer-only, decoupled produce/consume) drop to the primitives. This
+  interface is the seam a future runtime implements — the app above it is
+  unchanged.
+- `realtimeTransport(io)` is the Lambda + Realtime implementation of that seam. It
+  bridges the callback-based Realtime channel (`subscribe(handler)` +
+  `established`) into the `AsyncIterable` `ChunkStream` via a small
+  single-consumer push queue (`ChunkQueue`), and maps `run` onto the app's
+  `stream`/`resume` RPCs (which submit the AsyncJob). A new runtime supplies a
+  different transport here; nothing else on the client changes.
+
+The server methods (`stream()`/`getChannel()`/`resume()` and the private
+`runAgent()`) are the Realtime path itself and remain the app's backend contract.
+Only the `useChat` client hook is deprecated — superseded by `createChat`.
+
 ## Session Persistence
 
 Two storage backends, same FileBucket BB:
