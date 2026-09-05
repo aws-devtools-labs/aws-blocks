@@ -181,6 +181,12 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+
+      const blocksIntegration = readFileSync(join(tmpDir, 'amplify', 'blocks.ts'), 'utf-8');
+      assert.match(blocksIntegration, /import \{ registerConfig \} from '@aws-blocks\/blocks\/cdk';/);
+      assert.match(blocksIntegration, /registerConfig\(blocks, 'COGNITO_USER_POOL_ID', cfnUserPool\.ref\);/);
+      assert.match(blocksIntegration, /registerConfig\(blocks, 'COGNITO_CLIENT_ID', cfnUserPoolClient\.ref\);/);
+      assert.doesNotMatch(blocksIntegration, /blocks\.handler\.addEnvironment\('COGNITO_/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
