@@ -1,52 +1,37 @@
-# bb-data Infrastructure Roadmap
+# bb-data Infrastructure
 
-## Current State
+## Current Architecture
 
-Local development uses PGlite (WASM Postgres) - no cloud infrastructure needed.
+`Database` uses different engines for local development and deployed workloads:
 
-## Production Requirements
+- **Local development:** PGlite (WASM PostgreSQL) persists data under `.bb-data/`; no AWS resources are required.
+- **AWS-provisioned database:** `Database` provisions Aurora Serverless v2 and accesses it through the RDS Data API.
+- **Existing database:** `Database.fromExisting({ connectionString })` uses the PostgreSQL client engine for a database the application already owns, such as Supabase or Neon.
 
-To deploy to AWS, the following infrastructure is needed:
+The AWS-provisioned path is the default when no `connection` option is supplied.
 
-### Option A: Data API (Simpler)
+## AWS-Provisioned Database
 
-**Pros:** No VPC for Lambda, no connection pooling concerns
-**Cons:** Higher latency (~50-100ms), no LISTEN/NOTIFY support
+The CDK layer creates:
 
-Infrastructure:
-- Aurora Serverless v2 PostgreSQL with Data API enabled
-- Secrets Manager for credentials
-- Isolated VPC subnets (no NAT needed)
+- Aurora Serverless v2 PostgreSQL with the RDS Data API enabled
+- an isolated VPC and security group for the cluster
+- a Secrets Manager secret for database credentials
+- runtime configuration for the cluster ARN, secret ARN, and database name
+- IAM permissions for the application execution role to use the Data API and read the generated secret
 
-Runtime:
-- `@aws-sdk/client-rds-data` based Kysely dialect
-- Env vars: `BLOCKS_DATA_CLUSTER_ARN`, `BLOCKS_DATA_SECRET_ARN`, `BLOCKS_DATA_DATABASE`
+The application Lambda does not open a PostgreSQL connection to the cluster and this construct does not create an RDS Proxy. The RDS Data API manages request access to Aurora without placing the application Lambda in the database VPC.
 
-### Option B: Direct Connection (Recommended for Realtime)
+## Migrations
 
-**Pros:** Lower latency, supports LISTEN/NOTIFY for realtime
-**Cons:** More complex infra, VPC costs
+When `migrationsPath` is configured, the CDK layer adds a Lambda-backed CloudFormation custom resource. It packages the SQL migration files, runs pending migrations during deploy, and records applied files in the `_migrations` table. The custom resource waits for the Aurora writer instance before it runs.
 
-Infrastructure:
-- Aurora Serverless v2 PostgreSQL
-- RDS Proxy (connection pooling for Lambda)
-- VPC with NAT gateway or VPC endpoints
-- Secrets Manager for credentials
-- Lambda configured in VPC
+In local development, migrations run against PGlite before the first query. See [README.md](./README.md#migrations) for the migration workflow.
 
-Runtime:
-- `pg` driver based Kysely dialect
-- Connection string from Secrets Manager
+## Existing PostgreSQL Databases
 
-## Implementation Tasks
+`fromExisting({ connectionString })` is for a database managed outside this Building Block. The runtime uses the PostgreSQL client engine and the application owner remains responsible for network access, connection pooling or proxying, and the database lifecycle. TLS verification is enabled by default; see [README.md](./README.md#tls-certificate-verification) for the required CA configuration.
 
-1. [ ] Create production Kysely dialect (Data API or pg driver)
-2. [ ] Add environment detection (local vs Lambda)
-3. [ ] Implement `materialize()` in infra.ts
-4. [ ] Add `grantAccess()` helper for Lambda permissions
-5. [ ] Migration runner for production (currently local-only)
-6. [ ] Connection pooling strategy
+## Future Work
 
-## Decision: Data API vs Direct
-
-For future realtime support (LISTEN/NOTIFY), **direct connection with RDS Proxy** is recommended. Data API is acceptable for simpler use cases without realtime needs.
+The block does not currently provision a managed direct-connection architecture such as an RDS Proxy, VPC-connected application Lambda, or `LISTEN`/`NOTIFY` support. Those would be separate capabilities from the existing Aurora Data API path.
