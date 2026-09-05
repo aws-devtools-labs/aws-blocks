@@ -12,6 +12,13 @@ export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
   bbVersion?: string;
+  /**
+   * Internal marker for framework-owned `Scope` subclasses (e.g. `RawRoute`)
+   * that are not Building Blocks. Such scopes are excluded from the custom
+   * Building Block count even though they have no `bbName`.
+   * @internal
+   */
+  frameworkScope?: boolean;
 }
 
 export type ScopeParent = Scope | { id: string };
@@ -143,6 +150,14 @@ export class Scope {
   /** Static registry — collects BB names as they're instantiated */
   private static _bbRegistry: Map<string, { version: string; count: number }> = new Map();
 
+  /**
+   * Count of nameless custom Building Blocks — `Scope` subclasses instantiated
+   * without a `bbName`. Tracked separately from `_bbRegistry` because they have
+   * no name to key on. Excludes plain `Scope` grouping nodes and framework
+   * scopes (see the constructor).
+   */
+  private static _unnamedCustomCount = 0;
+
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
@@ -157,6 +172,14 @@ export class Scope {
         version: options.bbVersion || 'unknown',
         count: (existing?.count || 0) + 1,
       });
+    } else if (this.constructor !== Scope && !options?.frameworkScope) {
+      // A nameless `Scope` *subclass* is a custom Building Block authored
+      // without BB metadata. It can never be an official BB (its name is
+      // unknown and never exposed), so it counts toward the custom total.
+      // Excluded: a plain `new Scope()` used purely for grouping
+      // (`this.constructor === Scope`) and framework-owned scopes such as
+      // `RawRoute` (`frameworkScope: true`).
+      Scope._unnamedCustomCount += 1;
     }
   }
 
@@ -165,6 +188,8 @@ export class Scope {
    *
    * Only official BB names (in OFFICIAL_BB_NAMES) are returned in `blocks`.
    * Custom BBs are counted in `customBlocksCount` but their names are never exposed.
+   * This includes both named custom BBs (a `bbName` not in OFFICIAL_BB_NAMES) and
+   * nameless custom BBs (`Scope` subclasses instantiated without a `bbName`).
    *
    * @returns Official blocks, total instance count, and total number of custom BB instances.
    * @internal
@@ -181,12 +206,17 @@ export class Scope {
         customBlocksCount += count;
       }
     }
+    // Nameless custom BBs have no registry key of their own, so fold their
+    // running count into both totals here.
+    totalCount += Scope._unnamedCustomCount;
+    customBlocksCount += Scope._unnamedCustomCount;
     return { blocks, totalCount, customBlocksCount };
   }
 
   /** Reset registry (useful for testing). */
   static _resetRegistry(): void {
     Scope._bbRegistry.clear();
+    Scope._unnamedCustomCount = 0;
   }
 
   get fullId(): string {
