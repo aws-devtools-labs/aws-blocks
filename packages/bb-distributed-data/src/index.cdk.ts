@@ -7,147 +7,177 @@
  * Optionally runs migrations via a CustomResource Lambda.
  */
 
-import { Scope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import {
+	BuildingBlockScope,
+	blocksNodejsBundling,
+	DEFAULT_NODE_RUNTIME,
+	registerConfig,
+	synthGuard,
+} from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import {
+	ENV_SANITIZE,
+	LAMBDA_MIGRATIONS_DIR,
+	MIGRATION_LAMBDA_TIMEOUT_MINUTES,
+	sanitizeDbRoleName,
+} from './constants.js';
 import type { DistributedDatabaseOptions } from './types.js';
-import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
 
-export class DistributedDatabase extends Scope {
-  constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-    super(id, { parent: scope });
+export class DistributedDatabase extends BuildingBlockScope {
+	getVpcRequirements(): VpcRequirements {
+		// DSQL has no VPC endpoint — it's reached over a public HTTPS endpoint. The
+		// shared handler runtime therefore needs egress. If it's placed in isolated
+		// subnets the deploy succeeds but every DSQL call times out at runtime, so
+		// declare this: finalizeVpc validates it against the runtime's placement and
+		// fails synth on a mismatch instead of shipping a silently-broken deploy.
+		return { requiresEgress: true };
+	}
 
-    const stack = cdk.Stack.of(this);
-    const envName = this.fullId.replace(ENV_SANITIZE, '_');
-    const region = stack.region;
-    const dbRole = sanitizeDbRoleName(this.fullId);
+	constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
+		super(id, { parent: scope });
 
-    // Removal policy and deletion protection are resolved independently from the
-    // stack-wide `defaults` (per-block `removalPolicy` option wins for that field).
-    // Reading `defaults.deletionProtection` directly — rather than deriving it
-    // from `removalPolicy` — keeps every adopting block consistent: the same
-    // `defaults` object yields the same posture no matter which block reads it.
-    const removalPolicy =
-      options?.removalPolicy === 'destroy'
-        ? cdk.RemovalPolicy.DESTROY
-        : options?.removalPolicy === 'retain'
-          ? cdk.RemovalPolicy.RETAIN
-          : this.defaults.removalPolicy;
+		const stack = cdk.Stack.of(this);
+		const envName = this.fullId.replace(ENV_SANITIZE, '_');
+		const region = stack.region;
+		const dbRole = sanitizeDbRoleName(this.fullId);
 
-    const cluster = new cdk.CfnResource(stack, `${this.fullId}DsqlCluster`, {
-      type: 'AWS::DSQL::Cluster',
-      properties: {
-        DeletionProtectionEnabled: this.defaults.deletionProtection,
-      },
-    });
+		// Removal policy and deletion protection are resolved independently from the
+		// stack-wide `defaults` (per-block `removalPolicy` option wins for that field).
+		// Reading `defaults.deletionProtection` directly — rather than deriving it
+		// from `removalPolicy` — keeps every adopting block consistent: the same
+		// `defaults` object yields the same posture no matter which block reads it.
+		const removalPolicy =
+			options?.removalPolicy === 'destroy'
+				? cdk.RemovalPolicy.DESTROY
+				: options?.removalPolicy === 'retain'
+					? cdk.RemovalPolicy.RETAIN
+					: this.defaults.removalPolicy;
 
-    cluster.applyRemovalPolicy(removalPolicy);
+		const cluster = new cdk.CfnResource(stack, `${this.fullId}DsqlCluster`, {
+			type: 'AWS::DSQL::Cluster',
+			properties: {
+				DeletionProtectionEnabled: this.defaults.deletionProtection,
+			},
+		});
 
-    const endpoint = cluster.getAtt('Endpoint').toString();
+		cluster.applyRemovalPolicy(removalPolicy);
 
-    // Config for runtime — flows through S3 config (loaded into process.env at
-    // cold start) like every other block, instead of a direct env var.
-    registerConfig(this, `BLOCKS_${envName}_ENDPOINT`, endpoint);
-    registerConfig(this, `BLOCKS_${envName}_REGION`, region);
+		const endpoint = cluster.getAtt('Endpoint').toString();
 
-    // IAM grant — the shared execution role gets DML-only access via custom DB
-    // role (least privilege).
-    this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
-      actions: ['dsql:DbConnect'],
-      resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
-    }));
+		// Config for runtime — flows through S3 config (loaded into process.env at
+		// cold start) like every other block, instead of a direct env var.
+		registerConfig(this, `BLOCKS_${envName}_ENDPOINT`, endpoint);
+		registerConfig(this, `BLOCKS_${envName}_REGION`, region);
 
-    new cdk.CfnOutput(stack, `${this.fullId}DsqlEndpoint`, { value: endpoint });
+		// IAM grant — the shared execution role gets DML-only access via custom DB
+		// role (least privilege).
+		this.executionRole.addToPrincipalPolicy(
+			new iam.PolicyStatement({
+				actions: ['dsql:DbConnect'],
+				resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
+			}),
+		);
 
-    // The shared execution role ARN is mapped to the custom DB role.
-    const appRoleArn = this.executionRole.roleArn;
+		new cdk.CfnOutput(stack, `${this.fullId}DsqlEndpoint`, { value: endpoint });
 
-    // Resolve migrations path if provided
-    const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
-    const migrationsHash = resolvedMigrationsPath ? hashMigrationsDir(resolvedMigrationsPath) : 'no-migrations';
+		// The shared execution role ARN is mapped to the custom DB role.
+		const appRoleArn = this.executionRole.roleArn;
 
-    // Migration/provisioning Lambda — always created to provision the app DB role.
-    // Also runs .sql migrations when migrationsPath is provided.
-    const migrationFn = new lambda.NodejsFunction(stack, `${this.fullId}DsqlMigrationFn`, {
-      // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
-      // Must NOT use ../src/migration-lambda.ts — src/ is excluded from the published package.
-      entry: join(import.meta.dirname ?? new URL('.', import.meta.url).pathname, 'migration-lambda.js'),
-      handler: 'handler',
-      runtime: DEFAULT_NODE_RUNTIME,
-      timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
-      // Own the migration Lambda's log group so its retention follows the
-      // stack-wide default instead of AWS's infinite retention.
-      logGroup: new LogGroup(stack, `${this.fullId}DsqlMigrationLogs`, {
-        retention: this.defaults.logRetention,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-      environment: {
-        DSQL_ENDPOINT: endpoint,
-        DSQL_REGION: region,
-        MIGRATIONS_DIR: LAMBDA_MIGRATIONS_DIR,
-        APP_ROLE_ARN: appRoleArn,
-        DB_ROLE_NAME: dbRole,
-      },
-      bundling: blocksNodejsBundling({
-        commandHooks: {
-          beforeBundling: () => [],
-          beforeInstall: () => [],
-          afterBundling: (_inputDir: string, outputDir: string) => resolvedMigrationsPath
-            ? [`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`]
-            : [],
-        },
-      }),
-    });
+		// Resolve migrations path if provided
+		const resolvedMigrationsPath = options?.migrationsPath ? resolve(options.migrationsPath) : undefined;
+		const migrationsHash = resolvedMigrationsPath ? hashMigrationsDir(resolvedMigrationsPath) : 'no-migrations';
 
-    // Migration Lambda needs Admin access (DDL + role management)
-    migrationFn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['dsql:DbConnectAdmin'],
-      resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
-    }));
+		// Migration/provisioning Lambda — always created to provision the app DB role.
+		// Also runs .sql migrations when migrationsPath is provided.
+		const migrationFn = new lambda.NodejsFunction(stack, `${this.fullId}DsqlMigrationFn`, {
+			// Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
+			// Must NOT use ../src/migration-lambda.ts — src/ is excluded from the published package.
+			entry: join(import.meta.dirname ?? new URL('.', import.meta.url).pathname, 'migration-lambda.js'),
+			handler: 'handler',
+			runtime: DEFAULT_NODE_RUNTIME,
+			timeout: cdk.Duration.minutes(MIGRATION_LAMBDA_TIMEOUT_MINUTES),
+			// Own the migration Lambda's log group so its retention follows the
+			// stack-wide default instead of AWS's infinite retention.
+			logGroup: new LogGroup(stack, `${this.fullId}DsqlMigrationLogs`, {
+				retention: this.defaults.logRetention,
+				removalPolicy: cdk.RemovalPolicy.DESTROY,
+			}),
+			environment: {
+				DSQL_ENDPOINT: endpoint,
+				DSQL_REGION: region,
+				MIGRATIONS_DIR: LAMBDA_MIGRATIONS_DIR,
+				APP_ROLE_ARN: appRoleArn,
+				DB_ROLE_NAME: dbRole,
+			},
+			bundling: blocksNodejsBundling({
+				commandHooks: {
+					beforeBundling: () => [],
+					beforeInstall: () => [],
+					afterBundling: (_inputDir: string, outputDir: string) =>
+						resolvedMigrationsPath
+							? [
+									`cp -r ${resolvedMigrationsPath} ${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`,
+								]
+							: [],
+				},
+			}),
+		});
 
-    const provider = new cr.Provider(stack, `${this.fullId}DsqlMigrationProvider`, {
-      onEventHandler: migrationFn,
-    });
+		// Migration Lambda needs Admin access (DDL + role management)
+		migrationFn.addToRolePolicy(
+			new iam.PolicyStatement({
+				actions: ['dsql:DbConnectAdmin'],
+				resources: [`arn:aws:dsql:${region}:${stack.account}:cluster/${cluster.ref}`],
+			}),
+		);
 
-    const migrationCR = new cdk.CustomResource(stack, `${this.fullId}DsqlMigrationCR`, {
-      serviceToken: provider.serviceToken,
-      properties: { migrationsHash, dbRole },
-    });
+		const provider = new cr.Provider(stack, `${this.fullId}DsqlMigrationProvider`, {
+			onEventHandler: migrationFn,
+		});
 
-    // Ensure migrations run after cluster is created
-    migrationCR.node.addDependency(cluster);
-  }
+		const migrationCR = new cdk.CustomResource(stack, `${this.fullId}DsqlMigrationCR`, {
+			serviceToken: provider.serviceToken,
+			properties: { migrationsHash, dbRole },
+		});
 
-  /**
-   * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
-   * has no engine — queries run in the app Lambda against the deployed cluster.
-   * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
-   * query ran at synth time (e.g. at module scope).
-   */
-  getEngine(): never {
-    return synthGuard('DistributedDatabase', 'getEngine');
-  }
+		// Ensure migrations run after cluster is created
+		migrationCR.node.addDependency(cluster);
+	}
+
+	/**
+	 * Runtime-only. This is the CDK (synth) build: it defines infrastructure and
+	 * has no engine — queries run in the app Lambda against the deployed cluster.
+	 * `createKyselyAdapter()` no longer calls this eagerly, so reaching it means a
+	 * query ran at synth time (e.g. at module scope).
+	 */
+	getEngine(): never {
+		return synthGuard('DistributedDatabase', 'getEngine');
+	}
 }
 
 /** Hash all .sql files in a directory to detect changes. */
 function hashMigrationsDir(dir: string): string {
-  const hash = createHash('sha256');
-  const files = readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
-  for (const file of files) {
-    hash.update(file);
-    hash.update(readFileSync(join(dir, file), 'utf-8'));
-  }
-  return hash.digest('hex').slice(0, 16);
+	const hash = createHash('sha256');
+	const files = readdirSync(dir)
+		.filter((f) => f.endsWith('.sql'))
+		.sort();
+	for (const file of files) {
+		hash.update(file);
+		hash.update(readFileSync(join(dir, file), 'utf-8'));
+	}
+	return hash.digest('hex').slice(0, 16);
 }
 
-export { sql, createKyselyAdapter } from '@aws-blocks/data-common';
 export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
+export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
 export { DistributedDatabaseErrors } from './errors.js';
 export type { DistributedDatabaseOptions } from './types.js';

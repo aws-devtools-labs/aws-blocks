@@ -84,7 +84,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 | Aurora Serverless v2 cluster | PostgreSQL database |
 | VPC + private subnets | Network isolation |
 | RDS Proxy | Connection pooling |
-| Security group | Inbound 5432 from Lambda SG only |
+| Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials |
 | Migration Lambda + CustomResource | Runs .sql files on deploy |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |

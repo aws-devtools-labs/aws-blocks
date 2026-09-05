@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RemovalPolicy } from 'aws-cdk-lib';
-import { Scope, synthGuard } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KVStoreOptions, ExternalTableRef } from './types.js';
 import { TTL_ATTRIBUTE } from './ttl.js';
@@ -12,7 +14,7 @@ import { TTL_ATTRIBUTE } from './ttl.js';
 export { KVStoreErrors } from './errors.js';
 export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
 
-export class KVStore extends Scope {
+export class KVStore extends BuildingBlockScope {
 	private table: ITable;
 
 	/**
@@ -22,6 +24,12 @@ export class KVStore extends Scope {
 	 */
 	static fromExisting(tableName: string): ExternalTableRef {
 		return { __brand: 'ExternalTableRef' as const, tableName };
+	}
+
+	getVpcRequirements(): VpcRequirements {
+		return {
+			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB],
+		};
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {

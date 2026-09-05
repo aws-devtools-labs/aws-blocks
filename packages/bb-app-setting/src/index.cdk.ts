@@ -1,14 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, registerConfig } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { Scope, registerConfig, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { AppSettingOptions, InternalAppSettingOptions } from './types.js';
 
@@ -26,7 +28,7 @@ export type { AppSettingOptions } from './types.js';
  *   or with a customer-managed key when `kmsKeyArn` is provided (the handler is
  *   then granted `kms:Decrypt`/`Encrypt` on that specific key ARN).
  */
-export class AppSetting<T = string> extends Scope {
+export class AppSetting<T = string> extends BuildingBlockScope {
 	/**
 	 * Reference an SSM parameter that is created and owned **outside this stack**
 	 * (e.g. a connection string seeded by `ensureSecrets` before deploy). The
@@ -49,6 +51,12 @@ export class AppSetting<T = string> extends Scope {
 		return new AppSetting<T>(scope, id, opts);
 	}
 
+	getVpcRequirements(): VpcRequirements {
+		return {
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
+		};
+	}
+
 	constructor(scope: ScopeParent, id: string, options: AppSettingOptions<T>) {
 		super(id, { parent: scope });
 
@@ -60,7 +68,7 @@ export class AppSetting<T = string> extends Scope {
 		if (options.secret && options.schema) {
 			const err = new Error(
 				`AppSetting '${id}': 'secret' and 'schema' cannot be used together. ` +
-				`Secrets are always plain strings. Remove the schema or the secret flag.`
+					`Secrets are always plain strings. Remove the schema or the secret flag.`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -69,7 +77,7 @@ export class AppSetting<T = string> extends Scope {
 		if (options.schema && options.value === undefined) {
 			const err = new Error(
 				`AppSetting '${id}': a schema is provided but no value. ` +
-				`Provide a value that conforms to the schema so the SSM parameter is valid on first deploy.`
+					`Provide a value that conforms to the schema so the SSM parameter is valid on first deploy.`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -79,7 +87,7 @@ export class AppSetting<T = string> extends Scope {
 			if (!options.secret) {
 				const err = new Error(
 					`AppSetting '${id}': 'kmsKeyArn' is only valid with 'secret: true'. ` +
-					`Non-secret String parameters are not encrypted.`
+						`Non-secret String parameters are not encrypted.`,
 				);
 				err.name = AppSettingErrors.ValidationFailed;
 				throw err;
@@ -87,7 +95,7 @@ export class AppSetting<T = string> extends Scope {
 			if (options.kmsKeyArn.trim() === '') {
 				const err = new Error(
 					`AppSetting '${id}': 'kmsKeyArn' must be a non-empty KMS key ARN. ` +
-					`Omit it to use the default aws/ssm key.`
+						`Omit it to use the default aws/ssm key.`,
 				);
 				err.name = AppSettingErrors.ValidationFailed;
 				throw err;
@@ -97,8 +105,8 @@ export class AppSetting<T = string> extends Scope {
 		if (options.secret && options.value !== undefined) {
 			const err = new Error(
 				`AppSetting '${id}': secrets should not have a value in source code. ` +
-				`Remove the value — a random secret will be generated on first deploy. ` +
-				`Set the real value at runtime via AppSetting.put().`
+					`Remove the value — a random secret will be generated on first deploy. ` +
+					`Set the real value at runtime via AppSetting.put().`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -107,7 +115,7 @@ export class AppSetting<T = string> extends Scope {
 		if (external && options.value !== undefined) {
 			const err = new Error(
 				`AppSetting '${id}': 'external' settings are owned elsewhere and must not have a value. ` +
-				`Remove the value — the parameter is created and seeded outside this stack.`
+					`Remove the value — the parameter is created and seeded outside this stack.`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -115,7 +123,7 @@ export class AppSetting<T = string> extends Scope {
 
 		if (external && !options.name) {
 			const err = new Error(
-				`AppSetting '${id}': 'external' requires an explicit 'name' referencing the existing parameter.`
+				`AppSetting '${id}': 'external' requires an explicit 'name' referencing the existing parameter.`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -124,7 +132,7 @@ export class AppSetting<T = string> extends Scope {
 		if (!options.secret && !external && options.value === undefined) {
 			const err = new Error(
 				`AppSetting '${id}': non-secret settings require a value. ` +
-				`Provide an initial value for the SSM parameter.`
+					`Provide an initial value for the SSM parameter.`,
 			);
 			err.name = AppSettingErrors.ValidationFailed;
 			throw err;
@@ -134,9 +142,7 @@ export class AppSetting<T = string> extends Scope {
 
 		// Always JSON.stringify
 		// For secrets without a value, the Custom Resource Lambda generates a random string
-		const initialValue = options.value !== undefined
-			? JSON.stringify(options.value)
-			: undefined;
+		const initialValue = options.value !== undefined ? JSON.stringify(options.value) : undefined;
 
 		const parameterArn = cdk.Stack.of(this).formatArn({
 			service: 'ssm',
@@ -163,21 +169,25 @@ export class AppSetting<T = string> extends Scope {
 				// Customer-managed key: grant on the specific key ARN. NOTE: the key's
 				// own key policy must also allow this role (we can't edit a BYO key's
 				// policy from here) — see the README.
-				this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
-					actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
-					resources: [options.kmsKeyArn],
-				}));
+				this.executionRole.addToPrincipalPolicy(
+					new iam.PolicyStatement({
+						actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
+						resources: [options.kmsKeyArn],
+					}),
+				);
 			} else {
 				// Default aws/ssm key: scope the wildcard with a ViaService condition.
-				this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
-					actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
-					resources: ['*'],
-					conditions: {
-						StringEquals: {
-							'kms:ViaService': `ssm.${cdk.Stack.of(this).region}.amazonaws.com`,
+				this.executionRole.addToPrincipalPolicy(
+					new iam.PolicyStatement({
+						actions: external ? ['kms:Decrypt'] : ['kms:Decrypt', 'kms:Encrypt'],
+						resources: ['*'],
+						conditions: {
+							StringEquals: {
+								'kms:ViaService': `ssm.${cdk.Stack.of(this).region}.amazonaws.com`,
+							},
 						},
-					},
-				}));
+					}),
+				);
 			}
 		} else if (!external) {
 			// ── String parameter via CDK construct ──────────────────────────
@@ -193,10 +203,12 @@ export class AppSetting<T = string> extends Scope {
 
 		// Grant handler SSM access on this parameter. External parameters are owned
 		// elsewhere, so the app only reads them (no ssm:PutParameter).
-		this.executionRole.addToPrincipalPolicy(new iam.PolicyStatement({
-			actions: external ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
-			resources: [parameterArn],
-		}));
+		this.executionRole.addToPrincipalPolicy(
+			new iam.PolicyStatement({
+				actions: external ? ['ssm:GetParameter'] : ['ssm:GetParameter', 'ssm:PutParameter'],
+				resources: [parameterArn],
+			}),
+		);
 
 		// Pass the parameter name to the runtime via config registry
 		const envKey = `BLOCKS_SSM_PARAM_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
@@ -314,34 +326,39 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 			`),
 	});
 
-	secretInitFn.addToRolePolicy(new iam.PolicyStatement({
-		// GetParameter is needed to read a secret's current value when re-keying it.
-		actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
-		resources: cdk.Lazy.list({
-			produce: () => state!.params.map(p =>
-				stack.formatArn({
-					service: 'ssm',
-					resource: 'parameter',
-					resourceName: p.name.replace(/^\//, ''),
-				})
-			),
+	secretInitFn.addToRolePolicy(
+		new iam.PolicyStatement({
+			// GetParameter is needed to read a secret's current value when re-keying it.
+			actions: ['ssm:GetParameter', 'ssm:PutParameter', 'ssm:DeleteParameter', 'ssm:AddTagsToResource'],
+			resources: cdk.Lazy.list({
+				produce: () =>
+					state!.params.map((p) =>
+						stack.formatArn({
+							service: 'ssm',
+							resource: 'parameter',
+							resourceName: p.name.replace(/^\//, ''),
+						}),
+					),
+			}),
 		}),
-	}));
+	);
 
 	// SSM SecureString encryption goes through KMS via the SSM service. Scoping to
 	// `kms:ViaService = ssm.<region>` covers both the default aws/ssm key and any
 	// customer-managed key used above (the CMK's own key policy must also allow
 	// this role). Encrypt = create/re-key; Decrypt = read the current value when
 	// re-keying. Standard-tier SecureStrings don't use GenerateDataKey.
-	secretInitFn.addToRolePolicy(new iam.PolicyStatement({
-		actions: ['kms:Encrypt', 'kms:Decrypt'],
-		resources: ['*'],
-		conditions: {
-			StringEquals: {
-				'kms:ViaService': `ssm.${stack.region}.amazonaws.com`,
+	secretInitFn.addToRolePolicy(
+		new iam.PolicyStatement({
+			actions: ['kms:Encrypt', 'kms:Decrypt'],
+			resources: ['*'],
+			conditions: {
+				StringEquals: {
+					'kms:ViaService': `ssm.${stack.region}.amazonaws.com`,
+				},
 			},
-		},
-	}));
+		}),
+	);
 
 	const provider = new cr.Provider(stack, 'BlocksSecretProvider', {
 		onEventHandler: secretInitFn,
@@ -351,7 +368,11 @@ function registerSecret(stack: cdk.Stack, parameterName: string, logRetention: R
 		serviceToken: provider.serviceToken,
 		properties: {
 			Parameters: cdk.Lazy.any({ produce: () => state!.params }),
-			StackName: (() => { let s = stack; while (s.nestedStackParent) s = s.nestedStackParent; return s.stackName; })(),
+			StackName: (() => {
+				let s = stack;
+				while (s.nestedStackParent) s = s.nestedStackParent;
+				return s.stackName;
+			})(),
 		},
 	});
 }
