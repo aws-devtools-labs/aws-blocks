@@ -53,12 +53,12 @@ export interface PutOptions {
 }
 
 export interface GetUrlOptions {
-	/** URL expiration in seconds. Default: 3600. */
+	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
 }
 
 export interface PutUrlOptions {
-	/** URL expiration in seconds. Default: 3600. */
+	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
 	/** Required content type for the upload. */
 	contentType?: string;

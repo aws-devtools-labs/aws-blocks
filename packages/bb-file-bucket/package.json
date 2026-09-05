@@ -47,7 +47,7 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs FileBucket",
     "build": "tsc --build",
-    "test": "node --test dist/index.test.js dist/index.cdk.test.js dist/scan.test.js dist/file-server.test.js dist/url-encoding.test.js dist/path-containment.test.js dist/bucket-name.test.js"
+    "test": "node --test dist/index.test.js dist/index.cdk.test.js dist/scan.test.js dist/file-server.test.js dist/url-encoding.test.js dist/path-containment.test.js dist/bucket-name.test.js dist/presigned-url.test.js"
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.5",
