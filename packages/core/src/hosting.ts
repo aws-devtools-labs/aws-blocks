@@ -768,6 +768,12 @@ export class Hosting extends Construct {
       for (const dep of assetDeployments) {
         configDeployment.node.addDependency(dep);
       }
+
+      // The route-table update is the atomic cutover: it makes the new
+      // build prefix reachable at the edge. It must also wait for this
+      // resolved config deployment, otherwise CloudFormation can switch
+      // routes while `config.json` still contains the static placeholder.
+      hosting.addBuildAssetDependency(configDeployment);
     }
 
     // ── 9. Register public origin + CORS hosting origin into S3 config ──
