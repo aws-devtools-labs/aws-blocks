@@ -105,9 +105,14 @@ import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 
 CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
 CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
+CronJobErrors.UnsupportedCompute // resolved compute is not Lambda (thrown at synth time)
 ```
 
-Both errors are thrown at construction time (fail-fast validation).
+## Compute Compatibility
+
+CronJob targets its resolved compute. It currently supports Lambda compute only;
+constructing a CronJob under another compute fails at synth time with
+`UnsupportedComputeException`.
 
 ## Examples
 
@@ -212,7 +217,7 @@ In local dev mode, CronJob runs schedules in-process:
 Automatically provisions:
 
 - **EventBridge Schedule:** One `AWS::Scheduler::Schedule` per CronJob instance
-- **Shared Lambda:** Targets the shared Lambda (same as API handlers and AsyncJob). No dedicated Lambda per job.
+- **Lambda compute:** Each schedule targets its resolved Lambda compute. No dedicated Lambda is created per job.
 - **IAM role:** Per-stack EventBridge Scheduler role with `lambda:InvokeFunction` permission
 - **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
 
