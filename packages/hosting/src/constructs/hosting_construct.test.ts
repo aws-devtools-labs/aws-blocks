@@ -1347,6 +1347,35 @@ void describe('HostingConstruct — Error paths', () => {
     if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  void it('rejects compute placement that the construct cannot honor', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+
+    const manifest: DeployManifest = {
+      ...ssrManifest(staticDir, bundleDir),
+      compute: {
+        default: {
+          type: 'handler',
+          bundle: bundleDir,
+          handler: 'index.handler',
+          placement: 'global',
+        },
+      },
+    };
+
+    assert.throws(
+      () => new HostingConstruct(stack, 'Hosting', { manifest }),
+      (err: unknown) => {
+        assert.ok(err instanceof HostingError);
+        assert.strictEqual(err.name, 'InvalidComputePlacementError');
+        assert.ok(err.message.includes("type 'handler'"));
+        assert.ok(err.message.includes("placement 'global'"));
+        return true;
+      },
+    );
+  });
+
   void it('throws CacheComputeResourceNotFoundError when cache references non-existent compute', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();

@@ -459,6 +459,18 @@ export class HostingConstruct extends Construct {
     const hasCompute = computeEntries.length > 0;
 
     for (const [name, resource] of computeEntries) {
+      const expectedPlacement = resource.type === 'edge' ? 'global' : 'regional';
+      if (resource.placement !== expectedPlacement) {
+        throw new HostingError('InvalidComputePlacementError', {
+          message:
+            `Compute resource '${name}' has type '${resource.type}' with placement '${resource.placement}'. ` +
+            `That type must use '${expectedPlacement}' placement.`,
+          resolution:
+            "Use placement: 'global' only with type: 'edge'. " +
+            "Use placement: 'regional' with type: 'handler' or type: 'http-server'.",
+        });
+      }
+
       if (resource.type === 'edge') {
         const edgeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
           name,
