@@ -269,7 +269,7 @@ export type QueryOptions<
 		index: Name;
 		/** Key conditions for the query. */
 		where: KeyCondition<T, Indexes[Name]>;
-		/** Maximum number of items to return. */
+		/** Maximum number of items to return. Must be a positive integer. */
 		limit?: number;
 		/** Sort order. Defaults to 'asc'. */
 		order?: 'asc' | 'desc';
@@ -278,14 +278,14 @@ export type QueryOptions<
 	index?: undefined;
 	/** Key conditions for the primary key query. */
 	where: KeyCondition<T, K>;
-	/** Maximum number of items to return. */
+	/** Maximum number of items to return. Must be a positive integer. */
 	limit?: number;
 	/** Sort order. Defaults to 'asc'. */
 	order?: 'asc' | 'desc';
 };
 
 export interface ScanOptions {
-	/** Maximum number of items to return. */
+	/** Maximum number of items to return. Must be a positive integer. */
 	limit?: number;
 }
 
@@ -298,5 +298,4 @@ export type DeleteOptions<T> =
 	| { ifExists: true; ifFieldEquals?: never }
 	| { ifExists?: never; ifFieldEquals: Partial<T> }
 	| Record<string, never>;
-
 

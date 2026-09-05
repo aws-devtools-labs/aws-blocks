@@ -108,7 +108,7 @@ for await (const order of orders.query({
 |-------|------|----------|-------------|
 | `index` | `keyof Indexes` | No | GSI to query. Omit to query the primary key. |
 | `where` | `KeyCondition<T, K>` | Yes | Key conditions. Partition key requires `{ equals }`. Sort key supports `equals`, `greaterThan`, `lessThan`, `between`, `beginsWith`, etc. |
-| `limit` | `number` | No | Maximum number of items to return. |
+| `limit` | `number` | No | Maximum number of items to return. Must be a positive integer. |
 | `order` | `'asc' \| 'desc'` | No | Sort direction on the sort key. Defaults to `'asc'`. |
 
 ### Conditional Operations
@@ -180,7 +180,7 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 |----------|--------------|-------------|
 | `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. |
 | `DistributedTableErrors.ValidationFailed` | `ValidationFailedException` | An item failed the configured `schema` validation on `put()` / `putBatch()`. |
-| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The query/condition shape is wrong: missing `where`, partition key not given as `{ equals }`, unknown index, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug. |
+| `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The request/condition shape is wrong: missing `where`, partition key not given as `{ equals }`, unknown index, multiple sort-key conditions, an invalid `limit`, or an empty `ifFieldEquals`. A caller bug. |
 | `DistributedTableErrors.ItemTooLarge` | `ItemTooLargeException` | A `put`/`putBatch` item exceeds DynamoDB's 400 KB per-item size limit. |
 | `DistributedTableErrors.BatchIncomplete` | `BatchIncompleteException` | A batch op left entries unprocessed after the retry budget (sustained throttling). AWS runtime only. |
 
@@ -382,6 +382,3 @@ const events = new DistributedTable(scope, 'events', {
 ## Local Development
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Wipe with `rm -rf .bb-data`. The mock validates the 400 KB item size limit, schema validation, and conditional check failures, matching AWS behavior. Index queries are implemented via in-memory filtering — correctness is preserved but performance characteristics differ from DynamoDB.
-
-
-
