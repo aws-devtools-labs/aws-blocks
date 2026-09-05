@@ -876,7 +876,7 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 - **Persistence:** DynamoDB (DistributedTable) — PAY_PER_REQUEST, single-digit ms latency.
 - **Session storage:** S3 (FileBucket) — ~$0.023 per GB/month.
 - **Async execution:** SQS (AsyncJob) — $0.40 per million messages.
-- **Streaming:** AppSync Events (Realtime) — $1.00 per million connection minutes.
+- **Streaming:** Realtime uses API Gateway WebSocket with DynamoDB-backed connection tracking. See the [Realtime README](../bb-realtime/README.md) for service limits and cost considerations.
 - **No timeout limit:** Agent runs in AsyncJob consumer Lambda (up to 15 min), not behind API Gateway.
 
 ## Troubleshooting

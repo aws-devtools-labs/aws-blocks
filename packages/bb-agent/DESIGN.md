@@ -4,7 +4,7 @@ Design document for the Agent Building Block. For usage, see [README.md](./READM
 
 **Package:** `@aws-blocks/bb-agent`
 **Type:** Composite (uses DistributedTable, Realtime, AsyncJob, FileBucket internally)
-**AWS Services:** Bedrock, DynamoDB, S3, SQS, AppSync Events
+**AWS Services:** Bedrock, DynamoDB, S3, SQS, API Gateway WebSocket
 **Agent Framework:** [Strands Agents SDK](https://strandsagents.com/)
 
 ## Architecture
