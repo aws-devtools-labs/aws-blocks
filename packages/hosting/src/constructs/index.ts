@@ -56,3 +56,20 @@ export {
 	wireManagedValue,
 } from '../secret-resolve.js';
 export { FrameworkType, HostingProps, HostingResources } from '../types.js';
+// Front-door adapters (the swappable-door seam). CloudFront is the default door;
+// ALB is the first non-CloudFront door.
+export type {
+	AdapterContext,
+	CapabilityId,
+	CapabilityPlan,
+	FrontDoorAdapter,
+	FrontDoorResult,
+	Origin,
+	RouteTable,
+	SupportTier,
+} from '../plan/types.js';
+export { buildCapabilityPlan, ORIGIN_IDS } from '../plan/capability-plan.js';
+export { negotiate, requiredCapabilities } from '../plan/negotiate.js';
+export { CloudFrontAdapter } from './cloudfront_adapter.js';
+export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
+export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
