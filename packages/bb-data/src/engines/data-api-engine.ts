@@ -10,7 +10,7 @@ import {
   type Field,
 } from '@aws-sdk/client-rds-data';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError } from '../errors.js';
+import { DatabaseErrors, TRANSIENT_DATA_API_ERROR_NAMES, wrapError } from '../errors.js';
 
 /**
  * Translate `$1`, `$2`, ... placeholders to `:p1`, `:p2`, ... for Data API.
@@ -88,7 +88,8 @@ const SQLSTATE_PATTERN = /SQLState:\s*([A-Z0-9]{5})/i;
  * Classification priority:
  * 1. Parse SQLState from the message (most reliable — matches pg error codes).
  * 2. Fall back to message-text matching for unique constraints (backward compat).
- * 3. Check SDK exception names for connection errors.
+ * 3. Check SDK exception names for connection errors (service unavailable,
+ *    or a scale-to-zero cluster resuming from auto-pause).
  * 4. Default to QueryFailed.
  */
 function translateError(e: unknown): never {
@@ -110,7 +111,7 @@ function translateError(e: unknown): never {
       }
     } else if (/unique constraint|duplicate key/i.test(msg)) {
       e.name = DatabaseErrors.UniqueConstraintViolation;
-    } else if (e.name === 'ServiceUnavailableException' || e.name === 'InternalServerErrorException') {
+    } else if (TRANSIENT_DATA_API_ERROR_NAMES.has(e.name)) {
       e.name = DatabaseErrors.ConnectionFailed;
     } else {
       e.name = DatabaseErrors.QueryFailed;

@@ -367,3 +367,27 @@ test('a genuine non-serialization query error still maps to QueryFailed', async 
     },
   );
 });
+
+test('Data API auto-pause resume error (DatabaseResumingException) maps to ConnectionFailed', async () => {
+  // A scale-to-zero cluster (minCapacity: 0) auto-pauses after ~5 minutes idle.
+  // The first Data API call wakes it and fails with DatabaseResumingException —
+  // transient, and retryable. Classifying it as QueryFailed hides that from
+  // callers (notably the migration Lambda's retry helper), so a deploy against a
+  // paused cluster fails outright. The message carries no SQLState.
+  const engine = createEngine({
+    ExecuteStatementCommand: () => {
+      const err = new Error(
+        'The Aurora DB instance db-XXXXXXXXXXXXXXXXXXXXXXXXXX is resuming after being auto-paused. Please wait a few seconds and try again.',
+      );
+      err.name = 'DatabaseResumingException';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => engine.execute('CREATE TABLE IF NOT EXISTS _migrations (id SERIAL PRIMARY KEY)'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.ConnectionFailed);
+      return true;
+    },
+  );
+});

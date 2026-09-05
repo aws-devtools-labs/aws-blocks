@@ -226,7 +226,8 @@ try {
     // Serializable-isolation conflict with a concurrent transaction — safe to retry
   }
   if (isBlocksError(e, DatabaseErrors.ConnectionFailed)) {
-    // Cannot reach the database
+    // Cannot reach the database — includes a `minCapacity: 0` cluster resuming
+    // from auto-pause, which succeeds on retry a few seconds later
   }
 }
 ```
