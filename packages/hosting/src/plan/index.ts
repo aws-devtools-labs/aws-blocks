@@ -32,3 +32,5 @@ export {
 export type { BuildRouteTableInput, TerseRouteKind } from './route-table.js';
 export { buildCapabilityPlan, ORIGIN_IDS } from './capability-plan.js';
 export type { BuildCapabilityPlanInput } from './capability-plan.js';
+export { formatNegotiationErrors, negotiate, requiredCapabilities } from './negotiate.js';
+export type { NegotiateOptions, NegotiationResult } from './negotiate.js';
