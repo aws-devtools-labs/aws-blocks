@@ -21,13 +21,11 @@
  * blob records the chunk counts so the function reads a known, small number of
  * keys per request.
  */
-import type { DeployManifest, Redirect } from '../manifest/types.js';
-import {
-  prependBasePath,
-  normalizeBasePath,
-} from '../adapters/shared/basepath.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
-import { buildRouteTable, toTerseRows } from '../plan/route-table.js';
+import { buildCapabilityPlan } from '../plan/capability-plan.js';
+import { toTerseRows } from '../plan/route-table.js';
+import type { CapabilityPlan } from '../plan/types.js';
 
 // The pure routing helpers moved to the service-agnostic plan layer (so every
 // front-door adapter shares one implementation). Re-export them here for
@@ -127,95 +125,65 @@ const chunkRows = (rows: unknown[]): string[] => {
   return chunks;
 };
 
-/** Normalize a route pattern to the CloudFront form the function matches. */
-const normalizePattern = (pattern: string, basePath?: string): string => {
-  const p = pattern.startsWith('/') ? pattern : `/${pattern}`;
-  return prependBasePath(basePath, p);
-};
-
 /**
- * Build the KVS key/value map for a deploy. Keys:
+ * Render the KVS key/value map for a deploy from a service-agnostic
+ * {@link CapabilityPlan}. This is the CloudFront RENDERER: it takes the neutral
+ * plan (origins + route table + policies + release) the core produced and
+ * projects it onto CloudFront's KeyValueStore encoding. Keys:
  *   - `meta`  : metadata blob (buildId, basePath, spaFallback, image prefix,
  *               origin ids, chunk counts).
  *   - `r{n}`  : route-table chunks — JSON `[[pattern, kind], ...]`.
  *   - `d{n}`  : redirect chunks    — JSON `[[source, dest, status], ...]`.
  *   - `h{n}`  : header chunks      — JSON `[[pattern, {name:value}], ...]`.
+ *
+ * @param opts.maxChunksPerTable Override the per-table chunk budget (a
+ *   CloudFront-specific concern sourced from the `quotas.maxRouteChunks` prop),
+ *   NOT part of the neutral plan.
  */
-export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> => {
-  const { manifest, buildId, hasServer, hasImage } = input;
-  const edgeTargets = input.edgeTargets ?? new Set<string>();
-  const basePath = manifest.basePath
-    ? normalizeBasePath(manifest.basePath)
-    : undefined;
-  const imagePrefix = hasImage ? manifest.imageOptimization?.baseURL : undefined;
+export const renderKvsEntries = (
+  plan: CapabilityPlan,
+  opts: { maxChunksPerTable?: number } = {},
+): Record<string, string> => {
+  const { policies, routes, release } = plan;
 
-  // ---- route table ----
-  // Each static/compute/image route becomes one [pattern, kind] row. Image-opt
-  // and server routes are recorded so the function can pick their origin; every
-  // other path falls through to: server (if hasServer) else S3.
-  //
-  // IMPORTANT — patterns are kept basePath-RELATIVE through coalescing, then
-  // basePath is prepended ONCE afterwards. Coalescing groups routes by parent
-  // directory and a non-root parent (`parent.length > 0`) of one kind collapses
-  // to `parent/*`. If basePath were prepended FIRST, root-level routes like
-  // `/_next/*`, `/blocks-logo.png`, `/BUILD_ID` (parent `''`, never coalesced)
-  // would instead become `/app/_next/*`, `/app/blocks-logo.png` (parent `/app`)
-  // and collapse into a single `/app/*` STATIC wildcard — which shadows EVERY
-  // dynamic SSR route under basePath (`/app/api/echo` → S3 → 404). Coalescing
-  // relative keeps the root parent at `''` so the behavior is identical to the
-  // no-basePath case, just shifted under the prefix.
-  // Classification, coalescing, basePath-prefixing, and specificity ordering
-  // are computed by the neutral plan layer ({@link buildRouteTable}) so every
-  // front-door adapter shares one implementation. Here we render its neutral
-  // `{pattern, kind}` entries into the terse `[pattern, code]` rows the KVS
-  // chunker packs (`static→'s'`, `server→'c'`, `image→'i'`).
-  const coalesced: [string, RouteKind][] = toTerseRows(
-    buildRouteTable({
-      manifest,
-      hasServer,
-      hasImage,
-      imagePrefix,
-      basePath,
-      edgeTargets,
-      isrActive: hasServer && manifest.cache !== undefined,
-    }),
+  // Render the neutral route table into the terse `[pattern, code]` rows the KVS
+  // chunker packs (`static→'s'`, `server→'c'`, `image→'i'`). Classification,
+  // coalescing, basePath-prefixing, and ordering already happened in the plan
+  // layer (shared by every front-door adapter); redirects/headers arrive
+  // basePath-resolved.
+  const coalesced: [string, RouteKind][] = toTerseRows(routes.entries);
+
+  const redirectRows: [string, string, number][] = routes.redirects.map(
+    (r): [string, string, number] => [r.source, r.destination, r.statusCode],
   );
 
-  // ---- redirects (basePath-prefixed, unbounded — no 100 cap) ----
-  const redirects = manifest.redirects ?? [];
-  const redirectRows: [string, string, number][] = redirects.map(
-    (r: Redirect) => [
-      prependBasePath(basePath, r.source),
-      prependBasePath(basePath, r.destination),
-      r.statusCode,
-    ],
+  const headerRows: [string, Record<string, string>][] = routes.headers.map(
+    (h): [string, Record<string, string>] => [h.pattern, h.headers],
   );
-
-  // ---- per-pattern response headers ----
-  const headerRows: [string, Record<string, string>][] = (
-    manifest.headers ?? []
-  ).map((h) => [normalizePattern(h.source, basePath), h.headers]);
 
   const routeChunks = chunkRows(coalesced);
   const redirectChunks = chunkRows(redirectRows);
   const headerChunks = chunkRows(headerRows);
 
   const meta = {
-    b: buildId,
-    bp: basePath ?? '',
-    spa: manifest.staticAssets.spaFallback ? 1 : 0,
-    img: imagePrefix ?? '',
-    srv: hasServer ? 1 : 0,
+    b: release.buildId,
+    bp: policies.basePath ?? '',
+    spa: policies.spaFallback ? 1 : 0,
+    img: policies.imagePrefix ?? '',
+    srv: policies.hasServer ? 1 : 0,
     // assetPrefix (Next.js): the router strips this prefix from a static URI
     // before the build-id rewrite so prefixed asset URLs resolve to the same
     // S3 objects as unprefixed ones. Empty string = no prefix.
-    aP: manifest.assetPrefix ?? '',
+    aP: policies.assetPrefix ?? '',
     // www↔apex canonical redirect mode ('' = none).
-    ww: input.wwwRedirect && input.wwwRedirect !== 'none' ? input.wwwRedirect : '',
+    ww:
+      policies.wwwRedirect && policies.wwwRedirect !== 'none'
+        ? policies.wwwRedirect
+        : '',
     // skew protection on? When 0 the router ignores any `__dpl` build-pin
     // cookie (a stale cookie from a previously-enabled deploy must not pin a
     // visitor to a now-deleted build).
-    sk: input.skewEnabled ? 1 : 0,
+    sk: policies.skewEnabled ? 1 : 0,
     oS3: ORIGIN_ID.s3,
     oSrv: ORIGIN_ID.server,
     oImg: ORIGIN_ID.image,
@@ -245,9 +213,9 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // a positive integer — a fractional value (e.g. 0.5) is a caller mistake and
   // falls back to the default rather than silently capping between chunk counts.
   const maxChunksPerTable =
-    Number.isInteger(input.maxChunksPerTable) &&
-    (input.maxChunksPerTable ?? 0) > 0
-      ? input.maxChunksPerTable!
+    Number.isInteger(opts.maxChunksPerTable) &&
+    (opts.maxChunksPerTable ?? 0) > 0
+      ? opts.maxChunksPerTable!
       : KVS_BUDGET.maxChunksPerTable;
   if (tooManyChunks > maxChunksPerTable) {
     // Identify which table hit the cap for a targeted error message.
@@ -310,6 +278,29 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   }
   return entries;
 };
+
+/**
+ * Build the KVS key/value map directly from a manifest (+ deploy flags).
+ *
+ * Thin wrapper over the service-agnostic core: it builds a {@link CapabilityPlan}
+ * and renders it with {@link renderKvsEntries}. Retained as the historical entry
+ * point so existing callers/tests are unchanged; new CloudFront code builds the
+ * plan explicitly and calls `renderKvsEntries` (so the plan is the single source
+ * of routing truth every front-door adapter shares).
+ */
+export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
+  renderKvsEntries(
+    buildCapabilityPlan({
+      manifest: input.manifest,
+      buildId: input.buildId,
+      hasServer: input.hasServer,
+      hasImage: input.hasImage,
+      wwwRedirect: input.wwwRedirect,
+      skewEnabled: input.skewEnabled,
+      edgeTargets: input.edgeTargets,
+    }),
+    { maxChunksPerTable: input.maxChunksPerTable },
+  );
 
 /**
  * Shared CloudFront-Function helper source, concatenated VERBATIM into BOTH the

@@ -58,13 +58,14 @@ import { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
   ORIGIN_ID,
-  buildKvsEntries,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
   generateSentinelGuardCode,
   generateEdgeBasePathStripCode,
+  renderKvsEntries,
   routeSpecificity,
 } from './kvs_router.js';
+import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { KvKeys } from './kv_keys.js';
 import {
   AwsCustomResource,
@@ -721,7 +722,11 @@ export class CdnConstruct extends Construct {
     // server Lambda (which doesn't contain the split routes → 500).
     const edgeTargets = new Set(props.routeEdgeFunctions?.keys() ?? []);
 
-    const kvsEntries = buildKvsEntries({
+    // Build the service-agnostic CapabilityPlan (origins + route table +
+    // policies + release), then RENDER it onto CloudFront's KVS. The plan is the
+    // single source of routing truth every front-door adapter shares; CloudFront
+    // is one renderer of it.
+    const plan = buildCapabilityPlan({
       manifest,
       buildId,
       hasServer: Boolean(taggedServerOrigin),
@@ -729,6 +734,8 @@ export class CdnConstruct extends Construct {
       wwwRedirect: props.wwwRedirect,
       skewEnabled,
       edgeTargets,
+    });
+    const kvsEntries = renderKvsEntries(plan, {
       // Tunable route-table budget (issue #8) — raise via quotas.maxRouteChunks
       // for a very large site after verifying edge-function compute headroom.
       maxChunksPerTable: props.quotas?.maxRouteChunks,
