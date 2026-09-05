@@ -17,6 +17,7 @@ import type {
 	WaitUntilCompleteOptions,
 } from './types.js';
 import { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
+import { validateDelaySeconds } from './validation.js';
 import { JobStatusTracker, statusNotTrackedError } from './status.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { Logger } from '@aws-blocks/bb-logger';
@@ -201,6 +202,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	}
 
 	async submit(payload: T, options?: SubmitOptions): Promise<{ jobId: string }> {
+		validateDelaySeconds(options?.delaySeconds);
 		this.ensureQueueUrl();
 		const messageBody = await this.validatePayload(payload);
 
@@ -320,8 +322,6 @@ export class AsyncJob<T = unknown> extends Scope {
 	}
 
 	async submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult> {
-		this.ensureQueueUrl();
-
 		if (payloads.length === 0) {
 			const err = new Error(
 				`${AsyncJobErrors.BatchEmpty}: Batch is empty, must contain at least 1 payload`
@@ -337,6 +337,9 @@ export class AsyncJob<T = unknown> extends Scope {
 			err.name = AsyncJobErrors.BatchTooLarge;
 			throw err;
 		}
+
+		validateDelaySeconds(options?.delaySeconds);
+		this.ensureQueueUrl();
 
 		// Validate and serialize every payload before enqueuing anything, so one bad
 		// payload fails the whole call rather than half-submitting the batch.
