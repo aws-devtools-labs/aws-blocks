@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.1.5",
+    "@aws-blocks/bb-lambda-compute": "^0.3.0",
     "@aws-blocks/core": "^0.3.0"
   },
   "devDependencies": {

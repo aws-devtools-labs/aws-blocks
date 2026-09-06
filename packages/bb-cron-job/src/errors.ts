@@ -16,4 +16,6 @@ export const CronJobErrors = {
 	ScheduleNotSupported: 'ScheduleNotSupportedInMock',
 	/** Thrown when the timezone string is not a valid IANA timezone. */
 	InvalidTimezone: 'InvalidTimezoneExpression',
+	/** Thrown at synth time when the resolved compute is not a supported type (only Lambda today). */
+	UnsupportedCompute: 'UnsupportedComputeException',
 } as const;
