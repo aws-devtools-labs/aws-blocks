@@ -27,3 +27,18 @@ allow_licenses:
   - "Python-2.0"
   - "WTFPL"
   - "Zlib"
+
+# Temporary exclusions from license checking.
+#
+# GitHub's dependency graph reports Pub (Dart/Flutter) package licenses in
+# lowercase (e.g. "bsd-3-clause", sourced from pub.dev's pana tags), which the
+# dependency-review-action's case-sensitive SPDX parser rejects as invalid —
+# it fails the check before the allowlist above is even consulted.
+#
+# flutter_secure_storage is verifiably BSD-3-Clause:
+# https://pub.dev/packages/flutter_secure_storage/license
+#
+# Remove once the upstream parser normalizes license casing:
+# https://github.com/actions/dependency-review-action
+allow_dependencies_licenses:
+  - "pkg:pub/flutter_secure_storage"

@@ -41,6 +41,7 @@ export const AsyncJobErrors: {
     readonly Timeout: "AsyncJobTimeoutException";
     readonly StatusNotTracked: "StatusNotTrackedException";
     readonly InvalidOption: "InvalidOptionException";
+    readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
 // @public

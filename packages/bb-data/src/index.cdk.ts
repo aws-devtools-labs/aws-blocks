@@ -81,6 +81,8 @@ export class Database extends Scope {
       // an override like `{ ...production, deletionProtection: false }` is honored.
       deletionProtection: this.defaults.deletionProtection,
       postgresVersion: options?.postgresVersion,
+      // Migration Lambda log retention follows the stack-wide default.
+      logRetention: this.defaults.logRetention,
     });
 
     // Inject config so DataApiEngine can read them at runtime

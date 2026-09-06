@@ -34,6 +34,16 @@ Two storage backends, same FileBucket BB:
 - **AWS:** Strands' native `S3Storage` → FileBucket-provisioned S3 bucket
 - **Local:** Custom `FileBucketSnapshotStorage` → FileBucket mock (mirrors S3Storage key layout exactly)
 
+## Runaway-protection caps
+
+`AgentConfig.maxLlmCalls` / `maxToolIterations` (default 20, `false` disables) bound runaway cost. They're enforced in `runAgent` by counting Strands' `BeforeModelCallEvent` / `BeforeToolCallEvent` hooks and calling `agent.cancel()` once a cap is exceeded; cancellation ends the stream normally (`stopReason: 'cancelled'`), which `runAgent` surfaces as an `error` chunk and then skips the final persist + `done`.
+
+**Scope is the whole logical turn, including across HITL resumes.** The counters are stored in the Strands agent's `appState` (keys `__bbAgentModelCallCount` / `__bbAgentToolCallCount`), which the `SessionManager` persists with the session snapshot — the same mechanism the `trusted:<tool>` flags use. A turn that pauses on an interrupt and continues via `resume()` therefore keeps counting on its existing budget. Locals in `runAgent` would reset on every resume, letting an auto-approving or trusted-tool resume loop re-enter itself indefinitely — exactly the runaway these caps exist to stop.
+
+**The reset is lazy, and it has to be.** The `SessionManager` restores the snapshot's `appState` *during* `stream()`, i.e. after `runAgent` has already set up its hooks — so zeroing the counters up front is silently overwritten by the previous turn's values and the budget leaks from turn to turn (a second message on the same conversation would start at the first turn's count and trip immediately). Instead, a fresh turn mints a `turnId` and the first cap hook to fire notices the stored `__bbAgentCapTurnId` is stale, zeroes the counters, and claims the turn; a resume mints no id, so it continues on the restored counts. Strands has no per-turn identifier to reuse here — `invocationState` is a caller-supplied bag, and a per-invocation id would change on every `resume()`, which is the opposite of what's needed.
+
+A tool call cancelled by the tool cap still gets an `AfterToolCallEvent` (Strands reports the cancellation as the call's result), so the `tool-call` row already written to the message table keeps its `tool-result` partner — no dangling `tool_use` is left for the next turn to replay. `runAgent` additionally writes an `assistant` row carrying the stop reason in `metadata.error`, so a reloaded conversation explains why it ended.
+
 ## Infrastructure (CDK)
 
 The CDK class mirrors the runtime's BB creation:
@@ -62,6 +72,7 @@ Custom Strands model provider for local development. No network, no API keys, no
 
 - Returns instant keyword-based responses (e.g., prompt contains "weather" → weather response, otherwise a default canned response)
 - Streams word by word, matching the same `ModelStreamEvent` protocol as Bedrock/OpenAI
-- Triggers tool calls when the prompt mentions a tool name — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events
+- Triggers tool calls when the prompt mentions a tool name (or a `cannedTriggers` keyword) — splits camelCase names into words (e.g., "weather" matches `getWeather`) and emits Strands `toolUse` events. Matching is on word boundaries, not substrings, so "category" does not fire `getCat`.
+- Derives tool input from, in order of preference: the tool's `cannedExamples`, the schema `default` (from Zod `.default()`), the first `enum` value (for enum fields), then a generic placeholder by type (`'sample'` / `1` / `true` / `[]`)
 - After Strands executes the tool and sends the result back, returns a fixed acknowledgment (`"I called the tool and got a result."`)
 - Token usage reports zeros (no real model call)

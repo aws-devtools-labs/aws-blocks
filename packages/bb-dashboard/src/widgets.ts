@@ -371,16 +371,22 @@ export function buildDashboardWidgets(config: ResolvedDashboardConfig, functionN
  *
  * Resolution:
  * - **Metrics namespace**: derived from `metrics.namespace`
- * - **Log group**: derived from Lambda handler function name when Logger BB present
+ * - **Log group**: the framework-owned handler log group (`handlerLogGroupName`)
+ *   when the Logger BB is present; falls back to the `/aws/lambda/<fn>`
+ *   convention when the group name isn't supplied.
  * - **Tracing**: enabled when Tracer BB instance is provided
  *
  * @param id - Dashboard construct ID used as fallback for title.
  * @param options - User-provided dashboard configuration.
- * @param functionName - Lambda function name for auto-deriving logGroupName.
+ * @param functionName - Lambda function name for auto-deriving logGroupName (fallback only).
  * @param scopeFullId - Fully-qualified scope identifier (includes stack name) used as the
  *   default dashboardName to ensure uniqueness across environments/deployments.
+ * @param handlerLogGroupName - The shared handler log group's name (`scope.handlerLogGroup.logGroupName`).
+ *   Preferred over the `/aws/lambda/<fn>` convention: the framework now owns a
+ *   dedicated handler log group with a generated (non-`/aws/lambda/<fn>`) name,
+ *   which the reconstruction would miss.
  */
-export function resolveConfig(id: string, options?: DashboardOptions, functionName?: string, scopeFullId?: string): ResolvedDashboardConfig {
+export function resolveConfig(id: string, options?: DashboardOptions, functionName?: string, scopeFullId?: string, handlerLogGroupName?: string): ResolvedDashboardConfig {
 	const metricsNamespace = options?.metrics ? options.metrics.namespace : undefined;
 
 	const metricsDefaultDimensions = options?.metrics?.defaultDimensions
@@ -388,8 +394,11 @@ export function resolveConfig(id: string, options?: DashboardOptions, functionNa
 		? options.metrics.defaultDimensions
 		: undefined;
 
-	const logGroupName = options?.logger && functionName
-		? `/aws/lambda/${functionName}`
+	// Point log widgets at the actual handler log group. Prefer the framework-owned
+	// group's name; fall back to the `/aws/lambda/<fn>` convention when it isn't
+	// supplied (e.g. a caller that only knows the function name).
+	const logGroupName = options?.logger
+		? (handlerLogGroupName ?? (functionName ? `/aws/lambda/${functionName}` : undefined))
 		: undefined;
 
 	const tracingEnabled = options?.tracer !== undefined;

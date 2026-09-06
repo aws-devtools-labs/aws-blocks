@@ -14,6 +14,8 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { runSync, spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
+import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
+import type { S3Client } from '@aws-sdk/client-s3';
 
 /**
  * Import the backend definition to populate the Scope BB registry.
@@ -321,6 +323,180 @@ export async function startSandbox(options: SandboxOptions) {
   await new Promise(() => {});
 }
 
+/**
+ * Flatten a ListObjectVersions response into the `{ Key, VersionId }[]` shape
+ * DeleteObjects expects, combining live versions AND delete markers. Exported
+ * for unit testing — getting this combination wrong (e.g. missing the delete
+ * markers) leaves a "versioned" bucket that still can't be deleted.
+ */
+export function toDeleteObjects(listed: {
+	Versions?: Array<{ Key?: string; VersionId?: string }>;
+	DeleteMarkers?: Array<{ Key?: string; VersionId?: string }>;
+}): Array<{ Key: string; VersionId?: string }> {
+	return [...(listed.Versions ?? []), ...(listed.DeleteMarkers ?? [])]
+		.filter((v): v is { Key: string; VersionId?: string } => v.Key !== undefined)
+		.map((v) => ({ Key: v.Key, VersionId: v.VersionId }));
+}
+
+/** Collect a stack's S3 bucket physical names (paginated — a large stack has
+ * >100 resources, so a single page can miss the hosting bucket that blocks the
+ * delete). Returns [] if the stack is already gone / not accessible. */
+export async function listStackBucketNames(cfn: CloudFormationClient, stackName: string): Promise<string[]> {
+	const { ListStackResourcesCommand } = await import('@aws-sdk/client-cloudformation');
+	const buckets: string[] = [];
+	let token: string | undefined;
+	do {
+		const res = await cfn.send(new ListStackResourcesCommand({ StackName: stackName, NextToken: token }));
+		for (const r of res.StackResourceSummaries ?? []) {
+			if (r.ResourceType === 'AWS::S3::Bucket' && r.PhysicalResourceId) buckets.push(r.PhysicalResourceId);
+		}
+		token = res.NextToken;
+	} while (token);
+	return buckets;
+}
+
+/** Empty a versioned bucket: delete every object version + delete marker in
+ * pages of 1000 (the DeleteObjects limit). Stops if a page reports per-key
+ * errors (object-lock / retention) so it can't loop forever. */
+export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
+	const { ListObjectVersionsCommand, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
+	while (true) {
+		const listed = await s3.send(new ListObjectVersionsCommand({ Bucket: bucket, MaxKeys: 1000 }));
+		const objects = toDeleteObjects(listed);
+		if (objects.length === 0) return;
+		const res = await s3.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } }));
+		if (res.Errors && res.Errors.length > 0) {
+			// A bucket we can't fully empty (object-lock / retention / AccessDenied)
+			// will keep blocking `cdk destroy`, so the stack won't tear down until it's
+			// resolved by hand. Log loudly with the first error code — this is the
+			// kind of silent skip that leaks a stack, so make it visible in CI output.
+			const first = res.Errors[0];
+			console.warn(
+				`  ⚠️  ${bucket}: ${res.Errors.length} object(s) could NOT be deleted ` +
+					`(e.g. ${first.Key}: ${first.Code}). This bucket will block stack teardown ` +
+					`until cleared manually.`,
+			);
+			return;
+		}
+	}
+}
+
+/**
+ * Empty every versioned S3 bucket owned by the given stacks. `cdk destroy`
+ * relies on each bucket's `autoDeleteObjects` custom-resource Lambda to empty
+ * it on teardown — but that Lambda never provisions if the CREATE failed (e.g.
+ * a partial/aborted deploy), so the versioned bucket blocks the delete and the
+ * stack (and its IAM roles) leak. Emptying out-of-band before the retry lets
+ * the delete complete. Best-effort: any per-stack/per-bucket error is logged
+ * and skipped so teardown still proceeds.
+ */
+async function emptySandboxBuckets(stackNames: string[]): Promise<void> {
+	try {
+		const { CloudFormationClient } = await import('@aws-sdk/client-cloudformation');
+		const { S3Client } = await import('@aws-sdk/client-s3');
+		const cfn = new CloudFormationClient({});
+		// `followRegionRedirects` makes the client transparently retry against a
+		// bucket's real region on a PermanentRedirect, so a bucket that lives
+		// outside AWS_REGION (e.g. a us-east-1 Lambda@Edge stack's bucket) is still
+		// emptied instead of failing silently — closing the exact no-op this fix
+		// targets. It needs no GetBucketLocation permission.
+		const s3 = new S3Client({ followRegionRedirects: true });
+		for (const stackName of stackNames) {
+			let buckets: string[] = [];
+			try {
+				buckets = await listStackBucketNames(cfn, stackName);
+			} catch {
+				continue; // stack already gone / not accessible
+			}
+			for (const b of buckets) {
+				try {
+					await emptyBucket(s3, b);
+				} catch (e) {
+					console.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+				}
+			}
+		}
+	} catch (e) {
+		console.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+	}
+}
+
+/** Resolve the sandbox app's stack names via `cdk ls` (best-effort; [] on error). */
+function listSandboxStackNames(backendPath: string, cdkEnv: NodeJS.ProcessEnv): string[] {
+	try {
+		const out = execFileSync(
+			'npm',
+			// Single-quote backendPath: CDK re-runs the --app string through a shell,
+			// so an unquoted path containing a space would split.
+			['exec', 'cdk', '--', 'ls', '--context', 'sandboxMode=true', '--app', `npm exec tsx -- -C cdk '${backendPath}'`],
+			// Capture stderr so a genuine synth/`cdk ls` failure can be logged below
+			// rather than being indistinguishable from "app has zero stacks".
+			{ env: cdkEnv, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+		);
+		return out
+			.split('\n')
+			.map((s) => s.trim())
+			.filter(Boolean);
+	} catch (e) {
+		// Warn (don't stay silent): if this returns [] on a real failure, the retry
+		// skips bucket-emptying — the exact silent-no-op this change exists to avoid.
+		const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
+		console.warn(`  ⚠️  could not list sandbox stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
+		return [];
+	}
+}
+
+/** Injectable dependencies for {@link runDestroyWithRetries} — real ones in
+ * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
+ * sev2 fix) is exercised without spawning cdk. */
+export interface DestroyRetryDeps {
+	/** Run one `cdk destroy` attempt; throws on failure. */
+	runDestroy: () => void;
+	/** Resolve the app's stack names (for bucket enumeration). */
+	listStackNames: () => string[];
+	/** Empty the given stacks' versioned S3 buckets. */
+	emptyBuckets: (stackNames: string[]) => Promise<void>;
+	/** Sleep (VPC-ENI detach window). */
+	sleep: (ms: number) => Promise<void>;
+	/** Backoff between retries. Default: 1min, then 2min. */
+	retryDelays?: number[];
+}
+
+/**
+ * Retry `cdk destroy`, clearing the two known teardown blockers before each
+ * retry: (1) non-empty versioned S3 buckets — `cdk destroy` relies on each
+ * bucket's autoDeleteObjects Lambda, which never provisioned if the CREATE
+ * failed, so the bucket blocks the delete and the stack (+ its IAM roles) leaks;
+ * we empty them out-of-band — and (2) VPC ENIs that take 60-120s to detach (the
+ * backoff). Stack names are resolved once and reused (topology is stable across
+ * attempts). Factored out with injectable deps so this behavior is unit-testable.
+ */
+export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
+	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
+	let stackNames: string[] | undefined;
+	for (let attempt = 0; ; attempt++) {
+		try {
+			deps.runDestroy();
+			console.log(attempt === 0 ? '\n✅ Sandbox destroyed!' : '\n✅ Sandbox destroyed on retry!');
+			return;
+		} catch (error) {
+			if (attempt < retryDelays.length) {
+				if (stackNames === undefined) stackNames = deps.listStackNames();
+				if (stackNames.length > 0) {
+					console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+					await deps.emptyBuckets(stackNames);
+				}
+				const delaySec = retryDelays[attempt] / 1000;
+				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+				await deps.sleep(retryDelays[attempt]);
+			} else {
+				console.error('\n❌ Destroy failed after retries.');
+				throw error;
+			}
+		}
+	}
+}
+
 export async function destroySandbox(backendPath: string) {
   return trackCommand('sandbox:destroy', async () => {
     console.log("🗑️  Destroying sandbox...");
@@ -334,31 +510,16 @@ export async function destroySandbox(backendPath: string) {
       "exec", "cdk", "--", "destroy",
       "--force",
       "--context", "sandboxMode=true",
-      "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+      // Single-quote backendPath: CDK re-runs the --app string through a shell,
+      // so an unquoted path containing a space would split.
+      "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
     ];
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
-    // Retry with backoff for VPC-dependent resources (e.g. Aurora clusters).
-    // CloudFormation deletes the cluster first, but its ENIs take 60-120s to
-    // detach from the VPC subnets asynchronously. The initial destroy fails
-    // because the subnets still have attached ENIs; retrying after the cleanup
-    // window lets the VPC delete succeed.
-    const retryDelays = [60_000, 120_000]; // 1min, then 2min
-
-    for (let attempt = 0; ; attempt++) {
-      try {
-        runSync("npm", cdkArgs, { stdio: "inherit", env: cdkEnv });
-        console.log(attempt === 0 ? "\n✅ Sandbox destroyed!" : "\n✅ Sandbox destroyed on retry!");
-        return;
-      } catch (error) {
-        if (attempt < retryDelays.length) {
-          const delaySec = retryDelays[attempt] / 1000;
-          console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
-          await new Promise(r => setTimeout(r, retryDelays[attempt]));
-        } else {
-          console.error("\n❌ Destroy failed after retries.");
-          throw error;
-        }
-      }
-    }
+    await runDestroyWithRetries({
+      runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+      listStackNames: () => listSandboxStackNames(backendPath, cdkEnv),
+      emptyBuckets: emptySandboxBuckets,
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
   });
 }

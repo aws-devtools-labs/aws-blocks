@@ -1,13 +1,14 @@
-import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { App, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import type { DeployManifest } from '../manifest/types.js';
+import { config, secret } from '../secret.js';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
 
 // ---- Test helpers ----
 
@@ -16,10 +17,7 @@ const createStack = (): Stack => {
   return new Stack(app, 'TestStack');
 };
 
-const createEnvStack = (
-  region = 'us-east-1',
-  account = '123456789012',
-): Stack => {
+const createEnvStack = (region = 'us-east-1', account = '123456789012'): Stack => {
   const app = new App();
   return new Stack(app, 'TestStack', { env: { account, region } });
 };
@@ -42,10 +40,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
     fs.writeFileSync(path.join(staticDir, 'index.html'), '<html></html>');
 
     fs.mkdirSync(bundleDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(bundleDir, 'index.mjs'),
-      'export const handler = async () => {};',
-    );
+		fs.writeFileSync(path.join(bundleDir, 'index.mjs'), 'export const handler = async () => {};');
   });
 
   afterEach(() => {
@@ -235,16 +230,10 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       assert.ok(immutable, 'Immutable deployment present');
       assert.ok(mutable, 'Mutable deployment present');
       // Hashed paths get long-lived immutable Cache-Control.
-      assert.match(
-        JSON.stringify(deployments[immutable!].Properties),
-        /max-age=31536000.*immutable/,
-      );
+			assert.match(JSON.stringify(deployments[immutable!].Properties), /max-age=31536000.*immutable/);
       // Everything else gets the short-lived must-revalidate header so a
       // redeploy invalidates cached HTML on next request.
-      assert.match(
-        JSON.stringify(deployments[mutable!].Properties),
-        /max-age=0.*must-revalidate/,
-      );
+			assert.match(JSON.stringify(deployments[mutable!].Properties), /max-age=0.*must-revalidate/);
     });
 
     void it('splits HTML into separate deployment with no-cache when immutablePaths absent', () => {
@@ -259,17 +248,11 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       const htmlDeploy = ids.find((id) => id.includes('AssetDeploymentHtml'));
       assert.ok(htmlDeploy, 'AssetDeploymentHtml present');
       // HTML files get no-cache so browsers always revalidate on redeploy.
-      assert.match(
-        JSON.stringify(deployments[htmlDeploy!].Properties),
-        /no-cache.*must-revalidate/,
-      );
+			assert.match(JSON.stringify(deployments[htmlDeploy!].Properties), /no-cache.*must-revalidate/);
       // Non-HTML gets mutable cache (s-maxage for CDN, max-age=0 for browser).
       const otherDeploy = ids.find((id) => id.includes('AssetDeploymentOther'));
       assert.ok(otherDeploy, 'AssetDeploymentOther present');
-      assert.match(
-        JSON.stringify(deployments[otherDeploy!].Properties),
-        /max-age=0.*must-revalidate/,
-      );
+			assert.match(JSON.stringify(deployments[otherDeploy!].Properties), /max-age=0.*must-revalidate/);
     });
 
     void it('emits a per-extension Content-Type pass for fonts present in the static dir', () => {
@@ -290,13 +273,9 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       const template = Template.fromStack(stack);
       const deployments = template.findResources('Custom::CDKBucketDeployment');
       const ids = Object.keys(deployments);
-      const fontDeployments = ids.filter((id) =>
-        id.includes('FontTypeDeployment'),
-      );
+			const fontDeployments = ids.filter((id) => id.includes('FontTypeDeployment'));
       assert.equal(fontDeployments.length, 2, '2 font extensions detected');
-      const json = JSON.stringify(
-        fontDeployments.map((id) => deployments[id].Properties),
-      );
+			const json = JSON.stringify(fontDeployments.map((id) => deployments[id].Properties));
       assert.match(json, /font\/woff2/);
       assert.match(json, /font\/woff(?!2)/);
     });
@@ -308,9 +287,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       });
       const template = Template.fromStack(stack);
       const deployments = template.findResources('Custom::CDKBucketDeployment');
-      const fontDeployments = Object.keys(deployments).filter((id) =>
-        id.includes('FontTypeDeployment'),
-      );
+			const fontDeployments = Object.keys(deployments).filter((id) => id.includes('FontTypeDeployment'));
       assert.equal(fontDeployments.length, 0);
     });
 
@@ -329,10 +306,7 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       // The cacheControl override applies to the non-HTML "Other" deployment.
       const otherDeploy = ids.find((id) => id.includes('AssetDeploymentOther'));
       assert.ok(otherDeploy, 'AssetDeploymentOther present');
-      assert.match(
-        JSON.stringify(deployments[otherDeploy!].Properties),
-        /public, max-age=60/,
-      );
+			assert.match(JSON.stringify(deployments[otherDeploy!].Properties), /public, max-age=60/);
     });
 
     void it('provisions cache infrastructure when manifest declares cache', () => {
@@ -479,4 +453,69 @@ void describe('Standalone CDK usage (standalone CDK)', () => {
       assert.ok(!construct.computeFunctionUrls.has('default'));
     });
   });
+
+	// ---- secret() / config() markers in environment (any framework-neutral consumer) ----
+	void describe('environment secret()/config() markers', () => {
+		void it('config() → SSM: HOSTING_CONFIG_PARAM_* (leading slash) + ssm:GetParameter, no value leak', () => {
+			const stack = createEnvStack();
+			new HostingConstruct(stack, 'Hosting', {
+				manifest: makeSsrManifest(),
+				environment: { FEATURE_FLAGS: config('FEATURE_FLAGS') },
+				configStore: { prefix: '/blocks/config' },
+				skipRegionValidation: true,
+			});
+			const t = Template.fromStack(stack);
+			t.hasResourceProperties('AWS::Lambda::Function', {
+				Environment: {
+					Variables: Match.objectLike({
+						HOSTING_CONFIG_PARAM_FEATURE_FLAGS: '/blocks/config/FEATURE_FLAGS',
+					}),
+				},
+			});
+			t.hasResourceProperties('AWS::IAM::Policy', {
+				PolicyDocument: {
+					Statement: Match.arrayWith([Match.objectLike({ Action: 'ssm:GetParameter' })]),
+				},
+			});
+			assert.ok(
+				!JSON.stringify(t.toJSON()).includes('"FEATURE_FLAGS":'),
+				'value must not be a plaintext env var',
+			);
+		});
+
+		void it('secret() → Secrets Manager: HOSTING_SECRET_PARAM_* (slash-free) + secretsmanager:GetSecretValue', () => {
+			const stack = createEnvStack();
+			new HostingConstruct(stack, 'Hosting', {
+				manifest: makeSsrManifest(),
+				environment: { STRIPE_KEY: secret('STRIPE_KEY') },
+				secretStore: { prefix: '/blocks/secrets' },
+				skipRegionValidation: true,
+			});
+			const t = Template.fromStack(stack);
+			t.hasResourceProperties('AWS::Lambda::Function', {
+				Environment: {
+					Variables: Match.objectLike({
+						HOSTING_SECRET_PARAM_STRIPE_KEY: 'blocks/secrets/STRIPE_KEY',
+					}),
+				},
+			});
+			t.hasResourceProperties('AWS::IAM::Policy', {
+				PolicyDocument: {
+					Statement: Match.arrayWith([Match.objectLike({ Action: 'secretsmanager:GetSecretValue' })]),
+				},
+			});
+		});
+
+		void it('uses neutral default prefixes per kind (/hosting/secrets, /hosting/config)', () => {
+			const stack = createEnvStack();
+			new HostingConstruct(stack, 'Hosting', {
+				manifest: makeSsrManifest(),
+				environment: { API_KEY: secret('API_KEY'), FLAG: config('FLAG') },
+				skipRegionValidation: true,
+			});
+			const json = JSON.stringify(Template.fromStack(stack).toJSON());
+			assert.ok(json.includes('hosting/secrets/API_KEY'), 'neutral secret prefix');
+			assert.ok(json.includes('/hosting/config/FLAG'), 'neutral config prefix');
+		});
+	});
 });

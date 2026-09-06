@@ -105,6 +105,39 @@ export interface DevServerOptions {
   frontendCommand?: string;
   /** Port the frontend dev server listens on. Default: 3100. */
   frontendPort?: number;
+  /**
+   * Watch `secret()` / `config()` calls and regenerate the type-safe key
+   * augmentation (so `getSecret`/`getConfig` autocomplete and reject typos) as you
+   * edit — all under this one `npm run dev`, no second command. Auto-detected: a
+   * no-op unless the app actually declares a `secret()`/`config()`, and never fatal
+   * (a failure only logs a warning). Set `false` to disable. Default: enabled.
+   */
+  typegen?: boolean;
+}
+
+/**
+ * Bootstrap the type-safe `getSecret`/`getConfig` key generation for the dev
+ * session. Auto-detected and non-fatal: scans the app for `secret()`/`config()`
+ * calls and, only if it finds any, generates the augmentation `.d.ts` and starts a
+ * watcher that regenerates on save — so a single `npm run dev` gives type-safe keys
+ * with no second command. Returns a `stop()` (or `undefined` when the app declares
+ * no secrets, typegen is unavailable, or it is disabled). The watcher is `unref`'d
+ * so it can never block the dev server's shutdown.
+ */
+async function startTypegenWatch(): Promise<(() => void) | undefined> {
+  try {
+    const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
+    const scan = await scanValueKeys();
+    if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
+      return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
+    }
+    console.log('🔑 Type-safe secret()/config() keys — watching for changes...');
+    return await watchHostingValues({ unref: true });
+  } catch (error) {
+    // Never break the dev server over typegen (e.g. `typescript` not installed).
+    console.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 /**
@@ -953,6 +986,12 @@ export async function startDevServer(options: DevServerOptions) {
     await writeClientCode(resolvedPath, clientPath);
   }
 
+  // Type-safe getSecret/getConfig: generate + watch the key augmentation so the
+  // getters autocomplete and reject typos, regenerating on save — all under this
+  // one `npm run dev`. Auto-detected (no-op unless the app uses secret()/config())
+  // and non-fatal.
+  const stopTypegen = options.typegen === false ? undefined : await startTypegenWatch();
+
   // ── Startup reclaim ──────────────────────────────────────────────────────
   // Free any port left bound by a crashed / SIGKILL'd predecessor before we bind
   // the front door or spawn the `--strictPort` frontend. tsx-watch only gives the
@@ -1039,6 +1078,7 @@ export async function startDevServer(options: DevServerOptions) {
     console.log('\nShutting down...');
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
+    stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
     // Detach our own listeners so repeated signals can't pile up handlers.
     for (const sig of signals) process.removeListener(sig, cleanup);
 

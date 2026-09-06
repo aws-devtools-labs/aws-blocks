@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { Hosting, BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { Hosting, BlocksStack, BlocksPresets, secret, config } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -39,6 +39,13 @@ new Hosting(blocksStack, 'Hosting', {
   compute: {
     memorySize: 1024,
     timeout: cdk.Duration.seconds(30),
+  },
+  // E2E: secret() → Secrets Manager, config() → SSM Parameter Store. The values
+  // are written out of band by the CLI (see test/e2e.test.ts) and read at runtime
+  // via getSecret/getConfig in /api/probe/secret.
+  environment: {
+    DEMO_SECRET: secret('DEMO_SECRET'),
+    DEMO_CONFIG: config('DEMO_CONFIG'),
   },
 });
 

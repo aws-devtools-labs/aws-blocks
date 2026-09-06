@@ -136,6 +136,8 @@ The `useChat` hook only surfaces `user`, `assistant`, and `approval` messages to
 | `inferenceOnly` | `boolean` | Skip persistence infra. Default: `false`. |
 | `conversation` | `ConversationManagerConfig` | How the agent trims message history (sliding-window or summarizing). |
 | `streamingMode` | `'token' \| 'block'` | How text chunks are published to the client. Default: `'block'`. |
+| `maxLlmCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
+| `maxToolIterations` | `number \| false` | Max tool calls per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
 
 ### Model Configuration
 
@@ -358,6 +360,38 @@ const agent = new Agent(scope, 'support', {
   ...
 });
 ```
+
+### Limiting runaway cost
+
+An agent runs a reason→act loop: each iteration is one **model call**, optionally followed by tool calls, and a model call that requests no tools ends the turn. A misbehaving agent — or a prompt that induces one — can loop this cycle far longer than intended; an unbounded loop can run up unexpected cost.
+
+> **These caps are a safety backstop, not a way to guide the agent.** The defaults exist only to stop a runaway from racking up cost — they are *not* tuned for your agent and should not be used to shape its behavior. An agent that legitimately needs more steps or tools will be cut off mid-task at the default. **Set these values deliberately for your own agent** based on how many steps and tool calls a healthy turn takes, so a normal turn always completes and only genuine runaways are stopped.
+
+Two per-turn safety caps bound this, and **both default to `20`**:
+
+- **`maxLlmCalls`** — the maximum number of model invocations in a single turn. This is the most direct spend guard (model calls are the billing unit), and because every tool round needs a model call it transitively bounds tool loops too.
+- **`maxToolIterations`** — the maximum number of tool calls in a single turn (parallel tool batches count each call).
+
+When either cap is hit, the turn is stopped and the client receives an `error` chunk (so `complete()` rejects) instead of `done`. The counts cover the whole turn, including across a [tool-approval interrupt](#tool-approval-human-in-the-loop): they are kept in the agent's session state, so a turn that pauses for approval and continues via `resume()` keeps its existing budget instead of starting a fresh one. Only a new message starts a new budget.
+
+```typescript
+const agent = new Agent(scope, 'support', {
+  systemPrompt: '...',
+  maxLlmCalls: 40,          // agent legitimately reasons over many steps
+  maxToolIterations: 60,    // ...and chains many tools per turn
+});
+
+// Or disable a cap entirely with `false`:
+const unbounded = new Agent(scope, 'batch', {
+  systemPrompt: '...',
+  maxLlmCalls: false,       // no per-turn model-call limit
+  maxToolIterations: false,
+});
+```
+
+Raise the caps for agents that legitimately take many steps so they aren't cut off mid-task, or set a cap to `false` to disable it — tuning these to your agent is part of delivering a good agentic experience, not just a cost lever. The caps bound call *count*, not tokens or wall-clock — for real cost protection, also configure a [billing alarm](https://docs.aws.amazon.com/cost-management/latest/userguide/monitor-charges.html) or a CloudWatch alarm on Bedrock spend.
+
+When sizing the caps for an agent that uses [tool approval](#tool-approval-human-in-the-loop), remember that approved and trusted tool calls both count: a `trustable` tool that's been trusted runs without interrupting, and a tool approved through `resume()` continues on the same budget, so a long approve-and-continue turn can still reach the cap.
 
 ## Tools
 
@@ -640,8 +674,40 @@ The CannedProvider is a custom Strands model provider that requires no network o
 
 - Returns simple mock responses
 - Triggers tool calls when the prompt mentions a tool name (e.g., "get order" triggers `getOrderStatus`)
-- Generates valid tool inputs from Zod schemas using type-based placeholders
+- Generates valid tool inputs from Zod schemas, respecting schema `default` values (from `.default()`) before falling back to type-based placeholders (`'sample'`, `1`, `true`, `[]`)
 - Streams responses word by word, matching the same protocol as real providers
+
+#### Canned Hints — `cannedExamples` and `cannedTriggers`
+
+Two optional tool fields make the canned provider more useful for local prototyping. Both are **ignored by the real bedrock/openai providers**, so they're safe to leave on production tools:
+
+| Field | Type | Effect (canned provider only) |
+| --- | --- | --- |
+| `cannedExamples` | `Record<string, JSONValue>` | Realistic tool input, shallow-merged over the generated placeholder — your fields win, unspecified fields fall back to schema defaults / placeholders. The merge is one level deep: a nested-object example replaces that whole generated sub-object rather than deep-merging into it. |
+| `cannedTriggers` | `string[]` | Extra keyword phrases that make the provider select this tool, beyond its name and camelCase words. Single and multi-word phrases match on word boundaries (so `'log in'` won't fire on `"backlog in"`); internal whitespace is flexible. |
+
+Building on the [KnowledgeBase tool](#using-knowledgebase-with-the-agent) above: without hints the mock calls `searchDocs` with `{ query: 'sample' }`, which matches nothing in your documents, so local testing returns empty results. A `cannedExamples` query that actually appears in *your* docs makes the mock return real hits, and `cannedTriggers` lets natural phrasings fire the tool:
+
+```typescript
+tools: (tool) => ({
+  searchDocs: tool({
+    description: 'Search product documentation for relevant information',
+    parameters: z.object({
+      query: z.string().describe('The search query'),
+      maxResults: z.number().optional().describe('Max results to return (default: 5)'),
+    }),
+    handler: async ({ input }) => kb.retrieve(input.query, { maxResults: input.maxResults ?? 5 }),
+
+    // Canned provider hints (ignored by real models):
+    // Without this the mock would search for the literal 'sample' and match nothing —
+    // use a query that hits YOUR documents so local runs return meaningful results.
+    cannedExamples: { query: 'how do I reset my password' },
+    // The name already matches "search"/"docs"/"searchDocs"; these add phrasings that don't
+    // contain the name, so "help me find the manual" or "look up the guide" also fire the tool.
+    cannedTriggers: ['find', 'look up'],
+  }),
+}),
+```
 
 
 ## Client Hook — `useChat`

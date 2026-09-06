@@ -1,7 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ScopeOptions } from '../../common/index.js';
 import { Scope } from '../index.js';
+import { registerCompute } from './compute-registry.js';
 
 /**
  * Base class for a Blocks *compute* — a runtime that executes handler code
@@ -27,6 +29,14 @@ export abstract class Compute extends Scope {
 	 * unpopulated (no compute assignment surface yet).
 	 */
 	readonly namespaces: string[] = [];
+
+	constructor(id: string, options?: ScopeOptions) {
+		super(id, options);
+		// Self-register on the owning stack so finalize steps (config, routing,
+		// dashboards) can enumerate every compute without a separate discovery
+		// pass. Scoped per stack, so a multi-stack synth keeps lists isolated.
+		registerCompute(this);
+	}
 
 	/**
 	 * Inject a runtime configuration value (an environment variable) into this

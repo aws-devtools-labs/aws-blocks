@@ -334,6 +334,19 @@ describe('CannedProvider', () => {
 		assert.ok(text.includes('22°C'), 'should contain weather data');
 	});
 
+	// Keyword text matching must respect word boundaries for the same reason tool matching
+	// does, or "reorder" returns the order response and "helper" returns the help response.
+	test('does not return a keyword response when the keyword is only a substring', async () => {
+		const provider = new CannedProvider();
+		const chunks: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: 'please reorder the list alphabetically' }] }] as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'textDelta') chunks.push(event.delta.text);
+		}
+		const text = chunks.join('');
+		assert.ok(!text.includes('#12345'), `"reorder" must not return the order response, got: ${text}`);
+		assert.ok(text.includes('No real model was called'), 'should fall through to the default response');
+	});
+
 	test('triggers tool call when prompt matches tool name', async () => {
 		const provider = new CannedProvider();
 		let toolName: string | undefined;
@@ -382,6 +395,157 @@ describe('CannedProvider', () => {
 		assert.deepStrictEqual(started, ['getOrder']);
 	});
 
+	// Collect the parsed tool input from the first tool call in a stream.
+	const collectToolInput = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<any> => {
+		let input: any;
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockDeltaEvent' && event.delta.type === 'toolUseInputDelta') {
+				input = JSON.parse(event.delta.input);
+			}
+		}
+		return input;
+	};
+
+	// Collect the names of every tool call started in a stream.
+	const collectToolStarts = async (provider: CannedProvider, prompt: string, toolSpecs: any[]): Promise<string[]> => {
+		const started: string[] = [];
+		for await (const event of provider.stream([{ role: 'user', content: [{ text: prompt }] }] as any, { toolSpecs } as any)) {
+			if (event.type === 'modelContentBlockStartEvent' && event.start?.type === 'toolUseStart') started.push(event.start.name);
+		}
+		return started;
+	};
+
+	test('cannedExamples are shallow-merged over generated placeholder input', async () => {
+		const hints = new Map([['searchDocs', { examples: { query: 'how do I get started' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		// Example query wins; unspecified `limit` falls back to the generic integer placeholder.
+		assert.deepStrictEqual(input, { query: 'how do I get started', limit: 1 });
+	});
+
+	test('respects schema default values over generic placeholders', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10 });
+	});
+
+	test('mixes schema defaults with generic placeholders per field', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 }, query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 10, query: 'sample' });
+	});
+
+	test('cannedExamples win over a schema default on the same field', async () => {
+		const hints = new Map([['listItems', { examples: { limit: 5 } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { type: 'integer', default: 10 } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		// Full precedence chain is cannedExamples > schema default > generic placeholder;
+		// this pins the top link, where a field carries both an example and a default.
+		assert.deepStrictEqual(input, { limit: 5 }, 'the cannedExamples value must beat the schema default');
+	});
+
+	test('warns on a cannedExamples field missing from the tool schema, but still sends it', async () => {
+		const hints = new Map([['fetchPage', { examples: { rul: 'https://example.com' } }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'fetchPage', description: '', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } }];
+		const originalWarn = console.warn;
+		const warnings: string[] = [];
+		console.warn = (msg: unknown) => { warnings.push(String(msg)); };
+		let input: any;
+		try {
+			input = await collectToolInput(provider, 'fetchPage now', toolSpecs);
+		} finally {
+			console.warn = originalWarn;
+		}
+		assert.ok(
+			warnings.some(w => w.includes('fetchPage') && w.includes('"rul"')),
+			`the typo'd field should be reported, got ${JSON.stringify(warnings)}`,
+		);
+		// A bad hint is surfaced, never enforced: nothing throws and the value still ships.
+		assert.deepStrictEqual(input, { url: 'sample', rul: 'https://example.com' });
+	});
+
+	test('cannedTriggers fire a tool for a single-word keyword beyond its name', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['find'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'help me find the answer', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('cannedTriggers fire a tool for a multi-word phrase', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs']);
+	});
+
+	test('single-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['cat'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'what category is this', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "cat" must not fire on "category"');
+	});
+
+	test('multi-word cannedTriggers respect word boundaries', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['log in'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'check the backlog in the queue', toolSpecs);
+		assert.deepStrictEqual(started, [], 'trigger "log in" must not fire on "backlog in"');
+	});
+
+	test('multi-word cannedTriggers tolerate flexible internal whitespace', async () => {
+		const hints = new Map([['searchDocs', { triggers: ['look up'] }]]);
+		const provider = new CannedProvider({ hints });
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: {} }];
+		const started = await collectToolStarts(provider, 'can you look   up the manual', toolSpecs);
+		assert.deepStrictEqual(started, ['searchDocs'], 'multiple spaces between words should still match');
+	});
+
+	test('generates generic placeholder when no example or default is given', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'searchDocs', description: '', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }];
+		const input = await collectToolInput(provider, 'searchDocs please', toolSpecs);
+		assert.deepStrictEqual(input, { query: 'sample' });
+	});
+
+	test('resolves a union (anyOf) field from its first usable variant', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { limit: { anyOf: [{ type: 'integer' }, { type: 'string' }] } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { limit: 1 });
+	});
+
+	test('resolves a const field to its fixed value', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { kind: { const: 'archive' } } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { kind: 'archive' });
+	});
+
+	// A required field of an unrecognized shape used to be dropped entirely, so the emitted
+	// call failed schema validation before the tool ever ran.
+	test('fills a required field whose shape yields no placeholder', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} }, required: ['mystery'] } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, { mystery: 'sample' });
+	});
+
+	test('leaves an optional field whose shape yields no placeholder omitted', async () => {
+		const provider = new CannedProvider();
+		const toolSpecs = [{ name: 'listItems', description: '', inputSchema: { type: 'object', properties: { mystery: {} } } }];
+		const input = await collectToolInput(provider, 'listItems now', toolSpecs);
+		assert.deepStrictEqual(input, {}, 'absence is valid for an optional field; do not invent a wrong-typed value');
+	});
+
 	test('responds to tool result with acknowledgment', async () => {
 		const provider = new CannedProvider();
 		const chunks: string[] = [];
@@ -414,6 +578,35 @@ describe('CannedProvider', () => {
 		const done = await result.complete();
 		assert.strictEqual(done.type, 'done');
 		assert.ok(done.text && done.text.length > 0, 'should have response text');
+	});
+
+	// End-to-end: exercises the full createStrandsAgent -> createStrandsModel -> CannedProvider
+	// plumbing. A prompt that only matches a `cannedTriggers` keyword must fire the tool, and the
+	// emitted call must carry the `cannedExamples` input.
+	test('canned hints plumb through the Agent end-to-end', async () => {
+		const scope = new Scope('test-canned-hints');
+		const agent = new Agent(scope, 'hints', {
+			inferenceOnly: false,
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				searchDocs: tool({
+					description: 'Search documentation',
+					parameters: z.object({ query: z.string() }),
+					handler: async ({ input }) => ({ echoed: input.query }),
+					cannedExamples: { query: 'how do I get started' },
+					cannedTriggers: ['find'],
+				}),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream('help me find the answer', { conversationId: convId, userId: 'test-user' });
+		await result.complete();
+		const messages = await agent.getConversation(convId);
+		const toolCall = messages.find(m => m.role === 'tool-call');
+		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
+		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
+		assert.deepStrictEqual(toolCall.metadata.toolInput, { query: 'how do I get started' });
 	});
 
 	test("getConversation with limit returns most recent messages", async () => {
@@ -538,6 +731,238 @@ describe('CannedProvider', () => {
 			assert.ok(err.interrupts.length > 0, 'should have interrupts attached');
 			return true;
 		});
+	});
+});
+
+// ── runaway protection caps ──────────────────────────────────────────────────
+
+/** Run one turn, auto-approving every interrupt, until a terminal chunk arrives. */
+async function runAutoApproving(agent: any, message: string, conversationId: string, userId: string, maxResumes = 5) {
+	const chunks: any[] = [];
+	const result = await agent.stream(message, { conversationId, userId });
+	const channel = await result.channel;
+	const sub = channel.subscribe((chunk: any) => { chunks.push(chunk); });
+
+	const waitFor = async (predicate: () => any) => {
+		for (let i = 0; i < 200; i++) {
+			const hit = predicate();
+			if (hit) return hit;
+			await new Promise(r => setTimeout(r, 25));
+		}
+		return undefined;
+	};
+
+	let resumes = 0;
+	let terminal = await waitFor(() => chunks.find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt'));
+	while (terminal?.type === 'interrupt' && resumes < maxResumes) {
+		resumes++;
+		const seen = chunks.length;
+		await agent.resume(result.channelId, terminal.interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), { conversationId, userId });
+		terminal = await waitFor(() => chunks.slice(seen).find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt'));
+	}
+	sub.unsubscribe();
+	return { chunks, terminal, resumes };
+}
+
+describe('runaway protection caps', () => {
+	test('maxLlmCalls stops a turn that keeps calling the model', async () => {
+		// A tool prompt drives two model calls (initial call → tool → follow-up call).
+		// With maxLlmCalls: 1 the second BeforeModelCallEvent trips the cap and cancels
+		// the turn, surfacing an error chunk (so complete() rejects).
+		const scope = new Scope('test-cap-llm');
+		const agent = new Agent(scope, 'capllm', {
+			systemPrompt: 'test',
+			maxLlmCalls: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const result = await agent.stream('run getStatus', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: any) => {
+			assert.match(err.message, /maxLlmCalls/);
+			return true;
+		});
+	});
+
+	test('maxToolIterations stops a turn that fans out too many tools', async () => {
+		// Naming both tools makes the canned provider fire two tool calls in one turn;
+		// with maxToolIterations: 1 the second BeforeToolCallEvent trips the cap.
+		const scope = new Scope('test-cap-tools');
+		const agent = new Agent(scope, 'captools', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const result = await agent.stream('run alpha and bravo', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: any) => {
+			assert.match(err.message, /maxToolIterations/);
+			return true;
+		});
+	});
+
+	test('a normal single-tool turn under the default caps completes', async () => {
+		// Two model calls + one tool call are both well under the default caps (20),
+		// so the turn completes normally rather than tripping either guard.
+		const scope = new Scope('test-cap-default');
+		const agent = new Agent(scope, 'capdef', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getStatus: tool({ description: 'status', parameters: z.object({}), handler: async () => ({ ok: true }) }) }),
+		});
+		const result = await agent.stream('run getStatus', { userId: 'test-user' });
+		const chunk = await result.complete();
+		assert.strictEqual(chunk.type, 'done', 'a normal turn under the default caps should complete');
+	});
+
+	test('a cap set to false is disabled', async () => {
+		// The same two-tool fan-out that trips at maxToolIterations: 1 must complete
+		// when the cap is disabled with `false`.
+		const scope = new Scope('test-cap-disabled');
+		const agent = new Agent(scope, 'capoff', {
+			systemPrompt: 'test',
+			maxToolIterations: false,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const result = await agent.stream('run alpha and bravo', { userId: 'test-user' });
+		const chunk = await result.complete();
+		assert.strictEqual(chunk.type, 'done', 'disabling the cap should let the turn complete');
+	});
+
+	test('an invalid cap value is rejected at construction', async () => {
+		const scope = new Scope('test-cap-invalid');
+		const model = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+		let n = 0;
+		for (const value of [0, -1, 1.5, Number.NaN]) {
+			assert.throws(
+				() => new Agent(scope, `capbad${n++}`, { systemPrompt: 'test', model, maxLlmCalls: value }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig && /positive integer or false/.test(err.message),
+				`maxLlmCalls: ${value} should be rejected`,
+			);
+			assert.throws(
+				() => new Agent(scope, `capbad${n++}`, { systemPrompt: 'test', model, maxToolIterations: value }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig && /positive integer or false/.test(err.message),
+				`maxToolIterations: ${value} should be rejected`,
+			);
+		}
+		// Valid values must still construct.
+		new Agent(scope, 'capok1', { systemPrompt: 'test', model, maxLlmCalls: 1, maxToolIterations: 99 });
+		new Agent(scope, 'capok2', { systemPrompt: 'test', model, maxLlmCalls: false, maxToolIterations: false });
+	});
+
+	test('a cap trip leaves paired, explained history', async () => {
+		// A tool call cancelled by the cap still gets an AfterToolCallEvent from Strands
+		// (the cancellation is the result), so every persisted 'tool-call' keeps its
+		// 'tool-result' partner — no dangling tool_use to break the next turn. runAgent
+		// additionally records why the turn stopped.
+		const scope = new Scope('test-cap-history');
+		const agent = new Agent(scope, 'caphist', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				alpha: tool({ description: 'a', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+				bravo: tool({ description: 'b', parameters: z.object({}), handler: async () => ({ ok: true }) }),
+			}),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream('run alpha and bravo', { conversationId: convId, userId: 'test-user' });
+		await assert.rejects(() => result.complete());
+
+		const history = await agent.getConversation(convId);
+		const toolCalls = history.filter(m => m.role === 'tool-call');
+		const toolResults = history.filter(m => m.role === 'tool-result');
+		assert.ok(toolCalls.length > 0, 'sanity: a tool call was persisted before the cap fired');
+		assert.strictEqual(toolResults.length, toolCalls.length, 'every persisted tool-call needs a matching tool-result');
+		const stopRecord = history.find(m => m.role === 'assistant' && /maxToolIterations/.test(JSON.stringify(m.metadata ?? '')));
+		assert.ok(stopRecord, 'history should record why the turn stopped');
+	});
+
+	test('maxLlmCalls keeps counting after resume() — the pre-resume call still counts', async () => {
+		// Segment 1 spends one model call (it emits the toolUse, then needsApproval
+		// interrupts). The resumed segment spends one more (the post-tool follow-up), so
+		// the turn total is 2. With maxLlmCalls: 1 a per-turn count must trip on that
+		// follow-up; with per-segment counters the resumed segment restarts at 0, the
+		// follow-up is call #1, and the turn completes — so this discriminates the two.
+		const scope = new Scope('test-cap-resume-llm');
+		const agent = new Agent(scope, 'caprl', {
+			systemPrompt: 'test',
+			maxLlmCalls: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { terminal, resumes, chunks } = await runAutoApproving(agent, 'what is the weather?', convId, 'test-user');
+
+		assert.strictEqual(resumes, 1, 'the tool should have interrupted once for approval');
+		assert.ok(terminal, 'the turn should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'error', `expected the cap to trip after resume, got ${terminal.type}`);
+		assert.match(terminal.error, /maxLlmCalls/, 'the error should name the cap that tripped');
+
+		// History must stay paired and explain itself.
+		const history = await agent.getConversation(convId);
+		const resumeToolCalls = history.filter(m => m.role === 'tool-call');
+		const resumeToolResults = history.filter(m => m.role === 'tool-result');
+		assert.strictEqual(resumeToolResults.length, resumeToolCalls.length, 'every tool-call needs a matching tool-result');
+		assert.ok(history.some(m => m.role === 'assistant' && /maxLlmCalls/.test(JSON.stringify(m.metadata ?? ''))), 'history should record why the turn stopped');
+		assert.ok(chunks.some((c: any) => c.type === 'tool-call'), 'sanity: a tool call happened');
+	});
+
+	test('an approved tool call is charged once, not twice, across resume()', async () => {
+		// The same toolUseId re-emits BeforeToolCallEvent when the turn resumes. With
+		// maxToolIterations: 1 a double charge would trip the cap on a single approved
+		// call; deduping by toolUseId must let the turn finish.
+		const scope = new Scope('test-cap-resume-dedupe');
+		const agent = new Agent(scope, 'caprd', {
+			systemPrompt: 'test',
+			maxToolIterations: 1,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+		const { terminal, resumes } = await runAutoApproving(agent, 'what is the weather?', convId, 'test-user');
+
+		assert.strictEqual(resumes, 1, 'the tool should have interrupted once for approval');
+		assert.ok(terminal, 'the turn should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'done', `a single approved tool call must not trip maxToolIterations: 1, got ${terminal.type}: ${terminal.error ?? ''}`);
+	});
+
+	test('a second message on the same conversation gets a fresh budget', async () => {
+		// The counters live in the session-persisted appState, so a new message must
+		// start a fresh budget. Each tool turn spends 2 model calls, so with
+		// maxLlmCalls: 2 both turns must complete on their own budget; if the counts
+		// leak across turns (the session snapshot restoring the previous turn's count
+		// over an eager reset) turn 2 trips immediately.
+		const scope = new Scope('test-cap-turns');
+		const agent = new Agent(scope, 'capturns', {
+			systemPrompt: 'test',
+			maxLlmCalls: 2,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), handler: async () => ({ temp: 22 }) }) }),
+		});
+		const convId = await agent.createConversationId('test-user');
+
+		const first = await (await agent.stream('what is the weather?', { conversationId: convId, userId: 'test-user' })).complete();
+		assert.strictEqual(first.type, 'done', 'turn 1 should complete');
+
+		const second = await agent.stream('what is the weather?', { conversationId: convId, userId: 'test-user' });
+		const chunks: any[] = [];
+		const ch = await second.channel;
+		const sub = ch.subscribe((c: any) => { chunks.push(c); });
+		let terminal: any;
+		for (let i = 0; i < 200 && !terminal; i++) {
+			terminal = chunks.find(c => c.type === 'done' || c.type === 'error' || c.type === 'interrupt');
+			if (!terminal) await new Promise(r => setTimeout(r, 25));
+		}
+		sub.unsubscribe();
+		assert.ok(terminal, 'turn 2 should reach a terminal chunk');
+		assert.strictEqual(terminal.type, 'done', `turn 2 must get a fresh budget, got ${terminal.type}: ${terminal.error ?? ''}`);
 	});
 });
 
