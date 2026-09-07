@@ -10,9 +10,11 @@ installCookieJar();
 let server: ChildProcess | null = null;
 let api: typeof apiType;
 let hello: typeof helloType;
+const serverPort = 3000;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 test.before(async () => {
-  if (!await isServerRunning()) {
+  if (!await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -30,14 +32,14 @@ test.before(async () => {
   // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 60; i++) {
     try {
-      const response = await fetch('http://localhost:3000/.blocks-sandbox/config.json');
+      const response = await fetch(readinessUrl);
       if (response.ok) return;
     } catch {
       // The server is not listening yet.
     }
     await setTimeout(1000);
   }
-  throw new Error('Server not ready');
+  throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 test.after(() => {
