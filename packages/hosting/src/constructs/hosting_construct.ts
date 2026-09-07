@@ -360,6 +360,12 @@ export type HostingConstructProps = {
         internal?: boolean;
         /** Regional ACM certificate for an HTTPS listener (same region as the ALB). */
         certificate?: ICertificate;
+        /**
+         * Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) through
+         * the ALB via a Lambda target. Set by the Blocks integration layer from
+         * the `api` prop; enables cookie auth with no CORS.
+         */
+        backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
       };
@@ -1287,6 +1293,7 @@ export class HostingConstruct extends Construct {
         vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
         internal?: boolean;
         certificate?: ICertificate;
+        backendApiUrl?: string;
         degrade?: import('../plan/types.js').CapabilityId[];
       };
       const serverName = this.computeFunctions.has('default')
@@ -1316,6 +1323,7 @@ export class HostingConstruct extends Construct {
         vpc: albCfg.vpc,
         internal: albCfg.internal,
         certificate: albCfg.certificate,
+        backendApiUrl: albCfg.backendApiUrl,
         degrade: albCfg.degrade,
       });
       this.distributionUrl = albResult.url;

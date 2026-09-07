@@ -705,7 +705,13 @@ export class Hosting extends Construct {
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
       monitoring: props.monitoring,
       skewProtection: props.skewProtection,
-      frontDoor: props.frontDoor,
+      // For the ALB front door, thread the backend API Gateway URL so the L3
+      // wires the same-origin `/aws-blocks/*` proxy (a Lambda target) — the ALB
+      // analogue of the CloudFront API behaviors below.
+      frontDoor:
+        typeof props.frontDoor === 'object' && props.frontDoor.kind === 'alb' && props.api
+          ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
+          : props.frontDoor,
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
@@ -715,14 +721,11 @@ export class Hosting extends Construct {
     // only to the CloudFront front door (`hosting.distribution` present). On a
     // non-CloudFront door (ALB) there is no distribution to add behaviors to;
     // the frontend still reaches the backend cross-origin via `BLOCKS_API_URL`.
+    // On the ALB front door there is no distribution to add behaviors to — the
+    // same-origin `/aws-blocks/*` proxy is wired inside the L3's ALB branch (an
+    // api-proxy Lambda target), fed the backend URL via `frontDoor.backendApiUrl`.
     if (props.api && hosting.distribution) {
       this.addApiBehaviors(hosting, props.api.apiUrl);
-    } else if (props.api && !hosting.distribution) {
-      console.warn(
-        '[Hosting] ⚠️  Same-origin API proxy (/aws-blocks/*) is a CloudFront feature and ' +
-          'is not wired on the ALB front door yet. The frontend reaches the backend via ' +
-          'BLOCKS_API_URL (cross-origin) instead.',
-      );
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
