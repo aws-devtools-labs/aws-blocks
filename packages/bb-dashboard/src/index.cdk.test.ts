@@ -153,17 +153,6 @@ describe('Dashboard against a real compute (synth)', () => {
 		assert.ok(body.includes('📋 Logs'), 'its logs section renders (logs are always on)');
 	});
 
-	test('an explicit computes list selects which computes to render', async () => {
-		const stack = await makeStack('DashboardExplicitComputes');
-		const compute = stack._defaultCompute as LambdaCompute;
-
-		new Dashboard(stack, 'dashboard', { routePath: false, computes: [compute] });
-		finalizeDashboards(stack);
-
-		const body = dashboardBody(stack);
-		assert.ok(body.includes('🔧 DefaultCompute'), 'the explicitly selected compute renders');
-	});
-
 	test('renders traces when the Dashboard is constructed BEFORE tracing is enabled (order-independent via finalize)', async () => {
 		const stack = await makeStack('DashboardBeforeTracer');
 		const compute = stack._defaultCompute as LambdaCompute;

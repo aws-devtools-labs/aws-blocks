@@ -11,8 +11,6 @@
  * mock objects.
  */
 
-import type { Compute } from '@aws-blocks/core/cdk/internal';
-
 // ── Observability BB structural interfaces ──────────────────────────────────
 
 /**
@@ -130,18 +128,13 @@ export interface DashboardOptions {
 	 */
 	title?: string;
 
-	// ── Compute selection & display toggles ──────────────────────────────────
+	// ── Display toggles ───────────────────────────────────────────────────────
 
-	/**
-	 * The computes to render sections for, in display order.
-	 *
-	 * @default Every compute in the app (in construction order). Because the
-	 * dashboard resolves this at finalize — after the whole backend module has
-	 * been imported — the default captures every compute regardless of the order
-	 * the customer constructed things in. Pass an explicit list to restrict the
-	 * dashboard to a subset.
-	 */
-	computes?: Compute[];
+	// NOTE: there is intentionally no `computes` option yet. The dashboard always
+	// covers every compute in the app (resolved at finalize). A compute selector
+	// would leak the internal `Compute` type into the public API before customers
+	// can construct a compute to pass — it arrives with the multi-compute surface.
+	// See the TODO in `index.cdk.ts` for the intended behavior when it lands.
 
 	/**
 	 * Whether to render the **logs** section for each compute. Logs are always

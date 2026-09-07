@@ -72,7 +72,7 @@ How the dashboard resolves each section:
 - **Logs** — shown for every compute (logs are always captured); log group is the compute's own handler log group. Suppress with `logs: false`.
 - **Traces** — shown for a compute when tracing is enabled on it (the app contains a `Tracer`). Suppress with `traces: false`.
 - **Metrics** — app-wide, from the `metrics` option: uses each BB's resolved `namespace` (defaults to its scope `fullId`) and `defaultDimensions` (included in widget queries so they target the correct dimensioned stream).
-- **Compute selection** — defaults to **every** compute in the app; pass `computes: [...]` to restrict it.
+- **Compute coverage** — always **every** compute in the app (one today). No compute selector is exposed yet.
 
 ## API Reference
 
@@ -97,7 +97,7 @@ Creates a CloudWatch Dashboard with auto-generated widgets.
 
 ### `DashboardOptions`
 
-#### Compute selection & display toggles
+#### Display toggles
 
 Logs and traces are section **display toggles**, not composition inputs — the
 dashboard reads each compute's state directly. Logs are always captured (so
@@ -106,9 +106,12 @@ dashboard reads each compute's state directly. Logs are always captured (so
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `computes` | `Compute[]` | every compute in the app | Which computes to render, in order (resolved at finalize) |
 | `logs` | `boolean` | `true` | Show the logs section for each compute |
 | `traces` | `boolean` | `true` | Show the traces section for each compute (only ever present when the app has a `Tracer`) |
+
+The dashboard always covers **every** compute in the app. There is no compute
+selector yet — one arrives with the multi-compute customer surface (it would
+otherwise leak an internal type before customers can construct a compute).
 
 #### Metrics composition
 

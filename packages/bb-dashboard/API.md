@@ -4,7 +4,6 @@
 
 ```ts
 
-import type { Compute } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // @public
@@ -22,7 +21,6 @@ export const DashboardErrors: {
 
 // @public
 export interface DashboardOptions {
-    computes?: Compute[];
     dashboardName?: string;
     defaultTimeRange?: string;
     logs?: boolean;

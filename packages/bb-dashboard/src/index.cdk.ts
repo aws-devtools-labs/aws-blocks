@@ -78,9 +78,6 @@ export class Dashboard extends Scope {
 		// finalizer runs) but applied per compute below. Default is to show both.
 		const showLogs = options?.logs !== false;
 		const showTraces = options?.traces !== false;
-		// An explicit compute list is captured now; the all-computes default is
-		// deferred to the finalizer (below) so it sees every compute in the app.
-		const explicitComputes = options?.computes;
 
 		// Build the widget body in a finalizer, not here. The body depends on
 		// which computes are traced (`dashboardSection` gates its traces section on
@@ -88,15 +85,25 @@ export class Dashboard extends Scope {
 		// `Tracer` is finalized during the backend-module import. This finalizer
 		// runs after that import completes, so the dashboard observes tracing
 		// regardless of the order the customer constructed things in — and its
-		// default compute list captures every compute in the app.
+		// compute list captures every compute in the app.
 		registerDashboardFinalizer(this, () => {
 			const region = Stack.of(this).region;
-			// The dashboard is organized by compute: each selected compute is a group
-			// — health always, plus logs/traces per the compute's state and this
-			// dashboard's display toggles. Default selection is every compute in the
-			// app (resolved here, at finalize, so nothing is missed). Metrics are
-			// app-wide (rendered once per namespace, after the compute groups).
-			const computes = explicitComputes ?? getComputes(this);
+			// The dashboard is organized by compute: each compute is a group — health
+			// always, plus logs/traces per the compute's state and this dashboard's
+			// display toggles. Metrics are app-wide (rendered once per namespace,
+			// after the compute groups).
+			//
+			// TODO(multi-compute): the dashboard currently always covers EVERY compute
+			// in the app (`getComputes(this)`), which is complete today because there
+			// is exactly one (the default) compute and no customer surface to create
+			// more. When `Compute` becomes a public, customer-instantiable type, add a
+			// `computes?: Compute[]` option to `DashboardOptions` and resolve it here
+			// as `options.computes ?? getComputes(this)` — an explicit list restricts
+			// the dashboard to just those computes (in the given order); omitting it
+			// keeps the "cover every compute" default. It is left out of the public
+			// API until then so we don't leak the internal `Compute` type before a
+			// customer can construct one to pass.
+			const computes = getComputes(this);
 			const computeSections: ComputeDashboardSection[] = computes.map((compute) => {
 				const section = compute.dashboardSection(region);
 				// Apply the dashboard-wide display toggles uniformly. `logging` is

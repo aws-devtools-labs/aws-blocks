@@ -81,15 +81,16 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 
 ## Multi-Compute Dashboard (Implemented)
 
-> **Status:** implemented. The dashboard is organized **by compute** — it renders
-> each compute as a group (health always; logs always; traces only when the app
-> contains a `Tracer`) and app-wide metrics sections after them, one per
-> `MetricsSource`. It exposes a `computes?: Compute[]` selector that **defaults
-> to every compute in the app** (resolved at finalize), plus `logs` / `traces`
-> display toggles. `Compute` is still `@internal`, so the selector is a
-> forward-looking surface — the default-to-all path needs no compute reference
-> (see D-DB-10). There are no `logger` / `tracer` options — the dashboard reads
-> compute state directly.
+> **Status:** implemented; no compute selector is exposed yet. The dashboard is
+> organized **by compute** — it renders each compute as a group (health always;
+> logs always; traces only when the app contains a `Tracer`) and app-wide metrics
+> sections after them, one per `MetricsSource`. It exposes `logs` / `traces`
+> display toggles but **no public `computes` option**: it always covers every
+> compute in the app (`getComputes()` at finalize), which is complete today
+> because there is exactly one compute. A `computes` selector arrives with the
+> multi-compute customer surface — exposing it now would leak the internal
+> `Compute` type before customers can construct one (see D-DB-10). There are no
+> `logger` / `tracer` options — the dashboard reads compute state directly.
 
 ### The two axes: compute-scoped vs app-scoped observability
 
@@ -153,19 +154,17 @@ The dashboard's `logs` / `traces` options are a **display** choice layered on to
 - Pairing configs with their source prevents cross-namespace ambiguity: `OrdersPlaced` belongs to the orders namespace, not billing.
 - Per-compute disambiguation, when wanted, is a `defaultDimensions` choice on the Metrics BB — not a namespace-to-compute binding.
 
-### D-DB-10: `computes` selector, defaulting to all computes at finalize
+### D-DB-10: No compute selector exposed yet; cover every compute at finalize
 
-**Decision:** The dashboard exposes an optional `computes?: Compute[]` option and
-defaults to **every** compute in the app when it is omitted. The default is
-resolved at the finalize pass (see D-DB-11) by enumerating `getComputes()`, so
-there is no construction-order dependency. `Compute` is imported from
-`@aws-blocks/core/cdk/internal`.
+**Decision:** The dashboard exposes **no** `computes` option. Its finalizer always
+renders every compute in the app, resolved by enumerating `getComputes()` at the
+finalize pass (see D-DB-11). It does expose `logs` / `traces` display toggles.
 
 **Rationale:**
-- **Default-to-all is the batteries-included DX.** The common case — "show me my whole app" — needs no argument, and resolving it at finalize means a compute constructed after the Dashboard is still included.
-- **The explicit list stays available** for restricting the dashboard to a subset, and is order-safe (the caller names exactly what appears).
-- **Internal-type exposure is acceptable here.** `Compute` is still `@internal`, so `computes` is an advanced/forward-looking surface; the default-to-all path needs no compute reference at all, which is what almost every app uses today. When the multi-compute customer surface lands and `Compute` goes public, this option becomes fully first-class with no shape change.
-- Logs/traces are **not** part of this selector — they are per-section display toggles (`logs` / `traces`), applied uniformly to whichever computes are rendered (see D-DB-8).
+- **Nothing is lost today.** There is exactly one compute (the default), so "cover every compute" is complete. `getComputes()` at finalize also means a compute constructed after the Dashboard is still included — no construction-order gap.
+- **Don't leak an internal type early.** `Compute` is `@internal` and not customer-instantiable. A public `computes?: Compute[]` option would leak that type through the public API before a customer could construct a compute to pass — a worse experience than not having the option. It stays out until the multi-compute customer surface lands.
+- **The seam is ready.** Because the body is built at finalize over `getComputes()` (D-DB-11), adding `computes?: Compute[]` later is a pure addition: resolve `options.computes ?? getComputes(this)`, where an explicit list restricts (and orders) the rendered computes and omitting it keeps the default. A `TODO(multi-compute)` in `index.cdk.ts` records this intended behavior.
+- Logs/traces are **not** a compute selector — they are per-section display toggles (`logs` / `traces`), applied uniformly to every rendered compute (see D-DB-8).
 
 ### D-DB-11: Build the widget body at finalize, not in the constructor
 
