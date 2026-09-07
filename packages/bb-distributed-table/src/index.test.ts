@@ -859,4 +859,49 @@ describe('DistributedTable', () => {
 			);
 		});
 	});
+
+	// ── Query: index sort-key ties are ordered deterministically ────────────
+	describe('query (index sort-key ties)', () => {
+		const cardSchema = z.object({ boardId: z.string(), cardId: z.string(), position: z.number() });
+		// Base key is (boardId, cardId); the GSI sorts by `position`, which is NOT
+		// unique — several cards can share a position. DynamoDB tie-breaks such
+		// index rows by the base-table key, so the mock must too (not by Map
+		// insertion order, which varies by write order / disk reload).
+		function cardTable() {
+			return new DistributedTable(testScope(), 'cards', {
+				schema: cardSchema,
+				key: { partitionKey: 'boardId', sortKey: 'cardId' },
+				indexes: { byPosition: { partitionKey: 'boardId', sortKey: 'position' } },
+			});
+		}
+		const q = (t: ReturnType<typeof cardTable>, order?: 'asc' | 'desc') =>
+			collect(t.query({ index: 'byPosition', where: { boardId: { equals: 'b1' } }, ...(order ? { order } : {}) }));
+
+		test('ties on the index sort key order by the base-table key, regardless of write order', async () => {
+			const t1 = cardTable();
+			// All position=1; insert cardIds out of order.
+			for (const cardId of ['c3', 'c1', 'c2']) await t1.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t1)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+
+			// A different write order must yield the SAME result (deterministic).
+			const t2 = cardTable();
+			for (const cardId of ['c2', 'c3', 'c1']) await t2.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t2)).map((c) => c.cardId), ['c1', 'c2', 'c3']);
+		});
+
+		test('desc reverses ties too (whole index order flips)', async () => {
+			const t = cardTable();
+			for (const cardId of ['c1', 'c3', 'c2']) await t.put({ boardId: 'b1', cardId, position: 1 });
+			assert.deepEqual((await q(t, 'desc')).map((c) => c.cardId), ['c3', 'c2', 'c1']);
+		});
+
+		test('primary order stays by index sort key; base key only breaks ties', async () => {
+			const t = cardTable();
+			await t.put({ boardId: 'b1', cardId: 'zzz', position: 1 });
+			await t.put({ boardId: 'b1', cardId: 'aaa', position: 2 });
+			await t.put({ boardId: 'b1', cardId: 'mmm', position: 1 });
+			// position asc first (1,1,2); within position=1, base key (cardId) breaks the tie.
+			assert.deepEqual((await q(t)).map((c) => [c.position, c.cardId]), [[1, 'mmm'], [1, 'zzz'], [2, 'aaa']]);
+		});
+	});
 });
