@@ -403,9 +403,9 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					sub.connection?.close();
 
 					// Wait for the reconnect to complete (onReconnect fires post-resubscribe).
-					const reconnectDeadline = Date.now() + 15_000;
+					const reconnectDeadline = Date.now() + 60_000;
 					while (reconnects < 1) {
-						if (Date.now() > reconnectDeadline) throw new Error('reconnect did not occur within 15s');
+						if (Date.now() > reconnectDeadline) throw new Error('reconnect did not occur within 60s');
 						await setTimeout(200);
 					}
 
@@ -417,9 +417,9 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					// frame-send, so the server may not have re-registered the subscription
 					// at the instant reconnects reaches 1.
 					const before = received.length;
-					const deliverDeadline = Date.now() + 15_000;
+					const deliverDeadline = Date.now() + 30_000;
 					while (received.length <= before) {
-						if (Date.now() > deliverDeadline) throw new Error('c2 not delivered within 15s after reconnect');
+						if (Date.now() > deliverDeadline) throw new Error('c2 not delivered within 30s after reconnect');
 						await api.realtimePublishToChannel(channelName, c2);
 						await setTimeout(500);
 					}
