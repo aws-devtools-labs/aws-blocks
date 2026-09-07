@@ -279,6 +279,67 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					`Expected a DisconnectReason, got: ${reason}`,
 				);
 			});
+
+			test('reconnect after a forced close resubscribes and still delivers messages', async () => {
+				const api = getApi();
+				// Dedicated channel so only this subscription's token/resubscribe is exercised.
+				const channelName = `reconnect-e2e-${Date.now()}`;
+				const c1: Cursor = { userId: 'u1', x: 1, y: 1, color: 'red' };
+				const c2: Cursor = { userId: 'u1', x: 2, y: 2, color: 'blue' };
+
+				const channel = await api.realtimeGetChannel(channelName);
+
+				const received: Cursor[] = [];
+				let disconnects = 0;
+				let reconnects = 0;
+
+				const sub = channel.subscribe({
+					onMessage: (msg) => { received.push(msg); },
+					onDisconnect: () => { disconnects += 1; },
+					// Fires after the transport reopens AND this channel resubscribes.
+					onReconnect: () => { reconnects += 1; },
+				});
+
+				try {
+					await sub.established;
+
+					// Deliver a message before the drop.
+					await api.realtimePublishToChannel(channelName, c1);
+					const c1Deadline = Date.now() + 10_000;
+					while (!received.some((m) => m.x === c1.x && m.y === c1.y)) {
+						if (Date.now() > c1Deadline) throw new Error('c1 not received within 10s of publish');
+						await setTimeout(100);
+					}
+
+					// Force a mid-stream drop of the underlying socket (guard undefined).
+					sub.connection?.close();
+
+					// Wait for the transparent reconnect + resubscribe. Fails clearly on timeout.
+					const reconnectDeadline = Date.now() + 15_000;
+					while (reconnects < 1) {
+						if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 15s of the forced close');
+						await setTimeout(100);
+					}
+
+					// A message published AFTER the reconnect proves the resubscribe worked —
+					// it is delivered on the fresh socket, not the closed one. Republish while
+					// polling: the mock fires onReconnect when the resubscribe frame is SENT (it
+					// does not track per-channel server confirmation), so the server may not have
+					// re-registered this subscriber on the very first publish. Retry-publishing
+					// mirrors the server-side-subscribe test's handling of the same race.
+					const c2Deadline = Date.now() + 15_000;
+					while (!received.some((m) => m.x === c2.x && m.y === c2.y)) {
+						if (Date.now() > c2Deadline) throw new Error('c2 not delivered after reconnect within 15s');
+						await api.realtimePublishToChannel(channelName, c2);
+						await setTimeout(1000);
+					}
+
+					assert.ok(reconnects >= 1, 'onReconnect should fire at least once');
+					assert.ok(disconnects >= 1, 'onDisconnect should fire on the forced close, before the reconnect');
+				} finally {
+					sub.unsubscribe();
+				}
+			});
 		});
 
 		describe('Limit Enforcement', () => {
