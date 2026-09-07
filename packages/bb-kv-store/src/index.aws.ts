@@ -111,7 +111,7 @@ export class KVStore<T = string> extends Scope {
 		const conditions: string[] = [];
 		const names: Record<string, string> = {};
 		const values: Record<string, unknown> = {};
-		if (options?.ifNotExists) {
+		if (options?.ifNotExists === true) {
 			conditions.push('attribute_not_exists(#pk)');
 			names['#pk'] = 'pk';
 		}
