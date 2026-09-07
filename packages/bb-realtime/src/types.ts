@@ -46,6 +46,8 @@ export interface SubscribeOptions<T = unknown> {
 	onDisconnect?: (reason: DisconnectReason) => void;
 	/** Called after the transport transparently reconnects and THIS channel's resubscribe has been re-confirmed by the server (with its stored token replayed). Fires once per successful reconnect for this channel, after the corresponding `onDisconnect` for the drop that triggered it. Not called on the initial subscribe. Routed per-channel: if this channel's resubscribe is rejected (e.g. its replayed token expired), `onReconnect` does NOT fire for it — it receives `onDisconnect('error')` instead; and a sibling channel's rejection never reaches this channel. Applies to client-side (hydrated) subscriptions only — a server-side `subscribe()` has no transport reconnect, so an `onReconnect` passed to a server-obtained handle is never fired. */
 	onReconnect?: () => void;
+	/** Called before each reconnect to obtain a freshly-minted channel descriptor (new connect + channel token) so the subscription can outlive the token TTLs (channel ~1h / connect ~2h). Without it, a reconnect replays the original tokens and will fail once they expire. Not called on the initial subscribe. */
+	refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 /**
