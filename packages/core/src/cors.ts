@@ -33,11 +33,18 @@ function splitOrigins(raw: string): string[] {
  * @returns Array of anchored RegExp patterns
  */
 export function parseCorsPatterns(raw: string): RegExp[] {
+  // Case-INSENSITIVE (`i`): an Origin's scheme and host are case-insensitive per
+  // the URL spec, and some AWS hostnames are case-preserving but resolved
+  // case-insensitively — notably an Application Load Balancer's DNS name
+  // (`blocks-Hosti-AbCd….elb.amazonaws.com`), which the browser lowercases in
+  // the `Origin` header. A case-sensitive match would then reject the very
+  // origin the deploy configured (`CORS_HOSTING_ORIGINS`). Matching
+  // case-insensitively is both spec-correct and required for the ALB front door.
   return splitOrigins(raw).map(pattern => {
     try {
-      return new RegExp(`^(?:${pattern})$`);
+      return new RegExp(`^(?:${pattern})$`, 'i');
     } catch {
-      return new RegExp(escapeOriginToPattern(pattern));
+      return new RegExp(escapeOriginToPattern(pattern), 'i');
     }
   });
 }
@@ -110,7 +117,7 @@ export function getCorsPatterns(): RegExp[] | null {
   // Literal channel: framework-injected resolved origins, escaped so regex
   // metacharacters (notably dots) match literally rather than as wildcards.
   const hostingPatterns = splitOrigins(hostingOrigins)
-    .map(origin => new RegExp(escapeOriginToPattern(origin)));
+    .map(origin => new RegExp(escapeOriginToPattern(origin), 'i'));
 
   const all = [...regexPatterns, ...hostingPatterns];
   _corsPatterns = all.length ? all : null;
