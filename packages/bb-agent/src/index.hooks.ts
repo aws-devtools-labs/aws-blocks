@@ -387,19 +387,16 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	async function ensureSubscribed(channelId: string) {
 		if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
 
-		// Pass a CALLABLE that ALSO carries the ChatSubscribeOptions properties. This keeps
-		// both shapes of the `subscribe` union valid at runtime: an old adapter that invokes
-		// arg2 as a bare chunk handler still works (it's a function that dispatches to
-		// handleChunk), and a new adapter that reads arg2.onMessage/onReconnect/onDisconnect
-		// still works (those are attached as properties). Cast-free: the intersection type
-		// is assignable to either member of the ChatChunkHandler | ChatSubscribeOptions union.
-		const subscribeArg: ChatChunkHandler & ChatSubscribeOptions = Object.assign(
-			(chunk: AgentStreamChunk) => { handleChunk(chunk); },
-			{
-				onMessage: handleChunk,
-				onReconnect: () => { void handleReconnect(); },
-			},
-		);
+		// Pass a plain options object (NOT a callable-with-props). Both bb-realtime
+		// middlewares resolve subscribe with `typeof handlerOrOptions === 'function'`
+		// FIRST — a function is treated as a bare handler and its onMessage/onReconnect/
+		// onDisconnect properties are never read. A hybrid callable would therefore
+		// silently drop onReconnect, making the reconnect re-sync + failsafe dead on the
+		// real transport. The options object hits the transport's object branch.
+		const subscribeArg: ChatSubscribeOptions = {
+			onMessage: handleChunk,
+			onReconnect: () => { void handleReconnect(); },
+		};
 
 		const sub = await options.subscribe(channelId, subscribeArg);
 		try {
