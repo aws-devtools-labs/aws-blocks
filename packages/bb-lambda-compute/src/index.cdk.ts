@@ -12,13 +12,11 @@ import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
+import { applyXRayTracing, buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './observability.js';
 import type { LambdaComputeProps } from './types.js';
-import { buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './widgets.js';
 
 export type { LambdaComputeProps } from './types.js';
 
@@ -197,13 +195,7 @@ export class LambdaCompute extends Compute {
 	}
 
 	protected applyTracing(): void {
-		(this.fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
-		this.executionRole.addToPrincipalPolicy(
-			new PolicyStatement({
-				actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
-				resources: ['*'],
-			}),
-		);
+		applyXRayTracing(this.fn, this.executionRole);
 	}
 
 	protected healthWidgets(region: string): IWidget[][] {

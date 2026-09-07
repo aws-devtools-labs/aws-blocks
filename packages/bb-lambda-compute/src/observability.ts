@@ -2,15 +2,48 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * CloudWatch Dashboard health widgets for a Lambda-backed compute.
+ * Observability for a Lambda-backed compute: X-Ray tracing activation plus the
+ * CloudWatch Dashboard widget builders (health, logs, traces).
  *
- * A `LambdaCompute` self-reports these via `dashboardSection(region)` so the
- * Dashboard Building Block can assemble a per-compute health section without
- * knowing the compute is Lambda-shaped.
+ * `LambdaCompute` keeps its class body thin by delegating here:
+ * - `applyTracing()` → {@link applyXRayTracing}
+ * - `dashboardSection(region)` → the `build*Widgets` functions, which let the
+ *   Dashboard Building Block assemble a per-compute section without knowing the
+ *   compute is Lambda-shaped.
  */
 import { Duration } from 'aws-cdk-lib';
-import { GraphWidget, LogQueryWidget, Metric, ConcreteWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { ConcreteWidget, GraphWidget, LogQueryWidget, Metric } from 'aws-cdk-lib/aws-cloudwatch';
+import type { IRole } from 'aws-cdk-lib/aws-iam';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import type { CfnFunction, IFunction } from 'aws-cdk-lib/aws-lambda';
+
+// ── Tracing (X-Ray) ───────────────────────────────────────────────────────
+
+/**
+ * Turn on active X-Ray tracing for a Lambda compute: flip the function to
+ * `Active` tracing mode and grant its execution role permission to publish
+ * trace segments. Called from `LambdaCompute.applyTracing()` (which the
+ * framework invokes on every compute when the app contains a `Tracer`).
+ *
+ * X-Ray Active mode traces the function on **every** invocation path — API
+ * Gateway requests, SQS-driven async jobs, and EventBridge-scheduled runs alike
+ * — so this single call covers all workloads the shared handler serves.
+ *
+ * @param fn - The Lambda function backing the compute.
+ * @param executionRole - The compute's shared execution role to grant X-Ray publish on.
+ */
+export function applyXRayTracing(fn: IFunction, executionRole: IRole): void {
+	(fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
+	executionRole.addToPrincipalPolicy(
+		new PolicyStatement({
+			actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+			resources: ['*'],
+		}),
+	);
+}
+
+// ── Health widgets ──────────────────────────────────────────────────────────
 
 /**
  * Build Lambda health widgets: Invocations, Errors, Duration, ConcurrentExecutions.
