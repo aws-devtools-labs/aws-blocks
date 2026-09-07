@@ -135,8 +135,9 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set (alone) and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and `ifValueEquals` are set (they compose with OR), only when the key exists AND its current value does not match.
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: PutOptions<T>): Promise<void> {

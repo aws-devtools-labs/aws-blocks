@@ -70,14 +70,14 @@ test('put with ifValueEquals throws when value differs', async () => {
 test('put with both conditions writes a NEW key (absent branch of OR)', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'test');
 	await store.put('key1', 'v1', { ifNotExists: true, ifValueEquals: 'anything' });
-	assert.equal(await store.get('key1'), 'v1');
+	assert.strictEqual(await store.get('key1'), 'v1');
 });
 
 test('put with both conditions updates an EXISTING key when the value matches (value branch of OR)', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'test');
 	await store.put('key1', 'v1');
 	await store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'v1' });
-	assert.equal(await store.get('key1'), 'v2');
+	assert.strictEqual(await store.get('key1'), 'v2');
 });
 
 test('put with both conditions throws when the key exists AND the value differs', async () => {

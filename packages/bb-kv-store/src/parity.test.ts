@@ -247,3 +247,46 @@ describe('TTL parity between mock and AWS runtimes', () => {
 		}
 	});
 });
+
+// Conditional-write composition parity: the AWS runtime must emit an OR-composed
+// ConditionExpression when both ifNotExists and ifValueEquals are set, matching
+// the mock's behavior. A typo in the join or a missing name/value would slip
+// past the mock-only tests.
+describe('conditional-write composition (AWS PutCommand shape)', () => {
+	test('both conditions → attribute_not_exists(#pk) OR #value = :expected', () => {
+		const { store, items } = captureAws('parity-compose-both');
+		return store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk) OR #value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('ifNotExists alone → attribute_not_exists(#pk), no value attrs', () => {
+		const { store, items } = captureAws('parity-compose-absent');
+		return store.put('k', 'v', { ifNotExists: true }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk)');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk' });
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
+
+	test('ifValueEquals alone → #value = :expected, no #pk', () => {
+		const { store, items } = captureAws('parity-compose-value');
+		return store.put('k', 'v', { ifValueEquals: 'prev' }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, '#value = :expected');
+			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
+			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
+		});
+	});
+
+	test('no conditions → no ConditionExpression', () => {
+		const { store, items } = captureAws('parity-compose-none');
+		return store.put('k', 'v').then(() => {
+			assert.strictEqual(items()[0].ConditionExpression, undefined);
+		});
+	});
+});
