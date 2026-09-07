@@ -46,6 +46,15 @@ const connections = new Map<string, {
 	reconnectHandlers: Set<() => void>;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
 	reconnectTimer?: ReturnType<typeof setTimeout>;
+	/**
+	 * Set on a deliberate teardown (`__resetConnectionsForTest`). A torn-down
+	 * connection must never reconnect: `scheduleReconnect` short-circuits on it
+	 * so the deliberate `.close()` below cannot re-arm a timer or resurrect a
+	 * pooled entry (which would keep the Node event loop alive and hang
+	 * `node --test`). Only an UNEXPECTED server drop — where this stays false and
+	 * subscriptions remain — reconnects.
+	 */
+	tornDown?: boolean;
 }>();
 
 const MAX_RECONNECT = 5;
@@ -65,6 +74,7 @@ function getOrCreateConnection(wsUrl: string) {
 			pendingEstablished: new Map(),
 			disconnectHandlers: new Set(),
 			reconnectHandlers: new Set(),
+			tornDown: false,
 		};
 		connections.set(wsUrl, conn);
 	}
@@ -140,7 +150,19 @@ function doConnect(wsUrl: string, isReconnect = false) {
 }
 
 function scheduleReconnect(wsUrl: string) {
-	const conn = getOrCreateConnection(wsUrl);
+	// Look up the EXISTING connection rather than creating one: a stale timer or
+	// an onclose firing after teardown must not resurrect a just-deleted pooled
+	// entry from within scheduleReconnect.
+	const conn = connections.get(wsUrl);
+	// Teardown guard (mirrors aws-middleware, which short-circuits when
+	// subscriptions.size === 0): never reconnect a connection that is gone, has
+	// been deliberately torn down, or has no subscribers left. A client-initiated
+	// close (unsubscribe of the last handler) or the `__resetConnectionsForTest`
+	// teardown closes the socket ON PURPOSE; without this guard its onclose would
+	// arm a fresh setTimeout — and recreate a pooled entry — that keeps the event
+	// loop alive and hangs `node --test`. Only an UNEXPECTED drop (connection
+	// still present, not torn down, subscriptions still live) reconnects.
+	if (!conn || conn.tornDown || conn.subscriptions.size === 0) return;
 	if (conn.reconnectAttempts >= MAX_RECONNECT) return;
 	conn.reconnectAttempts++;
 	const delay = Math.min(1000 * 2 ** (conn.reconnectAttempts - 1), MAX_DELAY_MS);
@@ -154,12 +176,26 @@ function scheduleReconnect(wsUrl: string) {
  */
 export function __resetConnectionsForTest(): void {
 	for (const conn of connections.values()) {
-		if (conn.reconnectTimer) clearTimeout(conn.reconnectTimer);
+		// Mark torn down and detach the close handler BEFORE closing the socket.
+		// Order matters: the deliberate `.close()` below fires onclose
+		// asynchronously, and if that handler were still attached it would call
+		// scheduleReconnect → arm a fresh timer / recreate a pooled entry AFTER
+		// the map is cleared, leaving a live setTimeout that keeps `node --test`
+		// from ever exiting. Flagging tornDown (the guard's belt) and detaching
+		// onclose (the suspenders) makes the reset fully quiescent — no timers and
+		// no sockets survive it.
+		conn.tornDown = true;
+		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = undefined; }
 		conn.subscriptions.clear();
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
 		conn.reconnectHandlers.clear();
-		try { conn.ws?.close(); } catch {}
+		if (conn.ws) {
+			conn.ws.onmessage = null;
+			conn.ws.onerror = null;
+			conn.ws.onclose = null;
+			try { conn.ws.close(); } catch {}
+		}
 	}
 	connections.clear();
 }
