@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * TDD (red) coverage for PR1 (Option B): production Realtime auto-reconnect +
- * resubscribe-with-replayed-token, a surviving keep-alive ping timer, and the
- * new optional `SubscribeOptions.onReconnect` callback.
+ * Coverage for the production Realtime transport (PR1, Option B): it covers
+ * production auto-reconnect + resubscribe with the replayed channel token, a
+ * surviving keep-alive ping timer re-armed on the new socket, the optional
+ * `SubscribeOptions.onReconnect` callback, and the failure paths (retry cap
+ * give-up, stale-token resubscribe, transient onerror).
  *
- * These tests encode the INTENDED post-fix contract so they fail today and pass
- * once PR1 lands. They drive the production middleware through the same test
- * surface `mock-middleware.ts` already exposes (`hydrate` +
- * `__resetConnectionsForTest`) — a surface `aws-middleware.ts` does NOT export
- * yet — and reference `SubscribeOptions.onReconnect`, which does not exist yet.
- * Until PR1 adds them, this file is the RED signal: it fails to compile / load.
+ * These tests assert the shipped contract of the production middleware,
+ * driving it through the same test surface `mock-middleware.ts` exposes
+ * (`hydrate` + `__resetConnectionsForTest`) and exercising
+ * `SubscribeOptions.onReconnect`.
  *
  * Unlike the mock's reconnect regression (see ws-server.test.ts, "token replay
  * on reconnect"), these run against a fake in-process WebSocket rather than the
@@ -22,8 +22,8 @@
  */
 import { describe, it, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-// INTENDED PR1 surface — mirrors mock-middleware's `export function hydrate` and
-// `__resetConnectionsForTest`. Missing on aws-middleware today (RED).
+// Production test surface — mirrors mock-middleware's `export function hydrate`
+// and `__resetConnectionsForTest`.
 import { hydrate, __resetConnectionsForTest } from './aws-middleware.js';
 import type { RealtimeChannelClient } from './aws-middleware.js';
 import type { SubscribeOptions } from './types.js';
@@ -235,8 +235,8 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 	it('onReconnect callback fires after a successful resubscribe (onDisconnect fires on the drop)', () => {
 		const client = hydrateClient();
 		const events: string[] = [];
-		// `onReconnect` does not exist on SubscribeOptions yet — this declaration
-		// is the RED signal for the new callback (no cast, no ts-ignore directive).
+		// Exercises the `onReconnect` callback on SubscribeOptions (no cast, no
+		// type-suppression directive).
 		const options: SubscribeOptions = {
 			onMessage: () => {},
 			onDisconnect: () => {
@@ -462,6 +462,34 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 			FakeWebSocket.instances.length,
 			afterGiveUp + 1,
 			'a later subscribe must rebuild a fresh connection after give-up',
+		);
+	});
+
+	// (f) MEDIUM give-up: an UNCONFIRMED subscription whose retry cap is exhausted
+	// must REJECT `established` (not hang), with the name the give-up path sets.
+	it('sub.established rejects with ConnectionFailedException after the retry cap is exhausted', async () => {
+		const client = hydrateClient();
+		const sub = client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		// Drop before any subscribe_success, so `established` stays pending, then
+		// exhaust the cap — none of the reconnect sockets ever confirm.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		for (let i = 0; i < MAX_RECONNECT + 2; i++) {
+			const latest = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+			latest.emitServerClose(1006);
+			mock.timers.tick(60_000);
+		}
+
+		// The give-up path (scheduleReconnect at MAX_RECONNECT) rejects any pending
+		// establishment with a named ConnectionFailedException so awaiting callers
+		// fail fast instead of hanging forever.
+		await assert.rejects(
+			sub.established,
+			(err: Error) => err.name === 'ConnectionFailedException',
+			'established must reject with ConnectionFailedException once the retry cap is exhausted',
 		);
 	});
 });
