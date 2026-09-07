@@ -75,3 +75,5 @@ export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
 export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
 export { ApiGatewayAdapter, type ApiGatewayRenderContext } from './apigw_adapter.js';
 export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
+export { FunctionUrlAdapter, type FunctionUrlRenderContext } from './function_url_adapter.js';
+export { FunctionUrlConstruct, type FunctionUrlConstructProps } from './function_url_construct.js';

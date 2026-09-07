@@ -51,6 +51,7 @@ import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
 import { AlbAdapter } from './alb_adapter.js';
 import { ApiGatewayAdapter } from './apigw_adapter.js';
+import { FunctionUrlAdapter } from './function_url_adapter.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
@@ -379,6 +380,17 @@ export type HostingConstructProps = {
         kind: 'api-gateway';
         /** Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`), set by the Blocks layer. */
         backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        /**
+         * Lambda Function URL — the cheapest HTTPS, no-CloudFront door for a
+         * STATIC site / SPA (single asset-proxy Lambda, built-in HTTPS,
+         * scale-to-zero, no VPC). SSR / same-origin API are not available here;
+         * the negotiator fails synth if the app requires them.
+         */
+        kind: 'function-url';
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
       };
@@ -1342,6 +1354,12 @@ export class HostingConstruct extends Construct {
           result = new ApiGatewayAdapter().render(this, plan, {
             ...common,
             backendApiUrl: fd.backendApiUrl,
+            degrade: fd.degrade,
+          });
+          break;
+        case 'function-url':
+          result = new FunctionUrlAdapter().render(this, plan, {
+            bucket: this.bucket,
             degrade: fd.degrade,
           });
           break;
