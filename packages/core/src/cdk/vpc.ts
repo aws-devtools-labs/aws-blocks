@@ -4,6 +4,7 @@
 import { Annotations } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type { Construct } from 'constructs';
+import { getVpcRequirements as getRegisteredVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, SubnetRole, SubnetScope, VpcContext, VpcRequirements } from './vpc-types.js';
 
 const VPC_CONTEXT_KEY = Symbol.for('BLOCKS_VPC_CONTEXT');
@@ -56,14 +57,44 @@ export function getVpcContext(scope: Construct): VpcContext | undefined {
 	return undefined;
 }
 
+const LAZY_VPC_KEY = Symbol.for('BLOCKS_LAZY_VPC');
+
 /**
- * Type guard: does this construct implement the BuildingBlockScope protocol
- * (i.e., has a getVpcRequirements method)?
+ * Does any registered Building Block *require* a VPC (i.e. cannot function
+ * without one)? Used to decide whether to lazily derive a VPC when the customer
+ * didn't provide one. A BB that merely benefits from endpoints does NOT count —
+ * only `requiresVpc: true`.
+ * @internal
  */
-function hasBuildingBlockProtocol(
-	construct: Construct,
-): construct is Construct & { getVpcRequirements(): VpcRequirements } {
-	return typeof (construct as any).getVpcRequirements === 'function';
+export function anyRequirementNeedsVpc(scope: Construct): boolean {
+	return getRegisteredVpcRequirements(scope).some((r) => r.requirements.requiresVpc === true);
+}
+
+/**
+ * Get the framework-owned VPC for a stack, creating one on first use.
+ *
+ * VPC is a **derived** resource: when a Building Block (or, later, a container
+ * compute) requires one and the customer didn't bring their own, Blocks
+ * materializes a sensible default here — the same create-if-absent pattern
+ * `bb-data` uses for Aurora, lifted to the framework so the whole app shares a
+ * single VPC. Keyed by a Symbol on the stack so it's a true singleton: the first
+ * caller creates, everyone else reuses. Passing a customer VPC (`vpc:` prop)
+ * pre-seeds this via {@link initializeVpc}, so this default is only built when
+ * nothing was provided.
+ *
+ * The default has both a `private-with-egress` tier (for a runtime that needs
+ * outbound access — the derivation trigger) and public subnets for the NAT
+ * gateway. NAT has a real cost, so this is only created on genuine need, and
+ * `create()` emits a notice when it does.
+ * @internal
+ */
+export function getOrCreateVpc(scope: Construct): ec2.IVpc {
+	const holder = scope as any;
+	const existing = holder[LAZY_VPC_KEY] as ec2.IVpc | undefined;
+	if (existing) return existing;
+	const vpc = new ec2.Vpc(scope, 'BlocksVpc', { maxAzs: 2, natGateways: 1 });
+	holder[LAZY_VPC_KEY] = vpc;
+	return vpc;
 }
 
 /**
@@ -147,42 +178,40 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
 	const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];
 
-	// Pull requirements from all BuildingBlockScope instances in the tree.
-	for (const child of scope.node.findAll()) {
-		if (hasBuildingBlockProtocol(child)) {
-			const reqs = child.getVpcRequirements();
-			if (reqs.gatewayEndpoints) {
-				gatewayEndpoints.push(...reqs.gatewayEndpoints);
+	// Pull requirements from the central registry — every BuildingBlockScope
+	// self-registers in its constructor, so this is a faithful census without a
+	// separate tree walk (mirrors how config/compute registries are consumed).
+	for (const { fullId, requirements: reqs } of getRegisteredVpcRequirements(scope)) {
+		if (reqs.gatewayEndpoints) {
+			gatewayEndpoints.push(...reqs.gatewayEndpoints);
+		}
+		if (reqs.interfaceEndpoints) {
+			interfaceEndpoints.push(...reqs.interfaceEndpoints);
+		}
+		// Validate the BB's runtime egress need against where the runtime is
+		// actually placed. We never move the runtime (that's the customer's
+		// explicit choice) — an unsatisfiable requirement is a synth error, not a
+		// silent relocation. This turns an otherwise-silent runtime failure (e.g.
+		// DSQL in an isolated Lambda: deploys clean, times out on every call) into
+		// an actionable build error.
+		if (reqs.requiresEgress) {
+			if (placementHasEgress === false) {
+				throw new Error(
+					`${fullId} requires its runtime to reach the internet (outbound egress), but the ` +
+						`Blocks runtime is placed in subnets with no egress route. ` +
+						`Set 'vpc.subnets' to a 'private-with-egress' (or 'public') selection, or remove ` +
+						`the Building Block that needs it. See packages/blocks/VPC.md.`,
+				);
 			}
-			if (reqs.interfaceEndpoints) {
-				interfaceEndpoints.push(...reqs.interfaceEndpoints);
-			}
-			// Validate the BB's runtime egress need against where the runtime is
-			// actually placed. We never move the runtime (that's the customer's
-			// explicit choice) — an unsatisfiable requirement is a synth error, not a
-			// silent relocation. This turns an otherwise-silent runtime failure (e.g.
-			// DSQL in an isolated Lambda: deploys clean, times out on every call) into
-			// an actionable build error.
-			if (reqs.requiresEgress) {
-				const fullId = (child as { fullId?: string }).fullId ?? child.node.id;
-				if (placementHasEgress === false) {
-					throw new Error(
-						`${fullId} requires its runtime to reach the internet (outbound egress), but the ` +
-							`Blocks runtime is placed in subnets with no egress route. ` +
-							`Set 'vpc.subnets' to a 'private-with-egress' (or 'public') selection, or remove ` +
-							`the Building Block that needs it. See packages/blocks/VPC.md.`,
-					);
-				}
-				if (placementHasEgress === undefined) {
-					// Couldn't determine egress (e.g. imported VPC with unknown subnets).
-					// Don't fabricate a pass/fail — warn so a real mismatch isn't silent.
-					Annotations.of(scope).addWarningV2(
-						'blocks:vpc:egress-unverified',
-						`${fullId} requires runtime egress, but Blocks couldn't determine whether the ` +
-							`configured subnets provide it (e.g. an imported VPC). Ensure the runtime's subnets ` +
-							`have an outbound internet route. See packages/blocks/VPC.md.`,
-					);
-				}
+			if (placementHasEgress === undefined) {
+				// Couldn't determine egress (e.g. imported VPC with unknown subnets).
+				// Don't fabricate a pass/fail — warn so a real mismatch isn't silent.
+				Annotations.of(scope).addWarningV2(
+					'blocks:vpc:egress-unverified',
+					`${fullId} requires runtime egress, but Blocks couldn't determine whether the ` +
+						`configured subnets provide it (e.g. an imported VPC). Ensure the runtime's subnets ` +
+						`have an outbound internet route. See packages/blocks/VPC.md.`,
+				);
 			}
 		}
 	}

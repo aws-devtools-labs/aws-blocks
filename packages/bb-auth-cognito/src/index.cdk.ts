@@ -18,25 +18,17 @@
  * this CDK-only file out of the Lambda bundle.
  */
 
-import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as iam from 'aws-cdk-lib/aws-iam';
-
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import { registerConfig } from '@aws-blocks/core/cdk';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import type {
-	AdminOptions,
-	AuthCognitoOptions,
-	PasswordPolicy,
-	SignInWith,
-	UserAttribute,
-} from './types.js';
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, registerConfig } from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import type * as lambda from 'aws-cdk-lib/aws-lambda';
+import type { AdminOptions, AuthCognitoOptions, PasswordPolicy, SignInWith, UserAttribute } from './types.js';
 import { envVarNames, makeExternalUserPoolRef } from './types.js';
 
 export * from './types.js';
@@ -74,14 +66,8 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	/** Admin opt-in, captured for the IAM grant in `grantCognitoPermissions`. */
 	private readonly adminOptions?: AdminOptions;
 
-	getVpcRequirements(): VpcRequirements {
-		return {
-			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM],
-		};
-	}
-
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] });
 
 		// `AuthCognitoOptions` is all-optional; the cast is sound by the type bound.
 		const opts: AuthCognitoOptions = options ?? ({} as O);
@@ -92,11 +78,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// (choice-based, passwordless-capable) are supported. `USER_SRP_AUTH`
 		// and `CUSTOM_AUTH` still throw at synth so the customer doesn't get
 		// a working CDK deploy with a runtime that rejects every sign-in.
-		if (
-			opts.authFlowType &&
-			opts.authFlowType !== 'USER_PASSWORD_AUTH' &&
-			opts.authFlowType !== 'USER_AUTH'
-		) {
+		if (opts.authFlowType && opts.authFlowType !== 'USER_PASSWORD_AUTH' && opts.authFlowType !== 'USER_AUTH') {
 			throw new Error(
 				`AuthCognito: authFlowType '${opts.authFlowType}' is not yet supported. Supported: 'USER_PASSWORD_AUTH', 'USER_AUTH'.`,
 			);
@@ -109,7 +91,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		if (opts.enablePasskeys) {
 			if (opts.authFlowType !== 'USER_AUTH') {
 				throw new Error(
-					'AuthCognito: enablePasskeys requires `authFlowType: \'USER_AUTH\'`. Passkeys ride on the USER_AUTH choice-based flow.',
+					"AuthCognito: enablePasskeys requires `authFlowType: 'USER_AUTH'`. Passkeys ride on the USER_AUTH choice-based flow.",
 				);
 			}
 			if (!opts.webAuthnRelyingParty) {
@@ -121,11 +103,13 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				throw new Error('AuthCognito: webAuthnRelyingParty.id is required.');
 			}
 			if (!opts.webAuthnRelyingParty.origins?.length) {
-				throw new Error('AuthCognito: webAuthnRelyingParty.origins must be a non-empty list of `https://...` URLs.');
+				throw new Error(
+					'AuthCognito: webAuthnRelyingParty.origins must be a non-empty list of `https://...` URLs.',
+				);
 			}
 			if (opts.featurePlan === 'lite') {
 				throw new Error(
-					'AuthCognito: enablePasskeys requires `featurePlan: \'essentials\'` or `\'plus\'`. The `lite` tier does not include WebAuthn support.',
+					"AuthCognito: enablePasskeys requires `featurePlan: 'essentials'` or `'plus'`. The `lite` tier does not include WebAuthn support.",
 				);
 			}
 		}
@@ -156,10 +140,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		const emailMfaAdvertised = mfaMode !== 'off' && mfaTypes.includes('EMAIL');
 		if (emailMfaAdvertised && !opts.userPool) {
 			throw new Error(
-				'AuthCognito: Email MFA on a BB-created pool requires an SES `email` configuration on `cognito.UserPool`. '
-				+ 'AuthCognitoOptions does not yet expose an `email` passthrough (Part 2). '
-				+ 'Workarounds: (a) omit EMAIL from `mfaTypes` and use TOTP / SMS, or '
-				+ '(b) bring a pre-configured pool via `AuthCognito.fromExisting(userPoolId, clientId)`.',
+				'AuthCognito: Email MFA on a BB-created pool requires an SES `email` configuration on `cognito.UserPool`. ' +
+					'AuthCognitoOptions does not yet expose an `email` passthrough (Part 2). ' +
+					'Workarounds: (a) omit EMAIL from `mfaTypes` and use TOTP / SMS, or ' +
+					'(b) bring a pre-configured pool via `AuthCognito.fromExisting(userPoolId, clientId)`.',
 			);
 		}
 
@@ -176,69 +160,76 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		this.userPool = opts.userPool
 			? cognito.UserPool.fromUserPoolId(this, 'pool', opts.userPool.userPoolId)
 			: new cognito.UserPool(this, 'pool', {
-				userPoolName: this.fullId,
-				selfSignUpEnabled: opts.selfSignUp ?? true,
-				signInAliases,
-				autoVerify,
-				passwordPolicy: mapPasswordPolicy(opts.passwordPolicy),
-				mfa: mapMfaMode(opts.mfa),
-				// Pass `mfaSecondFactor` only when MFA is actually on —
-				// setting `{ email: true }` with `mfa: 'off'` still trips
-				// CDK's EMAIL-requires-SES validator.
-				mfaSecondFactor: mfaMode !== 'off' ? mapMfaTypes(opts.mfaTypes) : undefined,
-				customAttributes: mapCustomAttributes(opts.userAttributes),
-				deviceTracking: opts.deviceTracking
-					? {
-						challengeRequiredOnNewDevice: opts.deviceTracking.challengeRequiredOnNewDevice ?? false,
-						deviceOnlyRememberedOnUserPrompt: opts.deviceTracking.deviceOnlyRememberedOnUserPrompt ?? false,
-					}
-					: undefined,
-				// Explicit feature plan — Cognito otherwise defaults to
-				// `ESSENTIALS` and re-applies the tier as a side effect on
-				// every `UpdateUserPool`, which silently resets
-				// `AdminCreateUserConfig.AllowAdminCreateUserOnly` back to
-				// `true` (breaking self-signup on every deploy after the
-				// first). Setting it pinpoint here keeps subsequent
-				// `UpdateUserPool` calls a no-op for the tier and stops the
-				// reset cascade. Defaults to `'essentials'` so customers on
-				// the prior implicit-default tier don't see a billable
-				// upgrade or downgrade.
-				featurePlan: mapFeaturePlan(opts.featurePlan),
-				// USER_AUTH first-factor list. CDK 2.246+ exposes this as the
-				// `signInPolicy.allowedFirstAuthFactors` L2 — see the source
-				// at `aws-cognito/lib/user-pool.ts:configureSignInPolicy`,
-				// which translates these flags to CFN's
-				// `Policies.SignInPolicy.AllowedFirstAuthFactors` array.
-				// `password` is required by the API; the choice-based factors
-				// (emailOtp / smsOtp / passkey) are optional and gated on the
-				// matching options.
-				signInPolicy: opts.authFlowType === 'USER_AUTH' ? {
-					allowedFirstAuthFactors: {
-						password: true,
-						emailOtp: opts.mfaTypes?.includes('EMAIL') || opts.preferredChallenge === 'EMAIL_OTP',
-						smsOtp: opts.mfaTypes?.includes('SMS') || opts.preferredChallenge === 'SMS_OTP',
-						passkey: opts.enablePasskeys === true,
-					},
-				} : undefined,
-				// Native L2 passkey relying-party config. CDK 2.246+
-				// translates these to the CFN top-level
-				// `WebAuthnRelyingPartyId` + `WebAuthnUserVerification`
-				// properties on `AWS::Cognito::UserPool` (NOT under a
-				// `WebAuthnConfiguration` envelope — that name was used in
-				// some early docs but Cognito rejects it on `CreateUserPool`).
-				// Matches what `@aws-amplify/auth-construct` does for its
-				// `loginWith.webAuthn` option.
-				...(opts.enablePasskeys && opts.webAuthnRelyingParty ? {
-					passkeyRelyingPartyId: opts.webAuthnRelyingParty.id,
-					passkeyUserVerification: opts.webAuthnRelyingParty.userVerification === 'required'
-						? cognito.PasskeyUserVerification.REQUIRED
-						: cognito.PasskeyUserVerification.PREFERRED,
-				} : {}),
-				// Default DESTROY for sandbox ergonomics; customers MUST set 'retain' for production deploys.
-				removalPolicy: opts.removalPolicy === 'retain'
-					? cdk.RemovalPolicy.RETAIN
-					: cdk.RemovalPolicy.DESTROY,
-			});
+					userPoolName: this.fullId,
+					selfSignUpEnabled: opts.selfSignUp ?? true,
+					signInAliases,
+					autoVerify,
+					passwordPolicy: mapPasswordPolicy(opts.passwordPolicy),
+					mfa: mapMfaMode(opts.mfa),
+					// Pass `mfaSecondFactor` only when MFA is actually on —
+					// setting `{ email: true }` with `mfa: 'off'` still trips
+					// CDK's EMAIL-requires-SES validator.
+					mfaSecondFactor: mfaMode !== 'off' ? mapMfaTypes(opts.mfaTypes) : undefined,
+					customAttributes: mapCustomAttributes(opts.userAttributes),
+					deviceTracking: opts.deviceTracking
+						? {
+								challengeRequiredOnNewDevice: opts.deviceTracking.challengeRequiredOnNewDevice ?? false,
+								deviceOnlyRememberedOnUserPrompt:
+									opts.deviceTracking.deviceOnlyRememberedOnUserPrompt ?? false,
+							}
+						: undefined,
+					// Explicit feature plan — Cognito otherwise defaults to
+					// `ESSENTIALS` and re-applies the tier as a side effect on
+					// every `UpdateUserPool`, which silently resets
+					// `AdminCreateUserConfig.AllowAdminCreateUserOnly` back to
+					// `true` (breaking self-signup on every deploy after the
+					// first). Setting it pinpoint here keeps subsequent
+					// `UpdateUserPool` calls a no-op for the tier and stops the
+					// reset cascade. Defaults to `'essentials'` so customers on
+					// the prior implicit-default tier don't see a billable
+					// upgrade or downgrade.
+					featurePlan: mapFeaturePlan(opts.featurePlan),
+					// USER_AUTH first-factor list. CDK 2.246+ exposes this as the
+					// `signInPolicy.allowedFirstAuthFactors` L2 — see the source
+					// at `aws-cognito/lib/user-pool.ts:configureSignInPolicy`,
+					// which translates these flags to CFN's
+					// `Policies.SignInPolicy.AllowedFirstAuthFactors` array.
+					// `password` is required by the API; the choice-based factors
+					// (emailOtp / smsOtp / passkey) are optional and gated on the
+					// matching options.
+					signInPolicy:
+						opts.authFlowType === 'USER_AUTH'
+							? {
+									allowedFirstAuthFactors: {
+										password: true,
+										emailOtp:
+											opts.mfaTypes?.includes('EMAIL') || opts.preferredChallenge === 'EMAIL_OTP',
+										smsOtp: opts.mfaTypes?.includes('SMS') || opts.preferredChallenge === 'SMS_OTP',
+										passkey: opts.enablePasskeys === true,
+									},
+								}
+							: undefined,
+					// Native L2 passkey relying-party config. CDK 2.246+
+					// translates these to the CFN top-level
+					// `WebAuthnRelyingPartyId` + `WebAuthnUserVerification`
+					// properties on `AWS::Cognito::UserPool` (NOT under a
+					// `WebAuthnConfiguration` envelope — that name was used in
+					// some early docs but Cognito rejects it on `CreateUserPool`).
+					// Matches what `@aws-amplify/auth-construct` does for its
+					// `loginWith.webAuthn` option.
+					...(opts.enablePasskeys && opts.webAuthnRelyingParty
+						? {
+								passkeyRelyingPartyId: opts.webAuthnRelyingParty.id,
+								passkeyUserVerification:
+									opts.webAuthnRelyingParty.userVerification === 'required'
+										? cognito.PasskeyUserVerification.REQUIRED
+										: cognito.PasskeyUserVerification.PREFERRED,
+							}
+						: {}),
+					// Default DESTROY for sandbox ergonomics; customers MUST set 'retain' for production deploys.
+					removalPolicy:
+						opts.removalPolicy === 'retain' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+				});
 
 		// 2. App client (no secret). Default flow is `USER_PASSWORD_AUTH` +
 		// `REFRESH_TOKEN_AUTH`. When `USER_AUTH` is picked we additionally
@@ -332,40 +323,42 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	private grantCognitoPermissions(role: iam.IRole): void {
 		const poolArn = this.userPool.userPoolArn;
 		// Client-facing actions — work on the signed-in user via their access token.
-		role.addToPrincipalPolicy(new iam.PolicyStatement({
-			actions: [
-				'cognito-idp:SignUp',
-				'cognito-idp:ConfirmSignUp',
-				'cognito-idp:ResendConfirmationCode',
-				'cognito-idp:InitiateAuth',
-				'cognito-idp:RespondToAuthChallenge',
-				'cognito-idp:GetUser',
-				'cognito-idp:ChangePassword',
-				'cognito-idp:UpdateUserAttributes',
-				'cognito-idp:GetUserAttributeVerificationCode',
-				'cognito-idp:VerifyUserAttribute',
-				'cognito-idp:DeleteUser',
-				'cognito-idp:AssociateSoftwareToken',
-				'cognito-idp:VerifySoftwareToken',
-				'cognito-idp:SetUserMFAPreference',
-				'cognito-idp:ForgotPassword',
-				'cognito-idp:ConfirmForgotPassword',
-				'cognito-idp:GlobalSignOut',
-				'cognito-idp:ListDevices',
-				'cognito-idp:UpdateDeviceStatus',
-				'cognito-idp:ForgetDevice',
-				// WebAuthn / passkey ops. Always granted because the runtime
-				// surfaces the four passkey methods unconditionally — a
-				// customer that never enables passkeys at the pool level
-				// just gets `WebAuthnNotEnabledException` from Cognito on
-				// the first call, which the BB rethrows verbatim.
-				'cognito-idp:StartWebAuthnRegistration',
-				'cognito-idp:CompleteWebAuthnRegistration',
-				'cognito-idp:ListWebAuthnCredentials',
-				'cognito-idp:DeleteWebAuthnCredential',
-			],
-			resources: [poolArn],
-		}));
+		role.addToPrincipalPolicy(
+			new iam.PolicyStatement({
+				actions: [
+					'cognito-idp:SignUp',
+					'cognito-idp:ConfirmSignUp',
+					'cognito-idp:ResendConfirmationCode',
+					'cognito-idp:InitiateAuth',
+					'cognito-idp:RespondToAuthChallenge',
+					'cognito-idp:GetUser',
+					'cognito-idp:ChangePassword',
+					'cognito-idp:UpdateUserAttributes',
+					'cognito-idp:GetUserAttributeVerificationCode',
+					'cognito-idp:VerifyUserAttribute',
+					'cognito-idp:DeleteUser',
+					'cognito-idp:AssociateSoftwareToken',
+					'cognito-idp:VerifySoftwareToken',
+					'cognito-idp:SetUserMFAPreference',
+					'cognito-idp:ForgotPassword',
+					'cognito-idp:ConfirmForgotPassword',
+					'cognito-idp:GlobalSignOut',
+					'cognito-idp:ListDevices',
+					'cognito-idp:UpdateDeviceStatus',
+					'cognito-idp:ForgetDevice',
+					// WebAuthn / passkey ops. Always granted because the runtime
+					// surfaces the four passkey methods unconditionally — a
+					// customer that never enables passkeys at the pool level
+					// just gets `WebAuthnNotEnabledException` from Cognito on
+					// the first call, which the BB rethrows verbatim.
+					'cognito-idp:StartWebAuthnRegistration',
+					'cognito-idp:CompleteWebAuthnRegistration',
+					'cognito-idp:ListWebAuthnCredentials',
+					'cognito-idp:DeleteWebAuthnCredential',
+				],
+				resources: [poolArn],
+			}),
+		);
 
 		// Admin surface — opt-in only. Omitting `admin` grants NO Admin*/List*
 		// actions, so the synthesized role is byte-identical to today. When
@@ -376,14 +369,15 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		if (admin) {
 			const adminActions = adminIamActions(admin.actions);
 			if (adminActions.length > 0) {
-				role.addToPrincipalPolicy(new iam.PolicyStatement({
-					actions: adminActions,
-					resources: [poolArn],
-				}));
+				role.addToPrincipalPolicy(
+					new iam.PolicyStatement({
+						actions: adminActions,
+						resources: [poolArn],
+					}),
+				);
 			}
 		}
 	}
-
 }
 
 /**
@@ -437,9 +431,12 @@ function mapPasswordPolicy(p?: PasswordPolicy): cognito.PasswordPolicy | undefin
 
 function mapMfaMode(m?: 'off' | 'optional' | 'required'): cognito.Mfa {
 	switch (m) {
-		case 'required': return cognito.Mfa.REQUIRED;
-		case 'optional': return cognito.Mfa.OPTIONAL;
-		default: return cognito.Mfa.OFF;
+		case 'required':
+			return cognito.Mfa.REQUIRED;
+		case 'optional':
+			return cognito.Mfa.OPTIONAL;
+		default:
+			return cognito.Mfa.OFF;
 	}
 }
 
@@ -452,16 +449,15 @@ function mapMfaTypes(types?: readonly ('SMS' | 'TOTP' | 'EMAIL')[]): cognito.Mfa
 	};
 }
 
-function mapCustomAttributes(
-	attrs?: readonly UserAttribute[],
-): Record<string, cognito.ICustomAttribute> | undefined {
+function mapCustomAttributes(attrs?: readonly UserAttribute[]): Record<string, cognito.ICustomAttribute> | undefined {
 	if (!attrs || attrs.length === 0) return undefined;
 	const out: Record<string, cognito.ICustomAttribute> = {};
 	for (const attr of attrs) {
 		const mutable = attr.mutable ?? true;
-		out[attr.name] = attr.type === 'Number'
-			? new cognito.NumberAttribute({ mutable })
-			: new cognito.StringAttribute({ mutable });
+		out[attr.name] =
+			attr.type === 'Number'
+				? new cognito.NumberAttribute({ mutable })
+				: new cognito.StringAttribute({ mutable });
 	}
 	return out;
 }
@@ -476,17 +472,12 @@ function mapCustomAttributes(
  * @internal
  */
 function mapSignInWith(value?: SignInWith | SignInWith[]): cognito.SignInAliases {
-	const list: readonly SignInWith[] = value === undefined
-		? ['username', 'email']
-		: Array.isArray(value)
-			? value
-			: [value];
+	const list: readonly SignInWith[] =
+		value === undefined ? ['username', 'email'] : Array.isArray(value) ? value : [value];
 	if (list.length === 0) {
 		// Empty array would synthesize an unusable pool — Cognito requires
 		// at least one identifier. Fail loudly at synth time.
-		throw new Error(
-			'AuthCognito: signInWith must contain at least one of \'username\', \'email\', or \'phone\'.',
-		);
+		throw new Error("AuthCognito: signInWith must contain at least one of 'username', 'email', or 'phone'.");
 	}
 	return {
 		...(list.includes('username') ? { username: true } : {}),
@@ -518,9 +509,12 @@ function mapSignInWith(value?: SignInWith | SignInWith[]): cognito.SignInAliases
  */
 function mapFeaturePlan(plan?: 'lite' | 'essentials' | 'plus'): cognito.FeaturePlan {
 	switch (plan) {
-		case 'lite': return cognito.FeaturePlan.LITE;
-		case 'plus': return cognito.FeaturePlan.PLUS;
-		default: return cognito.FeaturePlan.ESSENTIALS;
+		case 'lite':
+			return cognito.FeaturePlan.LITE;
+		case 'plus':
+			return cognito.FeaturePlan.PLUS;
+		default:
+			return cognito.FeaturePlan.ESSENTIALS;
 	}
 }
 
@@ -536,4 +530,3 @@ function mapAutoVerify(aliases: cognito.SignInAliases): cognito.AutoVerifiedAttr
 		...(aliases.phone ? { phone: true } : {}),
 	};
 }
-

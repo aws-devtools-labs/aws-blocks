@@ -1,25 +1,36 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Construct } from 'constructs';
-import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { AttributeType, BillingMode, type ITable, Table, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { type IKey, Key } from 'aws-cdk-lib/aws-kms';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
-import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { Construct } from 'constructs';
+import type { ExternalKmsKeyRef, ExternalTableRef } from './types.js';
 
 export { DistributedTableErrors } from './errors.js';
-export type { DistributedTableOptions, ReadValidationMode, TableKeyConfig, TableKey, PutOptions, DeleteOptions, QueryOptions, ScanOptions, ExternalTableRef, ExternalKmsKeyRef } from './types.js';
+export type {
+	DeleteOptions,
+	DistributedTableOptions,
+	ExternalKmsKeyRef,
+	ExternalTableRef,
+	PutOptions,
+	QueryOptions,
+	ReadValidationMode,
+	ScanOptions,
+	TableKey,
+	TableKeyConfig,
+} from './types.js';
 
 export class DistributedTable<T = any> extends BuildingBlockScope {
 	private table: ITable;
@@ -48,14 +59,12 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
 	}
 
-	getVpcRequirements(): VpcRequirements {
-		return {
-			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB],
-		};
-	}
-
-	constructor(scope: ScopeParent, id: string, public options: any) {
-		super(id, { parent: scope });
+	constructor(
+		scope: ScopeParent,
+		id: string,
+		public options: any,
+	) {
+		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
 
 		const config = options;
 
@@ -69,8 +78,9 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			// never emit a `Table` resource to attach them to). Surface that at
 			// synth so a `protection: 'locked'` on what looks like a fresh
 			// table isn't a silent no-op.
-			const ignoredForExisting = (['pointInTimeRecovery', 'protection', 'encryption'] as const)
-				.filter((key) => config[key] !== undefined);
+			const ignoredForExisting = (['pointInTimeRecovery', 'protection', 'encryption'] as const).filter(
+				(key) => config[key] !== undefined,
+			);
 			if (ignoredForExisting.length > 0) {
 				Annotations.of(this).addWarningV2(
 					'@aws-blocks/bb-distributed-table:IgnoredOptionsForExistingTable',
@@ -80,10 +90,12 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			}
 			this.table = Table.fromTableName(this, 'table', config.table.tableName);
 			this.table.grantReadWriteData(this.executionRole);
-			this.executionRole.addToPrincipalPolicy(new PolicyStatement({
-				actions: ['dynamodb:Query'],
-				resources: [`${this.table.tableArn}/index/*`],
-			}));
+			this.executionRole.addToPrincipalPolicy(
+				new PolicyStatement({
+					actions: ['dynamodb:Query'],
+					resources: [`${this.table.tableArn}/index/*`],
+				}),
+			);
 			return;
 		}
 
@@ -98,9 +110,7 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			const result = config.schema['~standard'].validate(probe);
 			// validate may return sync or async; at synth time schemas are sync
 			if (result && 'issues' in result && result.issues) {
-				return !result.issues.some(
-					(i: any) => i.path?.length === 1 && i.path[0] === fieldName,
-				);
+				return !result.issues.some((i: any) => i.path?.length === 1 && i.path[0] === fieldName);
 			}
 			return true; // no issues for this field → numeric
 		};
@@ -135,14 +145,15 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		// `encryption` accepts two string literals or an ExternalKmsKeyRef
 		// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`).
 		// Anything else is a typo — warn rather than silently using the default.
-		const isKmsKeyRef = typeof config.encryption === 'object'
-			&& config.encryption !== null
-			&& config.encryption.__brand === 'ExternalKmsKeyRef';
+		const isKmsKeyRef =
+			typeof config.encryption === 'object' &&
+			config.encryption !== null &&
+			config.encryption.__brand === 'ExternalKmsKeyRef';
 		if (
-			config.encryption !== undefined
-			&& config.encryption !== 'aws-managed'
-			&& config.encryption !== 'customer-managed'
-			&& !isKmsKeyRef
+			config.encryption !== undefined &&
+			config.encryption !== 'aws-managed' &&
+			config.encryption !== 'customer-managed' &&
+			!isKmsKeyRef
 		) {
 			Annotations.of(this).addWarningV2(
 				'@aws-blocks/bb-distributed-table:UnknownEncryption',
@@ -211,10 +222,12 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 				name: config.key.partitionKey,
 				type: getDdbType(config.key.partitionKey),
 			},
-			sortKey: config.key.sortKey ? {
-				name: config.key.sortKey,
-				type: getDdbType(config.key.sortKey),
-			} : undefined,
+			sortKey: config.key.sortKey
+				? {
+						name: config.key.sortKey,
+						type: getDdbType(config.key.sortKey),
+					}
+				: undefined,
 			billingMode: BillingMode.PAY_PER_REQUEST,
 			timeToLiveAttribute: config.ttl || undefined,
 			// PITR spec is only emitted when enabled — leaving it undefined keeps
@@ -223,9 +236,9 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 			// omitted value keeps DynamoDB's 35-day default without emitting it).
 			pointInTimeRecoverySpecification: pitrEnabled
 				? {
-					pointInTimeRecoveryEnabled: true,
-					...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
-				}
+						pointInTimeRecoveryEnabled: true,
+						...(pitrDays !== undefined ? { recoveryPeriodInDays: pitrDays } : {}),
+					}
 				: undefined,
 			// Resolved above from `protection` (per-block override) or the
 			// stack-wide `defaults` (#302) — supersedes main's placeholder that
@@ -241,10 +254,12 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 		this.table.grantReadWriteData(this.executionRole);
 
 		// Explicit index query permissions
-		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
-			actions: ['dynamodb:Query'],
-			resources: [`${this.table.tableArn}/index/*`],
-		}));
+		this.executionRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['dynamodb:Query'],
+				resources: [`${this.table.tableArn}/index/*`],
+			}),
+		);
 
 		// Add GSI manager if indexes are defined
 		if (config.indexes && Object.keys(config.indexes).length > 0) {
@@ -258,7 +273,9 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 					sortKey: indexConfig.sortKey,
 					partitionKeyType: getDdbType(indexConfig.partitionKey) === AttributeType.NUMBER ? 'N' : 'S',
 					sortKeyType: indexConfig.sortKey
-						? (getDdbType(indexConfig.sortKey) === AttributeType.NUMBER ? 'N' : 'S')
+						? getDdbType(indexConfig.sortKey) === AttributeType.NUMBER
+							? 'N'
+							: 'S'
 						: undefined,
 				};
 			}
@@ -283,14 +300,30 @@ export class DistributedTable<T = any> extends BuildingBlockScope {
 	// build; calling them at module top-level (which runs during synth) would
 	// otherwise fail with a cryptic `X is not a function`. These stubs turn that
 	// into an actionable message.
-	get(..._args: unknown[]): never { return synthGuard('DistributedTable', 'get'); }
-	put(..._args: unknown[]): never { return synthGuard('DistributedTable', 'put'); }
-	delete(..._args: unknown[]): never { return synthGuard('DistributedTable', 'delete'); }
-	query(..._args: unknown[]): never { return synthGuard('DistributedTable', 'query'); }
-	scan(..._args: unknown[]): never { return synthGuard('DistributedTable', 'scan'); }
-	getBatch(..._args: unknown[]): never { return synthGuard('DistributedTable', 'getBatch'); }
-	putBatch(..._args: unknown[]): never { return synthGuard('DistributedTable', 'putBatch'); }
-	deleteBatch(..._args: unknown[]): never { return synthGuard('DistributedTable', 'deleteBatch'); }
+	get(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'get');
+	}
+	put(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'put');
+	}
+	delete(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'delete');
+	}
+	query(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'query');
+	}
+	scan(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'scan');
+	}
+	getBatch(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'getBatch');
+	}
+	putBatch(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'putBatch');
+	}
+	deleteBatch(..._args: unknown[]): never {
+		return synthGuard('DistributedTable', 'deleteBatch');
+	}
 }
 
 // ── Shared GSI Manager Provider (one per stack) ─────────────────────────────
@@ -337,15 +370,19 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 	});
 
 	// Production permissions — lazily resolved so ARNs accumulate as tables register
-	gsiManagerLambda.addToRolePolicy(new PolicyStatement({
-		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
-		resources: cdk.Lazy.list({ produce: () => tableArns }),
-	}));
+	gsiManagerLambda.addToRolePolicy(
+		new PolicyStatement({
+			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			resources: cdk.Lazy.list({ produce: () => tableArns }),
+		}),
+	);
 
-	gsiIsCompleteLambda.addToRolePolicy(new PolicyStatement({
-		actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
-		resources: cdk.Lazy.list({ produce: () => tableArns }),
-	}));
+	gsiIsCompleteLambda.addToRolePolicy(
+		new PolicyStatement({
+			actions: ['dynamodb:DescribeTable', 'dynamodb:UpdateTable'],
+			resources: cdk.Lazy.list({ produce: () => tableArns }),
+		}),
+	);
 
 	// Sandbox permissions — only added if any table requests sandbox mode
 	let sandboxPolicyAdded = false;
@@ -365,15 +402,17 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 				sandboxTableArns.push(tableArn);
 				if (!sandboxPolicyAdded) {
 					sandboxPolicyAdded = true;
-					gsiManagerLambda.addToRolePolicy(new PolicyStatement({
-						actions: [
-							'dynamodb:DeleteTable',
-							'dynamodb:CreateTable',
-							'dynamodb:Scan',
-							'dynamodb:BatchWriteItem',
-						],
-						resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
-					}));
+					gsiManagerLambda.addToRolePolicy(
+						new PolicyStatement({
+							actions: [
+								'dynamodb:DeleteTable',
+								'dynamodb:CreateTable',
+								'dynamodb:Scan',
+								'dynamodb:BatchWriteItem',
+							],
+							resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
+						}),
+					);
 				}
 			}
 		},

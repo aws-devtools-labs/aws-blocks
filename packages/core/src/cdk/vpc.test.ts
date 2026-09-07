@@ -7,27 +7,30 @@ import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
-import { finalizeVpc, getVpcContext, initializeVpc, setVpcContext } from './vpc.js';
+import {
+	anyRequirementNeedsVpc,
+	finalizeVpc,
+	getOrCreateVpc,
+	getVpcContext,
+	initializeVpc,
+	setVpcContext,
+} from './vpc.js';
+import { registerVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
-// A minimal stand-in for a BuildingBlockScope: finalizeVpc only depends on the
-// duck-typed protocol (a `getVpcRequirements()` method), so a bare Construct
-// that implements it exercises the real pull-and-provision path without pulling
-// every BB package into core's test graph. A `fullId` getter mirrors the real
-// Scope so error messages that name the BB can be asserted.
+// A minimal stand-in for a BuildingBlockScope: finalizeVpc reads requirements
+// from the central registry, and the real BuildingBlockScope base registers in
+// its constructor. This fake does the same (register on construction) so it
+// exercises the real pull-and-provision path without pulling every BB package
+// into core's test graph. A `fullId` getter mirrors the real Scope so error
+// messages that name the BB can be asserted.
 class FakeBB extends Construct {
-	constructor(
-		scope: Construct,
-		id: string,
-		private readonly reqs: VpcRequirements,
-	) {
+	constructor(scope: Construct, id: string, reqs: VpcRequirements) {
 		super(scope, id);
+		registerVpcRequirements(this, reqs);
 	}
 	get fullId(): string {
 		return this.node.id;
-	}
-	getVpcRequirements(): VpcRequirements {
-		return this.reqs;
 	}
 }
 
@@ -289,5 +292,57 @@ describe('VPC utilities', () => {
 		const vpcContext = { vpc: 'mock-vpc', lambdaSecurityGroup: 'mock-sg', lambdaSubnets: {} };
 		setVpcContext(fakeScope, vpcContext as any);
 		assert.equal(getVpcContext(fakeScope), vpcContext);
+	});
+});
+
+describe('lazy VPC derivation', () => {
+	function stackWith(bbs: (scope: Construct) => void): { stack: cdk.Stack; scope: Construct } {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'LazyStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		bbs(stack);
+		return { stack, scope: stack };
+	}
+
+	it('anyRequirementNeedsVpc is false for BBs that only declare endpoints', () => {
+		const { scope } = stackWith((s) => {
+			new FakeBB(s, 'Kv', { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+			new FakeBB(s, 'Job', { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] });
+		});
+		assert.equal(anyRequirementNeedsVpc(scope), false);
+	});
+
+	it('anyRequirementNeedsVpc is true when a BB declares requiresVpc', () => {
+		const { scope } = stackWith((s) => {
+			new FakeBB(s, 'Kv', { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+			new FakeBB(s, 'Container', { requiresVpc: true });
+		});
+		assert.equal(anyRequirementNeedsVpc(scope), true);
+	});
+
+	it('getOrCreateVpc returns the same VPC on repeated calls (singleton)', () => {
+		const { scope } = stackWith(() => {});
+		const a = getOrCreateVpc(scope);
+		const b = getOrCreateVpc(scope);
+		assert.equal(a, b, 'lazy VPC is a per-stack singleton');
+	});
+
+	it('a derived VPC + finalizeVpc provisions endpoints for a requiresVpc app', () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'DerivedStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		new FakeBB(stack, 'Container', {
+			requiresVpc: true,
+			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS],
+		});
+		assert.equal(anyRequirementNeedsVpc(stack), true);
+		const vpc = getOrCreateVpc(stack);
+		const options = { network: vpc };
+		initializeVpc(stack, options);
+		finalizeVpc(stack, options);
+		const template = Template.fromStack(stack);
+		// SQS (from the BB) + always-on CloudWatch Logs interface endpoints, plus
+		// the always-on S3 gateway endpoint.
+		const { iface, gateway } = endpointCounts(template);
+		assert.equal(iface, 2, 'SQS + Logs');
+		assert.equal(gateway, 1, 'S3 gateway');
 	});
 });

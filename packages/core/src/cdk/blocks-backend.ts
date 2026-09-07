@@ -14,7 +14,7 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
-import { finalizeVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
 
 /**
@@ -335,9 +335,21 @@ export class BlocksBackend extends Construct {
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(backend, backend.executionRole, getComputes(backend));
 
-		// Finalize VPC: collect requirements → deduplicate → provision endpoints
+		// Finalize VPC. Derived resource: use the customer's if provided, else
+		// lazily create one only if a Building Block requires it.
 		if (backend._vpcOptions) {
 			finalizeVpc(backend, backend._vpcOptions);
+		} else if (anyRequirementNeedsVpc(backend)) {
+			const derived = getOrCreateVpc(backend);
+			const options = { network: derived };
+			initializeVpc(backend, options);
+			finalizeVpc(backend, options);
+			cdk.Annotations.of(backend).addInfoV2(
+				'blocks:vpc:derived',
+				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `vpc: { network }` to ' +
+					'bring your own. See packages/blocks/VPC.md.',
+			);
 		}
 
 		return backend;

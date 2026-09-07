@@ -1,18 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { Realtime } from '@aws-blocks/bb-realtime';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
-import { INTERACTIVE_JOB_EVENT_SOURCE } from './job-event-source.js';
+import { Realtime } from '@aws-blocks/bb-realtime';
+import type { ScopeParent } from '@aws-blocks/core';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { z } from 'zod';
+import { INTERACTIVE_JOB_EVENT_SOURCE } from './job-event-source.js';
+import { agentStreamChunkSchema, conversationSchema, messageSchema } from './schemas.js';
 
 export { AgentErrors } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
@@ -31,22 +31,21 @@ export class Agent extends BuildingBlockScope {
 	 * TODO: guardrails CDK provisioning
 	 */
 
-	getVpcRequirements(): VpcRequirements {
-		return {
-			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME],
-		};
-	}
-
 	constructor(scope: ScopeParent, id: string, config?: any) {
-		super(id, { parent: scope });
+		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] });
 
-		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
-			actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel', 'bedrock:ListFoundationModels', 'bedrock:GetInferenceProfile'],
-			resources: [
-				'arn:aws:bedrock:*::foundation-model/*',
-				'arn:aws:bedrock:*:*:inference-profile/*',
-			],
-		}));
+		this.executionRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: [
+					'bedrock:InvokeModel',
+					'bedrock:InvokeModelWithResponseStream',
+					'bedrock:GetFoundationModel',
+					'bedrock:ListFoundationModels',
+					'bedrock:GetInferenceProfile',
+				],
+				resources: ['arn:aws:bedrock:*::foundation-model/*', 'arn:aws:bedrock:*:*:inference-profile/*'],
+			}),
+		);
 
 		// Propagate `removalPolicy` to the sessions bucket so customers can
 		// opt sandbox stacks into clean teardown. Without it, CDK's RETAIN

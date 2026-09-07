@@ -58,14 +58,31 @@ export interface BlocksVpcOptions {
 
 /**
  * VPC requirements declared by a Building Block.
- * Returned by `BuildingBlockScope.getVpcRequirements()` and collected
- * during finalization to provision endpoints.
+ * Supplied to the `BuildingBlockScope` constructor and collected in the central
+ * requirements registry; `finalizeVpc` pulls them to provision endpoints, and the
+ * lazy VPC uses `requiresVpc` to decide whether to derive a VPC when none was
+ * provided.
  */
 export interface VpcRequirements {
 	/** Gateway VPC endpoints this BB needs (e.g., S3, DynamoDB). */
 	gatewayEndpoints?: ec2.GatewayVpcEndpointAwsService[];
 	/** Interface VPC endpoints this BB needs (e.g., SQS, SSM, Secrets Manager). */
 	interfaceEndpoints?: ec2.InterfaceVpcEndpointAwsService[];
+	/**
+	 * Whether this BB **cannot function without a VPC** — i.e. it must run in (or
+	 * provision resources into) a VPC regardless of whether the customer asked
+	 * for one. When any registered requirement sets this and no `vpc` was
+	 * provided, the framework **lazily derives** a default VPC (see
+	 * `getOrCreateVpc`) rather than erroring — mirroring how bb-data creates its
+	 * own VPC when no shared one exists.
+	 *
+	 * Most BBs leave this unset: they reach AWS services from the AWS-managed
+	 * Lambda network and only *benefit* from a VPC (endpoints) when one is present.
+	 * Set it only for a BB whose resources are intrinsically VPC-resident.
+	 *
+	 * @default false
+	 */
+	requiresVpc?: boolean;
 	/**
 	 * Whether the BB's **parent runtime** — the shared Blocks handler Lambda (or,
 	 * in future, a container) that executes this BB's operations — must be able to

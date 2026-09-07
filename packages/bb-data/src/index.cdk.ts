@@ -32,22 +32,22 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  * const db = new Database(scope, 'analytics', { minCapacity: 1, maxCapacity: 8 });
  */
 export class Database extends BuildingBlockScope {
-	getVpcRequirements(): VpcRequirements {
+	constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
 		// Aurora is reached over the RDS Data API, so it needs Secrets Manager + RDS
 		// Data interface endpoints. It does NOT declare `requiresEgress`: the Data
-		// API is called from the shared Lambda over HTTPS (via those endpoints), so
-		// the Lambda's own placement is unconstrained. The cluster's placement is
+		// API is called from the shared runtime over HTTPS (via those endpoints), so
+		// the runtime's own placement is unconstrained. The cluster's placement is
 		// resolved by the Database construct itself via `selectSubnets`, not here.
-		return {
-			interfaceEndpoints: [
-				ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
-				ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
-			],
-		};
-	}
-
-	constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
-		super(id, { parent: scope });
+		super(
+			id,
+			{ parent: scope },
+			{
+				interfaceEndpoints: [
+					ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+					ec2.InterfaceVpcEndpointAwsService.RDS_DATA,
+				],
+			},
+		);
 
 		if (options?.connection) {
 			// External database — skip provisioning, just grant permissions and inject env vars

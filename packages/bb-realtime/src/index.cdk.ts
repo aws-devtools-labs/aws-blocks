@@ -13,12 +13,18 @@
  * subsequent ones reuse it.
  */
 
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { VpcRequirements } from '@aws-blocks/core/cdk';
-import { BuildingBlockScope, blocksError, ensureApiGatewayAccount, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import {
+	BuildingBlockScope,
+	blocksError,
+	ensureApiGatewayAccount,
+	registerConfig,
+	synthGuard,
+} from '@aws-blocks/core/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import * as cdk from 'aws-cdk-lib';
 import { AccessLogFormat } from 'aws-cdk-lib/aws-apigateway';
@@ -26,8 +32,8 @@ import { LogGroupLogDestination, WebSocketApi, WebSocketStage } from 'aws-cdk-li
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
-import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
 import { RealtimeErrors } from './errors.js';
+import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -179,14 +185,8 @@ function getOrCreateSharedInfra(
  * so the user's backend code works unchanged under `--conditions=cdk`.
  */
 export class Realtime extends BuildingBlockScope {
-	getVpcRequirements(): VpcRequirements {
-		return {
-			interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY],
-		};
-	}
-
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope }, { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] });
 
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's

@@ -33,17 +33,13 @@ import {
 import type { DistributedDatabaseOptions } from './types.js';
 
 export class DistributedDatabase extends BuildingBlockScope {
-	getVpcRequirements(): VpcRequirements {
-		// DSQL has no VPC endpoint — it's reached over a public HTTPS endpoint. The
-		// shared handler runtime therefore needs egress. If it's placed in isolated
-		// subnets the deploy succeeds but every DSQL call times out at runtime, so
-		// declare this: finalizeVpc validates it against the runtime's placement and
-		// fails synth on a mismatch instead of shipping a silently-broken deploy.
-		return { requiresEgress: true };
-	}
-
 	constructor(scope: ScopeParent, id: string, options?: DistributedDatabaseOptions) {
-		super(id, { parent: scope });
+		// DSQL has no VPC endpoint — it's reached over a public HTTPS endpoint, so
+		// the shared handler runtime needs egress. If it's placed in isolated
+		// subnets the deploy succeeds but every DSQL call times out at runtime;
+		// declaring requiresEgress makes finalizeVpc validate it against the
+		// runtime's placement and fail synth on a mismatch.
+		super(id, { parent: scope }, { requiresEgress: true });
 
 		const stack = cdk.Stack.of(this);
 		const envName = this.fullId.replace(ENV_SANITIZE, '_');

@@ -19,7 +19,8 @@ import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
-import { finalizeVpc, initializeVpc } from './vpc.js';
+import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc } from './vpc.js';
+import { registerVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, VpcRequirements } from './vpc-types.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
@@ -153,9 +154,23 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
-		// Finalize VPC: pull requirements from BBs → deduplicate → provision endpoints
+		// Finalize VPC. A VPC is a derived resource: use the customer's if they
+		// brought one, else lazily create one only if a Building Block genuinely
+		// requires it (requiresVpc). Most apps need neither — Lambda reaches AWS
+		// services from the managed network without a VPC.
 		if (stack._vpcOptions) {
 			finalizeVpc(stack, stack._vpcOptions);
+		} else if (anyRequirementNeedsVpc(stack)) {
+			const derived = getOrCreateVpc(stack);
+			const options = { network: derived };
+			initializeVpc(stack, options);
+			finalizeVpc(stack, options);
+			cdk.Annotations.of(stack).addInfoV2(
+				'blocks:vpc:derived',
+				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+					'(with a NAT gateway, which has an ongoing cost). Pass `vpc: { network }` to ' +
+					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
+			);
 		}
 
 		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
@@ -254,31 +269,33 @@ export class Scope extends Construct {
 		return defaultCompute;
 	}
 
-  /**
-   * The stack's default compute, **ignoring** any per-scope `_compute`
-   * assignment (unlike {@link compute}, which resolves the nearest assigned
-   * one). Use when a resource is a stack-level singleton that must bind to one
-   * deterministic compute regardless of the block's resolved compute — e.g.
-   * Realtime's shared WebSocket route integration, where one WebSocket API
-   * integrates to a single target and connection bookkeeping is compute-agnostic.
-   *
-   * @internal Not a customer surface; for framework/BB singleton infra only.
-   */
-  get defaultCompute(): Compute {
-    const defaultCompute = this.root._defaultCompute;
-    if (!defaultCompute) {
-      throw new Error('Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `defaultCompute`.');
-    }
-    return defaultCompute;
-  }
+	/**
+	 * The stack's default compute, **ignoring** any per-scope `_compute`
+	 * assignment (unlike {@link compute}, which resolves the nearest assigned
+	 * one). Use when a resource is a stack-level singleton that must bind to one
+	 * deterministic compute regardless of the block's resolved compute — e.g.
+	 * Realtime's shared WebSocket route integration, where one WebSocket API
+	 * integrates to a single target and connection bookkeeping is compute-agnostic.
+	 *
+	 * @internal Not a customer surface; for framework/BB singleton infra only.
+	 */
+	get defaultCompute(): Compute {
+		const defaultCompute = this.root._defaultCompute;
+		if (!defaultCompute) {
+			throw new Error(
+				'Default compute not initialized — BlocksStack/BlocksBackend.create() must run before resolving `defaultCompute`.',
+			);
+		}
+		return defaultCompute;
+	}
 
-  /**
-   * The backend entry file the owning BlocksStack/BlocksBackend runs — the
-   * single handler entry shared across the whole app.
-   */
-  get backendHandlerPath(): string {
-    return this.root.backendHandlerPath;
-  }
+	/**
+	 * The backend entry file the owning BlocksStack/BlocksBackend runs — the
+	 * single handler entry shared across the whole app.
+	 */
+	get backendHandlerPath(): string {
+		return this.root.backendHandlerPath;
+	}
 
 	/**
 	 * The owning stack/backend's token-free root identity. This is the value the
@@ -368,18 +385,45 @@ export class Scope extends Construct {
 }
 
 /**
- * Abstract base class for Building Block CDK constructs that declare VPC requirements.
- *
- * BBs extend this instead of `Scope` directly. The framework calls
- * `getVpcRequirements()` at finalization time (only when a VPC is configured)
- * to collect gateway/interface endpoint needs and provision them centrally.
+ * A VPC-requirements provider: either the requirements directly, or a callback
+ * that returns them. Use the callback form when the value depends on `fullId`
+ * or other post-construction state — it is evaluated by the base constructor
+ * *after* `super()` runs, so `this` is fully available.
  */
-export abstract class BuildingBlockScope extends Scope {
-	/**
-	 * Declare what VPC resources this BB needs when deployed in a VPC.
-	 * Called at finalization time ONLY when a VPC is configured.
-	 *
-	 * Return an empty object `{}` if no VPC-specific resources are needed.
-	 */
-	abstract getVpcRequirements(): VpcRequirements;
+export type VpcRequirementsProvider = VpcRequirements | (() => VpcRequirements);
+
+/**
+ * Base class for Building Block CDK constructs.
+ *
+ * BBs extend this instead of `Scope` directly and **must** declare their VPC
+ * requirements as a constructor argument — the base registers them centrally
+ * (see `vpc-requirements-registry.ts`) so `finalizeVpc` can pull, deduplicate,
+ * and provision endpoints, and so the lazy VPC can answer "does anything here
+ * need a VPC?". Passing the requirements is required by the constructor
+ * signature, so a BB author cannot silently forget to declare them — the same
+ * forcing the previous `abstract getVpcRequirements()` gave, but without a
+ * standing method on every subclass.
+ *
+ * Declare `{}` when the BB needs nothing VPC-specific.
+ *
+ * @example
+ * ```ts
+ * export class KVStore extends BuildingBlockScope {
+ *   constructor(scope: ScopeParent, id: string) {
+ *     super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+ *     // …
+ *   }
+ * }
+ * ```
+ */
+export class BuildingBlockScope extends Scope {
+	constructor(id: string, options: ScopeOptions | undefined, vpc: VpcRequirementsProvider) {
+		super(id, options);
+		// Resolve the provider (callback form is evaluated here, after super(), so
+		// values that depend on this.fullId are available) and self-register on the
+		// owning stack. Register even when empty so the registry is a faithful
+		// census of every BB — the lazy VPC and finalizeVpc both rely on that.
+		const requirements = typeof vpc === 'function' ? vpc() : vpc;
+		registerVpcRequirements(this, requirements);
+	}
 }

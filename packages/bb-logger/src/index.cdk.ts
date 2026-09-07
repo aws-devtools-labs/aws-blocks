@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ScopeParent } from '@aws-blocks/core';
+import { registerConfig, Scope } from '@aws-blocks/core/cdk';
 import { Annotations } from 'aws-cdk-lib';
 import type { CfnLogGroup } from 'aws-cdk-lib/aws-logs';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
 import type { LoggingOptions } from './types.js';
 
 /**
@@ -16,7 +16,7 @@ const EXPLICIT_RETENTION = Symbol.for('BLOCKS_LOGGER_EXPLICIT_RETENTION');
 
 // Re-export public types and errors (no runtime dependencies)
 export { LoggingErrors } from './errors.js';
-export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from './types.js';
+export type { ChildLogger, LogEntry, LoggingOptions, LogLevel, RetentionDays } from './types.js';
 
 /**
  * CDK construct for Logger. Sets the retention on the shared handler Lambda's

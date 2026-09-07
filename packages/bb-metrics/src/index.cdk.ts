@@ -1,19 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
+import { Scope } from '@aws-blocks/core/cdk';
 import type { MetricsOptions } from './types.js';
 
 export { MetricsErrors } from './errors.js';
 export type {
-	MetricsOptions,
 	EmitOptions,
-	MetricDatum,
-	MetricUnit,
-	MetricResolution,
 	ExternalMetricsRef,
+	MetricDatum,
+	MetricResolution,
 	MetricsEmitter,
+	MetricsOptions,
+	MetricUnit,
 } from './types.js';
 
 /**
@@ -32,9 +32,7 @@ export class Metrics extends Scope {
 
 	constructor(scope: ScopeParent, id: string, options?: MetricsOptions) {
 		super(id, { parent: scope });
-		this.namespace = options?.metrics?.namespace
-			?? options?.namespace
-			?? this.fullId;
+		this.namespace = options?.metrics?.namespace ?? options?.namespace ?? this.fullId;
 		this.defaultDimensions = options?.defaultDimensions ?? {};
 	}
 }

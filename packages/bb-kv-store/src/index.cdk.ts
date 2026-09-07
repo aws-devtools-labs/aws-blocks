@@ -1,18 +1,24 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Table, type ITable, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RemovalPolicy } from 'aws-cdk-lib';
-import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
-import type { VpcRequirements } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KVStoreOptions, ExternalTableRef } from './types.js';
+import type { VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
+import { RemovalPolicy } from 'aws-cdk-lib';
+import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { TTL_ATTRIBUTE } from './ttl.js';
+import type { ExternalTableRef, KVStoreOptions } from './types.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+export type {
+	ConditionalDeleteOptions,
+	ConditionalWriteOptions,
+	ExternalTableRef,
+	KVStoreOptions,
+	PutOptions,
+} from './types.js';
 
 export class KVStore extends BuildingBlockScope {
 	private table: ITable;
@@ -26,14 +32,8 @@ export class KVStore extends BuildingBlockScope {
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
-	getVpcRequirements(): VpcRequirements {
-		return {
-			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB],
-		};
-	}
-
 	constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<unknown>) {
-		super(id, { parent: scope });
+		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
 
 		if (options?.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name
@@ -73,8 +73,16 @@ export class KVStore extends BuildingBlockScope {
 	// the runtime build. Calling them at module top-level (which runs during
 	// synth) would otherwise fail with a cryptic `X is not a function`; these
 	// stubs turn that into an actionable message.
-	get(..._args: unknown[]): never { return synthGuard('KVStore', 'get'); }
-	put(..._args: unknown[]): never { return synthGuard('KVStore', 'put'); }
-	delete(..._args: unknown[]): never { return synthGuard('KVStore', 'delete'); }
-	scan(..._args: unknown[]): never { return synthGuard('KVStore', 'scan'); }
+	get(..._args: unknown[]): never {
+		return synthGuard('KVStore', 'get');
+	}
+	put(..._args: unknown[]): never {
+		return synthGuard('KVStore', 'put');
+	}
+	delete(..._args: unknown[]): never {
+		return synthGuard('KVStore', 'delete');
+	}
+	scan(..._args: unknown[]): never {
+		return synthGuard('KVStore', 'scan');
+	}
 }

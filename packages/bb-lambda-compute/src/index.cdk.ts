@@ -203,6 +203,10 @@ export class LambdaCompute extends Compute {
 	 * app resolve different copies of this package.
 	 */
 	static isLambdaCompute(x: unknown): x is LambdaCompute {
-		return typeof x === 'object' && x !== null && (x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true;
+		return (
+			typeof x === 'object' &&
+			x !== null &&
+			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
+		);
 	}
 }

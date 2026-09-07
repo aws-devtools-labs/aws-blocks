@@ -1,18 +1,29 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as s3 from 'aws-cdk-lib/aws-s3';
-import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
-import type { VpcRequirements, ScopeOptions } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucketOptions, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
+import type { ScopeOptions, VpcRequirements } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
+import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { validateBucketName } from './bucket-name.js';
+import type { CorsRule, ExternalBucketRef, FileBucketOptions, LifecycleRule } from './types.js';
 
 export { FileBucketErrors } from './errors.js';
-export type { FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions, FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef } from './types.js';
+export type {
+	CorsRule,
+	ExternalBucketRef,
+	FileBucketOptions,
+	FileContent,
+	FileInfo,
+	GetUrlOptions,
+	LifecycleRule,
+	PutOptions,
+	PutUrlOptions,
+	ScanOptions,
+} from './types.js';
 
 const httpMethodMap: Record<string, s3.HttpMethods> = {
 	GET: s3.HttpMethods.GET,
@@ -34,14 +45,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
 	}
 
-	getVpcRequirements(): VpcRequirements {
-		return {
-			gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3],
-		};
-	}
-
 	constructor(scope: ScopeParent, id: string, options?: O) {
-		super(id, { parent: scope });
+		super(id, { parent: scope }, { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3] });
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
@@ -77,7 +82,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			autoDeleteObjects: destroy,
 			cors: options?.corsRules?.map((rule: CorsRule) => ({
 				allowedOrigins: rule.allowedOrigins,
-				allowedMethods: rule.allowedMethods.map(m => httpMethodMap[m]),
+				allowedMethods: rule.allowedMethods.map((m) => httpMethodMap[m]),
 				allowedHeaders: rule.allowedHeaders,
 				exposedHeaders: rule.exposedHeaders,
 				maxAge: rule.maxAge,
@@ -85,10 +90,14 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			lifecycleRules: options?.lifecycleRules?.map((rule: LifecycleRule) => ({
 				prefix: rule.prefix,
 				expiration: rule.expirationDays ? Duration.days(rule.expirationDays) : undefined,
-				transitions: rule.transitionToIaDays ? [{
-					storageClass: s3.StorageClass.INFREQUENT_ACCESS,
-					transitionAfter: Duration.days(rule.transitionToIaDays),
-				}] : undefined,
+				transitions: rule.transitionToIaDays
+					? [
+							{
+								storageClass: s3.StorageClass.INFREQUENT_ACCESS,
+								transitionAfter: Duration.days(rule.transitionToIaDays),
+							},
+						]
+					: undefined,
 			})),
 		});
 
