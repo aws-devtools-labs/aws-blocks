@@ -57,6 +57,8 @@ Error translation happens at the engine layer, not the database layer. Each engi
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
 
+Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
+
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
 
 ## RLS Implementation
@@ -86,7 +88,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 | RDS Proxy | Connection pooling |
 | Security group | Inbound 5432 from Lambda SG only |
 | Secrets Manager secret | Auto-generated credentials |
-| Migration Lambda + CustomResource | Runs .sql files on deploy |
+| Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
 | IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
