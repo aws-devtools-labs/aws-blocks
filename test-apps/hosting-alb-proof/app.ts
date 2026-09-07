@@ -17,7 +17,8 @@ import { BucketDeployment, Source } from 'aws-cdk-lib/aws-s3-deployment';
 import { AlbAdapter, buildCapabilityPlan, type DeployManifest } from '@aws-blocks/hosting/constructs';
 
 const app = new App();
-const stack = new Stack(app, 'blocks-hosting-alb-proof', {
+const stackName = process.env.ALB_PROOF_STACK || 'blocks-hosting-alb-proof';
+const stack = new Stack(app, stackName, {
   env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
 });
 
