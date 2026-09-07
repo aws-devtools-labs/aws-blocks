@@ -117,9 +117,40 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 	const ws = new WebSocket(url);
 	conn.ws = ws;
 
+	// Per-socket guard so a single drop notifies onDisconnect exactly once even
+	// when the runtime fires onerror immediately followed by onclose (as it does
+	// for a 1006 abnormal closure). A fresh socket gets a fresh flag, so the NEXT
+	// drop still notifies — onDisconnect must fire on every drop, not just the first.
+	let disconnectNotified = false;
+	const notifyDisconnect = (reason: DisconnectReason): void => {
+		if (disconnectNotified) { return; }
+		disconnectNotified = true;
+		conn.disconnectHandlers.forEach(h => { try { h(reason); } catch {} });
+	};
+
+	// Settle one channel of the post-reconnect resubscribe set. When the set
+	// drains, the reconnect is confirmed: reset the retry counter (so the cap is
+	// per-outage — a socket that reopens but never confirms a resubscribe still
+	// exhausts MAX_RECONNECT) and fire onReconnect for the channels that came
+	// back. Called on both a successful resubscribe and a stale-token error so a
+	// single failed channel cannot wedge onReconnect for the ones that succeeded.
+	const settleResubscribe = (channel: string): void => {
+		if (!conn.resubscribePending?.has(channel)) { return; }
+		conn.resubscribePending.delete(channel);
+		if (conn.resubscribePending.size === 0) {
+			conn.resubscribePending = null;
+			// Resubscribe confirmed — only now is it safe to reset the retry cap.
+			conn.reconnectAttempts = 0;
+			conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
+		}
+	};
+
 	ws.onopen = () => {
 		conn.connected = true;
-		conn.reconnectAttempts = 0;
+		// NOTE: reconnectAttempts is intentionally NOT reset here. A flapping
+		// socket that opens then immediately drops again must still count toward
+		// the cap; the counter is reset only once a resubscribe is confirmed
+		// (see settleResubscribe), otherwise the cap could never hold.
 		// Resubscribe every stored channel, replaying its stored token so the
 		// server can re-authorize. This covers the initial connect and a
 		// reconnect uniformly. On a reconnect, track the channels so onReconnect
@@ -159,13 +190,7 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				}
 				// After a reconnect, fire onReconnect once every resubscribed
 				// channel has been re-confirmed by the server.
-				if (conn.resubscribePending?.has(msg.channel)) {
-					conn.resubscribePending.delete(msg.channel);
-					if (conn.resubscribePending.size === 0) {
-						conn.resubscribePending = null;
-						conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
-					}
-				}
+				settleResubscribe(msg.channel);
 			} else if (msg.type === 'error' && msg.channel) {
 				const pending = conn.pendingEstablished.get(msg.channel);
 				if (pending) {
@@ -174,7 +199,21 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 					pending.forEach(p => { p.reject(err); });
 					conn.pendingEstablished.delete(msg.channel);
 				}
+				// A resubscribe can be rejected when the channel's replayed token
+				// has expired: channel tokens carry a ~2h TTL, so a socket that was
+				// down long enough reconnects and replays a stale token the server
+				// now refuses. Don't drop the channel silently — surface it through
+				// the existing disconnect plumbing (reason 'error') so the caller
+				// learns this channel is gone. Fire the handlers directly (not via
+				// the per-socket notifyDisconnect) because this is a channel-level
+				// failure, not a socket close, and must not suppress the disconnect
+				// notification for a later real drop on this same socket.
 				conn.subscriptions.delete(msg.channel);
+				conn.channelTokens.delete(msg.channel);
+				conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+				// Drain the failed channel from the resubscribe set so the channels
+				// that DID succeed can still fire onReconnect instead of wedging.
+				settleResubscribe(msg.channel);
 			} else if (msg.type === 'message' && msg.channel) {
 				const handlers = conn.subscriptions.get(msg.channel);
 				if (handlers) {
@@ -185,13 +224,14 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 	};
 
 	ws.onerror = () => {
-		const err = new Error('WebSocket connection failed');
-		err.name = 'ConnectionFailedException';
-		for (const pending of conn.pendingEstablished.values()) {
-			pending.forEach(p => { p.reject(err); });
-		}
-		conn.pendingEstablished.clear();
-		conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+		// Do NOT reject or clear pendingEstablished here. A transient drop
+		// surfaces as onerror immediately followed by onclose; rejecting now would
+		// kill an in-flight established promise that the resubscribe on reconnect
+		// could still resolve. Let onclose decide based on the close code
+		// (terminal → reject+clear; reconnecting → keep intact). Only surface the
+		// disconnect, deduped per-socket so a 1006 (onerror + onclose) notifies
+		// exactly once rather than double-firing onDisconnect.
+		notifyDisconnect('error');
 	};
 
 	ws.onclose = (event) => {
@@ -199,14 +239,16 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 		// 1001 = going away (server timeout), 1006 = abnormal closure
 		const reason: DisconnectReason = event.code === 1001 ? 'timeout' : event.code === 1006 ? 'error' : 'unknown';
-		conn.disconnectHandlers.forEach(h => { try { h(reason); } catch {} });
-		conn.disconnectHandlers.clear();
+		notifyDisconnect(reason);
 		// A normal (1000) or no-status (1005) close is client-initiated/expected:
-		// fail any pending establishment and drop the pool entry. Any other code
-		// is an unexpected drop, so auto-reconnect and keep pendingEstablished
-		// intact so the resubscribe on reconnect can still resolve it (mirrors
-		// mock-middleware.ts, which never rejects on a transient drop).
+		// this is terminal, so fail any pending establishment, drop the
+		// onDisconnect handlers, and remove the pool entry. Any other code is an
+		// unexpected drop, so auto-reconnect and KEEP disconnectHandlers intact so
+		// subsequent drops still notify, and KEEP pendingEstablished intact so the
+		// resubscribe on reconnect can still resolve it (mirrors mock-middleware.ts,
+		// which never rejects on a transient drop).
 		if (event.code === 1000 || event.code === 1005) {
+			conn.disconnectHandlers.clear();
 			const err = new Error('WebSocket closed');
 			err.name = 'ConnectionFailedException';
 			for (const pending of conn.pendingEstablished.values()) {
@@ -226,9 +268,48 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
  * so a persistently-failing endpoint does not spin forever.
  */
 function scheduleReconnect(conn: Connection): void {
-	if (conn.reconnectAttempts >= MAX_RECONNECT) return;
+	// Nothing to reconnect for: no channels remain (e.g. every channel's token
+	// went stale and was dropped in the resubscribe-error path, or all were
+	// unsubscribed). Since reconnectAttempts only resets once resubscribePending
+	// drains, a channel-less connection could never reset the counter and would
+	// march to the cap even though each reopen succeeds at the socket level. No
+	// caller depends on this connection anymore, so tear it down instead.
+	if (conn.subscriptions.size === 0) {
+		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
+		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+		conn.connected = false;
+		conn.resubscribePending = null;
+		connections.delete(conn.wsUrl);
+		return;
+	}
+	if (conn.reconnectAttempts >= MAX_RECONNECT) {
+		// Give up: MAX_RECONNECT consecutive attempts have failed. Rather than
+		// leaving a zombie pool entry that a later subscribe() would keep reusing
+		// (and never reconnecting), tear the connection down completely — reject
+		// any still-pending establishments so awaiting callers fail fast, fire a
+		// terminal disconnect so onDisconnect handlers learn the channel is dead,
+		// clear the keep-alive and reconnect timers, and drop the pool entry so a
+		// later subscribe() rebuilds a fresh connection from scratch.
+		const err = new Error('WebSocket reconnect failed after maximum attempts');
+		err.name = 'ConnectionFailedException';
+		for (const pending of conn.pendingEstablished.values()) {
+			pending.forEach(p => { p.reject(err); });
+		}
+		conn.pendingEstablished.clear();
+		conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+		conn.disconnectHandlers.clear();
+		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
+		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+		conn.connected = false;
+		conn.resubscribePending = null;
+		connections.delete(conn.wsUrl);
+		return;
+	}
 	conn.reconnectAttempts++;
 	const delay = Math.min(1000 * 2 ** (conn.reconnectAttempts - 1), MAX_DELAY_MS);
+	// NIT: clear any timer still armed from a previous schedule before arming a
+	// new one, so a stale setTimeout can never fire a duplicate reconnect.
+	if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); }
 	conn.reconnectTimer = setTimeout(() => openSocket(conn, true), delay);
 }
 
