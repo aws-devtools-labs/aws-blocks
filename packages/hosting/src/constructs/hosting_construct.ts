@@ -52,6 +52,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { AlbAdapter } from './alb_adapter.js';
 import { ApiGatewayAdapter } from './apigw_adapter.js';
 import { FunctionUrlAdapter } from './function_url_adapter.js';
+import { S3WebsiteAdapter } from './s3_website_adapter.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
@@ -391,6 +392,17 @@ export type HostingConstructProps = {
          * the negotiator fails synth if the app requires them.
          */
         kind: 'function-url';
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        /**
+         * S3 static-website hosting — the simplest/cheapest door for a PURE
+         * static site / SPA: a public website bucket, no CloudFront, no Lambda.
+         * HTTP-only (no TLS), no SSR/API/image/edge. The negotiator fails synth
+         * for anything beyond static/SPA.
+         */
+        kind: 's3-website';
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
       };
@@ -1360,6 +1372,12 @@ export class HostingConstruct extends Construct {
         case 'function-url':
           result = new FunctionUrlAdapter().render(this, plan, {
             bucket: this.bucket,
+            degrade: fd.degrade,
+          });
+          break;
+        case 's3-website':
+          result = new S3WebsiteAdapter().render(this, plan, {
+            staticDir: manifest.staticAssets.directory,
             degrade: fd.degrade,
           });
           break;

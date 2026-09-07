@@ -18,13 +18,14 @@ const adapterWith = (tiers: Partial<Record<CapabilityId, SupportTier>>): FrontDo
 });
 
 describe('requiredCapabilities', () => {
-  it('always requires routing, static serving, atomic release', () => {
+  it('always requires routing + static serving; atomic release only with a server', () => {
     const req = requiredCapabilities(planWith());
-    assert.ok(req.has('RouteRequest') && req.has('ServeStaticAsset') && req.has('AtomicRelease'));
+    assert.ok(req.has('RouteRequest') && req.has('ServeStaticAsset'));
     assert.ok(!req.has('RunServerRender'));
+    assert.ok(!req.has('AtomicRelease'), 'pure-static deploy should not require AtomicRelease');
   });
 
-  it('requires RunServerRender / OptimizeImage / PinSession / InjectResponseHeaders when the plan shows them', () => {
+  it('requires RunServerRender / AtomicRelease / OptimizeImage / PinSession / InjectResponseHeaders when the plan shows them', () => {
     const req = requiredCapabilities(
       planWith({
         origins: [
@@ -36,7 +37,7 @@ describe('requiredCapabilities', () => {
         policies: { spaFallback: false, hasServer: true, skewEnabled: true },
       }),
     );
-    assert.ok(req.has('RunServerRender') && req.has('OptimizeImage') && req.has('PinSession') && req.has('InjectResponseHeaders'));
+    assert.ok(req.has('RunServerRender') && req.has('AtomicRelease') && req.has('OptimizeImage') && req.has('PinSession') && req.has('InjectResponseHeaders'));
   });
 });
 

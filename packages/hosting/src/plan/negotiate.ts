@@ -20,8 +20,15 @@ export const requiredCapabilities = (plan: CapabilityPlan): Set<CapabilityId> =>
   // Routing + static serving are always needed.
   req.add('RouteRequest');
   req.add('ServeStaticAsset');
-  req.add('AtomicRelease');
-  if (plan.policies.hasServer) req.add('RunServerRender');
+  // Atomic release (build-id cutover / invalidation) guards a COMPUTE origin
+  // serving cacheable HTML that references build-prefixed assets (the stale-HTML
+  // → 403 problem). A pure-static deploy has no such risk, so it is only
+  // required when there is a server — letting simplest static doors (e.g. an
+  // S3 website bucket) negotiate cleanly without an atomicity opt-in.
+  if (plan.policies.hasServer) {
+    req.add('AtomicRelease');
+    req.add('RunServerRender');
+  }
   if (plan.origins.some((o) => o.kind === 'image')) req.add('OptimizeImage');
   if (plan.policies.skewEnabled) req.add('PinSession');
   if (plan.routes.headers.length > 0) req.add('InjectResponseHeaders');
