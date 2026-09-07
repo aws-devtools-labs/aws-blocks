@@ -71,6 +71,7 @@ export interface RealtimeSubscription {
 export interface SubscribeOptions<T = unknown> {
     onDisconnect?: (reason: DisconnectReason) => void;
     onMessage: (message: T) => void;
+    onReconnect?: () => void;
 }
 
 // (No @packageDocumentation comment for this package)
