@@ -192,12 +192,17 @@ export interface ManagedValueJSON {
 /** Type guard: a value produced by {@link encodeManagedValue} (the JSON form). */
 export function isManagedValueJSON(v: unknown): v is ManagedValueJSON {
 	if (typeof v !== 'object' || v === null) return false;
-	const inner = (v as Record<string, unknown>)[MANAGED_VALUE_JSON_TAG];
+	// Cast to the JSON payload shape (not the branded `ManagedValue`) — this is the
+	// wire form being validated, before it's revived into a real marker.
+	const inner = (v as Record<string, unknown>)[MANAGED_VALUE_JSON_TAG] as
+		| { kind?: unknown; key?: unknown }
+		| null
+		| undefined;
 	return (
 		typeof inner === 'object' &&
 		inner !== null &&
-		((inner as ManagedValue).kind === 'secret' || (inner as ManagedValue).kind === 'config') &&
-		typeof (inner as ManagedValue).key === 'string'
+		(inner.kind === 'secret' || inner.kind === 'config') &&
+		typeof inner.key === 'string'
 	);
 }
 
