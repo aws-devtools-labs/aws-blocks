@@ -1906,6 +1906,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { channel: await agent.getChannel(channelId) };
   },
 
+  async agentGetRawDescriptor(channelId: string) {
+    // Return the raw toJSON() descriptor for the AGENT's chunks channel with __blocks
+    // removed so client middleware does NOT hydrate it into a channel client. useChat's
+    // `refresh` callback needs the raw token fields to re-mint fresh credentials before a
+    // reconnect. Mirrors realtimeGetRawDescriptor, but sourced from the agent's chunks
+    // channel (agent.getChannel === realtime.getChannel('chunks', channelId)) so the
+    // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
+    const ch = await agent.getChannel(channelId);
+    const raw = ch.toJSON() as Record<string, unknown>;
+    const { __blocks, ...descriptor } = raw;
+    return descriptor;
+  },
+
   async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
     await agent.resume(channelId, responses, { conversationId, userId: user?.userId ?? 'anonymous' });
