@@ -1185,6 +1185,36 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
+import type { AgentStreamChunk, ChatMessage, UseChatOptions } from './index.hooks.js';
+
+/** Flush pending microtasks so an async onReconnect handler settles before assertions. */
+function flush(): Promise<void> {
+	return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/**
+ * useChat calls `subscribe` with a {@link ChatSubscribeOptions} object. Capture its
+ * callbacks (onMessage / onReconnect / onDisconnect) cast-free so tests can drive chunks
+ * and simulate a transport reconnect. Also tolerates the bare-handler form for safety.
+ */
+function subscribeCapture() {
+	const cap: {
+		handler?: (chunk: AgentStreamChunk) => void;
+		reconnect?: () => void;
+		disconnect?: (reason: string) => void;
+	} = {};
+	const subscribe: UseChatOptions['subscribe'] = async (_channelId, handlerOrOptions) => {
+		if (typeof handlerOrOptions === 'function') {
+			cap.handler = handlerOrOptions;
+		} else {
+			cap.handler = handlerOrOptions.onMessage;
+			cap.reconnect = handlerOrOptions.onReconnect;
+			cap.disconnect = handlerOrOptions.onDisconnect;
+		}
+		return { unsubscribe() {}, established: Promise.resolve() };
+	};
+	return { cap, subscribe };
+}
 
 describe('useChat', () => {
 	test('onError is called when error chunk arrives', async () => {
@@ -1198,8 +1228,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onLoadingChange: (l) => { loadingStates.push(l); },
@@ -1225,8 +1255,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onLoadingChange: (l) => { loadingStates.push(l); },
@@ -1254,8 +1284,8 @@ describe('useChat', () => {
 				getConversation: async () => ({ messages: [] }),
 				resume: async (channelId, responses, convId) => { resumeCalled = true; resumeArgs = { channelId, responses, convId }; },
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 		});
@@ -1280,8 +1310,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 		});
@@ -1301,8 +1331,8 @@ describe('useChat', () => {
 				createConversation: async () => ({ conversationId: 'conv-1' }),
 				getConversation: async () => ({ messages: [] }),
 			},
-			subscribe: async (_channelId, handler) => {
-				chunkHandler = handler;
+			subscribe: async (_channelId, handlerOrOptions) => {
+				chunkHandler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				return { unsubscribe() {}, established: Promise.resolve() };
 			},
 			onMessagesChange: (msgs) => { lastMessages = msgs; },
@@ -1314,6 +1344,173 @@ describe('useChat', () => {
 		// Interrupt arrives — placeholder should be removed
 		chunkHandler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
 		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'empty placeholder should be removed');
+	});
+
+	// ── Send-path failsafes + mid-turn reconnect re-sync (PR2 / Option A) ────────
+
+	test('sendMessage rejection (504) resets loading and calls onError', async () => {
+		let errorReceived: string | undefined;
+		const loadingStates: boolean[] = [];
+		let lastMessages: ChatMessage[] = [];
+		const { subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => { throw new Error('504 Gateway Timeout'); },
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (e) => { errorReceived = e; },
+			onMessagesChange: (m) => { lastMessages = m; },
+		});
+
+		await chat.sendMessage('hello');
+
+		assert.strictEqual(chat.isLoading(), false, 'loading should be reset after send failure');
+		assert.strictEqual(loadingStates.at(-1), false);
+		assert.ok(errorReceived, 'onError should be called');
+		assert.match(errorReceived!, /504/);
+		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'no orphaned empty assistant bubble');
+	});
+
+	test('respondToInterrupt rejection resets loading and calls onError', async () => {
+		let errorReceived: string | undefined;
+		let lastMessages: ChatMessage[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+				resume: async () => { throw new Error('resume failed'); },
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+			onMessagesChange: (m) => { lastMessages = m; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'interrupt', interrupts: [{ id: 'int-1', name: 'approve:delete' }] });
+		await chat.respondToInterrupt([{ interruptId: 'int-1', approved: true }]);
+
+		assert.strictEqual(chat.isLoading(), false, 'loading should be reset after resume failure');
+		assert.ok(errorReceived, 'onError should be called');
+		assert.match(errorReceived!, /resume failed/);
+		assert.ok(!lastMessages.some(m => m.role === 'assistant' && m.content === ''), 'no orphaned empty assistant bubble');
+	});
+
+	test('reconnect re-syncs final assistant text from getConversation when the done chunk was missed', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn completed server-side: history ends with a non-empty assistant message.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'Hello! The final persisted answer.' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		// Two deltas arrive, then the socket drops before `done`.
+		cap.handler!({ type: 'text-delta', text: 'Hel' });
+		cap.handler!({ type: 'text-delta', text: 'lo' });
+		// Transport reconnects — useChat re-syncs from the DB.
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'loading cleared after re-sync of completed turn');
+		const assistant = chat.getMessages().find(m => m.role === 'assistant');
+		assert.ok(assistant, 'assistant message should exist');
+		assert.strictEqual(assistant!.content, 'Hello! The final persisted answer.', 'in-flight bubble replaced with persisted final text');
+		chat.destroy();
+	});
+
+	test('reconnect while turn still running keeps loading true (no premature clear)', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running: history ends with the user message (no final assistant yet).
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'loading stays true while the turn is still running');
+
+		// The terminal chunk finally arrives on the resubscribed channel.
+		cap.handler!({ type: 'done', text: 'done at last' });
+		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+	});
+
+	test('reconnect re-checks pending interrupts', async () => {
+		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+				// An interrupt was raised server-side while the socket was down.
+				getPendingInterrupts: async () => ({ interrupts: [{ id: 'int-9', name: 'approve:refund' }] }),
+			},
+			subscribe,
+			onInterrupt: (ints) => { interruptsReceived = ints; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.ok(interruptsReceived, 'pending interrupt should surface after reconnect');
+		assert.strictEqual(interruptsReceived!.length, 1);
+		assert.strictEqual(interruptsReceived![0].name, 'approve:refund');
+		chat.destroy();
+	});
+
+	test('bounded failsafe clears loading if no terminal chunk arrives after reconnect', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		let errorReceived: string | undefined;
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// Turn still running on reconnect — arms the failsafe.
+				getConversation: async () => ({ messages: [{ role: 'user', content: 'hello' }] }),
+			},
+			subscribe,
+			onError: (e) => { errorReceived = e; },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+		assert.strictEqual(chat.isLoading(), true, 'still loading right after reconnect (turn running)');
+
+		// No terminal chunk ever arrives — advance past the failsafe window.
+		t.mock.timers.tick(60_000);
+
+		assert.strictEqual(chat.isLoading(), false, 'failsafe should clear loading');
+		assert.ok(errorReceived, 'failsafe should surface an error');
+		chat.destroy();
 	});
 });
 
