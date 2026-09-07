@@ -72,6 +72,7 @@ export interface SubscribeOptions<T = unknown> {
     onDisconnect?: (reason: DisconnectReason) => void;
     onMessage: (message: T) => void;
     onReconnect?: () => void;
+    refresh?: () => Promise<RealtimeChannelDescriptor>;
 }
 
 // (No @packageDocumentation comment for this package)
