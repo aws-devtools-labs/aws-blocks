@@ -9,7 +9,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import { grantExternalDataApi, materialize } from './infra.js';
-import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
+import type { DatabaseOptions, ExternalDatabaseRef, SubnetSelection } from './types.js';
 
 /**
  * CDK layer for the Database Building Block.
@@ -31,6 +31,45 @@ import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
  * // With custom capacity:
  * const db = new Database(scope, 'analytics', { minCapacity: 1, maxCapacity: 8 });
  */
+
+/** Map the CDK-free `subnetType` string to the CDK enum. */
+const SUBNET_TYPE_MAP: Record<NonNullable<SubnetSelection['subnetType']>, ec2.SubnetType> = {
+	isolated: ec2.SubnetType.PRIVATE_ISOLATED,
+	'private-with-egress': ec2.SubnetType.PRIVATE_WITH_EGRESS,
+	public: ec2.SubnetType.PUBLIC,
+};
+
+/**
+ * Resolve the customer's CDK-free {@link SubnetSelection} (from `Database({ subnets })`)
+ * into a real `ec2.SubnetSelection`. Returns `undefined` when no override was
+ * given, so the default isolated-preferred placement applies. Enforces CDK's
+ * mutual exclusion (at most one of subnetType / subnetGroupName / subnetIds)
+ * with a BB-named error instead of a cryptic CDK one.
+ */
+function resolveClusterSubnets(scope: BuildingBlockScope, sel?: SubnetSelection): ec2.SubnetSelection | undefined {
+	if (!sel) return undefined;
+	const primaries = [sel.subnetType, sel.subnetGroupName, sel.subnetIds].filter((v) => v !== undefined);
+	if (primaries.length > 1) {
+		throw new Error(
+			`Database "${scope.fullId}": at most one of 'subnetType', 'subnetGroupName', or 'subnetIds' ` +
+				`may be set in 'subnets'.`,
+		);
+	}
+	return {
+		...(sel.subnetType ? { subnetType: SUBNET_TYPE_MAP[sel.subnetType] } : {}),
+		...(sel.subnetGroupName ? { subnetGroupName: sel.subnetGroupName } : {}),
+		...(sel.subnetIds
+			? {
+					subnets: sel.subnetIds.map((sid, i) =>
+						ec2.Subnet.fromSubnetId(scope, `${scope.node.id}Subnet${i}`, sid),
+					),
+				}
+			: {}),
+		...(sel.availabilityZones ? { availabilityZones: sel.availabilityZones } : {}),
+		...(sel.onePerAz !== undefined ? { onePerAz: sel.onePerAz } : {}),
+	};
+}
+
 export class Database extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options?: DatabaseOptions) {
 		// Aurora is reached over the RDS Data API, so it needs Secrets Manager + RDS
@@ -98,6 +137,7 @@ export class Database extends BuildingBlockScope {
 			deletionProtection: this.defaults.deletionProtection,
 			postgresVersion: options?.postgresVersion,
 			vpcContext: getVpcContext(this),
+			clusterSubnets: resolveClusterSubnets(this, options?.subnets),
 			// Migration Lambda log retention follows the stack-wide default.
 			logRetention: this.defaults.logRetention,
 		});
@@ -133,4 +173,4 @@ export type { SqlQuery, Transaction } from '@aws-blocks/data-common';
 export { createKyselyAdapter, sql } from '@aws-blocks/data-common';
 export { DatabaseErrors } from './errors.js';
 export { fromExisting } from './from-existing.js';
-export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions } from './types.js';
+export type { DatabaseOptions, ExternalDatabaseRef, ExternalSslOptions, SubnetSelection } from './types.js';

@@ -52,6 +52,14 @@ export interface AuroraInfraConfig {
    */
 	vpcContext?: VpcContext;
 	/**
+	 * Explicit subnet placement for the Aurora cluster, resolved from the
+	 * customer's `Database({ subnets })` option by the CDK layer. When provided,
+	 * it overrides the default isolated-preferred placement. Only meaningful with
+	 * a shared `vpcContext`.
+	 * @internal
+	 */
+	clusterSubnets?: ec2.SubnetSelection;
+	/**
 	 * CloudWatch retention for the migration Lambda's log group. Populated from
 	 * the stack-wide `defaults.logRetention`; when omitted the log group uses the
 	 * CDK `LogGroup` default retention.
@@ -128,7 +136,10 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
 	// tier the VPC actually has. Prefer isolated when present (keeps the DB off any NAT
 	// path), otherwise fall back to private-with-egress.
 	let clusterSubnets: ec2.SubnetSelection;
-	if (options.vpcContext) {
+	if (options.clusterSubnets) {
+		// Customer explicitly chose placement via Database({ subnets }); honor it.
+		clusterSubnets = options.clusterSubnets;
+	} else if (options.vpcContext) {
 		// Prefer the isolated tier when the VPC has one (keeps the DB off any NAT
 		// path); otherwise fall back to private-with-egress. selectSubnets throws an
 		// instructive, BB-named error if neither exists. `name` is the BB's fullId
