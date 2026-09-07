@@ -146,11 +146,13 @@ describe('DistributedTable', () => {
 	// ── OCC conflicts map to HTTP 409 (Conflict) ─────────────────────────────
 	// A conditional-write conflict must serialize to JSON-RPC code 409, not 500.
 	// The mock must throw an ApiError (status 409) that preserves the
-	// ConditionalCheckFailed name and flags the conflict retriable, matching the
-	// aws-runtime path.
+	// ConditionalCheckFailed name, matching the aws-runtime path. `retriable` is
+	// scoped to the assertion kind: true only for optimistic-lock ifFieldEquals
+	// conflicts (a re-read and retry can succeed), false for existence/uniqueness
+	// assertions (a blind retry fails identically).
 
 	describe('OCC conflicts map to 409', () => {
-		test('put ifNotExists conflict is an ApiError with status 409', async () => {
+		test('put ifNotExists conflict is an ApiError with status 409, not retriable', async () => {
 			const table = new DistributedTable(testScope(), 'users', {
 				schema: userSchema,
 				key: { partitionKey: 'userId', sortKey: 'createdAt' },
@@ -163,19 +165,55 @@ describe('DistributedTable', () => {
 					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
 					assert.equal(err.status, 409);
 					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('put ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
 					assert.equal(err.retriable, true);
 					return true;
 				},
 			);
 		});
 
-		test('delete ifExists conflict is an ApiError with status 409', async () => {
+		test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
 			const table = new DistributedTable(testScope(), 'users', {
 				schema: userSchema,
 				key: { partitionKey: 'userId', sortKey: 'createdAt' },
 			});
 			await assert.rejects(
 				() => table.delete({ userId: 'missing', createdAt: 1 }, { ifExists: true }),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
+		test('delete ifFieldEquals conflict is an ApiError with status 409, retriable', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			await assert.rejects(
+				() => table.delete({ userId: 'u1', createdAt: 1000 }, { ifFieldEquals: { name: 'Wrong' } }),
 				(err: unknown) => {
 					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
 					assert.equal(err.status, 409);

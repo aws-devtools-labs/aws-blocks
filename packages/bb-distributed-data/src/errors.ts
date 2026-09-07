@@ -37,7 +37,6 @@ export const TRANSACTION_ROW_LIMIT = 3000;
 export function translateDsqlError(e: Error): never {
   const code = (e as any).code as string | undefined;
   if (code === PG_SERIALIZATION_FAILURE) {
-    e.name = DistributedDatabaseErrors.SerializationFailure;
     // An OCC / serialization-failure conflict (SQLSTATE 40001) is a Conflict,
     // not an InternalServerError: throw an ApiError with status 409 so the
     // JSON-RPC serializer emits code 409 instead of a generic 500. Preserve the

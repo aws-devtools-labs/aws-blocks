@@ -129,15 +129,18 @@ export class DistributedTable<
 		try {
 			await this.docClient.send(new PutCommand(command));
 		} catch (err: unknown) {
-			// A failed conditional write (ifNotExists / ifFieldEquals) is a
-			// Conflict, not an InternalServerError: map DynamoDB's raw
+			// A failed conditional write is a Conflict, not an
+			// InternalServerError: map DynamoDB's raw
 			// ConditionalCheckFailedException to an ApiError with status 409 so the
 			// JSON-RPC serializer emits code 409 instead of 500. Name is preserved
-			// for isBlocksError(), the driver error is kept as `cause`, and the
-			// conflict is flagged retriable. Matches the mock path. Other errors
-			// (e.g. oversized items) still flow through remapItemTooLarge.
+			// for isBlocksError(), the driver error is kept as `cause`. DynamoDB
+			// collapses every conditional failure under one exception with no
+			// sub-reason, so retriability is decided from the condition THIS call
+			// set: an `ifFieldEquals` optimistic-lock conflict is retriable, an
+			// `ifNotExists` uniqueness assertion is not. Matches the mock path. Other
+			// errors (e.g. oversized items) still flow through remapItemTooLarge.
 			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
-				throw conditionalCheckFailed(err);
+				throw conditionalCheckFailed(!!options?.ifFieldEquals, err);
 			}
 			throw remapItemTooLarge(err);
 		}
@@ -156,12 +159,14 @@ export class DistributedTable<
 		try {
 			await this.docClient.send(new DeleteCommand(command));
 		} catch (err: unknown) {
-			// A failed conditional delete (ifExists / ifFieldEquals) is a Conflict,
-			// not an InternalServerError: map DynamoDB's raw
+			// A failed conditional delete is a Conflict, not an
+			// InternalServerError: map DynamoDB's raw
 			// ConditionalCheckFailedException to an ApiError with status 409 (see
-			// the put path above). Matches the mock path.
+			// the put path above). Retriability is decided from the condition THIS
+			// call set: an `ifFieldEquals` optimistic-lock conflict is retriable, an
+			// `ifExists` existence assertion is not. Matches the mock path.
 			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
-				throw conditionalCheckFailed(err);
+				throw conditionalCheckFailed(!!options?.ifFieldEquals, err);
 			}
 			throw err;
 		}

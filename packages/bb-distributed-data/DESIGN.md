@@ -47,7 +47,7 @@ bb-distributed-data (this package)
 - PGlite wrapped with a validation layer
 - `validateStatement()` rejects unsupported SQL before execution
 - `TransactionTracker` enforces DDL/DML separation and 3,000-row limit
-- `simulateConflict()` test helper for OCC testing
+- `simulateConflict()` test helper for OCC testing (mock-only hook, absent from the deployed AWS surface; the comprehensive app's `dsqlForceConflict` method uses it to prove the 40001→409 mapping over the JSON-RPC wire in the e2e suite)
 - Error translation matches production behavior
 
 ## Validation Layer

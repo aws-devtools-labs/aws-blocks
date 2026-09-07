@@ -104,7 +104,6 @@ function translateError(e: unknown): never {
         // OCC conflict: surface as a retriable 409 (Conflict), not a generic
         // 500. Preserves the SerializationFailure name and keeps the original
         // error as cause. Matches the PGlite / pg-client engine paths.
-        e.name = DatabaseErrors.SerializationFailure;
         throw serializationConflict(e);
       } else if (code === '23505') {
         e.name = DatabaseErrors.UniqueConstraintViolation;

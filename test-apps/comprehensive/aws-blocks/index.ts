@@ -1730,6 +1730,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
+  // Test-only: forces the mock DSQL engine to raise a serialization conflict on
+  // the next commit, so the e2e suite can prove the OCC→409 mapping over the
+  // JSON-RPC wire. simulateConflict() is a mock-only hook (absent from the
+  // deployed aws surface); the comprehensive app type-checks against mock types,
+  // so this compiles without a cast.
+  async dsqlForceConflict() {
+    dsql.simulateConflict();
+    await dsql.transaction(async (tx) => {
+      await tx.execute(sql`UPDATE dsql_items SET value = value WHERE id = ${'__occ_probe__'}`);
+    });
+    return { success: true };
+  },
+
   async dsqlTransferWithRetry(fromId: string, toId: string, amount: number) {
     await dsql.transaction(async (tx) => {
       const sender = await tx.queryOne<{ value: number }>(

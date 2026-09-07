@@ -101,14 +101,31 @@ test('delete with ifValueEquals throws when value differs', async () => {
 // ── OCC conflicts map to HTTP 409 (Conflict), not 500 ───────────────────────
 // A conditional-write conflict must serialize to JSON-RPC code 409 so callers
 // see a Conflict, not an InternalServerError. The mock must throw an ApiError
-// (status 409) that still preserves the ConditionalCheckFailed name and flags
-// the conflict as retriable, matching the aws-runtime path.
+// (status 409) that preserves the ConditionalCheckFailed name, matching the
+// aws-runtime path. `retriable` is scoped to the assertion kind: true only for
+// optimistic-lock value-equals conflicts (a re-read and retry can succeed),
+// false for existence/uniqueness assertions (a blind retry fails identically).
 
-test('put ifNotExists conflict is an ApiError with status 409', async () => {
+test('put ifNotExists conflict is an ApiError with status 409, not retriable', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'test');
 	await store.put('key1', 'v1');
 	await assert.rejects(
 		() => store.put('key1', 'v2', { ifNotExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, false);
+			return true;
+		},
+	);
+});
+
+test('put ifValueEquals conflict is an ApiError with status 409, retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifValueEquals: 'wrong' }),
 		(err: unknown) => {
 			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
 			assert.strictEqual(err.status, 409);
@@ -119,10 +136,25 @@ test('put ifNotExists conflict is an ApiError with status 409', async () => {
 	);
 });
 
-test('delete ifExists conflict is an ApiError with status 409', async () => {
+test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'test');
 	await assert.rejects(
 		() => store.delete('missing', { ifExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, false);
+			return true;
+		},
+	);
+});
+
+test('delete ifValueEquals conflict is an ApiError with status 409, retriable', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.delete('key1', { ifValueEquals: 'wrong' }),
 		(err: unknown) => {
 			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
 			assert.strictEqual(err.status, 409);

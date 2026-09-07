@@ -40,21 +40,26 @@ function blocksError(name: string, message: string): Error {
 }
 
 /**
- * Build the 409 ApiError for an optimistic-concurrency / conditional-write
- * conflict. Maps to HTTP 409 (Conflict) so the JSON-RPC serializer emits code
- * 409 instead of a generic 500, preserves the `ConditionalCheckFailed` name so
- * `isBlocksError()` keeps matching on both server and client, and flags the
- * conflict retriable (the caller can re-read and retry). The underlying named
- * error is kept as `cause` (retained server-side by ApiError). This is the
- * mock's counterpart to the aws-runtime path, which maps DynamoDB's raw
- * `ConditionalCheckFailedException` to the same 409 shape.
+ * Build the 409 ApiError for a conditional-write conflict. Maps to HTTP 409
+ * (Conflict) so the JSON-RPC serializer emits code 409 instead of a generic
+ * 500, preserves the `ConditionalCheckFailed` name so `isBlocksError()` keeps
+ * matching on both server and client, and keeps the underlying named error as
+ * `cause` (retained server-side by ApiError).
+ *
+ * `retriable` is scoped to the assertion kind: `true` only for optimistic-lock
+ * value-equals conflicts (`ifValueEquals`), where a re-read and retry can
+ * succeed; `false` for existence/uniqueness assertions (`ifNotExists` on put,
+ * `ifExists` on delete), where a blind identical retry fails identically. This
+ * is the mock's counterpart to the aws-runtime path, which decides retriability
+ * per-operation because DynamoDB collapses every conditional failure under one
+ * `ConditionalCheckFailedException`.
  */
-function conditionalConflict(): ApiError {
+function conditionalConflict(retriable: boolean): ApiError {
 	const cause = blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
 	return new ApiError('The conditional request failed', 409, {
 		name: KVStoreErrors.ConditionalCheckFailed,
 		cause,
-		retriable: true,
+		retriable,
 	});
 }
 
@@ -154,8 +159,8 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists. Serializes to HTTP 409 (Conflict), retriable.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists. Serializes to HTTP 409 (Conflict), not retriable (a blind retry fails identically).
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry).
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: PutOptions<T>): Promise<void> {
@@ -170,12 +175,14 @@ export class KVStore<T = string> extends Scope {
 		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
 
 		if (options?.ifNotExists && this.data.has(key)) {
-			throw conditionalConflict();
+			// Uniqueness assertion — not retriable.
+			throw conditionalConflict(false);
 		}
 		if (options?.ifValueEquals !== undefined) {
 			const current = this.data.get(key)?.value;
 			if (current !== JSON.stringify(options.ifValueEquals)) {
-				throw conditionalConflict();
+				// Optimistic-lock value-equals conflict — retriable.
+				throw conditionalConflict(true);
 			}
 		}
 
@@ -190,17 +197,19 @@ export class KVStore<T = string> extends Scope {
 	 *
 	 * @param key - The key to delete.
 	 * @param conditions - Optional delete conditions.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist. Serializes to HTTP 409 (Conflict), retriable.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist. Serializes to HTTP 409 (Conflict), not retriable (a blind retry fails identically).
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry).
 	 */
 	async delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void> {
 		if (conditions?.ifExists && !this.data.has(key)) {
-			throw conditionalConflict();
+			// Existence assertion — not retriable.
+			throw conditionalConflict(false);
 		}
 		if (conditions?.ifValueEquals !== undefined) {
 			const current = this.data.get(key)?.value;
 			if (current !== JSON.stringify(conditions.ifValueEquals)) {
-				throw conditionalConflict();
+				// Optimistic-lock value-equals conflict — retriable.
+				throw conditionalConflict(true);
 			}
 		}
 		this.data.delete(key);

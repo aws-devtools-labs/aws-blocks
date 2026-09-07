@@ -53,6 +53,7 @@ Error translation happens at the engine layer, not the database layer. Each engi
 
 | pg error code | DatabaseErrors name |
 |---------------|-------------------|
+| `40001` | `SerializationFailure` (→ `ApiError` 409, retriable) |
 | `23505` | `UniqueConstraintViolation` |
 | `08xxx` | `ConnectionFailed` |
 | (other) | `QueryFailed` |
@@ -60,6 +61,8 @@ Error translation happens at the engine layer, not the database layer. Each engi
 Data API errors that carry no SQLState are classified by their SDK exception name: `ServiceUnavailableException`, `InternalServerErrorException`, and `DatabaseResumingException` (a `minCapacity: 0` cluster waking from auto-pause) all map to `ConnectionFailed` — transient, and worth retrying. Everything else falls through to `QueryFailed`.
 
 The `DatabaseBase` subclass only adds `TransactionFailed` naming for errors that escape the engine's transaction methods without a recognized name.
+
+An OCC serialization failure (SQLSTATE `40001`) is translated to an `ApiError` with status **409 (Conflict)**, retriable, preserving the `SerializationFailure` name so the JSON-RPC serializer emits 409 instead of a generic 500. This mapping is verified by translator/engine **unit tests** (`pg-error-translator.test.ts`, `data-api-engine.test.ts`), not an over-the-wire e2e test: the single-connection PGlite mock has no conflict-injection hook and cannot deterministically produce a `40001` serialization conflict over the wire, so unit tests are the verification ceiling for this Block. (By contrast, DistributedDatabase's DSQL mock exposes a `simulateConflict()` hook, so its 409 mapping is proven over the JSON-RPC wire in the comprehensive e2e suite.)
 
 ## RLS Implementation
 

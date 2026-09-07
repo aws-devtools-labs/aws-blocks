@@ -174,7 +174,8 @@ export class DistributedTable<
 		const keyStr = this.serializeKey(item as any);
 
 		if (options?.ifNotExists && this.data.has(keyStr)) {
-			throw conditionalCheckFailed();
+			// Uniqueness assertion — not retriable.
+			throw conditionalCheckFailed(false);
 		}
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals);
@@ -188,7 +189,8 @@ export class DistributedTable<
 		const keyStr = this.serializeKey(key);
 
 		if (options?.ifExists && !this.data.has(keyStr)) {
-			throw conditionalCheckFailed();
+			// Existence assertion — not retriable.
+			throw conditionalCheckFailed(false);
 		}
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals);
@@ -350,11 +352,13 @@ export class DistributedTable<
 
 		const existing = this.data.get(keyStr);
 		if (!existing) {
-			throw conditionalCheckFailed();
+			// Optimistic-lock (compare-and-swap) conflict — retriable.
+			throw conditionalCheckFailed(true);
 		}
 		for (const [field, value] of entries) {
 			if (!deepEqual((existing as any)[field], value)) {
-				throw conditionalCheckFailed();
+				// Optimistic-lock (compare-and-swap) conflict — retriable.
+				throw conditionalCheckFailed(true);
 			}
 		}
 	}
