@@ -27,7 +27,7 @@ export type DeleteOptionsFor<O extends FileBucketOptions> = O extends {
     versioned: false;
 } ? undefined : VersionedDeleteOptions;
 
-// @public (undocumented)
+// @public
 export interface ExternalBucketRef {
     // (undocumented)
     readonly __brand: 'ExternalBucketRef';
