@@ -350,6 +350,88 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					sub.unsubscribe();
 				}
 			});
+
+			test('reconnect invokes the refresh callback to obtain fresh credentials', async () => {
+				const api = getApi();
+				const channelName = `refresh-e2e-${Date.now()}`;
+				const c1: Cursor = { userId: 'u1', x: 11, y: 22, color: 'amber' };
+				const c2: Cursor = { userId: 'u2', x: 33, y: 44, color: 'violet' };
+
+				const channel = await api.realtimeGetChannel(channelName);
+
+				const received: Cursor[] = [];
+				let reconnects = 0;
+				let refreshCalls = 0;
+
+				// The reconnect path awaits refresh() BEFORE reopening the socket and
+				// applies the returned descriptor's fresh connect+channel tokens, so a
+				// subscription can outlive the token TTLs (channel ~1h / connect ~2h).
+				// The 1h TTL can't be waited out in a test — this proves the PATH:
+				// refresh IS invoked on reconnect and post-reconnect delivery still works.
+				//
+				// realtimeGetChannel hydrates into a subscribe-only client (no descriptor
+				// fields are reachable on it), so refresh re-mints via
+				// realtimeGetRawDescriptor: that call mints a FRESH channel+connect token
+				// server-side and returns the raw wire fields (it strips __blocks so the
+				// response middleware won't hydrate it into a channel). We re-add the
+				// __blocks discriminant to reconstruct the RealtimeChannelDescriptor the
+				// reconnect path expects. Cast-free: the returned object literal is
+				// contextually typed against SubscribeOptions.refresh's return type.
+				const sub = channel.subscribe({
+					onMessage: (msg) => { received.push(msg); },
+					onReconnect: () => { reconnects++; },
+					refresh: async () => {
+						refreshCalls++;
+						const fresh = await api.realtimeGetRawDescriptor(channelName);
+						return { ...fresh, __blocks: 'realtime/channel', channel: channelName };
+					},
+				} satisfies import('aws-blocks').SubscribeOptions<Cursor>);
+
+				try {
+					await sub.established;
+
+					// Baseline: delivery works before the drop.
+					await api.realtimePublishToChannel(channelName, c1);
+					const preDeadline = Date.now() + 10_000;
+					while (received.length < 1) {
+						if (Date.now() > preDeadline) throw new Error('c1 not delivered within 10s (pre-reconnect)');
+						await setTimeout(200);
+					}
+
+					// Force an unexpected drop. The transport auto-reconnects and, because
+					// a refresh fn is registered, must invoke it before reopening.
+					sub.connection?.close();
+
+					// Wait for the reconnect to complete (onReconnect fires post-resubscribe).
+					const reconnectDeadline = Date.now() + 15_000;
+					while (reconnects < 1) {
+						if (Date.now() > reconnectDeadline) throw new Error('reconnect did not occur within 15s');
+						await setTimeout(200);
+					}
+
+					// PR3-specific assertion: refresh WAS invoked on the reconnect path.
+					assert.ok(refreshCalls >= 1, `refresh callback should be invoked on reconnect, got ${refreshCalls}`);
+
+					// Resubscribe-with-fresh-creds worked: a post-reconnect publish is
+					// delivered. Republish in a poll loop — the mock fires onReconnect on
+					// frame-send, so the server may not have re-registered the subscription
+					// at the instant reconnects reaches 1.
+					const before = received.length;
+					const deliverDeadline = Date.now() + 15_000;
+					while (received.length <= before) {
+						if (Date.now() > deliverDeadline) throw new Error('c2 not delivered within 15s after reconnect');
+						await api.realtimePublishToChannel(channelName, c2);
+						await setTimeout(500);
+					}
+					assert.deepStrictEqual(
+						received[received.length - 1],
+						c2,
+						'post-reconnect message should be delivered after resubscribe with fresh creds',
+					);
+				} finally {
+					sub.unsubscribe();
+				}
+			});
 		});
 
 		describe('Limit Enforcement', () => {
