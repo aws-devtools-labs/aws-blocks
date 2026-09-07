@@ -88,11 +88,13 @@ export class KvKeys extends Construct {
       }),
     );
 
-    // #480: supersede-tagging of the OUTGOING build at cutover. Least
-    // privilege: the handler may LIST and TAG objects under `builds/*` only —
-    // it is deliberately granted NO delete permission. Actual expiry is done
-    // by the S3 `DeleteOldBuilds` lifecycle rule, so a bug in the handler can
-    // never delete the live build; worst case an old build lingers untagged.
+    // #480: supersede-tagging of the OUTGOING build at cutover, plus clearing
+    // the build-state tag on the INCOMING build. Least privilege: the handler
+    // may LIST and TAG/UNTAG objects under `builds/*` only — it is deliberately
+    // granted NO delete-object permission (`DeleteObjectTagging` removes tags,
+    // never objects). Actual expiry is done by the S3 `DeleteOldBuilds`
+    // lifecycle rule, so a bug in the handler can never delete the live build;
+    // worst case an old build lingers untagged.
     handler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['s3:ListBucket'],
@@ -102,7 +104,7 @@ export class KvKeys extends Construct {
     );
     handler.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ['s3:PutObjectTagging'],
+        actions: ['s3:PutObjectTagging', 's3:DeleteObjectTagging'],
         resources: [`${props.bucket.bucketArn}/builds/*`],
       }),
     );

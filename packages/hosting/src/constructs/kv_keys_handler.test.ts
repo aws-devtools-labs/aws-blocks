@@ -1,8 +1,16 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import { describe, it } from 'node:test';
+import { describe, it, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { batches, computeDiff, deleteDrainSet, activeBuildId } from './kv_keys_handler.js';
+import { S3Client, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { CloudFrontKeyValueStoreClient } from '@aws-sdk/client-cloudfront-keyvaluestore';
+import {
+  batches,
+  computeDiff,
+  deleteDrainSet,
+  activeBuildId,
+  handler,
+} from './kv_keys_handler.js';
 
 // Regression for the Delete-path drain bug: CloudFormation does not send
 // OldResourceProperties on Delete, so the keys to drain must come from
@@ -157,5 +165,116 @@ describe('kv_keys_handler — activeBuildId (#480)', () => {
     assert.notEqual(oldB, newB);
     // Same build on both sides → no cutover → handler must not tag.
     assert.equal(activeBuildId(entriesJson('same-3333')), activeBuildId(entriesJson('same-3333')));
+  });
+});
+
+// #480 F1: at cutover the handler must tag the OUTGOING build superseded AND
+// clear the build-state tag on the INCOMING build. Leaving the incoming build
+// tagged means a rollback that flips `meta.b` back to it hands the live build to
+// the `DeleteOldBuilds` lifecycle rule — the original #480 bug.
+describe('kv_keys_handler — cutover tagging (#480 F1)', () => {
+  const OLD = 'old-1111';
+  const NEW = 'new-2222';
+  const BUCKET = 'hosting-bucket';
+  const entriesJson = (b: string): string =>
+    JSON.stringify({ r0: '[]', meta: JSON.stringify({ b, bp: '/', v: 1 }) });
+
+  type Call = { name: string; Key?: string; Prefix?: string };
+
+  const install = (): Call[] => {
+    const calls: Call[] = [];
+    mock.method(
+      CloudFrontKeyValueStoreClient.prototype,
+      'send',
+      async (cmd: { constructor: { name: string } }) => {
+        const name = cmd.constructor.name;
+        calls.push({ name });
+        return name === 'DescribeKeyValueStoreCommand' ? { ETag: 'etag-1' } : {};
+      },
+    );
+    mock.method(
+      S3Client.prototype,
+      'send',
+      async (cmd: { constructor: { name: string }; input: Record<string, string> }) => {
+        const name = cmd.constructor.name;
+        calls.push({ name, Key: cmd.input.Key, Prefix: cmd.input.Prefix });
+        if (cmd instanceof ListObjectsV2Command) {
+          const prefix = cmd.input.Prefix ?? '';
+          return {
+            Contents: [{ Key: `${prefix}index.html` }, { Key: `${prefix}assets/app.js` }],
+            IsTruncated: false,
+          };
+        }
+        return {};
+      },
+    );
+    return calls;
+  };
+
+  const event = (
+    RequestType: 'Create' | 'Update' | 'Delete',
+    oldBuild: string | undefined,
+    newBuild: string,
+  ) => ({
+    RequestType,
+    ResourceProperties: {
+      KvsArn: 'arn:aws:cloudfront::1:key-value-store/store-1',
+      BucketName: BUCKET,
+      Entries: entriesJson(newBuild),
+    },
+    OldResourceProperties: oldBuild ? { Entries: entriesJson(oldBuild) } : undefined,
+  });
+
+  afterEach(() => mock.restoreAll());
+
+  const of = (calls: Call[], name: string): Call[] => calls.filter((c) => c.name === name);
+
+  it('tags ONLY the outgoing build superseded and clears tags ONLY on the incoming build', async () => {
+    const calls = install();
+    await handler(event('Update', OLD, NEW));
+
+    const puts = of(calls, 'PutObjectTaggingCommand');
+    const dels = of(calls, 'DeleteObjectTaggingCommand');
+
+    assert.ok(puts.length > 0, 'PutObjectTagging issued for the outgoing build');
+    assert.ok(
+      puts.every((c) => c.Key?.startsWith(`builds/${OLD}/`)),
+      'every PutObjectTagging key is under the outgoing build prefix',
+    );
+    assert.ok(
+      !puts.some((c) => c.Key?.startsWith(`builds/${NEW}/`)),
+      'the incoming (live) build is NEVER tagged superseded',
+    );
+
+    assert.ok(dels.length > 0, 'DeleteObjectTagging issued for the incoming build');
+    assert.ok(
+      dels.every((c) => c.Key?.startsWith(`builds/${NEW}/`)),
+      'every DeleteObjectTagging key is under the incoming build prefix',
+    );
+    assert.ok(
+      !dels.some((c) => c.Key?.startsWith(`builds/${OLD}/`)),
+      'the outgoing build never has its superseded tag cleared',
+    );
+  });
+
+  it('issues neither tagging call on Create', async () => {
+    const calls = install();
+    await handler(event('Create', undefined, NEW));
+    assert.equal(of(calls, 'PutObjectTaggingCommand').length, 0);
+    assert.equal(of(calls, 'DeleteObjectTaggingCommand').length, 0);
+  });
+
+  it('issues neither tagging call on Delete', async () => {
+    const calls = install();
+    await handler(event('Delete', OLD, NEW));
+    assert.equal(of(calls, 'PutObjectTaggingCommand').length, 0);
+    assert.equal(of(calls, 'DeleteObjectTaggingCommand').length, 0);
+  });
+
+  it('issues neither tagging call on an Update that does not change the build (no cutover)', async () => {
+    const calls = install();
+    await handler(event('Update', 'same-3333', 'same-3333'));
+    assert.equal(of(calls, 'PutObjectTaggingCommand').length, 0);
+    assert.equal(of(calls, 'DeleteObjectTaggingCommand').length, 0);
   });
 });

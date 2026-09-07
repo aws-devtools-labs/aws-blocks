@@ -38,6 +38,7 @@ import {
   S3Client,
   ListObjectsV2Command,
   PutObjectTaggingCommand,
+  DeleteObjectTaggingCommand,
 } from '@aws-sdk/client-s3';
 import { BUILD_STATE_TAG_KEY, BUILD_STATE_SUPERSEDED } from './build_tags.js';
 
@@ -138,6 +139,48 @@ export async function supersedeBuild(
               },
             }),
           ),
+        ),
+      );
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+}
+
+/**
+ * Remove the build-state tag from every object under `builds/<buildId>/`, the
+ * symmetric counterpart of {@link supersedeBuild}. Called on the INCOMING build
+ * at cutover so a retained prefix is never left tagged `superseded`: a rollback
+ * that re-points the KVS `meta.b` pointer back at it would otherwise hand the
+ * now-live build to the `DeleteOldBuilds` lifecycle rule — #480 all over again.
+ *
+ * Same bounded concurrency (15 in flight) and best-effort contract as
+ * {@link supersedeBuild}: a failure only leaves a stale tag on a build that is
+ * live right now (the lifecycle rule cannot expire it while it is pointed at by
+ * a deploy that keeps re-clearing on each cutover), so we never fail a deploy
+ * for it.
+ */
+export async function clearBuildState(
+  bucket: string,
+  buildId: string,
+): Promise<void> {
+  const CONCURRENCY = 15;
+  let token: string | undefined;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: `builds/${buildId}/`,
+        ContinuationToken: token,
+      }),
+    );
+    const keys = (page.Contents ?? [])
+      .map((obj) => obj.Key)
+      .filter((key): key is string => typeof key === 'string');
+    for (let i = 0; i < keys.length; i += CONCURRENCY) {
+      const chunk = keys.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        chunk.map((key) =>
+          s3.send(new DeleteObjectTaggingCommand({ Bucket: bucket, Key: key })),
         ),
       );
     }
@@ -299,6 +342,23 @@ export async function handler(event: Event): Promise<{ PhysicalResourceId: strin
           `Failed to tag superseded build ${oldBuildId}; it will not be expired by ` +
             `the DeleteOldBuilds lifecycle rule until re-tagged. ${String(err)}`,
         );
+      }
+      // Symmetric to the supersede tagging above: clear the build-state tag on
+      // the INCOMING build so a rollback that flips the pointer back to it can
+      // never hand a live build to `DeleteOldBuilds` (#480 F1). Best-effort for
+      // the same reason — a stale tag on the live build is not expired while
+      // deploys keep clearing it, so never fail the deploy over it.
+      if (newBuildId) {
+        try {
+          await clearBuildState(event.ResourceProperties.BucketName, newBuildId);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `Failed to clear the build-state tag on incoming build ${newBuildId}; ` +
+              `a rollback to it could be expired by the DeleteOldBuilds lifecycle ` +
+              `rule until the tag is cleared. ${String(err)}`,
+          );
+        }
       }
     }
   }

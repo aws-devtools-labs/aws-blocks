@@ -17,12 +17,19 @@ Recovery required a redeploy.
 **Fix.** The lifecycle rule now matches only objects tagged
 `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
 to the new build, the cutover handler tags the *outgoing* build's objects
-superseded (best-effort; list + tag only — the handler is granted **no** S3
-delete permission). The live build is never tagged, so it is never expired,
+superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
+delete-object permission). The live build is never tagged, so it is never expired,
 regardless of deploy cadence. Superseded builds are still cleaned up after
 `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
 "NOT tagged" predicate), which is why the superseded build is tagged rather than
 the live build excluded.
+
+**Rollback-safety hardening.** The same cutover also *clears* the build-state tag
+on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+this, a rollback that re-points `meta.b` back to a retained build that was tagged
+superseded by an earlier cutover would hand the now-live build to
+`DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
+`s3:DeleteObjectTagging` (tags only, never objects).
 
 **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
 `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
@@ -40,7 +47,8 @@ a rollback-window note, not a correctness gate.
 Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
 lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
 + Lambda-role update on the next deploy; no bucket replacement), and adds a new
-IAM grant (`s3:ListBucket` + `s3:PutObjectTagging`, scoped to `builds/*`) to the
+IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+scoped to `builds/*`) to the
 cutover handler. Build artifacts uploaded before the upgrade carry no
 `build-state` tag and are therefore never expired by the new rule — including
 the live build — so the upgrade cannot delete a running build; from the next
