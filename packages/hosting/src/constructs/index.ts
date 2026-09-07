@@ -73,3 +73,5 @@ export { negotiate, requiredCapabilities } from '../plan/negotiate.js';
 export { CloudFrontAdapter } from './cloudfront_adapter.js';
 export { AlbAdapter, type AlbRenderContext } from './alb_adapter.js';
 export { AlbConstruct, type AlbConstructProps } from './alb_construct.js';
+export { ApiGatewayAdapter, type ApiGatewayRenderContext } from './apigw_adapter.js';
+export { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';

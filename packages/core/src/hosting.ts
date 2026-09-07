@@ -709,7 +709,9 @@ export class Hosting extends Construct {
       // wires the same-origin `/aws-blocks/*` proxy (a Lambda target) — the ALB
       // analogue of the CloudFront API behaviors below.
       frontDoor:
-        typeof props.frontDoor === 'object' && props.frontDoor.kind === 'alb' && props.api
+        typeof props.frontDoor === 'object' &&
+        props.api &&
+        (props.frontDoor.kind === 'alb' || props.frontDoor.kind === 'api-gateway')
           ? { ...props.frontDoor, backendApiUrl: props.api.apiUrl }
           : props.frontDoor,
     };

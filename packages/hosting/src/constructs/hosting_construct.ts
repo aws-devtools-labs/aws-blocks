@@ -50,6 +50,7 @@ import {
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
 import { AlbAdapter } from './alb_adapter.js';
+import { ApiGatewayAdapter } from './apigw_adapter.js';
 import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
@@ -365,6 +366,18 @@ export type HostingConstructProps = {
          * the ALB via a Lambda target. Set by the Blocks integration layer from
          * the `api` prop; enables cookie auth with no CORS.
          */
+        backendApiUrl?: string;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      }
+    | {
+        /**
+         * API Gateway HTTP API (v2) — a cheap, regional, HTTPS-by-default,
+         * no-CloudFront door (pay-per-request, scale-to-zero, no VPC). Good for a
+         * SPA/SSR app that doesn't need a CDN. No edge cache, no streaming SSR.
+         */
+        kind: 'api-gateway';
+        /** Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`), set by the Blocks layer. */
         backendApiUrl?: string;
         /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
         degrade?: import('../plan/types.js').CapabilityId[];
@@ -1039,10 +1052,10 @@ export class HostingConstruct extends Construct {
     // policy, the CDN distribution, OPEN_NEXT_ORIGIN, OAC KMS grant) is guarded
     // by `!useAlb` below. The ALB branch renders the same neutral CapabilityPlan
     // onto an Application Load Balancer.
-    const useAlb = typeof props.frontDoor === 'object' && props.frontDoor.kind === 'alb';
+    const useCustomDoor = typeof props.frontDoor === 'object';
     let cdn: CdnConstruct | undefined;
 
-    if (!useAlb) {
+    if (!useCustomDoor) {
     // ---- 6. WAF (conditional) ----
     // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
     const effectiveWebAclArn = props.waf?.webAclArn ?? props.cdn?.webAclArn;
@@ -1281,52 +1294,64 @@ export class HostingConstruct extends Construct {
       }
     }
     } else {
-      // ---- Front door: ALB (non-CloudFront) ----
-      // Storage + compute are already built above (front-door-agnostic). Render
-      // the neutral CapabilityPlan onto an Application Load Balancer via the
-      // AlbAdapter, which negotiates the plan (conscious degradation) then
-      // provisions the VPC/ALB/target-groups/listener-rules. Static assets are
-      // uploaded to `builds/<buildId>/` by the shared section 12 below and read
-      // by the ALB's asset-proxy Lambda target.
-      const albCfg = props.frontDoor as {
-        kind: 'alb';
-        vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
-        internal?: boolean;
-        certificate?: ICertificate;
-        backendApiUrl?: string;
-        degrade?: import('../plan/types.js').CapabilityId[];
-      };
+      // ---- Front door: non-CloudFront (dispatch by kind) ----
+      // Storage + compute are already built above (front-door-agnostic). Each
+      // adapter renders the SAME neutral CapabilityPlan onto its service, after
+      // negotiating (conscious degradation). Static assets are uploaded to
+      // `builds/<buildId>/` by the shared section 12 below and read by each
+      // door's asset-proxy. Skew-pin is a CloudFront-edge capability; leave it
+      // off the plan so it is not a required capability these doors would reject
+      // (apps opt into other degradations via `degrade`).
+      const fd = props.frontDoor as Extract<HostingConstructProps['frontDoor'], { kind: string }>;
       const serverName = this.computeFunctions.has('default')
         ? 'default'
         : this.computeFunctions.has('server')
           ? 'server'
           : undefined;
       const hasImageOrigin = this.computeFunctions.has('image-optimization');
+      const computeFunctions = this.computeFunctions as Map<
+        string,
+        import('aws-cdk-lib/aws-lambda').IFunction
+      >;
       const plan = buildCapabilityPlan({
         manifest,
         buildId,
         hasServer: Boolean(serverName),
         hasImage: hasImageOrigin,
-        // Skew-pin is a CloudFront-edge capability; ALB marks it degraded. Leave
-        // it off in the plan so it is not a required capability the negotiator
-        // would reject (the app opts into other degradations via `degrade`).
         skewEnabled: false,
       });
-      const albResult = new AlbAdapter().render(this, plan, {
+      const common = {
         bucket: this.bucket,
-        computeFunctions: this.computeFunctions as Map<
-          string,
-          import('aws-cdk-lib/aws-lambda').IFunction
-        >,
+        computeFunctions,
         serverComputeName: serverName,
         imageComputeName: hasImageOrigin ? 'image-optimization' : undefined,
-        vpc: albCfg.vpc,
-        internal: albCfg.internal,
-        certificate: albCfg.certificate,
-        backendApiUrl: albCfg.backendApiUrl,
-        degrade: albCfg.degrade,
-      });
-      this.distributionUrl = albResult.url;
+      };
+      let result: { url: string };
+      switch (fd.kind) {
+        case 'alb':
+          result = new AlbAdapter().render(this, plan, {
+            ...common,
+            vpc: fd.vpc,
+            internal: fd.internal,
+            certificate: fd.certificate,
+            backendApiUrl: fd.backendApiUrl,
+            degrade: fd.degrade,
+          });
+          break;
+        case 'api-gateway':
+          result = new ApiGatewayAdapter().render(this, plan, {
+            ...common,
+            backendApiUrl: fd.backendApiUrl,
+            degrade: fd.degrade,
+          });
+          break;
+        default:
+          throw new HostingError('UnsupportedFrontDoorError', {
+            message: `Unknown front door kind '${(fd as { kind: string }).kind}'.`,
+            resolution: "Use 'cloudfront' (default), or { kind: 'alb' | 'api-gateway' }.",
+          });
+      }
+      this.distributionUrl = result.url;
     }
 
     // ---- 11. Error page deployment (SSR only) ----
