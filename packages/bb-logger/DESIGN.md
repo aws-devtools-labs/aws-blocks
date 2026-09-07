@@ -8,20 +8,26 @@ Design document for Logger. For usage, see [README.md](./README.md).
 
 ## Infrastructure (CDK)
 
-The framework owns a single CloudWatch Logs LogGroup for the shared handler
-Lambda (created by the `BlocksStack`/`BlocksBackend` with retention from the
-stack-wide `defaults.logRetention`). The Logger construct **reconfigures that
-group's retention** rather than creating its own:
+Every compute owns a single CloudWatch Logs LogGroup for its handler (created by
+the compute with retention from the stack-wide `defaults.logRetention`). Logger
+owns **no** infrastructure — it targets the compute it resolves to and calls one
+seam, `compute.enableLogging(options?.retention)`:
 
-- **Retention:** Resolved as `options.retention ?? scope.defaults.logRetention`
-  and applied to the shared handler log group via the L1 escape hatch
-  (`CfnLogGroup.retentionInDays`). An explicit per-Logger `retention` wins over
-  the stack-wide default; both target the one group.
+- **Presence + retention (one call):** `enableLogging` always marks the compute
+  as having a Logger (so the per-compute Dashboard renders its logs section), and
+  when a `retention` is passed, the compute reconfigures **its own** log group
+  (via the L1 `CfnLogGroup.retentionInDays` escape hatch). The compute owns the
+  policy: because several Loggers can target one compute and all describe the
+  same group, the last explicit value wins and a synth warning is emitted on a
+  conflicting value. Targeting the resolved compute means a Logger attached to a
+  non-default compute reconfigures *that* compute's group, not always the
+  default one.
 - **When `retention` is omitted:** The group keeps the stack-wide
-  `defaults.logRetention` already applied by the BlocksStack/BlocksBackend.
+  `defaults.logRetention` the compute already applied — a bare Logger never
+  clobbers a retention another Logger set.
 - **No second LogGroup:** Logger deliberately does not create a
   `/aws/lambda/${handler.functionName}` group of its own — that would collide
-  with the framework-owned group on the log-group name.
+  with the compute-owned group on the log-group name.
 - **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when
   `options.level` is configured. Multiple Logger BBs can coexist with different
   levels via constructor options.

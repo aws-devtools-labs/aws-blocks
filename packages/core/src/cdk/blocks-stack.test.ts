@@ -15,7 +15,7 @@ import { BlocksBackend } from './blocks-backend.js';
 import { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
-import { BlocksStack, BlocksPresets, Scope } from './index.js';
+import { BlocksPresets, BlocksStack, Scope } from './index.js';
 
 // A real app gets its default compute from @aws-blocks/bb-lambda-compute (via
 // @aws-blocks/blocks), which core's own tests can't depend on. Use an
@@ -55,6 +55,9 @@ class StubLambdaCompute extends Compute {
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
 	}
+
+	protected applyLogRetention(_retentionDays: number): void {}
+	protected applyTracing(): void {}
 }
 
 const stubComputeFactory: DefaultComputeFactory = (root) => new StubLambdaCompute(root as never, 'DefaultCompute');
@@ -72,9 +75,19 @@ const factoryBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js')
 // Wrap create(), injecting the stub default-compute factory the way
 // @aws-blocks/blocks injects LambdaCompute — so tests don't repeat it.
 const makeStack = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksStack.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
+	BlocksStack.create(scope, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: stubComputeFactory,
+	});
 const makeBackend = (scope: Construct, id: string, backendCDKPath: string) =>
-	BlocksBackend.create(scope, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production, defaultComputeFactory: stubComputeFactory });
+	BlocksBackend.create(scope, id, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: stubComputeFactory,
+	});
 
 describe('ESM cache-busting (multi-stage)', () => {
 	test('BlocksStack.create() with same backendCDKPath but different IDs produces constructs in each', async () => {
@@ -203,16 +216,13 @@ describe('assertCdkConditionActive', () => {
 		try {
 			const app = new cdk.App();
 
-			await assert.rejects(
-				makeStack(app, 'MissingConditionStack', sideEffectBackendPath),
-				(err: Error) => {
-					assert.ok(
-						err.message.includes('Missing --conditions=cdk'),
-						`Expected condition error, got: ${err.message}`,
-					);
-					return true;
-				},
-			);
+			await assert.rejects(makeStack(app, 'MissingConditionStack', sideEffectBackendPath), (err: Error) => {
+				assert.ok(
+					err.message.includes('Missing --conditions=cdk'),
+					`Expected condition error, got: ${err.message}`,
+				);
+				return true;
+			});
 		} finally {
 			process.env.NODE_OPTIONS = origNodeOptions;
 			process.execArgv = origExecArgv;

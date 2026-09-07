@@ -35,13 +35,16 @@ Beyond `addAnnotation` and `addMetadata`, `Segment` exposes two additional metho
 
 ## Infrastructure (CDK)
 
-Tracer is a **composite Building Block** — it creates no new AWS resources. It configures tracing on the parent scope's Lambda function:
+Tracer is a **composite Building Block** — it creates no new AWS resources. It
+**delegates to its resolved compute** by calling `this.compute.enableTracing()`,
+so tracing targets whichever compute backs the block. For a Lambda compute that
+turns on:
 
-- **Tracing mode:** Sets `TracingConfig.Mode = 'Active'` on the Lambda `CfnFunction` (L1 construct).
-- **IAM permissions:** Adds `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on resource `'*'` to the Lambda execution role.
+- **Tracing mode:** `TracingConfig.Mode = 'Active'` on the Lambda `CfnFunction` (L1 construct).
+- **IAM permissions:** `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on resource `'*'`, added to the shared execution role.
 - **No sampling rules:** X-Ray sampling rules are not managed by this BB. The default sampling rule (1 req/sec + 5% of additional requests) applies unless configured externally.
 
-When `enabled: false` is passed, no CDK mutations occur — the Lambda runs without active tracing.
+When `enabled: false` is passed, `enableTracing()` is not called — no CDK mutations occur and the compute runs without active tracing.
 
 ## Mock Implementation
 

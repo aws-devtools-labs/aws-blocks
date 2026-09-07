@@ -42,6 +42,11 @@ class TestCompute extends Compute {
 	setEnv(key: string, value: string): void {
 		this.fn.addEnvironment(key, value);
 	}
+
+	// Observability hooks are irrelevant to config-registry tests — stub them so
+	// this test double satisfies Compute's abstract contract.
+	protected applyLogRetention(): void {}
+	protected applyTracing(): void {}
 }
 
 function stackWithCompute(id: string): {

@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 /**
  * CDK-side tests for CronJob: compute targeting + synth-time schedule validation.
  *
@@ -15,18 +18,15 @@
  * compute), so an invalid expression fails fast rather than minutes into the
  * deploy.
  */
-import { test, describe, before, after } from 'node:test';
-import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
+import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { Compute } from '@aws-blocks/core/cdk/internal';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import * as cdk from 'aws-cdk-lib';
+import { Template } from 'aws-cdk-lib/assertions';
 import { CronJob, CronJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
@@ -34,6 +34,9 @@ const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as
 /** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
 class FakeCompute extends Compute {
 	setEnv(_key: string, _value: string): void {}
+	// Observability hooks are irrelevant here — stub them to satisfy Compute.
+	protected applyLogRetention(): void {}
+	protected applyTracing(): void {}
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -126,9 +129,7 @@ describe('CronJob synth-time schedule validation', () => {
 
 	test('accepts a valid schedule and synthesizes a CfnSchedule', async () => {
 		const stack = await makeStack('CronValid');
-		assert.doesNotThrow(
-			() => new CronJob(stack, 'job', { schedule: 'rate(5 minutes)', handler: async () => {} }),
-		);
+		assert.doesNotThrow(() => new CronJob(stack, 'job', { schedule: 'rate(5 minutes)', handler: async () => {} }));
 		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 1);
 	});
 

@@ -4,101 +4,74 @@
 /**
  * CDK-side tests for Logger.
  *
- * Logger no longer creates its own `/aws/lambda/<fn>` LogGroup (which would
- * collide with the framework-owned handler log group). Instead it reconfigures
- * retention on the single shared group — but ONLY when an explicit
- * `options.retention` is given, so a bare Logger can't clobber a retention set
- * by another Logger or the stack default.
+ * Logger owns no infrastructure. It targets the compute it resolves to: it
+ * always calls `enableLogging()` (presence, so the per-compute Dashboard renders
+ * the logs section) and, only when an explicit `retention` is given, forwards it
+ * via `setLogRetention()`. The compute owns the actual log group and the
+ * last-wins + conflict-warning policy (covered in `@aws-blocks/bb-lambda-compute`
+ * tests), so here we assert only that Logger delegates correctly.
  */
-import { test, describe } from 'node:test';
+import assert from 'node:assert';
+import { describe, test } from 'node:test';
+import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { Logger } from './index.cdk.js';
 
+/** Records the observability-seam calls bb-logger makes on its resolved compute. */
+class SpyCompute {
+	/** One entry per `enableLogging` call — the retention arg it was passed. */
+	enableLoggingArgs: Array<number | undefined> = [];
+	enableLogging(retentionDays?: number): void {
+		this.enableLoggingArgs.push(retentionDays);
+	}
+}
+
+// Minimal owner. Logger resolves `this.compute` to the root's `_defaultCompute`
+// and reads `defaults`/`id` off the ambient stack; a spy compute is enough to
+// observe the delegation without provisioning a real log group.
 class StubBlocksStack extends cdk.Stack {
-	public readonly handler: cdk.aws_lambda.Function;
-	public readonly handlerLogGroup: cdk.aws_logs.ILogGroup;
 	public readonly id: string;
 	public readonly defaults: BlocksDefaults;
+	public readonly _defaultCompute = new SpyCompute();
 	constructor(scope: Construct, id: string, defaults: BlocksDefaults) {
 		super(scope, id);
 		this.id = id;
 		this.defaults = defaults;
 		(globalThis as any).CURRENT_BLOCKS_STACK = this;
-		// The framework-owned handler log group carries defaults.logRetention,
-		// exactly as setupBlocksInfra creates it.
-		this.handlerLogGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
-			retention: defaults.logRetention,
-			removalPolicy: cdk.RemovalPolicy.DESTROY,
-		});
-		this.handler = new cdk.aws_lambda.Function(this, 'StubHandler', {
-			runtime: DEFAULT_NODE_RUNTIME,
-			handler: 'index.handler',
-			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
-			logGroup: this.handlerLogGroup,
-		});
 	}
 }
 
-function setup(defaults: BlocksDefaults = BlocksPresets.production): { stack: StubBlocksStack; parent: Scope } {
+function setup(defaults: BlocksDefaults = BlocksPresets.production): { parent: Scope; compute: SpyCompute } {
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'LoggerStack', defaults);
 	const parent = new Scope('app');
-	return { stack, parent };
+	return { parent, compute: stack._defaultCompute };
 }
 
-describe('Logger CDK retention', () => {
-	test('does not create a second (colliding) log group', () => {
-		const { stack, parent } = setup();
+describe('Logger CDK (delegates observability to the compute)', () => {
+	test('marks logging on the resolved compute with no retention when none is given', () => {
+		const { parent, compute } = setup();
 		new Logger(parent, 'log', { level: 'info' });
-		const template = Template.fromStack(stack);
-		// Only the framework-owned handler log group exists.
-		template.resourceCountIs('AWS::Logs::LogGroup', 1);
+		assert.deepStrictEqual(compute.enableLoggingArgs, [undefined], 'enableLogging() called once, no retention');
 	});
 
-	test('a bare Logger leaves the stack-wide default retention untouched (no clobber)', () => {
-		const { stack, parent } = setup(BlocksPresets.production);
+	test('a bare Logger enables logging with no retention (no clobber of the stack default)', () => {
+		const { parent, compute } = setup();
 		new Logger(parent, 'log');
-		const template = Template.fromStack(stack);
-		// Retention is whatever setupBlocksInfra set (production → 365); Logger
-		// must not rewrite it.
-		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+		assert.deepStrictEqual(compute.enableLoggingArgs, [undefined]);
 	});
 
-	test('an explicit per-Logger retention overrides the shared group retention', () => {
-		const { stack, parent } = setup(BlocksPresets.production);
+	test('forwards an explicit retention to the compute', () => {
+		const { parent, compute } = setup();
 		new Logger(parent, 'log', { retention: 30 });
-		const template = Template.fromStack(stack);
-		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
-		// Still one group — the override mutates the shared group, not a new one.
-		template.resourceCountIs('AWS::Logs::LogGroup', 1);
+		assert.deepStrictEqual(compute.enableLoggingArgs, [30]);
 	});
 
-	test('the last explicit retention wins; a later bare Logger does not reset it', () => {
-		const { stack, parent } = setup(BlocksPresets.production);
-		new Logger(parent, 'explicit', { retention: 14 });
-		new Logger(parent, 'bare'); // must NOT clobber the 14 above
-		const template = Template.fromStack(stack);
-		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 14 });
-	});
-
-	test('two Loggers with conflicting explicit retention: last wins, with a synth warning', () => {
-		const { stack, parent } = setup(BlocksPresets.production);
+	test('two Loggers each forward their own value (compute enforces last-wins/conflict policy)', () => {
+		const { parent, compute } = setup();
 		new Logger(parent, 'first', { retention: 14 });
 		new Logger(parent, 'second', { retention: 30 });
-		const template = Template.fromStack(stack);
-		// Last explicit value wins on the shared group.
-		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
-		// …but the clobber is surfaced as a synth warning, not silent.
-		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('retention'));
-	});
-
-	test('two Loggers with the SAME explicit retention: no conflict warning', () => {
-		const { stack, parent } = setup(BlocksPresets.production);
-		new Logger(parent, 'first', { retention: 30 });
-		new Logger(parent, 'second', { retention: 30 });
-		Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('retention-conflict|overriding'));
+		assert.deepStrictEqual(compute.enableLoggingArgs, [14, 30]);
 	});
 });

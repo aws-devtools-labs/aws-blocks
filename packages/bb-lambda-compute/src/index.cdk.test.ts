@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { LambdaCompute } from './index.cdk.js';
@@ -251,13 +251,66 @@ describe('LambdaCompute handler log-group retention (defaults.logRetention)', ()
 	});
 });
 
+// enableLogging(retention) reconfigures the compute's OWN single log group (the
+// one the function writes to), enforcing last-wins + a synth warning on
+// conflict. This is the seam bb-logger drives when a Logger passes an explicit
+// retention; the compute owns whether a group already exists and the policy.
+describe('LambdaCompute enableLogging(retention)', () => {
+	test('overrides the handler group retention without spawning a second group', () => {
+		const { stack, parent } = setup('LambdaComputeSetRetention', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(30);
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+		// Still exactly one group — the override mutates the owned group.
+		template.resourceCountIs('AWS::Logs::LogGroup', 1);
+	});
+
+	test('last explicit retention wins across multiple calls', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionLastWins', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(14);
+		compute.enableLogging(30);
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+	});
+
+	test('conflicting retentions emit a synth warning (last wins, not silent)', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionConflict', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(14);
+		compute.enableLogging(30);
+		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('log retention set to 30'));
+	});
+
+	test('the same retention twice emits no conflict warning', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionSame', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging(30);
+		compute.enableLogging(30);
+		Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('log-retention-conflict|overriding'));
+	});
+
+	test('a bare enableLogging() leaves the stack-wide default retention untouched', () => {
+		const { stack, parent } = setup('LambdaComputeRetentionDefault', BlocksPresets.production);
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+		// No explicit retention → the group keeps the production default (365).
+		Template.fromStack(stack).hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 365 });
+	});
+});
+
 describe('LambdaCompute stage throttling (defaults.throttling)', () => {
 	test('production carries the 1000/2000 rate + burst default', () => {
 		const { stack, parent } = setup('LambdaComputeThrottleProd', BlocksPresets.production);
 		new LambdaCompute(parent, 'extra');
 		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
 			MethodSettings: Match.arrayWith([
-				Match.objectLike({ HttpMethod: '*', ResourcePath: '/*', ThrottlingRateLimit: 1000, ThrottlingBurstLimit: 2000 }),
+				Match.objectLike({
+					HttpMethod: '*',
+					ResourcePath: '/*',
+					ThrottlingRateLimit: 1000,
+					ThrottlingBurstLimit: 2000,
+				}),
 			]),
 		});
 	});
@@ -279,9 +332,7 @@ describe('LambdaCompute stage throttling (defaults.throttling)', () => {
 		});
 		new LambdaCompute(parent, 'extra');
 		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([
-				Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 }),
-			]),
+			MethodSettings: Match.arrayWith([Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 })]),
 		});
 	});
 });
@@ -343,5 +394,33 @@ describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
 		template.resourceCountIs('AWS::ApiGateway::Account', 1);
 		// Both stages still get access logging.
 		template.resourceCountIs('AWS::ApiGateway::Stage', 2);
+	});
+});
+
+// enableTracing routes tracing onto the resolved compute (X-Ray on its function
+// + trace-publish permission on the shared role) instead of poking a specific
+// function. (Dashboard rendering of the traces section lands with the Dashboard
+// change that builds on this.)
+describe('LambdaCompute observability', () => {
+	test('enableTracing turns on Active tracing and grants X-Ray publish on the shared role', () => {
+		const { stack, parent } = setup('LambdaComputeTracing');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+
+		const template = Template.fromStack(stack);
+		template.hasResourceProperties('AWS::Lambda::Function', {
+			TracingConfig: { Mode: 'Active' },
+		});
+		template.hasResourceProperties('AWS::IAM::Policy', {
+			PolicyDocument: {
+				Statement: Match.arrayWith([
+					Match.objectLike({
+						Action: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+						Effect: 'Allow',
+					}),
+				]),
+			},
+		});
 	});
 });
