@@ -720,6 +720,53 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash)');
 	});
 
+	// Finding #5 (LOW): refresh() RESOLVES, but with a malformed descriptor (missing
+	// connect/channel token) that fails the isRealtimeDescriptor guard. The middleware
+	// must NOT fall through and reopen with the STALE stored tokens — it treats this
+	// like a refresh failure: surface onDisconnect('error') and fall back to backoff.
+	it('refresh resolving a malformed descriptor does not open a socket with stale tokens; surfaces error + backoff', async () => {
+		// Well-formed enough to satisfy the RealtimeChannelDescriptor param type
+		// ({ __blocks, channel }), but MISSING wsUrl/connectToken/token — so the
+		// aws-middleware isRealtimeDescriptor guard rejects it. Cast-free.
+		const refresh = mock.fn(async () => ({ __blocks: 'realtime/channel' as const, channel: CHANNEL }));
+		let errorDisconnects = 0;
+		const client = hydrateClient();
+		client.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => { if (reason === 'error') errorDisconnects++; },
+			refresh,
+		});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop (onDisconnect 'error' #1) → reconnect calls refresh, which resolves malformed.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(refresh.mock.callCount(), 1, 'refresh is attempted on reconnect');
+		// The malformed descriptor was rejected BEFORE constructing a socket, so no
+		// reconnect socket exists — crucially, none opened carrying the stale tokens.
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a malformed refresh descriptor must not construct a socket with stale tokens',
+		);
+		// Surfaced (drop + malformed-refresh), not silently swallowed.
+		assert.strictEqual(
+			errorDisconnects,
+			2,
+			'onDisconnect(error) fires for the drop and again for the malformed refresh',
+		);
+
+		// Backoff was rescheduled rather than proceeding — the next tick re-attempts refresh.
+		mock.timers.tick(60_000);
+		await new Promise((r) => setImmediate(r));
+		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash, no stale-token socket)');
+	});
+
 	// PR3 guard #1 (BLOCKING): a teardown landing while refresh() is in flight
 	// must WIN the race — the awaited continuation must not reopen a zombie
 	// socket or leak a keep-alive interval once unsubscribe has torn the
