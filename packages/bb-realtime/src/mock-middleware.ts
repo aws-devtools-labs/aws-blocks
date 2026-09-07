@@ -102,8 +102,17 @@ function doConnect(wsUrl: string, isReconnect = false) {
 		const refresh = conn.refresh;
 		refresh()
 			.then((fresh) => {
+				// GUARD (BLOCKING): re-fetch the pooled connection. A teardown
+				// (unsubscribe of the last handler, or __resetConnectionsForTest) can
+				// land while refresh() is in flight. If the connection is gone, torn
+				// down, or has no subscribers, do NOT reopen: openMockSocket →
+				// getOrCreateConnection would otherwise resurrect a fresh pooled entry
+				// (tornDown unset) and re-arm timers, keeping the event loop alive and
+				// hanging `node --test` — the exact leak PR1's teardown guard fixed.
+				const c = connections.get(wsUrl);
+				if (!c || c.tornDown || c.subscriptions.size === 0) { return; }
 				if (isRealtimeDescriptor(fresh) && typeof fresh.token === 'string') {
-					conn.channelTokens.set(fresh.channel, fresh.token);
+					c.channelTokens.set(fresh.channel, fresh.token);
 				}
 				openMockSocket(wsUrl, isReconnect);
 			})

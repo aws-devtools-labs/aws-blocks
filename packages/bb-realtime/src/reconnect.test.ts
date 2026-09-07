@@ -719,6 +719,98 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 		await new Promise((r) => setImmediate(r));
 		assert.strictEqual(refresh.mock.callCount(), 2, 'refresh is retried on the next backoff tick (no crash)');
 	});
+
+	// PR3 guard #1 (BLOCKING): a teardown landing while refresh() is in flight
+	// must WIN the race — the awaited continuation must not reopen a zombie
+	// socket or leak a keep-alive interval once unsubscribe has torn the
+	// connection down.
+	it('unsubscribe during a pending refresh does not open a socket', async () => {
+		type FreshDescriptor = {
+			__blocks: 'realtime/channel';
+			channel: string;
+			wsUrl: string;
+			connectToken: string;
+			token: string;
+		};
+		let resolveRefresh: (d: FreshDescriptor) => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<FreshDescriptor>((res) => { resolveRefresh = res; }),
+		);
+		const client = hydrateClient();
+		const sub = client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the reconnect awaits refresh(); we hold the resolver so it stays
+		// pending and no socket can open yet.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(refresh.mock.callCount(), 1, 'reconnect should await refresh()');
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket may open while refresh is pending');
+
+		// Teardown lands mid-refresh.
+		sub.unsubscribe();
+
+		// The refresh now resolves — the guarded continuation must no-op.
+		resolveRefresh({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: FRESH_WS_URL,
+			connectToken: FRESH_CONNECT_TOKEN,
+			token: FRESH_CHANNEL_TOKEN,
+		});
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'no zombie socket may be constructed after unsubscribe tore the connection down',
+		);
+
+		// No keep-alive interval may have leaked: advancing past one interval must
+		// not emit a ping on the (now closed) first socket, proving the suite exits.
+		first.sent.length = 0;
+		mock.timers.tick(KEEP_ALIVE_MS + 1000);
+		assert.strictEqual(first.framesFor('ping').length, 0, 'keep-alive interval must not survive teardown');
+	});
+
+	// PR3 guard #2: a persistently REJECTING refresh must fall back to backoff and
+	// give up at MAX_RECONNECT rather than looping forever. Since refresh rejects
+	// before any `new WebSocket(...)`, no reconnect socket is ever constructed, so
+	// the socket count stays bounded and the loop terminates.
+	it('persistently rejecting refresh stops after MAX_RECONNECT', async () => {
+		const refresh = mock.fn(async (): Promise<never> => { throw new Error('mint always fails'); });
+		const client = hydrateClient();
+		const sub = client.subscribe({ onMessage: () => {}, refresh });
+		// The give-up at the cap rejects the still-pending establishment; swallow it.
+		sub.established.catch(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → each reconnect attempt calls refresh(), which rejects (async), then
+		// schedules the next backoff. Drive well past the cap, flushing the catch
+		// microtask each tick.
+		first.emitServerClose(1006);
+		for (let i = 0; i < MAX_RECONNECT + 5; i++) {
+			mock.timers.tick(60_000);
+			await new Promise((r) => setImmediate(r));
+		}
+
+		assert.strictEqual(
+			refresh.mock.callCount(),
+			MAX_RECONNECT,
+			`refresh must be attempted exactly ${MAX_RECONNECT} times, then give up (not loop forever)`,
+		);
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a persistently rejecting refresh must not construct any reconnect socket',
+		);
+	});
 });
 
 describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
@@ -776,6 +868,49 @@ describe('Mock (local-dev) middleware: token refresh on reconnect', () => {
 			resubs[0].token,
 			FRESH_TOKEN,
 			'mock resubscribe must carry the fresh token from refresh(), not the stale stored one',
+		);
+	});
+
+	// PR3 guard #3 (BLOCKING, mock): a reset landing while refresh() is in flight
+	// must not let the continuation resurrect a fresh pooled entry via
+	// openMockSocket → getOrCreateConnection (tornDown unset), which would re-arm
+	// timers and hang `node --test` — the exact leak PR1's teardown guard fixed.
+	it('reset during a pending refresh does not open a socket (mock)', async () => {
+		type MockFreshDescriptor = { __blocks: 'realtime/channel'; channel: string; wsUrl: string; token: string };
+		let resolveRefresh: (d: MockFreshDescriptor) => void = () => {};
+		const refresh = mock.fn(
+			() => new Promise<MockFreshDescriptor>((res) => { resolveRefresh = res; }),
+		);
+		const client = mockHydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: WS_URL,
+			token: 'mock-channel-token-stale',
+		});
+		assert.ok(isChannelClient(client), 'mock hydrate should return a channel client');
+		client.subscribe({ onMessage: () => {}, refresh });
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Drop → the mock reconnect awaits refresh(); hold it pending.
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+		assert.strictEqual(refresh.mock.callCount(), 1, 'mock reconnect should await refresh()');
+		assert.strictEqual(FakeWebSocket.instances.length, 1, 'no socket may open while refresh is pending');
+
+		// Teardown lands mid-refresh: clears + detaches the pooled connection.
+		mockReset();
+
+		// The guarded continuation must no-op instead of resurrecting the pool.
+		resolveRefresh({ __blocks: 'realtime/channel', channel: CHANNEL, wsUrl: WS_URL, token: 'mock-channel-token-fresh' });
+		await new Promise((r) => setImmediate(r));
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'openMockSocket must not run after reset — no zombie socket or resurrected pool entry',
 		);
 	});
 });
