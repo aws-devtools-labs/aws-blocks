@@ -111,13 +111,19 @@ function nextId(): string {
 }
 
 /**
- * Last-resort window (ms) after a reconnect. If neither the terminal chunk on the
- * resubscribed channel nor the getConversation re-sync resolves the turn within this
- * bound, useChat stops the spinner and surfaces an error so the UI can never hang
- * forever. This is a backstop, NOT the primary recovery (which is the done chunk /
- * DB re-sync). Kept generous so it only fires when both of those genuinely fail.
+ * Last-resort window (ms) of COMPLETE SILENCE after a reconnect. The failsafe is a
+ * backstop, NOT the primary recovery (which is the done chunk / DB re-sync). It is
+ * re-armed by every received chunk (see handleChunk), so it only fires after a window
+ * in which NO chunk at all arrived — not during a long tool-call/thinking gap or a slow
+ * post-reconnect stream. On the multi-hour turns this feature targets, such gaps are
+ * normal.
+ *
+ * This MUST comfortably exceed the Realtime transport's idle-timeout + reconnect budget
+ * (API Gateway WebSocket: 10-min idle timeout, 2h max connection duration), otherwise a
+ * perfectly normal idle → disconnect → reconnect cycle would trip a spurious 'Timed out'.
+ * 11 minutes sits just above the 10-min idle timeout with margin for the reconnect.
  */
-const RECONNECT_FAILSAFE_MS = 30_000;
+const RECONNECT_FAILSAFE_MS = 660_000;
 
 /**
  * Create a chat instance for managing agent conversations.
@@ -153,6 +159,18 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	let assistantText = '';
 	/** Timer id for the post-reconnect failsafe (see RECONNECT_FAILSAFE_MS). null when disarmed. */
 	let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * True once destroy() has run. Guards async callbacks (the reconnect re-sync and the
+	 * failsafe timer) so no onLoadingChange/onError/onMessagesChange fires after teardown.
+	 */
+	let destroyed = false;
+	/**
+	 * Whether onError has already been reported for the CURRENT turn. A send-path
+	 * rejection (e.g. a 504) may mean the turn actually STARTED server-side, so a later
+	 * `error` chunk can arrive for the same turn; this guard reports onError at most once
+	 * per turn. Reset when a new turn begins (sendMessage / respondToInterrupt).
+	 */
+	let errorReported = false;
 
 	/** Cancel the post-reconnect failsafe timer if one is armed. */
 	function clearFailsafe() {
@@ -171,6 +189,8 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		clearFailsafe();
 		failsafeTimer = setTimeout(() => {
 			failsafeTimer = null;
+			// Teardown guard: destroy() may have run while the timer was pending.
+			if (destroyed) return;
 			if (loading) {
 				loading = false;
 				options.onLoadingChange?.(loading);
@@ -194,15 +214,31 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	}
 
 	/**
+	 * Surface an error to the consumer at most ONCE per turn (see errorReported). A 504
+	 * send-rejection and a later `error` chunk can both describe the same failed turn; we
+	 * must not fire onError twice for it.
+	 */
+	function reportError(message: string) {
+		if (errorReported) return;
+		errorReported = true;
+		options.onError?.(message);
+	}
+
+	/**
 	 * Shared handler for a rejected send path (api.sendMessage / api.resume): reset
 	 * loading, drop the dangling empty placeholder, and surface the error via onError
 	 * (swallowed, matching how the `error` chunk is handled — no re-throw).
+	 *
+	 * NOTE: a 504 (or similar) rejection often means the turn DID start server-side, so a
+	 * later done/delta/error chunk may still arrive for it. Recovery of such a started
+	 * turn happens via the normal reconnect → getConversation re-sync path; here we only
+	 * guard against a DOUBLE onError (reportError) if that later chunk is an `error`.
 	 */
 	function handleSendFailure(err: unknown) {
 		loading = false;
 		options.onLoadingChange?.(loading);
 		removeEmptyAssistantPlaceholder();
-		options.onError?.(err instanceof Error ? err.message : String(err));
+		reportError(err instanceof Error ? err.message : String(err));
 	}
 
 	/**
@@ -218,42 +254,84 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	 * Also re-checks pending interrupts, which may have been raised during the gap.
 	 */
 	async function handleReconnect() {
+		if (destroyed) return;
 		if (!conversationId) return;
+		// Capture the in-flight turn identity BEFORE the await. getConversation reads
+		// DynamoDB, which is eventually consistent, so this read can (a) resolve LATE —
+		// after a terminal chunk already resolved the turn on the resubscribed channel —
+		// and (b) reflect a STALE view whose last row is a previous turn's assistant
+		// message. Both are guarded against once the read resolves, using this snapshot.
+		const turnAtStart = assistantId;
 		try {
 			const { messages: history } = await options.api.getConversation(conversationId);
+			if (destroyed) return;
 			const last = history[history.length - 1];
 			const turnComplete = !!last && last.role === 'assistant' && !!last.content;
 
-			if (turnComplete && assistantId) {
-				// Turn finished while we were disconnected; the terminal `done` chunk was lost.
-				// Replace the in-flight assistant bubble with the persisted final text.
-				assistantText = last.content;
-				messages = messages.map(m => (m.id === assistantId ? { ...m, content: last.content } : m));
-				options.onMessagesChange?.(messages);
-				assistantId = null;
-				clearFailsafe();
-				loading = false;
-				options.onLoadingChange?.(loading);
-			} else if (loading) {
-				// Turn still running server-side — do NOT clear loading. Wait for the terminal
-				// chunk on the resubscribed channel, guarded by the bounded failsafe.
+			// Turn-identity + liveness guard: only act on the persisted read if the turn we
+			// captured is STILL the in-flight one and we're still loading. If a terminal
+			// chunk (done/error) resolved the turn while getConversation was in flight, it
+			// already nulled assistantId (and set the authoritative final text), so we must
+			// ignore this — possibly stale — DB result rather than clobber a live outcome.
+			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
+
+			if (turnComplete && stillSameInFlightTurn) {
+				// Adopt the persisted final text ONLY if it extends what we've already
+				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
+				// persisted text). If it does NOT extend our stream, `last` is a stale /
+				// previous-turn assistant row that does not continue the current bubble;
+				// adopting it would overwrite live text with prior-turn content and halt
+				// streaming, so we treat the turn as still running and wait for the terminal
+				// chunk instead.
+				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
+				if (extendsStream) {
+					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
+					// Replace the in-flight assistant bubble with the persisted final text.
+					assistantText = last.content;
+					messages = messages.map(m => (m.id === assistantId ? { ...m, content: last.content } : m));
+					options.onMessagesChange?.(messages);
+					assistantId = null;
+					clearFailsafe();
+					loading = false;
+					options.onLoadingChange?.(loading);
+				} else {
+					// Snapshot doesn't extend our stream — keep waiting for the terminal chunk,
+					// guarded by the bounded failsafe.
+					armFailsafe();
+				}
+			} else if (stillSameInFlightTurn) {
+				// Turn still running server-side (no final assistant message yet) — do NOT clear
+				// loading. Wait for the terminal chunk on the resubscribed channel, guarded by
+				// the bounded failsafe.
 				armFailsafe();
 			}
+			// else: the turn was already resolved by a terminal chunk during the await
+			// (assistantId nulled / loading cleared) — nothing to adopt.
 
 			// A pending interrupt may have been raised while the socket was down.
 			if (options.api.getPendingInterrupts) {
 				const { interrupts } = await options.api.getPendingInterrupts(conversationId);
+				if (destroyed) return;
 				if (interrupts.length) options.onInterrupt?.(interrupts);
 			}
 		} catch (err) {
-			// Re-sync itself failed. Surface it, and keep the spinner honest via the failsafe.
-			if (loading) armFailsafe();
+			if (destroyed) return;
+			// Re-sync itself failed. Surface it via onError only. We deliberately do NOT also
+			// arm the failsafe here (NIT): the channel is resubscribed, so a terminal chunk can
+			// still resolve the turn; arming would fire a second, misleading 'Timed out' error
+			// ~11min later on top of the error we just surfaced.
 			options.onError?.(err instanceof Error ? err.message : String(err));
 		}
 	}
 
 	/** Handle a chunk from the Realtime subscription. */
 	function handleChunk(chunk: AgentStreamChunk) {
+		// Liveness: ANY received chunk proves the stream is alive. If the post-reconnect
+		// failsafe is armed, re-arm it (reset its countdown) so it only ever fires after a
+		// window of COMPLETE silence — not during a long tool-call/thinking gap or a slow
+		// post-reconnect stream. Terminal chunks below still clearFailsafe outright.
+		if (failsafeTimer !== null) armFailsafe();
+
 		options.onChunk?.(chunk);
 
 		if (chunk.type === 'text-delta' && chunk.text && assistantId) {
@@ -267,16 +345,25 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				messages = messages.map(m => m.id === assistantId ? { ...m, content: chunk.text! } : m);
 				options.onMessagesChange?.(messages);
 			}
+			// Null assistantId so it is a reliable in-flight signal: a later-resolving
+			// reconnect re-sync must not adopt a (possibly stale) DB snapshot over this
+			// already-resolved turn (see handleReconnect's turn-identity guard).
+			assistantId = null;
 			clearFailsafe();
 			loading = false;
 			options.onLoadingChange?.(loading);
 		}
 
 		if (chunk.type === 'error') {
+			// Null assistantId (mirroring done/interrupt) so a later reconnect re-sync treats
+			// the turn as resolved and won't clobber the bubble with a stale getConversation read.
+			assistantId = null;
 			clearFailsafe();
 			loading = false;
 			options.onLoadingChange?.(loading);
-			options.onError?.(chunk.error ?? 'Unknown error');
+			// Report at most once per turn: a prior send-rejection may have already surfaced
+			// onError for this same (server-started) turn.
+			reportError(chunk.error ?? 'Unknown error');
 		}
 
 		if (chunk.type === 'interrupt' && chunk.interrupts) {
@@ -300,20 +387,27 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	async function ensureSubscribed(channelId: string) {
 		if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
 
-		// Pass an options object (not a bare handler) so the transport can notify us on
-		// reconnect — we re-sync authoritative state from the DB in handleReconnect().
-		const subscribeOptions: ChatSubscribeOptions = {
-			onMessage: handleChunk,
-			onReconnect: () => { void handleReconnect(); },
-		};
+		// Pass a CALLABLE that ALSO carries the ChatSubscribeOptions properties. This keeps
+		// both shapes of the `subscribe` union valid at runtime: an old adapter that invokes
+		// arg2 as a bare chunk handler still works (it's a function that dispatches to
+		// handleChunk), and a new adapter that reads arg2.onMessage/onReconnect/onDisconnect
+		// still works (those are attached as properties). Cast-free: the intersection type
+		// is assignable to either member of the ChatChunkHandler | ChatSubscribeOptions union.
+		const subscribeArg: ChatChunkHandler & ChatSubscribeOptions = Object.assign(
+			(chunk: AgentStreamChunk) => { handleChunk(chunk); },
+			{
+				onMessage: handleChunk,
+				onReconnect: () => { void handleReconnect(); },
+			},
+		);
 
-		const sub = await options.subscribe(channelId, subscribeOptions);
+		const sub = await options.subscribe(channelId, subscribeArg);
 		try {
 			await sub.established;
 		} catch (err) {
 			console.warn('Subscription failed, retrying with fresh token:', err);
 			sub.unsubscribe();
-			const retrySub = await options.subscribe(channelId, subscribeOptions);
+			const retrySub = await options.subscribe(channelId, subscribeArg);
 			await retrySub.established;
 			activeSub = retrySub;
 			return;
@@ -343,6 +437,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			assistantText = '';
 			messages = [...messages, userMsg, aMsg];
 			options.onMessagesChange?.(messages);
+			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
 
@@ -374,6 +469,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			}
 			assistantText = '';
 			options.onMessagesChange?.(messages);
+			errorReported = false; // fresh turn — allow one onError report
 			loading = true;
 			options.onLoadingChange?.(loading);
 			if (!options.api.resume) throw new Error('respondToInterrupt requires api.resume to be configured');
@@ -417,6 +513,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 		},
 
 		destroy() {
+			destroyed = true;
 			clearFailsafe();
 			if (activeSub) { activeSub.unsubscribe(); activeSub = null; }
 		},
