@@ -3,14 +3,17 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "backend",
-  "blocksTemplateDescription": "Backend-only — Blocks API + CDK, no frontend (bring your own client)",
+  "blocksTemplateDescription": "Backend-only \u2014 Blocks API + CDK, no frontend (bring your own client)",
   "engines": {
     "node": ">=22.0.0"
   },
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
+    "prebuild": "blocks-generate-client",
     "dev": "tsx watch aws-blocks/scripts/server.ts",
     "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
