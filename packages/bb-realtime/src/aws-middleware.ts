@@ -91,6 +91,14 @@ interface Connection {
 	 * tornDown/subscriptions.size guard.
 	 */
 	intentionalClose: boolean;
+	/**
+	 * Set on a deliberate teardown (last-channel unsubscribe, terminal close,
+	 * give-up at the retry cap, or `__resetConnectionsForTest`). A torn-down
+	 * connection must never reopen: the awaited `refresh()` continuation in
+	 * `openSocket` checks this so a teardown landing mid-refresh cannot reopen a
+	 * zombie socket or leak a keep-alive interval. Mirrors mock-middleware.ts.
+	 */
+	tornDown?: boolean;
 }
 
 const connections = new Map<string, Connection>();
@@ -118,6 +126,7 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		reconnectTimer: null,
 		resubscribePending: null,
 		intentionalClose: false,
+		tornDown: false,
 	};
 	connections.set(wsUrl, conn);
 
@@ -136,9 +145,18 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor): void {
 	if (!isRealtimeDescriptor(fresh)) { return; }
 	if (fresh.wsUrl !== conn.wsUrl) {
-		connections.delete(conn.wsUrl);
-		conn.wsUrl = fresh.wsUrl;
-		connections.set(conn.wsUrl, conn);
+		// Pool re-key collision guard: if another live connection already owns the
+		// fresh endpoint key, do NOT blind-overwrite it — that would evict a
+		// distinct live connection from the pool. Keep our current key instead and
+		// still refresh the tokens below. (Rare in practice; the API Gateway
+		// endpoint is stable across refreshes, so fresh.wsUrl normally equals the
+		// current one and this branch is not taken at all.)
+		const existing = connections.get(fresh.wsUrl);
+		if (!existing || existing === conn) {
+			connections.delete(conn.wsUrl);
+			conn.wsUrl = fresh.wsUrl;
+			connections.set(conn.wsUrl, conn);
+		}
 	}
 	conn.connectToken = fresh.connectToken;
 	conn.channelTokens.set(fresh.channel, fresh.token);
@@ -166,7 +184,20 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 		const refresh = conn.refresh;
 		refresh()
 			.then((fresh) => {
+				// GUARD (BLOCKING): a teardown (unsubscribe of the last channel,
+				// terminal close, give-up at the cap, or __resetConnectionsForTest)
+				// can land while refresh() is in flight. If it did, do NOT reopen a
+				// zombie socket or leak a keep-alive interval. A connection is live
+				// only if it is still the pooled owner of its key, has not been
+				// flagged tornDown, and still has subscribers. Check BEFORE
+				// applyFreshDescriptor because that call may re-key the pool (and
+				// would otherwise resurrect a reset connection under a fresh key).
+				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
 				applyFreshDescriptor(conn, fresh);
+				// Re-check AFTER applyFreshDescriptor: it may have re-keyed the pool,
+				// and (defensively) a synchronous handler could have torn the
+				// connection down. Only construct the socket if still live + pooled.
+				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
 				constructSocket(conn, true);
 			})
 			.catch(() => {
@@ -352,6 +383,9 @@ function constructSocket(conn: Connection, isReconnect: boolean): void {
 				pending.forEach(p => { p.reject(err); });
 			}
 			conn.pendingEstablished.clear();
+			// Terminal close: mark torn down so a refresh() continuation in flight
+			// (from a prior reconnect attempt) cannot reopen this dead connection.
+			conn.tornDown = true;
 			connections.delete(wsUrl);
 		} else {
 			scheduleReconnect(conn);
@@ -376,8 +410,11 @@ function scheduleReconnect(conn: Connection): void {
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
 		conn.connected = false;
 		conn.resubscribePending = null;
-		// Deliberate teardown of a now-subscriber-less connection: mark intentional.
+		// Deliberate teardown of a now-subscriber-less connection: mark intentional
+		// (so a late onclose is classified terminal) and torn down (so any refresh()
+		// continuation still in flight no-ops instead of reopening this dead conn).
 		conn.intentionalClose = true;
+		conn.tornDown = true;
 		connections.delete(conn.wsUrl);
 		return;
 	}
@@ -403,8 +440,10 @@ function scheduleReconnect(conn: Connection): void {
 		conn.resubscribePending = null;
 		// Give-up is a deliberate, client-side teardown: mark the close intentional
 		// so any late onclose on the dead socket is classified terminal, not
-		// reconnected.
+		// reconnected, and mark it torn down so a refresh() continuation still
+		// awaiting cannot reopen after we have given up and dropped the pool entry.
 		conn.intentionalClose = true;
+		conn.tornDown = true;
 		connections.delete(conn.wsUrl);
 		return;
 	}
@@ -423,6 +462,10 @@ function scheduleReconnect(conn: Connection): void {
  */
 export function __resetConnectionsForTest(): void {
 	for (const conn of connections.values()) {
+		// Flag torn down FIRST so any refresh() continuation still awaiting (from a
+		// scheduled reconnect) no-ops instead of resurrecting this connection into
+		// the pool and re-arming timers that would keep `node --test` alive.
+		conn.tornDown = true;
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
 		// Belt (intentionalClose) and suspenders (detach onclose below): mark this
@@ -515,7 +558,10 @@ function subscribeTo(
 				// rather than reconnecting. Detaching onclose below is the primary
 				// guard; intentionalClose makes the intent explicit and no longer
 				// relies on the old {1000,1005} close-code check to avoid reconnect.
+				// Also mark torn down so a refresh() continuation still in flight
+				// (from a prior reconnect) cannot reopen after this deliberate close.
 				conn.intentionalClose = true;
+				conn.tornDown = true;
 				conn.ws.onmessage = null;
 				conn.ws.onerror = null;
 				conn.ws.onclose = null;
