@@ -95,6 +95,15 @@ class FakeWebSocket {
 		this.onmessage?.({ data: JSON.stringify(payload) });
 	}
 
+	/**
+	 * Simulate a low-level socket error (`onerror`). The browser fires this
+	 * immediately before an abnormal `onclose`, so tests use it to prove the
+	 * error path does not prematurely reject an in-flight established promise.
+	 */
+	emitError(): void {
+		this.onerror?.({});
+	}
+
 	/** Parsed frames this socket has sent whose `action` matches. */
 	framesFor(action: string): Record<string, unknown>[] {
 		const out: Record<string, unknown>[] = [];
@@ -124,6 +133,23 @@ function hydrateClient(): RealtimeChannelClient {
 	return client;
 }
 
+/**
+ * Hydrate an additional channel on the SAME connection. Reusing `WS_URL` and
+ * `CONNECT_TOKEN` means it multiplexes onto the one shared socket, so a test can
+ * drive a reconnect where one channel resubscribes cleanly and another fails.
+ */
+function hydrateClientFor(channel: string, token: string): RealtimeChannelClient {
+	const client = hydrate({
+		__blocks: 'realtime/channel',
+		channel,
+		wsUrl: WS_URL,
+		connectToken: CONNECT_TOKEN,
+		token,
+	});
+	assert.ok(isChannelClient(client), 'hydrate should return a channel client');
+	return client;
+}
+
 describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 	beforeEach(() => {
 		FakeWebSocket.reset();
@@ -143,7 +169,12 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 
 	it('production middleware auto-reconnects after an unexpected close (1006) with a retry cap', () => {
 		const client = hydrateClient();
-		client.subscribe(() => {});
+		// Giving up at the cap now rejects any in-flight established promise (see
+		// the dedicated give-up test below); swallow it so the deliberate
+		// rejection is not surfaced as an unhandled rejection. The socket-count
+		// assertions below are unchanged.
+		const sub = client.subscribe(() => {});
+		sub.established.catch(() => {});
 
 		const first = FakeWebSocket.instances[0];
 		assert.ok(first, 'a socket should be created on subscribe');
@@ -258,5 +289,179 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 
 		const pings = second.framesFor('ping');
 		assert.ok(pings.length >= 1, 'keep-alive ping should be sent on the reconnected socket');
+	});
+
+	// (a) BLOCKING 1: onclose must not self-clear disconnectHandlers on the
+	// reconnect branch, or only the first drop would ever notify.
+	it('onDisconnect fires on every drop, not just the first', () => {
+		const client = hydrateClient();
+		let disconnects = 0;
+		const options: SubscribeOptions = {
+			onMessage: () => {},
+			onDisconnect: () => {
+				disconnects++;
+			},
+		};
+		client.subscribe(options);
+
+		// Cycle 1: open, confirm, drop.
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		// Cycle 2: the reconnect socket opens, confirms (resetting the cap), drops.
+		const s1 = FakeWebSocket.instances[1];
+		assert.ok(s1, 'middleware should reconnect after the first drop');
+		s1.emitOpen();
+		s1.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+		s1.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		assert.ok(FakeWebSocket.instances[2], 'middleware should reconnect after the second drop too');
+		assert.strictEqual(
+			disconnects,
+			2,
+			'onDisconnect must fire once per drop — disconnectHandlers must survive a reconnecting close',
+		);
+	});
+
+	// (b) SUGGESTION 5: a flapping socket that opens then immediately closes must
+	// still exhaust the cap. This only holds if reconnectAttempts is NOT reset on
+	// every onopen (it is reset only once a resubscribe is confirmed).
+	it('flapping socket (open then immediate close) still hits the retry cap', () => {
+		const client = hydrateClient();
+		// Give-up at the cap rejects the pending establishment; swallow it.
+		const sub = client.subscribe(() => {});
+		sub.established.catch(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		// Every reconnect socket OPENS (the flap) and then immediately drops again
+		// without ever confirming a resubscribe, so the counter never resets.
+		for (let i = 0; i < MAX_RECONNECT + 5; i++) {
+			const latest = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+			latest.emitOpen();
+			latest.emitServerClose(1006);
+			mock.timers.tick(60_000);
+		}
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1 + MAX_RECONNECT,
+			`a flapping socket must still stop after ${MAX_RECONNECT} reconnects, saw ${FakeWebSocket.instances.length}`,
+		);
+	});
+
+	// (c) BLOCKING 2: a stale-token resubscribe error must be surfaced (not
+	// silently dropped) AND must not wedge onReconnect for the channels that DID
+	// resubscribe successfully.
+	it('stale token on resubscribe surfaces error and does not wedge onReconnect', () => {
+		const clientA = hydrateClientFor('my-app-rt/chat/room-A', 'token-A');
+		const clientB = hydrateClientFor('my-app-rt/chat/room-B', 'token-B');
+		const events: string[] = [];
+		// Callbacks live on channel A (the one that resubscribes cleanly). Because
+		// disconnect/reconnect handlers are connection-level, A's onDisconnect also
+		// observes the surfaced failure of channel B.
+		clientA.subscribe({
+			onMessage: () => {},
+			onDisconnect: (reason) => {
+				events.push(`disc:${reason}`);
+			},
+			onReconnect: () => {
+				events.push('reconn');
+			},
+		});
+		clientB.subscribe(() => {});
+
+		const s0 = FakeWebSocket.instances[0];
+		s0.emitOpen();
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
+		s0.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-B' });
+
+		// Drop → reconnect. The drop itself notifies onDisconnect once.
+		s0.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const s1 = FakeWebSocket.instances[1];
+		assert.ok(s1, 'middleware should reconnect');
+		s1.emitOpen();
+		// Channel A resubscribes cleanly; channel B's replayed token is stale.
+		s1.emitMessage({ type: 'subscribe_success', channel: 'my-app-rt/chat/room-A' });
+		s1.emitMessage({ type: 'error', channel: 'my-app-rt/chat/room-B', message: 'token expired' });
+
+		// The stale-token failure is surfaced via onDisconnect (in addition to the
+		// original drop), so it is not lost silently.
+		assert.strictEqual(
+			events.filter((e) => e === 'disc:error').length,
+			2,
+			'expected one disconnect for the drop and one for the surfaced stale-token error',
+		);
+		// onReconnect still fires: resubscribePending drained even though one
+		// channel failed, so the successful channel is not wedged.
+		assert.ok(events.includes('reconn'), 'onReconnect must still fire for the channel that resubscribed');
+		assert.strictEqual(events[events.length - 1], 'reconn', 'onReconnect fires only after the set fully drains');
+	});
+
+	// (d) BLOCKING 3: onerror must not reject an in-flight established promise —
+	// a transient drop should be resolved by the resubscribe on reconnect.
+	it('onerror during a transient drop does not reject an in-flight established promise', async () => {
+		const client = hydrateClient();
+		const sub = client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		// established is still pending (no subscribe_success yet). onerror fires,
+		// then the socket drops abnormally — neither may reject the promise.
+		first.emitError();
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'middleware should reconnect after the transient drop');
+		second.emitOpen();
+		second.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// If onerror had rejected, this await would throw and fail the test.
+		await sub.established;
+	});
+
+	// (e) BLOCKING 4: giving up at the cap must delete the pool entry so a later
+	// subscribe() rebuilds a fresh connection instead of reusing a dead one.
+	it('giving up at MAX_RECONNECT removes the connection so a later subscribe rebuilds', () => {
+		const client = hydrateClient();
+		const sub = client.subscribe(() => {});
+		sub.established.catch(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitServerClose(1006);
+		mock.timers.tick(60_000);
+
+		// Exhaust the cap (reconnect sockets never confirm), then a couple more.
+		for (let i = 0; i < MAX_RECONNECT + 2; i++) {
+			const latest = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+			latest.emitServerClose(1006);
+			mock.timers.tick(60_000);
+		}
+
+		const afterGiveUp = FakeWebSocket.instances.length;
+		assert.strictEqual(afterGiveUp, 1 + MAX_RECONNECT, 'should have stopped opening sockets at the cap');
+
+		// A brand-new subscribe must build a fresh connection (new socket),
+		// proving the wedged pool entry was removed.
+		const client2 = hydrateClient();
+		const sub2 = client2.subscribe(() => {});
+		sub2.established.catch(() => {});
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			afterGiveUp + 1,
+			'a later subscribe must rebuild a fresh connection after give-up',
+		);
 	});
 });
