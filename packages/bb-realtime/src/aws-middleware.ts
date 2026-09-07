@@ -141,9 +141,15 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
  * descriptor changes the endpoint URL, re-key the pool entry so lookups and
  * teardown keyed by `wsUrl` still resolve this connection. Narrowed via the
  * existing descriptor type guard so the access is cast-free.
+ *
+ * Returns `true` when a well-formed descriptor was applied, `false` when the
+ * descriptor is MALFORMED (fails `isRealtimeDescriptor` — e.g. missing
+ * connect/channel token). On `false` the stored tokens are left untouched, and
+ * the caller MUST NOT proceed to open a socket with the stale tokens; it should
+ * treat this like a refresh failure (see `openSocket`).
  */
-function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor): void {
-	if (!isRealtimeDescriptor(fresh)) { return; }
+function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor): boolean {
+	if (!isRealtimeDescriptor(fresh)) { return false; }
 	if (fresh.wsUrl !== conn.wsUrl) {
 		// Pool re-key collision guard: if another live connection already owns the
 		// fresh endpoint key, do NOT blind-overwrite it — that would evict a
@@ -160,6 +166,7 @@ function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor
 	}
 	conn.connectToken = fresh.connectToken;
 	conn.channelTokens.set(fresh.channel, fresh.token);
+	return true;
 }
 
 /**
@@ -176,8 +183,10 @@ function applyFreshDescriptor(conn: Connection, fresh: RealtimeChannelDescriptor
  * so the socket opens with the fresh connect token in its URL and resubscribes
  * with the fresh channel token. If `refresh` throws, do not crash: surface via
  * the existing onDisconnect('error') path and fall back to `scheduleReconnect`
- * backoff. With no `refresh` fn, replay the stored wsUrl + token exactly as
- * before (back-compat).
+ * backoff. Likewise, if `refresh` RESOLVES but with a malformed descriptor
+ * (applyFreshDescriptor returns false), do not reopen with the stale tokens —
+ * take the same onDisconnect('error') + backoff path. With no `refresh` fn,
+ * replay the stored wsUrl + token exactly as before (back-compat).
  */
 function openSocket(conn: Connection, isReconnect: boolean): void {
 	if (isReconnect && conn.refresh) {
@@ -193,7 +202,19 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 				// applyFreshDescriptor because that call may re-key the pool (and
 				// would otherwise resurrect a reset connection under a fresh key).
 				if (conn.tornDown || connections.get(conn.wsUrl) !== conn || conn.subscriptions.size === 0) { return; }
-				applyFreshDescriptor(conn, fresh);
+				// If the freshly-minted descriptor is MALFORMED (fails the
+				// isRealtimeDescriptor guard — e.g. missing connect/channel token),
+				// applyFreshDescriptor leaves the stored tokens untouched and returns
+				// false. Do NOT fall through to constructSocket: that would reopen with
+				// the STALE tokens the refresh was meant to replace, which fail at
+				// $connect / subscribe once expired. Treat it exactly like a refresh
+				// failure — surface onDisconnect('error') and fall back to backoff so a
+				// later attempt can re-mint (mirrors the .catch below).
+				if (!applyFreshDescriptor(conn, fresh)) {
+					conn.disconnectHandlers.forEach(h => { try { h('error'); } catch {} });
+					scheduleReconnect(conn);
+					return;
+				}
 				// Re-check AFTER applyFreshDescriptor: it may have re-keyed the pool,
 				// and (defensively) a synchronous handler could have torn the
 				// connection down. Only construct the socket if still live + pooled.
