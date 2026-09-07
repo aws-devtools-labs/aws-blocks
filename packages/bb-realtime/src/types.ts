@@ -58,7 +58,7 @@ export interface RealtimeSubscription {
 	unsubscribe(): void;
 	/** Resolves when the server confirms the subscription. Rejects on auth failure. */
 	established: Promise<void>;
-	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. */
+	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. Implemented as a live getter, so it always reflects the current socket: after a transparent reconnect it returns the fresh socket rather than the closed one captured at subscribe time. */
 	connection?: WebSocket;
 }
 
