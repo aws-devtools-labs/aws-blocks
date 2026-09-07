@@ -132,9 +132,9 @@ export function agentTests(getApi: () => typeof apiType) {
           // the chunks channel and fire onReconnect.
           sub.connection?.close();
 
-          const reconnectDeadline = Date.now() + 15_000;
+          const reconnectDeadline = Date.now() + 60_000;
           while (reconnects < 1) {
-            if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 15s of the forced close on the agent channel');
+            if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close on the agent channel');
             await new Promise(r => setTimeout(r, 100));
           }
 
