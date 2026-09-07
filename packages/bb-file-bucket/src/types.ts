@@ -54,7 +54,17 @@ export interface FileBucketOptions {
 	 * the rule. Ignored by the mock and browser runtimes (no AWS resource).
 	 */
 	noncurrentVersionExpirationDays?: number;
-	/** Wrap an existing S3 bucket instead of creating one. */
+	/**
+	 * Wrap an existing S3 bucket instead of creating one.
+	 *
+	 * @remarks
+	 * When set, FileBucket binds to the supplied bucket as-is and returns early:
+	 * NONE of the secure defaults this construct normally applies are applied to
+	 * an externally-supplied bucket — not `enforceSSL`, versioning + noncurrent-version
+	 * expiration, server access logging, `blockPublicAccess`, encryption, nor the
+	 * wildcard-CORS guard. You own that bucket's security posture; configure these
+	 * on the bucket itself (or via its own CDK construct) before wrapping it.
+	 */
 	bucket?: ExternalBucketRef;
 	/**
 	 * CDK removal behavior for the underlying S3 bucket. When omitted,
@@ -211,6 +221,11 @@ export interface LifecycleRule {
 	transitionToIaDays?: number;
 }
 
+/**
+ * A reference to a pre-existing S3 bucket to wrap via {@link FileBucketOptions.bucket}
+ * (see that field's remarks — a wrapped bucket does not receive FileBucket's
+ * secure defaults). Produced by `FileBucket.fromExisting(bucketName)`.
+ */
 export interface ExternalBucketRef {
 	readonly __brand: 'ExternalBucketRef';
 	readonly bucketName: string;

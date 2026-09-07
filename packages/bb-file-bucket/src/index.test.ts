@@ -395,3 +395,102 @@ test('versioned:false opt-out disables versioning at runtime', async () => {
 	assert.ok(file);
 	assert.strictEqual(file.body.toString(), 'v2');
 });
+
+// ── Synth-time validation parity (mock mirrors the CDK's index.cdk.ts guards) ─
+// The mock reproduces the CDK's two synth-time guards VERBATIM so a local/unit
+// run fails the same way `cdk synth` would (mock↔cdk parity). Mirrors the
+// corresponding cases in index.cdk.test.ts.
+
+test('mock: noncurrentVersionExpirationDays of 0 throws', () => {
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { noncurrentVersionExpirationDays: 0 }),
+		(err: unknown) =>
+			err instanceof Error &&
+			/noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+			/got 0/.test(err.message),
+	);
+});
+
+test('mock: negative noncurrentVersionExpirationDays throws', () => {
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { noncurrentVersionExpirationDays: -1 }),
+		(err: unknown) =>
+			err instanceof Error &&
+			/noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+			/got -1/.test(err.message),
+	);
+});
+
+test('mock: non-integer noncurrentVersionExpirationDays throws', () => {
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { noncurrentVersionExpirationDays: 1.5 }),
+		(err: unknown) =>
+			err instanceof Error &&
+			/noncurrentVersionExpirationDays must be a positive integer/.test(err.message),
+	);
+});
+
+test('mock: noncurrentVersionExpirationDays FORMAT is validated even when versioned:false', () => {
+	// Format guard is decoupled from the `versioned` gate (matches CDK): a
+	// malformed value must fail regardless of whether versioning is on.
+	assert.throws(
+		() => new FileBucket(scope, 'uploads', { versioned: false, noncurrentVersionExpirationDays: 0 }),
+		(err: unknown) =>
+			err instanceof Error &&
+			/noncurrentVersionExpirationDays must be a positive integer/.test(err.message) &&
+			/got 0/.test(err.message),
+	);
+});
+
+test('mock: valid noncurrentVersionExpirationDays does not throw', () => {
+	assert.doesNotThrow(
+		() => new FileBucket(scope, 'uploads', { noncurrentVersionExpirationDays: 30 }),
+	);
+});
+
+test('mock: wildcard-origin CORS with a mutating method throws', () => {
+	assert.throws(
+		() =>
+			new FileBucket(scope, 'uploads', {
+				corsRules: [{ allowedOrigins: ['*'], allowedMethods: ['GET', 'PUT'] }],
+			}),
+		(err: unknown) =>
+			err instanceof Error &&
+			/\*/.test(err.message) &&
+			/PUT/.test(err.message),
+	);
+});
+
+test('mock: wildcard-origin CORS with only safe methods is allowed', () => {
+	assert.doesNotThrow(() =>
+		new FileBucket(scope, 'uploads', {
+			corsRules: [{ allowedOrigins: ['*'], allowedMethods: ['GET', 'HEAD'] }],
+		}),
+	);
+});
+
+test('mock: explicit-origin CORS with a mutating method is allowed', () => {
+	assert.doesNotThrow(() =>
+		new FileBucket(scope, 'uploads', {
+			corsRules: [{ allowedOrigins: ['https://app.example.com'], allowedMethods: ['PUT', 'POST'] }],
+		}),
+	);
+});
+
+test('mock: when both guards are tripped, the CORS guard fires first (matches CDK order)', () => {
+	// The CDK (index.cdk.ts) evaluates the CORS guard before the noncurrent
+	// check, so a config that violates BOTH must surface the CORS message — not
+	// the noncurrent one — in the mock too, keeping mock↔cdk parity.
+	assert.throws(
+		() =>
+			new FileBucket(scope, 'uploads', {
+				noncurrentVersionExpirationDays: 0,
+				corsRules: [{ allowedOrigins: ['*'], allowedMethods: ['PUT'] }],
+			}),
+		(err: unknown) =>
+			err instanceof Error &&
+			/CORS rule with wildcard origin/.test(err.message) &&
+			/PUT/.test(err.message) &&
+			!/noncurrentVersionExpirationDays/.test(err.message),
+	);
+});

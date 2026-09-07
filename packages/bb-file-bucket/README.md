@@ -190,6 +190,8 @@ const bucket = new FileBucket(scope, 'legacy', {
 });
 ```
 
+> **A wrapped bucket does not receive FileBucket's secure defaults.** When you supply `bucket`, FileBucket binds to the existing bucket as-is and returns early — none of the secure defaults it normally applies are applied: not `enforceSSL`, versioning / noncurrent-version expiration, server access logging, `blockPublicAccess`, encryption, nor the wildcard-CORS guard. You own that bucket's security posture; configure these on the bucket itself (or via its own CDK construct) before wrapping it.
+
 ### Versioned Bucket
 
 Versioning is **on by default**, so the version-aware methods (`listVersions`, `restoreVersion`, and optional `versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are available without any option. Pass `versioned: false` to opt out (which also removes the `versionId` option typings). The example below passes `versioned: true` explicitly for clarity:
