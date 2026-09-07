@@ -1,22 +1,22 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ScopeParent } from '@aws-blocks/core';
+import { registerConfig, registerDashboardFinalizer, Scope } from '@aws-blocks/core/cdk';
+import { type ComputeDashboardSection, getComputes } from '@aws-blocks/core/cdk/internal';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
-import { Scope, registerConfig } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
+import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { buildDashboardWidgets, resolveConfig } from './widgets.js';
-import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
-	ResolvedDashboardConfig,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
+	ResolvedDashboardConfig,
 } from './types.js';
 
 /**
@@ -34,21 +34,27 @@ export type {
  *
  * @example
  * ```typescript
- * // Minimal — Lambda health widgets only
+ * // Minimal — a health + logs section for every compute in the app.
  * const dashboard = new Dashboard(scope, 'dashboard');
  * ```
  *
  * @example
  * ```typescript
- * // With observability BB composition
+ * // Health + logs render for every compute automatically. A traces section
+ * // appears per compute when the app contains a Tracer (tracing is
+ * // presence-gated, enabling X-Ray on every compute). Metrics are app-wide and
+ * // passed explicitly (one section per namespace), with their configs.
+ * new Tracer(scope, 'tracer');   // → traces section on every compute
+ * const metrics = new Metrics(scope, 'metrics');
  * const dashboard = new Dashboard(scope, 'dashboard', {
- *   logger,
- *   metrics,
- *   tracer,
- *   metricConfigs: [
- *     { name: 'OrdersPlaced' },
- *     { name: 'Latency', stat: 'p99', period: 300 },
- *   ],
+ *   logs: false,   // hide the logs sections (logs are still captured)
+ *   metrics: {
+ *     metrics,
+ *     metricConfigs: [
+ *       { name: 'OrdersPlaced' },
+ *       { name: 'Latency', stat: 'p99', period: 300 },
+ *     ],
+ *   },
  * });
  * ```
  */
@@ -65,20 +71,50 @@ export class Dashboard extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
 		super(id, { parent: scope });
 
-		const functionName = this.handler.functionName;
-		// Point log widgets at the framework-owned handler log group (its name is
-		// generated, not `/aws/lambda/<fn>`), so "Recent Errors" / "Log Volume"
-		// resolve to the group the handler actually writes to.
-		const config = resolveConfig(id, options, functionName, this.fullId, this.handlerLogGroup.logGroupName);
+		const config = resolveConfig(id, options, this.fullId);
 		this.dashboardName = config.dashboardName;
 
-		const region = Stack.of(this).region;
-		const widgetRows = buildDashboardWidgets(config, functionName, region);
+		// Display toggles for the logs / traces sections. Captured here (before the
+		// finalizer runs) but applied per compute below. Default is to show both.
+		const showLogs = options?.logs !== false;
+		const showTraces = options?.traces !== false;
+		// An explicit compute list is captured now; the all-computes default is
+		// deferred to the finalizer (below) so it sees every compute in the app.
+		const explicitComputes = options?.computes;
 
-		new CwDashboard(this, 'Resource', {
-			dashboardName: config.dashboardName,
-			start: config.defaultTimeRange,
-			widgets: widgetRows,
+		// Build the widget body in a finalizer, not here. The body depends on
+		// which computes are traced (`dashboardSection` gates its traces section on
+		// each compute's tracing flag), and that flag is flipped when the app's
+		// `Tracer` is finalized during the backend-module import. This finalizer
+		// runs after that import completes, so the dashboard observes tracing
+		// regardless of the order the customer constructed things in — and its
+		// default compute list captures every compute in the app.
+		registerDashboardFinalizer(this, () => {
+			const region = Stack.of(this).region;
+			// The dashboard is organized by compute: each selected compute is a group
+			// — health always, plus logs/traces per the compute's state and this
+			// dashboard's display toggles. Default selection is every compute in the
+			// app (resolved here, at finalize, so nothing is missed). Metrics are
+			// app-wide (rendered once per namespace, after the compute groups).
+			const computes = explicitComputes ?? getComputes(this);
+			const computeSections: ComputeDashboardSection[] = computes.map((compute) => {
+				const section = compute.dashboardSection(region);
+				// Apply the dashboard-wide display toggles uniformly. `logging` is
+				// always present on the section (logs are always captured), so the
+				// `logs` toggle can suppress it; `tracing` is only present when the
+				// compute is traced, so the `traces` toggle only ever suppresses an
+				// already-present section — it never fabricates one.
+				return {
+					...section,
+					logging: showLogs ? section.logging : undefined,
+					tracing: showTraces ? section.tracing : undefined,
+				};
+			});
+			new CwDashboard(this, 'Resource', {
+				dashboardName: config.dashboardName,
+				start: config.defaultTimeRange,
+				widgets: buildDashboardWidgets(computeSections, config, region),
+			});
 		});
 
 		this.url = Fn.join('', [

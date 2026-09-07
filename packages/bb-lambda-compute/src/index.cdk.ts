@@ -2,14 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { BLOCKS_RPC_PREFIX, DEFAULT_NODE_RUNTIME, blocksNodejsBundling, ensureApiGatewayAccount } from '@aws-blocks/core/cdk';
+import {
+	BLOCKS_RPC_PREFIX,
+	blocksNodejsBundling,
+	DEFAULT_NODE_RUNTIME,
+	ensureApiGatewayAccount,
+} from '@aws-blocks/core/cdk';
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { LambdaComputeProps } from './types.js';
+import { buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './widgets.js';
 
 export type { LambdaComputeProps } from './types.js';
 
@@ -49,10 +58,10 @@ export class LambdaCompute extends Compute {
 	/** The RPC endpoint URL (`{gateway}/aws-blocks/api`). */
 	readonly apiUrl: string;
 	/**
-	 * The handler's CloudWatch log group. `bb-logger` reconfigures its retention.
-	 * Named `logGroup` (not `handlerLogGroup`) to avoid clashing with the
-	 * inherited {@link Scope.handlerLogGroup} accessor, which resolves back to
-	 * the owning stack/backend's default compute (i.e. this).
+	 * The handler's CloudWatch log group. Logs are always captured here; the
+	 * retention comes from this compute's `logRetention` prop, falling back to the
+	 * stack-wide `defaults.logRetention`. Named `logGroup` (not `handlerLogGroup`)
+	 * to avoid clashing with the inherited {@link Scope.handlerLogGroup} accessor.
 	 */
 	readonly logGroup: LogGroup;
 
@@ -61,11 +70,11 @@ export class LambdaCompute extends Compute {
 
 		// The single CloudWatch log group for the handler. Owning it (a real
 		// LogGroup passed as the function's `logGroup`) makes its retention follow
-		// the stack-wide default instead of AWS's infinite default, and gives
-		// bb-logger one group to reconfigure rather than a second, colliding one.
-		// Torn down with the stack (logs are not durable state).
+		// this compute's setting instead of AWS's infinite default. Retention is a
+		// compute-level prop (per-compute override) falling back to the stack-wide
+		// default. Torn down with the stack (logs are not durable state).
 		this.logGroup = new LogGroup(this, 'HandlerLogGroup', {
-			retention: this.defaults.logRetention,
+			retention: options?.logRetention ?? this.defaults.logRetention,
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 
@@ -180,6 +189,38 @@ export class LambdaCompute extends Compute {
 	 * app resolve different copies of this package.
 	 */
 	static isLambdaCompute(x: unknown): x is LambdaCompute {
-		return typeof x === 'object' && x !== null && (x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true;
+		return (
+			typeof x === 'object' &&
+			x !== null &&
+			(x as { [LAMBDA_COMPUTE_BRAND]?: unknown })[LAMBDA_COMPUTE_BRAND] === true
+		);
+	}
+
+	protected applyTracing(): void {
+		(this.fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
+		this.executionRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
+				resources: ['*'],
+			}),
+		);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Logs are always captured to this compute's own log group (the one wired
+		// into the function), so this is always available. Query that group's name
+		// (CDK-generated) rather than the AWS default `/aws/lambda/<fn>` name.
+		return buildLoggingWidgets(this.logGroup.logGroupName, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }

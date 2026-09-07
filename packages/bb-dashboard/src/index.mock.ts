@@ -10,16 +10,15 @@
  */
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers } from '@aws-blocks/core';
-import type { DashboardOptions } from './types.js';
 import { mountDashboardRoute } from './routes.js';
+import type { DashboardOptions } from './types.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
 	MetricConfig,
 	MetricsBBRef,
-	LoggerBBRef,
-	TracerBBRef,
+	MetricsSource,
 } from './types.js';
 
 /**
@@ -48,7 +47,12 @@ export class Dashboard {
 
 	constructor(scope: ScopeParent, id: string, options?: DashboardOptions) {
 		const title = options?.title ?? id;
-		this.fullId = 'fullId' in scope && scope.fullId ? `${scope.fullId}-${id}` : ('id' in scope && scope.id ? `${scope.id}-${id}` : id);
+		this.fullId =
+			'fullId' in scope && scope.fullId
+				? `${scope.fullId}-${id}`
+				: 'id' in scope && scope.id
+					? `${scope.id}-${id}`
+					: id;
 		this.dashboardName = (options?.dashboardName ?? this.fullId).replace(/[^A-Za-z0-9\-_]/g, '-').substring(0, 255);
 		registerSdkIdentifiers(this.fullId, { dashboardName: this.dashboardName });
 
@@ -60,11 +64,11 @@ export class Dashboard {
 
 		console.log(
 			`[Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).\n` +
-			`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
-			`📍 Local observability data:\n` +
-			`   • Logs: Check your terminal output - Logger BB writes structured JSON to stdout\n` +
-			`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
-			`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`
+				`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
+				`📍 Local observability data:\n` +
+				`   • Logs: Check your terminal output - Logger BB writes structured JSON to stdout\n` +
+				`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
+				`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`,
 		);
 	}
 }

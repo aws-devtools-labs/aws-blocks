@@ -10,7 +10,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 // ── Public types ────────────────────────────────────────────────────────────
 
 export { LoggingErrors } from './errors.js';
-export type { LogLevel, LoggingOptions, LogEntry, ChildLogger, RetentionDays } from './types.js';
+export type { LogLevel, LoggingOptions, LogEntry, ChildLogger } from './types.js';
 
 // ── Logger (AWS runtime) ──────────────────────────────────────────────────────────
 

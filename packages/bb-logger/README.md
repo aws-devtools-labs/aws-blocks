@@ -39,9 +39,10 @@ new Logger(scope: ScopeParent, id: string, options?: LoggingOptions)
 ```
 
 **Options:**
-- `level` — Minimum log level (`'debug' | 'info' | 'warn' | 'error'`). Default: `'info'`.
+- `level` — Minimum log level (`'debug' | 'info' | 'warn' | 'error'`). Default: `'info'` (or the app-wide `defaults.logLevel` baseline).
 - `defaultContext` — Fields included in every log entry.
-- `retention` — CloudWatch Logs retention (days). Creates a LogGroup when set.
+
+Log retention is not a Logger option — it is a compute-level setting (see [Retention](#retention-production) below).
 
 ### Methods
 
@@ -118,22 +119,23 @@ The logger handles edge cases gracefully:
 
 ## Retention (Production)
 
-The shared handler log group already carries the stack-wide default retention
-(`defaults.logRetention` — one week in sandbox, one year in production). Set
-`retention` only to override it for this handler:
+**Logging is always on, and retention is a compute-level setting — not a Logger
+option.** Every compute captures its handler's stdout to its own CloudWatch log
+group, which carries the stack-wide default retention (`defaults.logRetention` —
+one week in sandbox, one year in production).
+
+To override retention, set it on the **compute**, not the Logger:
 
 ```typescript
-const log = new Logger(scope, 'app', {
-  level: 'warn',
-  retention: 30,  // 30 days — overrides the stack-wide default
-});
+import { RetentionDays } from 'aws-cdk-lib/aws-logs';
+
+// LambdaCompute exposes a `logRetention` prop that overrides defaults.logRetention
+// for that compute's handler log group.
+new LambdaCompute(scope, 'api', { logRetention: RetentionDays.ONE_MONTH });
 ```
 
-Without `retention`, the stack-wide `defaults.logRetention` applies. The Logger
-reconfigures the single, framework-owned handler log group — it does not create
-a second `/aws/lambda/<fn>` group.
-
-Valid retention values: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653 days.
+A `Logger` no longer reconfigures retention — the compute owns the single,
+framework-owned handler log group.
 
 ## Local Development
 
@@ -141,7 +143,7 @@ In local dev (`npm run dev`), the Logger BB:
 - Writes structured JSON to stdout/stderr (same as production)
 - Does NOT persist logs to disk
 - Does NOT create any files in `.bb-data/`
-- `retention` option is ignored locally
+- Retention has no local effect (it is a cloud-only, compute-level setting)
 - `LOG_LEVEL` env var works the same way
 
 ## Errors
