@@ -314,11 +314,18 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					// Force a mid-stream drop of the underlying socket (guard undefined).
 					sub.connection?.close();
 
-					// Wait for the transparent reconnect + resubscribe. Fails clearly on timeout.
-					const reconnectDeadline = Date.now() + 15_000;
+					// Wait for the transparent reconnect + resubscribe. Against the REAL AWS
+					// transport this is a full round-trip after backoff: >=1s reconnect
+					// backoff -> $connect handshake -> $default Lambda (possible cold start)
+					// -> Secrets Manager token-secret fetch -> token validation -> DynamoDB
+					// put -> PostToConnection subscribe_success back to the client. That
+					// comfortably exceeds the mock's ~instant reconnect, so allow 60s here
+					// (the mock still fires onReconnect in well under a second). Fails clearly
+					// on timeout.
+					const reconnectDeadline = Date.now() + 60_000;
 					while (reconnects < 1) {
-						if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 15s of the forced close');
-						await setTimeout(100);
+						if (Date.now() > reconnectDeadline) throw new Error('onReconnect did not fire within 60s of the forced close');
+						await setTimeout(200);
 					}
 
 					// A message published AFTER the reconnect proves the resubscribe worked —
@@ -327,9 +334,9 @@ export function realtimeTests(getApi: () => typeof apiType) {
 					// does not track per-channel server confirmation), so the server may not have
 					// re-registered this subscriber on the very first publish. Retry-publishing
 					// mirrors the server-side-subscribe test's handling of the same race.
-					const c2Deadline = Date.now() + 15_000;
+					const c2Deadline = Date.now() + 30_000;
 					while (!received.some((m) => m.x === c2.x && m.y === c2.y)) {
-						if (Date.now() > c2Deadline) throw new Error('c2 not delivered after reconnect within 15s');
+						if (Date.now() > c2Deadline) throw new Error('c2 not delivered after reconnect within 30s');
 						await api.realtimePublishToChannel(channelName, c2);
 						await setTimeout(1000);
 					}
