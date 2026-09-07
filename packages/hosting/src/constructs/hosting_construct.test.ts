@@ -7,7 +7,7 @@ import { App, CfnResource, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { HostingConstruct } from './hosting_construct.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
 
@@ -3331,4 +3331,43 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
       assert.match(p, /^builds\/cc-test-3\//, `prefix ${p} is under the build id`);
     }
   });
+});
+
+// ================================================================
+// Teardown safety — CDKBucketDeployment CRs must be RETAINed
+// ================================================================
+
+void describe('HostingConstruct — teardown safety', () => {
+	afterEach(() => {
+		if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	// A BucketDeployment custom resource whose delete-time handler fails wedges
+	// the whole stack in DELETE_FAILED, orphaning the CloudFront distribution
+	// (aws-cdk#15891 / #23708). Retaining the CRs removes them from the teardown
+	// path so the stack — and its distribution — delete cleanly.
+	void it('retains every CDKBucketDeployment custom resource (SPA)', () => {
+		const staticDir = createStaticDir();
+		const stack = createStack();
+		new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(staticDir) });
+		const template = Template.fromStack(stack);
+		const deployments = template.findResources('Custom::CDKBucketDeployment');
+		const ids = Object.keys(deployments);
+		assert.ok(ids.length > 0, 'expected at least one CDKBucketDeployment');
+		for (const id of ids) {
+			assert.strictEqual(deployments[id].DeletionPolicy, 'Retain', `${id} must be DeletionPolicy: Retain`);
+		}
+	});
+
+	void it('retains every CDKBucketDeployment custom resource (SSR)', () => {
+		const staticDir = createStaticDir();
+		const bundleDir = createBundleDir();
+		const stack = createStack();
+		new HostingConstruct(stack, 'Hosting', { manifest: ssrManifest(staticDir, bundleDir) });
+		const template = Template.fromStack(stack);
+		const deployments = template.findResources('Custom::CDKBucketDeployment');
+		for (const id of Object.keys(deployments)) {
+			assert.strictEqual(deployments[id].DeletionPolicy, 'Retain', `${id} must be DeletionPolicy: Retain`);
+		}
+	});
 });

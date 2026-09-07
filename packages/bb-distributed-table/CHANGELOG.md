@@ -1,5 +1,54 @@
 # @aws-blocks/bb-distributed-table
 
+## 0.1.6
+
+### Patch Changes
+
+- 08ab129: `DistributedTable`: make production DynamoDB tables secure by default, and add options to tune it.
+  
+  Previously every table this block provisioned shipped with Point-in-Time Recovery disabled, deletion protection off, no explicit SSE-KMS, and CDK's default removal policy — so a stray `cdk destroy` could permanently and unrecoverably delete customer data, and at-rest data used an AWS-owned key with no CloudTrail auditability.
+  
+  Durability posture now comes from the stack-wide **`BlocksDefaults`** (see `BlocksPresets` in `@aws-blocks/core/cdk`): a `production` stack retains + protects + backs up its tables, a `sandbox` stack is disposable. So on a production deploy a table defaults to:
+  
+  - **Point-in-Time Recovery** enabled (`defaults.pointInTimeRecovery`) — 35-day continuous backups
+  - **Deletion protection** enabled (`defaults.deletionProtection`)
+  - **`RemovalPolicy.RETAIN`** (`defaults.removalPolicy`) — stack deletion orphans rather than destroys the table
+  - **SSE-KMS** with the AWS-managed `aws/dynamodb` key (auditable, no per-key charge)
+  
+  Under the `sandbox` preset PITR, deletion protection, and RETAIN all flip off/`DESTROY`, so throwaway stacks stay cheap and `sandbox:destroy` tears down in one command. (The block no longer reads the `sandboxMode` context for durability — that posture flows through the stack `defaults`.)
+  
+  Every default is overridable per table:
+  
+  - `protection` (`'disposable' | 'retained' | 'locked'`) — one knob spanning removal policy + deletion protection, so the contradictory "protect + destroy" state can't be expressed. When set it wins over the stack `defaults`.
+  - `pointInTimeRecovery` (`boolean | { retentionDays: number }`) — overrides `defaults.pointInTimeRecovery` for this table. `true` enables PITR with the default 35-day window, `false` disables it, and `{ retentionDays: n }` (1–35) pins a shorter window to trim backup cost. Window and on/off are one field, so "days set but PITR off" can't be expressed.
+  - `encryption` (`'aws-managed' | 'customer-managed'`, or `DistributedTable.fromKmsKey(arn)` to share an existing customer-managed key across tables instead of provisioning one CMK each).
+  
+  Tables bound via `fromExisting()` are unaffected, and now emit a synth-time warning if durability/encryption options are passed alongside them (they're ignored). An unrecognized `protection`/`encryption` value, or an out-of-range `pointInTimeRecovery.retentionDays`, also warns at synth rather than silently falling back.
+  
+  > **Behavior change on next production deploy of an existing app:** the table will gain PITR, deletion protection, an SSE-KMS specification, and a `Retain` deletion policy (from the `production` preset). These are in-place updates (no table replacement). Because deletion protection becomes enabled, a future `cdk destroy` of a prod stack will refuse to delete the table until you relax it (`protection: 'disposable'`/`'retained'`). And because the removal policy is now `Retain`, deleting the stack orphans the table — redeploying the same app then fails with `Table already exists` until the orphaned table is removed or imported.
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-logger@0.1.5
+
 ## 0.1.5
 
 ### Patch Changes

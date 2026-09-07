@@ -8,12 +8,23 @@ Design document for Logger. For usage, see [README.md](./README.md).
 
 ## Infrastructure (CDK)
 
-The CDK construct optionally creates a CloudWatch Logs LogGroup:
+The framework owns a single CloudWatch Logs LogGroup for the shared handler
+Lambda (created by the `BlocksStack`/`BlocksBackend` with retention from the
+stack-wide `defaults.logRetention`). The Logger construct **reconfigures that
+group's retention** rather than creating its own:
 
-- **When `retention` is set:** Creates a LogGroup with the specified retention policy and `RemovalPolicy.DESTROY` for clean stack teardown.
-- **When `retention` is omitted:** No LogGroup is created — Lambda's auto-created log group applies (logs never expire).
-- **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when `options.level` is configured. Multiple Logger BBs can coexist with different levels via constructor options.
-- **LogGroup name:** `/aws/lambda/${handler.functionName}` (matches Lambda's default naming).
+- **Retention:** Resolved as `options.retention ?? scope.defaults.logRetention`
+  and applied to the shared handler log group via the L1 escape hatch
+  (`CfnLogGroup.retentionInDays`). An explicit per-Logger `retention` wins over
+  the stack-wide default; both target the one group.
+- **When `retention` is omitted:** The group keeps the stack-wide
+  `defaults.logRetention` already applied by the BlocksStack/BlocksBackend.
+- **No second LogGroup:** Logger deliberately does not create a
+  `/aws/lambda/${handler.functionName}` group of its own — that would collide
+  with the framework-owned group on the log-group name.
+- **Log level env var:** Sets `LOG_LEVEL` on the shared Lambda handler when
+  `options.level` is configured. Multiple Logger BBs can coexist with different
+  levels via constructor options.
 
 ## Serialization Format
 
