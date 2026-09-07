@@ -177,45 +177,162 @@ export function isManagedValue(v: unknown): v is ManagedValue {
 // provides one: markers encode to a tagged plain object and decode back into real
 // branded markers.
 //
-// Note: only `kind` + `key` are transported (the locator identity). A marker's
-// optional `schema` is not serializable and is intentionally dropped; re-declare
-// the schema on the far side if the runtime JSON-parse behavior is needed there.
+// The wire form is *versioned* (a `v` field) and self-describing (a namespaced
+// tag), so producers and consumers on different package versions fail predictably
+// rather than silently misreading each other: `decodeManagedValue` throws a typed
+// `ManagedValueCodecError` on an unknown version/kind or a malformed value, and the
+// reviver leaves anything that is not an exact wire value untouched (never throws).
+//
+// A marker's optional `schema` object is not serializable, so it is not transported.
+// What IS transported is the schema's *operational* consequence — a `json` bit — so
+// a schema-bearing marker round-trips without silently changing runtime behavior:
+// the far side still emits the synth-time JSON-parse flag and parses the stored
+// value. Deep re-validation still needs the schema re-declared on the far side (the
+// runtime getter is parse-only regardless — see `secret-runtime`).
 
 /** Stable tag identifying the JSON-transport form of a {@link ManagedValue}. */
 export const MANAGED_VALUE_JSON_TAG = '$aws-blocks/hosting.ManagedValue' as const;
 
+/**
+ * Current version of the {@link ManagedValueJSON} wire protocol. It is embedded in
+ * every encoded value; a decoder rejects versions it does not understand rather
+ * than guessing, so this public cross-build format can evolve safely. Bump this
+ * (and widen the decoder) only for a backward-incompatible wire change.
+ */
+export const MANAGED_VALUE_JSON_VERSION = 1 as const;
+
 /** Plain, JSON-safe representation of a {@link ManagedValue} marker. */
 export interface ManagedValueJSON {
-	readonly [MANAGED_VALUE_JSON_TAG]: { readonly kind: ValueKind; readonly key: string };
+	readonly [MANAGED_VALUE_JSON_TAG]: {
+		/** Wire protocol version. See {@link MANAGED_VALUE_JSON_VERSION}. */
+		readonly v: typeof MANAGED_VALUE_JSON_VERSION;
+		readonly kind: ValueKind;
+		readonly key: string;
+		/**
+		 * Present and `true` iff the source marker declared a `schema`. The schema
+		 * object itself is not serializable and is not transported; this bit carries
+		 * its *operational* consequence — the runtime JSON-parse behavior — so a
+		 * schema-bearing marker round-trips without silently degrading (see the codec
+		 * note above and {@link decodeManagedValue}).
+		 */
+		readonly json?: true;
+	};
+}
+
+/**
+ * Thrown by {@link decodeManagedValue} when a value is not a valid, supported
+ * {@link ManagedValueJSON} wire form — missing/foreign tag, unsupported protocol
+ * version, unknown kind, invalid key, or a stray malformed shape. A typed error (vs.
+ * a raw `TypeError`) lets callers distinguish "incompatible/garbled wire data" from
+ * other failures.
+ */
+export class ManagedValueCodecError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ManagedValueCodecError';
+	}
+}
+
+/** Validated wire payload — the inner object under {@link MANAGED_VALUE_JSON_TAG}. */
+interface WirePayload {
+	readonly kind: ValueKind;
+	readonly key: string;
+	readonly json?: true;
+}
+
+/**
+ * Single, exhaustive validator shared by {@link isManagedValueJSON} (boolean) and
+ * {@link decodeManagedValue} (throws). Because the guard delegates here, the reviver
+ * only ever hands `decodeManagedValue` values that already validated, so the reviver
+ * never throws on malformed data — it leaves it untouched.
+ */
+function readWirePayload(v: unknown): { ok: true; payload: WirePayload } | { ok: false; reason: string } {
+	if (typeof v !== 'object' || v === null) return { ok: false, reason: 'value is not an object' };
+	// Require the EXACT wire shape: the tag is the object's only own key. A plain
+	// object that merely happens to also carry the tag (a collision) plus sibling
+	// fields is NOT a wire value — reviving it would silently drop those siblings —
+	// so reject it and leave it untouched.
+	const ownKeys = Object.keys(v as object);
+	if (ownKeys.length !== 1 || ownKeys[0] !== MANAGED_VALUE_JSON_TAG) {
+		return { ok: false, reason: `object is not exactly a single ${MANAGED_VALUE_JSON_TAG} wire value` };
+	}
+	const inner = (v as Record<string, unknown>)[MANAGED_VALUE_JSON_TAG];
+	if (typeof inner !== 'object' || inner === null) return { ok: false, reason: 'tag payload is not an object' };
+	const p = inner as Record<string, unknown>;
+	if (p.v !== MANAGED_VALUE_JSON_VERSION) {
+		return {
+			ok: false,
+			reason: `unsupported wire version ${JSON.stringify(p.v)} (this build understands v${MANAGED_VALUE_JSON_VERSION})`,
+		};
+	}
+	if (p.kind !== 'secret' && p.kind !== 'config') {
+		return { ok: false, reason: `unknown kind ${JSON.stringify(p.kind)} (expected 'secret' or 'config')` };
+	}
+	if (typeof p.key !== 'string' || !KEY_PATTERN.test(p.key)) {
+		return { ok: false, reason: `invalid key ${JSON.stringify(p.key)}` };
+	}
+	if (p.json !== undefined && p.json !== true) {
+		return { ok: false, reason: `invalid json flag ${JSON.stringify(p.json)} (expected true or absent)` };
+	}
+	return { ok: true, payload: { kind: p.kind, key: p.key, ...(p.json === true ? { json: true } : {}) } };
 }
 
 /** Type guard: a value produced by {@link encodeManagedValue} (the JSON form). */
 export function isManagedValueJSON(v: unknown): v is ManagedValueJSON {
-	if (typeof v !== 'object' || v === null) return false;
-	// Cast to the JSON payload shape (not the branded `ManagedValue`) — this is the
-	// wire form being validated, before it's revived into a real marker.
-	const inner = (v as Record<string, unknown>)[MANAGED_VALUE_JSON_TAG] as
-		| { kind?: unknown; key?: unknown }
-		| null
-		| undefined;
-	return (
-		typeof inner === 'object' &&
-		inner !== null &&
-		(inner.kind === 'secret' || inner.kind === 'config') &&
-		typeof inner.key === 'string'
-	);
+	return readWirePayload(v).ok;
 }
 
 /** Encode a marker into a JSON-safe tagged object that survives `JSON.stringify`. */
 export function encodeManagedValue(v: ManagedValue): ManagedValueJSON {
-	return { [MANAGED_VALUE_JSON_TAG]: { kind: v.kind, key: v.key } };
+	return {
+		[MANAGED_VALUE_JSON_TAG]: {
+			v: MANAGED_VALUE_JSON_VERSION,
+			kind: v.kind,
+			key: v.key,
+			// Transport the schema's operational bit (not the un-serializable schema).
+			...(v.schema ? { json: true } : {}),
+		},
+	};
 }
 
-/** Decode a tagged object (see {@link encodeManagedValue}) back into a branded marker. */
-export function decodeManagedValue(v: ManagedValueJSON): ManagedValue {
-	const { kind, key } = v[MANAGED_VALUE_JSON_TAG];
-	return kind === 'secret' ? secret(key) : config(key);
+/**
+ * Decode a wire value (see {@link encodeManagedValue}) back into a branded marker.
+ *
+ * Accepts `unknown` and validates exhaustively: throws {@link ManagedValueCodecError}
+ * on an unsupported version, unknown kind, invalid key, or any other malformed shape.
+ * When the wire value's `json` bit is set, the returned marker carries a passthrough
+ * schema so the far side re-emits the runtime JSON-parse flag — preserving the
+ * origin's runtime behavior (deep re-validation still needs the real schema
+ * re-declared; the runtime getter is parse-only either way).
+ */
+export function decodeManagedValue(v: unknown): ManagedValue {
+	const result = readWirePayload(v);
+	if (!result.ok) {
+		throw new ManagedValueCodecError(
+			`decodeManagedValue: not a valid ${MANAGED_VALUE_JSON_TAG} wire value — ${result.reason}.`,
+		);
+	}
+	const { kind, key, json } = result.payload;
+	const options: ManagedValueOptions = json ? { schema: JSON_PASSTHROUGH_SCHEMA } : {};
+	return kind === 'secret' ? secret(key, options) : config(key, options);
 }
+
+/**
+ * Sentinel Standard Schema attached to a marker revived from a wire value whose
+ * `json` bit was set. The origin's real schema is not serializable and does not
+ * cross the boundary, and the runtime getter never deep-validates (it is parse-only
+ * — see `secret-runtime`'s `finalizeValue`). This passthrough therefore reproduces
+ * exactly the operational effect of "a schema was declared": synth emits the
+ * per-key JSON-parse flag, so the stored value is `JSON.parse`d on read as at the
+ * origin. It is a valid, callable Standard Schema (returns its input unchanged).
+ */
+const JSON_PASSTHROUGH_SCHEMA: StandardSchemaV1<unknown> = {
+	'~standard': {
+		version: 1,
+		vendor: '@aws-blocks/hosting',
+		validate: (value: unknown) => ({ value }),
+	},
+};
 
 /**
  * A `JSON.stringify` replacer that encodes any {@link ManagedValue} markers it

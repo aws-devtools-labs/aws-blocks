@@ -13,9 +13,17 @@ containing markers across a JSON boundary (e.g. serializing per-stage config int
 build environment variable and reading it back in a later phase) now has a lossless
 round-trip: `encodeManagedValue`/`decodeManagedValue`, the `managedValueReplacer` /
 `managedValueReviver` for use with `JSON.stringify`/`JSON.parse`, plus
-`isManagedValueJSON`, `ManagedValueJSON`, and `MANAGED_VALUE_JSON_TAG`. Only the
-`kind` + `key` locator identity is transported; a marker's optional `schema` is not
-serializable and is intentionally dropped.
+`isManagedValueJSON`, `ManagedValueJSON`, `MANAGED_VALUE_JSON_TAG`,
+`MANAGED_VALUE_JSON_VERSION`, and the typed `ManagedValueCodecError`. The wire form
+is a versioned, cross-build compatibility boundary: `decodeManagedValue` accepts
+`unknown` and validates exhaustively — throwing `ManagedValueCodecError` on an
+unsupported version, unknown kind, or malformed value — while the reviver leaves
+anything that is not an exact wire value untouched (a tagged object carrying extra
+fields is not mistaken for a marker, so no data is silently dropped). A marker's
+`schema` object is not serializable and is not transported, but its operational bit
+is, so a schema-bearing marker round-trips **without silently changing runtime
+behavior** (the far side still JSON-parses the stored value); deep re-validation
+still requires re-declaring the schema on the far side.
 
 **`@aws-blocks/pipeline` — `postStage` hook.** New optional `postStage` prop on
 `PipelineProps`. It is invoked once per stage with the stage, its config, and the
