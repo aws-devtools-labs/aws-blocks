@@ -3,7 +3,7 @@
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, ApiError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -79,8 +79,8 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists. Serializes to HTTP 409 (Conflict), retriable.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable.
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: import('./index.mock.js').PutOptions<T>): Promise<void> {
@@ -120,6 +120,21 @@ export class KVStore<T = string> extends Scope {
 				sized.name = KVStoreErrors.ItemTooLarge;
 				throw sized;
 			}
+			// A failed conditional write (ifNotExists / ifValueEquals) is a
+			// Conflict, not an InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 so
+			// the JSON-RPC serializer emits code 409 instead of 500. Preserve the
+			// name (== KVStoreErrors.ConditionalCheckFailed) so isBlocksError()
+			// keeps matching, keep the driver error as `cause` (server-side), and
+			// flag it retriable (the caller can re-read and retry). Matches the
+			// mock path's `conditionalConflict()`.
+			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
+				throw new ApiError(err.message, 409, {
+					name: KVStoreErrors.ConditionalCheckFailed,
+					cause: err,
+					retriable: true,
+				});
+			}
 			throw err;
 		}
 	}
@@ -129,8 +144,8 @@ export class KVStore<T = string> extends Scope {
 	 *
 	 * @param key - The key to delete.
 	 * @param conditions - Optional delete conditions.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifExists` is true and the key does not exist. Serializes to HTTP 409 (Conflict), retriable.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable.
 	 */
 	async delete(key: string, conditions?: import('./index.mock.js').ConditionalDeleteOptions<T>): Promise<void> {
 		const command: any = {
@@ -147,7 +162,23 @@ export class KVStore<T = string> extends Scope {
 			command.ExpressionAttributeValues = { ':expected': JSON.stringify(conditions.ifValueEquals) };
 		}
 
-		await this.docClient.send(new DeleteCommand(command));
+		try {
+			await this.docClient.send(new DeleteCommand(command));
+		} catch (err: unknown) {
+			// A failed conditional delete (ifExists / ifValueEquals) is a Conflict,
+			// not an InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 (see
+			// the put path above). Preserves the name for isBlocksError(), keeps
+			// the driver error as `cause`, and flags it retriable.
+			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
+				throw new ApiError(err.message, 409, {
+					name: KVStoreErrors.ConditionalCheckFailed,
+					cause: err,
+					retriable: true,
+				});
+			}
+			throw err;
+		}
 	}
 
 	/**

@@ -3,7 +3,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { DatabaseErrors, wrapError } from './errors.js';
+import { ApiError } from '@aws-blocks/core';
+import { DatabaseErrors, wrapError, serializationConflict } from './errors.js';
+
+test('serializationConflict builds a 409 ApiError preserving name + retriable', () => {
+  const cause = Object.assign(new Error('could not serialize access due to read/write dependencies'), { code: '40001' });
+  const e = serializationConflict(cause);
+  assert.ok(e instanceof ApiError, 'expected an ApiError');
+  assert.strictEqual(e.status, 409);
+  assert.strictEqual(e.name, DatabaseErrors.SerializationFailure);
+  assert.strictEqual(e.retriable, true);
+  assert.strictEqual(e.message, 'could not serialize access due to read/write dependencies');
+});
 
 test('DatabaseErrors has all expected keys', () => {
   assert.strictEqual(DatabaseErrors.QueryFailed, 'QueryFailedException');

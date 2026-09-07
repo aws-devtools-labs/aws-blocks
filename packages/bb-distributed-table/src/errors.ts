@@ -3,6 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { ApiError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -98,6 +99,24 @@ export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
 	return err;
+}
+
+/**
+ * @internal Build the 409 ApiError for an optimistic-concurrency /
+ * conditional-write conflict. Maps to HTTP 409 (Conflict) so the JSON-RPC
+ * serializer emits code 409 instead of a generic 500, preserves the
+ * `ConditionalCheckFailed` name so `isBlocksError()` keeps matching on both
+ * server and client, and flags the conflict retriable (the caller can re-read
+ * and retry). Shared by the mock and AWS runtime so both produce an identically
+ * shaped 409; on AWS the caught DynamoDB `ConditionalCheckFailedException` is
+ * passed as `cause` (kept server-side by ApiError).
+ */
+export function conditionalCheckFailed(cause?: unknown): ApiError {
+	return new ApiError('The conditional request failed', 409, {
+		name: DistributedTableErrors.ConditionalCheckFailed,
+		cause,
+		retriable: true,
+	});
 }
 
 /**

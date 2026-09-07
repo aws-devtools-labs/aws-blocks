@@ -4,7 +4,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 
 // Clean mock data between tests to avoid cross-contamination
@@ -95,6 +95,41 @@ test('delete with ifValueEquals throws when value differs', async () => {
 	await assert.rejects(
 		() => store.delete('key1', { ifValueEquals: 'wrong' }),
 		(err: Error) => err.name === KVStoreErrors.ConditionalCheckFailed,
+	);
+});
+
+// ── OCC conflicts map to HTTP 409 (Conflict), not 500 ───────────────────────
+// A conditional-write conflict must serialize to JSON-RPC code 409 so callers
+// see a Conflict, not an InternalServerError. The mock must throw an ApiError
+// (status 409) that still preserves the ConditionalCheckFailed name and flags
+// the conflict as retriable, matching the aws-runtime path.
+
+test('put ifNotExists conflict is an ApiError with status 409', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, true);
+			return true;
+		},
+	);
+});
+
+test('delete ifExists conflict is an ApiError with status 409', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await assert.rejects(
+		() => store.delete('missing', { ifExists: true }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, true);
+			return true;
+		},
 	);
 });
 

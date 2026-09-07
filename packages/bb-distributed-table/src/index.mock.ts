@@ -38,7 +38,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ export class DistributedTable<
 		const keyStr = this.serializeKey(item as any);
 
 		if (options?.ifNotExists && this.data.has(keyStr)) {
-			throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
+			throw conditionalCheckFailed();
 		}
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals);
@@ -188,7 +188,7 @@ export class DistributedTable<
 		const keyStr = this.serializeKey(key);
 
 		if (options?.ifExists && !this.data.has(keyStr)) {
-			throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
+			throw conditionalCheckFailed();
 		}
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals);
@@ -350,11 +350,11 @@ export class DistributedTable<
 
 		const existing = this.data.get(keyStr);
 		if (!existing) {
-			throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
+			throw conditionalCheckFailed();
 		}
 		for (const [field, value] of entries) {
 			if (!deepEqual((existing as any)[field], value)) {
-				throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
+				throw conditionalCheckFailed();
 			}
 		}
 	}

@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ApiError } from '@aws-blocks/core';
 import {
   translateDsqlError,
   DistributedDatabaseErrors,
@@ -13,6 +14,21 @@ import {
   PG_UNIQUE_VIOLATION,
   PG_CONNECTION_EXCEPTION_CLASS,
 } from './errors.js';
+
+test('translateDsqlError: serialization failure (40001) → ApiError status 409, retriable', () => {
+  const err = Object.assign(new Error('conflict'), { code: PG_SERIALIZATION_FAILURE });
+  assert.throws(
+    () => translateDsqlError(err),
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.equal(e.status, 409);
+      assert.equal(e.name, DistributedDatabaseErrors.SerializationFailure);
+      assert.equal(e.retriable, true);
+      assert.equal(e.message, 'conflict');
+      return true;
+    }
+  );
+});
 
 test('translateDsqlError: serialization failure (40001) → SerializationFailure', () => {
   const err = Object.assign(new Error('conflict'), { code: PG_SERIALIZATION_FAILURE });

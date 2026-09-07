@@ -78,13 +78,13 @@ await store.delete('temp', { ifExists: true });
 await store.delete('lock', { ifValueEquals: expectedVal });
 ```
 
-All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`.
+All condition failures throw with `error.name === KVStoreErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500) and are flagged retriable, so `error.status === 409` on the client and `isBlocksError` still matches by name.
 
 ### Error Handling
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifValueEquals` condition failed. Serializes to HTTP **409 (Conflict)**, retriable. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value failed the configured `schema` validation. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | The serialized item exceeds the 400 KB DynamoDB per-item size limit. (In the AWS layer, DynamoDB raises a generic `ValidationException`; KVStore re-maps the size-specific case to this name.) |
 

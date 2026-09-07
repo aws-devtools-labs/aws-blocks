@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
 // Error name constant — matches KVStoreErrors.ConditionalCheckFailed.
@@ -165,6 +165,38 @@ export function kvStoreTests(getApi: () => typeof apiType) {
           await api.kvDelete(`kv-absent-${Date.now().toString(36)}`, { ifValueEquals: 'anything' });
           assert.fail('Expected error');
         } catch (e) { assertConditionalCheckFailed(e); }
+      });
+    });
+
+    // OCC conflicts must serialize to JSON-RPC code 409 (Conflict) over the
+    // wire — reconstructed client-side as an ApiError with status 409 — not a
+    // generic 500. The error name is preserved so isBlocksError still matches.
+    describe('OCC conflicts map to HTTP 409', () => {
+      test('put ifNotExists conflict returns status 409 over the wire', async () => {
+        const api = getApi();
+        const key = `kv-409-${Date.now().toString(36)}`;
+        await api.kvPut(key, 'original');
+        try {
+          await api.kvPut(key, 'dup', { ifNotExists: true });
+          assert.fail('Expected a conflict error');
+        } catch (e) {
+          assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+          assert.strictEqual(e.status, 409, 'OCC conflict must be 409, not 500');
+          assertConditionalCheckFailed(e);
+        }
+        await api.kvDelete(key);
+      });
+
+      test('delete ifExists conflict returns status 409 over the wire', async () => {
+        const api = getApi();
+        try {
+          await api.kvDelete(`kv-absent-409-${Date.now().toString(36)}`, { ifExists: true });
+          assert.fail('Expected a conflict error');
+        } catch (e) {
+          assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+          assert.strictEqual(e.status, 409, 'OCC conflict must be 409, not 500');
+          assertConditionalCheckFailed(e);
+        }
       });
     });
 

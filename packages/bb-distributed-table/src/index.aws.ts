@@ -47,7 +47,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -129,6 +129,16 @@ export class DistributedTable<
 		try {
 			await this.docClient.send(new PutCommand(command));
 		} catch (err: unknown) {
+			// A failed conditional write (ifNotExists / ifFieldEquals) is a
+			// Conflict, not an InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 so the
+			// JSON-RPC serializer emits code 409 instead of 500. Name is preserved
+			// for isBlocksError(), the driver error is kept as `cause`, and the
+			// conflict is flagged retriable. Matches the mock path. Other errors
+			// (e.g. oversized items) still flow through remapItemTooLarge.
+			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(err);
+			}
 			throw remapItemTooLarge(err);
 		}
 	}
@@ -143,7 +153,18 @@ export class DistributedTable<
 			this.applyFieldEqualsCondition(command, options.ifFieldEquals);
 		}
 
-		await this.docClient.send(new DeleteCommand(command));
+		try {
+			await this.docClient.send(new DeleteCommand(command));
+		} catch (err: unknown) {
+			// A failed conditional delete (ifExists / ifFieldEquals) is a Conflict,
+			// not an InternalServerError: map DynamoDB's raw
+			// ConditionalCheckFailedException to an ApiError with status 409 (see
+			// the put path above). Matches the mock path.
+			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
+				throw conditionalCheckFailed(err);
+			}
+			throw err;
+		}
 	}
 
 	/**
