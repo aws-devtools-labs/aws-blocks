@@ -324,6 +324,13 @@ export async function generateSpec(
 		for (const [methodName, methodFn] of Object.entries(methodMap)) {
 			if (typeof methodFn !== 'function') continue;
 
+			const qualifiedName = `${routingName}.${methodName}`;
+			// Prefer the namespace-qualified TS types; fall back to the bare method
+			// name for entries the extractor couldn't attribute to a namespace.
+			// Qualified keys stop two namespaces that share a method name (e.g.
+			// widgets.create / subscriptions.create) from cross-assigning schemas.
+			const tsInfo = tsTypes.get(qualifiedName) ?? tsTypes.get(methodName);
+
 			// `@blocksSkipCodegen` is a JSDoc tag the customer puts on a method
 			// they want callable from the generated TS client (Proxy-based,
 			// doesn't enumerate) but absent from the OpenRPC spec — so native
@@ -334,9 +341,8 @@ export async function generateSpec(
 			// type-resolution errors and silently empty its Map — we always
 			// want the JSDoc tag to be honored, so the AST-only scan acts as
 			// a safety net.
-			if (tsTypes.get(methodName)?.skipCodegen || skipCodegenNames.has(methodName)) continue;
+			if (tsInfo?.skipCodegen || skipCodegenNames.has(methodName)) continue;
 
-			const qualifiedName = `${routingName}.${methodName}`;
 			const resultName = capitalize(methodName) + 'Result';
 			const paramNames = extractParamNames(methodFn);
 			const fnSource = methodFn.toString();
@@ -380,7 +386,6 @@ export async function generateSpec(
 				}));
 			} else {
 				// No Zod schema — fall back to TypeScript AST types
-				const tsInfo = tsTypes.get(methodName);
 				if (tsInfo) {
 					params = tsInfo.params.map((p) => ({
 						name: p.name,
@@ -397,8 +402,7 @@ export async function generateSpec(
 				}
 			}
 
-			// Return type: Zod doesn't cover this yet, so use TS types
-			const tsInfo = tsTypes.get(methodName);
+			// Return type: Zod doesn't cover this yet, so use TS types (tsInfo resolved above)
 			const rawResultSchema = tsInfo?.returnType && tsInfo.returnType.type !== 'unknown'
 				? tsInfo.returnType
 				: { type: 'unknown' };

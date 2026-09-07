@@ -197,7 +197,7 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 			const fnName = node.expression;
 			if (ts.isIdentifier(fnName) && fnName.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
 				const handlerArg = node.arguments[node.arguments.length - 1];
-				extractMethodsFromHandler(handlerArg, checker, sourceFile!, result);
+				extractMethodsFromHandler(handlerArg, checker, sourceFile!, result, enclosingBindingName(node));
 			}
 		}
 		ts.forEachChild(node, visit);
@@ -221,7 +221,7 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 			// For `auth.createApi()`, this resolves through the method's return type
 			// to the `AsyncAPI<T>` type that ApiNamespace returns.
 			const initType = checker.getTypeAtLocation(decl.initializer);
-			extractMethodsFromResolvedType(initType, checker, result);
+			extractMethodsFromResolvedType(initType, checker, result, decl.name.text);
 		}
 	});
 
@@ -249,6 +249,7 @@ function extractMethodsFromHandler(
 	checker: ts.TypeChecker,
 	sourceFile: ts.SourceFile,
 	result: Map<string, MethodTypeInfo>,
+	namespaceName?: string,
 ): void {
 	let objectLiteral: ts.ObjectLiteralExpression | undefined;
 
@@ -280,9 +281,33 @@ function extractMethodsFromHandler(
 		if (ts.isMethodDeclaration(prop) && prop.name && ts.isIdentifier(prop.name)) {
 			const methodName = prop.name.text;
 			const info = extractMethodTypeInfo(prop, checker, sourceFile);
-			if (info) result.set(methodName, info);
+			// Key by the namespace-qualified name when the namespace is known, so two
+			// namespaces sharing a method name (e.g. widgets.create / subscriptions.create)
+			// don't collide and cross-assign schemas. Fall back to the bare name when the
+			// namespace can't be determined (consumers try qualified, then bare).
+			if (info) result.set(namespaceName ? `${namespaceName}.${methodName}` : methodName, info);
 		}
 	}
+}
+
+/**
+ * Walk up from a `new ApiNamespace(...)` node to the name it's bound to
+ * (`export const widgets = new ApiNamespace(...)` → `"widgets"`). This is the
+ * name the dev server / Lambda handler route by, and the one `generate-spec`
+ * uses to qualify method names. Returns `undefined` when the namespace is
+ * created behind indirection (factory return, etc.), in which case methods key
+ * by their bare name.
+ */
+function enclosingBindingName(node: ts.Node): string | undefined {
+	let current: ts.Node | undefined = node.parent;
+	while (current) {
+		if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) return current.name.text;
+		// Don't cross a function/block boundary — beyond it the binding no longer
+		// corresponds to a directly-exported namespace.
+		if (ts.isSourceFile(current) || ts.isBlock(current) || ts.isFunctionLike(current)) return undefined;
+		current = current.parent;
+	}
+	return undefined;
 }
 
 function extractMethodTypeInfo(
@@ -365,6 +390,7 @@ function extractMethodsFromResolvedType(
 	type: ts.Type,
 	checker: ts.TypeChecker,
 	result: Map<string, MethodTypeInfo>,
+	namespaceName?: string,
 ): void {
 	// The runtime value of an ApiNamespace export is the handler function itself
 	// (with the marker symbol attached). Its TS type is `AsyncAPI<T>`, which is
@@ -392,8 +418,9 @@ function extractMethodsFromResolvedType(
 		const propName = prop.getName();
 		// Skip internal symbols and the marker
 		if (propName.startsWith('_') || propName === 'Symbol(blocks:ApiNamespace)') continue;
+		const key = namespaceName ? `${namespaceName}.${propName}` : propName;
 		// Don't overwrite methods already found by the AST walk
-		if (result.has(propName)) continue;
+		if (result.has(key)) continue;
 
 		const propType = checker.getTypeOfSymbol(prop);
 		const methodSigs = propType.getCallSignatures();
@@ -433,7 +460,7 @@ function extractMethodsFromResolvedType(
 			skipCodegen = true;
 		}
 
-		result.set(propName, { params, returnType, transferable, skipCodegen });
+		result.set(key, { params, returnType, transferable, skipCodegen });
 	}
 }
 
