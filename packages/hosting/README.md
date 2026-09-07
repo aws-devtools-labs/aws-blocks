@@ -283,8 +283,8 @@ back, then expired by an S3 lifecycle rule.
 > self-cleaning for pre-existing artifacts.
 
 ```ts
-new Hosting(stack, 'Hosting', {
-  root: './',
+new HostingConstruct(stack, 'Hosting', {
+  manifest,
   storage: {
     buildRetentionDays: 90,   // keep 90 days of rollback targets
     deployIntervalDays: 30,   // advisory only
