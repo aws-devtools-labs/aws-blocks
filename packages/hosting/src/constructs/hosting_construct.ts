@@ -49,6 +49,8 @@ import {
 } from '../secret-resolve.js';
 import type { HostingResources } from '../types.js';
 import { CdnConstruct } from './cdn_construct.js';
+import { AlbAdapter } from './alb_adapter.js';
+import { buildCapabilityPlan } from '../plan/capability-plan.js';
 import { ComputeConstruct } from './compute_construct.js';
 import { DnsConstruct } from './dns_construct.js';
 import { MonitoringConstruct } from './monitoring_construct.js';
@@ -333,6 +335,34 @@ export type HostingConstructProps = {
     /** How long to honor old build cookies (seconds). Default: 86400 (24h) */
     maxAge?: number;
   };
+  /**
+   * Which FRONT DOOR serves the deploy. The front door is the public entry
+   * point that routes requests to the origins (static/S3, SSR, image-opt).
+   *
+   * - `'cloudfront'` (default) — the global CloudFront CDN (today's behavior;
+   *   full edge caching, WAF, custom domains, streaming). Unchanged.
+   * - `{ kind: 'alb', … }` — an Application Load Balancer (regional, no CDN).
+   *   For enterprises behind an existing ALB, private/internal deploys, or
+   *   apps that simply don't need a global edge. Capabilities CloudFront does
+   *   at the edge (edge cache, per-route response headers, skew-pin, geo)
+   *   are degraded on ALB and must be accepted via `degrade` (the negotiator
+   *   fails synth otherwise — conscious, never silent).
+   *
+   * Omit for the CloudFront default (backward-compatible).
+   */
+  frontDoor?:
+    | 'cloudfront'
+    | {
+        kind: 'alb';
+        /** BYO VPC; a default 2-AZ VPC is created when omitted. */
+        vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
+        /** Internal (private) ALB vs internet-facing. Default: internet-facing. */
+        internal?: boolean;
+        /** Regional ACM certificate for an HTTPS listener (same region as the ALB). */
+        certificate?: ICertificate;
+        /** Capabilities explicitly accepted in degraded form (else the negotiator fails). */
+        degrade?: import('../plan/types.js').CapabilityId[];
+      };
 };
 
 // ---- Main construct ----
@@ -353,7 +383,16 @@ export type HostingConstructProps = {
  */
 export class HostingConstruct extends Construct {
   readonly bucket: Bucket;
-  readonly distribution: Distribution;
+  /**
+   * The CloudFront distribution. Present for the default `cloudfront` front
+   * door; `undefined` when a non-CloudFront front door (e.g. `alb`) is selected.
+   */
+  readonly distribution?: Distribution;
+  /**
+   * The Application Load Balancer, present when `frontDoor: { kind: 'alb' }`.
+   * Mutually exclusive with {@link distribution}.
+   */
+  readonly loadBalancer?: import('aws-cdk-lib/aws-elasticloadbalancingv2').IApplicationLoadBalancer;
   readonly distributionUrl: string;
   readonly computeFunctions: Map<string, LambdaFunction | experimental.EdgeFunction> = new Map();
   readonly computeFunctionUrls: Map<string, FunctionUrl> = new Map();
@@ -986,6 +1025,18 @@ export class HostingConstruct extends Construct {
       }
     }
 
+    // ---- Front-door selection ----
+    // Which front door serves the deploy: CloudFront (default) or a
+    // non-CloudFront door (ALB). Storage + compute + cache + image + the S3
+    // asset upload (sections 1-5, 11-12) are front-door-AGNOSTIC and run for
+    // BOTH; the CloudFront-specific wiring (WAF, DNS-via-CF, security-headers
+    // policy, the CDN distribution, OPEN_NEXT_ORIGIN, OAC KMS grant) is guarded
+    // by `!useAlb` below. The ALB branch renders the same neutral CapabilityPlan
+    // onto an Application Load Balancer.
+    const useAlb = typeof props.frontDoor === 'object' && props.frontDoor.kind === 'alb';
+    let cdn: CdnConstruct | undefined;
+
+    if (!useAlb) {
     // ---- 6. WAF (conditional) ----
     // Determine effective WebACL ARN: waf.webAclArn > cdn.webAclArn > create new
     const effectiveWebAclArn = props.waf?.webAclArn ?? props.cdn?.webAclArn;
@@ -1074,7 +1125,7 @@ export class HostingConstruct extends Construct {
       }
     }
 
-    const cdn = new CdnConstruct(this, 'Cdn', {
+    cdn = new CdnConstruct(this, 'Cdn', {
       bucket: this.bucket,
       manifest: manifestWithBuildId,
       securityHeadersPolicy,
@@ -1110,7 +1161,7 @@ export class HostingConstruct extends Construct {
     // BYO domain users need this to set up their external DNS CNAME.
     if (resolvedDomainNames.length > 0) {
       new CfnOutput(this, 'DistributionDomainName', {
-        value: this.distribution.distributionDomainName,
+        value: cdn.distribution.distributionDomainName,
         description: 'CloudFront distribution domain name. Point your DNS CNAME to this value.',
       });
     }
@@ -1153,7 +1204,7 @@ export class HostingConstruct extends Construct {
       const monitoring = new MonitoringConstruct(this, 'Monitoring', {
         enabled: true,
         snsTopic: userTopic,
-        distribution: this.distribution,
+        distribution: cdn.distribution,
         // Lambda@Edge functions don't accept the CW metric helpers we
         // use; only attach when the SSR compute is a regional Lambda.
         ssrFunction: ssrFn instanceof LambdaFunction ? ssrFn : undefined,
@@ -1220,8 +1271,54 @@ export class HostingConstruct extends Construct {
     // ---- 10. DNS records ----
     if (props.domain && dnsConstructs.length > 0) {
       for (const dns of dnsConstructs) {
-        dns.createDnsRecords(this.distribution);
+        dns.createDnsRecords(cdn.distribution);
       }
+    }
+    } else {
+      // ---- Front door: ALB (non-CloudFront) ----
+      // Storage + compute are already built above (front-door-agnostic). Render
+      // the neutral CapabilityPlan onto an Application Load Balancer via the
+      // AlbAdapter, which negotiates the plan (conscious degradation) then
+      // provisions the VPC/ALB/target-groups/listener-rules. Static assets are
+      // uploaded to `builds/<buildId>/` by the shared section 12 below and read
+      // by the ALB's asset-proxy Lambda target.
+      const albCfg = props.frontDoor as {
+        kind: 'alb';
+        vpc?: import('aws-cdk-lib/aws-ec2').IVpc;
+        internal?: boolean;
+        certificate?: ICertificate;
+        degrade?: import('../plan/types.js').CapabilityId[];
+      };
+      const serverName = this.computeFunctions.has('default')
+        ? 'default'
+        : this.computeFunctions.has('server')
+          ? 'server'
+          : undefined;
+      const hasImageOrigin = this.computeFunctions.has('image-optimization');
+      const plan = buildCapabilityPlan({
+        manifest,
+        buildId,
+        hasServer: Boolean(serverName),
+        hasImage: hasImageOrigin,
+        // Skew-pin is a CloudFront-edge capability; ALB marks it degraded. Leave
+        // it off in the plan so it is not a required capability the negotiator
+        // would reject (the app opts into other degradations via `degrade`).
+        skewEnabled: false,
+      });
+      const albResult = new AlbAdapter().render(this, plan, {
+        bucket: this.bucket,
+        computeFunctions: this.computeFunctions as Map<
+          string,
+          import('aws-cdk-lib/aws-lambda').IFunction
+        >,
+        serverComputeName: serverName,
+        imageComputeName: hasImageOrigin ? 'image-optimization' : undefined,
+        vpc: albCfg.vpc,
+        internal: albCfg.internal,
+        certificate: albCfg.certificate,
+        degrade: albCfg.degrade,
+      });
+      this.distributionUrl = albResult.url;
     }
 
     // ---- 11. Error page deployment (SSR only) ----
@@ -1231,7 +1328,7 @@ export class HostingConstruct extends Construct {
     // them (see `cdn.addBuildAssetDependency` at the end of this method) so
     // the buildId cutover never races ahead of the asset uploads.
     const buildAssetDeployments: BucketDeployment[] = [];
-    if (hasCompute) {
+    if (hasCompute && cdn) {
       buildAssetDeployments.push(
         new BucketDeployment(this, 'ErrorPageDeployment', {
           sources: [Source.data(ERROR_PAGE_KEY, cdn.errorPageHtml)],
@@ -1247,7 +1344,7 @@ export class HostingConstruct extends Construct {
     // (spaFallback === false) that shipped no 404.html and got no
     // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
     // → /builds/<id>/_not_found.html responses resolve from S3.
-    if (cdn.defaultNotFoundPageHtml) {
+    if (cdn?.defaultNotFoundPageHtml) {
       new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
         sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
         destinationBucket: this.bucket,
@@ -1570,8 +1667,12 @@ export class HostingConstruct extends Construct {
     // functions / updates the distribution to route at the new buildId.
     // Without this, the buildId could propagate globally before the assets
     // landed, 403-ing new/cookieless visitors for the deploy window.
-    for (const dep of buildAssetDeployments) {
-      cdn.addBuildAssetDependency(dep);
+    // (CloudFront only — the ALB front door reads S3 live, so there is no
+    // build-id cutover to gate.)
+    if (cdn) {
+      for (const dep of buildAssetDeployments) {
+        cdn.addBuildAssetDependency(dep);
+      }
     }
 
     // ---- CloudFormation resource-count guard ----

@@ -392,6 +392,25 @@ export interface HostingProps {
    * @default { enabled: true }
    */
   skewProtection?: SkewProtectionConfig;
+
+  /**
+   * Which front door serves the deploy. Omit for the default global CloudFront
+   * CDN (today's behavior). Pass `{ kind: 'alb', … }` to serve behind a
+   * regional Application Load Balancer instead — for enterprises behind an
+   * existing ALB, private/internal deploys, or apps that don't need a CDN.
+   *
+   * Edge-only capabilities (edge caching, per-route response headers, skew-pin,
+   * geo) are degraded on ALB and must be accepted via `degrade` (synth fails
+   * otherwise — conscious, never silent). Same-origin API proxy (`/aws-blocks/*`)
+   * is CloudFront-only for now; on ALB the frontend reaches the backend via
+   * `BLOCKS_API_URL` (cross-origin).
+   *
+   * @example
+   * ```ts
+   * new Hosting(stack, 'Web', { root, framework: 'nuxt', frontDoor: { kind: 'alb' } });
+   * ```
+   */
+  frontDoor?: HostingConstructProps['frontDoor'];
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -444,8 +463,8 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
 export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
   public readonly bucket: cdk.aws_s3.Bucket;
-  /** The CloudFront distribution. */
-  public readonly distribution: cdk.aws_cloudfront.Distribution;
+  /** The CloudFront distribution. `undefined` when a non-CloudFront front door (e.g. `alb`) is selected. */
+  public readonly distribution?: cdk.aws_cloudfront.Distribution;
   /** The public URL of the deployed site (https://...). */
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
@@ -686,13 +705,24 @@ export class Hosting extends Construct {
       errorPages: skipPropsErrorPages ? undefined : props.errorPages,
       monitoring: props.monitoring,
       skewProtection: props.skewProtection,
+      frontDoor: props.frontDoor,
     };
 
     const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
 
     // ── 7. Add CloudFront behaviors for API proxy ────────────────
-    if (props.api) {
+    // Same-origin API proxy is wired as CloudFront behaviors, so it applies
+    // only to the CloudFront front door (`hosting.distribution` present). On a
+    // non-CloudFront door (ALB) there is no distribution to add behaviors to;
+    // the frontend still reaches the backend cross-origin via `BLOCKS_API_URL`.
+    if (props.api && hosting.distribution) {
       this.addApiBehaviors(hosting, props.api.apiUrl);
+    } else if (props.api && !hosting.distribution) {
+      console.warn(
+        '[Hosting] ⚠️  Same-origin API proxy (/aws-blocks/*) is a CloudFront feature and ' +
+          'is not wired on the ALB front door yet. The frontend reaches the backend via ' +
+          'BLOCKS_API_URL (cross-origin) instead.',
+      );
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -735,16 +765,22 @@ export class Hosting extends Construct {
         destinationBucket: hosting.bucket,
         destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
         prune: false,
-        distribution: hosting.distribution,
-        // The skew-protection viewer-request CloudFront function rewrites the
-        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
-        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
-        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
-        // a no-op for config.json. Invalidate the post-rewrite key too. (The
-        // primary guard against staleness is step 5a's no-cache placeholder;
-        // this is defense-in-depth so a post-deploy invalidation actually
-        // clears any edge entry at its real key.)
-        distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
+        // CloudFront-only: attach the distribution + post-rewrite invalidation
+        // paths so a redeploy clears the edge entry for config.json. On a
+        // non-CloudFront door (ALB) there is no distribution to invalidate; the
+        // ALB reads S3 live, so the upload alone suffices.
+        ...(hosting.distribution
+          ? {
+              distribution: hosting.distribution,
+              // The skew-protection viewer-request CloudFront function rewrites
+              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
+              // BEFORE the cache lookup, so the real edge cache key lives under
+              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
+              // matches that key and is a no-op for config.json. Invalidate the
+              // post-rewrite key too.
+              distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
+            }
+          : {}),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
       });
 
@@ -830,6 +866,10 @@ export class Hosting extends Construct {
    * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
    */
   private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+    // Only called for the CloudFront front door; the caller guards on
+    // `hosting.distribution` existing. Bind it locally for null-safety.
+    const distribution = hosting.distribution;
+    if (!distribution) return;
     const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
     const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
     const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
@@ -846,8 +886,8 @@ export class Hosting extends Construct {
       viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
     };
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
     // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
@@ -856,7 +896,7 @@ export class Hosting extends Construct {
     // instance count, and never drifts as routes are added. Added directly (not
     // via the route loop below) so it's emitted exactly once even with multiple
     // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+    distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
     const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
     for (const route of getRegisteredRoutes()) {
@@ -882,7 +922,7 @@ export class Hosting extends Construct {
       }
 
       addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+      distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
     }
   }
 }
