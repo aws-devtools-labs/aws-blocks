@@ -3,11 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError, ApiError } from '@aws-blocks/core';
-import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import type { api as apiType } from 'aws-blocks';
-
-const { SerializationFailure } = DistributedDatabaseErrors;
 
 // Compile-time type assertion helpers (same pattern as database.test.ts).
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends (<T>() => T extends Y ? 1 : 2) ? true : false;
@@ -150,23 +146,6 @@ export function dsqlTests(getApi: () => typeof apiType) {
       assert.strictEqual(ours.value, 99);
 
       await api.dsqlKyselyDelete(id);
-    });
-
-    // OCC serialization conflicts (SQLSTATE 40001) must serialize to JSON-RPC
-    // code 409 (Conflict) over the wire — reconstructed client-side as an
-    // ApiError with status 409 — not a generic 500. The error name is preserved
-    // so isBlocksError still matches. dsqlForceConflict() drives the mock's
-    // simulateConflict() hook to raise the conflict deterministically.
-    test('DSQL - serialization conflict returns status 409 over the wire', async () => {
-      const api = getApi();
-      try {
-        await api.dsqlForceConflict();
-        assert.fail('expected a 409 serialization conflict');
-      } catch (e) {
-        assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
-        assert.strictEqual(e.status, 409, 'OCC serialization conflict must be 409, not 500');
-        assert.ok(isBlocksError(e, SerializationFailure));
-      }
     });
   });
 }

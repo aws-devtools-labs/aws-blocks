@@ -149,7 +149,7 @@ export class DsqlMockEngine implements DatabaseEngine {
       // Route through translateDsqlError so the mock surfaces the SAME 409
       // ApiError (name preserved, retriable) the real DSQL engine produces for
       // SQLSTATE 40001 — keeping mock and aws paths behaviorally identical.
-      translateDsqlError(err);
+      throw translateDsqlError(err);
     }
     await this.db.query('COMMIT');
     (handle as MockTxHandle).tracker.reset();

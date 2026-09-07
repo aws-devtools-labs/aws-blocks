@@ -173,14 +173,18 @@ export class DistributedTable<
 
 		const keyStr = this.serializeKey(item as any);
 
+		// Existence assertion wins: `ifNotExists` makes a conflict non-retriable
+		// even if combined with an `ifFieldEquals` value check (value presence, so
+		// an explicit `undefined` is treated as absent). Only a pure `ifFieldEquals`
+		// optimistic-lock check is retriable. Shared derivation so mock and aws
+		// agree for identical inputs, incl. combined conditions.
+		const retriable = options?.ifFieldEquals !== undefined && !options?.ifNotExists;
 		if (options?.ifNotExists && this.data.has(keyStr)) {
-			// Uniqueness assertion — not retriable.
-			throw conditionalCheckFailed(false);
+			throw conditionalCheckFailed(retriable);
 		}
 		if (options?.ifFieldEquals) {
-			this.checkFieldEquals(keyStr, options.ifFieldEquals);
+			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-
 		this.data.set(keyStr, item);
 		this.flushToDisk();
 	}
@@ -188,12 +192,14 @@ export class DistributedTable<
 	async delete(key: TableKey<T, K>, options?: DeleteOptions<T>): Promise<void> {
 		const keyStr = this.serializeKey(key);
 
+		// Existence assertion wins (see put): `ifExists` makes a conflict
+		// non-retriable even if combined with an `ifFieldEquals` value check.
+		const retriable = options?.ifFieldEquals !== undefined && !options?.ifExists;
 		if (options?.ifExists && !this.data.has(keyStr)) {
-			// Existence assertion — not retriable.
-			throw conditionalCheckFailed(false);
+			throw conditionalCheckFailed(retriable);
 		}
 		if (options?.ifFieldEquals) {
-			this.checkFieldEquals(keyStr, options.ifFieldEquals);
+			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
 
 		this.data.delete(keyStr);
@@ -344,7 +350,7 @@ export class DistributedTable<
 
 	// ── Internal ────────────────────────────────────────────────────────────
 
-	private checkFieldEquals(keyStr: string, fields: Partial<T>): void {
+	private checkFieldEquals(keyStr: string, fields: Partial<T>, retriable: boolean): void {
 		const entries = Object.entries(fields).filter(([, v]) => v !== undefined);
 		if (entries.length === 0) {
 			throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.emptyIfFieldEquals);
@@ -352,13 +358,14 @@ export class DistributedTable<
 
 		const existing = this.data.get(keyStr);
 		if (!existing) {
-			// Optimistic-lock (compare-and-swap) conflict — retriable.
-			throw conditionalCheckFailed(true);
+			// Compare-and-swap conflict; retriability is decided by the caller —
+			// existence assertion wins, so not retriable even if combined.
+			throw conditionalCheckFailed(retriable);
 		}
 		for (const [field, value] of entries) {
 			if (!deepEqual((existing as any)[field], value)) {
-				// Optimistic-lock (compare-and-swap) conflict — retriable.
-				throw conditionalCheckFailed(true);
+				// Compare-and-swap conflict; retriability decided by the caller.
+				throw conditionalCheckFailed(retriable);
 			}
 		}
 	}

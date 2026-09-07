@@ -127,13 +127,13 @@ export class KVStore<T = string> extends Scope {
 			// name (== KVStoreErrors.ConditionalCheckFailed) so isBlocksError()
 			// keeps matching, and keep the driver error as `cause` (server-side).
 			// DynamoDB collapses every conditional failure under one exception with
-			// no sub-reason, so retriability is decided from the condition THIS
-			// call set: an `ifValueEquals` optimistic-lock conflict is retriable
-			// (re-read and retry can succeed); an `ifNotExists` uniqueness
-			// assertion is not (a blind identical retry fails identically). Matches
-			// the mock path's per-branch `conditionalConflict()`.
+			// no sub-reason, so retriability is derived from the conditions THIS
+			// call set, matching the mock branch-for-branch: existence assertion
+			// wins — a conflict is retriable only for a pure `ifValueEquals`
+			// optimistic-lock check (value presence, so an explicit `undefined` is
+			// treated as absent) and NOT when `ifNotExists` is also set.
 			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
-				const retriable = !options?.ifNotExists && !!(options && 'ifValueEquals' in options);
+				const retriable = options?.ifValueEquals !== undefined && !options?.ifNotExists;
 				throw new ApiError(err.message, 409, {
 					name: KVStoreErrors.ConditionalCheckFailed,
 					cause: err,
@@ -173,12 +173,12 @@ export class KVStore<T = string> extends Scope {
 			// A failed conditional delete is a Conflict, not an
 			// InternalServerError: map DynamoDB's raw
 			// ConditionalCheckFailedException to an ApiError with status 409 (see
-			// the put path above). Preserves the name for isBlocksError() and keeps
-			// the driver error as `cause`. Retriability is decided from the
-			// condition THIS call set: an `ifValueEquals` optimistic-lock conflict
-			// is retriable; an `ifExists` existence assertion is not.
+			// Retriability is derived from the conditions THIS call set (see the
+			// put path): existence assertion wins — retriable only for a pure
+			// `ifValueEquals` optimistic-lock check (value presence) and NOT when
+			// `ifExists` is also set. Matches the mock path.
 			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
-				const retriable = !conditions?.ifExists && !!(conditions && 'ifValueEquals' in conditions);
+				const retriable = conditions?.ifValueEquals !== undefined && !conditions?.ifExists;
 				throw new ApiError(err.message, 409, {
 					name: KVStoreErrors.ConditionalCheckFailed,
 					cause: err,

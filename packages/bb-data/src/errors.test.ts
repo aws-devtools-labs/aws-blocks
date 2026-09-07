@@ -13,7 +13,8 @@ test('serializationConflict builds a 409 ApiError preserving name + retriable', 
   assert.strictEqual(e.status, 409);
   assert.strictEqual(e.name, DatabaseErrors.SerializationFailure);
   assert.strictEqual(e.retriable, true);
-  assert.strictEqual(e.message, 'could not serialize access due to read/write dependencies');
+  assert.strictEqual(e.message, 'The transaction failed due to a serialization conflict');
+  assert.strictEqual((e.cause as Error).message, 'could not serialize access due to read/write dependencies');
 });
 
 test('DatabaseErrors has all expected keys', () => {

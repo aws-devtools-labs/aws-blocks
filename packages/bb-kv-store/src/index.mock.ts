@@ -174,15 +174,20 @@ export class KVStore<T = string> extends Scope {
 
 		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
 
+		// Existence assertion wins: `ifNotExists` makes a conflict non-retriable
+		// even when combined with an `ifValueEquals` value check. Only a pure
+		// value-equals optimistic-lock check is retriable. Uses value presence
+		// (`!== undefined`), so an explicit `undefined` is treated as absent —
+		// consistent with the aws path. Both throw sites share this single
+		// derivation so mock and aws agree for identical inputs, incl. combined.
+		const retriable = options?.ifValueEquals !== undefined && !options?.ifNotExists;
 		if (options?.ifNotExists && this.data.has(key)) {
-			// Uniqueness assertion — not retriable.
-			throw conditionalConflict(false);
+			throw conditionalConflict(retriable);
 		}
 		if (options?.ifValueEquals !== undefined) {
 			const current = this.data.get(key)?.value;
 			if (current !== JSON.stringify(options.ifValueEquals)) {
-				// Optimistic-lock value-equals conflict — retriable.
-				throw conditionalConflict(true);
+				throw conditionalConflict(retriable);
 			}
 		}
 
@@ -201,15 +206,16 @@ export class KVStore<T = string> extends Scope {
 	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry).
 	 */
 	async delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void> {
+		// Existence assertion wins (see put): `ifExists` makes a conflict
+		// non-retriable even when combined with an `ifValueEquals` value check.
+		const retriable = conditions?.ifValueEquals !== undefined && !conditions?.ifExists;
 		if (conditions?.ifExists && !this.data.has(key)) {
-			// Existence assertion — not retriable.
-			throw conditionalConflict(false);
+			throw conditionalConflict(retriable);
 		}
 		if (conditions?.ifValueEquals !== undefined) {
 			const current = this.data.get(key)?.value;
 			if (current !== JSON.stringify(conditions.ifValueEquals)) {
-				// Optimistic-lock value-equals conflict — retriable.
-				throw conditionalConflict(true);
+				throw conditionalConflict(retriable);
 			}
 		}
 		this.data.delete(key);

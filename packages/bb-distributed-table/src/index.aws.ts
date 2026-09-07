@@ -135,12 +135,14 @@ export class DistributedTable<
 			// JSON-RPC serializer emits code 409 instead of 500. Name is preserved
 			// for isBlocksError(), the driver error is kept as `cause`. DynamoDB
 			// collapses every conditional failure under one exception with no
-			// sub-reason, so retriability is decided from the condition THIS call
-			// set: an `ifFieldEquals` optimistic-lock conflict is retriable, an
-			// `ifNotExists` uniqueness assertion is not. Matches the mock path. Other
-			// errors (e.g. oversized items) still flow through remapItemTooLarge.
+			// sub-reason, so retriability is derived from the conditions THIS call
+			// set, matching the mock: existence assertion wins — retriable only for
+			// a pure `ifFieldEquals` optimistic-lock check (value presence, so an
+			// explicit `undefined` is treated as absent) and NOT when `ifNotExists`
+			// is also set. Other errors (e.g. oversized items) still flow through
+			// remapItemTooLarge.
 			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
-				throw conditionalCheckFailed(!!options?.ifFieldEquals, err);
+				throw conditionalCheckFailed(options?.ifFieldEquals !== undefined && !options?.ifNotExists, err);
 			}
 			throw remapItemTooLarge(err);
 		}
@@ -162,11 +164,12 @@ export class DistributedTable<
 			// A failed conditional delete is a Conflict, not an
 			// InternalServerError: map DynamoDB's raw
 			// ConditionalCheckFailedException to an ApiError with status 409 (see
-			// the put path above). Retriability is decided from the condition THIS
-			// call set: an `ifFieldEquals` optimistic-lock conflict is retriable, an
-			// `ifExists` existence assertion is not. Matches the mock path.
+			// the put path above). Retriability is derived from the conditions THIS
+			// call set, matching the mock: existence assertion wins — retriable only
+			// for a pure `ifFieldEquals` optimistic-lock check (value presence) and
+			// NOT when `ifExists` is also set.
 			if (err instanceof Error && err.name === DistributedTableErrors.ConditionalCheckFailed) {
-				throw conditionalCheckFailed(!!options?.ifFieldEquals, err);
+				throw conditionalCheckFailed(options?.ifFieldEquals !== undefined && !options?.ifExists, err);
 			}
 			throw err;
 		}

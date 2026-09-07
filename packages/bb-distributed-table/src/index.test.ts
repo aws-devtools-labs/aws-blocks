@@ -189,6 +189,28 @@ describe('DistributedTable', () => {
 			);
 		});
 
+		test('put ifNotExists + ifFieldEquals conflict is 409, not retriable (existence wins)', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'Test', createdAt: 1000 });
+			// The typed API forbids combining ifNotExists with ifFieldEquals; force
+			// the combined shape to verify the runtime derivation is existence-wins
+			// (not retriable) for parity with the aws path and bb-kv-store.
+			const combined = { ifNotExists: true, ifFieldEquals: { name: 'Wrong' } } as unknown as Parameters<typeof table.put>[1];
+			await assert.rejects(
+				() => table.put({ userId: 'u1', email: 'a@b.com', name: 'Fail', createdAt: 1000 }, combined),
+				(err: unknown) => {
+					assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+					assert.equal(err.status, 409);
+					assert.ok(isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed));
+					assert.equal(err.retriable, false);
+					return true;
+				},
+			);
+		});
+
 		test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
 			const table = new DistributedTable(testScope(), 'users', {
 				schema: userSchema,

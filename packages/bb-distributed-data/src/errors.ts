@@ -43,7 +43,9 @@ export function translateDsqlError(e: Error): never {
     // SerializationFailure name so isBlocksError() keeps matching on both server
     // and client, keep the original error as `cause` (server-side), and flag it
     // retriable — the caller can retry the transaction (see `retryOnConflict`).
-    throw new ApiError(e.message, 409, {
+    // The client-visible message is a fixed, stable string (the raw driver text
+    // is verbose); the original error is retained as `cause` for diagnostics.
+    throw new ApiError('The transaction failed due to a serialization conflict', 409, {
       name: DistributedDatabaseErrors.SerializationFailure,
       cause: e,
       retriable: true,

@@ -51,6 +51,8 @@ This also follows the API's options-object convention (objects over positional p
 
 `ifNotExists` and `ifFieldEquals` are mutually exclusive at the type level (discriminated union), as are `ifExists` and `ifFieldEquals`. DynamoDB's `ConditionExpression` could combine them, but the semantics are confusing — "create only if it doesn't exist AND the existing item's field equals X" is contradictory. The type system prevents this rather than silently picking one.
 
+A conditional-failure `ApiError` (409) is flagged `retriable` only for a pure `ifFieldEquals` optimistic-lock check (a re-read and retry can succeed); an existence assertion (`ifNotExists`/`ifExists`) is not retriable (a blind retry fails identically). Both runtimes derive this from a single expression keyed on **value presence** (`ifFieldEquals !== undefined`) with the **existence assertion winning** — so even the type-forbidden combined case (only reachable outside the typed API) is not retriable, and mock and AWS produce identical `retriable` for identical inputs.
+
 KVStore uses `ifValueEquals` (compare the entire value). DistributedTable uses `ifFieldEquals` (compare individual fields) because items are structured objects with multiple fields — comparing the entire item would be impractical and fragile.
 
 ### D-DT-5: `scan()` not `list()`

@@ -26,9 +26,13 @@ export const DatabaseErrors = {
  * and flags the conflict retriable (the caller can retry the transaction).
  * Shared by every engine translator (PGlite, pg-client, Data API) so all paths
  * produce an identically shaped 409.
+ *
+ * The client-visible message is a fixed, stable string (the raw driver text
+ * varies by engine and can be verbose); the original error is retained as
+ * `cause` for server-side diagnostics.
  */
 export function serializationConflict(cause: Error): ApiError {
-  return new ApiError(cause.message, 409, {
+  return new ApiError('The transaction failed due to a serialization conflict', 409, {
     name: DatabaseErrors.SerializationFailure,
     cause,
     retriable: true,

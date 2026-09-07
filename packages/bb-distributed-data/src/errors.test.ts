@@ -24,7 +24,8 @@ test('translateDsqlError: serialization failure (40001) → ApiError status 409,
       assert.equal(e.status, 409);
       assert.equal(e.name, DistributedDatabaseErrors.SerializationFailure);
       assert.equal(e.retriable, true);
-      assert.equal(e.message, 'conflict');
+      assert.equal(e.message, 'The transaction failed due to a serialization conflict');
+      assert.equal((e.cause as Error).message, 'conflict');
       return true;
     }
   );
@@ -36,7 +37,7 @@ test('translateDsqlError: serialization failure (40001) → SerializationFailure
     () => translateDsqlError(err),
     (e: Error) => {
       assert.equal(e.name, DistributedDatabaseErrors.SerializationFailure);
-      assert.equal(e.message, 'conflict');
+      assert.equal(e.message, 'The transaction failed due to a serialization conflict');
       return true;
     }
   );

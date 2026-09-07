@@ -136,6 +136,23 @@ test('put ifValueEquals conflict is an ApiError with status 409, retriable', asy
 	);
 });
 
+test('put ifNotExists + ifValueEquals conflict is 409, not retriable (existence wins)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	// Combined existence + value check on a state that fails: the existence
+	// assertion wins, so the conflict is NOT retriable — mock and aws agree.
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'wrong' }),
+		(err: unknown) => {
+			assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+			assert.strictEqual(err.status, 409);
+			assert.ok(isBlocksError(err, KVStoreErrors.ConditionalCheckFailed));
+			assert.strictEqual(err.retriable, false);
+			return true;
+		},
+	);
+});
+
 test('delete ifExists conflict is an ApiError with status 409, not retriable', async () => {
 	const store = new KVStore({ id: 'root' } as any, 'test');
 	await assert.rejects(
