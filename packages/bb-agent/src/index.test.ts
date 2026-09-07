@@ -1185,7 +1185,7 @@ describe('model-factory', () => {
 // ── useChat ──────────────────────────────────────────────────────────────────
 
 import { useChat } from './index.hooks.js';
-import type { AgentStreamChunk, ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions } from './index.hooks.js';
+import type { AgentStreamChunk, ChatMessage, UseChatOptions, ChatChunkHandler, ChatSubscribeOptions, ChatChannelDescriptor } from './index.hooks.js';
 
 /** Flush pending microtasks so an async onReconnect handler settles before assertions. */
 function flush(): Promise<void> {
@@ -1212,12 +1212,14 @@ function subscribeCapture() {
 		handler?: (chunk: AgentStreamChunk) => void;
 		reconnect?: () => void;
 		disconnect?: (reason: string) => void;
+		refresh?: () => Promise<ChatChannelDescriptor>;
 	} = {};
 	const subscribe: UseChatOptions['subscribe'] = async (_channelId, handlerOrOptions) => {
 		if (hasSubscribeOptions(handlerOrOptions)) {
 			cap.handler = handlerOrOptions.onMessage;
 			cap.reconnect = handlerOrOptions.onReconnect;
 			cap.disconnect = handlerOrOptions.onDisconnect;
+			cap.refresh = handlerOrOptions.refresh;
 		} else {
 			cap.handler = handlerOrOptions;
 		}
@@ -1623,6 +1625,36 @@ describe('useChat', () => {
 
 		assert.strictEqual(errors.length, 1, 'onError fires exactly once for the same failed turn');
 		assert.match(errors[0], /504/, 'the first (send-rejection) error is the one surfaced');
+		chat.destroy();
+	});
+
+	test('useChat forwards a consumer-supplied refresh to the subscription options', async () => {
+		// The consumer owns api.agentGetChannel, so it supplies the actual mint; useChat only
+		// forwards it. A fresh descriptor is what the transport uses to re-mint tokens on reconnect.
+		const descriptor: ChatChannelDescriptor = { __blocks: 'realtime/channel', channel: 'conv-1' };
+		let refreshCalls = 0;
+		const mockRefresh = async (): Promise<ChatChannelDescriptor> => { refreshCalls++; return descriptor; };
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			refresh: mockRefresh,
+		});
+
+		// Sending triggers ensureSubscribed, which builds subscribeArg with refresh attached.
+		await chat.sendMessage('hello');
+
+		assert.strictEqual(typeof cap.refresh, 'function', 'refresh should be forwarded to the subscription options');
+		assert.strictEqual(cap.refresh, mockRefresh, 'the exact consumer-supplied fn is forwarded verbatim');
+		// Invoking the forwarded fn calls the consumer mint and yields its descriptor.
+		const result = await cap.refresh!();
+		assert.strictEqual(refreshCalls, 1, 'the forwarded refresh invokes the consumer mint');
+		assert.strictEqual(result, descriptor, 'and returns the freshly-minted descriptor');
 		chat.destroy();
 	});
 });
