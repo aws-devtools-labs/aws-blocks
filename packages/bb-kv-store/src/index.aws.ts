@@ -115,7 +115,10 @@ export class KVStore<T = string> extends Scope {
 			conditions.push('attribute_not_exists(#pk)');
 			names['#pk'] = 'pk';
 		}
-		if (options && 'ifValueEquals' in options) {
+		// Detect with `!== undefined` (not `in options`) to match the mock: an
+		// explicit `{ ifValueEquals: undefined }` is a no-op on both layers, rather
+		// than emitting `#value = :expected` with an undefined value the SDK rejects.
+		if (options?.ifValueEquals !== undefined) {
 			conditions.push('#value = :expected');
 			names['#value'] = 'value';
 			values[':expected'] = JSON.stringify(options.ifValueEquals);

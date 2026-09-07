@@ -289,4 +289,13 @@ describe('conditional-write composition (AWS PutCommand shape)', () => {
 			assert.strictEqual(items()[0].ConditionExpression, undefined);
 		});
 	});
+
+	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
+		const { store, items } = captureAws('parity-compose-undef');
+		return store.put('k', 'v', { ifValueEquals: undefined }).then(() => {
+			const input = items()[0];
+			assert.strictEqual(input.ConditionExpression, undefined);
+			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+		});
+	});
 });
