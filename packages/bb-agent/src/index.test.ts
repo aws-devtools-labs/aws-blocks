@@ -1199,9 +1199,12 @@ function flush(): Promise<void> {
  * simulate a transport reconnect. Also tolerates a plain options object and a truly-bare handler.
  */
 function hasSubscribeOptions(arg: ChatChunkHandler | ChatSubscribeOptions): arg is ChatSubscribeOptions {
-	// A bare handler is a function with no onMessage property; the options object and the
-	// callable-with-props hybrid both carry onMessage.
-	return typeof arg !== 'function' || 'onMessage' in arg;
+	// Mirror the REAL bb-realtime middleware precedence: it branches on
+	// `typeof arg === 'function'` FIRST and treats any function as a bare handler,
+	// never reading properties off it. So onReconnect/onDisconnect are only honored
+	// when arg is a non-function options object. Testing it any other way would let a
+	// regression to a callable-with-props pass vacuously.
+	return typeof arg !== 'function';
 }
 
 function subscribeCapture() {
