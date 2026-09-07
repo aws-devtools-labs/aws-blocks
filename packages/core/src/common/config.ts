@@ -60,9 +60,13 @@ async function loadConfigFromS3(): Promise<Record<string, string>> {
 			|| error?.Code === 'NoSuchKey'
 			|| error?.$metadata?.httpStatusCode === 404;
 		if (isNotFound) {
-			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config`);
-			configCache = {};
-			return configCache;
+			// Do NOT cache the empty result: a 404 right after deploy is usually the config file
+			// not being readable yet (the transient window before the BucketDeployment settles), not
+			// a genuinely config-less app. Caching {} here would poison the container for its whole
+			// lifetime. Returning without caching lets the next invocation re-fetch and pick up the
+			// real config once it's present. (Apps that truly have no config just re-check cheaply.)
+			console.warn(`[Blocks] Config file not found in S3 (${bucket}/${key}), proceeding with empty config (will retry on next request)`);
+			return {};
 		}
 		const msg = error instanceof Error ? error.message : String(error);
 		throw new Error(`[Blocks] Failed to load config from S3 (${bucket}/${key}): ${msg}`);
@@ -150,6 +154,25 @@ export async function loadConfigToProcessEnv(): Promise<void> {
 			process.env[key] = value;
 		}
 	}
+}
+
+/**
+ * Whether a config load has resolved and cached a result.
+ *
+ * Returns `true` once `loadConfigFromS3()` has cached a config object — either a
+ * successful S3 load, a genuinely-empty `{}` config, or the no-bucket local-dev
+ * path (both of which cache `{}`). Returns `false` in the initial state AND
+ * after a transient not-found miss: the 404 path deliberately does NOT cache its
+ * empty result (see `loadConfigFromS3`), so a `false` return immediately after
+ * awaiting a load uniquely identifies the post-deploy S3 window where
+ * blocks-config.json isn't readable yet.
+ *
+ * Callers use this to tell a transient-empty load (retry on the next request)
+ * apart from a legitimately-config-less app (do nothing) without reaching into
+ * the module's private cache.
+ */
+export function isConfigResolved(): boolean {
+	return configCache !== null;
 }
 
 /**
