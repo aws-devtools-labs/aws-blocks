@@ -180,4 +180,46 @@ describe('Mock middleware: token replay on reconnect (regression)', () => {
 		sub.unsubscribe();
 		__resetConnectionsForTest();
 	});
+
+	it('fires onReconnect after the mock reconnects and resubscribes (not on the initial subscribe)', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+
+		const events: string[] = [];
+		const client = hydrate({
+			__blocks: 'realtime/channel',
+			channel: CHANNEL,
+			wsUrl: `ws://localhost:${port}/realtime`,
+			token,
+		}) as {
+			subscribe: (o: {
+				onMessage: (m: unknown) => void;
+				onDisconnect?: (reason: string) => void;
+				onReconnect?: () => void;
+			}) => { established: Promise<void>; connection: WebSocket; unsubscribe: () => void };
+		};
+
+		const sub = client.subscribe({
+			onMessage: () => {},
+			onDisconnect: () => { events.push('disconnect'); },
+			onReconnect: () => { events.push('reconnect'); },
+		});
+		await sub.established;
+
+		// onReconnect must NOT fire on the initial connect.
+		assert.strictEqual(events.length, 0, 'onReconnect must not fire on the initial subscribe');
+
+		// Force a reconnect by closing the underlying socket. The middleware's
+		// onclose schedules a reconnect that resubscribes and then fires onReconnect.
+		sub.connection.close();
+
+		// Wait for the reconnect (backoff starts ~1s) and resubscribe to complete.
+		await new Promise((r) => setTimeout(r, 1500));
+
+		assert.ok(events.includes('disconnect'), 'onDisconnect fires on the drop');
+		assert.ok(events.includes('reconnect'), 'onReconnect fires after the reconnect resubscribes');
+		assert.strictEqual(events[events.length - 1], 'reconnect', 'onReconnect fires after the disconnect');
+
+		sub.unsubscribe();
+		__resetConnectionsForTest();
+	});
 });

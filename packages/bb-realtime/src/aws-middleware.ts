@@ -410,7 +410,11 @@ function subscribeTo(
 			}
 		},
 		established,
-		connection: conn.ws!,
+		// Live getter, not a snapshot: openSocket assigns a fresh conn.ws on every
+		// reconnect, so reading conn.ws here means `.connection` always reflects the
+		// current socket rather than the stale (closed) one captured at subscribe
+		// time. Coalesce null → undefined to match the optional `connection?: WebSocket` type.
+		get connection() { return conn.ws ?? undefined; },
 	};
 }
 

@@ -42,6 +42,8 @@ const connections = new Map<string, {
 	pendingMessages: string[];
 	pendingEstablished: Map<string, PendingSubscribe[]>;
 	disconnectHandlers: Set<(reason: DisconnectReason) => void>;
+	/** Registered onReconnect callbacks (called after a reconnect resubscribes). */
+	reconnectHandlers: Set<() => void>;
 	/** Pending reconnect timer, tracked so it can be cleared on teardown. */
 	reconnectTimer?: ReturnType<typeof setTimeout>;
 }>();
@@ -62,13 +64,14 @@ function getOrCreateConnection(wsUrl: string) {
 			pendingMessages: [],
 			pendingEstablished: new Map(),
 			disconnectHandlers: new Set(),
+			reconnectHandlers: new Set(),
 		};
 		connections.set(wsUrl, conn);
 	}
 	return conn;
 }
 
-function doConnect(wsUrl: string) {
+function doConnect(wsUrl: string, isReconnect = false) {
 	const conn = getOrCreateConnection(wsUrl);
 	try {
 		conn.ws = new WebSocket(wsUrl);
@@ -86,6 +89,14 @@ function doConnect(wsUrl: string) {
 			conn.pendingSubs.length = 0;
 			for (const msg of conn.pendingMessages) { conn.ws!.send(msg); }
 			conn.pendingMessages.length = 0;
+			// After a reconnect (not the initial connect), the stored channels have
+			// just been resubscribed above — notify onReconnect once, mirroring the
+			// AWS middleware's post-resubscribe semantics. The mock does not track
+			// per-channel resubscribe confirmation, so "resubscribe complete" is the
+			// point at which every resubscribe frame has been sent.
+			if (isReconnect) {
+				conn.reconnectHandlers.forEach(h => { try { h(); } catch {} });
+			}
 		};
 		conn.ws.onmessage = (event) => {
 			try {
@@ -133,7 +144,7 @@ function scheduleReconnect(wsUrl: string) {
 	if (conn.reconnectAttempts >= MAX_RECONNECT) return;
 	conn.reconnectAttempts++;
 	const delay = Math.min(1000 * 2 ** (conn.reconnectAttempts - 1), MAX_DELAY_MS);
-	conn.reconnectTimer = setTimeout(() => doConnect(wsUrl), delay);
+	conn.reconnectTimer = setTimeout(() => doConnect(wsUrl, true), delay);
 }
 
 /**
@@ -147,6 +158,7 @@ export function __resetConnectionsForTest(): void {
 		conn.subscriptions.clear();
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
+		conn.reconnectHandlers.clear();
 		try { conn.ws?.close(); } catch {}
 	}
 	connections.clear();
@@ -162,10 +174,11 @@ function ensureConnected(wsUrl: string) {
 	doConnect(wsUrl);
 }
 
-function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void): RealtimeSubscription {
+function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, token?: string, onDisconnect?: (reason: DisconnectReason) => void, onReconnect?: () => void): RealtimeSubscription {
 	const conn = getOrCreateConnection(wsUrl);
 	ensureConnected(wsUrl);
 	if (onDisconnect) conn.disconnectHandlers.add(onDisconnect);
+	if (onReconnect) conn.reconnectHandlers.add(onReconnect);
 
 	let establishedResolve: () => void;
 	let establishedReject: (err: Error) => void;
@@ -198,6 +211,7 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 				try { onDisconnect('client'); } catch {}
 				conn.disconnectHandlers.delete(onDisconnect);
 			}
+			if (onReconnect) conn.reconnectHandlers.delete(onReconnect);
 			const handlers = conn.subscriptions.get(channel);
 			if (handlers) {
 				handlers.delete(handler);
@@ -211,7 +225,11 @@ function subscribeTo(wsUrl: string, channel: string, handler: MessageHandler, to
 			}
 		},
 		established,
-		connection: conn.ws!,
+		// Live getter, not a snapshot: doConnect assigns a fresh conn.ws on every
+		// reconnect, so reading conn.ws here means `.connection` always reflects the
+		// current socket rather than the stale one captured at subscribe time.
+		// Coalesce undefined-through to match the optional `connection?: WebSocket` type.
+		get connection() { return conn.ws ?? undefined; },
 	};
 }
 
@@ -233,7 +251,8 @@ export function hydrate(data: unknown): unknown {
 			subscribe(handlerOrOptions: MessageHandler | SubscribeOptions) {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				const onDisconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onDisconnect;
-				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect);
+				const onReconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onReconnect;
+				return subscribeTo(wsUrl, channel, handler, token as string | undefined, onDisconnect, onReconnect);
 			},
 		} satisfies RealtimeChannelClient;
 	}
