@@ -397,11 +397,23 @@ describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
 	});
 });
 
-// enableTracing routes tracing onto the resolved compute (X-Ray on its function
-// + trace-publish permission on the shared role) instead of poking a specific
-// function. (Dashboard rendering of the traces section lands with the Dashboard
-// change that builds on this.)
+// Observability methods the Logger / Tracer / Dashboard blocks call on the
+// resolved compute instead of poking a specific function. Under Option 1
+// retention is NOT set here: the compute owns one handler log group (created in
+// its constructor with defaults.logRetention) and bb-logger reconfigures that
+// group — so enableLogging() is presence-only.
 describe('LambdaCompute observability', () => {
+	test('enableLogging() marks logging enabled so the Dashboard renders the logs section', () => {
+		const { parent } = setup('LambdaComputeLogEnabled');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+
+		// Presence-based: no second LogGroup is provisioned (the constructor's
+		// handler group is the only one); the logs section simply renders.
+		assert.notStrictEqual(compute.dashboardSection('us-east-1').logging, undefined);
+	});
+
 	test('enableTracing turns on Active tracing and grants X-Ray publish on the shared role', () => {
 		const { stack, parent } = setup('LambdaComputeTracing');
 
@@ -422,5 +434,59 @@ describe('LambdaCompute observability', () => {
 				]),
 			},
 		});
+	});
+
+	test('dashboardSection returns the Lambda health widget rows', () => {
+		const { parent } = setup('LambdaComputeWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const rows = compute.dashboardSection('us-east-1').health;
+
+		assert.strictEqual(rows.length, 2, 'two rows');
+		assert.strictEqual(rows[0].length, 2, 'first row has two widgets');
+		assert.strictEqual(rows[1].length, 2, 'second row has two widgets');
+
+		const titles = rows.flat().flatMap((w) => w.toJson().map((j: any) => j.properties?.title));
+		for (const t of ['Lambda Invocations', 'Lambda Errors', 'Lambda Duration', 'Lambda Concurrent Executions']) {
+			assert.ok(titles.includes(t), `expected a "${t}" widget`);
+		}
+	});
+
+	test('dashboardSection omits logs/traces until a Logger/Tracer is attached', () => {
+		const { parent } = setup('LambdaComputeGating');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		const section = compute.dashboardSection('us-east-1');
+		assert.equal(section.logging, undefined, 'no logs section without a Logger');
+		assert.equal(section.tracing, undefined, 'no traces section without a Tracer');
+	});
+
+	test("dashboardSection.logging queries this compute's log group once a Logger is attached", () => {
+		const { parent } = setup('LambdaComputeLogWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableLogging();
+		const json = (compute.dashboardSection('us-east-1').logging ?? []).flat().flatMap((w) => w.toJson());
+
+		const titles = json.map((j: any) => j.properties?.title);
+		assert.ok(titles.includes('Recent Errors'), 'has a recent-errors log query widget');
+		assert.ok(titles.includes('Log Volume'), 'has a log-volume widget');
+		// The log query targets the compute's own handler log group.
+		const logWidget = json.find((j: any) => j.properties?.title === 'Recent Errors');
+		assert.equal(logWidget.type, 'log');
+	});
+
+	test('dashboardSection.tracing emits an X-Ray trace widget once a Tracer is attached', () => {
+		const { parent } = setup('LambdaComputeTraceWidgets');
+
+		const compute = new LambdaCompute(parent, 'extra');
+		compute.enableTracing();
+		const json = (compute.dashboardSection('eu-west-1').tracing ?? []).flat().flatMap((w) => w.toJson());
+
+		assert.strictEqual(json.length, 1, 'one trace widget');
+		assert.equal(json[0].type, 'trace');
+		assert.equal(json[0].properties.title, 'Traces');
+		assert.equal(json[0].properties.region, 'eu-west-1');
+		assert.ok(json[0].properties.filters.query.includes('AWS::Lambda::Function'));
 	});
 });

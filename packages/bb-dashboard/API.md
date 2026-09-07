@@ -23,15 +23,12 @@ export const DashboardErrors: {
 export interface DashboardOptions {
     dashboardName?: string;
     defaultTimeRange?: string;
-    logger?: LoggerBBRef;
-    metricConfigs?: MetricConfig[];
-    metrics?: MetricsBBRef;
+    metrics?: MetricsSource | MetricsSource[];
     routePath?: string | false;
     title?: string;
-    tracer?: TracerBBRef;
 }
 
-// @public
+// @public @deprecated
 export interface LoggerBBRef {
     // (undocumented)
     readonly fullId: string;
@@ -54,6 +51,12 @@ export interface MetricsBBRef {
 }
 
 // @public
+export interface MetricsSource {
+    metricConfigs?: MetricConfig[];
+    metrics: MetricsBBRef;
+}
+
+// @public @deprecated
 export interface TracerBBRef {
     // (undocumented)
     readonly fullId: string;

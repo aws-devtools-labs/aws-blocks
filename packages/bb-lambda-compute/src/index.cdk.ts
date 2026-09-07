@@ -11,12 +11,14 @@ import {
 import { BLOCKS_NAMESPACE, Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import type { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { type CfnLogGroup, LogGroup } from 'aws-cdk-lib/aws-logs';
 import type { LambdaComputeProps } from './types.js';
+import { buildHealthWidgets, buildLoggingWidgets, buildTracingWidgets } from './widgets.js';
 
 export type { LambdaComputeProps } from './types.js';
 
@@ -210,5 +212,29 @@ export class LambdaCompute extends Compute {
 				resources: ['*'],
 			}),
 		);
+	}
+
+	protected healthWidgets(region: string): IWidget[][] {
+		return buildHealthWidgets(this.fn.functionName, region);
+	}
+
+	protected loggingWidgets(region: string): IWidget[][] {
+		// Defense-in-depth: dashboardSection only calls this when logging is on,
+		// but guard anyway so the builder can never emit an empty/misleading
+		// log section for a compute with no Logger attached.
+		if (!this.isLoggerEnabled) {
+			throw new Error(`Compute "${this.id}": loggingWidgets requires a Logger — call enableLogging() first`);
+		}
+		// Query the compute's own log group (the one wired into the function),
+		// not the AWS default `/aws/lambda/<fn>` name — the function writes to
+		// `this.logGroup`, whose name CDK generates.
+		return buildLoggingWidgets(this.logGroup.logGroupName, region);
+	}
+
+	protected tracingWidgets(region: string): IWidget[][] {
+		if (!this.isTracerEnabled) {
+			throw new Error(`Compute "${this.id}": tracingWidgets requires a Tracer — call enableTracing() first`);
+		}
+		return buildTracingWidgets(this.fn.functionName, region);
 	}
 }

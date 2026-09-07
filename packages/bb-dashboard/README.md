@@ -22,43 +22,52 @@ npm install @aws-blocks/bb-dashboard
 
 ## Quick Start
 
-### Minimal (Lambda Health Only)
+### Minimal (default compute)
 
 ```typescript
 import { Dashboard } from '@aws-blocks/bb-dashboard';
 
 const dashboard = new Dashboard(scope, 'dashboard');
-// After deploy: outputs URL to CloudWatch Dashboard with Lambda metrics
+// After deploy: a CloudWatch Dashboard with a health section for the default compute.
 ```
 
 ### With Observability BBs (Recommended)
+
+The dashboard is organized **by compute** — it renders your app's compute as a
+group. Logs and traces appear automatically when a `Logger` / `Tracer` is
+attached — you do **not** pass those to the dashboard. **Metrics** are app-scoped
+(a namespace isn't tied to a compute), so they're passed explicitly, one section
+per namespace.
 
 ```typescript
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
 import { Tracer } from '@aws-blocks/bb-tracer';
 
-const logger = new Logger(scope, 'logs');
+new Logger(scope, 'logs');       // → logs section
+new Tracer(scope, 'tracing');    // → traces section
 const metrics = new Metrics(scope, 'metrics', { namespace: 'MyApp' });
-const tracer = new Tracer(scope, 'tracing');
 
 const dashboard = new Dashboard(scope, 'dashboard', {
   title: 'MyApp — Production',
-  logger,
-  metrics,
-  tracer,
-  metricConfigs: [
-    { name: 'OrdersPlaced' },
-    { name: 'Latency', stat: 'p99', period: 300, title: 'P99 Latency' },
-    { name: 'CustomMetric', dimensions: { Service: 'API', Stage: 'prod' } },
-  ],
+  // app-wide; pair each Metrics BB with its own metric names (per-namespace).
+  // Also accepts an array of sources, one section per namespace.
+  metrics: {
+    metrics,
+    metricConfigs: [
+      { name: 'OrdersPlaced' },
+      { name: 'Latency', stat: 'p99', period: 300, title: 'P99 Latency' },
+      { name: 'CustomMetric', dimensions: { Service: 'API', Stage: 'prod' } },
+    ],
+  },
 });
 ```
 
-The Dashboard extracts configuration directly from BB instances:
-- **Metrics**: uses the BB's resolved `namespace` (which defaults to its scope `fullId` unless overridden) and `defaultDimensions` (automatically included in widget queries so they target the correct dimensioned metric stream)
-- **Logger**: enables log widgets; log group derived from Lambda handler function name
-- **Tracer**: presence implies X-Ray tracing is active
+How the dashboard resolves each section:
+- **Health** — the compute's health section, always shown.
+- **Logs** — shown when a `Logger` is attached to the compute (the compute self-reports via `loggerEnabled`); log group derived from that compute's own log group.
+- **Traces** — shown when a `Tracer` is attached to the compute (`tracerEnabled`).
+- **Metrics** — app-wide, from the `metrics` option: uses each BB's resolved `namespace` (defaults to its scope `fullId`) and `defaultDimensions` (included in widget queries so they target the correct dimensioned stream).
 
 ## API Reference
 
@@ -83,13 +92,16 @@ Creates a CloudWatch Dashboard with auto-generated widgets.
 
 ### `DashboardOptions`
 
-#### Observability BB Composition
+#### Observability composition
+
+Logs and traces are **not** options — they appear automatically when a `Logger`
+/ `Tracer` is attached to the compute. You pass the app-scoped metrics here.
+(There is no compute selector yet — the dashboard covers the app's default
+compute; one arrives with the multi-compute customer surface.)
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `logger` | `LoggerBBRef` | Logger BB instance — enables log query widgets |
-| `metrics` | `MetricsBBRef` | Metrics BB instance — adds metric widgets (uses resolved `namespace` and `defaultDimensions`) |
-| `tracer` | `TracerBBRef` | Tracer BB instance — enables X-Ray trace widgets |
+| `metrics` | `MetricsSource \| MetricsSource[]` | Metrics source(s) — each pairs a Metrics BB with its own `metricConfigs`; one app-wide section per namespace |
 
 #### Configuration
 
@@ -97,7 +109,6 @@ Creates a CloudWatch Dashboard with auto-generated widgets.
 |--------|------|---------|-------------|
 | `title` | `string` | `id` | Dashboard display title |
 | `dashboardName` | `string` | `scope.fullId` | CloudWatch Dashboard name (max 255 characters, auto-truncated) |
-| `metricConfigs` | `MetricConfig[]` | `[]` | Pre-registered metrics with optional custom stat/period/title |
 | `defaultTimeRange` | `string` | `'-PT3H'` | Default time range (ISO 8601 duration) |
 | `routePath` | `string \| false` | `'/aws-blocks/dashboard'` | Route path for the redirect. Set to `false` to disable |
 
@@ -129,18 +140,20 @@ DashboardErrors.InvalidMetricConfig // 'InvalidMetricConfigException'
 
 The following widgets are always included:
 
+Grouped per compute, then an app-wide metrics section:
+
 | Widget | Source | Condition |
 |--------|--------|-----------|
-| Lambda Invocations | AWS/Lambda | Always |
-| Lambda Errors | AWS/Lambda | Always |
-| Lambda Duration (Avg + p99) | AWS/Lambda | Always |
-| Concurrent Executions | AWS/Lambda | Always |
-| Individual Metric Graph (per metric) | User namespace | `metrics` BB + `metricConfigs` |
-| X-Ray Trace Table | X-Ray | `tracer` BB provided |
-| Recent Errors (Log Insights) | Log group | `logger` BB provided |
-| Log Volume | AWS/Logs | `logger` BB provided |
+| Lambda Invocations | AWS/Lambda | Per compute, always |
+| Lambda Errors | AWS/Lambda | Per compute, always |
+| Lambda Duration (Avg + p99) | AWS/Lambda | Per compute, always |
+| Concurrent Executions | AWS/Lambda | Per compute, always |
+| X-Ray Trace Table | X-Ray | Per compute, when a `Tracer` is attached to it |
+| Recent Errors (Log Insights) | Log group | Per compute, when a `Logger` is attached to it |
+| Log Volume | AWS/Logs | Per compute, when a `Logger` is attached to it |
+| Individual Metric Graph (per metric) | User namespace | App-wide, per `metrics` source + `metricConfigs` |
 
-Rows collapse upward when their condition is not met.
+(Health widgets are Lambda-shaped for the default compute; other compute types report their own health metrics.)
 
 ## Dashboard Redirect Route
 
@@ -161,8 +174,8 @@ const dashboard = new Dashboard(scope, 'dashboard', {
 
 ## Auto-Derived Log Group Name
 
-When a `logger` BB instance is provided, the Dashboard derives the log group
-name from the Lambda function name using the standard pattern:
+When a `Logger` is attached to a compute, that compute's log section derives the
+log group name from its Lambda function name using the standard pattern:
 
 ```
 /aws/lambda/{functionName}
@@ -217,10 +230,12 @@ const metrics = new Metrics(scope, 'metrics', {
 });
 
 const dashboard = new Dashboard(scope, 'dashboard', {
-  metrics,
-  metricConfigs: [
-    { name: 'OrdersPlaced' },  // queries with { service: 'orders', env: 'prod' }
-    { name: 'Latency', dimensions: { endpoint: '/api' } },  // { service: 'orders', env: 'prod', endpoint: '/api' }
-  ],
+  metrics: {
+    metrics,
+    metricConfigs: [
+      { name: 'OrdersPlaced' },  // queries with { service: 'orders', env: 'prod' }
+      { name: 'Latency', dimensions: { endpoint: '/api' } },  // { service: 'orders', env: 'prod', endpoint: '/api' }
+    ],
+  },
 });
 ```

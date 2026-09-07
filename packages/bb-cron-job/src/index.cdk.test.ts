@@ -27,6 +27,7 @@ import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { Compute } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
+import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { CronJob, CronJobErrors } from './index.cdk.js';
 
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
@@ -37,6 +38,15 @@ class FakeCompute extends Compute {
 	// Observability hooks are irrelevant here — stub them to satisfy Compute.
 	protected applyLogRetention(): void {}
 	protected applyTracing(): void {}
+	protected healthWidgets(): IWidget[][] {
+		return [];
+	}
+	protected loggingWidgets(): IWidget[][] {
+		return [];
+	}
+	protected tracingWidgets(): IWidget[][] {
+		return [];
+	}
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
