@@ -129,7 +129,7 @@ await table.delete(key, { ifExists: true });
 await table.delete(key, { ifFieldEquals: { status: 'archived' } });
 ```
 
-All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500) and are flagged retriable, in both the mock and AWS runtime.
+All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically).
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
@@ -178,7 +178,7 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to HTTP **409 (Conflict)**, retriable. |
+| `DistributedTableErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | An `ifNotExists` / `ifExists` / `ifFieldEquals` condition failed. Serializes to HTTP **409 (Conflict)**; retriable only for `ifFieldEquals` optimistic-lock conflicts (not `ifNotExists` / `ifExists`). |
 | `DistributedTableErrors.ValidationFailed` | `ValidationFailedException` | An item failed the configured `schema` validation on `put()` / `putBatch()`. |
 | `DistributedTableErrors.InvalidQuery` | `InvalidQueryException` | The query/condition shape is wrong: missing `where`, partition key not given as `{ equals }`, unknown index, multiple sort-key conditions, or an empty `ifFieldEquals`. A caller bug. |
 | `DistributedTableErrors.ItemTooLarge` | `ItemTooLargeException` | A `put`/`putBatch` item exceeds DynamoDB's 400 KB per-item size limit. |

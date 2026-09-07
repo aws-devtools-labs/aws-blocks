@@ -134,7 +134,7 @@ export class KVStore<T = string> extends Scope {
 			// treated as absent) and NOT when `ifNotExists` is also set.
 			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
 				const retriable = options?.ifValueEquals !== undefined && !options?.ifNotExists;
-				throw new ApiError(err.message, 409, {
+				throw new ApiError('The conditional request failed', 409, {
 					name: KVStoreErrors.ConditionalCheckFailed,
 					cause: err,
 					retriable,
@@ -179,7 +179,7 @@ export class KVStore<T = string> extends Scope {
 			// `ifExists` is also set. Matches the mock path.
 			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
 				const retriable = conditions?.ifValueEquals !== undefined && !conditions?.ifExists;
-				throw new ApiError(err.message, 409, {
+				throw new ApiError('The conditional request failed', 409, {
 					name: KVStoreErrors.ConditionalCheckFailed,
 					cause: err,
 					retriable,
