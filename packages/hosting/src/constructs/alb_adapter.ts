@@ -55,6 +55,8 @@ export type AlbRenderContext = AdapterContext & {
   vpc?: IVpc;
   internal?: boolean;
   certificate?: ICertificate;
+  /** Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) via a Lambda target. */
+  backendApiUrl?: string;
   /** Capabilities the app explicitly accepts in degraded form (else the negotiator fails). */
   degrade?: CapabilityId[];
 };
@@ -93,6 +95,7 @@ export class AlbAdapter implements FrontDoorAdapter {
       vpc: ctx.vpc,
       internal: ctx.internal,
       certificate: ctx.certificate,
+      backendApiUrl: ctx.backendApiUrl,
     });
     return { url: alb.url };
   }

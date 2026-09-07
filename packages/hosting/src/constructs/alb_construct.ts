@@ -21,8 +21,10 @@ import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Code, Function as LambdaFunction, type IFunction } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
+import { Fn } from 'aws-cdk-lib';
 import type { CapabilityPlan, RouteKind } from '../plan/types.js';
 import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
+import { generateAlbApiProxyCode } from './alb_api_proxy.js';
 import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 
 export type AlbConstructProps = {
@@ -42,10 +44,24 @@ export type AlbConstructProps = {
   internal?: boolean;
   /** ACM certificate (regional, same region as the ALB) for an HTTPS listener. */
   certificate?: ICertificate;
+  /**
+   * Backend API Gateway URL (e.g. `https://…/prod/aws-blocks/api`). When set,
+   * the ALB proxies {@link apiProxyPaths} to the backend via an api-proxy Lambda
+   * target — the same-origin API proxy (the ALB analogue of CloudFront's
+   * `/aws-blocks/*` behaviors), so session cookies flow and there is no CORS.
+   */
+  backendApiUrl?: string;
+  /**
+   * URL patterns proxied to the backend API when {@link backendApiUrl} is set.
+   * Default: `['/aws-blocks/*', '/aws-blocks-auth/*']` (the Blocks RPC + auth
+   * subtrees). These win over the route/catch-all rules.
+   */
+  apiProxyPaths?: string[];
 };
 
-/** ALB listener rule priorities start here; redirects get the lowest numbers (highest precedence). */
-const REDIRECT_PRIORITY_BASE = 1;
+/** ALB listener rule priority bands (lower number = evaluated first). */
+const API_PRIORITY_BASE = 1;
+const REDIRECT_PRIORITY_BASE = 100;
 const ROUTE_PRIORITY_BASE = 1000;
 
 export class AlbConstruct extends Construct {
@@ -121,6 +137,44 @@ export class AlbConstruct extends Construct {
       certificates: httpsCert ? [httpsCert] : undefined,
       defaultTargetGroups: [defaultTg],
     });
+
+    // ── Same-origin API proxy (highest precedence) ──
+    // Forward /aws-blocks/* (+ auth subtree) to the backend API Gateway via a
+    // small forwarder Lambda target, so the API is same-origin with the
+    // frontend (session cookies flow, no CORS) — the ALB analogue of
+    // CloudFront's addApiBehaviors. ALB can't target an external HTTPS URL, so
+    // a Lambda relays it.
+    if (props.backendApiUrl) {
+      const apiProxy = new LambdaFunction(this, 'ApiProxy', {
+        runtime: DEFAULT_NODE_RUNTIME,
+        handler: 'index.handler',
+        code: Code.fromInline(generateAlbApiProxyCode()),
+        timeout: Duration.seconds(30),
+        memorySize: 256,
+        environment: {
+          // API Gateway base WITHOUT the `/aws-blocks/api` suffix (token-safe:
+          // split the resolved apiUrl on the suffix and take the base).
+          API_GW_BASE: Fn.select(0, Fn.split('/aws-blocks/api', props.backendApiUrl)),
+        },
+      });
+      const apiTg = new elbv2.ApplicationTargetGroup(this, 'ApiProxyTg', {
+        targetType: elbv2.TargetType.LAMBDA,
+        targets: [new targets.LambdaTarget(apiProxy)],
+        healthCheck: { enabled: false },
+        // Preserve multiple Set-Cookie response headers (auth session cookies).
+        // Requires the LAMBDA target type (set explicitly above for the validator).
+        multiValueHeadersEnabled: true,
+      });
+      const apiPaths = props.apiProxyPaths ?? ['/aws-blocks/*', '/aws-blocks-auth/*'];
+      let apiPriority = API_PRIORITY_BASE;
+      for (const pattern of apiPaths) {
+        listener.addTargetGroups(`ApiRoute${apiPriority}`, {
+          priority: apiPriority++,
+          conditions: [elbv2.ListenerCondition.pathPatterns([pattern])],
+          targetGroups: [apiTg],
+        });
+      }
+    }
 
     // ── Listener rules from the plan's RouteTable ──
     // Redirects first (lowest priority numbers = evaluated first), then routes
