@@ -51,7 +51,7 @@ globalEmitter.setMaxListeners(1000);
 // ── Realtime ────────────────────────────────────────────────────────────────
 
 /**
- * Real-time pub/sub messaging backed by AWS AppSync Events.
+ * Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
  *
  * **When to use:** You need to push data from the server to connected clients
  * in real time — chat messages, live notifications, dashboard updates,
@@ -67,9 +67,9 @@ globalEmitter.setMaxListeners(1000);
  * - Keep message payloads small — large payloads increase latency and cost
  * - Return channel handles from API methods for seamless client hydration
  *
- * **Scaling:** WebSocket connections managed by AppSync Events. Automatic scaling.
- * $1.00 per million operations. 200 subscriptions per connection (adjustable).
- * Message fan-out cost is proportional to subscriber count.
+ * **Scaling:** API Gateway manages WebSocket connections. The Blocks handler
+ * fans each publish out to subscribed connections, so latency and cost scale
+ * with subscriber count. See the package README for limits and cost details.
  *
  * @example
  * ```typescript
