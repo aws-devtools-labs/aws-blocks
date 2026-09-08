@@ -1,5 +1,214 @@
 # @aws-blocks/core
 
+## 0.4.0
+
+### Minor Changes
+
+- df667c5: feat(core): expose `backendModulePath`
+  
+  `BlocksStack` / `BlocksBackend` now expose `backendModulePath` (the app's `backendCDKPath`) so
+  Building Blocks that co-bundle the app backend at synth time can discover it via
+  `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`. Used to co-bundle the backend + the agent
+  `serve()` harness into the AgentCore Runtime's code asset.
+  
+  The shared execution role (`BlocksRole`) stays BB-agnostic: it is created with a
+  `CompositePrincipal` so a Building Block whose compute runs **as** the shared role can add its own
+  trust principal from its own CDK construct (e.g. the Agent BB adds `bedrock-agentcore`), rather than
+  core trusting a specific compute by default.
+- df667c5: feat(core): expose `getConfigLocation()` so co-located compute can load the app config
+  
+  `getConfigLocation(scope)` ensures the shared config bucket exists (created once per stack, memoized on
+  the config registry) and returns `{ bucketName, key }`. `finalizeConfigRegistry` now uses it for the
+  handler's `BLOCKS_CONFIG_BUCKET`/`BLOCKS_CONFIG_KEY` + `s3:GetObject` grant (handler behavior unchanged).
+  A Building Block whose compute runs **as** the shared execution role but outside the Lambda handler
+  (e.g. the Agent BB's AgentCore Runtime) can now inject the same two vars at construction so its
+  `loadConfigToProcessEnv()` loads the identical app config — otherwise it would run with empty config and
+  any config-backed BB a tool touches would fail. IAM is unchanged: the config-read grant is on the shared
+  role, which such compute inherits.
+- c45eb92: Extend stack-wide `BlocksDefaults` (introduced in the Infrastructure Options work) with three additive fields, and adopt them across the Blocks-managed infrastructure. Each field is read independently via `option ?? scope.defaults.field` — a per-block option always wins, and no field is derived from another.
+  
+  `@aws-blocks/core/cdk` now adds to `BlocksDefaults` (and both `BlocksPresets`):
+  
+  - `logRetention: RetentionDays` — how long Blocks-managed CloudWatch log groups keep events. Preset sandbox `ONE_WEEK`, production `ONE_YEAR`.
+  - `throttling: { rateLimit, burstLimit }` — request-rate limits applied to every Blocks API Gateway stage. Preset sandbox `200 / 400`, production `1000 / 2000`.
+  - `accessLogging: boolean` — structured JSON access logs on every Blocks API Gateway stage. **Off by default in both presets** (opt-in), because enabling it mutates the account/region-level API Gateway CloudWatch role singleton.
+  
+  Also newly exported from `@aws-blocks/core/cdk`: the `BlocksThrottling` type and `ensureApiGatewayAccount()` (provisions the account-level API Gateway CloudWatch Logs role once per stack). `Scope` gains a `handlerLogGroup` getter for the shared handler log group.
+  
+  **Log retention** — Blocks-managed log groups now follow `defaults.logRetention` instead of AWS's infinite default: the shared handler Lambda (now owned by `BlocksStack`/`BlocksBackend` as `scope.handlerLogGroup`), the `bb-distributed-table` GSI-manager Lambdas, the `bb-distributed-data` DSQL migration Lambda, the `bb-data` Aurora migration Lambda, and the `bb-app-setting` secret-init Lambda. `bb-logger` reconfigures the shared handler group's retention — **only when an explicit per-Logger `retention` is set** (a bare `Logger` no longer writes it back, so it can't clobber another Logger's value) — rather than creating its own `/aws/lambda/<fn>` group. (Note: the framework `custom-resources.Provider` Lambdas these BBs wrap still use AWS's default retention — the L2 `Provider` exposes no log-group/retention override.)
+  
+  **Throttling** — applied to the core REST API stage and the `bb-realtime` WebSocket stage. On a WebSocket stage the throttle unit is messages/second across the connection.
+  
+  **Access logging** — when enabled, each stage writes structured JSON access logs to a dedicated CloudWatch log group (retention = `defaults.logRetention`, removal policy = `defaults.removalPolicy` so production **RETAIN**s the audit trail on teardown). The account-level API Gateway CloudWatch Logs role is provisioned once per stack and shared across stages.
+  
+  **⚠️ Behavior changes on upgrade:**
+  - **Throttling now caps the core REST API and WebSocket stages.** Before this change these stages had no stage-level throttle (they ran at the API Gateway account default, ~10k rps). After upgrade, sandbox is capped at 200 rps / 400 burst and production at 1000 rps / 2000 burst. Apps serving above the production ceiling will see `429`s — raise it with a per-stack `throttling` override (`defaults: { ...BlocksPresets.production, throttling: { rateLimit, burstLimit } }`).
+  - **The shared handler Lambda log group changes.** The handler previously logged to Lambda's auto-created `/aws/lambda/<fn>` group (infinite retention); it now logs to a framework-owned group with the default retention. On upgrade the old auto group is left orphaned in CloudWatch (unmanaged, still infinite) — delete it manually if you want its history/cost gone. Likewise a `bb-logger`-created retention group from a prior version is replaced.
+  - **Access logging** is **opt-in (off in both presets)**. When enabled it requires the account-level API Gateway CloudWatch Logs role — an account/region-level singleton, so enabling it is safe for **one Blocks stack per region** (see `ensureApiGatewayAccount()` for the multi-stack teardown caveat). It defaults off (rather than on for production) so an upgrade never mutates that account-wide singleton without an explicit opt-in.
+  - **`BlocksDefaults` gains three required fields** (`logRetention`, `throttling`, `accessLogging`). Apps that spread a `BlocksPresets` preset (the documented path) are unaffected; code that hand-rolls a literal `BlocksDefaults` object will need to add the new fields to compile.
+  
+  `bb-dashboard` now points its log widgets at the framework-owned handler log
+  group (`scope.handlerLogGroup.logGroupName`) instead of reconstructing
+  `/aws/lambda/<fn>` — the handler now writes to a dedicated group with a
+  CDK-generated name, so the old convention would leave the "Recent Errors" /
+  "Log Volume" widgets querying an empty group.
+  
+  Hosting adoption of these defaults (SSR REST API + compute log groups) ships in a separate change.
+- 4a830a6: feat: route event-block resources to their resolved compute
+  
+  AsyncJob, CronJob, and Realtime now attach their compute-bound resources to a
+  compute resolved at synth rather than the stack's shared handler:
+  
+  - AsyncJob attaches its SQS event source to the resolved compute's function;
+  - CronJob points its EventBridge Scheduler target at the resolved compute's function;
+  - Realtime binds its shared WebSocket API integrations to the stack's **default**
+    compute (its routes are a stack-level singleton) and grants `postToConnection`
+    to the shared execution role, so `publish()` works from any compute.
+  
+  Each block requires a Lambda compute today and fails at synth with a typed
+  `UnsupportedCompute` error (assertable via `isBlocksError`) on any other type.
+  The check uses a duplicate-copy-safe brand (`LambdaCompute.isLambdaCompute`,
+  backed by a `Symbol.for` marker) instead of `instanceof`, so it does not misfire
+  when two copies of `bb-lambda-compute` resolve in one dependency tree.
+  
+  On the default single-Lambda setup the resolved/default compute is the stack's
+  default, whose function is the shared handler — so this is non-breaking with no
+  change to synthesized infrastructure. AsyncJob also grants SQS send to the shared
+  execution role rather than the handler directly.
+  
+  New public surface (hence `minor`):
+  
+  - `@aws-blocks/core` exports `blocksError(name, message)` (the producer half of
+    the `isBlocksError` contract) and `sanitizeConfigKey(id)` from `./bb-utils`
+    (the single env-var-key sanitizer both config writers and runtime readers use).
+  - `@aws-blocks/bb-lambda-compute` adds a `./cdk` subpath exposing the CDK-typed
+    `LambdaCompute` and its `LambdaCompute.isLambdaCompute` guard.
+  - `bb-async-job` / `bb-cron-job` / `bb-realtime` add an `UnsupportedCompute`
+    error member.
+  
+  `@aws-blocks/bb-agent` builds AsyncJob and Realtime internally, so its CDK test
+  moves onto the `BlocksStack.create` harness instead of a handler-only stub.
+  Test-only change — no runtime behavior change to the Agent.
+- f2f186c: fix(hosting): DeleteOldBuilds no longer expires the build that is currently served (#480)
+  
+  The `DeleteOldBuilds` S3 lifecycle rule expired every object under `builds/`
+  after `buildRetentionDays` (default 30), including the build that CloudFront KVS
+  `meta.b` currently points to. An app that did not deploy within the retention
+  window had its live build's objects expired out from under an otherwise-healthy
+  stack — the router kept rewriting to the now-empty prefix, so every static path
+  returned 403 (hosting ≤ 0.1.4) or 404 (≥ 0.1.5) while the API path stayed 200.
+  Recovery required a redeploy.
+  
+  **Fix.** The lifecycle rule now matches only objects tagged
+  `aws-blocks:build-state=superseded`. At the KVS cutover, after the pointer flips
+  to the new build, the cutover handler tags the *outgoing* build's objects
+  superseded (best-effort; list + tag/untag only — the handler is granted **no** S3
+  delete-object permission). The live build is never tagged, so it is never expired,
+  regardless of deploy cadence. Superseded builds are still cleaned up after
+  `buildRetentionDays`. S3 lifecycle `TagFilters` are inclusion-only (there is no
+  "NOT tagged" predicate), which is why the superseded build is tagged rather than
+  the live build excluded.
+  
+  **Rollback-safety hardening.** The same cutover also *clears* the build-state tag
+  on the *incoming* build's objects, symmetric to tagging the outgoing one. Without
+  this, a rollback that re-points `meta.b` back to a retained build that was tagged
+  superseded by an earlier cutover would hand the now-live build to
+  `DeleteOldBuilds` — #480 again. Clearing is best-effort and uses
+  `s3:DeleteObjectTagging` (tags only, never objects).
+  
+  **`buildRetentionDays` is now configurable from `@aws-blocks/core`.** Previously
+  `HostingProps` dropped it (only `retainOnDelete` was forwarded), so the only way
+  to change retention was an L1 bucket override. It now flows through to the
+  hosting bucket lifecycle rule. Must be at least `skewProtection.maxAge`
+  (converted to days) or synth throws `InvalidSkewProtectionMaxAgeError`, as
+  before.
+  
+  **New advisory guard.** An optional `storage.deployIntervalDays` hint emits a
+  synth-time **warning** (never an error) when the deploy cadence is at or beyond
+  `buildRetentionDays`, i.e. when superseded builds could age out before the next
+  deploy and shrink the rollback window. The live build is unaffected, so this is
+  a rollback-window note, not a correctness gate.
+  
+  Pre-1.0 `minor` per this repo's convention: the change alters the synthesized
+  lifecycle rule and the `KvKeys` custom resource (a benign in-place bucket-config
+  + Lambda-role update on the next deploy; no bucket replacement), and adds a new
+  IAM grant (`s3:ListBucket` + `s3:PutObjectTagging` + `s3:DeleteObjectTagging`,
+  scoped to `builds/*`) to the
+  cutover handler. Build artifacts uploaded before the upgrade carry no
+  `build-state` tag and are therefore never expired by the new rule — including
+  the live build — so the upgrade cannot delete a running build; from the next
+  deploy onward each superseded build is tagged and reclaimed normally.
+
+### Patch Changes
+
+- 64ddd74: refactor(core): retarget the config registry to the shared role and every compute
+  
+  `finalizeConfigRegistry` no longer takes a single handler function. It now takes
+  the owning construct plus the shared execution role and the stack's computes
+  (`finalizeConfigRegistry(root, executionRole, computes)`) and:
+  
+  - grants `s3:GetObject` on the config object **once to the shared execution
+    role** instead of to one function's role, so every compute that assumes the
+    role can read it; and
+  - stamps `BLOCKS_CONFIG_BUCKET` / `BLOCKS_CONFIG_KEY` on **every compute** via
+    `compute.setEnv(...)` rather than on a single hardcoded handler.
+  
+  Adds a per-stack compute registry (`registerCompute` / `getComputes`): computes
+  self-register on their owning stack in the `Compute` base constructor (state
+  keyed on the stack, resolved via `cdk.Stack.of()`, like the config registry), so
+  a multi-stack synth keeps each stack's computes isolated. `create()` reads the
+  registry directly via `getComputes(stack)`.
+  
+  Behavior-preserving for the default single-compute app: the same config object
+  is written to S3, the same two coordinates reach the runtime, and the same
+  `s3:GetObject` permission is available — now via the shared role. Internal
+  refactor; no public API or runtime-config-loading change.
+- df667c5: fix(core): retry handler initialization on failure instead of caching the rejection
+  
+  `createLambdaHandler` memoized its init promise and, if `initialize()` threw — most often
+  because `loadConfigToProcessEnv()` couldn't read `blocks-config.json` during the brief
+  post-deploy window before it's readable — cached that **rejected** promise for the container's
+  entire lifetime. Every subsequent request then re-awaited the same rejection and returned a 500,
+  so a *transient* config blip became a *permanent* handler outage for that container (visible as a
+  whole stack of API calls returning `undefined`, only "recovering" as Lambda cycled in fresh
+  containers).
+  
+  A failed `initialize()` now resets the promise so the next invocation retries. Combined with the
+  config loader no longer caching a not-found result (a 404 is treated as transient rather than
+  poisoning the cache with `{}`), the handler **self-heals** as soon as config becomes readable.
+  This is most likely to surface on large/slow deploys (which widen the post-deploy window), but the
+  fragility was general.
+  
+  **Behavior change:** a failed handler init is now **retried per request** instead of cached. A
+  transient config blip self-heals (the win), but a *genuinely* broken deploy (bad IAM, wrong bucket,
+  malformed config) now re-runs `initialize()` — an S3 GET + backend import — on **every** invocation
+  until it recovers or the container cycles, rather than failing fast. Expect added per-request latency
+  and repeated S3/CloudWatch activity under a broken deploy; revisit any alarms that assumed a fast,
+  sticky init failure.
+- 646614b: feat(core): record each API namespace on its resolved compute (internal)
+  
+  `ApiNamespace` now records its name on the namespace's resolved compute
+  (`compute.namespaces`) so later request routing can map a namespace to the
+  compute that hosts it. This is a CDK-synth-only internal side effect — in the
+  mock/runtime bundles there is no compute and it is a silent no-op.
+  
+  The public `ApiNamespace(scope, name, handler)` signature is unchanged and the
+  returned handler is byte-identical. On the default single-compute app every
+  namespace is recorded on the stack's default compute. No `{ compute }` overload
+  is added here (that is the later customer-facing surface).
+- 46b7c89: Generate the local `aws-blocks` package's client entry point on fresh checkouts, under the correct export conditions.
+  
+  The templates declare `./client.js` as the package's `browser`/`import` entry and gitignore it as generated, so a scaffold built on any machine other than the one that scaffolded it failed to resolve the package, and `cdk synth` failed with it (the Hosting block builds the frontend during synthesis).
+  
+  `@aws-blocks/blocks` gains a `blocks-generate-client` bin (mirroring `blocks-generate-spec` and `blocks-vendorize`) that spawns the core generator worker with `--conditions=aws-runtime`, so the emitted client imports `aws-middleware` rather than `mock-middleware` regardless of how the hook is invoked. `@aws-blocks/core` exports the existing `generate-client-worker` subpath so the bin can resolve it. The templates wire `"prebuild": "blocks-generate-client"` (including `backend`, where the hook is dormant until a `build` script exists) and gitignore `.hosting/`, the Vite output written during synthesis.
+- 1da58fd: `destroySandbox` (used by `npm run destroy` and per-job E2E teardown): empty versioned S3 buckets before retrying `cdk destroy`. Teardown relies on each bucket's `autoDeleteObjects` Lambda, which never provisions if the CREATE failed, so a versioned bucket blocked the delete and the stack (and its IAM roles) leaked. On a destroy failure the buckets owned by the app's stacks are now emptied (all object versions + delete markers, paginated) before the retry, alongside the existing VPC-ENI backoff.
+- Updated dependencies [f2f186c]
+- Updated dependencies [1da58fd]
+- Updated dependencies [4b74c7f]
+- Updated dependencies [5960fa4]
+  - @aws-blocks/hosting@0.3.0
+  - @aws-blocks/pipeline@0.2.1
+
 ## 0.3.0
 
 ### Minor Changes

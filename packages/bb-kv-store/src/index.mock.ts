@@ -159,8 +159,10 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists. Serializes to HTTP 409 (Conflict), not retriable (a blind retry fails identically).
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match. Serializes to HTTP 409 (Conflict), retriable (optimistic-lock conflict — re-read and retry).
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set (alone) and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and `ifValueEquals` are set (they compose with OR), only when the key exists AND its current value does not match.
+	 *   All three ConditionalCheckFailed cases serialize to HTTP 409 (Conflict). `retriable` is true whenever a value check participated (`ifValueEquals` set — a stale-value optimistic-lock conflict; under OR composition the combined failure means the key exists but its value differs, so re-read and retry) and false for a pure `ifNotExists` existence assertion (a blind retry fails identically).
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: PutOptions<T>): Promise<void> {
@@ -174,19 +176,28 @@ export class KVStore<T = string> extends Scope {
 
 		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
 
-		// Existence assertion wins: `ifNotExists` makes a conflict non-retriable
-		// even when combined with an `ifValueEquals` value check. Only a pure
-		// value-equals optimistic-lock check is retriable. Uses value presence
-		// (`!== undefined`), so an explicit `undefined` is treated as absent —
-		// consistent with the aws path. Both throw sites share this single
-		// derivation so mock and aws agree for identical inputs, incl. combined.
-		const retriable = options?.ifValueEquals !== undefined && !options?.ifNotExists;
-		if (options?.ifNotExists && this.data.has(key)) {
-			throw conditionalConflict(retriable);
-		}
-		if (options?.ifValueEquals !== undefined) {
-			const current = this.data.get(key)?.value;
-			if (current !== JSON.stringify(options.ifValueEquals)) {
+		// Conditional write. `ifNotExists` and `ifValueEquals` compose with OR
+		// (mirrors the AWS `attribute_not_exists(pk) OR value = :expected`): the
+		// write succeeds when the key is absent OR its current value matches, and
+		// fails only when the key exists AND the value differs.
+		//
+		// Retriability mirrors the aws path and both share this single derivation
+		// so mock and aws agree for identical inputs (incl. the combined case).
+		// Under OR composition a failure means every arm failed: if a value arm
+		// participated (`ifValueEquals` set) the failure is the stale-value case
+		// (key exists, value differs) — an optimistic-lock conflict that IS
+		// retriable. A pure `ifNotExists` failure means the key already exists and
+		// is NOT retriable. Uses value presence (`!== undefined`), so an explicit
+		// `undefined` is treated as absent.
+		const wantAbsent = options?.ifNotExists === true;
+		const wantValue = options?.ifValueEquals !== undefined;
+		if (wantAbsent || wantValue) {
+			const exists = this.data.has(key);
+			const current = exists ? this.data.get(key)?.value : undefined;
+			const absentOk = wantAbsent && !exists;
+			const valueOk = wantValue && current === JSON.stringify(options?.ifValueEquals);
+			if (!absentOk && !valueOk) {
+				const retriable = options?.ifValueEquals !== undefined;
 				throw conditionalConflict(retriable);
 			}
 		}

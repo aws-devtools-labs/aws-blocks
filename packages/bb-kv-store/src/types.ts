@@ -11,8 +11,12 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 export interface ConditionalWriteOptions<T = unknown> {
 	/** Only write if the key does not already exist. */
 	ifNotExists?: boolean;
-	/** Only write if the current value deep-equals this value (optimistic locking / compare-and-swap). */
+	/** Only write if the current value serializes equal to this value (compared via `JSON.stringify`, so object key order matters) — optimistic locking / compare-and-swap. */
 	ifValueEquals?: T;
+	// When BOTH `ifNotExists` and `ifValueEquals` are set they compose with OR:
+	// the write succeeds if the key is absent OR its current value matches — the
+	// optimistic "create it, or update it only if unchanged" pattern. It fails
+	// only when the key exists AND the value differs.
 }
 
 /**
@@ -74,7 +78,7 @@ export interface ScanOptions {
 export interface ConditionalDeleteOptions<T = unknown> {
 	/** Only delete if the key exists. Throws ConditionalCheckFailedException otherwise. */
 	ifExists?: boolean;
-	/** Only delete if the current value deep-equals this value (optimistic locking). */
+	/** Only delete if the current value serializes equal to this value (compared via `JSON.stringify`, so object key order matters) — optimistic locking. */
 	ifValueEquals?: T;
 }
 
