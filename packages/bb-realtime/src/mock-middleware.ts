@@ -137,6 +137,15 @@ function doConnect(wsUrl: string, isReconnect = false) {
 			} catch (e) { console.error('[Realtime] Parse error:', e); }
 		};
 		conn.ws.onclose = () => {
+			// Reconnect on ANY close, regardless of code. The mock is the reference
+			// intent-based model: it does not inspect the close code (a legitimate
+			// mid-connection drop can arrive as 1000/1005 as well as 1001/1006), and
+			// the reconnect-vs-terminal decision lives entirely in scheduleReconnect's
+			// tornDown/subscriptions.size guard. A client-initiated teardown
+			// (__resetConnectionsForTest sets tornDown and detaches this handler;
+			// unsubscribe of the last channel leaves subscriptions.size === 0) is
+			// therefore suppressed there. aws-middleware.ts now mirrors this via its
+			// intentionalClose flag instead of the old close-code classification.
 			conn.isConnected = false;
 			conn.disconnectHandlers.forEach(h => { try { h('unknown'); } catch {} });
 			conn.disconnectHandlers.clear();
