@@ -90,7 +90,7 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.notStrictEqual(d2.token, d1.token, 'each call mints a fresh channel token');
       });
 
-      test('reconnect on the agent chunks channel invokes refresh and resubscribes', { timeout: 60_000 }, async () => {
+      test('reconnect on the agent chunks channel invokes refresh and resubscribes', { timeout: 120_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.agentCreateConversationId();
         // Subscribe via the SAME path useChat uses (agentGetChannel → hydrated chunks channel).

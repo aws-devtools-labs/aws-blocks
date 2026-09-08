@@ -281,8 +281,8 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 
 			// Per-TEST timeout (not on the describe): the real-AWS reconnect round-trip
-			// can take tens of seconds; a describe-level timeout would budget the WHOLE
-			// Realtime suite and cancel sibling tests.
+			// can take ~45s, plus the post-reconnect delivery poll. A describe-level
+			// timeout would budget the WHOLE Realtime suite and cancel sibling tests.
 			test('reconnect after a forced close resubscribes and still delivers messages', { timeout: 120_000 }, async () => {
 				const api = getApi();
 				// Dedicated channel so only this subscription's token/resubscribe is exercised.
@@ -351,7 +351,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				}
 			});
 
-			test('reconnect invokes the refresh callback to obtain fresh credentials', async () => {
+			test('reconnect invokes the refresh callback to obtain fresh credentials', { timeout: 120_000 }, async () => {
 				const api = getApi();
 				const channelName = `refresh-e2e-${Date.now()}`;
 				const c1: Cursor = { userId: 'u1', x: 11, y: 22, color: 'amber' };
