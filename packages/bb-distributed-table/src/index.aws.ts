@@ -47,7 +47,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation, validateLimit } from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -158,6 +158,7 @@ export class DistributedTable<
 	async *query(
 		options: QueryOptions<T, K, Indexes>,
 	): AsyncIterable<T> {
+		const limit = validateLimit(options.limit);
 		const indexConfig = options.index ? this.indexes[options.index as keyof Indexes] : this.keyConfig;
 		if (!indexConfig) throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index));
 
@@ -183,12 +184,12 @@ export class DistributedTable<
 		let count = 0;
 
 		do {
-			const command = this.buildQueryCommand(options.index, pkField, pkValue, skField, skCondition, lastEvaluatedKey, options);
+			const command = this.buildQueryCommand(options.index, pkField, pkValue, skField, skCondition, lastEvaluatedKey, { limit, order: options.order });
 			const result = await this.docClient.send(command);
 
 			for (const item of result.Items ?? []) {
 				yield (await this.reconcileRead(item as T)) as T;
-				if (options.limit && ++count >= options.limit) return;
+				if (limit !== undefined && ++count >= limit) return;
 			}
 
 			lastEvaluatedKey = result.LastEvaluatedKey;
@@ -196,6 +197,7 @@ export class DistributedTable<
 	}
 
 	async *scan(options?: ScanOptions): AsyncIterable<T> {
+		const limit = validateLimit(options?.limit);
 		let lastEvaluatedKey: Record<string, any> | undefined;
 		let count = 0;
 
@@ -203,12 +205,12 @@ export class DistributedTable<
 			const result = await this.docClient.send(new ScanCommand({
 				TableName: getSdkIdentifiers(this).tableName,
 				ExclusiveStartKey: lastEvaluatedKey,
-				Limit: options?.limit,
+				Limit: limit,
 			}));
 
 			for (const item of result.Items ?? []) {
 				yield (await this.reconcileRead(item as T)) as T;
-				if (options?.limit && ++count >= options.limit) return;
+				if (limit !== undefined && ++count >= limit) return;
 			}
 
 			lastEvaluatedKey = result.LastEvaluatedKey;
@@ -422,4 +424,3 @@ export class DistributedTable<
 }
 
 // ── Query input helper type ─────────────────────────────────────────────────
-

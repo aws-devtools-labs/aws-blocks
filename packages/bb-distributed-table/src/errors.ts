@@ -50,10 +50,11 @@ export const DistributedTableErrors = {
 	ConditionalCheckFailed: 'ConditionalCheckFailedException',
 	ValidationFailed: 'ValidationFailedException',
 	/**
-	 * The query or condition shape is invalid and was rejected before reaching
+	 * The request or condition shape is invalid and was rejected before reaching
 	 * DynamoDB: a missing `where` clause, a partition key not given as
-	 * `{ equals: value }`, an unknown index, more than one sort-key condition, or
-	 * an empty `ifFieldEquals`. These are all caller bugs — something the caller
+	 * `{ equals: value }`, an unknown index, more than one sort-key condition, an
+	 * empty `ifFieldEquals`, or a non-positive/non-integer `limit`. These are all
+	 * caller bugs — something the caller
 	 * can fix by correcting the call. Catchable via
 	 * `isBlocksError(e, DistributedTableErrors.InvalidQuery)`.
 	 *
@@ -142,6 +143,8 @@ export const DistributedTableMessages = {
 	multipleSortKeyConditions: (conditionKeys: string[]) =>
 		`Only one sort key condition is allowed per query (DynamoDB limitation). ` +
 		`Got: ${conditionKeys.join(', ')}. Use "between" for range queries.`,
+	invalidLimit: (limit: unknown) =>
+		`limit must be a positive integer (>= 1); received ${String(limit)}`,
 	emptyIfFieldEquals: 'ifFieldEquals must contain at least one field with a non-undefined value',
 	itemTooLarge: (bytes: number) =>
 		`Item size has exceeded the maximum allowed size of 400 KB (got ${bytes} bytes)`,
@@ -149,6 +152,19 @@ export const DistributedTableMessages = {
 		`${operation} did not complete: ${remaining} entr${remaining === 1 ? 'y' : 'ies'} still unprocessed ` +
 		`after ${attempts} attempts (DynamoDB throttling or response-size limits). Retry with backoff.`,
 } as const;
+
+/**
+ * Validate a DynamoDB request limit before either runtime starts yielding
+ * items. A truthiness guard in the local mock would otherwise treat zero or
+ * NaN as an unlimited query, while DynamoDB rejects them.
+ */
+export function validateLimit(limit: number | undefined): number | undefined {
+	if (limit === undefined) return undefined;
+	if (!Number.isInteger(limit) || limit < 1) {
+		throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.invalidLimit(limit));
+	}
+	return limit;
+}
 
 /**
  * @internal Re-map DynamoDB's generic `ValidationException` to the intent-revealing

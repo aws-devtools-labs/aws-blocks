@@ -673,6 +673,44 @@ describe('AWS query rejects multiple sort key conditions before issuing a Dynamo
 	});
 });
 
+describe('query and scan reject invalid limits before issuing DynamoDB commands', () => {
+	const schema = z.object({ pk: z.string(), sk: z.number(), data: z.string() });
+	const options = { schema, key: { partitionKey: 'pk', sortKey: 'sk' } };
+	const invalidLimits = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
+
+	test('query rejects every invalid limit before sending a QueryCommand', async () => {
+		let sendCount = 0;
+		const table = awsTableWithFakeClient('aws-invalid-query-limit', options, async () => {
+			sendCount++;
+			return { Items: [] };
+		});
+
+		for (const limit of invalidLimits) {
+			await assert.rejects(
+				() => collect(table.query({ where: { pk: { equals: 'a' } }, limit })),
+				(err: unknown) => isBlocksError(err, DistributedTableErrors.InvalidQuery),
+			);
+		}
+		assert.strictEqual(sendCount, 0, 'must reject invalid limits before sending a query to DynamoDB');
+	});
+
+	test('scan rejects every invalid limit before sending a ScanCommand', async () => {
+		let sendCount = 0;
+		const table = awsTableWithFakeClient('aws-invalid-scan-limit', options, async () => {
+			sendCount++;
+			return { Items: [] };
+		});
+
+		for (const limit of invalidLimits) {
+			await assert.rejects(
+				() => collect(table.scan({ limit })),
+				(err: unknown) => isBlocksError(err, DistributedTableErrors.InvalidQuery),
+			);
+		}
+		assert.strictEqual(sendCount, 0, 'must reject invalid limits before scanning DynamoDB');
+	});
+});
+
 describe('the 400 KB item-size overflow is a distinct ItemTooLarge error, not the generic InvalidQuery bucket', () => {
 	// R2: the size overflow is a runtime data condition (the item may be too big for
 	// reasons outside the caller's control), so it must be catchable separately from

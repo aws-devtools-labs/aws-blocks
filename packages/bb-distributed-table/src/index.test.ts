@@ -523,6 +523,18 @@ describe('DistributedTable', () => {
 			assert.deepEqual(items.map(i => i.createdAt), [1000, 2000]);
 		});
 
+		test('rejects non-positive and non-integer limits before returning data', async () => {
+			const table = numTable();
+			await seedNumeric(table);
+
+			for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+				await assert.rejects(
+					collect(table.query({ index: 'byUser', where: { userId: { equals: 'u1' } }, limit })),
+					(err: Error) => err.name === DistributedTableErrors.InvalidQuery,
+				);
+			}
+		});
+
 		test('filter + limit combined', async () => {
 			const table = numTable();
 			await seedNumeric(table);
@@ -711,6 +723,21 @@ describe('DistributedTable', () => {
 			await table.put({ userId: 'u2', email: 'b@b.com', name: 'B', createdAt: 2000 });
 			await table.put({ userId: 'u3', email: 'c@b.com', name: 'C', createdAt: 3000 });
 			assert.equal((await collect(table.scan({ limit: 2 }))).length, 2);
+		});
+
+		test('rejects non-positive and non-integer limits before scanning data', async () => {
+			const table = new DistributedTable(testScope(), 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+			});
+			await table.put({ userId: 'u1', email: 'a@b.com', name: 'A', createdAt: 1000 });
+
+			for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+				await assert.rejects(
+					collect(table.scan({ limit })),
+					(err: Error) => err.name === DistributedTableErrors.InvalidQuery,
+				);
+			}
 		});
 
 		test('empty table returns nothing', async () => {
