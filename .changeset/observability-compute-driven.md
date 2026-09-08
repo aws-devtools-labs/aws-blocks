@@ -3,8 +3,8 @@
 "@aws-blocks/blocks": minor
 "@aws-blocks/bb-lambda-compute": minor
 "@aws-blocks/bb-dashboard": minor
-"@aws-blocks/bb-logger": patch
-"@aws-blocks/bb-tracer": patch
+"@aws-blocks/bb-logger": minor
+"@aws-blocks/bb-tracer": minor
 ---
 
 Make observability **compute-driven** so it composes correctly once an app has more than one compute. Logging, tracing, and the dashboard now key off compute state rather than off the Logger / Tracer / Dashboard blocks poking a single implicit compute.

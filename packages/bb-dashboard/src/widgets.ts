@@ -156,13 +156,17 @@ export function buildDashboardWidgets(
 		rows.push(sectionHeader(`## 🔧 ${compute.label}`));
 		rows.push(...compute.health);
 
-		// Traces — present only when a Tracer is attached to this compute.
+		// Traces — present only when tracing is enabled fleet-wide, i.e. some
+		// `Tracer` exists in the app (see cdk/tracer-registry.ts). Also cleared
+		// upstream by the dashboard's `traces: false` display toggle.
 		if (compute.tracing) {
 			rows.push(sectionHeader('### 🔍 Traces'));
 			rows.push(...compute.tracing);
 		}
 
-		// Logs — present only when a Logger is attached to this compute.
+		// Logs — always captured for every compute (stdout → its own log group,
+		// no Logger required). Falsy here only when the dashboard's `logs: false`
+		// display toggle cleared this section.
 		if (compute.logging) {
 			rows.push(sectionHeader('### 📋 Logs'));
 			rows.push(...compute.logging);
@@ -184,8 +188,6 @@ export function buildDashboardWidgets(
  *
  * Resolution:
  * - **Metrics namespace**: derived from `metrics.namespace`
- * - **Log group**: derived from Lambda handler function name when Logger BB present
- * - **Tracing**: enabled when Tracer BB instance is provided
  *
  * @param id - Dashboard construct ID used as fallback for title.
  * @param options - User-provided dashboard configuration.

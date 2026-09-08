@@ -66,7 +66,7 @@ export class Dashboard {
 			`[Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).\n` +
 				`Will create CloudWatch Dashboard '${title}' on deploy. Run 'npx cdk deploy' to view.\n\n` +
 				`📍 Local observability data:\n` +
-				`   • Logs: Check your terminal output - Logger BB writes structured JSON to stdout\n` +
+				`   • Logs: Check your terminal output - every compute writes structured JSON to stdout\n` +
 				`   • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)\n` +
 				`   • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout`,
 		);

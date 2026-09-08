@@ -164,8 +164,10 @@ export interface DashboardOptions {
 	 * Metrics are **app-scoped**, not compute-scoped: a CloudWatch namespace is
 	 * a semantic grouping any compute can emit into, so it is rendered once
 	 * app-wide rather than per compute. (Logs and traces, by contrast, are
-	 * compute-scoped and are rendered automatically for whichever computes have
-	 * a Logger / Tracer attached — see the compute-grouped sections.)
+	 * compute-scoped: every compute always gets a logs section (stdout is always
+	 * captured), and a traces section whenever tracing is enabled fleet-wide —
+	 * i.e. any `Tracer` exists in the app. Both are subject to the `logs` /
+	 * `traces` display toggles above — see the compute-grouped sections.)
 	 *
 	 * @example
 	 * ```typescript
@@ -223,7 +225,9 @@ export interface ResolvedMetricsSource {
  * Used internally by the CDK construct.
  *
  * Logs / traces are not represented here — they are compute-scoped and resolved
- * per compute at build time from whether each compute has a Logger / Tracer attached.
+ * per compute at finalize: logs are always captured for every compute, and
+ * traces appear when tracing is enabled fleet-wide (any `Tracer` in the app),
+ * each subject to the `logs` / `traces` display toggles.
  */
 export interface ResolvedDashboardConfig {
 	title: string;
