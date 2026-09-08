@@ -135,8 +135,9 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set (alone) and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and `ifValueEquals` are set (they compose with OR), only when the key exists AND its current value does not match.
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: PutOptions<T>): Promise<void> {
@@ -150,12 +151,18 @@ export class KVStore<T = string> extends Scope {
 
 		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
 
-		if (options?.ifNotExists && this.data.has(key)) {
-			throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
-		}
-		if (options?.ifValueEquals !== undefined) {
-			const current = this.data.get(key)?.value;
-			if (current !== JSON.stringify(options.ifValueEquals)) {
+		// Conditional write. `ifNotExists` and `ifValueEquals` compose with OR
+		// (mirrors the AWS `attribute_not_exists(pk) OR value = :expected`): the
+		// write succeeds when the key is absent OR its current value matches, and
+		// fails only when the key exists AND the value differs.
+		const wantAbsent = options?.ifNotExists === true;
+		const wantValue = options?.ifValueEquals !== undefined;
+		if (wantAbsent || wantValue) {
+			const exists = this.data.has(key);
+			const current = exists ? this.data.get(key)?.value : undefined;
+			const absentOk = wantAbsent && !exists;
+			const valueOk = wantValue && current === JSON.stringify(options?.ifValueEquals);
+			if (!absentOk && !valueOk) {
 				throw blocksError(KVStoreErrors.ConditionalCheckFailed, 'The conditional request failed');
 			}
 		}

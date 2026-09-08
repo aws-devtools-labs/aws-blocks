@@ -71,6 +71,10 @@ await store.put('user:alice', data, { ifNotExists: true });
 // Only write if current value matches (optimistic locking / compare-and-swap)
 await store.put('counter', newVal, { ifValueEquals: oldVal });
 
+// Compose both (OR): create it, or update it only if unchanged — write succeeds
+// if the key is absent OR its current value matches; fails only if it exists and differs.
+await store.put('config', next, { ifNotExists: true, ifValueEquals: prev });
+
 // Only delete if key exists
 await store.delete('temp', { ifExists: true });
 
