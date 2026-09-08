@@ -91,6 +91,31 @@ All `Realtime` instances in a stack share infrastructure. The first constructor 
 
 All three WebSocket routes ($connect, $disconnect, $default) point at the existing Blocks handler Lambda — wired via `WebSocketLambdaIntegration` at CDK synth time, with the runtime handler registered through `registerLambdaEventHandler('blocks.websocket', ...)`. No separate Lambdas are created.
 
+#### Stage defaults (throttling + access logging)
+
+The WebSocket stage adopts the stack-wide `BlocksDefaults`:
+
+- **Throttling** — `defaults.throttling` is applied as the stage's default route
+  settings (`{ rateLimit, burstLimit }` — sandbox 200/400, production 1000/2000).
+  **On a WebSocket stage the throttle unit is messages per second across the
+  connection** (not HTTP requests): API Gateway meters `$default`-route messages,
+  not connects.
+- **Access logging** — when `defaults.accessLogging` is true (opt-in; off in
+  both presets), the stage writes structured JSON access logs to a dedicated
+  CloudWatch log group (retention = `defaults.logRetention`, removal policy =
+  `defaults.removalPolicy` — production RETAINs the audit trail on teardown,
+  sandbox DESTROYs). This requires the account-level API Gateway
+  CloudWatch Logs role, provisioned once per stack via
+  `ensureApiGatewayAccount()` (shared with the core REST API stage through a
+  `Symbol.for`-keyed lookup, so only one `AWS::ApiGateway::Account` is emitted).
+  The stage is given an explicit dependency on that account so a clean-account
+  first deploy applies the account setting before the stage is created.
+  Note: a production (RETAINed) access-log group is **orphaned** on stack
+  teardown and is the operator's to clean up. The group is intentionally left
+  unnamed (CDK-generated physical name) so a teardown-then-redeploy mints a fresh
+  name and can't collide — do not pin a stable `logGroupName` here, or a
+  RETAINed group from a prior delete would fail the next create.
+
 ### Per Instance
 
 | Resource | Type | Purpose |

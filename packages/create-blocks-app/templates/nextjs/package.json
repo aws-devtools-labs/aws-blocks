@@ -7,7 +7,9 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "workspaces": ["aws-blocks"],
+  "workspaces": [
+    "aws-blocks"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
@@ -17,15 +19,19 @@
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "sandbox:console": "tsx aws-blocks/scripts/console.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
+    "prebuild": "blocks-generate-client",
     "build": "next build",
     "start": "next start",
     "deploy": "tsx aws-blocks/scripts/deploy.ts",
     "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "secret": "tsx aws-blocks/scripts/secret.ts",
+    "typegen": "tsx aws-blocks/scripts/typegen.ts",
     "test:e2e": "tsx -C browser test/e2e.test.ts",
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
+    "@aws-blocks/hosting": "*",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

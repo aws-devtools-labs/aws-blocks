@@ -6,6 +6,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import { DEFAULT_NODE_RUNTIME, blocksNodejsBundling } from '@aws-blocks/core/cdk';
@@ -43,6 +44,12 @@ export interface AuroraInfraConfig {
   deletionProtection?: boolean;
   /** Aurora PostgreSQL engine version, e.g. `'16.13'`. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * CloudWatch retention for the migration Lambda's log group. Populated from
+   * the stack-wide `defaults.logRetention`; when omitted the log group uses the
+   * CDK `LogGroup` default retention.
+   */
+  logRetention?: cdk.aws_logs.RetentionDays;
 }
 
 /**
@@ -204,6 +211,10 @@ export function materialize(
       handler: 'handler',
       runtime: DEFAULT_NODE_RUNTIME,
       timeout: cdk.Duration.minutes(5),
+      logGroup: new LogGroup(scope, `${name}MigrationLogs`, {
+        retention: options.logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
       environment: {
         CLUSTER_ARN: cluster.clusterArn,
         SECRET_ARN: secret.secretArn,

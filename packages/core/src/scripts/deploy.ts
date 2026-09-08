@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
+import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
@@ -24,6 +25,10 @@ export async function deploy(options: DeployOptions) {
     loadProductionEnv();
 
     process.env.BLOCKS_STAGE = 'production';
+
+    // Fail fast if AWS credentials are missing/expired, before generating the
+    // client and spending time in synth only to hit an opaque CDK credential error.
+    await assertAwsCredentials('deploy');
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name

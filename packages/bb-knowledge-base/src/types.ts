@@ -130,7 +130,12 @@ export type MetadataFilter = Record<string, { equals: string }>;
  * Options for the `retrieve()` method.
  */
 export interface RetrieveOptions {
-	/** Maximum results to return. Clamped to 1–100. Default: 10. */
+	/**
+	 * Maximum results to return. Must be an integer; a finite integer outside
+	 * 1–100 is clamped to that range. A fractional or non-finite value (`1.5`,
+	 * `NaN`, `Infinity`) is rejected with `KnowledgeBaseErrors.ValidationError`,
+	 * since Bedrock requires an integer here. Default: 10.
+	 */
 	maxResults?: number;
 	/** Metadata filter with AND semantics across all key-value pairs. Only chunks whose metadata matches every condition are returned. */
 	filter?: MetadataFilter;

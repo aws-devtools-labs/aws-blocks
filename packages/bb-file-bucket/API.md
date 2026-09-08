@@ -24,10 +24,10 @@ export interface CorsRule {
 
 // @public
 export type DeleteOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedDeleteOptions : undefined;
+    versioned: false;
+} ? undefined : VersionedDeleteOptions;
 
-// @public (undocumented)
+// @public
 export interface ExternalBucketRef {
     // (undocumented)
     readonly __brand: 'ExternalBucketRef';
@@ -76,10 +76,12 @@ export const FileBucketErrors: {
 
 // @public (undocumented)
 export interface FileBucketOptions {
+    accessLogging?: boolean;
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
+    noncurrentVersionExpirationDays?: number;
     removalPolicy?: 'destroy' | 'retain';
     versioned?: boolean;
 }
@@ -143,8 +145,8 @@ export interface FileVersionInfo {
 
 // @public
 export type GetOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedGetOptions : undefined;
+    versioned: false;
+} ? undefined : VersionedGetOptions;
 
 // @public (undocumented)
 export interface GetUrlOptions {
@@ -153,8 +155,8 @@ export interface GetUrlOptions {
 
 // @public
 export type GetUrlOptionsFor<O extends FileBucketOptions> = O extends {
-    versioned: true;
-} ? VersionedGetUrlOptions : GetUrlOptions;
+    versioned: false;
+} ? GetUrlOptions : VersionedGetUrlOptions;
 
 // @public (undocumented)
 export interface LifecycleRule {

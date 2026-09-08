@@ -7,7 +7,7 @@ import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
-import { clearRouteRegistry } from '@aws-blocks/core';
+import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import { handleDiscovery, handleJwks, handleAuthorize, handleAuthorizeSubmit, stubIssuerUrl } from './engines/stub-idp.js';
@@ -658,6 +658,24 @@ describe('requireAuth / checkAuth / getCurrentUser without session', () => {
 		await assert.rejects(
 			() => auth.requireAuth(ctx),
 			(e: Error) => e.name === AuthOIDCErrors.NotAuthenticated,
+		);
+	});
+
+	test('requireAuth throws an ApiError with status 401 (regression: handle401 / e.status===401 must match)', async () => {
+		// A bare Error serializes as 500 over JSON-RPC, so handle401 (status === 401)
+		// never fired. Must be ApiError(401); name preserved for isBlocksError().
+		const auth = new AuthOIDC(ROOT, unique('noauth401'), {
+			providers: [stubIdp({ name: unique('p') })],
+		});
+		const ctx = freshContext();
+		await assert.rejects(
+			() => auth.requireAuth(ctx),
+			(e: unknown) => {
+				assert.ok(e instanceof ApiError, `expected ApiError, got ${(e as { constructor?: { name?: string } })?.constructor?.name}`);
+				assert.strictEqual(e.status, 401);
+				assert.strictEqual(e.name, AuthOIDCErrors.NotAuthenticated);
+				return true;
+			},
 		);
 	});
 

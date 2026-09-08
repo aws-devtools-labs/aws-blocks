@@ -1,5 +1,41 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.1.9
+
+### Patch Changes
+
+- 309a236: refactor(bb): attach IAM grants to the shared execution role
+  
+  Data and auth blocks now grant permissions to the shared Blocks execution role
+  (`this.executionRole`) instead of the handler function directly. Grants land on
+  the same role the handler assumes, so the effective runtime permissions are
+  identical — this decouples IAM wiring from the concrete Lambda function ahead of
+  the multi-compute model.
+  
+  For `bb-distributed-data`, the DSQL endpoint and region now flow through the
+  config registry (loaded into `process.env` at cold start, like every other
+  block) rather than being set as direct handler environment variables, and the
+  migration Lambda maps the shared execution role's ARN.
+- 27346f3: Make AuthOIDC `requireAuth()` throw `ApiError(401, NotAuthenticatedException)` so the documented `handle401()` 401-redirect pattern works for a signed-out protected call.
+  
+  Previously `requireAuth()` threw a bare `Error` with no `status`. Over the JSON-RPC boundary `errorResponseFromCatch` serializes a non-`ApiError` as code `500`, so the client received an `ApiError` with `status === 500`. The README's `if (handle401(e, provider)) return;` helper only acts on `err instanceof ApiError && err.status === 401`, so it never matched and the app never redirected to sign-in — the error just surfaced. This aligns AuthOIDC with AuthCognito, whose `requireAuth()` already throws `ApiError(401, …)`. The error name is preserved, so existing `isBlocksError(e, AuthOIDCErrors.NotAuthenticated)` checks are unaffected.
+- 9bd5b3e: Reject stub IdP redirect_uris whose query carries a reserved OAuth/OIDC response param, or that carry a URI fragment, matching real-IdP behavior. Reserved-param matching is case-sensitive, so a distinctly-cased key such as `State` is passed through as a real IdP would.
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-kv-store@0.1.7
+  - @aws-blocks/auth-common@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
 ## 0.1.8
 
 ### Patch Changes
