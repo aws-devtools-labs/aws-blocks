@@ -4,34 +4,34 @@
 import { execSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import { detectFramework, type FrameworkAdapterFn, getAdapter, normalizeBasePath } from '@aws-blocks/hosting/adapters';
+import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
-  generateBuildId,
-  HostingConstruct,
-  type HostingConstructProps,
-  type HostingDomainConfig,
-  type HostingWafConfig,
-  type SkewProtectionConfig,
+	generateBuildId,
+	HostingConstruct,
+	type HostingConstructProps,
+	type HostingDomainConfig,
+	type HostingWafConfig,
+	type SkewProtectionConfig,
 } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { AllowedMethods, CachePolicy, OriginRequestPolicy, ViewerProtocolPolicy } from 'aws-cdk-lib/aws-cloudfront';
-import { HttpOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { registerConfig } from './cdk/config-registry.js';
+import { httpOriginFromApiUrl, registerHostingDistribution } from './cdk/front-door.js';
 import { BLOCKS_SANDBOX_DIR } from './common/constants.js';
 import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
-  collectSynthMarkers,
-  type DomainNameInput,
-  type EnvValue,
-  partitionEnvironment,
-  resolveDomainNames,
-  resolveSecretsAtSynth,
-  wireByo,
-  wireManagedValue,
+	collectSynthMarkers,
+	type DomainNameInput,
+	type EnvValue,
+	partitionEnvironment,
+	resolveDomainNames,
+	resolveSecretsAtSynth,
+	wireByo,
+	wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
 
@@ -53,47 +53,47 @@ import { getRegisteredRoutes } from './raw-route.js';
  * ```
  */
 export type ComputeConfig = {
-  /** Lambda memory size in MB. Default: 512. */
-  memorySize?: number;
-  /**
-   * Lambda timeout. Default: 30 seconds.
-   *
-   * Accepts either a `cdk.Duration` object (e.g. `Duration.seconds(30)`)
-   * or a plain number of seconds (e.g. `30`). Both are equivalent.
-   *
-   * @example
-   * ```ts
-   * // Either form works:
-   * timeout: Duration.seconds(30)
-   * timeout: 30
-   * ```
-   */
-  timeout?: cdk.Duration | number;
-  /** Reserved concurrent executions for the SSR Lambda. Default: undefined (no reservation). */
-  reservedConcurrency?: number;
-  /**
-   * Overrides for the image-optimization Lambda.
-   *
-   * `reservedConcurrency` defaults to undefined (no reservation). It is left
-   * unreserved so deploys succeed on fresh AWS accounts, whose default
-   * account-level unreserved-concurrency limit is 10 — reserving any
-   * concurrency there can drop the account below its required minimum and
-   * cause Lambda to reject the stack with a 400. Set this only if you have
-   * headroom and want to cap image-opt throughput.
-   *
-   * @example
-   * ```ts
-   * compute: {
-   *   imageOptimization: { reservedConcurrency: 5 },
-   * }
-   * ```
-   */
-  imageOptimization?: {
-    /** Reserved concurrent executions. Default: undefined (no reservation). */
-    reservedConcurrency?: number;
-  };
-  /** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
-  logRetention?: cdk.aws_logs.RetentionDays;
+	/** Lambda memory size in MB. Default: 512. */
+	memorySize?: number;
+	/**
+	 * Lambda timeout. Default: 30 seconds.
+	 *
+	 * Accepts either a `cdk.Duration` object (e.g. `Duration.seconds(30)`)
+	 * or a plain number of seconds (e.g. `30`). Both are equivalent.
+	 *
+	 * @example
+	 * ```ts
+	 * // Either form works:
+	 * timeout: Duration.seconds(30)
+	 * timeout: 30
+	 * ```
+	 */
+	timeout?: cdk.Duration | number;
+	/** Reserved concurrent executions for the SSR Lambda. Default: undefined (no reservation). */
+	reservedConcurrency?: number;
+	/**
+	 * Overrides for the image-optimization Lambda.
+	 *
+	 * `reservedConcurrency` defaults to undefined (no reservation). It is left
+	 * unreserved so deploys succeed on fresh AWS accounts, whose default
+	 * account-level unreserved-concurrency limit is 10 — reserving any
+	 * concurrency there can drop the account below its required minimum and
+	 * cause Lambda to reject the stack with a 400. Set this only if you have
+	 * headroom and want to cap image-opt throughput.
+	 *
+	 * @example
+	 * ```ts
+	 * compute: {
+	 *   imageOptimization: { reservedConcurrency: 5 },
+	 * }
+	 * ```
+	 */
+	imageOptimization?: {
+		/** Reserved concurrent executions. Default: undefined (no reservation). */
+		reservedConcurrency?: number;
+	};
+	/** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
+	logRetention?: cdk.aws_logs.RetentionDays;
 };
 
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
@@ -107,8 +107,8 @@ export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtecti
  * are inherited unchanged from {@link HostingDomainConfig}.
  */
 export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
-  /** Domain name(s): a plain string / string[] and/or a `config()` marker resolved at synth. */
-  domainName: DomainNameInput;
+	/** Domain name(s): a plain string / string[] and/or a `config()` marker resolved at synth. */
+	domainName: DomainNameInput;
 }
 
 /**
@@ -118,8 +118,8 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
  * instance but kept structural so Hosting doesn't depend on the concrete class.
  */
 export interface BlocksStackApi {
-  /** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
-  readonly apiUrl: string;
+	/** Fully-qualified API Gateway URL (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks`). */
+	readonly apiUrl: string;
 }
 
 /**
@@ -134,135 +134,135 @@ export interface BlocksStackApi {
  *     through the same domain (single-origin architecture)
  */
 export interface HostingProps {
-  // ── Build ──────────────────────────────────────────────────────
-  /** Absolute or relative path to the frontend app root directory. */
-  root: string;
+	// ── Build ──────────────────────────────────────────────────────
+	/** Absolute or relative path to the frontend app root directory. */
+	root: string;
 
-  /**
-   * Shell command to build the frontend (e.g. `'npm run build'`).
-   * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
-   * injected into the environment.
-   * Omit if the app is already pre-built.
-   */
-  buildCommand?: string;
+	/**
+	 * Shell command to build the frontend (e.g. `'npm run build'`).
+	 * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
+	 * injected into the environment.
+	 * Omit if the app is already pre-built.
+	 */
+	buildCommand?: string;
 
-  /**
-   * Framework type: `'nextjs'`, `'spa'`, or `'static'`.
-   * Auto-detected from `package.json` when omitted.
-   */
-  framework?: FrameworkType;
+	/**
+	 * Framework type: `'nextjs'`, `'spa'`, or `'static'`.
+	 * Auto-detected from `package.json` when omitted.
+	 */
+	framework?: FrameworkType;
 
-  /**
-   * Path to the build output directory (e.g. `'dist'` or `'.next'`).
-   * Auto-detected based on framework when omitted.
-   */
-  buildOutputDir?: string;
+	/**
+	 * Path to the build output directory (e.g. `'dist'` or `'.next'`).
+	 * Auto-detected based on framework when omitted.
+	 */
+	buildOutputDir?: string;
 
-  /** Supply a custom adapter when using an unsupported framework. */
-  customAdapter?: FrameworkAdapterFn;
+	/** Supply a custom adapter when using an unsupported framework. */
+	customAdapter?: FrameworkAdapterFn;
 
-  /**
-   * URL prefix the whole site is served under (Next.js `basePath`, Astro
-   * `base`, Nuxt `app.baseURL`). When set, CloudFront behaviors are prefixed
-   * with it and the bare root issues a 308 redirect to `/<basePath>/`.
-   *
-   * Declaring it here is the recommended source of truth: the value is
-   * caller-provided rather than reverse-engineered from build output, so it
-   * can't drift with framework/bundler internals. When omitted, the adapter
-   * falls back to detecting the framework's own base-path config from the
-   * build output.
-   *
-   * Format: leading slash, no trailing slash (e.g. `'/app'`). A trailing
-   * slash or bare `'/'` is normalized/ignored.
-   *
-   * @example
-   * ```ts
-   * new Hosting(stack, 'Web', { root, framework: 'nuxt', basePath: '/app' });
-   * ```
-   */
-  basePath?: string;
+	/**
+	 * URL prefix the whole site is served under (Next.js `basePath`, Astro
+	 * `base`, Nuxt `app.baseURL`). When set, CloudFront behaviors are prefixed
+	 * with it and the bare root issues a 308 redirect to `/<basePath>/`.
+	 *
+	 * Declaring it here is the recommended source of truth: the value is
+	 * caller-provided rather than reverse-engineered from build output, so it
+	 * can't drift with framework/bundler internals. When omitted, the adapter
+	 * falls back to detecting the framework's own base-path config from the
+	 * build output.
+	 *
+	 * Format: leading slash, no trailing slash (e.g. `'/app'`). A trailing
+	 * slash or bare `'/'` is normalized/ignored.
+	 *
+	 * @example
+	 * ```ts
+	 * new Hosting(stack, 'Web', { root, framework: 'nuxt', basePath: '/app' });
+	 * ```
+	 */
+	basePath?: string;
 
-  // ── Blocks backend integration ────────────────────────────────────
-  /**
-   * The Blocks backend stack (or any object with `apiUrl`).
-   *
-   * When provided, Hosting creates CloudFront behaviors that proxy API
-   * requests through the same domain as the frontend — enabling relative
-   * URL access (`/aws-blocks/...`) without CORS.
-   *
-   * Omit when deploying a static-only site with no backend.
-   */
-  api?: BlocksStackApi;
+	// ── Blocks backend integration ────────────────────────────────────
+	/**
+	 * The Blocks backend stack (or any object with `apiUrl`).
+	 *
+	 * When provided, Hosting creates CloudFront behaviors that proxy API
+	 * requests through the same domain as the frontend — enabling relative
+	 * URL access (`/aws-blocks/...`) without CORS.
+	 *
+	 * Omit when deploying a static-only site with no backend.
+	 */
+	api?: BlocksStackApi;
 
-  /**
-   * Additional backend configuration to include in config.json.
-   * Merged with apiUrl to produce the final config.
-   *
-   * ⚠️ WARNING: These values will be publicly accessible at /.blocks-sandbox/config.json
-   * and in the BLOCKS_CONFIG Lambda environment variable. Do NOT include secrets,
-   * API keys, or sensitive configuration here.
-   */
-  backendConfig?: Record<string, unknown>;
+	/**
+	 * Additional backend configuration to include in config.json.
+	 * Merged with apiUrl to produce the final config.
+	 *
+	 * ⚠️ WARNING: These values will be publicly accessible at /.blocks-sandbox/config.json
+	 * and in the BLOCKS_CONFIG Lambda environment variable. Do NOT include secrets,
+	 * API keys, or sensitive configuration here.
+	 */
+	backendConfig?: Record<string, unknown>;
 
-  // ── Infrastructure options ─────────────────────────────────────
-  /** Lambda compute configuration for SSR frameworks. */
-  compute?: ComputeConfig;
+	// ── Infrastructure options ─────────────────────────────────────
+	/** Lambda compute configuration for SSR frameworks. */
+	compute?: ComputeConfig;
 
-  /**
-   * Custom environment variables injected into all compute Lambda functions.
-   *
-   * Values are either plain strings or {@link secret} references:
-   *
-   * ```ts
-   * environment: {
-   *   FEATURE_FLAG: 'on',                 // plaintext (in CFN template + Lambda config)
-   *   STRIPE_KEY: secret('STRIPE_KEY'),   // encrypted; read at runtime via getSecret()
-   * }
-   * ```
-   *
-   * A plain string is injected verbatim (visible in the CloudFormation
-   * template — safe for non-sensitive literals). A `secret('K')` value (AWS
-   * Secrets Manager) or `config('K')` value (SSM Parameter Store) injects only
-   * the store LOCATOR — never the value — and grants the compute role scoped
-   * read + decrypt; fetch it at runtime with `await getSecret('K')` /
-   * `await getConfig('K')`. A bring-your-own CDK `ISecret` / `IParameter` handle
-   * is accepted too and resolves identically.
-   *
-   * The env-var name must equal the key: `STRIPE_KEY: secret('STRIPE_KEY')`.
-   */
-  environment?: Record<string, EnvValue>;
+	/**
+	 * Custom environment variables injected into all compute Lambda functions.
+	 *
+	 * Values are either plain strings or {@link secret} references:
+	 *
+	 * ```ts
+	 * environment: {
+	 *   FEATURE_FLAG: 'on',                 // plaintext (in CFN template + Lambda config)
+	 *   STRIPE_KEY: secret('STRIPE_KEY'),   // encrypted; read at runtime via getSecret()
+	 * }
+	 * ```
+	 *
+	 * A plain string is injected verbatim (visible in the CloudFormation
+	 * template — safe for non-sensitive literals). A `secret('K')` value (AWS
+	 * Secrets Manager) or `config('K')` value (SSM Parameter Store) injects only
+	 * the store LOCATOR — never the value — and grants the compute role scoped
+	 * read + decrypt; fetch it at runtime with `await getSecret('K')` /
+	 * `await getConfig('K')`. A bring-your-own CDK `ISecret` / `IParameter` handle
+	 * is accepted too and resolves identically.
+	 *
+	 * The env-var name must equal the key: `STRIPE_KEY: secret('STRIPE_KEY')`.
+	 */
+	environment?: Record<string, EnvValue>;
 
-  /**
-   * Custom domain configuration. `domainName` accepts plain strings and/or
-   * {@link config} references (e.g. `domain: { domainName: config('DOMAIN_PROD') }`).
-   * A domain is resolved at synth time and inlined as a literal into the template,
-   * so only `config()` (non-sensitive → SSM) is allowed here, never `secret()`
-   * (which would leak into the template). Any domain marker requires constructing
-   * via the async {@link Hosting.create}.
-   */
-  domain?: HostingDomain;
+	/**
+	 * Custom domain configuration. `domainName` accepts plain strings and/or
+	 * {@link config} references (e.g. `domain: { domainName: config('DOMAIN_PROD') }`).
+	 * A domain is resolved at synth time and inlined as a literal into the template,
+	 * so only `config()` (non-sensitive → SSM) is allowed here, never `secret()`
+	 * (which would leak into the template). Any domain marker requires constructing
+	 * via the async {@link Hosting.create}.
+	 */
+	domain?: HostingDomain;
 
-  /**
-   * Namespace/cache config for `secret()` values (AWS Secrets Manager). Defaults
-   * to the Blocks `/blocks/secrets` prefix; set `prefix` to namespace per app,
-   * `stage` for per-stage values with a shared fallback, or `cacheTtlSeconds` to
-   * refresh a rotated value on a warm compute without a cold start. Any field the
-   * app sets overrides the Blocks default.
-   */
-  secretStore?: KindStoreOptions;
+	/**
+	 * Namespace/cache config for `secret()` values (AWS Secrets Manager). Defaults
+	 * to the Blocks `/blocks/secrets` prefix; set `prefix` to namespace per app,
+	 * `stage` for per-stage values with a shared fallback, or `cacheTtlSeconds` to
+	 * refresh a rotated value on a warm compute without a cold start. Any field the
+	 * app sets overrides the Blocks default.
+	 */
+	secretStore?: KindStoreOptions;
 
-  /**
-   * Namespace/cache config for `config()` values (SSM Parameter Store). Defaults
-   * to the Blocks `/blocks/config` prefix; same override semantics as
-   * {@link HostingProps.secretStore}.
-   */
-  configStore?: KindStoreOptions;
+	/**
+	 * Namespace/cache config for `config()` values (SSM Parameter Store). Defaults
+	 * to the Blocks `/blocks/config` prefix; same override semantics as
+	 * {@link HostingProps.secretStore}.
+	 */
+	configStore?: KindStoreOptions;
 
-  /** WAF protection configuration. */
-  waf?: HostingWafConfig;
+	/** WAF protection configuration. */
+	waf?: HostingWafConfig;
 
-  /** Retain the S3 bucket when the stack is deleted. Default: false. */
-  retainOnDelete?: boolean;
+	/** Retain the S3 bucket when the stack is deleted. Default: false. */
+	retainOnDelete?: boolean;
 
   /**
    * Days to retain SUPERSEDED build artifacts in S3 before they are expired.
@@ -277,140 +277,140 @@ export interface HostingProps {
   /** Custom Content-Security-Policy header value. */
   contentSecurityPolicy?: string;
 
-  /** CloudFront price class. Default: PRICE_CLASS_100. */
-  priceClass?: cdk.aws_cloudfront.PriceClass;
+	/** CloudFront price class. Default: PRICE_CLASS_100. */
+	priceClass?: cdk.aws_cloudfront.PriceClass;
 
-  /**
-   * Geo-restriction configuration for the CloudFront distribution.
-   *
-   * @example
-   * ```ts
-   * geoRestriction: { type: 'whitelist', countries: ['US', 'CA', 'GB'] }
-   * ```
-   */
-  geoRestriction?: {
-    type: 'whitelist' | 'blacklist';
-    countries: string[];
-  };
+	/**
+	 * Geo-restriction configuration for the CloudFront distribution.
+	 *
+	 * @example
+	 * ```ts
+	 * geoRestriction: { type: 'whitelist', countries: ['US', 'CA', 'GB'] }
+	 * ```
+	 */
+	geoRestriction?: {
+		type: 'whitelist' | 'blacklist';
+		countries: string[];
+	};
 
-  /**
-   * Overrides for the adjustable AWS Service Quotas the CloudFront
-   * distribution draws on. Each field maps to a named AWS quota you can
-   * request an increase on:
-   *
-   *   - `cacheBehaviors` — "Cache behaviors per distribution" (default 25).
-   *     Consumed by routed paths, prerendered pages, per-pattern header
-   *     rules, assetPrefix, and the error-page behavior.
-   *   - `edgeFunctions` — Lambda@Edge associations per distribution
-   *     (default 25). Consumed by `runtime: 'edge'` routes.
-   *   - `headerPolicies` — "Response headers policies per AWS account"
-   *     (default 20, account-wide).
-   *
-   * Omitted fields use the AWS default. Set a field ONLY to match a quota
-   * increase AWS has actually granted — synth cannot verify your real quota,
-   * so an over-set value does not raise the AWS ceiling; it just moves the
-   * failure from a clear synth error to an opaque CloudFormation rollback.
-   *
-   * @example
-   * ```ts
-   * // After AWS grants "Cache behaviors per distribution" = 50:
-   * new Hosting(stack, 'Web', { root, quotas: { cacheBehaviors: 50 } });
-   * ```
-   */
-  quotas?: {
-    cacheBehaviors?: number;
-    edgeFunctions?: number;
-    headerPolicies?: number;
-    /**
-     * Max chunks per KVS edge route table (routes / redirects / headers);
-     * ~25 entries per chunk, default 64 (≈1600 entries). Not an AWS quota —
-     * a self-imposed guard (KVS ≤5 MB + the edge function reads chunks
-     * sequentially per request). Raise only after measuring edge-function
-     * compute headroom (e.g. a very large `trailingSlash: true` site with
-     * many canonical-form redirects); lowering it fails synth sooner.
-     * @default 64
-     */
-    maxRouteChunks?: number;
-  };
+	/**
+	 * Overrides for the adjustable AWS Service Quotas the CloudFront
+	 * distribution draws on. Each field maps to a named AWS quota you can
+	 * request an increase on:
+	 *
+	 *   - `cacheBehaviors` — "Cache behaviors per distribution" (default 25).
+	 *     Consumed by routed paths, prerendered pages, per-pattern header
+	 *     rules, assetPrefix, and the error-page behavior.
+	 *   - `edgeFunctions` — Lambda@Edge associations per distribution
+	 *     (default 25). Consumed by `runtime: 'edge'` routes.
+	 *   - `headerPolicies` — "Response headers policies per AWS account"
+	 *     (default 20, account-wide).
+	 *
+	 * Omitted fields use the AWS default. Set a field ONLY to match a quota
+	 * increase AWS has actually granted — synth cannot verify your real quota,
+	 * so an over-set value does not raise the AWS ceiling; it just moves the
+	 * failure from a clear synth error to an opaque CloudFormation rollback.
+	 *
+	 * @example
+	 * ```ts
+	 * // After AWS grants "Cache behaviors per distribution" = 50:
+	 * new Hosting(stack, 'Web', { root, quotas: { cacheBehaviors: 50 } });
+	 * ```
+	 */
+	quotas?: {
+		cacheBehaviors?: number;
+		edgeFunctions?: number;
+		headerPolicies?: number;
+		/**
+		 * Max chunks per KVS edge route table (routes / redirects / headers);
+		 * ~25 entries per chunk, default 64 (≈1600 entries). Not an AWS quota —
+		 * a self-imposed guard (KVS ≤5 MB + the edge function reads chunks
+		 * sequentially per request). Raise only after measuring edge-function
+		 * compute headroom (e.g. a very large `trailingSlash: true` site with
+		 * many canonical-form redirects); lowering it fails synth sooner.
+		 * @default 64
+		 */
+		maxRouteChunks?: number;
+	};
 
-  /**
-   * Build cache configuration. When enabled, provisions an S3 bucket for
-   * framework build caches (e.g. Next.js .next/cache) and exports the bucket
-   * name as a CfnOutput. Reduces cold-build times in CI.
-   *
-   * @example
-   * ```ts
-   * buildCache: { enabled: true }
-   * ```
-   */
-  buildCache?: {
-    enabled: boolean;
-    /** BYO S3 bucket for build cache storage. Creates one if not provided. */
-    bucket?: cdk.aws_s3.IBucket;
-  };
+	/**
+	 * Build cache configuration. When enabled, provisions an S3 bucket for
+	 * framework build caches (e.g. Next.js .next/cache) and exports the bucket
+	 * name as a CfnOutput. Reduces cold-build times in CI.
+	 *
+	 * @example
+	 * ```ts
+	 * buildCache: { enabled: true }
+	 * ```
+	 */
+	buildCache?: {
+		enabled: boolean;
+		/** BYO S3 bucket for build cache storage. Creates one if not provided. */
+		bucket?: cdk.aws_s3.IBucket;
+	};
 
-  /**
-   * Custom error pages served by CloudFront for 404/500 responses.
-   * Paths are relative to the project root and must point to HTML files
-   * present in the build output.
-   *
-   * Note: Custom error pages are incompatible with SPAs that use client-side
-   * routing. Error pages disable SPA fallback mode, which breaks deep linking.
-   * Use this feature for static sites and SSR apps only.
-   *
-   * @example
-   * ```ts
-   * errorPages: { notFound: '/404.html', serverError: '/500.html' }
-   * ```
-   */
-  errorPages?: {
-    /** Path to a custom 404 HTML file (relative to project root). */
-    notFound?: string;
-    /** Path to a custom 500 HTML file (relative to project root). */
-    serverError?: string;
-  };
+	/**
+	 * Custom error pages served by CloudFront for 404/500 responses.
+	 * Paths are relative to the project root and must point to HTML files
+	 * present in the build output.
+	 *
+	 * Note: Custom error pages are incompatible with SPAs that use client-side
+	 * routing. Error pages disable SPA fallback mode, which breaks deep linking.
+	 * Use this feature for static sites and SSR apps only.
+	 *
+	 * @example
+	 * ```ts
+	 * errorPages: { notFound: '/404.html', serverError: '/500.html' }
+	 * ```
+	 */
+	errorPages?: {
+		/** Path to a custom 404 HTML file (relative to project root). */
+		notFound?: string;
+		/** Path to a custom 500 HTML file (relative to project root). */
+		serverError?: string;
+	};
 
-  /**
-   * CloudFront access logging configuration.
-   * When enabled, access logs are written to a dedicated S3 bucket.
-   */
-  logging?: {
-    /** Enable CloudFront access logging. */
-    enabled: boolean;
-    /** Days to retain access logs. Default: 90. */
-    retentionDays?: number;
-  };
+	/**
+	 * CloudFront access logging configuration.
+	 * When enabled, access logs are written to a dedicated S3 bucket.
+	 */
+	logging?: {
+		/** Enable CloudFront access logging. */
+		enabled: boolean;
+		/** Days to retain access logs. Default: 90. */
+		retentionDays?: number;
+	};
 
-  /**
-   * CloudWatch alarms for hosting infrastructure. When enabled, wires
-   * CloudFront 5xx, Lambda error/throttle, and revalidation DLQ alarms
-   * to an SNS topic.
-   *
-   * @default { enabled: true }
-   */
-  monitoring?: {
-    enabled?: boolean;
-    /** ARN of an existing SNS topic to send alarm actions to. */
-    snsTopicArn?: string;
-  };
+	/**
+	 * CloudWatch alarms for hosting infrastructure. When enabled, wires
+	 * CloudFront 5xx, Lambda error/throttle, and revalidation DLQ alarms
+	 * to an SNS topic.
+	 *
+	 * @default { enabled: true }
+	 */
+	monitoring?: {
+		enabled?: boolean;
+		/** ARN of an existing SNS topic to send alarm actions to. */
+		snsTopicArn?: string;
+	};
 
-  /**
-   * Cookie-based skew protection to prevent asset mismatches during
-   * rolling deployments. When enabled, returning users are pinned to
-   * the build they started their session on.
-   *
-   * @default { enabled: true }
-   */
-  skewProtection?: SkewProtectionConfig;
+	/**
+	 * Cookie-based skew protection to prevent asset mismatches during
+	 * rolling deployments. When enabled, returning users are pinned to
+	 * the build they started their session on.
+	 *
+	 * @default { enabled: true }
+	 */
+	skewProtection?: SkewProtectionConfig;
 }
 
 // ─── Default build output directories per framework ──────────────
 
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
-  nextjs: '.next',
-  sveltekit: 'build',
-  spa: 'dist',
-  static: 'dist',
+	nextjs: '.next',
+	sveltekit: 'build',
+	spa: 'dist',
+	static: 'dist',
 };
 
 // ─── Construct ───────────────────────────────────────────────────
@@ -452,225 +452,225 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
  * ```
  */
 export class Hosting extends Construct {
-  /** The S3 bucket storing static assets. */
-  public readonly bucket: cdk.aws_s3.Bucket;
-  /** The CloudFront distribution. */
-  public readonly distribution: cdk.aws_cloudfront.Distribution;
-  /** The public URL of the deployed site (https://...). */
-  public readonly url: string;
-  /** The primary SSR/compute Lambda function (first compute resource, if any). */
-  public readonly ssrFunction?: cdk.aws_lambda.Function;
-  /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
-  public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
-  /** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
-  public readonly monitoringTopic?: cdk.aws_sns.ITopic;
+	/** The S3 bucket storing static assets. */
+	public readonly bucket: cdk.aws_s3.Bucket;
+	/** The CloudFront distribution. */
+	public readonly distribution: cdk.aws_cloudfront.Distribution;
+	/** The public URL of the deployed site (https://...). */
+	public readonly url: string;
+	/** The primary SSR/compute Lambda function (first compute resource, if any). */
+	public readonly ssrFunction?: cdk.aws_lambda.Function;
+	/** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
+	public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
+	/** SNS topic for hosting CloudWatch alarms (present when `monitoring.enabled` is true). */
+	public readonly monitoringTopic?: cdk.aws_sns.ITopic;
 
-  /**
-   * Async constructor. Required when a `secret()` / `config()` value resolves at
-   * **synth time** — i.e. a `domain.domainName` marker — because that value is
-   * fetched from its store (Secrets Manager / SSM) during synthesis. Returns a
-   * fully-constructed {@link Hosting}.
-   *
-   * For runtime `environment` markers (read via `getSecret`/`getConfig`) and
-   * plain literals, `new Hosting(...)` works directly; `create()` is also safe
-   * to use uniformly.
-   *
-   * @example
-   * ```ts
-   * await Hosting.create(stack, 'Web', {
-   *   root: '.', framework: 'nextjs', api: blocksStack,
-   *   domain: { domainName: config('DOMAIN_PROD') },
-   * });
-   * ```
-   */
-  static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
+	/**
+	 * Async constructor. Required when a `secret()` / `config()` value resolves at
+	 * **synth time** — i.e. a `domain.domainName` marker — because that value is
+	 * fetched from its store (Secrets Manager / SSM) during synthesis. Returns a
+	 * fully-constructed {@link Hosting}.
+	 *
+	 * For runtime `environment` markers (read via `getSecret`/`getConfig`) and
+	 * plain literals, `new Hosting(...)` works directly; `create()` is also safe
+	 * to use uniformly.
+	 *
+	 * @example
+	 * ```ts
+	 * await Hosting.create(stack, 'Web', {
+	 *   root: '.', framework: 'nextjs', api: blocksStack,
+	 *   domain: { domainName: config('DOMAIN_PROD') },
+	 * });
+	 * ```
+	 */
+	static async create(scope: Construct, id: string, props: HostingProps): Promise<Hosting> {
 		const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
-    const synthMarkers = collectSynthMarkers(props.domain?.domainName);
-    const resolved = synthMarkers.length
+		const synthMarkers = collectSynthMarkers(props.domain?.domainName);
+		const resolved = synthMarkers.length
 			? await resolveSecretsAtSynth(synthMarkers, undefined, storeConfig)
-      : new Map<string, string>();
+			: new Map<string, string>();
 		// Fail the deploy early if a declared `environment` secret/config has no value
 		// set — existence only, never fetching the value. (Domain markers above already
 		// fail this way; this extends it to runtime markers.)
 		await assertMarkersExistAtSynth(partitionEnvironment(props.environment).managed, storeConfig);
-    return new Hosting(scope, id, props, resolved);
-  }
+		return new Hosting(scope, id, props, resolved);
+	}
 
-  /**
-   * @param resolvedSecrets - Synth-time-resolved secret values, keyed by secret
-   *   key. Populated by {@link Hosting.create}; empty for the direct
-   *   `new Hosting()` path (which then rejects any synth-time secret with a
-   *   clear "use Hosting.create()" error).
-   */
-  constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
-    super(scope, id);
+	/**
+	 * @param resolvedSecrets - Synth-time-resolved secret values, keyed by secret
+	 *   key. Populated by {@link Hosting.create}; empty for the direct
+	 *   `new Hosting()` path (which then rejects any synth-time secret with a
+	 *   clear "use Hosting.create()" error).
+	 */
+	constructor(scope: Construct, id: string, props: HostingProps, resolvedSecrets: Map<string, string> = new Map()) {
+		super(scope, id);
 
-    const root = resolve(props.root);
+		const root = resolve(props.root);
 
-    // ── 1. Detect framework ──────────────────────────────────────
-    const framework = props.framework ?? detectFramework(root);
+		// ── 1. Detect framework ──────────────────────────────────────
+		const framework = props.framework ?? detectFramework(root);
 
-    // ── 2. Optionally run the build ──────────────────────────────
-    if (props.buildCommand) {
-      console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
-      const apiUrl = props.api?.apiUrl;
-      // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
-      // from breaking frontend builds (e.g., Next.js webpack module resolution).
-      const nodeOptions = (process.env.NODE_OPTIONS || '')
-        .split(/\s+/)
-        .filter((opt) => opt !== '--conditions=cdk')
-        .join(' ');
-      const buildEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
-      try {
-        execSync(props.buildCommand, {
-          cwd: root,
-          stdio: 'inherit',
-          env: {
-            ...buildEnv,
-            ...(apiUrl ? { BLOCKS_API_URL: apiUrl } : {}),
-          },
-        });
-      } catch (error) {
-        throw new Error(
-          `Frontend build failed: ${props.buildCommand}\n` +
-            `Ensure the build command is correct and all dependencies are installed.`,
-        );
-      }
-    }
+		// ── 2. Optionally run the build ──────────────────────────────
+		if (props.buildCommand) {
+			console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
+			const apiUrl = props.api?.apiUrl;
+			// Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
+			// from breaking frontend builds (e.g., Next.js webpack module resolution).
+			const nodeOptions = (process.env.NODE_OPTIONS || '')
+				.split(/\s+/)
+				.filter((opt) => opt !== '--conditions=cdk')
+				.join(' ');
+			const buildEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
+			try {
+				execSync(props.buildCommand, {
+					cwd: root,
+					stdio: 'inherit',
+					env: {
+						...buildEnv,
+						...(apiUrl ? { BLOCKS_API_URL: apiUrl } : {}),
+					},
+				});
+			} catch (error) {
+				throw new Error(
+					`Frontend build failed: ${props.buildCommand}\n` +
+						`Ensure the build command is correct and all dependencies are installed.`,
+				);
+			}
+		}
 
-    // ── 3. Resolve build output dir (for validation only) ────────
-    const buildOutputDir = props.buildOutputDir;
+		// ── 3. Resolve build output dir (for validation only) ────────
+		const buildOutputDir = props.buildOutputDir;
 
-    const expectedOutputDir = buildOutputDir
-      ? resolve(root, buildOutputDir)
-      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+		const expectedOutputDir = buildOutputDir
+			? resolve(root, buildOutputDir)
+			: resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
 
-    if (!existsSync(expectedOutputDir)) {
-      throw new Error(
-        `Build output directory not found: ${expectedOutputDir}\n` +
-          `Provide a buildCommand or ensure the directory exists before synthesis.`,
-      );
-    }
+		if (!existsSync(expectedOutputDir)) {
+			throw new Error(
+				`Build output directory not found: ${expectedOutputDir}\n` +
+					`Provide a buildCommand or ensure the directory exists before synthesis.`,
+			);
+		}
 
-    // ── 4. Run framework adapter → DeployManifest ────────────────
-    //    For Next.js with buildCommand: the construct already ran `next build`
-    //    with BLOCKS_API_URL in the env. OpenNext will re-run it but Next.js
-    //    caches aggressively so it's fast. We still set BLOCKS_API_URL in the
-    //    process env so OpenNext's build also has access to it.
-    if (props.api?.apiUrl) {
-      process.env.BLOCKS_API_URL = props.api.apiUrl;
-    }
-    const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
-    const manifest: DeployManifest = adapter(root);
+		// ── 4. Run framework adapter → DeployManifest ────────────────
+		//    For Next.js with buildCommand: the construct already ran `next build`
+		//    with BLOCKS_API_URL in the env. OpenNext will re-run it but Next.js
+		//    caches aggressively so it's fast. We still set BLOCKS_API_URL in the
+		//    process env so OpenNext's build also has access to it.
+		if (props.api?.apiUrl) {
+			process.env.BLOCKS_API_URL = props.api.apiUrl;
+		}
+		const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
+		const manifest: DeployManifest = adapter(root);
 
-    // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
-      manifest.buildId = generateBuildId();
-    }
+		// ── 4b. Ensure buildId is set on the manifest ────────────────
+		if (!manifest.buildId) {
+			manifest.buildId = generateBuildId();
+		}
 
-    // ── 4b'. basePath: prop is the source of truth ───────────────
-    //    A caller-declared `basePath` overrides whatever the adapter
-    //    detected from build output. This is the robust path: the value
-    //    is provided rather than reverse-engineered from framework/bundler
-    //    internals (which drift across versions). When the prop is omitted,
-    //    the adapter's detected `manifest.basePath` (if any) stands.
-    if (props.basePath !== undefined) {
-      const normalized = normalizeBasePath(props.basePath);
-      if (normalized) {
-        manifest.basePath = normalized;
-      } else {
-        // Explicit '/' (or empty) means "no base path" — clear any value
-        // the adapter may have detected so the prop genuinely wins.
-        delete manifest.basePath;
-      }
-    }
+		// ── 4b'. basePath: prop is the source of truth ───────────────
+		//    A caller-declared `basePath` overrides whatever the adapter
+		//    detected from build output. This is the robust path: the value
+		//    is provided rather than reverse-engineered from framework/bundler
+		//    internals (which drift across versions). When the prop is omitted,
+		//    the adapter's detected `manifest.basePath` (if any) stands.
+		if (props.basePath !== undefined) {
+			const normalized = normalizeBasePath(props.basePath);
+			if (normalized) {
+				manifest.basePath = normalized;
+			} else {
+				// Explicit '/' (or empty) means "no base path" — clear any value
+				// the adapter may have detected so the prop genuinely wins.
+				delete manifest.basePath;
+			}
+		}
 
-    // ── 4c. Prevent duplicate error pages ────────────────────────
-    //    The adapter may auto-detect error pages (e.g. SPA adapter finds
-    //    404.html in build output and sets manifest.errorPages). When the
-    //    user also provides errorPages via props, the CDN construct would
-    //    create DUPLICATE CloudFront custom error responses — one from the
-    //    manifest and one from the props.customErrorPages.
-    //
-    //    Fix: when manifest.errorPages already covers the error codes,
-    //    don't pass props.errorPages to the construct. The manifest's
-    //    errorPages will drive the CloudFront configuration correctly,
-    //    and the HTML files are already in the static assets directory
-    //    (copied by the adapter).
-    const manifestHasErrorPages = manifest.errorPages !== undefined && Object.keys(manifest.errorPages).length > 0;
-    const skipPropsErrorPages = !!(props.errorPages && manifestHasErrorPages);
+		// ── 4c. Prevent duplicate error pages ────────────────────────
+		//    The adapter may auto-detect error pages (e.g. SPA adapter finds
+		//    404.html in build output and sets manifest.errorPages). When the
+		//    user also provides errorPages via props, the CDN construct would
+		//    create DUPLICATE CloudFront custom error responses — one from the
+		//    manifest and one from the props.customErrorPages.
+		//
+		//    Fix: when manifest.errorPages already covers the error codes,
+		//    don't pass props.errorPages to the construct. The manifest's
+		//    errorPages will drive the CloudFront configuration correctly,
+		//    and the HTML files are already in the static assets directory
+		//    (copied by the adapter).
+		const manifestHasErrorPages = manifest.errorPages !== undefined && Object.keys(manifest.errorPages).length > 0;
+		const skipPropsErrorPages = !!(props.errorPages && manifestHasErrorPages);
 
-    // ── 5. Write placeholder config.json into static assets ─────────
-    //    A placeholder is needed so the L3 construct sees
-    //    .blocks-sandbox/ in the static directory during bundling.
-    //    The real config with resolved CDK tokens is deployed in
-    //    step 8 via BucketDeployment + Source.jsonData().
-    const staticDir = manifest.staticAssets.directory;
-    const blocksSandboxDir = join(staticDir, '.blocks-sandbox');
-    mkdirSync(blocksSandboxDir, { recursive: true });
-    writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
+		// ── 5. Write placeholder config.json into static assets ─────────
+		//    A placeholder is needed so the L3 construct sees
+		//    .blocks-sandbox/ in the static directory during bundling.
+		//    The real config with resolved CDK tokens is deployed in
+		//    step 8 via BucketDeployment + Source.jsonData().
+		const staticDir = manifest.staticAssets.directory;
+		const blocksSandboxDir = join(staticDir, '.blocks-sandbox');
+		mkdirSync(blocksSandboxDir, { recursive: true });
+		writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
 
-    // ── 5a. Mark config.json as a no-cache path ─────────────────────
-    //    config.json is a fixed-name, mutable runtime-config file: it must
-    //    NOT inherit the content-hashed mutable-asset cache-control
-    //    (`s-maxage=31536000`) applied to `/assets/<hash>.js`. Registering it
-    //    as a no-cache path uploads the build-time placeholder with
-    //    `no-cache, no-store, must-revalidate` so an edge never caches it
-    //    long-term; the real config is deployed in step 8 with `max-age=60`.
-    const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
-    const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
-    manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
-      ? existingNoCachePaths
-      : [...existingNoCachePaths, configNoCachePath];
+		// ── 5a. Mark config.json as a no-cache path ─────────────────────
+		//    config.json is a fixed-name, mutable runtime-config file: it must
+		//    NOT inherit the content-hashed mutable-asset cache-control
+		//    (`s-maxage=31536000`) applied to `/assets/<hash>.js`. Registering it
+		//    as a no-cache path uploads the build-time placeholder with
+		//    `no-cache, no-store, must-revalidate` so an edge never caches it
+		//    long-term; the real config is deployed in step 8 with `max-age=60`.
+		const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
+		const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
+		manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
+			? existingNoCachePaths
+			: [...existingNoCachePaths, configNoCachePath];
 
-    // ── 5b. Inject static route for .blocks-sandbox config ──────────
-    //    Insert a static route for /.blocks-sandbox/* so CloudFront
-    //    serves config.json from S3 instead of routing to compute.
-    const blocksConfigRoute: RouteBehavior = {
-      pattern: '/.blocks-sandbox/*',
-      target: 'static',
-    };
-    // Insert before any catch-all route
-    const catchAllIdx = manifest.routes.findIndex((r) => r.pattern === '/*' || r.pattern === '/(.*)');
-    if (catchAllIdx >= 0) {
-      manifest.routes.splice(catchAllIdx, 0, blocksConfigRoute);
-    } else {
-      manifest.routes.push(blocksConfigRoute);
-    }
+		// ── 5b. Inject static route for .blocks-sandbox config ──────────
+		//    Insert a static route for /.blocks-sandbox/* so CloudFront
+		//    serves config.json from S3 instead of routing to compute.
+		const blocksConfigRoute: RouteBehavior = {
+			pattern: '/.blocks-sandbox/*',
+			target: 'static',
+		};
+		// Insert before any catch-all route
+		const catchAllIdx = manifest.routes.findIndex((r) => r.pattern === '/*' || r.pattern === '/(.*)');
+		if (catchAllIdx >= 0) {
+			manifest.routes.splice(catchAllIdx, 0, blocksConfigRoute);
+		} else {
+			manifest.routes.push(blocksConfigRoute);
+		}
 
-    // ── 6. Create the L3 hosting construct ─────────────────────────
-    // Validate and normalize compute.timeout: accept both number (seconds) and Duration
-    if (props.compute && typeof props.compute.timeout === 'number') {
-      if (!Number.isFinite(props.compute.timeout) || props.compute.timeout < 1 || props.compute.timeout > 900) {
-        throw new Error(`compute.timeout must be between 1-900 seconds, got: ${props.compute.timeout}`);
-      }
-    }
+		// ── 6. Create the L3 hosting construct ─────────────────────────
+		// Validate and normalize compute.timeout: accept both number (seconds) and Duration
+		if (props.compute && typeof props.compute.timeout === 'number') {
+			if (!Number.isFinite(props.compute.timeout) || props.compute.timeout < 1 || props.compute.timeout > 900) {
+				throw new Error(`compute.timeout must be between 1-900 seconds, got: ${props.compute.timeout}`);
+			}
+		}
 
-    const normalizedCompute = props.compute
-      ? {
-          ...props.compute,
-          timeout:
-            typeof props.compute.timeout === 'number'
-              ? cdk.Duration.seconds(props.compute.timeout)
-              : props.compute.timeout,
-        }
-      : undefined;
+		const normalizedCompute = props.compute
+			? {
+					...props.compute,
+					timeout:
+						typeof props.compute.timeout === 'number'
+							? cdk.Duration.seconds(props.compute.timeout)
+							: props.compute.timeout,
+				}
+			: undefined;
 
-    // ── 6b. Resolve secret() markers ─────────────────────────────
-    //    Env values split into plain / runtime-secret / deploy-time buckets;
-    //    domain names may contain markers resolved at synth time. See
-    //    ./hosting-secrets.ts for the two-strategy rationale.
-    const { plain: plainEnv, managed, byo } = partitionEnvironment(props.environment);
+		// ── 6b. Resolve secret() markers ─────────────────────────────
+		//    Env values split into plain / runtime-secret / deploy-time buckets;
+		//    domain names may contain markers resolved at synth time. See
+		//    ./hosting-secrets.ts for the two-strategy rationale.
+		const { plain: plainEnv, managed, byo } = partitionEnvironment(props.environment);
 
-    // Resolved domain (markers → literals); falls back to the raw config when
-    // no domain is set. resolveDomainNames throws a "use Hosting.create()"
-    // error if a domain marker reached the sync path unresolved.
-    const resolvedDomain = props.domain
-      ? {
-          ...props.domain,
-          domainName: resolveDomainNames(props.domain.domainName, resolvedSecrets),
-        }
-      : undefined;
+		// Resolved domain (markers → literals); falls back to the raw config when
+		// no domain is set. resolveDomainNames throws a "use Hosting.create()"
+		// error if a domain marker reached the sync path unresolved.
+		const resolvedDomain = props.domain
+			? {
+					...props.domain,
+					domainName: resolveDomainNames(props.domain.domainName, resolvedSecrets),
+				}
+			: undefined;
 
     const hostingProps: HostingConstructProps = {
       manifest,
@@ -708,201 +708,200 @@ export class Hosting extends Construct {
       skewProtection: props.skewProtection,
     };
 
-    const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
+		const hosting = new HostingConstruct(this, 'Hosting', hostingProps);
 
-    // ── 7. Add CloudFront behaviors for API proxy ────────────────
-    if (props.api) {
-      this.addApiBehaviors(hosting, props.api.apiUrl);
-    }
+		// ── 7. Add CloudFront behaviors for API proxy ────────────────
+		if (props.api) {
+			this.addApiBehaviors(hosting, props.api.apiUrl);
+			// Publish this distribution as the app's front door so the backend's
+			// managed front door reuses it instead of provisioning a second one
+			// (see scheduleFrontDoor / FrontDoorAspect in cdk/front-door.ts).
+			registerHostingDistribution(cdk.Stack.of(this), hosting.distribution);
+		}
 
-    // ── 7a. Inject Blocks env vars into compute functions ───────────
-    // Lambda@Edge functions (edge-runtime routes) do NOT support environment
-    // variables — they surface in computeFunctions as EdgeFunction/IVersion
-    // without an `addEnvironment` method. Skip any function that can't take
-    // env vars instead of crashing (`fn.addEnvironment is not a function`).
-    const canAddEnv = (fn: unknown): fn is cdk.aws_lambda.Function =>
-      typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
+		// ── 7a. Inject Blocks env vars into compute functions ───────────
+		// Lambda@Edge functions (edge-runtime routes) do NOT support environment
+		// variables — they surface in computeFunctions as EdgeFunction/IVersion
+		// without an `addEnvironment` method. Skip any function that can't take
+		// env vars instead of crashing (`fn.addEnvironment is not a function`).
+		const canAddEnv = (fn: unknown): fn is cdk.aws_lambda.Function =>
+			typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
 
-    const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
+		const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
 
-    for (const [, fn] of hosting.computeFunctions) {
-      if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
-      if (props.api) {
-        fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
-      }
-      if (props.backendConfig) {
-        fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
-      }
-      // Runtime managed markers (secret|config): inject the store locator
-      // (never the value) + grant read/decrypt; read via getSecret()/getConfig().
-      // The app's secretStore/configStore (prefix, stage, cacheTtlSeconds) layer
-      // over the Blocks defaults.
-      const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
-      for (const marker of managed) {
-        wireManagedValue(fn, marker, storeConfig);
-      }
-      // BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
-      for (const binding of byo) {
-        wireByo(fn, binding, storeConfig);
-      }
-    }
+		for (const [, fn] of hosting.computeFunctions) {
+			if (!canAddEnv(fn)) continue; // Lambda@Edge: no env var support
+			if (props.api) {
+				fn.addEnvironment('BLOCKS_API_URL', props.api.apiUrl);
+			}
+			if (props.backendConfig) {
+				fn.addEnvironment('BLOCKS_CONFIG', JSON.stringify(props.backendConfig));
+			}
+			// Runtime managed markers (secret|config): inject the store locator
+			// (never the value) + grant read/decrypt; read via getSecret()/getConfig().
+			// The app's secretStore/configStore (prefix, stage, cacheTtlSeconds) layer
+			// over the Blocks defaults.
+			const storeConfig = { secretStore: props.secretStore, configStore: props.configStore };
+			for (const marker of managed) {
+				wireManagedValue(fn, marker, storeConfig);
+			}
+			// BYO handles (ISecret|IParameter): grant via the handle + inject its locator.
+			for (const binding of byo) {
+				wireByo(fn, binding, storeConfig);
+			}
+		}
 
-    // ── 8. Deploy config.json with resolved CDK tokens ───────────
-    const buildId = manifest.buildId;
-    if (buildId) {
-      const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
-        sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
-        destinationBucket: hosting.bucket,
-        destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
-        prune: false,
-        distribution: hosting.distribution,
-        // The skew-protection viewer-request CloudFront function rewrites the
-        // URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
-        // cache lookup, so the real edge cache key lives under `/builds/<id>/`.
-        // Invalidating only `/.blocks-sandbox/*` never matches that key and is
-        // a no-op for config.json. Invalidate the post-rewrite key too. (The
-        // primary guard against staleness is step 5a's no-cache placeholder;
-        // this is defense-in-depth so a post-deploy invalidation actually
-        // clears any edge entry at its real key.)
-        distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
-        cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
-      });
+		// ── 8. Deploy config.json with resolved CDK tokens ───────────
+		const buildId = manifest.buildId;
+		if (buildId) {
+			const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
+				sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props))],
+				destinationBucket: hosting.bucket,
+				destinationKeyPrefix: `builds/${buildId}/.blocks-sandbox`,
+				prune: false,
+				distribution: hosting.distribution,
+				// The skew-protection viewer-request CloudFront function rewrites the
+				// URI to `/builds/<buildId>/.blocks-sandbox/config.json` BEFORE the
+				// cache lookup, so the real edge cache key lives under `/builds/<id>/`.
+				// Invalidating only `/.blocks-sandbox/*` never matches that key and is
+				// a no-op for config.json. Invalidate the post-rewrite key too. (The
+				// primary guard against staleness is step 5a's no-cache placeholder;
+				// this is defense-in-depth so a post-deploy invalidation actually
+				// clears any edge entry at its real key.)
+				distributionPaths: [`/builds/${buildId}/.blocks-sandbox/*`, '/.blocks-sandbox/*'],
+				cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
+			});
 
-      // Ensure the config deployment runs AFTER the hosting construct's
-      // asset deployments. Those deployments upload the whole static dir —
-      // which includes the *placeholder* `.blocks-sandbox/config.json`
-      // (`{_placeholder:true}`) written during synth — to the same
-      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
-      // the resolved config to. Without an ordering dependency the
-      // placeholder can land last and clobber the real config.
-      //
-      // We depend on EVERY BucketDeployment under the hosting construct
-      // rather than a single hard-coded child id: the real children are
-      // `AssetDeploymentImmutable` / `AssetDeploymentHtml` / `...Mutable`
-      // (and vary by deploy shape), so the previous
-      // `tryFindChild('AssetDeployment')` never matched and the dependency
-      // was silently never wired.
-      const assetDeployments = hosting.node
-        .findAll()
-        .filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
-      for (const dep of assetDeployments) {
-        configDeployment.node.addDependency(dep);
-      }
-    }
+			// Ensure the config deployment runs AFTER the hosting construct's
+			// asset deployments. Those deployments upload the whole static dir —
+			// which includes the *placeholder* `.blocks-sandbox/config.json`
+			// (`{_placeholder:true}`) written during synth — to the same
+			// `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
+			// the resolved config to. Without an ordering dependency the
+			// placeholder can land last and clobber the real config.
+			//
+			// We depend on EVERY BucketDeployment under the hosting construct
+			// rather than a single hard-coded child id: the real children are
+			// `AssetDeploymentImmutable` / `AssetDeploymentHtml` / `...Mutable`
+			// (and vary by deploy shape), so the previous
+			// `tryFindChild('AssetDeployment')` never matched and the dependency
+			// was silently never wired.
+			const assetDeployments = hosting.node
+				.findAll()
+				.filter((c): c is s3deploy.BucketDeployment => c instanceof s3deploy.BucketDeployment);
+			for (const dep of assetDeployments) {
+				configDeployment.node.addDependency(dep);
+			}
+		}
 
-    // ── 9. Register public origin + CORS hosting origin into S3 config ──
-    //    The Handler no longer depends on the BucketDeployment, so including
-    //    the CloudFront domain token via registerConfig() is safe — no cycle.
-    //    Traffic only flows after the stack is COMPLETE, so the Lambda always
-    //    sees the full config (including these values) on its first cold start.
-    //
-    //    Both values come from `hosting.distributionUrl` (custom-domain-aware:
-    //    `https://<customDomain>` when configured, else the CloudFront default)
-    //    so a custom-domain deploy gets the right public origin and CORS allow.
-    if (props.api) {
-      // BLOCKS_PUBLIC_ORIGIN: trusted public origin the app is served from. The
-      // auth BB (bb-auth-oidc) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
-      // OIDC redirect_uris (config-derived, not from a forgeable request
-      // header) so server-initiated sign-in lands back on the CloudFront/custom
-      // domain — where the session cookie is scoped — instead of the raw
-      // execute-api host (which strips the viewer Host header). Kept a literal
-      // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
-      registerConfig(this, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
-      registerConfig(this, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
-    }
+		// ── 9. Register public origin + CORS hosting origin into S3 config ──
+		//    The Handler no longer depends on the BucketDeployment, so including
+		//    the CloudFront domain token via registerConfig() is safe — no cycle.
+		//    Traffic only flows after the stack is COMPLETE, so the Lambda always
+		//    sees the full config (including these values) on its first cold start.
+		//
+		//    Both values come from `hosting.distributionUrl` (custom-domain-aware:
+		//    `https://<customDomain>` when configured, else the CloudFront default)
+		//    so a custom-domain deploy gets the right public origin and CORS allow.
+		if (props.api) {
+			// BLOCKS_PUBLIC_ORIGIN: trusted public origin the app is served from. The
+			// auth BB (bb-auth-oidc) reads `process.env.BLOCKS_PUBLIC_ORIGIN` to build
+			// OIDC redirect_uris (config-derived, not from a forgeable request
+			// header) so server-initiated sign-in lands back on the CloudFront/custom
+			// domain — where the session cookie is scoped — instead of the raw
+			// execute-api host (which strips the viewer Host header). Kept a literal
+			// key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
+			registerConfig(this, 'BLOCKS_PUBLIC_ORIGIN', hosting.distributionUrl);
+			registerConfig(this, 'CORS_HOSTING_ORIGINS', hosting.distributionUrl);
+		}
 
-    // ── 10. Expose resources ──────────────────────────────────────
-    this.bucket = hosting.bucket;
-    this.distribution = hosting.distribution;
-    this.url = hosting.distributionUrl;
-    this.ssrFunction = primaryFunction;
-    this.buildCacheBucket = hosting.buildCacheBucket;
-    this.monitoringTopic = hosting.monitoringTopic;
+		// ── 10. Expose resources ──────────────────────────────────────
+		this.bucket = hosting.bucket;
+		this.distribution = hosting.distribution;
+		this.url = hosting.distributionUrl;
+		this.ssrFunction = primaryFunction;
+		this.buildCacheBucket = hosting.buildCacheBucket;
+		this.monitoringTopic = hosting.monitoringTopic;
 
-    // ── 11. CfnOutput ────────────────────────────────────────────
-    new cdk.CfnOutput(this, 'HostingUrl', {
-      value: hosting.distributionUrl,
-      description: 'Blocks Hosting URL',
-    });
+		// ── 11. CfnOutput ────────────────────────────────────────────
+		new cdk.CfnOutput(this, 'HostingUrl', {
+			value: hosting.distributionUrl,
+			description: 'Blocks Hosting URL',
+		});
 
-    if (hosting.buildCacheBucket) {
-      new cdk.CfnOutput(this, 'BuildCacheBucketName', {
-        value: hosting.buildCacheBucket.bucketName,
-        description: 'S3 bucket for framework build caches',
-      });
-    }
-  }
+		if (hosting.buildCacheBucket) {
+			new cdk.CfnOutput(this, 'BuildCacheBucketName', {
+				value: hosting.buildCacheBucket.bucketName,
+				description: 'S3 bucket for framework build caches',
+			});
+		}
+	}
 
-  /**
-   * Build the config.json payload from props.
-   *
-   * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
-   * so the frontend fetches through the same CloudFront domain (no CORS).
-   */
-  private buildConfigJson(props: HostingProps): Record<string, unknown> {
-    return {
-      ...(props.backendConfig ?? {}),
-      ...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
-    };
-  }
+	/**
+	 * Build the config.json payload from props.
+	 *
+	 * When `api` is provided, the config uses a relative `/aws-blocks/api` URL
+	 * so the frontend fetches through the same CloudFront domain (no CORS).
+	 */
+	private buildConfigJson(props: HostingProps): Record<string, unknown> {
+		return {
+			...(props.backendConfig ?? {}),
+			...(props.api ? { apiUrl: BLOCKS_RPC_PREFIX } : {}),
+		};
+	}
 
-  /**
-   * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
-   */
-  private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
-    const baseUrl = cdk.Fn.select(0, cdk.Fn.split(BLOCKS_RPC_PREFIX, apiUrl));
-    const withoutScheme = cdk.Fn.select(1, cdk.Fn.split('https://', baseUrl));
-    const hostname = cdk.Fn.select(0, cdk.Fn.split('/', withoutScheme));
-    const stage = cdk.Fn.select(1, cdk.Fn.split('/', withoutScheme));
+	/**
+	 * Add CloudFront behaviors that proxy API traffic to the API Gateway origin.
+	 */
+	private addApiBehaviors(hosting: HostingConstruct, apiUrl: string): void {
+		// Shared with the backend's managed front door so both build the API origin
+		// identically from the API URL token.
+		const apiGatewayOrigin = httpOriginFromApiUrl(apiUrl);
 
-    const apiGatewayOrigin = new HttpOrigin(hostname, {
-      originPath: `/${stage}`,
-    });
+		const behaviorDefaults = {
+			allowedMethods: AllowedMethods.ALLOW_ALL,
+			cachePolicy: CachePolicy.CACHING_DISABLED,
+			originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+			viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+		};
 
-    const behaviorDefaults = {
-      allowedMethods: AllowedMethods.ALLOW_ALL,
-      cachePolicy: CachePolicy.CACHING_DISABLED,
-      originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    };
+		hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
+		hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
-    hosting.distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, behaviorDefaults);
-    hosting.distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+		// Proxy the auth BB's reserved subtree as a single behavior. The auth flow
+		// (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
+		// only at runtime; declaring the subtree wildcard here — rather than per
+		// route at synth — proxies the whole flow regardless of providers or
+		// instance count, and never drifts as routes are added. Added directly (not
+		// via the route loop below) so it's emitted exactly once even with multiple
+		// AuthOIDC instances.
+		hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
 
-    // Proxy the auth BB's reserved subtree as a single behavior. The auth flow
-    // (callback, sign-in, exchange, authorize-params, the stub IdP) is mounted
-    // only at runtime; declaring the subtree wildcard here — rather than per
-    // route at synth — proxies the whole flow regardless of providers or
-    // instance count, and never drifts as routes are added. Added directly (not
-    // via the route loop below) so it's emitted exactly once even with multiple
-    // AuthOIDC instances.
-    hosting.distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, behaviorDefaults);
+		const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
+		for (const route of getRegisteredRoutes()) {
+			if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
+			if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
 
-    const addedPatterns = new Set<string>([`${BLOCKS_RPC_PREFIX}/*`, `${BLOCKS_AUTH_PREFIX}/*`]);
-    for (const route of getRegisteredRoutes()) {
-      if (route.path.startsWith(`${BLOCKS_RPC_PREFIX}/`)) continue;
-      if (route.path === BLOCKS_AUTH_PREFIX || route.path.startsWith(`${BLOCKS_AUTH_PREFIX}/`)) continue;
+			let behaviorPattern: string;
+			const paramIndex = route.path.indexOf('/{');
+			if (paramIndex !== -1) {
+				behaviorPattern = route.path.substring(0, paramIndex) + '/*';
+			} else {
+				behaviorPattern = route.path;
+			}
 
-      let behaviorPattern: string;
-      const paramIndex = route.path.indexOf('/{');
-      if (paramIndex !== -1) {
-        behaviorPattern = route.path.substring(0, paramIndex) + '/*';
-      } else {
-        behaviorPattern = route.path;
-      }
+			if (addedPatterns.has(behaviorPattern)) continue;
 
-      if (addedPatterns.has(behaviorPattern)) continue;
+			if (behaviorPattern.endsWith('/*')) {
+				console.warn(
+					`[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
+						`which may shadow SSR/frontend routes under the same prefix. ` +
+						`Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
+				);
+			}
 
-      if (behaviorPattern.endsWith('/*')) {
-        console.warn(
-          `[Hosting] ⚠️  RawRoute '${route.path}' creates CloudFront behavior '${behaviorPattern}' ` +
-            `which may shadow SSR/frontend routes under the same prefix. ` +
-            `Consider placing this route under ${BLOCKS_RPC_PREFIX}/ to avoid conflicts.`,
-        );
-      }
-
-      addedPatterns.add(behaviorPattern);
-      hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
-    }
-  }
+			addedPatterns.add(behaviorPattern);
+			hosting.distribution.addBehavior(behaviorPattern, apiGatewayOrigin, behaviorDefaults);
+		}
+	}
 }

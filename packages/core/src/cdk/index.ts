@@ -18,7 +18,7 @@ import type { Compute } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
 import { finalizeConfigRegistry } from './config-registry.js';
-import { scheduleFrontDoor } from './front-door.js';
+import { resolvedFrontDoorUrl, scheduleFrontDoor } from './front-door.js';
 import { addBlocksStackMetadata } from './stack-metadata.js';
 
 export { ApiError, DEFAULT_API_ERROR_NAME, hasAuthError, isBlocksError } from '../errors.js';
@@ -37,6 +37,7 @@ export {
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
 export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { synthGuard } from './synth-guard.js';
@@ -77,11 +78,21 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	get handler(): cdk.aws_lambda_nodejs.NodejsFunction {
 		return this.requireDefaultCompute().fn;
 	}
-	/** The default compute's API Gateway REST API. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's API Gateway REST API.
+	 * @deprecated The managed CloudFront front door is now the app's public
+	 * origin; use it (or a specific compute's own `apiGateway`) instead of the
+	 * stack-level gateway. Removed in a later multi-compute change (Track D, D5).
+	 */
 	get gateway(): cdk.aws_apigateway.RestApi {
 		return this.requireDefaultCompute().apiGateway;
 	}
-	/** The default compute's RPC endpoint URL. To be removed once consumers move to the multi-compute model. */
+	/**
+	 * The default compute's RPC endpoint URL.
+	 * @deprecated The client now resolves the front-door origin (via the `ApiUrl`
+	 * output → `config.json`); this stack-level accessor is removed in a later
+	 * multi-compute change (Track D, D5).
+	 */
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
@@ -144,14 +155,19 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 			}
 		}
 		// Schedule the managed CloudFront API front door (prod default; off in
-		// sandbox). Resolved by a synth-time aspect, so it observes the whole app;
-		// the client is not switched to it here (that is a later change).
+		// sandbox). Deferred to synth via an aspect so it can observe a Hosting
+		// construct built after create() returns and reuse its distribution.
 		scheduleFrontDoor(stack, stack.apiUrl, stack.defaults.provisionApiFrontDoor);
 
 		// Finalize BB config → S3 (after all BBs have registered their config)
 		finalizeConfigRegistry(stack, stack.executionRole, getComputes(stack));
 
-		new cdk.CfnOutput(stack, 'ApiUrl', { value: stack.apiUrl });
+		// ApiUrl → the front-door origin when one is provisioned (resolved at synth
+		// by the aspect), else the API Gateway directly. Lazy so it reflects the
+		// aspect's decision; the deploy script writes it into the client config.json.
+		new cdk.CfnOutput(stack, 'ApiUrl', {
+			value: cdk.Lazy.string({ produce: () => resolvedFrontDoorUrl(stack) ?? stack.apiUrl }),
+		});
 
 		addBlocksStackMetadata(stack);
 
