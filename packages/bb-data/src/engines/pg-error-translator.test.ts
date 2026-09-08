@@ -3,10 +3,11 @@
 
 /**
  * Unit tests for the shared PostgreSQL error translator (used by PgClientEngine
- * and PGliteEngine). Focus: an OCC / serialization-failure conflict (SQLSTATE
- * 40001) must surface as an ApiError with HTTP status 409 (Conflict), not a
- * generic 500, while preserving the SerializationFailure name and flagging the
- * conflict retriable.
+ * and PGliteEngine). Focus: conflict codes must surface as an ApiError with an
+ * HTTP status (409 Conflict), not a generic 500 — an OCC / serialization-failure
+ * conflict (SQLSTATE 40001, retriable) and a duplicate-key / unique-constraint
+ * violation (SQLSTATE 23505, not retriable) — while preserving the standardized
+ * error name so `isBlocksError` keeps matching.
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
@@ -28,14 +29,18 @@ test('translatePgError: serialization failure (40001) → ApiError status 409, r
   );
 });
 
-test('translatePgError: unique violation (23505) → UniqueConstraintViolation (unchanged, non-ApiError)', () => {
-  const err = Object.assign(new Error('duplicate key'), { code: '23505' });
+test('translatePgError: unique violation (23505) → ApiError status 409, name preserved, not retriable', () => {
+  const err = Object.assign(new Error('duplicate key value violates unique constraint "t_pkey"'), { code: '23505' });
   assert.throws(
     () => translatePgError(err, 'PgClientEngine'),
     (e: unknown) => {
-      assert.ok(e instanceof Error);
-      assert.strictEqual((e as Error).name, DatabaseErrors.UniqueConstraintViolation);
-      assert.ok(!(e instanceof ApiError), 'unique violation should not be remapped to an ApiError');
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(e.status, 409);
+      assert.strictEqual(e.name, DatabaseErrors.UniqueConstraintViolation);
+      assert.notStrictEqual(e.retriable, true, 'a duplicate-key retry fails identically → not retriable');
+      // Raw driver error is retained server-side as `cause`, not leaked into the message.
+      assert.strictEqual(e.cause, err);
+      assert.notStrictEqual(e.message, err.message);
       return true;
     },
   );

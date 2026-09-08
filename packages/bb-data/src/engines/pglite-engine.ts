@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError, serializationConflict } from '../errors.js';
+import { DatabaseErrors, wrapError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -45,8 +45,11 @@ function translateError(e: unknown): never {
       throw serializationConflict(e);
     }
     if (code === PG_UNIQUE_VIOLATION) {
-      e.name = DatabaseErrors.UniqueConstraintViolation;
-    } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
+      // Duplicate key: surface as a 409 (Conflict), not a generic 500. Not
+      // retriable — a blind retry of the same insert fails identically.
+      throw uniqueConstraintConflict(e);
+    }
+    if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {
       e.name = DatabaseErrors.ConnectionFailed;
     } else {
       e.name = DatabaseErrors.QueryFailed;

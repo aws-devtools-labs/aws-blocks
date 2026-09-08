@@ -43,12 +43,18 @@ test('translateDsqlError: serialization failure (40001) → SerializationFailure
   );
 });
 
-test('translateDsqlError: unique violation (23505) → UniqueConstraintViolation', () => {
-  const err = Object.assign(new Error('duplicate key'), { code: PG_UNIQUE_VIOLATION });
+test('translateDsqlError: unique violation (23505) → ApiError status 409, name preserved, not retriable', () => {
+  const err = Object.assign(new Error('duplicate key value violates unique constraint "dsql_items_pkey"'), { code: PG_UNIQUE_VIOLATION });
   assert.throws(
     () => translateDsqlError(err),
-    (e: Error) => {
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.equal(e.status, 409);
       assert.equal(e.name, DistributedDatabaseErrors.UniqueConstraintViolation);
+      assert.notEqual(e.retriable, true, 'a duplicate-key retry fails identically → not retriable');
+      assert.equal(e.message, 'The item violates a unique constraint');
+      // Raw driver error retained server-side as `cause`, not leaked into the message.
+      assert.equal(e.cause, err);
       return true;
     }
   );
