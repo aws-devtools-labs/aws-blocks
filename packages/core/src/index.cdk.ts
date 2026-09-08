@@ -33,6 +33,7 @@ export {
 	DEFAULT_NODE_RUNTIME,
 	ensureApiGatewayAccount,
 	finalizeConfigRegistry,
+	getConfigLocation,
 	getVpcContext,
 	registerConfig,
 	SandboxDisableDeletionProtection,

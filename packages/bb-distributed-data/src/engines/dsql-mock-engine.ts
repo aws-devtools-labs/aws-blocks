@@ -146,7 +146,10 @@ export class DsqlMockEngine implements DatabaseEngine {
         new Error('SerializationFailureException: OCC conflict — transaction not committed.'),
         { code: PG_SERIALIZATION_FAILURE, name: DistributedDatabaseErrors.SerializationFailure }
       );
-      throw err;
+      // Route through translateDsqlError so the mock surfaces the SAME 409
+      // ApiError (name preserved, retriable) the real DSQL engine produces for
+      // SQLSTATE 40001 — keeping mock and aws paths behaviorally identical.
+      translateDsqlError(err);
     }
     await this.db.query('COMMIT');
     (handle as MockTxHandle).tracker.reset();

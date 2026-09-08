@@ -38,7 +38,7 @@ export {
 	type BlocksThrottling,
 } from './blocks-defaults.js';
 export { blocksNodejsBundling } from './bundling.js';
-export { finalizeConfigRegistry, registerConfig } from './config-registry.js';
+export { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
 export { SandboxDisableDeletionProtection } from './mixins.js';
 export { DEFAULT_NODE_RUNTIME } from './node-version.js';
 export { synthGuard } from './synth-guard.js';
@@ -64,6 +64,12 @@ export interface CoreBlocksStackProps extends BlocksStackProps {
 export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	public readonly id: string;
 	public readonly backendHandlerPath: string;
+	/**
+	 * Path to the app's backend module (`props.backendCDKPath`). Exposed so Building Blocks that
+	 * co-bundle the backend at synth (e.g. the Agent BB's AgentCore Runtime) can discover it via
+	 * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
+	 */
+	public readonly backendModulePath: string;
 	/** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
 	public readonly executionRole: cdk.aws_iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this stack. */
@@ -103,6 +109,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		super(scope, id, props);
 		this.id = id;
 		this.backendHandlerPath = props.backendHandlerPath;
+		this.backendModulePath = props.backendCDKPath;
 		this.defaults = props.defaults;
 		this._vpcOptions = props.vpc;
 

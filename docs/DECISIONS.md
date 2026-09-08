@@ -629,7 +629,7 @@ write-back/staging machinery.
 
 `DistributedTable.get`/`getBatch`/`query`/`scan` returned the raw stored value without reconciling it against the current schema (issue #1007). After a schema change, a row written under the old schema no longer conforms to the declared type `T`: a newly added field is absent from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back), and a required-with-no-default field makes the `put()` half of the documented read-modify-write cycle throw `ValidationFailed`, stranding the row.
 
-The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-9).
+The fix adds `readValidation?: 'off' | 'coerce' | 'strict'`. The central choice is which value is the **default**: the lossless `'off'` (raw passthrough, opt into coercion) or `'coerce'` (reconcile on read, opt out for raw). This decision records that choice; the per-BB mechanics live in `packages/bb-distributed-table/DESIGN.md` (D-DT-10).
 
 ### Decision
 
@@ -658,5 +658,5 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 ### References
 
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
-- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-9.
+- Per-BB mechanics: `packages/bb-distributed-table/DESIGN.md` D-DT-10.
 - Code: `packages/bb-distributed-table/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
