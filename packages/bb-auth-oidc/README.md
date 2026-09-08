@@ -324,6 +324,9 @@ Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so
 
 ## Cognito-mediated federation
 
+> [!WARNING]
+> **`cognitoFederated()` is not currently deployable.** The CDK layer registers the IdP by writing the client id/secret into `AWS::Cognito::UserPoolIdentityProvider.ProviderDetails` as `{{resolve:ssm-secure:...}}` dynamic references, which CloudFormation does not permit on that property — deploy fails at change-set creation. AuthOIDC now surfaces this at **synth** time with an actionable error rather than emitting an undeployable template. Until the deploy-time custom-resource fix lands, use a self-hosted runtime provider instead (`google()`, `github()`, `customOidc()`, `customOauth2()`); those resolve IdP credentials at runtime via `AppSetting.get()` and deploy cleanly. See [the tracking issue](https://github.com/aws-devtools-labs/aws-blocks/issues/447).
+
 Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verification, MFA, and brute-force protection. Your Lambda only exchanges the code and reads the session.
 
 `cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials — the CDK layer needs to read them at synth time to register the IdP in Cognito via CloudFormation dynamic references.

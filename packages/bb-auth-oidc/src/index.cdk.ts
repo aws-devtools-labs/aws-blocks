@@ -126,6 +126,28 @@ export class AuthOIDC<
 		cognitoProviders: CognitoFederatedProvider[],
 		options: AuthOIDCOptions<readonly ProviderConfig[]>,
 	): void {
+		// `cognitoFederated()` cannot currently be deployed. The IdP registration
+		// below writes the client id/secret into
+		// `AWS::Cognito::UserPoolIdentityProvider.ProviderDetails` as
+		// `{{resolve:ssm-secure:...}}` dynamic references, but CloudFormation only
+		// permits `ssm-secure` references on a small allowlist of properties that
+		// excludes `ProviderDetails`. Without this guard `cdk synth` succeeds and
+		// deploy fails during change-set creation — before any resource is created —
+		// leaving the stack in `REVIEW_IN_PROGRESS`. Surface the limitation at synth
+		// with an actionable message instead of emitting a template that can never
+		// deploy. See DESIGN.md ("Cognito federation credential flow") for the
+		// deploy-time custom-resource fix that would lift this restriction.
+		const names = cognitoProviders.map(p => `'${p.name}'`).join(', ');
+		cdk.Annotations.of(this).addError(
+			`AuthOIDC: cognitoFederated() provider(s) ${names} cannot be deployed. `
+				+ 'CloudFormation rejects the {{resolve:ssm-secure}} dynamic references this '
+				+ 'path writes into AWS::Cognito::UserPoolIdentityProvider ProviderDetails '
+				+ '(client_id / client_secret), so the synthesized template fails at change-set '
+				+ 'creation. Use a self-hosted runtime provider instead — google(), github(), '
+				+ 'customOidc() or customOauth2() resolve IdP credentials at runtime via '
+				+ 'AppSetting.get() rather than through CloudFormation, and deploy cleanly.',
+		);
+
 		const stack = cdk.Stack.of(this);
 
 		const pool = new cognito.UserPool(this, 'cognito-pool', {
