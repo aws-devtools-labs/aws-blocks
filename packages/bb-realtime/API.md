@@ -43,6 +43,7 @@ export const RealtimeErrors: {
     readonly PublishFailed: "PublishFailedException";
     readonly ValidationFailed: "ValidationFailedException";
     readonly ConnectionFailed: "ConnectionFailedException";
+    readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
 // @public (undocumented)

@@ -50,7 +50,7 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, onAuthChange, broadcastAuthChange } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, AccountMenuBar, onAuthChange, broadcastAuthChange } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -745,5 +745,181 @@ describe('onAuthChange', () => {
 		await flush();
 
 		assert.strictEqual(callCount, countAfterInit, 'Should not receive events after unsubscribe');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// data-testid contract
+//
+// These hooks are documented in CUSTOMIZING-AUTH-UI.md and e2e suites depend
+// on them, so renaming one is a breaking change.
+// ---------------------------------------------------------------------------
+
+describe('test hooks', () => {
+
+	function testId(root: ParentNode, id: string) {
+		return root.querySelector(`[data-testid="${id}"]`);
+	}
+
+	test('Authenticator container and per-action wrappers are addressable', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+
+		assert.strictEqual(el.getAttribute('data-testid'), 'authenticator');
+		assert.ok(testId(el, 'authenticator-heading'), 'heading hook present');
+		assert.ok(testId(el, 'authenticator-action-signIn'), 'signIn wrapper hook present');
+		assert.ok(testId(el, 'authenticator-action-signUp'), 'signUp wrapper hook present');
+	});
+
+	test('field and submit hooks are unique within an action wrapper', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+
+		const signIn = testId(el, 'authenticator-action-signIn')!;
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-username"]').length, 1);
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-password"]').length, 1);
+		assert.strictEqual(signIn.querySelectorAll('[data-testid="authenticator-submit"]').length, 1);
+
+		const username = testId(signIn, 'authenticator-username') as HTMLInputElement;
+		const password = testId(signIn, 'authenticator-password') as HTMLInputElement;
+		assert.strictEqual(username.name, 'username');
+		assert.strictEqual(password.type, 'password');
+		assert.strictEqual(testId(signIn, 'authenticator-submit')!.textContent, 'Sign In');
+	});
+
+	test('field hooks follow the field names the BB emits, hidden fields included', async () => {
+		const api = mockApi({
+			state: 'confirmingPasswordReset',
+			actions: [{
+				name: 'confirmResetPassword',
+				label: 'Reset Password',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+					{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+					{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+				],
+			}],
+		});
+		const el = Authenticator(api);
+		await flush();
+
+		const wrapper = testId(el, 'authenticator-action-confirmResetPassword')!;
+		const hiddenUsername = testId(wrapper, 'authenticator-username') as HTMLInputElement;
+		assert.strictEqual(hiddenUsername.type, 'hidden');
+		assert.strictEqual(hiddenUsername.value, 'alice');
+		assert.ok(testId(wrapper, 'authenticator-code'), 'code hook present');
+		assert.ok(testId(wrapper, 'authenticator-newPassword'), 'newPassword hook present');
+	});
+
+	test('a scoped submit hook drives the state machine', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		await flush();
+		api.nextState = signedInState();
+
+		const signIn = testId(el, 'authenticator-action-signIn')!;
+		(testId(signIn, 'authenticator-username') as HTMLInputElement).value = 'alice';
+		(testId(signIn, 'authenticator-password') as HTMLInputElement).value = 'secret';
+		(testId(signIn, 'authenticator-submit') as HTMLButtonElement).click();
+		await flush();
+
+		assert.deepStrictEqual(api.calls, [{ action: 'signIn', fields: { username: 'alice', password: 'secret' } }]);
+		assert.strictEqual(testId(el, 'authenticator-signed-in')?.textContent, 'Signed in as: alice');
+	});
+
+	test('error hook carries the error text', async () => {
+		const api = mockApi({ ...signedOutState(), error: 'Invalid password' });
+		const el = Authenticator(api);
+		await flush();
+
+		assert.strictEqual(testId(el, 'authenticator-error')?.textContent, 'Invalid password');
+	});
+
+	test('external actions expose the same wrapper, field and submit hooks', async () => {
+		const api = mockApi(signedOutState([{
+			name: 'signIn:google',
+			label: 'Sign in with Google',
+			url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
+			method: 'GET',
+			fields: [
+				{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
+			],
+		}]));
+		const el = Authenticator(api);
+		await flush();
+
+		const form = testId(el, 'authenticator-action-signIn:google');
+		assert.ok(form, 'external action wrapper hook present');
+		assert.strictEqual(form!.tagName, 'FORM');
+		assert.ok(testId(form!, 'authenticator-redirect_uri'), 'hidden field hook present');
+		assert.strictEqual(testId(form!, 'authenticator-submit')?.textContent, 'Sign in with Google');
+	});
+
+	// Federated action names carry a `<action>:<provider>` suffix, and the hook
+	// keeps it verbatim, so the documented name contains a colon. That is only a
+	// hazard where a locator would parse the value as selector grammar, so pin
+	// the quoted-attribute lookup and the exact-match behavior both here and in
+	// CUSTOMIZING-AUTH-UI.md.
+	test('provider-suffixed action names keep the suffix in the hook', async () => {
+		const api = mockApi(signedOutState([
+			{ name: 'signIn', label: 'Sign In', fields: [
+				{ name: 'username', label: 'Username', type: 'text', required: true },
+			]},
+			{ name: 'signIn:google', label: 'Sign in with Google', url: 'https://accounts.google.com/o/oauth2/auth', method: 'GET', fields: [] },
+			{ name: 'signIn:okta', label: 'Sign in with Okta', url: 'https://example.okta.com/oauth2/v1/authorize', method: 'POST', fields: [] },
+		]));
+		const el = Authenticator(api);
+		await flush();
+
+		const google = testId(el, 'authenticator-action-signIn:google');
+		const okta = testId(el, 'authenticator-action-signIn:okta');
+		assert.ok(google, 'colon-suffixed hook resolves through a quoted attribute selector');
+		assert.ok(okta, 'a second provider gets its own hook');
+		assert.notStrictEqual(google, okta, 'providers do not collide on one hook');
+		assert.strictEqual(testId(google!, 'authenticator-submit')?.textContent, 'Sign in with Google');
+
+		// The bare `signIn` hook matches exactly, not by prefix, or scoping a
+		// form-flow test would land on an OAuth button.
+		const bare = testId(el, 'authenticator-action-signIn');
+		assert.ok(bare, 'the internal signIn action keeps its own hook');
+		assert.ok(testId(bare!, 'authenticator-username'), 'scoping through the bare hook still works');
+		assert.strictEqual(
+			testId(bare!, 'authenticator-action-signIn:google'),
+			null,
+			'suffixed actions are siblings of the bare action, not children',
+		);
+	});
+
+	test('AuthenticatedContent container is addressable', async () => {
+		const api = mockApi(signedInState());
+		const el = AuthenticatedContent(api, () => document.createElement('span'));
+		await flush();
+
+		assert.strictEqual(el.getAttribute('data-testid'), 'authenticated-content');
+	});
+
+	test('AccountMenuBar exposes sign-in, sign-out and username hooks', async () => {
+		const signedOutApi = mockApi(signedOutState());
+		const bar = AccountMenuBar(signedOutApi);
+		await flush();
+
+		assert.strictEqual(bar.getAttribute('data-testid'), 'account-menu');
+		const signInBtn = testId(bar, 'account-menu-signin') as HTMLButtonElement;
+		assert.ok(signInBtn, 'sign-in hook present when signed out');
+
+		signInBtn.click();
+		await flush();
+		const modal = testId(document.body, 'account-menu-modal')!;
+		assert.ok(modal, 'modal hook present after clicking sign in');
+		assert.ok(testId(modal, 'authenticator'), 'modal hosts the Authenticator');
+		(testId(modal, 'account-menu-modal-close') as HTMLButtonElement).click();
+
+		const signedInApi = mockApi(signedInState());
+		const signedInBar = AccountMenuBar(signedInApi);
+		await flush();
+		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
+		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
 	});
 });

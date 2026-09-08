@@ -149,6 +149,11 @@ describe('resolveConfig', () => {
 		assert.equal(config.logGroupName, '/aws/lambda/my-handler-fn');
 	});
 
+	it('logGroupName prefers the supplied handler log-group name over the /aws/lambda convention', () => {
+		const config = resolveConfig('dash', { logger: { fullId: 'myapp-log' } }, 'my-handler-fn', undefined, 'MyStack-HandlerLogGroupABC123');
+		assert.equal(config.logGroupName, 'MyStack-HandlerLogGroupABC123');
+	});
+
 	it('logGroupName remains undefined when no logger BB even with functionName', () => {
 		const config = resolveConfig('dash', {}, 'my-handler-fn');
 		assert.equal(config.logGroupName, undefined);

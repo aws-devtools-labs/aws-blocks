@@ -11,6 +11,7 @@ import type { api as apiType } from 'aws-blocks';
 import { installCookieJar } from './cookie-jar.js';
 import { kvStoreTests } from './kv-store.test.js';
 import { distributedTableTests } from './distributed-table.test.js';
+import { distributedTableSecureDefaultsTests } from './distributed-table-secure-defaults.test.js';
 import { realtimeTests } from './realtime.test.js';
 import { basicAuthTests } from './basic-auth.test.js';
 import { authCookieAttrsTests } from './auth-cookie-attrs.test.js';
@@ -21,6 +22,7 @@ import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
 import { asyncJobTests } from './async-job.test.js';
+import { asyncJobStatusTests } from './async-job-status.test.js';
 import { agentTests } from './agent.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
@@ -190,6 +192,9 @@ kvStoreTests(() => api);
 // DistributedTable tests (separate file)
 distributedTableTests(() => api);
 
+// DistributedTable secure-defaults deploy coverage (separate file)
+distributedTableSecureDefaultsTests(() => api);
+
 // Database tests (separate file)
 databaseTests(() => api);
 
@@ -225,6 +230,9 @@ databaseTests(() => api);
 
 // AsyncJob tests (separate file)
 asyncJobTests(() => api);
+
+// AsyncJob status tracking tests (separate file)
+asyncJobStatusTests(() => api);
 
 // CronJob tests (separate file)
 cronJobTests(() => api);

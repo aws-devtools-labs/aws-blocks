@@ -18,17 +18,17 @@ void main() {
     // Mock the url_launcher platform channel
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/url_launcher'),
-      (MethodCall methodCall) async => true,
-    );
+          const MethodChannel('plugins.flutter.io/url_launcher'),
+          (MethodCall methodCall) async => true,
+        );
   });
 
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/url_launcher'),
-      null,
-    );
+          const MethodChannel('plugins.flutter.io/url_launcher'),
+          null,
+        );
   });
 
   test('implements BrowserLauncher', () {

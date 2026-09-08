@@ -1,5 +1,144 @@
 # @aws-blocks/hosting
 
+## 0.2.0
+
+### Minor Changes
+
+- 9d4ccea: Add `secret()` / `config()` support to hosting and pipeline for self-hosted deployments — externalized values that are never hardcoded in source, committed to git, or written into the CloudFormation template.
+  
+  **Two intent functions; the store is implied by which you call.**
+  
+  - **`secret('KEY')` → AWS Secrets Manager** — for sensitive values (API keys, tokens, credentials).
+  - **`config('KEY')` → SSM Parameter Store** (free tier) — for non-sensitive externalized values (feature flags, a custom domain, a connection ARN).
+  
+  The developer never selects a store; it is derived from the function (`storeForKind`), so the CLI write, the IAM grant, the synth-time fetch, and the runtime read can never disagree.
+  
+  **Runtime read — two getters, one per store.** `getSecret('KEY')` reads Secrets Manager; `getConfig('KEY')` reads SSM. Each reads its own injected locator env var (`HOSTING_SECRET_PARAM_<KEY>` vs `HOSTING_CONFIG_PARAM_<KEY>`), so the store is unambiguous. Both read `process.env.KEY` first, so **local dev needs no AWS** (put the value in a `.env` file). Values are fetched + decrypted on first use, cached (per-kind `cacheTtlSeconds` for rotation without a cold start; otherwise cached for the process lifetime), and never enter the template. The getters live on the **CDK-free `@aws-blocks/hosting` entry** — the value API (`secret`/`config`/`getSecret`/`getConfig`) is the package's `.`, and its module graph pulls in no CDK, no `fast-glob`, and no `node:fs`, so importing it into an SSR/runtime bundle (including the edge runtime) is safe. Build-time tooling lives off `.` so it never enters a runtime bundle: the CDK construct + resolution engine on `@aws-blocks/hosting/constructs`, and the CLI + typegen engines on `@aws-blocks/hosting/scripts`. (`@aws-blocks/core` already exports a backend `getConfig`, so import the hosting getters from `@aws-blocks/hosting`.)
+  
+  **CDK wiring.** In `Hosting` `environment` (and `domain`) a `secret()`/`config()` marker injects only the store *locator* and grants the compute role least-privilege read (`secretsmanager:GetSecretValue` / `ssm:GetParameter`, scoped to the exact ARN) + `kms:Decrypt` (conditioned on `kms:ViaService`). When a `stage` is set the grant covers BOTH the stage locator `<prefix>/<stage>/<key>` and the shared fallback `<prefix>/<key>` (the fallback read is what lets a stage fall back to a shared value), so treat the shared entry as readable by every stage sharing that prefix. A **synth-time** position — `domain.domainName` — accepts only `config()` (or a plain string), never `secret()`: the value is resolved via an SDK read and **inlined as a literal into the template** (a domain must be a literal before CloudFront/ACM), so a secret there would defeat its own purpose; a domain is public anyway. Synth resolution is async, so use `await Hosting.create(...)`. (Runtime `environment` markers still accept both `secret()` and `config()` — those inject only the locator and never inline.) Per-kind namespace/cache config is set via the separate `secretStore` / `configStore` props (`{ prefix, stage, cacheTtlSeconds }`), defaulting to the neutral `/hosting/secrets` and `/hosting/config` prefixes.
+  
+  **Namespacing (avoid cross-app collisions).** A **Blocks** app is scoped automatically: the `Hosting` / `Pipeline` blocks and the `npm run secret` / `config` CLIs default to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`, where `stackId` is the app's stable id from the committed `.blocks/config.json`. Both the CLI and the CDK synth read that same file, so two Blocks apps in one account/region never collide, and the write and the read can never diverge (when the file is absent — e.g. a bare test — both sides fall back to the unscoped `/blocks/*` identically). `stackId` is stage-independent (prod and sandbox share it; use the opt-in `stage` segment for per-stage values). A **standalone** hosting/pipeline app (the framework-neutral leaf) has no `.blocks/config.json`, so its defaults (`/hosting/secrets`, `/hosting/config`) stay account-global — give each app its own `secretStore.prefix` / `configStore.prefix` (and matching CLI `--prefix`) when more than one deploys to an account. Use `--region` (or `AWS_REGION`) to write the value in the same region the app deploys to.
+  
+  **Bring-your-own (BYO).** `environment` (hosting) and `buildSecrets` (pipeline) also accept an existing CDK `ISecret` / `IParameter` handle alongside the managed markers: the construct grants read via the handle and injects its locator, so `getSecret`/`getConfig` resolve it identically — managed *provisions*, BYO *references*.
+  
+  **Pipeline.** `source.connectionArn` accepts a `config()` marker (resolved to a literal at synth; a connection ARN is a reference inlined into the template, so `secret()` is a type error there — same rule as `domain`). `buildSecrets` accepts `secret()` markers or BYO `ISecret` handles and wires them as CodeBuild `SECRETS_MANAGER` env vars fetched at build time (masked in logs, never inlined) — build-time credentials are secrets, so this surface is Secrets-Manager-only. Namespace config via `secretStore` / `configStore`.
+  
+  **CLI.** `secret set|list|remove` (Secrets Manager) and `config set|list|remove` (SSM), sharing one engine (`setValue`/`listValues`/`removeValue`/`runValueCli`). Blocks apps get `npm run secret` / `npm run config` (scoped per app to `/blocks/<stackId>/secrets` and `/blocks/<stackId>/config`); standalone/pipeline apps get the `hosting-secret` and `hosting-config` bins. A **secret** value is never read from argv/shell history — `secret set` takes it from a hidden prompt or `--value-stdin` (a positional value is a hard error); a non-sensitive **config** value may be passed positionally. `list` prints names only, never values. All commands accept `--prefix`, `--stage`, and `--region` (write to the same region the app deploys to).
+  
+  **Type-safe reads (zero code) — `getSecret` / `getConfig` autocomplete + typo errors.** The runtime getters are typed against two augmentable registries (`HostingSecretRegistry` / `HostingConfigRegistry`): empty by default they accept any `string` (unchanged, non-breaking), and once populated they narrow to your declared keys — editor autocomplete, and a typo (or reading a `config` key via `getSecret`, i.e. the wrong store) becomes a compile error. You populate them with **no code change** via the new `hosting-typegen` CLI (`npm run typegen`, `--watch` to regenerate on save, `--check` for CI): it statically scans your `secret('...')` / `config('...')` calls (TypeScript compiler API — no app execution, no AWS credentials) and generates a `.d.ts` (`.blocks/hosting-values.d.ts`) that augments the `@aws-blocks/hosting` entry (where the getters live), narrowing them to your declared keys. The generated file is derived from your `secret()`/`config()` calls, and `--check` fails CI when it's stale. Add `.blocks/**/*.d.ts` to your tsconfig `include`. In a Blocks app this is automatic: the dev server (`npm run dev`) auto-detects `secret()`/`config()` usage and runs the generate-and-watch step itself (a no-op when the app declares no secrets, and non-fatal), so keys update as you type with no second command; standalone hosting apps use `hosting-typegen --watch`.
+  
+  **Typed, parsed values via a schema.** `secret('KEY', { schema })` / `config('KEY', { schema })` accept any Standard Schema (Zod, Valibot, ArkType — typed as `StandardSchemaV1`, library-neutral). `typegen` builds a TypeScript `Program`, infers the schema's output type, and inlines it into the generated `.d.ts`, so **`getSecret`/`getConfig` return the inferred type** (e.g. `const { beta } = await getConfig('FEATURE_FLAGS')`) instead of `string` — no `JSON.parse(...)` and no `any`. At runtime the value is JSON-parsed (a per-key flag is injected at synth); the schema itself isn't shipped to the runtime, so this is parse-to-type, not a deep re-validation across the bundle boundary.
+  
+  **Templates.** `@aws-blocks/create-blocks-app` templates scaffold a `secret` script (`npm run secret`) wired to the Blocks CLI, and a `typegen` script (`npm run typegen` → `runTypegenCli` from `@aws-blocks/blocks/scripts`) with `.blocks/**/*.d.ts` added to the tsconfig `include`, so a newly-created app can manage secrets and get type-safe `getSecret`/`getConfig` out of the box.
+
+## 0.1.10
+
+### Patch Changes
+
+- dd2350b: Trim the `KvKeys` custom resource IAM policy to true least privilege: it now grants only `cloudfront-keyvaluestore:DescribeKeyValueStore` and `UpdateKeys` — the two actions the deploy-time handler actually calls. The previously-granted `ListKeys`, `GetKey`, `PutKey`, and `DeleteKey` are dropped.
+  
+  This also makes the hosting stack deployable under restrictive Service Control Policies (SCPs) / permission boundaries that deny `cloudfront-keyvaluestore:ListKeys`, which previously blocked the deploy.
+  
+  Behavior is preserved: `ListKeys` was only used to diff against the live store on Create, but the route-table `KeyValueStore` is created fresh with no `ImportSource`, so it is empty at Create time — the handler now diffs Create against `{}`. The Update path still diffs against the prior template's entries and Delete still drains via `deleteDrainSet()`, neither of which used `ListKeys`.
+
+## 0.1.9
+
+### Patch Changes
+
+- 940956e: fix(hosting): encrypt the alarm SNS topic by default, with a key policy CloudWatch can actually use
+  
+  The monitoring construct's auto-created alarm topic was unencrypted. It now gets
+  a dedicated customer-managed KMS key (`MonitoringAlarmTopicKey`) whose policy
+  grants `cloudwatch.amazonaws.com` `kms:Decrypt` + `kms:GenerateDataKey*` in
+  addition to the usual account-root administration statement.
+  
+  Both halves matter. Encrypting the topic makes hosting secure-by-default, and
+  the CloudWatch grant is what keeps alarms working once it is encrypted: when an
+  SNS topic used as a CloudWatch alarm action is KMS-encrypted, the key policy
+  must grant the `cloudwatch.amazonaws.com` service principal, because CloudWatch
+  calls KMS **directly** (not via SNS) and an account-root `kms:*` statement does
+  not cover AWS service principals. Without the grant, CloudWatch's publish fails
+  with `KMSAccessDenied` and notifications are dropped silently — the alarm still
+  transitions to ALARM in the console, so the only symptom is the notification
+  that never arrives.
+  
+  An AWS-managed key (`alias/aws/sns`) cannot be used instead: its key policy is
+  not editable and does not grant CloudWatch, so a customer-managed key is the
+  only option that can carry the grant.
+  
+  The grant is scoped to just those two actions for that one service principal on
+  a single-purpose key, plus a `StringEqualsIfExists` guard on `aws:SourceAccount`
+  against cross-account confused-deputy use. `IfExists` is deliberate:
+  `aws:SourceAccount` is only populated on direct service-principal calls, and a
+  hard `StringEquals` would reintroduce the very silent deny this grant exists to
+  prevent.
+  
+  No configuration changes: encryption is unconditional, with no opt-out knob to
+  weaken it. The only API addition is a read-only `encryptionKey` accessor on
+  `MonitoringConstruct`, alongside the existing `topic` and `alarms`, so callers
+  can grant additional publishers on the key. Callers who need different key
+  management continue to pass their own `snsTopic` / `snsTopicArn` and own that
+  topic's encryption. Note the KMS key adds roughly $1/month per stack, and
+  monitoring is on by default; `monitoring: { enabled: false }` or a BYO topic
+  avoids it.
+- 4981137: fix(hosting): disable installLatestAwsSdk on the CDN invalidation custom resource
+  
+  The `DeployInvalidation` `AwsCustomResource` in `CdnConstruct` left
+  `installLatestAwsSdk` at its CDK default of `true`. That default makes the
+  custom-resource provider Lambda `npm install` the AWS SDK at invoke time,
+  adding roughly 15-30s of cold start and forcing a 512MB memory floor on the
+  provider function.
+  
+  Nothing here needs a newer SDK than the runtime ships. The resource makes a
+  single `CloudFront.createInvalidation` call — a long-stable API already bundled
+  in the Lambda runtime's AWS SDK v3. And unlike a one-off resource, this one
+  fires on *every* hosting deploy (its `CallerReference`/`physicalResourceId` are
+  keyed on `buildId`), so the install cost was paid on every deploy rather than
+  once.
+  
+  Setting `installLatestAwsSdk: false` removes that per-deploy penalty and also
+  silences CDK's `installLatestAwsSdkNotSpecified` warning for this construct.
+  No public API or template change beyond the `InstallLatestAwsSdk: false`
+  property on the synthesized `Custom::AWS` resource; invalidation behavior,
+  IAM policy, and deploy ordering are unchanged.
+- 5c58c53: fix(hosting): deploy SSR framework Lambdas on nodejs24.x and throw on unrecognized runtimes instead of silently falling back to nodejs20.x
+  
+  SSR framework compute (Nuxt/Nitro, Astro, SvelteKit, Next.js regional) now runs on
+  `nodejs24.x` via a shared `FRAMEWORK_COMPUTE_RUNTIME` constant, and `resolveRuntime()`
+  recognizes `nodejs24.x`, defaults to it when no runtime is declared, and throws
+  `UnsupportedRuntimeError` for unrecognized runtimes rather than silently returning
+  Node 20. Lambda@Edge compute (`FRAMEWORK_EDGE_COMPUTE_RUNTIME`) is bumped to
+  `nodejs24.x` as well: Lambda@Edge draws Node.js versions from the same managed runtime
+  table as regional Lambda, where `nodejs24.x` is supported and `nodejs20.x` is already
+  past deprecation. The OpenNext edge bundle banner patch was revalidated — the crash it
+  works around comes from ES Module namespace exports being non-writable per spec, not
+  from any Node-20-specific behavior.
+
+## 0.1.8
+
+### Patch Changes
+
+- 0284e5b: fix(hosting): serve HTML from the current build after a deploy (fixes returning-visitor blank page)
+
+  Returning visitors — browsers holding a `__dpl` skew-protection cookie from a
+  previous build — got a blank page on their first load after every deploy (a
+  second reload fixed it). The KVS router's viewer-request function honored the
+  `__dpl` cookie for **all** URIs including HTML, so a returning visitor was served
+  the **old** build's HTML, while the viewer-response function stamped `__dpl` with
+  the **current** build on every HTML response. The old HTML references
+  content-hashed assets that only exist under the old build's prefix; with the
+  cookie now advanced to the new build, those asset requests were rewritten to
+  `/builds/<newBuildId>/…<oldHash>` (which does not exist) and failed (403 on
+  0.1.4, 404 on ≥ 0.1.5), rendering a blank page.
+
+  The viewer-request function now resolves HTML documents from the current build
+  (`meta.b`), never a pinned cookie build, while assets keep honoring the cookie.
+  HTML, cookie, and referenced assets therefore always agree on one build
+  generation. Mid-session visitors stay safe: asset requests keep honoring their
+  old cookie and old `builds/<id>/` prefixes are retained (`prune: false`), so an
+  already-loaded page keeps working until the next HTML navigation lands the
+  visitor consistently on the current build.
+
 ## 0.1.7
 
 ### Patch Changes

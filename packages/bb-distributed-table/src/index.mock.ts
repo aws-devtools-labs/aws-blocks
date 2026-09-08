@@ -13,7 +13,9 @@ export { DistributedTableErrors } from './errors.js';
 export type {
 	TableKeyConfig,
 	DistributedTableOptions,
+	ReadValidationMode,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	TableKey,
 	PartitionKeyCondition,
 	SortKeyCondition,
@@ -28,13 +30,15 @@ import type {
 	TableKeyConfig,
 	DistributedTableOptions,
 	ExternalTableRef,
+	ExternalKmsKeyRef,
 	SortKeyCondition,
 	ScanOptions,
 	PutOptions,
 	DeleteOptions,
 	TableKey,
+	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -125,23 +129,38 @@ export class DistributedTable<
 	private schema: StandardSchemaV1<T>;
 	private keyConfig: K;
 	private indexes: Indexes;
+	private readValidation: ReadValidationMode;
 
-	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
+	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
-		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Default level is 'warn' (not 'error') so the readValidation='coerce'
+		// raw-fallback warning actually surfaces — it's the only log the block
+		// emits, so this doesn't add noise. Callers can pass their own logger.
+		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		this.filePath = join(getMockDataDir(this), 'data.json');
 		this.data = this.loadFromDisk();
 		this.schema = options.schema;
 		this.keyConfig = options.key;
 		this.indexes = (options.indexes ?? {}) as Indexes;
+		this.readValidation = options.readValidation ?? 'coerce';
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
 
 	async get(key: TableKey<T, K>): Promise<T | null> {
-		return this.data.get(this.serializeKey(key)) ?? null;
+		return this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null);
+	}
+
+	/**
+	 * Reconcile a stored value with the schema per this table's `readValidation`
+	 * mode (`off` → raw, `coerce` → coerced output / raw+warn on failure, `strict`
+	 * → throw on mismatch). `null` (a missing item) passes straight through. See
+	 * {@link applyReadValidation}.
+	 */
+	private reconcileRead(item: T | null): Promise<T | null> {
+		return applyReadValidation(this.readValidation, this.schema, item, this.log, { table: this.fullId });
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
@@ -247,13 +266,20 @@ export class DistributedTable<
 			const dir = options.order === 'desc' ? -1 : 1;
 			items.sort((a, b) => {
 				const av = (a as any)[skField], bv = (b as any)[skField];
-				return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
+				const primary = av < bv ? -1 : av > bv ? 1 : 0;
+				// Tie-break on the base-table primary key. On a GSI the sort key need
+				// not be unique, so equal sort-key values must NOT fall back to Map
+				// insertion order (which varies by write order / disk reload) — that's
+				// the mock-vs-DynamoDB divergence. DynamoDB orders index ties by the
+				// base-table key, and the whole index (ties included) reverses under
+				// `order: 'desc'`.
+				return (primary !== 0 ? primary : this.compareByBaseKey(a, b)) * dir;
 			});
 		}
 
 		let count = 0;
 		for (const item of items) {
-			yield item;
+			yield (await this.reconcileRead(item)) as T;
 			if (options.limit && ++count >= options.limit) return;
 		}
 	}
@@ -261,7 +287,7 @@ export class DistributedTable<
 	async *scan(options?: ScanOptions): AsyncIterable<T> {
 		let count = 0;
 		for (const item of this.data.values()) {
-			yield item;
+			yield (await this.reconcileRead(item)) as T;
 			if (options?.limit && ++count >= options.limit) return;
 		}
 	}
@@ -275,7 +301,9 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]> {
-		return keys.map(key => this.data.get(this.serializeKey(key)) ?? null);
+		return Promise.all(
+			keys.map(key => this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null)),
+		);
 	}
 
 	/**
@@ -315,6 +343,10 @@ export class DistributedTable<
 		return { __brand: 'ExternalTableRef' as const, tableName };
 	}
 
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
+	}
+
 	// ── Internal ────────────────────────────────────────────────────────────
 
 	private checkFieldEquals(keyStr: string, fields: Partial<T>): void {
@@ -332,6 +364,27 @@ export class DistributedTable<
 				throw blocksError(DistributedTableErrors.ConditionalCheckFailed, 'The conditional request failed');
 			}
 		}
+	}
+
+	/**
+	 * Deterministic tie-break for `query` ordering: compare two items by the
+	 * base-table primary key (partition key, then sort key). Used when an index
+	 * sort-key value is shared by multiple items, so results don't depend on Map
+	 * insertion order. Returns a stable -1/0/1.
+	 */
+	private compareByBaseKey(a: T, b: T): number {
+		const pk = this.keyConfig.partitionKey;
+		const ap = (a as any)[pk], bp = (b as any)[pk];
+		if (ap !== bp) return ap < bp ? -1 : 1;
+		const sk = this.keyConfig.sortKey;
+		if (sk) {
+			const as = (a as any)[sk], bs = (b as any)[sk];
+			if (as !== bs) return as < bs ? -1 : 1;
+		}
+		// Unreachable for distinct rows: every item is keyed by its serialized base
+		// primary key, so two different entries always differ in base PK or SK.
+		// (String comparisons above use JS UTF-16 order — see DESIGN.md D-DT-6.)
+		return 0;
 	}
 
 	private serializeKey(key: TableKey<T, K>): string {

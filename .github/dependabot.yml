@@ -1,0 +1,52 @@
+# Dependabot configuration.
+#
+# Scope note: every published package lives under packages/* and every test app
+# under test-apps/* is installed from the single root package-lock.json (npm
+# workspaces). One npm entry rooted at "/" therefore covers the whole workspace;
+# there is no per-package or per-test-app lockfile to configure separately.
+#
+# What this file controls: it does NOT generate or clear Dependabot *alerts*
+# (those come from the dependency graph). It configures the *pull requests*
+# Dependabot opens:
+#   - Version-update PRs run monthly.
+#   - Two groups: aws-sdk (@aws-sdk/*, @smithy/*), which release in lockstep,
+#     and dev-dependencies (build/test only, low blast radius). Production deps
+#     and security fixes land as their own PRs so each shipped bump stays
+#     reviewable and mergeable on its own.
+#   - typescript and @types/node are toolchain foundations: a major bump is a
+#     deliberate migration, not routine hygiene (TS 7 / @types/node 26 broke the
+#     project-reference build in one grouped PR). So they are excluded from the
+#     dev-dependencies group (minor/patch arrive as their own PRs) and their
+#     major-version updates are ignored (bump them intentionally, by hand).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@smithy/*"
+      dev-dependencies:
+        dependency-type: development
+        exclude-patterns:
+          - "typescript"
+          - "@types/node"
+
+  # Keep the GitHub Actions used by CI patched. Low volume, batch into one PR.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -3,6 +3,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { PGlite } from '@electric-sql/pglite';
 import { PGliteEngine } from './pglite-engine.js';
 import { DatabaseErrors } from '../errors.js';
 import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
@@ -229,4 +230,101 @@ test('constructor recovers a PGlite leaf directory before PG_VERSION is written'
   const corruptDirs = readdirSync(TEST_DIR).filter((entry) => entry.startsWith('pre-version-init.corrupt-'));
   assert.strictEqual(corruptDirs.length, 1);
   assert.strictEqual(existsSync(join(TEST_DIR, corruptDirs[0], 'base')), true);
+});
+
+// --- Regression #188: PGlite WASM `_pg_initdb` `unreachable` init trap ---
+// The first query forces PGlite's lazy WASM initdb, which can intermittently
+// trap with `unreachable` under memory pressure and kill the process during
+// runMigrations. The engine must recreate the instance and retry instead.
+// A factory injects a first instance that traps on the init probe; recovery
+// then falls through to a REAL PGlite so data round-trips end-to-end.
+
+test('recovers when the first PGlite instance traps during init', async () => {
+  const dir = join(TEST_DIR, 'init-trap-recover');
+  let creates = 0;
+  const factory = (d: string): PGlite => {
+    creates++;
+    if (creates === 1) {
+      return {
+        query: async () => {
+          throw new Error('Aborted(). Build with -sASSERTIONS for more info. RuntimeError: unreachable');
+        },
+        close: async () => {},
+      } as unknown as PGlite;
+    }
+    return new PGlite(d);
+  };
+  engine = new PGliteEngine(dir, factory);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  await engine.execute("INSERT INTO t (id) VALUES ('ok')");
+  const rows = await engine.query<{ id: string }>('SELECT id FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'ok' }]);
+  assert.strictEqual(creates, 2, 'engine should recreate the trapped instance exactly once');
+});
+
+test('surfaces a QueryFailed error when init keeps trapping', async () => {
+  const dir = join(TEST_DIR, 'init-trap-persistent');
+  const factory = (): PGlite =>
+    ({
+      query: async () => {
+        throw new Error('RuntimeError: unreachable');
+      },
+      close: async () => {},
+    }) as unknown as PGlite;
+  engine = new PGliteEngine(dir, factory);
+  await assert.rejects(
+    () => engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});
+
+// --- Regression #188 (recovery): a later call must succeed after the init
+// retry budget is fully exhausted, once memory pressure eases and the factory
+// stops trapping. The exhausted attempt closes the last instance; if the
+// engine kept that dead handle, the next call would re-probe a CLOSED instance
+// whose error is a "closed" error (NOT `unreachable`) and thus non-retryable,
+// wedging the engine permanently. The trapped instances below faithfully model
+// a real PGlite: `unreachable` while open, a "closed" error after close().
+test('recovers on a later call after the init-retry budget is exhausted', async () => {
+  const dir = join(TEST_DIR, 'init-trap-exhaust-recover');
+  let creates = 0;
+  const factory = (d: string): PGlite => {
+    creates++;
+    // Default maxAttempts is 3, so the first ensureReady probes creates 1..3.
+    if (creates <= 3) {
+      let closed = false;
+      return {
+        query: async () => {
+          throw new Error(
+            closed ? 'PGlite is closed' : 'Aborted(). RuntimeError: unreachable',
+          );
+        },
+        close: async () => {
+          closed = true;
+        },
+      } as unknown as PGlite;
+    }
+    return new PGlite(d);
+  };
+  engine = new PGliteEngine(dir, factory);
+
+  // First call exhausts the 3-attempt retry budget and rejects.
+  await assert.rejects(
+    () => engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)'),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+
+  // Once the factory stops trapping, a later call must recover on a fresh
+  // instance instead of re-probing the closed handle forever.
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  await engine.execute("INSERT INTO t (id) VALUES ('ok')");
+  const rows = await engine.query<{ id: string }>('SELECT id FROM t');
+  assert.deepStrictEqual(rows, [{ id: 'ok' }]);
+  assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
 });

@@ -133,6 +133,8 @@ describe('telemetry/environment', () => {
       delete process.env.TF_BUILD;
       delete process.env.BITBUCKET_BUILD_NUMBER;
       delete process.env.BUILDKITE;
+      delete process.env.RENDER;
+      delete process.env.TASKCLUSTER_ROOT_URL;
     });
 
     it('returns false when no CI env vars set', () => {
@@ -151,6 +153,16 @@ describe('telemetry/environment', () => {
 
     it('returns true when CODEBUILD_BUILD_ID is set', () => {
       process.env.CODEBUILD_BUILD_ID = 'build-123';
+      assert.strictEqual(isCI(), true);
+    });
+
+    it('returns true when RENDER is set', () => {
+      process.env.RENDER = 'true';
+      assert.strictEqual(isCI(), true);
+    });
+
+    it('returns true when TASKCLUSTER_ROOT_URL is set', () => {
+      process.env.TASKCLUSTER_ROOT_URL = 'https://tc.example.com';
       assert.strictEqual(isCI(), true);
     });
   });

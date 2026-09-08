@@ -25,7 +25,6 @@
 import {
   CloudFrontKeyValueStoreClient,
   DescribeKeyValueStoreCommand,
-  ListKeysCommand,
   UpdateKeysCommand,
 } from '@aws-sdk/client-cloudfront-keyvaluestore';
 // The cloudfront-keyvaluestore data-plane API signs with SigV4a (region-
@@ -161,22 +160,6 @@ async function applyUpdate(
   }
 }
 
-/** Read every existing key so Delete can fully drain the store. */
-async function listAll(kvsArn: string): Promise<Entries> {
-  const out: Entries = {};
-  let next: string | undefined;
-  do {
-    const res = await client.send(
-      new ListKeysCommand({ KvsARN: kvsArn, NextToken: next }),
-    );
-    for (const item of res.Items ?? []) {
-      if (item.Key !== undefined) out[item.Key] = item.Value ?? '';
-    }
-    next = res.NextToken;
-  } while (next);
-  return out;
-}
-
 /**
  * The set of keys to drain on a Delete. CloudFormation does NOT populate
  * `OldResourceProperties` on Delete — the last-deployed props arrive in
@@ -199,12 +182,15 @@ export async function handler(event: Event): Promise<{ PhysicalResourceId: strin
   }
 
   const desired = JSON.parse(entriesJson) as Entries;
-  // On Update, diff against the previous template's entries; on Create, diff
-  // against what's actually in the store (handles re-create over a dirty store).
+  // Previous state is taken from CloudFormation properties, not read from the
+  // store: on Update, the prior template's Entries; on Create, empty (the store
+  // is created fresh with no ImportSource). The diff of desired vs. previous
+  // therefore only adds/overwrites keys and deletes keys the prior template
+  // had; keys present in the store but in neither template are left untouched.
   const previous: Entries =
     event.RequestType === 'Update' && event.OldResourceProperties?.Entries
       ? (JSON.parse(event.OldResourceProperties.Entries) as Entries)
-      : await listAll(KvsArn);
+      : {};
 
   await applyUpdate(KvsArn, desired, previous);
   return { PhysicalResourceId: physicalId };

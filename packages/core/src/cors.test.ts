@@ -3,7 +3,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
+import { parseCorsPatterns, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 
@@ -56,6 +56,95 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://anything.example.org'));
     assert.ok(patterns[0].test('http://localhost:9999'));
+  });
+});
+
+// ── buildCorsHeaders unit tests ─────────────────────────────────────────────
+
+describe('buildCorsHeaders', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('reflects an origin that matches the configured allowlist', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const headers = buildCorsHeaders('https://myapp.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Origin'], 'https://myapp.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Credentials'], 'true');
+  });
+
+  it('never reflects an origin that is not on a configured allowlist', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const headers = buildCorsHeaders('https://evil.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Origin'], undefined);
+    assert.strictEqual(headers['Access-Control-Allow-Credentials'], undefined);
+    assert.deepStrictEqual(headers, { Vary: 'Origin' });
+  });
+
+  it('never reflects an origin when no allowlist is configured', () => {
+    const headers = buildCorsHeaders('https://evil.example.com');
+    assert.strictEqual(headers['Access-Control-Allow-Origin'], undefined);
+    assert.deepStrictEqual(headers, { Vary: 'Origin' });
+  });
+
+  it('returns no reflection headers when there is no origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    assert.deepStrictEqual(buildCorsHeaders(''), { Vary: 'Origin' });
+  });
+
+  it('always sets Vary: Origin so shared caches key on the request origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    assert.strictEqual(buildCorsHeaders('https://myapp.example.com').Vary, 'Origin');
+    assert.strictEqual(buildCorsHeaders('https://evil.example.com').Vary, 'Origin');
+    assert.strictEqual(buildCorsHeaders('').Vary, 'Origin');
+  });
+
+  it('warns only once per distinct disallowed origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const original = console.warn;
+    const lines: string[] = [];
+    console.warn = (msg: string) => { lines.push(msg); };
+    try {
+      buildCorsHeaders('https://evil.example.com');
+      buildCorsHeaders('https://evil.example.com');
+      buildCorsHeaders('https://evil.example.com');
+      assert.strictEqual(lines.length, 1, 'repeat requests from one origin should warn once');
+
+      buildCorsHeaders('https://other.example.com');
+      assert.strictEqual(lines.length, 2, 'a distinct origin should still warn');
+      assert.ok(lines[0].includes('https://evil.example.com'));
+      assert.ok(lines[1].includes('https://other.example.com'));
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  it('does not warn for an allowed origin or an absent origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://myapp\\.example\\.com';
+    _resetCorsPatterns();
+
+    const original = console.warn;
+    const lines: string[] = [];
+    console.warn = (msg: string) => { lines.push(msg); };
+    try {
+      buildCorsHeaders('https://myapp.example.com');
+      buildCorsHeaders('');
+      assert.strictEqual(lines.length, 0);
+    } finally {
+      console.warn = original;
+    }
   });
 });
 
@@ -159,7 +248,12 @@ describe('createLambdaHandler — CORS origin validation', () => {
     assert.strictEqual(result.headers['Access-Control-Allow-Credentials'], 'true');
     assert.ok(result.headers['Access-Control-Allow-Methods']);
     assert.ok(result.headers['Access-Control-Allow-Headers']);
-    assert.strictEqual(result.headers['Access-Control-Max-Age'], '86400');
+    assert.strictEqual(result.headers['Access-Control-Max-Age'], CORS_MAX_AGE);
+    assert.strictEqual(result.headers['Vary'], 'Origin');
+  });
+
+  it('pins Access-Control-Max-Age at the browser preflight cap', () => {
+    assert.strictEqual(CORS_MAX_AGE, '7200');
   });
 
   it('OPTIONS preflight with rejected origin returns 403', async () => {

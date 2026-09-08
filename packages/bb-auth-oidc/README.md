@@ -114,6 +114,45 @@ export function SignInButton() {
 - **Client PKCE** (`auth.signIn()` above): the browser handles the callback and POSTs to `/aws-blocks/auth/exchange`. Use it for SPAs, and required when the frontend and API are on **different origins**. Same-origin SPAs can use it too, but must pass a frontend `redirectPath` (the default current-page redirect avoids the backend `/aws-blocks/auth/callback`).
 - **Relay** (native/CLI): see [Native sign-in](#relay-flow-for-native-sign-in).
 
+### Server-initiated sign-in (`GET /aws-blocks/auth/signin/<provider>`)
+
+One route per configured provider, mounted by the block. It needs no client-side code at all: no PKCE verifier, no `getClient()`, no callback component. Point a browser at it and the whole flow runs on server-side redirects:
+
+```html
+<a href="/aws-blocks/auth/signin/google">Sign in with Google</a>
+```
+
+1. `GET /aws-blocks/auth/signin/google` → `302` to the IdP's authorize URL, plus a `Set-Cookie` with the short-lived pending-auth cookie (it carries the PKCE verifier and nonce server-side).
+2. The IdP authenticates the user and redirects back to `GET /aws-blocks/auth/callback?code=…&state=…`.
+3. The callback sees the pending-auth cookie, exchanges the code, runs `onSignIn`, sets the session cookie, and `302`s to `postSignInPath` (default `/`).
+
+The provider name is URL-encoded, so a provider called `my provider` is at `/aws-blocks/auth/signin/my%20provider`. Because there is one route per *configured* provider, a name you never declared has no route at all and `404`s; the `ProviderNotConfiguredException` for an unknown provider surfaces from `getSignInUrl()` (the RPC path), not from here. A failure while building the authorize URL, IdP discovery for example, returns JSON (`{"error":"...","name":"..."}`) with the error's status instead of a redirect.
+
+This is the path the block's own integration tests drive, because it is scriptable end to end with nothing but `fetch` and manual redirects:
+
+```bash
+# 1. kickoff, keeping the pending-auth cookie
+curl -i -c cookies.txt http://localhost:3000/aws-blocks/auth/signin/google
+# → 302 Location: /aws-blocks/auth/idp/google/authorize?...   (stubIdp provider)
+
+# 2. follow the IdP redirect (stubIdp auto-approves)
+curl -i -b cookies.txt -c cookies.txt "<authorize URL from step 1>"
+# → 302 Location: /aws-blocks/auth/callback?code=...&state=...
+
+# 3. the callback sets the session cookie and sends you back to the app
+curl -i -b cookies.txt -c cookies.txt "<callback URL from step 2>"
+# → 302 Location: /   + Set-Cookie: oidc_<instance>_session=...
+
+# 4. the session cookie now authenticates RPC calls
+curl -b cookies.txt -X POST http://localhost:3000/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"api.whoami","params":[],"id":1}'
+```
+
+Every response above is asserted, not just described. `test-apps/comprehensive/test/oidc-auth.test.ts` walks the same three redirects in `full sign-in flow via HTTP redirects — google` (and again against a custom OIDC provider in the `corporate` variant), checking the `302` chain, the pending-auth and session cookies, the `Location: /` that `postSignInPath` produces, and the authenticated RPC call that follows. The `404`s for an undeclared provider and for a `GET` on the sign-out route are asserted in the same file; the default `postSignInPath` and the `%20` provider encoding are asserted by the `path configuration` tests in `packages/bb-auth-oidc/src/index.test.ts`.
+
+Use it for server-rendered and zero-JS pages, for `<a>`-tag sign-in, and for integration tests. Reach for the client PKCE API instead when the frontend and API are on different origins, or when an SPA wants to stay on its own route and handle the callback itself. Both flows write the same session cookie, so `requireAuth` / `getAuthState` don't care which one signed the user in. Sign-out is the same route either way: `POST /aws-blocks/auth/signout` (a `GET` is a 404), normally via `auth.signOut()`.
+
 ## What the BB provisions
 
 Adding `AuthOIDC` to your app provisions:

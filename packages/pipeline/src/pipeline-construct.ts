@@ -1,27 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { pathToFileURL } from 'node:url';
+import { defaultPrefixForKind, isManagedValue, secretStoreLocator } from '@aws-blocks/hosting';
+import { isCdkSecret, resolveSecretsAtSynth } from '@aws-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations } from 'aws-cdk-lib';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
-import {
-  CodeBuildStep,
-  CodePipeline,
-  CodePipelineSource,
-  ManualApprovalStep,
-  ShellStep,
-} from 'aws-cdk-lib/pipelines';
+import { CodeBuildStep, CodePipeline, CodePipelineSource, ManualApprovalStep, ShellStep } from 'aws-cdk-lib/pipelines';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
-import { pathToFileURL } from 'node:url';
-import type {
-  BranchConfig,
-  PipelineProps,
-  PipelineStageConfig,
-} from './types.js';
 import { __PIPELINE_STAGE_SCOPE__ } from './constants.js';
+import type { BranchConfig, PipelineProps, PipelineStageConfig } from './types.js';
 
 /**
  * Resolve a relative file path against the calling file's directory.
@@ -45,11 +37,20 @@ function resolveRelativeToCaller(relativePath: string): string {
       const fileUrlMatch = line.match(/file:\/\/(.+?):\d+:\d+/);
       const plainMatch = line.match(/\((.+?):\d+:\d+\)/) || line.match(/at\s+(.+?):\d+:\d+/);
 
-      const filePath = fileUrlMatch
-        ? fileUrlMatch[1]
-        : plainMatch?.[1];
+      const filePath = fileUrlMatch ? fileUrlMatch[1] : plainMatch?.[1];
+      if (!filePath) continue;
 
-      if (filePath && !filePath.includes('node_modules') && !filePath.includes('pipeline-construct')) {
+      // Skip framework frames so we land on the USER's file: this package's own
+      // machinery (`pipeline-construct`), node_modules, and the Blocks `core`
+      // Pipeline wrapper (`@aws-blocks/core` re-exports Pipeline via a subclass at
+      // `core/{src,dist}/pipeline/index.*` that injects the Blocks namespace — in a
+      // monorepo/workspace its frame is NOT under node_modules, so match it here).
+      const isFrameworkFrame =
+        filePath.includes('node_modules') ||
+        filePath.includes('pipeline-construct') ||
+        /[/\\]core[/\\](?:src|dist)[/\\]pipeline[/\\]index\.[jt]s$/.test(filePath);
+
+      if (!isFrameworkFrame) {
         const callerDir = path.dirname(filePath);
         return path.resolve(callerDir, relativePath);
       }
@@ -60,7 +61,8 @@ function resolveRelativeToCaller(relativePath: string): string {
   return path.resolve(process.cwd(), relativePath);
 }
 
-const VALID_ARN_PATTERN = /^arn:(aws|aws-us-gov|aws-cn):(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[a-zA-Z0-9-]+$/;
+const VALID_ARN_PATTERN =
+  /^arn:(aws|aws-us-gov|aws-cn):(codeconnections|codestar-connections):[a-z0-9-]+:\d{12}:connection\/[a-zA-Z0-9-]+$/;
 
 const DEFAULT_SYNTH_COMMANDS = ['npm ci', 'npx cdk synth'];
 
@@ -147,7 +149,12 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
    * For async stageFactory (e.g., when using `BlocksStack.create()`), use
    * the static `Pipeline.create()` method instead.
    */
-  constructor(scope: Construct, id: string, props: PipelineProps<TConfig>, _internal?: { marker: symbol; pipelines: Map<string, CodePipeline> }) {
+  constructor(
+    scope: Construct,
+    id: string,
+    props: PipelineProps<TConfig>,
+    _internal?: { marker: symbol; pipelines: Map<string, CodePipeline> },
+  ) {
     super(scope, id);
 
     if (_internal && _internal.marker === Pipeline._ASYNC_INIT) {
@@ -158,23 +165,27 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
     if (scope instanceof cdk.App) {
       throw new Error(
         'Pipeline: sync constructor requires a Stack scope, not an App. ' +
-        'Either wrap in a Stack or use Pipeline.create() which auto-wraps.'
+          'Either wrap in a Stack or use Pipeline.create() which auto-wraps.',
       );
     }
 
     if (props.appFile && !props.stageFactory) {
       throw new Error(
         'Pipeline: `appFile` requires async resolution — use `await Pipeline.create(...)` instead of `new Pipeline(...)`. ' +
-        'For the sync constructor, provide a `stageFactory` function.'
+          'For the sync constructor, provide a `stageFactory` function.',
       );
     }
 
     if (!props.stageFactory && !props.appFile) {
-      throw new Error('Pipeline: either `stageFactory` or `appFile` must be provided (sync constructor requires an explicit value).');
+      throw new Error(
+        'Pipeline: either `stageFactory` or `appFile` must be provided (sync constructor requires an explicit value).',
+      );
     }
 
     if (props.stageFactory && props.stageFactory.constructor.name === 'AsyncFunction') {
-      throw new Error('Pipeline: async stageFactory detected in sync constructor. Use the static Pipeline.create() method for async stage factories.');
+      throw new Error(
+        'Pipeline: async stageFactory detected in sync constructor. Use the static Pipeline.create() method for async stage factories.',
+      );
     }
 
     validateProps(this, props);
@@ -221,14 +232,12 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
     const effectiveAppFile = props.appFile ?? (props.stageFactory ? undefined : './index.cdk.ts');
 
     // Resolve appFile relative to caller BEFORE any async operations (stack trace needs caller frame)
-    const resolvedAppFile = effectiveAppFile
-      ? resolveRelativeToCaller(effectiveAppFile)
-      : undefined;
+    const resolvedAppFile = effectiveAppFile ? resolveRelativeToCaller(effectiveAppFile) : undefined;
 
     if (resolvedAppFile && !fs.existsSync(resolvedAppFile)) {
       throw new Error(
         `Pipeline: resolved appFile path '${resolvedAppFile}' does not exist. ` +
-        `Pass an explicit absolute path via the 'appFile' option, e.g.: appFile: join(__dirname, 'index.cdk.ts')`,
+          `Pass an explicit absolute path via the 'appFile' option, e.g.: appFile: join(__dirname, 'index.cdk.ts')`,
       );
     }
 
@@ -241,18 +250,22 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
       actualScope = new cdk.Stack(scope, id);
     }
 
+    // Resolve a secret() connectionArn at SYNTH time (before validation/use).
+    // CodeBuild has no `.env`, so a store-backed secret is the right mechanism.
+    const resolvedProps = await resolveSourceSecrets(props);
+
     // Create the Pipeline instance in async-init mode (skips sync pipeline building)
-    const instance = new Pipeline<TConfig>(actualScope, id, props, {
+    const instance = new Pipeline<TConfig>(actualScope, id, resolvedProps, {
       marker: Pipeline._ASYNC_INIT,
       pipelines: new Map(),
     });
 
-    validateProps(instance, props);
+    validateProps(instance, resolvedProps);
 
     const pipelines = new Map<string, CodePipeline>();
 
-    for (const branchConfig of props.branches) {
-      const pipeline = await createBranchPipelineAsync(instance, id, branchConfig, props, resolvedAppFile);
+    for (const branchConfig of resolvedProps.branches) {
+      const pipeline = await createBranchPipelineAsync(instance, id, branchConfig, resolvedProps, resolvedAppFile);
       pipelines.set(branchConfig.branch, pipeline);
     }
 
@@ -265,6 +278,69 @@ export class Pipeline<TConfig = Record<string, unknown>> extends Construct {
 
 // ─── Shared helpers ──────────────────────────────────────────────
 
+/**
+ * Resolve a `secret()`/`config()` marker on `source.connectionArn` to a plaintext
+ * ARN at synth time, returning props with the resolved literal. A plain-string
+ * ARN is returned unchanged. The store is derived from the marker's kind (secret
+ * → Secrets Manager, config → SSM), so the pipeline needs no store code of its own.
+ */
+async function resolveSourceSecrets<TConfig>(props: PipelineProps<TConfig>): Promise<PipelineProps<TConfig>> {
+  const arn = props.source.connectionArn;
+  if (!isManagedValue(arn)) return props;
+
+  const resolved = await resolveSecretsAtSynth([arn], {
+    secretStore: props.secretStore,
+    configStore: props.configStore,
+  });
+  const value = resolved.get(arn.key);
+  if (value === undefined) {
+    throw new Error(`Pipeline: connectionArn ${arn.kind}('${arn.key}') did not resolve.`);
+  }
+  return { ...props, source: { ...props.source, connectionArn: value } };
+}
+
+/**
+ * Map `buildSecrets` (secret markers or BYO `ISecret` handles) to CodeBuild
+ * `SECRETS_MANAGER` environment variables that CodeBuild fetches from Secrets
+ * Manager **at build time** — granting the build role read, masking the value in
+ * logs, never inlining it. Build-time credentials are secrets, so this surface is
+ * Secrets-Manager-only (config values belong on the running compute, not the build).
+ * Returns `undefined` when there are no build secrets.
+ */
+function buildSecretEnvVars<TConfig>(
+  props: PipelineProps<TConfig>,
+): Record<string, codebuild.BuildEnvironmentVariable> | undefined {
+  const buildSecrets = props.buildSecrets;
+  if (!buildSecrets || Object.keys(buildSecrets).length === 0) return undefined;
+
+  const prefix = props.secretStore?.prefix ?? defaultPrefixForKind('secret');
+  const stage = props.secretStore?.stage;
+  const type = codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER;
+
+  const envVars: Record<string, codebuild.BuildEnvironmentVariable> = {};
+  for (const [name, marker] of Object.entries(buildSecrets)) {
+    if (isManagedValue(marker)) {
+      if (marker.kind !== 'secret') {
+        throw new Error(`Pipeline: buildSecrets['${name}'] must be a secret(...) — build credentials are secrets.`);
+      }
+      // secret marker → Secrets Manager locator (slash-free) at build time. Honors
+      // `secretStore.stage` so the locator matches what `secret set --stage` writes.
+      // NOTE: a CodeBuild env var references ONE locator, so unlike the hosting
+      // runtime there is no two-try shared fallback — a staged build secret must be
+      // set at `<prefix>/<stage>/<KEY>`.
+      envVars[name] = { type, value: secretStoreLocator(marker.key, { prefix, store: 'secrets-manager', stage }) };
+    } else if (isCdkSecret(marker)) {
+      // BYO ISecret handle → reference its name; CodeBuild grants the build role read.
+      envVars[name] = { type, value: marker.secretName };
+    } else {
+      throw new Error(
+        `Pipeline: buildSecrets['${name}'] must be a secret('...') marker or an existing ISecret handle.`,
+      );
+    }
+  }
+  return envVars;
+}
+
 function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConfig>): void {
   if (props.stageFactory && props.appFile) {
     throw new Error('Pipeline: `stageFactory` and `appFile` are mutually exclusive. Provide one or the other.');
@@ -275,28 +351,32 @@ function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConf
   }
 
   if (!props.source.repo.includes('/')) {
+    throw new Error(`Pipeline: \`repo\` must be in "owner/repo" format (got "${props.source.repo}").`);
+  }
+
+  if (isManagedValue(props.source.connectionArn)) {
     throw new Error(
-      `Pipeline: \`repo\` must be in "owner/repo" format (got "${props.source.repo}").`,
+      "Pipeline: `connectionArn: secret('...')` resolves at synth time and " +
+        'requires the async path — use `await Pipeline.create(scope, id, props)` ' +
+        'instead of `new Pipeline(...)`.',
     );
   }
 
   if (!VALID_ARN_PATTERN.test(props.source.connectionArn)) {
     throw new Error(
       'Pipeline: `connectionArn` must be a valid CodeConnections ARN ' +
-      'in the format "arn:aws:codeconnections:<region>:<account-id>:connection/<connection-id>" ' +
-      '(legacy "arn:aws:codestar-connections:..." format is also accepted). ' +
-      'Accepted partitions: aws, aws-us-gov, aws-cn. ' +
-      'Create a CodeConnections connection in the AWS Console under Developer Tools > Connections, ' +
-      'then complete the OAuth handshake before using it.',
+        'in the format "arn:aws:codeconnections:<region>:<account-id>:connection/<connection-id>" ' +
+        '(legacy "arn:aws:codestar-connections:..." format is also accepted). ' +
+        'Accepted partitions: aws, aws-us-gov, aws-cn. ' +
+        'Create a CodeConnections connection in the AWS Console under Developer Tools > Connections, ' +
+        'then complete the OAuth handshake before using it.',
     );
   }
 
   const branchNames = new Set<string>();
   for (const branchConfig of props.branches) {
     if (branchNames.has(branchConfig.branch)) {
-      throw new Error(
-        `Pipeline: duplicate branch name "${branchConfig.branch}". Each branch must be unique.`,
-      );
+      throw new Error(`Pipeline: duplicate branch name "${branchConfig.branch}". Each branch must be unique.`);
     }
     branchNames.add(branchConfig.branch);
 
@@ -323,27 +403,31 @@ function validateProps<TConfig>(construct: Construct, props: PipelineProps<TConf
     if (seenBranchIds.has(safeBranch)) {
       throw new Error(
         `Pipeline: branch '${branchConfig.branch}' produces duplicate ID '${safeBranch}'. ` +
-        'Ensure branch names are unique after sanitization (only alphanumeric and hyphens are kept).'
+          'Ensure branch names are unique after sanitization (only alphanumeric and hyphens are kept).',
       );
     }
     seenBranchIds.add(safeBranch);
   }
 
   const pipelineAccount = cdk.Stack.of(construct).account;
-  const hasCrossAccount = !cdk.Token.isUnresolved(pipelineAccount) && props.branches.some(b =>
-    b.stages.some(s => s.env?.account && !cdk.Token.isUnresolved(s.env.account) && s.env.account !== pipelineAccount),
-  );
+  const hasCrossAccount =
+    !cdk.Token.isUnresolved(pipelineAccount) &&
+    props.branches.some((b) =>
+      b.stages.some(
+        (s) => s.env?.account && !cdk.Token.isUnresolved(s.env.account) && s.env.account !== pipelineAccount,
+      ),
+    );
   if (hasCrossAccount && !props.crossAccountKeys) {
     throw new Error(
       'Pipeline: crossAccountKeys must be true when deploying to different accounts. ' +
-      'This creates a KMS key (~$1/month) for cross-account artifact encryption.',
+        'This creates a KMS key (~$1/month) for cross-account artifact encryption.',
     );
   }
 
   if (props.synth?.computeType === codebuild.ComputeType.SMALL) {
     Annotations.of(construct).addWarning(
       'ComputeType.SMALL (3GB RAM) may be insufficient for apps with Lambda bundling or frontend builds. ' +
-      'If synth fails with exit code 137 (OOM), remove the computeType override to use the default MEDIUM (7GB).',
+        'If synth fails with exit code 137 (OOM), remove the computeType override to use the default MEDIUM (7GB).',
     );
   }
 }
@@ -367,7 +451,7 @@ export function validateAppFilePath(resolvedAppFile: string): void {
   if (!ALLOWED_APP_FILE_EXTENSIONS.has(ext)) {
     throw new Error(
       `Pipeline: appFile must have a module extension (${[...ALLOWED_APP_FILE_EXTENSIONS].join(', ')}). ` +
-      `Got '${ext}' in '${resolvedAppFile}'.`,
+        `Got '${ext}' in '${resolvedAppFile}'.`,
     );
   }
 
@@ -378,7 +462,7 @@ export function validateAppFilePath(resolvedAppFile: string): void {
   if (realFilePath !== realRoot && !realFilePath.startsWith(realRoot + path.sep)) {
     throw new Error(
       `Pipeline: appFile must be inside the project root. ` +
-      `Resolved path '${realFilePath}' is outside '${realRoot}'.`,
+        `Resolved path '${realFilePath}' is outside '${realRoot}'.`,
     );
   }
 }
@@ -391,20 +475,25 @@ function buildCodePipeline<TConfig>(
 ): CodePipeline {
   const hasTriggerFilters = props.source.triggerFilters && props.source.triggerFilters.length > 0;
   if (branchConfig.triggerOnPush === true && hasTriggerFilters) {
-    throw new Error(`Pipeline branch '${branchConfig.branch}': triggerOnPush cannot be true when triggerFilters are set. CodePipeline uses filters instead of push triggers when filters are configured.`);
+    throw new Error(
+      `Pipeline branch '${branchConfig.branch}': triggerOnPush cannot be true when triggerFilters are set. CodePipeline uses filters instead of push triggers when filters are configured.`,
+    );
   }
-  const triggerOnPush = hasTriggerFilters
-    ? false
-    : (branchConfig.triggerOnPush ?? props.source.triggerOnPush ?? true);
+  const triggerOnPush = hasTriggerFilters ? false : (branchConfig.triggerOnPush ?? props.source.triggerOnPush ?? true);
 
-  const source = props._sourceOverride ?? CodePipelineSource.connection(
-    props.source.repo,
-    branchConfig.branch,
-    {
-      connectionArn: props.source.connectionArn,
+  // connectionArn is resolved to a plain string by resolveSourceSecrets (async
+  // path) and rejected as a marker by validateProps (sync path), so by here it
+  // is always a string. Guard defensively to satisfy the type + catch misuse.
+  const connectionArn = props.source.connectionArn;
+  if (isManagedValue(connectionArn)) {
+    throw new Error('Pipeline: unresolved connectionArn secret — use `await Pipeline.create(...)`.');
+  }
+  const source =
+    props._sourceOverride ??
+    CodePipelineSource.connection(props.source.repo, branchConfig.branch, {
+      connectionArn,
       triggerOnPush,
-    },
-  );
+    });
 
   const synthCommands = props.synth?.commands ?? DEFAULT_SYNTH_COMMANDS;
   const userNodeOptions = props.synth?.env?.NODE_OPTIONS ?? '';
@@ -425,9 +514,14 @@ function buildCodePipeline<TConfig>(
   //   undefined (omitted) -> apply the Node.js 22 default
   //   null                -> opt out entirely (no partialBuildSpec injected; bring your own via installCommands)
   //   a BuildSpec value    -> use it as-is
-  const partial = props.synth?.partialBuildSpec === null
-    ? undefined
-    : (props.synth?.partialBuildSpec ?? DEFAULT_SYNTH_PARTIAL_BUILD_SPEC);
+  const partial =
+    props.synth?.partialBuildSpec === null
+      ? undefined
+      : (props.synth?.partialBuildSpec ?? DEFAULT_SYNTH_PARTIAL_BUILD_SPEC);
+
+  // buildSecrets → CodeBuild env vars fetched from the store at build time
+  // (SECRETS_MANAGER / PARAMETER_STORE). CodeBuild grants read + masks logs.
+  const secretEnvVars = buildSecretEnvVars(props);
 
   return new CodePipeline(construct, branchId, {
     synth: synthStep,
@@ -442,6 +536,9 @@ function buildCodePipeline<TConfig>(
       buildEnvironment: {
         buildImage: props.synth?.buildImage ?? codebuild.LinuxBuildImage.AMAZON_LINUX_2023_5,
         computeType: props.synth?.computeType ?? codebuild.ComputeType.MEDIUM,
+        // Only set environmentVariables when there are build secrets, so the
+        // field is omitted (not set to undefined) in the common no-secrets case.
+        ...(secretEnvVars ? { environmentVariables: secretEnvVars } : {}),
       },
     },
   });
@@ -456,18 +553,22 @@ function addStageToCodePipeline<TConfig>(
   const post: Array<ShellStep | CodeBuildStep> = [];
 
   if (stageConfig.requireApproval) {
-    pre.push(new ManualApprovalStep(`Approve-${stageConfig.name}`, {
-      comment: stageConfig.approvalComment ?? `Approve deployment to ${stageConfig.name}`,
-    }));
+    pre.push(
+      new ManualApprovalStep(`Approve-${stageConfig.name}`, {
+        comment: stageConfig.approvalComment ?? `Approve deployment to ${stageConfig.name}`,
+      }),
+    );
   }
 
   if (stageConfig.bakeTime) {
     const seconds = stageConfig.bakeTime.toSeconds();
-    post.push(new CodeBuildStep(`BakeTime-${stageConfig.name}`, {
-      commands: [`echo "Baking for ${seconds}s..." && sleep ${seconds}`],
-      buildEnvironment: { computeType: codebuild.ComputeType.SMALL },
-      timeout: cdk.Duration.minutes(stageConfig.bakeTime.toMinutes() + BAKE_TIMEOUT_BUFFER_MINUTES),
-    }));
+    post.push(
+      new CodeBuildStep(`BakeTime-${stageConfig.name}`, {
+        commands: [`echo "Baking for ${seconds}s..." && sleep ${seconds}`],
+        buildEnvironment: { computeType: codebuild.ComputeType.SMALL },
+        timeout: cdk.Duration.minutes(stageConfig.bakeTime.toMinutes() + BAKE_TIMEOUT_BUFFER_MINUTES),
+      }),
+    );
   }
 
   codePipeline.addStage(deployStage, { pre, post });
@@ -480,28 +581,48 @@ function validateBakeTime<TConfig>(stageConfig: PipelineStageConfig<TConfig>): v
 }
 
 function validateStageName<TConfig>(stageConfig: PipelineStageConfig<TConfig>): void {
-  if (!/^[a-zA-Z0-9_-]+$/.test(stageConfig.name)) {
+  const name = stageConfig.name;
+  // The stage name becomes a prefix of the derived CloudFormation stack name
+  // (`<stageName>-<stackId>`), which CloudFormation requires to match
+  // /^[A-Za-z][A-Za-z0-9-]*$/. A name with an underscore — or a leading digit —
+  // passes a looser check but makes CloudFormation reject the stack name only
+  // after minutes of provisioning. Enforce the stack-name contract here so it
+  // fails fast at synth with an actionable message.
+  if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(name)) {
+    const suggestion =
+      name
+        .replace(/[^A-Za-z0-9-]+/g, '-')
+        .replace(/^[^A-Za-z]+/, '')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'stage';
     throw new Error(
-      `Pipeline: stage name '${stageConfig.name}' contains invalid characters. ` +
-      'Use only letters, numbers, hyphens, and underscores.'
+      `Pipeline: stage name '${name}' is invalid — it becomes part of the CloudFormation ` +
+      'stack name, which must start with a letter and contain only letters, numbers, and ' +
+      `hyphens (no underscores). Try '${suggestion}'.`,
     );
   }
 }
 
 function validateStageStacks(stage: cdk.Stage, stageName: string, source: 'stageFactory' | 'appFile'): void {
-  const stacks = stage.node.children.filter(
-    (c): c is cdk.Stack => c instanceof cdk.Stack,
-  );
+  // Use `Stack.isStack()` (a `Symbol.for`-based marker) rather than `instanceof
+  // cdk.Stack`. The stageFactory runs in the CONSUMER's app, which may resolve a
+  // DIFFERENT aws-cdk-lib copy than this package (monorepo / linked-package /
+  // `file:` installs — e.g. Amplify self-hosting). Across copies `instanceof`
+  // returns false, so a stage that DID create a Stack is misdetected as empty and
+  // synth fails with "contains no stacks". `Stack.isStack()` matches on a shared
+  // `Symbol.for` marker and is cross-copy-safe.
+  const stacks = stage.node.children.filter((c): c is cdk.Stack => cdk.Stack.isStack(c));
 
   if (stacks.length === 0) {
-    const hint = source === 'appFile'
-      ? 'When using `appFile`, ensure your CDK app creates stacks via `BlocksStack.create()` ' +
-        '(which uses the ambient pipeline scope) or create stacks directly on the stage scope.'
-      : 'Ensure `stageFactory` creates at least one Stack on the provided scope.';
+    const hint =
+      source === 'appFile'
+        ? 'When using `appFile`, ensure your CDK app creates stacks via `BlocksStack.create()` ' +
+          '(which uses the ambient pipeline scope) or create stacks directly on the stage scope.'
+        : 'Ensure `stageFactory` creates at least one Stack on the provided scope.';
 
     throw new Error(
       `Pipeline: stage '${stageName}' contains no stacks after running ${source}. ` +
-      `CDK Pipelines requires at least one Stack in each stage to generate deploy actions. ${hint}`,
+        `CDK Pipelines requires at least one Stack in each stage to generate deploy actions. ${hint}`,
     );
   }
 }
@@ -529,8 +650,7 @@ function createBranchPipelineSync<TConfig>(
     const result = props.stageFactory!(stage, stageConfig);
     if (result && typeof (result as any).then === 'function') {
       throw new Error(
-        'Pipeline: stageFactory returned a Promise. ' +
-        'Use Pipeline.create() for async stage factories.',
+        'Pipeline: stageFactory returned a Promise. ' + 'Use Pipeline.create() for async stage factories.',
       );
     }
     validateStageStacks(stage, stageConfig.name, 'stageFactory');
@@ -655,10 +775,12 @@ function addTriggerFilters<TConfig>(
     providerType: codepipeline.ProviderType.CODE_STAR_SOURCE_CONNECTION,
     gitConfiguration: {
       sourceAction,
-      pushFilter: [{
-        branchesIncludes: [branchConfig.branch],
-        filePathsIncludes: triggerFilters,
-      }],
+      pushFilter: [
+        {
+          branchesIncludes: [branchConfig.branch],
+          filePathsIncludes: triggerFilters,
+        },
+      ],
     },
   });
 }

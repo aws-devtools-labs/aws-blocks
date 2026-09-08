@@ -28,13 +28,13 @@
  *   the provider helpers.
  */
 
-import { type ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-blocks/core';
 import { Scope, registerConfig } from '@aws-blocks/core/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import type * as lambda from 'aws-cdk-lib/aws-lambda';
+
 import type { IDependable } from 'constructs';
 import type { AuthOIDCOptions, CognitoFederatedProvider, ProviderConfig } from './types.js';
 import {
@@ -175,7 +175,6 @@ export class AuthOIDC<
 			client.node.addDependency(dep);
 		}
 
-		const fn = this.handler as lambda.Function;
 		const envPrefix = `BLOCKS_AUTH_OIDC_COGNITO_${this.fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 		registerConfig(this, `${envPrefix}_POOL_ID`, pool.userPoolId);
 		registerConfig(this, `${envPrefix}_CLIENT_ID`, client.userPoolClientId);

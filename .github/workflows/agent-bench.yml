@@ -6,6 +6,15 @@ name: Agent Bench
 # + Converse on the bench model, and s3 Put/Get on bench/* in the registry bucket) and S3_BUCKET var.
 # Invoked by pr-agent-bench.yml, which owns the triggers + same-repo gate; the OIDC steps and
 # `environment: publish` live on the jobs here because a `uses:` caller job cannot set environment.
+#
+# LEAST PRIVILEGE: the bench job's initial OIDC session is narrowed to Bedrock only via
+# an inline session policy, so the shell-capable "2. Agent run" step (and judge/analysis) cannot
+# reach s3:PutObject even though the role grants it. The same role is re-assumed WITHOUT a session
+# policy immediately before "Persist to S3" so only that step regains the s3 write. See the
+# "Configure AWS credentials (OIDC)" step below for the canonical explanation of how the inline
+# session policy works (intersection semantics, why the shared AWS_ROLE_ARN is untouched, and the
+# exact allow-list). The `summary` job holds the full role (Bedrock + S3 baseline) but has no
+# shell-capable agent (tracked as follow-up).
 
 on:
   workflow_call:
@@ -31,11 +40,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
@@ -46,7 +55,7 @@ jobs:
           npm run build
           npm run publish:local
       - name: Upload dist-registry
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-registry
           path: dist-registry/
@@ -101,12 +110,12 @@ jobs:
       BENCH_STAGGER_STEP_SEC: '7'
       BENCH_STAGGER_WAVE_SIZE: '5' # keep in sync with strategy.max-parallel above
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # cache: npm so the per-cell root `npm ci` restores from the Actions cache.
           node-version-file: '.nvmrc'
@@ -156,6 +165,38 @@ jobs:
           # Extend the OIDC session past the ~1h default so it survives slow cells (AWS clamps
           # to the role's max if lower).
           role-duration-seconds: 7200
+          # LEAST PRIVILEGE (canonical explanation): the effective session permissions are the
+          # INTERSECTION of the role's policy and this inline policy, so this narrows the initial
+          # session to Bedrock Converse ONLY — steps 1→4b (agent, judge, per-cell analysis) run with
+          # no s3:PutObject. It cannot widen the role, so the shared AWS_ROLE_ARN and every other
+          # workflow that uses it are untouched — no new IAM roles or environment secrets. The
+          # allow-list is exactly the two model-invocation paths the harness uses: ConverseStream for
+          # the Strands BedrockModel (builder/judge stream — see the ModelStreamUpdateEvent hook in
+          # 2-agent-run.ts) and Converse for the CLI `bedrock-runtime converse` analysis. InvokeModel
+          # / InvokeModelWithResponseStream are intentionally omitted — no path uses them. Resources
+          # stay on model-invocation ARNs (inference-profile + foundation-model), robust to the us.*
+          # geo profile's cross-region routing and a BENCH_MODEL override — the role itself already
+          # pins the exact model. "Persist to S3" re-assumes the same role below WITHOUT this policy
+          # to regain the s3 write for that step.
+          inline-session-policy: >-
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "BedrockInvokeOnly",
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:Converse",
+                    "bedrock:ConverseStream"
+                  ],
+                  "Resource": [
+                    "arn:aws:bedrock:*:*:inference-profile/*",
+                    "arn:aws:bedrock:*:*:application-inference-profile/*",
+                    "arn:aws:bedrock:*::foundation-model/*"
+                  ]
+                }
+              ]
+            }
 
       # BUILD-ONCE: pull the dist-registry/ build-blocks packed so "1. Init bench-app" can skip the
       # ~150s monorepo build. Best-effort: a download blip never reds the cell (init rebuilds it).
@@ -164,7 +205,7 @@ jobs:
       - name: 1a. Download prebuilt dist-registry
         continue-on-error: true
         if: steps.initresult.outcome == 'success'
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist-registry
           path: dist-registry/
@@ -177,9 +218,11 @@ jobs:
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
 
-      # SECURITY: this step runs an LLM agent (shell tool) with the live OIDC session, so a
-      # prompt-injected task could reach any AWS API in the role's scope. Bounded by the same-repo
-      # guard in pr-agent-bench.yml (fork PRs get no secrets/OIDC). See README "Security".
+      # SECURITY: this step runs an LLM agent (shell tool), so a prompt-injected task could reach any
+      # AWS API in the CURRENT session's scope — which the OIDC step's inline session policy has
+      # narrowed to Bedrock-only (the *session*, not the role), so s3:PutObject is NOT reachable here.
+      # Still bounded by the same-repo guard in pr-agent-bench.yml (fork PRs get no secrets/OIDC).
+      # See the "Configure AWS credentials (OIDC)" step above and README "Security" for the mechanism.
       - name: 2. Agent run
         id: agent
         continue-on-error: true
@@ -267,7 +310,7 @@ jobs:
       - name: 5. Upload result
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-result-${{ matrix.task }}-${{ matrix.template }}
           path: /tmp/result.json
@@ -281,7 +324,7 @@ jobs:
       - name: 6. Upload source
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-source-${{ matrix.task }}-${{ matrix.template }}
           path: |
@@ -302,7 +345,7 @@ jobs:
       - name: 6b. Upload trace
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-trace-${{ matrix.task }}-${{ matrix.template }}
           path: |
@@ -311,6 +354,24 @@ jobs:
           retention-days: 90
           overwrite: true
           if-no-files-found: ignore
+
+      # LEAST PRIVILEGE: re-assume the SAME role WITHOUT an inline session policy so only
+      # this persist step regains s3:PutObject on bench/*. Runs after the shell-capable agent step, so
+      # the s3 write is never live while the agent is. Best-effort: a re-assume failure just leaves the
+      # (Bedrock-only) session in place and the persist below degrades gracefully — never reds a cell.
+      # `!cancelled()` (not always()): on a cancelled run we deliberately do NOT re-widen the session,
+      # so a cancellation can never leave an S3-capable session active for a later step; it still runs
+      # on job failure so a failed cell can persist its partial result.json. No role-duration-seconds:
+      # unlike the initial assume (which must span the whole ~85min cell), this session is taken at the
+      # end and only needs to outlive the ~3min best-effort upload, so the ~1h default is ample.
+      - name: Re-assume role for S3 persist (drop Bedrock-only session policy)
+        id: oidc_s3
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
       # Archive the raw per-cell result under a COMMIT-keyed prefix; the summary job builds the
       # aggregate + baseline from these.
@@ -321,7 +382,15 @@ jobs:
         env:
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           BUCKET: ${{ vars.S3_BUCKET }}
+          # Surface (don't swallow) a silent archival gap: if the re-assume above failed, the session
+          # is still Bedrock-only and this upload will AccessDenied. That never reds the cell (the PR
+          # summary aggregates from GitHub artifacts, not S3), but it drops this cell's commit-keyed
+          # baseline entry — annotate it so a missing historical row isn't later read as "no results".
+          OIDC_S3_OUTCOME: ${{ steps.oidc_s3.outcome }}
         run: |
+          if [ "${OIDC_S3_OUTCOME}" != "success" ]; then
+            echo "::warning title=Bench S3 archive skipped::S3 re-assume outcome='${OIDC_S3_OUTCOME}' (not success); the Bedrock-only session is still active so this cell's baseline archive will likely fail — historical baseline entry for ${TASK}-${TEMPLATE} may be missing."
+          fi
           KEY="bench/runs/${BENCH_SHA}/cells/${TASK}-${TEMPLATE}.json"
           bash scripts/agent-bench/steps/lib/s3-put.sh /tmp/result.json "s3://${BUCKET}/$KEY" "cell archive"
 
@@ -345,16 +414,16 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       # Checkout first — it would wipe the workspace if it ran after the artifact download.
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
           sparse-checkout: scripts/agent-bench
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version-file: '.nvmrc' }
       # Each result.json already carries its per-cell `analysis`, so the roll-up consumes these
       # directly — no re-download of bench-trace-* needed.
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { path: results, pattern: bench-result-* }
 
       # OIDC for S3 (read/write the baseline). Best-effort: a creds failure degrades the overview
@@ -443,7 +512,7 @@ jobs:
       - name: Upload analysis (best-effort)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-analysis
           path: ${{ github.workspace }}/bench-analysis.json
@@ -492,11 +561,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
           cache: npm

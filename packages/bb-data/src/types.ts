@@ -29,9 +29,11 @@ export interface DatabaseOptions {
    */
   rlsPolicy?: 'enforce';
   /**
-   * CloudFormation removal policy for the Aurora cluster.
-   * Use 'destroy' for dev/sandbox, 'retain' (default) for production to prevent data loss.
-   * @default 'retain'
+   * CloudFormation removal policy for the Aurora cluster. When omitted, the
+   * stack-wide `defaults` apply (`production` → RETAIN so data is preserved on
+   * `cdk destroy`; `sandbox` → DESTROY). Pass `'destroy'`/`'retain'`/`'snapshot'`
+   * to override for this one database. Deletion protection follows: on unless
+   * the cluster is being destroyed.
    */
   removalPolicy?: 'destroy' | 'retain' | 'snapshot';
   /**

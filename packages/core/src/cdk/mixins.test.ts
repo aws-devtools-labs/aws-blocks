@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, describe } from 'node:test';
-import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Table, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
@@ -107,6 +106,62 @@ describe('sandbox removal policy', () => {
     // (RDS rejects it for cluster members)
     template.hasResourceProperties('AWS::RDS::DBInstance', {
       DeletionProtection: Match.absent(),
+    });
+  });
+
+  test('SandboxDisableDeletionProtection mixin: deletionProtection disabled on DynamoDB table', () => {
+    const app = new cdk.App({ context: { sandboxMode: 'true' } });
+    const stack = new cdk.Stack(app, 'TestStack');
+
+    new Table(stack, 'MyTable', {
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      deletionProtection: true,
+    });
+
+    RemovalPolicies.of(stack).destroy();
+    Mixins.of(stack).apply(new SandboxDisableDeletionProtection());
+
+    const template = Template.fromStack(stack);
+    // DynamoDB refuses DeleteTable while protection is on, regardless of DeletionPolicy
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      DeletionProtectionEnabled: false,
+    });
+    template.hasResource('AWS::DynamoDB::Table', {
+      DeletionPolicy: 'Delete',
+    });
+  });
+
+  test('production mode: deletionProtection stays enabled on DynamoDB table when mixin is not applied', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'TestStack');
+
+    new Table(stack, 'MyTable', {
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+      deletionProtection: true,
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      DeletionProtectionEnabled: true,
+    });
+  });
+
+  test('SandboxDisableDeletionProtection mixin: does not set DeletionProtectionEnabled on unprotected tables', () => {
+    const app = new cdk.App({ context: { sandboxMode: 'true' } });
+    const stack = new cdk.Stack(app, 'TestStack');
+
+    new Table(stack, 'MyTable', {
+      partitionKey: { name: 'pk', type: AttributeType.STRING },
+      billingMode: BillingMode.PAY_PER_REQUEST,
+    });
+
+    Mixins.of(stack).apply(new SandboxDisableDeletionProtection());
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      DeletionProtectionEnabled: Match.absent(),
     });
   });
 

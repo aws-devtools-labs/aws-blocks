@@ -44,8 +44,36 @@ export interface DatabaseEngine {
 // @public
 export const DOLLAR_QUOTE_TAG_RE: RegExp;
 
+// Warning: (ae-internal-missing-underscore) The name "initializePgliteWithRetry" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export function initializePgliteWithRetry<T extends PgliteLike>(initial: T, recreate: () => T | Promise<T>, options?: PgliteInitRetryOptions): Promise<T>;
+
+// Warning: (ae-internal-missing-underscore) The name "isPgliteUnreachableTrap" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export function isPgliteUnreachableTrap(error: unknown): boolean;
+
 // @public
 export const loadMigrationsFromDir: (dir: string) => Promise<Record<string, string>>;
+
+// Warning: (ae-internal-missing-underscore) The name "PgliteInitRetryOptions" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export interface PgliteInitRetryOptions {
+    backoffMs?: number;
+    isRetryable?: (error: unknown) => boolean;
+    maxAttempts?: number;
+    onRetry?: (attempt: number, error: unknown) => void;
+}
+
+// Warning: (ae-internal-missing-underscore) The name "PgliteLike" should be prefixed with an underscore because the declaration is marked as @internal
+//
+// @internal
+export interface PgliteLike {
+    close(): Promise<void>;
+    query(sql: string, params?: unknown[]): Promise<unknown>;
+}
 
 // @public
 export const runMigrations: (engine: DatabaseEngine, migrations: Record<string, string>) => Promise<string[]>;

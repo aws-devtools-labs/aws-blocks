@@ -118,20 +118,22 @@ The logger handles edge cases gracefully:
 
 ## Retention (Production)
 
-Set `retention` to create a CloudWatch Logs LogGroup with a retention policy:
+The shared handler log group already carries the stack-wide default retention
+(`defaults.logRetention` — one week in sandbox, one year in production). Set
+`retention` only to override it for this handler:
 
 ```typescript
 const log = new Logger(scope, 'app', {
   level: 'warn',
-  retention: 30,  // 30 days
+  retention: 30,  // 30 days — overrides the stack-wide default
 });
 ```
 
-Without `retention`, Lambda's auto-created log group applies (logs never expire).
+Without `retention`, the stack-wide `defaults.logRetention` applies. The Logger
+reconfigures the single, framework-owned handler log group — it does not create
+a second `/aws/lambda/<fn>` group.
 
 Valid retention values: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653 days.
-
-**Note on CDK stack teardown:** When `retention` is specified, the Logger BB creates a CloudWatch Logs LogGroup with automatic cleanup enabled (RemovalPolicy.DESTROY). This ensures that E2E test stacks and ephemeral deployment stacks can be torn down cleanly. Production stacks using `RemovalPolicies.of(stack).destroy()` will also delete the LogGroup on stack destruction.
 
 ## Local Development
 

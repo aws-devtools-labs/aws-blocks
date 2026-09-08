@@ -9,10 +9,12 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { KVStoreErrors } from './errors.js';
+import { TTL_ATTRIBUTE, isExpired, resolveTtlEpochSeconds } from './ttl.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, KVStoreOptions, ExternalTableRef } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ScanOptions } from './types.js';
+import type { ScanOptions } from './types.js';
 
 /**
  * Simple key-value storage backed by DynamoDB.
@@ -53,8 +55,11 @@ export class KVStore<T = string> extends Scope {
 	/**
 	 * Retrieve a value by key.
 	 *
+	 * Items whose TTL has passed are treated as absent even if DynamoDB has not
+	 * reaped them yet (deletion is asynchronous, typically within 48 hours).
+	 *
 	 * @param key - The key to retrieve.
-	 * @returns The value, or `null` if the key does not exist.
+	 * @returns The value, or `null` if the key does not exist or has expired.
 	 */
 	async get(key: string): Promise<T | null> {
 		const result = await this.docClient.send(new GetCommand({
@@ -62,6 +67,7 @@ export class KVStore<T = string> extends Scope {
 			Key: { pk: key },
 		}));
 		if (!result.Item) return null;
+		if (isExpired(result.Item[TTL_ATTRIBUTE])) return null;
 		return JSON.parse(result.Item.value) as T;
 	}
 
@@ -71,12 +77,13 @@ export class KVStore<T = string> extends Scope {
 	 *
 	 * @param key - The key to store.
 	 * @param value - The value to store.
-	 * @param conditions - Optional write conditions.
+	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
 	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
 	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
-	async put(key: string, value: T, conditions?: import('./index.mock.js').ConditionalWriteOptions<T>): Promise<void> {
+	async put(key: string, value: T, options?: import('./index.mock.js').PutOptions<T>): Promise<void> {
 		if (this.schema) {
 			const result = this.schema['~standard'].validate(value);
 			const resolved = result instanceof Promise ? await result : result;
@@ -87,18 +94,22 @@ export class KVStore<T = string> extends Scope {
 			}
 		}
 
+		const expiresAtEpochSeconds = resolveTtlEpochSeconds(options);
+		const item: Record<string, unknown> = { pk: key, value: JSON.stringify(value) };
+		if (expiresAtEpochSeconds !== undefined) item[TTL_ATTRIBUTE] = expiresAtEpochSeconds;
+
 		const command: any = {
 			TableName: getSdkIdentifiers(this).tableName,
-			Item: { pk: key, value: JSON.stringify(value) },
+			Item: item,
 		};
 
-		if (conditions?.ifNotExists) {
+		if (options?.ifNotExists) {
 			command.ConditionExpression = 'attribute_not_exists(#pk)';
 			command.ExpressionAttributeNames = { '#pk': 'pk' };
-		} else if (conditions && 'ifValueEquals' in conditions) {
+		} else if (options && 'ifValueEquals' in options) {
 			command.ConditionExpression = '#value = :expected';
 			command.ExpressionAttributeNames = { '#value': 'value' };
-			command.ExpressionAttributeValues = { ':expected': JSON.stringify(conditions.ifValueEquals) };
+			command.ExpressionAttributeValues = { ':expected': JSON.stringify(options.ifValueEquals) };
 		}
 
 		try {
@@ -142,10 +153,13 @@ export class KVStore<T = string> extends Scope {
 	/**
 	 * Enumerate all key-value pairs. Reads every item in the table —
 	 * use sparingly on large datasets. Uses DynamoDB's native Scan operation.
+	 * Expired items are skipped even if DynamoDB has not reaped them yet,
+	 * unless `includeExpired` is set.
 	 *
 	 * @returns An async iterable of key-value entries.
 	 */
-	async *scan(): AsyncIterable<{ key: string; value: T }> {
+	async *scan(options?: ScanOptions): AsyncIterable<{ key: string; value: T }> {
+		const includeExpired = options?.includeExpired === true;
 		let lastKey: Record<string, any> | undefined;
 		do {
 			const result = await this.docClient.send(new ScanCommand({
@@ -153,6 +167,7 @@ export class KVStore<T = string> extends Scope {
 				ExclusiveStartKey: lastKey,
 			}));
 			for (const item of result.Items ?? []) {
+				if (!includeExpired && isExpired(item[TTL_ATTRIBUTE])) continue;
 				yield { key: item.pk as string, value: JSON.parse(item.value as string) as T };
 			}
 			lastKey = result.LastEvaluatedKey;

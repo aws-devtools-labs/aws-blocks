@@ -8,6 +8,19 @@
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
+// ── Read validation ─────────────────────────────────────────────────────────
+
+/**
+ * Controls how reads reconcile a stored item with the schema. See
+ * {@link DistributedTableOptions.readValidation} for full semantics.
+ *
+ * - `'coerce'` (default): pass through the schema, return coerced output; on
+ *   validation failure return the raw value + warn (never throws).
+ * - `'strict'`: validate and throw `ValidationFailed` on any non-conforming item.
+ * - `'off'`: return the raw stored value with no validation.
+ */
+export type ReadValidationMode = 'off' | 'coerce' | 'strict';
+
 // ── Key configuration ───────────────────────────────────────────────────────
 
 export interface TableKeyConfig<T> {
@@ -44,6 +57,121 @@ export interface DistributedTableOptions<
 	 * ```
 	 */
 	ttl?: keyof T & string;
+	/**
+	 * DynamoDB Point-in-Time Recovery (continuous backups) — restore the table
+	 * to any second within a retention window, protecting against accidental
+	 * writes/deletes and logical corruption.
+	 *
+	 * A single knob, since the recovery window only means anything when PITR is
+	 * on:
+	 * - `true` — enable PITR with the default 35-day window.
+	 * - `false` — disable PITR.
+	 * - `{ retentionDays: n }` — enable PITR and keep `n` days of continuous
+	 *   backups (**1–35**). A shorter window reduces backup-storage cost at the
+	 *   expense of how far back you can restore.
+	 *
+	 * When omitted, the stack-wide default applies (`defaults.pointInTimeRecovery`
+	 * from `BlocksPresets` — on under `production`, off under `sandbox`). A
+	 * per-block value always wins.
+	 *
+	 * Note: PITR bills for continuous-backup storage (per GB-month of table
+	 * size), so it is not free on large tables.
+	 */
+	pointInTimeRecovery?: boolean | { retentionDays: number };
+	/**
+	 * How hard the table is to destroy — a single knob spanning DynamoDB
+	 * deletion protection and the CloudFormation removal policy, which together
+	 * answer one question: "can this table be destroyed?"
+	 *
+	 * - `'disposable'`: `RemovalPolicy.DESTROY`, deletion protection **off**.
+	 *   Deleting the stack deletes the table. The **sandbox default** — keeps
+	 *   `sandbox:destroy` a one-command teardown.
+	 * - `'retained'`: `RemovalPolicy.RETAIN`, deletion protection **off**.
+	 *   Deleting the stack orphans (keeps) the table, but a direct
+	 *   `DeleteTable`/console delete still works. Use when you want the data to
+	 *   survive stack teardown without blocking intentional deletes.
+	 * - `'locked'`: `RemovalPolicy.RETAIN` **and** deletion protection **on**.
+	 *   The table survives stack deletion and DynamoDB refuses a direct delete
+	 *   until protection is turned off. The **production default**.
+	 *
+	 * When omitted, removal policy and deletion protection follow the stack-wide
+	 * `defaults` (`BlocksPresets.production` ≈ `'locked'`, `BlocksPresets.sandbox`
+	 * ≈ `'disposable'`). A per-block value always wins.
+	 *
+	 * Replaces the separate `deletionProtection` + `removalPolicy` booleans:
+	 * those two knobs could encode the contradictory `deletionProtection: true`
+	 * + `removalPolicy: 'destroy'` state, which wedges stack deletion (CFN
+	 * issues `DeleteTable`, DynamoDB refuses it, the stack lands in
+	 * `DELETE_FAILED`). A single enum makes that state unrepresentable.
+	 */
+	protection?: 'disposable' | 'retained' | 'locked';
+	/**
+	 * Server-side encryption at rest.
+	 *
+	 * - `'aws-managed'` (default): SSE with the AWS-managed `aws/dynamodb` KMS
+	 *   key. Auditable via CloudTrail with no per-key monthly charge.
+	 * - `'customer-managed'`: provisions a **dedicated** customer-managed KMS
+	 *   key (CMK) for this table, giving you full control over rotation and key
+	 *   policy. Incurs standard KMS key + request charges — and note this mints
+	 *   a **separate key per table**, so a dozen tables means a dozen keys.
+	 * - a {@link ExternalKmsKeyRef} from {@link DistributedTable.fromKmsKey}:
+	 *   uses an **existing** CMK you already own, so several tables can share one
+	 *   key (and one monthly charge) instead of each provisioning its own.
+	 *
+	 * DynamoDB is always encrypted at rest; this only selects the key.
+	 *
+	 * @example
+	 * ```ts
+	 * // Share one key across several tables
+	 * const key = DistributedTable.fromKmsKey(
+	 *   'arn:aws:kms:us-east-1:111122223333:key/abcd-1234',
+	 * );
+	 * new DistributedTable(scope, 'orders', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * new DistributedTable(scope, 'events', { schema, key: { partitionKey: 'id' }, encryption: key });
+	 * ```
+	 */
+	encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
+	/**
+	 * How reads (`get`, `getBatch`, `query`, `scan`) reconcile a stored item with
+	 * the configured `schema`. Writes (`put`/`putBatch`) always validate; this
+	 * governs the read side, which matters after a schema change: a row written
+	 * under an older schema may no longer conform to the current type `T`.
+	 *
+	 * - **`'coerce'`** (default) — pass each stored item through the schema and
+	 *   return its output. For transform-bearing schemas (e.g. Zod) this fills
+	 *   `.default()`s and narrows types so the value satisfies `T` and the
+	 *   read-modify-write cycle (`get()` → mutate → `put()`) round-trips. **Never
+	 *   throws:** an item that fails validation is returned **as-is** with a
+	 *   warning, keeping drifted/legacy rows readable for migration.
+	 * - **`'strict'`** — validate on read and **throw** `ValidationFailed` on any
+	 *   item that doesn't satisfy the schema. For tables where a mismatch should be
+	 *   treated as corruption/tampering and rejected rather than absorbed. Note
+	 *   this makes a single bad row fail the whole `query`/`scan`/`getBatch`.
+	 * - **`'off'`** — return the raw stored value with no validation (lowest cost).
+	 *   Use for hot paths, data you trust was written through this schema, or to
+	 *   read items you can't yet coerce during a migration.
+	 *
+	 * Defaults to `'coerce'`.
+	 *
+	 * > **Best-effort coercion (validator-dependent).** Coercion relies on the
+	 * > schema *transforming* its input. Zod fills defaults and casts; a check-only
+	 * > Standard Schema validator (some Valibot/ArkType schemas) validates without
+	 * > transforming, so `'coerce'` returns the value unchanged for those — it never
+	 * > invents data. A required field with no default is never fabricated: under
+	 * > `'coerce'` such a row is returned raw + warned; under `'strict'` it throws.
+	 *
+	 * @example
+	 * ```typescript
+	 * const orders = new DistributedTable(scope, 'orders', {
+	 *   schema: orderSchemaV2,        // adds `currency: z.string().default('USD')`
+	 *   key: { partitionKey: 'orderId' },
+	 *   // readValidation: 'coerce' is the default
+	 * });
+	 * const order = await orders.get({ orderId: 'o1' }); // legacy row → currency: 'USD'
+	 * await orders.put({ ...order, total: 20 });         // round-trips cleanly
+	 * ```
+	 */
+	readValidation?: ReadValidationMode;
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
@@ -53,6 +181,17 @@ export interface DistributedTableOptions<
 export interface ExternalTableRef {
 	readonly __brand: 'ExternalTableRef';
 	readonly tableName: string;
+}
+
+/**
+ * A reference to an existing customer-managed KMS key, produced by
+ * {@link DistributedTable.fromKmsKey}. Pass it as the `encryption` option to
+ * encrypt the table with a CMK you already own — letting several tables share
+ * one key instead of each provisioning its own dedicated key.
+ */
+export interface ExternalKmsKeyRef {
+	readonly __brand: 'ExternalKmsKeyRef';
+	readonly keyArn: string;
 }
 
 // ── Key type for get/delete ─────────────────────────────────────────────────

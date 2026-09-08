@@ -1,5 +1,42 @@
 # @aws-blocks/bb-realtime
 
+## 0.1.5
+
+### Patch Changes
+
+- Updated dependencies [1ff9d03]
+- Updated dependencies [5798492]
+- Updated dependencies [08ab129]
+- Updated dependencies [f00adb0]
+- Updated dependencies [f00adb0]
+- Updated dependencies [309a236]
+- Updated dependencies [08ab129]
+- Updated dependencies [9d4ccea]
+- Updated dependencies [5bfae0a]
+- Updated dependencies [0ac3879]
+- Updated dependencies [e4dac4a]
+  - @aws-blocks/bb-app-setting@0.2.0
+  - @aws-blocks/core@0.3.0
+  - @aws-blocks/bb-distributed-table@0.1.6
+  - @aws-blocks/bb-logger@0.1.5
+
+## 0.1.4
+
+### Patch Changes
+
+- 406ba89: Align local Realtime WebSocket message envelopes with the AWS runtime by using `data` for published messages.
+- Updated dependencies [7b4c62d]
+- Updated dependencies [5262062]
+- Updated dependencies [3614a09]
+- Updated dependencies [5262062]
+- Updated dependencies [5071079]
+- Updated dependencies [8966cfb]
+- Updated dependencies [b11a75b]
+  - @aws-blocks/core@0.2.0
+  - @aws-blocks/bb-distributed-table@0.1.5
+  - @aws-blocks/bb-app-setting@0.1.4
+  - @aws-blocks/bb-logger@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes

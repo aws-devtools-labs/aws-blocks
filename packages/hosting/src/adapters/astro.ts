@@ -35,6 +35,7 @@ import semver from 'semver';
 import { createJiti } from 'jiti';
 import { getPackageInfoSync, isPackageExists } from 'local-pkg';
 import { HostingError } from '../hosting_error.js';
+import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
 
 export type AstroAdapterOptions = {
@@ -992,7 +993,7 @@ const buildSsrManifest = (input: {
         entrypoint: path.posix.join(path.basename(serverDir), RUN_SH_FILENAME),
         port: ASTRO_SERVER_PORT,
         placement: 'regional',
-        runtime: 'nodejs20.x',
+        runtime: FRAMEWORK_COMPUTE_RUNTIME,
       },
     },
     staticAssets: {

@@ -29,9 +29,9 @@ export type KvKeysProps = {
   /** The CloudFront KeyValueStore to write into. */
   store: IKeyValueStore;
   /**
-   * Desired key→value map. The custom resource diffs this against what's in
-   * the store and applies the minimal set of put/delete operations (chunked to
-   * the 50-key / 3 MB UpdateKeys ceiling).
+   * Desired key→value map. The custom resource diffs this against the
+   * previously deployed entries (empty on Create) and applies the minimal set
+   * of put/delete operations, chunked to the 50-key / 3 MB UpdateKeys ceiling.
    */
   entries: Record<string, string>;
 };
@@ -65,15 +65,15 @@ export class KvKeys extends Construct {
       timeout: Duration.minutes(5),
     });
 
-    // Data-plane KVS access: describe/list to diff, update to apply.
+    // Data-plane KVS access. The handler reads the store's current ETag
+    // (DescribeKeyValueStore) and writes the route-table diff in batches
+    // (UpdateKeys) — the only two actions it calls. Previous state is read from
+    // this custom resource's CloudFormation properties, not from the store, so
+    // no key-read (ListKeys/GetKey) or single-key write (PutKey/DeleteKey) is used.
     handler.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           'cloudfront-keyvaluestore:DescribeKeyValueStore',
-          'cloudfront-keyvaluestore:ListKeys',
-          'cloudfront-keyvaluestore:GetKey',
-          'cloudfront-keyvaluestore:PutKey',
-          'cloudfront-keyvaluestore:DeleteKey',
           'cloudfront-keyvaluestore:UpdateKeys',
         ],
         resources: [props.store.keyValueStoreArn],
