@@ -34,8 +34,6 @@ export type ApiGatewayConstructProps = {
   computeFunctions?: Map<string, IFunction>;
   serverComputeName?: string;
   imageComputeName?: string;
-  /** Backend API Gateway URL (`https://…/prod/aws-blocks/api`) to proxy same-origin. */
-  backendApiUrl?: string;
 };
 
 /** Convert a route-table glob pattern to an API Gateway HTTP API route path (or null for the catch-all). */
@@ -85,19 +83,35 @@ export class ApiGatewayConstruct extends Construct {
       : kind === 'image' ? (imageIntegration ?? assetIntegration)
       : assetIntegration;
 
-    // Same-origin backend proxy (native HTTP proxy to the backend API Gateway).
-    if (props.backendApiUrl) {
-      const base = Fn.select(0, Fn.split('/aws-blocks/api', props.backendApiUrl)); // https://…/prod
-      this.api.addRoutes({
-        path: '/aws-blocks/{proxy+}',
-        methods: [HttpMethod.ANY],
-        integration: new HttpUrlIntegration('BackendRpc', `${base}/aws-blocks/{proxy}`),
-      });
-      this.api.addRoutes({
-        path: '/aws-blocks-auth/{proxy+}',
-        methods: [HttpMethod.ANY],
-        integration: new HttpUrlIntegration('BackendAuth', `${base}/aws-blocks-auth/{proxy}`),
-      });
+    // Same-origin backend routing (native HTTP proxy — HTTP API can proxy an
+    // external HTTPS URL directly, no forwarder Lambda). Each backend origin
+    // path-routes its namespace to that compute's ingress. A lone `'*'` origin
+    // is the single-compute case (the whole `/aws-blocks/*` + `/aws-blocks-auth/*`
+    // subtree → one backend); a named namespace routes `/aws-blocks/api/{ns}/*`.
+    for (const origin of plan.backend?.origins ?? []) {
+      // Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to get
+      // the backend base — the same URL shape whether it is a Lambda API Gateway,
+      // a container ALB, or a BYOC endpoint.
+      const base = Fn.select(0, Fn.split('/aws-blocks/api', origin.ingress.url)); // https://…/prod
+      if (origin.namespace === '*') {
+        this.api.addRoutes({
+          path: '/aws-blocks/{proxy+}',
+          methods: [HttpMethod.ANY],
+          integration: new HttpUrlIntegration('BackendRpc', `${base}/aws-blocks/{proxy}`),
+        });
+        this.api.addRoutes({
+          path: '/aws-blocks-auth/{proxy+}',
+          methods: [HttpMethod.ANY],
+          integration: new HttpUrlIntegration('BackendAuth', `${base}/aws-blocks-auth/{proxy}`),
+        });
+      } else {
+        const ns = origin.namespace;
+        this.api.addRoutes({
+          path: `/aws-blocks/api/${ns}/{proxy+}`,
+          methods: [HttpMethod.ANY],
+          integration: new HttpUrlIntegration(`BackendNs-${ns}`, `${base}/aws-blocks/api/${ns}/{proxy}`),
+        });
+      }
     }
 
     // Route table → routes (deduped; catch-all handled by defaultIntegration).

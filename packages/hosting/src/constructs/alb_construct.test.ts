@@ -64,6 +64,39 @@ describe('AlbConstruct — BYO VPC vs default', () => {
   });
 });
 
+describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
+  it('forwards /aws-blocks/* + /aws-blocks-auth/* to one ingress via a forwarder Lambda (single-compute)', () => {
+    const plan: CapabilityPlan = {
+      ...staticPlan,
+      backend: {
+        origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }],
+      },
+    };
+    const t = synth(plan);
+    // 2 routes + 1 redirect + 2 API paths (/aws-blocks/* + /aws-blocks-auth/*) = 5 rules.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 5);
+    // The forwarder target group preserves multiple Set-Cookie headers.
+    t.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      TargetType: 'lambda',
+    });
+  });
+
+  it('provisions one forwarder Lambda + rule per named namespace (multi-compute)', () => {
+    const plan: CapabilityPlan = {
+      ...staticPlan,
+      backend: {
+        origins: [
+          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.example.com/aws-blocks/api' } },
+          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/aws-blocks/api' } },
+        ],
+      },
+    };
+    const t = synth(plan);
+    // 2 routes + 1 redirect + 2 namespace API rules = 5 rules.
+    t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 5);
+  });
+});
+
 describe('AlbAdapter — negotiation gating', () => {
   const adapter = new AlbAdapter();
 

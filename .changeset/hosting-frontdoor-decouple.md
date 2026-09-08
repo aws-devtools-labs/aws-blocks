@@ -26,6 +26,16 @@ layer** and a **Ports & Adapters** seam so the front door becomes a swappable ch
   `cloudfront` (default, unchanged), `alb`, `api-gateway` (HTTP API v2),
   `function-url`, and `s3-website`. The CloudFront path is byte-identical (snapshot
   tests); the new doors render the same plan and are gated by the negotiator per door.
+- **Backend/API routing is a first-class front-door responsibility.** The plan now
+  models a service-neutral `backend` (`BackendPlan` / `BackendOrigin` /
+  `BackendIngress`): each API namespace routes to its owning compute's ingress
+  (`/aws-blocks/api/{ns}/*`), with a lone `'*'` origin as the single-compute
+  same-origin case. Every adapter renders this from the plan (the ALB forwarder
+  Lambda and the API Gateway `HttpUrlIntegration` now loop over `backend.origins`),
+  so Hosting's front door is the shared door for the whole app — site *and* backend.
+  New capabilities `RouteApiNamespace`, `LongRequest`, and `LargePayload` let the
+  negotiator reject/degrade a door whose router caps requests (API Gateway 29 s /
+  10 MB, ALB-Lambda 1 MB) instead of the limit surfacing as a production surprise.
 
 **`@aws-blocks/core`** — CORS origin matching is now case-insensitive
 (`parseCorsPatterns` compiles with the `i` flag). ALB DNS names are case-preserving

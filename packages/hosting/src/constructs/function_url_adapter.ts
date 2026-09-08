@@ -29,6 +29,9 @@ const FUNCTION_URL_SUPPORT: Record<CapabilityId, SupportTier> = {
   RunServerRender: 'unsupported', // one origin can't also serve static assets
   StreamServerRender: 'unsupported',
   ProxySameOriginApi: 'unsupported', // no path routing to a backend; use api-gateway/alb
+  RouteApiNamespace: 'unsupported', // single origin, no path routing
+  LongRequest: 'core', // a Function URL can run long / stream (no router timeout)
+  LargePayload: 'core', // no router-imposed size cap
   CustomDomainTls: 'core', // built-in HTTPS (custom domain needs a fronting proxy)
   InjectResponseHeaders: 'degraded',
   FilterRequests: 'unsupported',

@@ -340,7 +340,15 @@ export type HostingConstructProps = {
   };
   /**
    * Which FRONT DOOR serves the deploy. The front door is the public entry
-   * point that routes requests to the origins (static/S3, SSR, image-opt).
+   * point that routes requests to the origins (static/S3, SSR, image-opt) AND
+   * to the backend/API surface same-origin.
+   *
+   * When Hosting is present this IS the app's shared front door: it owns the
+   * full front-door surface — routing, caching, security (WAF), private-asset
+   * access (S3 OAC / asset-proxy), deployment/atomic-release, custom domains/TLS,
+   * and same-origin routing to the backend/API (each namespace → its owning
+   * compute; see the plan's `backend`). The multi-compute `apiFrontDoor` concept
+   * only stands up its own door when there is NO Hosting to reuse.
    *
    * - `'cloudfront'` (default) — the global CloudFront CDN (today's behavior;
    *   full edge caching, WAF, custom domains, streaming). Unchanged.
@@ -1337,12 +1345,21 @@ export class HostingConstruct extends Construct {
         string,
         import('aws-cdk-lib/aws-lambda').IFunction
       >;
+      // Same-origin backend routing: a single `'*'` origin (single-compute) from
+      // the backend API URL the Blocks layer threads in. A future multi-compute
+      // caller passes several named-namespace origins here; the adapters already
+      // loop over `plan.backend.origins`. Omitting it = cross-origin API.
+      const backendApiUrl = 'backendApiUrl' in fd ? fd.backendApiUrl : undefined;
+      const backendOrigins = backendApiUrl
+        ? [{ namespace: '*', ingress: { kind: 'url' as const, url: backendApiUrl } }]
+        : undefined;
       const plan = buildCapabilityPlan({
         manifest,
         buildId,
         hasServer: Boolean(serverName),
         hasImage: hasImageOrigin,
         skewEnabled: false,
+        backendOrigins,
       });
       const common = {
         bucket: this.bucket,
@@ -1358,14 +1375,12 @@ export class HostingConstruct extends Construct {
             vpc: fd.vpc,
             internal: fd.internal,
             certificate: fd.certificate,
-            backendApiUrl: fd.backendApiUrl,
             degrade: fd.degrade,
           });
           break;
         case 'api-gateway':
           result = new ApiGatewayAdapter().render(this, plan, {
             ...common,
-            backendApiUrl: fd.backendApiUrl,
             degrade: fd.degrade,
           });
           break;

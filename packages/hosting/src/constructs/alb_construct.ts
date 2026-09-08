@@ -44,19 +44,6 @@ export type AlbConstructProps = {
   internal?: boolean;
   /** ACM certificate (regional, same region as the ALB) for an HTTPS listener. */
   certificate?: ICertificate;
-  /**
-   * Backend API Gateway URL (e.g. `https://…/prod/aws-blocks/api`). When set,
-   * the ALB proxies {@link apiProxyPaths} to the backend via an api-proxy Lambda
-   * target — the same-origin API proxy (the ALB analogue of CloudFront's
-   * `/aws-blocks/*` behaviors), so session cookies flow and there is no CORS.
-   */
-  backendApiUrl?: string;
-  /**
-   * URL patterns proxied to the backend API when {@link backendApiUrl} is set.
-   * Default: `['/aws-blocks/*', '/aws-blocks-auth/*']` (the Blocks RPC + auth
-   * subtrees). These win over the route/catch-all rules.
-   */
-  apiProxyPaths?: string[];
 };
 
 /** ALB listener rule priority bands (lower number = evaluated first). */
@@ -138,26 +125,33 @@ export class AlbConstruct extends Construct {
       defaultTargetGroups: [defaultTg],
     });
 
-    // ── Same-origin API proxy (highest precedence) ──
-    // Forward /aws-blocks/* (+ auth subtree) to the backend API Gateway via a
-    // small forwarder Lambda target, so the API is same-origin with the
-    // frontend (session cookies flow, no CORS) — the ALB analogue of
-    // CloudFront's addApiBehaviors. ALB can't target an external HTTPS URL, so
-    // a Lambda relays it.
-    if (props.backendApiUrl) {
-      const apiProxy = new LambdaFunction(this, 'ApiProxy', {
+    // ── Same-origin backend routing (highest precedence) ──
+    // Each backend origin path-routes its namespace to that compute's ingress via
+    // a small forwarder Lambda target (ALB can't target an external HTTPS URL, so
+    // a Lambda relays it) — the ALB analogue of CloudFront's addApiBehaviors, so
+    // the API is same-origin with the frontend (session cookies flow, no CORS). A
+    // lone `'*'` origin is the single-compute case (`/aws-blocks/*` + auth subtree
+    // → one backend); a named namespace routes `/aws-blocks/api/{ns}/*`. These
+    // rules win over the route/catch-all rules (lowest priority numbers).
+    let apiPriority = API_PRIORITY_BASE;
+    for (const origin of plan.backend?.origins ?? []) {
+      const ns = origin.namespace;
+      const paths = ns === '*' ? ['/aws-blocks/*', '/aws-blocks-auth/*'] : [`/aws-blocks/api/${ns}/*`];
+      const idSuffix = ns === '*' ? 'Default' : ns;
+      const apiProxy = new LambdaFunction(this, `ApiProxy${idSuffix}`, {
         runtime: DEFAULT_NODE_RUNTIME,
         handler: 'index.handler',
         code: Code.fromInline(generateAlbApiProxyCode()),
         timeout: Duration.seconds(30),
         memorySize: 256,
         environment: {
-          // API Gateway base WITHOUT the `/aws-blocks/api` suffix (token-safe:
-          // split the resolved apiUrl on the suffix and take the base).
-          API_GW_BASE: Fn.select(0, Fn.split('/aws-blocks/api', props.backendApiUrl)),
+          // Ingress base WITHOUT the `/aws-blocks/api` suffix (token-safe: split
+          // the resolved URL on the suffix and take the base). Works for a Lambda
+          // API Gateway, a container ALB, or a BYOC endpoint alike.
+          API_GW_BASE: Fn.select(0, Fn.split('/aws-blocks/api', origin.ingress.url)),
         },
       });
-      const apiTg = new elbv2.ApplicationTargetGroup(this, 'ApiProxyTg', {
+      const apiTg = new elbv2.ApplicationTargetGroup(this, `ApiProxyTg${idSuffix}`, {
         targetType: elbv2.TargetType.LAMBDA,
         targets: [new targets.LambdaTarget(apiProxy)],
         healthCheck: { enabled: false },
@@ -165,9 +159,7 @@ export class AlbConstruct extends Construct {
         // Requires the LAMBDA target type (set explicitly above for the validator).
         multiValueHeadersEnabled: true,
       });
-      const apiPaths = props.apiProxyPaths ?? ['/aws-blocks/*', '/aws-blocks-auth/*'];
-      let apiPriority = API_PRIORITY_BASE;
-      for (const pattern of apiPaths) {
+      for (const pattern of paths) {
         listener.addTargetGroups(`ApiRoute${apiPriority}`, {
           priority: apiPriority++,
           conditions: [elbv2.ListenerCondition.pathPatterns([pattern])],

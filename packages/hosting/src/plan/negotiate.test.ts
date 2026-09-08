@@ -39,6 +39,34 @@ describe('requiredCapabilities', () => {
     );
     assert.ok(req.has('RunServerRender') && req.has('AtomicRelease') && req.has('OptimizeImage') && req.has('PinSession') && req.has('InjectResponseHeaders'));
   });
+
+  it('requires ProxySameOriginApi when the plan proxies the API same-origin; no RouteApiNamespace for a lone `*` origin', () => {
+    const req = requiredCapabilities(
+      planWith({ backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }] } }),
+    );
+    assert.ok(req.has('ProxySameOriginApi'));
+    assert.ok(!req.has('RouteApiNamespace'), 'single-compute `*` should not require namespace path-routing');
+    assert.ok(!req.has('LongRequest') && !req.has('LargePayload'));
+  });
+
+  it('requires RouteApiNamespace for a named namespace, and payload/timeout caps when declared', () => {
+    const req = requiredCapabilities(
+      planWith({
+        backend: {
+          origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }],
+          needsLongRequests: true,
+          needsLargePayloads: true,
+        },
+      }),
+    );
+    assert.ok(req.has('ProxySameOriginApi') && req.has('RouteApiNamespace'));
+    assert.ok(req.has('LongRequest') && req.has('LargePayload'));
+  });
+
+  it('requires nothing backend-related when there is no backend (cross-origin API)', () => {
+    const req = requiredCapabilities(planWith());
+    assert.ok(!req.has('ProxySameOriginApi') && !req.has('RouteApiNamespace'));
+  });
 });
 
 describe('negotiate', () => {
@@ -65,5 +93,21 @@ describe('negotiate', () => {
     const { errors, warnings } = negotiate(planWith(), adapterWith({ RouteRequest: 'extended' }));
     assert.equal(errors.length, 0);
     assert.equal(warnings.length, 0);
+  });
+
+  it('errors when a plan needs LongRequest on a door that cannot (e.g. API Gateway 29 s cap)', () => {
+    const plan = planWith({
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }], needsLongRequests: true },
+    });
+    const { errors } = negotiate(plan, adapterWith({ LongRequest: 'unsupported' }));
+    assert.ok(errors.some((e) => e.capability === 'LongRequest'));
+  });
+
+  it('errors when a multi-namespace plan hits a single-origin door (RouteApiNamespace unsupported)', () => {
+    const plan = planWith({
+      backend: { origins: [{ namespace: 'notes', ingress: { kind: 'url', url: 'https://x/aws-blocks/api' } }] },
+    });
+    const { errors } = negotiate(plan, adapterWith({ RouteApiNamespace: 'unsupported' }));
+    assert.ok(errors.some((e) => e.capability === 'RouteApiNamespace'));
   });
 });

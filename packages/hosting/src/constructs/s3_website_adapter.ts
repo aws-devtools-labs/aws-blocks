@@ -27,6 +27,9 @@ const S3_WEBSITE_SUPPORT: Record<CapabilityId, SupportTier> = {
   RunServerRender: 'unsupported',
   StreamServerRender: 'unsupported',
   ProxySameOriginApi: 'unsupported',
+  RouteApiNamespace: 'unsupported', // static bucket cannot route to a backend
+  LongRequest: 'unsupported', // no compute
+  LargePayload: 'unsupported', // no compute
   CustomDomainTls: 'unsupported', // S3 website endpoints are HTTP only
   InjectResponseHeaders: 'unsupported',
   FilterRequests: 'unsupported',
