@@ -147,21 +147,30 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('pins template CDK CLI versions to the repository toolchain', () => {
-    const lockfile = JSON.parse(readFileSync(join(__dirname, '../../..', 'package-lock.json'), 'utf-8'));
-    const expectedVersion = lockfile.packages?.['node_modules/aws-cdk']?.version;
-    assert.ok(expectedVersion, 'repository lockfile should resolve aws-cdk');
+  it('deployable templates declare a floating CDK CLI dependency', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    const missingOrPinned: string[] = [];
 
-    for (const template of ['auth-cognito', 'backend', 'bare', 'default', 'demo', 'nextjs', 'react']) {
-      const packageJson = JSON.parse(
-        readFileSync(join(__dirname, '..', 'templates', template, 'package.json'), 'utf-8'),
-      );
-      assert.strictEqual(
-        packageJson.devDependencies?.['aws-cdk'],
-        expectedVersion,
-        `${template} should pin the repository aws-cdk version`,
-      );
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+
+      const pkgPath = join(templatesDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+
+      const packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (!packageJson.scripts?.sandbox) continue;
+
+      const cdkVersion = packageJson.devDependencies?.['aws-cdk'];
+      if (typeof cdkVersion !== 'string' || !cdkVersion.startsWith('^2.')) {
+        missingOrPinned.push(entry.name);
+      }
     }
+
+    assert.deepStrictEqual(
+      missingOrPinned,
+      [],
+      `Deployable templates must declare a floating aws-cdk 2.x dependency: ${missingOrPinned.join(', ')}`,
+    );
   });
 
   it('detects existing project with package.json when "." is given', () => {
