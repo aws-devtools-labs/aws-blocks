@@ -73,18 +73,33 @@ export class CronJob<T = void> extends Scope {
 
 const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
 
+interface SchedulerRoleState {
+	role: iam.Role;
+	handlerArns: Set<string>;
+}
+
 function getOrCreateSchedulerRole(stack: cdk.Stack, handlerArn: string): iam.Role {
-	const existing = (stack as any)[SCHEDULER_ROLE_KEY] as iam.Role | undefined;
-	if (existing) return existing;
+	const existing = (stack as any)[SCHEDULER_ROLE_KEY] as SchedulerRoleState | undefined;
+	if (existing) {
+		if (!existing.handlerArns.has(handlerArn)) {
+			grantSchedulerInvocation(existing.role, handlerArn);
+			existing.handlerArns.add(handlerArn);
+		}
+		return existing.role;
+	}
 
 	const role = new iam.Role(stack, 'BlocksSchedulerRole', {
 		assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
 	});
+	grantSchedulerInvocation(role, handlerArn);
+
+	(stack as any)[SCHEDULER_ROLE_KEY] = { role, handlerArns: new Set([handlerArn]) } satisfies SchedulerRoleState;
+	return role;
+}
+
+function grantSchedulerInvocation(role: iam.Role, handlerArn: string): void {
 	role.addToPolicy(new iam.PolicyStatement({
 		actions: ['lambda:InvokeFunction'],
 		resources: [handlerArn],
 	}));
-
-	(stack as any)[SCHEDULER_ROLE_KEY] = role;
-	return role;
 }
