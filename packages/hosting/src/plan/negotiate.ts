@@ -32,6 +32,22 @@ export const requiredCapabilities = (plan: CapabilityPlan): Set<CapabilityId> =>
   if (plan.origins.some((o) => o.kind === 'image')) req.add('OptimizeImage');
   if (plan.policies.skewEnabled) req.add('PinSession');
   if (plan.routes.headers.length > 0) req.add('InjectResponseHeaders');
+  // Backend/API routing. Present only when the front door proxies the API
+  // same-origin (undefined = cross-origin, needs no front-door support).
+  if (plan.backend && plan.backend.origins.length > 0) {
+    // Proxying the API subtree same-origin (cookies flow, no CORS).
+    req.add('ProxySameOriginApi');
+    // Path-routing DISTINCT namespaces to distinct computes is the multi-compute
+    // case — a single `'*'` origin (single-compute) does not need it. A door that
+    // serves one origin (function-url) can proxy but cannot path-route.
+    if (plan.backend.origins.some((o) => o.namespace !== '*')) req.add('RouteApiNamespace');
+    // Payload/timeout budgets the router itself imposes (API Gateway 29 s / 10 MB,
+    // ALB-Lambda 1 MB). Required only when the app declares it needs them, so the
+    // negotiator rejects/degrades a capping door instead of the limit surfacing
+    // as a production surprise.
+    if (plan.backend.needsLongRequests) req.add('LongRequest');
+    if (plan.backend.needsLargePayloads) req.add('LargePayload');
+  }
   return req;
 };
 

@@ -21,11 +21,16 @@ const staticPlan: CapabilityPlan = {
   release: { buildId: 'testbuild' },
 };
 
-const synth = (plan: CapabilityPlan, backendApiUrl?: string) => {
+const withBackendApiUrl = (plan: CapabilityPlan, url: string): CapabilityPlan => ({
+  ...plan,
+  backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url } }] },
+});
+
+const synth = (plan: CapabilityPlan) => {
   const app = new App();
   const stack = new Stack(app, 'S', { env: { account: '111111111111', region: 'us-west-2' } });
   const bucket = new Bucket(stack, 'Assets');
-  new ApiGatewayConstruct(stack, 'ApiGw', { plan, bucket, backendApiUrl });
+  new ApiGatewayConstruct(stack, 'ApiGw', { plan, bucket });
   return Template.fromStack(stack);
 };
 
@@ -50,10 +55,26 @@ describe('ApiGatewayConstruct — static plan', () => {
 
 describe('ApiGatewayConstruct — with backend proxy', () => {
   it('adds same-origin backend routes (/aws-blocks + /aws-blocks-auth) via HTTP integration', () => {
-    const t = synth(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api');
+    const t = synth(withBackendApiUrl(staticPlan, 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api'));
     // 2 static + 2 backend + $default = 5 routes
     t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
     // At least one HTTP_PROXY integration to the backend
+    t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
+  });
+
+  it('path-routes each named namespace to its own ingress (multi-compute)', () => {
+    const plan: CapabilityPlan = {
+      ...staticPlan,
+      backend: {
+        origins: [
+          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } },
+          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/aws-blocks/api' } },
+        ],
+      },
+    };
+    const t = synth(plan);
+    // 2 static + 2 namespace routes + $default = 5
+    t.resourceCountIs('AWS::ApiGatewayV2::Route', 5);
     t.hasResourceProperties('AWS::ApiGatewayV2::Integration', { IntegrationType: 'HTTP_PROXY' });
   });
 });

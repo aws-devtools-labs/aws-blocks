@@ -60,6 +60,9 @@ export { FrameworkType, HostingProps, HostingResources } from '../types.js';
 // ALB is the first non-CloudFront door.
 export type {
 	AdapterContext,
+	BackendIngress,
+	BackendOrigin,
+	BackendPlan,
 	CapabilityId,
 	CapabilityPlan,
 	FrontDoorAdapter,

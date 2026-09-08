@@ -36,6 +36,9 @@ const ALB_SUPPORT: Record<CapabilityId, SupportTier> = {
   RunServerRender: 'core',
   StreamServerRender: 'core', // ALB holds a long streaming connection to its target
   ProxySameOriginApi: 'core', // same ALB routes the API subtree to the server target
+  RouteApiNamespace: 'extended', // per-namespace listener rules → a forwarder Lambda per ingress
+  LongRequest: 'core', // ALB holds long-lived connections to its target
+  LargePayload: 'degraded', // Lambda-target request/response caps at 1 MB (per-namespace forwarder)
   CustomDomainTls: 'core', // HTTPS listener + a regional ACM cert
   InjectResponseHeaders: 'degraded', // ALB can't inject per-route response headers → move into SSR/origin
   FilterRequests: 'core', // a REGIONAL WAFv2 WebACL associates with the ALB
@@ -55,8 +58,6 @@ export type AlbRenderContext = AdapterContext & {
   vpc?: IVpc;
   internal?: boolean;
   certificate?: ICertificate;
-  /** Backend API Gateway URL to proxy same-origin (`/aws-blocks/*`) via a Lambda target. */
-  backendApiUrl?: string;
   /** Capabilities the app explicitly accepts in degraded form (else the negotiator fails). */
   degrade?: CapabilityId[];
 };
@@ -95,7 +96,6 @@ export class AlbAdapter implements FrontDoorAdapter {
       vpc: ctx.vpc,
       internal: ctx.internal,
       certificate: ctx.certificate,
-      backendApiUrl: ctx.backendApiUrl,
     });
     return { url: alb.url };
   }

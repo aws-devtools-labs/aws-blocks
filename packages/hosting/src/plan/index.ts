@@ -10,6 +10,9 @@
  */
 export type {
   AdapterContext,
+  BackendIngress,
+  BackendOrigin,
+  BackendPlan,
   CapabilityId,
   CapabilityPlan,
   FrontDoorAdapter,

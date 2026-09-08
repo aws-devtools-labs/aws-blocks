@@ -30,6 +30,9 @@ const APIGW_SUPPORT: Record<CapabilityId, SupportTier> = {
   RunServerRender: 'core',
   StreamServerRender: 'unsupported', // HTTP API cannot stream responses (buffered only)
   ProxySameOriginApi: 'core', // native HTTP proxy to the backend API Gateway
+  RouteApiNamespace: 'core', // a route per namespace → each compute's ingress (HttpUrlIntegration)
+  LongRequest: 'unsupported', // HTTP API hard ~29 s integration timeout — caps long backend work
+  LargePayload: 'degraded', // ~10 MB payload cap on the router path
   CustomDomainTls: 'core', // HTTPS by default; custom domain via API GW domain names
   InjectResponseHeaders: 'degraded', // no per-route response-header injection
   FilterRequests: 'degraded', // no native WAF on HTTP API (REST API only) → WAF elsewhere
@@ -45,7 +48,6 @@ export type ApiGatewayRenderContext = AdapterContext & {
   computeFunctions?: Map<string, IFunction>;
   serverComputeName?: string;
   imageComputeName?: string;
-  backendApiUrl?: string;
   degrade?: CapabilityId[];
 };
 
@@ -78,7 +80,6 @@ export class ApiGatewayAdapter implements FrontDoorAdapter {
       computeFunctions: ctx.computeFunctions,
       serverComputeName: ctx.serverComputeName,
       imageComputeName: ctx.imageComputeName,
-      backendApiUrl: ctx.backendApiUrl,
     });
     return { url: apigw.url };
   }

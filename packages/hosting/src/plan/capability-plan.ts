@@ -12,7 +12,7 @@
 import type { DeployManifest } from '../manifest/types.js';
 import { normalizeBasePath, prependBasePath } from '../adapters/shared/basepath.js';
 import { buildRouteTable } from './route-table.js';
-import type { CapabilityPlan, HeaderRule, Origin, RedirectRule } from './types.js';
+import type { BackendOrigin, CapabilityPlan, HeaderRule, Origin, RedirectRule } from './types.js';
 
 /** Stable origin ids shared by every renderer (a CloudFront behavior, an ALB target, …). */
 export const ORIGIN_IDS = {
@@ -38,6 +38,17 @@ export type BuildCapabilityPlanInput = {
    * 'edge'`). Excluded from the route table (they get a dedicated behavior).
    */
   edgeTargets?: Set<string>;
+  /**
+   * Backend/API ingresses the front door should route to same-origin (each
+   * namespace → its owning compute). Omit for cross-origin (the client reaches
+   * the backend via `BLOCKS_API_URL`). A single `{ namespace: '*' }` entry is
+   * the common single-compute same-origin case. See {@link BackendPlan}.
+   */
+  backendOrigins?: BackendOrigin[];
+  /** The app needs backend requests longer than a router's short timeout (agent loops, big jobs). */
+  backendNeedsLongRequests?: boolean;
+  /** The app needs backend payloads above a router's size cap (large uploads/downloads). */
+  backendNeedsLargePayloads?: boolean;
 };
 
 const normalizePattern = (pattern: string, basePath?: string): string => {
@@ -85,6 +96,16 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
     headers: h.headers,
   }));
 
+  // ── Backend/API routing (same-origin only; undefined = cross-origin) ──
+  const backend =
+    input.backendOrigins && input.backendOrigins.length > 0
+      ? {
+          origins: input.backendOrigins,
+          needsLongRequests: input.backendNeedsLongRequests === true,
+          needsLargePayloads: input.backendNeedsLargePayloads === true,
+        }
+      : undefined;
+
   return {
     origins,
     routes: { entries, redirects, headers },
@@ -98,5 +119,6 @@ export const buildCapabilityPlan = (input: BuildCapabilityPlanInput): Capability
       skewEnabled: input.skewEnabled === true,
     },
     release: { buildId },
+    ...(backend ? { backend } : {}),
   };
 };

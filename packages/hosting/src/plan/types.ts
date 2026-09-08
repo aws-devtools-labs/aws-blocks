@@ -81,6 +81,55 @@ export type ReleasePlan = {
 };
 
 /**
+ * Where a slice of the backend/API surface is reached. Service-neutral: an
+ * adapter turns it into its own primitive (a CloudFront behavior + origin, an
+ * API Gateway HTTP-proxy route, an ALB forwarder-Lambda target, …).
+ *
+ * `kind: 'url'` — an HTTPS endpoint (a Lambda compute's API Gateway invoke URL,
+ * a container's ALB DNS, or an arbitrary bring-your-own-compute URL). The union
+ * is intentionally single-member today; a future `'lambda'`/`'ip'` direct-target
+ * kind can be added without changing consumers that already switch on `kind`.
+ */
+export type BackendIngress = {
+  kind: 'url';
+  /** The routable HTTPS base (may be a CDK token). */
+  url: string;
+};
+
+/**
+ * One API-namespace → ingress route. This is the neutral form of the
+ * multi-compute front-door problem (see the "Multi-Compute Front Door" one-pager):
+ * a request for `/aws-blocks/api/{namespace}/*` must reach the compute that owns
+ * that namespace. A single `namespace: '*'` origin is the common single-compute,
+ * same-origin case (the whole `/aws-blocks/*` + `/aws-blocks-auth/*` API subtree
+ * proxied to one backend).
+ */
+export type BackendOrigin = {
+  /** The `/aws-blocks/api/{namespace}` segment this ingress owns; `'*'` = the whole API subtree. */
+  namespace: string;
+  /** Where requests for this namespace are routed. */
+  ingress: BackendIngress;
+};
+
+/**
+ * The neutral description of how the front door routes to the backend/API. When
+ * Hosting is present, its front door IS the shared door for the whole app — so
+ * routing to backend resources is a first-class front-door responsibility, not a
+ * CloudFront-only add-on. Absent (`undefined`) means the front door does not
+ * proxy the API same-origin (the client reaches the backend cross-origin via
+ * `BLOCKS_API_URL`); present means the door path-routes each namespace to its
+ * owning compute's ingress.
+ */
+export type BackendPlan = {
+  /** API-namespace → ingress routes. A lone `'*'` origin is the single-compute same-origin case. */
+  origins: BackendOrigin[];
+  /** The app needs requests longer than a router's short timeout (agent loops, big batch jobs). */
+  needsLongRequests?: boolean;
+  /** The app needs payloads above a router's size cap (large uploads/downloads). */
+  needsLargePayloads?: boolean;
+};
+
+/**
  * The complete service-agnostic description of a deployment. Produced by the
  * core (`buildCapabilityPlan`); consumed by every {@link FrontDoorAdapter}.
  * Contains NO service types — a plan is identical whether it is later rendered
@@ -91,6 +140,13 @@ export type CapabilityPlan = {
   routes: RouteTable;
   policies: PlanPolicies;
   release: ReleasePlan;
+  /**
+   * How the front door routes to the backend/API surface. Present when the door
+   * proxies the API same-origin (each namespace → its owning compute's ingress);
+   * `undefined` when the client reaches the backend cross-origin. See
+   * {@link BackendPlan}.
+   */
+  backend?: BackendPlan;
 };
 
 // ── Capability negotiation (the conscious-degradation contract) ───────────────
@@ -107,6 +163,9 @@ export type CapabilityId =
   | 'RunServerRender'
   | 'StreamServerRender'
   | 'ProxySameOriginApi'
+  | 'RouteApiNamespace'
+  | 'LongRequest'
+  | 'LargePayload'
   | 'CustomDomainTls'
   | 'InjectResponseHeaders'
   | 'FilterRequests'
