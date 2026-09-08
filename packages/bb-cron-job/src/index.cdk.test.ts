@@ -112,6 +112,31 @@ describe('CronJob compute targeting', () => {
 			'schedule does NOT target the default compute',
 		);
 	});
+
+	test('shared scheduler role can invoke every targeted compute', async () => {
+		const stack = await makeStack('CronMultipleComputes');
+		new CronJob(stack, 'defaultJob', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const lambdaB = new LambdaCompute(stack, 'LambdaB');
+		const scoped = new Scope('scoped', { parent: stack });
+		scoped._compute = lambdaB;
+		new CronJob(scoped, 'targetedJob', { schedule: 'rate(1 day)', handler: async () => {} });
+
+		const policies = Template.fromStack(stack).findResources('AWS::IAM::Policy');
+		const schedulerPolicy = Object.values(policies).find((policy) =>
+			JSON.stringify(policy).includes('BlocksSchedulerRole'),
+		);
+		assert.ok(schedulerPolicy, 'shared scheduler role has an IAM policy');
+		const policyDocument = JSON.stringify(schedulerPolicy);
+		assert.ok(
+			policyDocument.includes(fnLogicalId(stack, stack._defaultCompute as LambdaCompute)),
+			'scheduler role can invoke the default compute',
+		);
+		assert.ok(
+			policyDocument.includes(fnLogicalId(stack, lambdaB)),
+			'scheduler role can invoke the scoped compute',
+		);
+	});
 });
 
 describe('CronJob synth-time schedule validation', () => {

@@ -74,11 +74,16 @@ export class CronJob<T = void> extends Scope {
 
 const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
 
+interface SchedulerRoleState {
+	role: iam.Role;
+	handlerArns: Set<string>;
+}
+
 // Keyed on (and parented under) the owning backend root, so two BlocksBackends in
-// one cdk.Stack each get their own scheduler role — the role grants invoke on that
-// backend's handler, so sharing A's role would pin B's schedule to A's Lambda.
+// one cdk.Stack each get their own scheduler role. Within a backend, grant each
+// targeted compute once rather than only the first schedule's handler.
 function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Role {
-	return getOrCreateOnRoot(scope, SCHEDULER_ROLE_KEY, (root) => {
+	const state = getOrCreateOnRoot<SchedulerRoleState>(scope, SCHEDULER_ROLE_KEY, (root) => {
 		// The trust is limited to EventBridge Scheduler schedules in this account and region.
 		// Scheduler reports the schedule GROUP ARN (not the individual schedule ARN) as aws:SourceArn,
 		// so the ArnLike pattern matches `schedule-group/*`. Same shape as the AgentCore Runtime trust
@@ -94,10 +99,14 @@ function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Rol
 				},
 			}),
 		});
-		role.addToPolicy(new iam.PolicyStatement({
+		return { role, handlerArns: new Set<string>() };
+	});
+	if (!state.handlerArns.has(handlerArn)) {
+		state.role.addToPolicy(new iam.PolicyStatement({
 			actions: ['lambda:InvokeFunction'],
 			resources: [handlerArn],
 		}));
-		return role;
-	});
+		state.handlerArns.add(handlerArn);
+	}
+	return state.role;
 }
