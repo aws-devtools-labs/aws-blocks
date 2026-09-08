@@ -70,6 +70,18 @@ interface Connection {
 	reconnectTimer: ReturnType<typeof setTimeout> | null;
 	/** Channels awaiting resubscribe confirmation after a reconnect; when it drains, onReconnect fires. `null` outside a reconnect. */
 	resubscribePending: Set<string> | null;
+	/**
+	 * Set TRUE only on a client-initiated teardown (unsubscribe of the last
+	 * channel, `__resetConnectionsForTest`, or the MAX_RECONNECT give-up path).
+	 * This is the intent signal for `ws.onclose`: the close CODE cannot tell an
+	 * expected teardown from an unexpected drop (a legitimate mid-connection drop
+	 * the client did not cause can arrive as 1000/1005 just as easily as
+	 * 1001/1006), so only the client knows it meant to close. `onclose` treats a
+	 * close as terminal iff this is true (or nothing is left to reconnect for),
+	 * and otherwise reconnects on ANY code — mirroring mock-middleware.ts's
+	 * tornDown/subscriptions.size guard.
+	 */
+	intentionalClose: boolean;
 }
 
 const connections = new Map<string, Connection>();
@@ -96,6 +108,7 @@ function getOrCreateConnection(wsUrl: string, connectToken: string): Connection 
 		reconnectAttempts: 0,
 		reconnectTimer: null,
 		resubscribePending: null,
+		intentionalClose: false,
 	};
 	connections.set(wsUrl, conn);
 
@@ -237,17 +250,31 @@ function openSocket(conn: Connection, isReconnect: boolean): void {
 	ws.onclose = (event) => {
 		conn.connected = false;
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
-		// 1001 = going away (server timeout), 1006 = abnormal closure
+		// Close-code → onDisconnect reason. This mapping is INDEPENDENT of the
+		// reconnect decision below: it only describes WHY the socket dropped for
+		// the onDisconnect callback. 1001 = going away (GW/server timeout),
+		// 1006 = abnormal closure, else (incl. 1000/1005) = unknown.
 		const reason: DisconnectReason = event.code === 1001 ? 'timeout' : event.code === 1006 ? 'error' : 'unknown';
 		notifyDisconnect(reason);
-		// A normal (1000) or no-status (1005) close is client-initiated/expected:
-		// this is terminal, so fail any pending establishment, drop the
-		// onDisconnect handlers, and remove the pool entry. Any other code is an
-		// unexpected drop, so auto-reconnect and KEEP disconnectHandlers intact so
-		// subsequent drops still notify, and KEEP pendingEstablished intact so the
-		// resubscribe on reconnect can still resolve it (mirrors mock-middleware.ts,
-		// which never rejects on a transient drop).
-		if (event.code === 1000 || event.code === 1005) {
+		// Intent-based terminal classification (was: close-code-based, treating
+		// {1000,1005} as terminal). Proven live on AWS: a legitimate
+		// mid-connection drop the client did NOT initiate can arrive as 1000 or
+		// 1005 just as easily as 1001/1006, so the close CODE cannot distinguish
+		// an expected teardown from an unexpected drop. Only the client knows it
+		// meant to close, tracked via `intentionalClose` (set on the last-channel
+		// unsubscribe, __resetConnectionsForTest, and give-up paths).
+		//
+		// Terminal iff the close was intentional OR nothing is left to reconnect
+		// for (subscriptions.size === 0): reject any pending establishment, drop
+		// the onDisconnect handlers, and remove the pool entry.
+		//
+		// Otherwise it is an unexpected drop on ANY code — clean closes (1000/1005)
+		// and GW timeouts (1001/1006) alike — so auto-reconnect and KEEP
+		// disconnectHandlers intact (so subsequent drops still notify) and
+		// pendingEstablished intact (so the resubscribe on reconnect can still
+		// resolve it). This matches mock-middleware.ts, which reconnects on ANY
+		// close guarded only by tornDown/subscriptions.size — the correct model.
+		if (conn.intentionalClose || conn.subscriptions.size === 0) {
 			conn.disconnectHandlers.clear();
 			const err = new Error('WebSocket closed');
 			err.name = 'ConnectionFailedException';
@@ -279,6 +306,8 @@ function scheduleReconnect(conn: Connection): void {
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
 		conn.connected = false;
 		conn.resubscribePending = null;
+		// Deliberate teardown of a now-subscriber-less connection: mark intentional.
+		conn.intentionalClose = true;
 		connections.delete(conn.wsUrl);
 		return;
 	}
@@ -302,6 +331,10 @@ function scheduleReconnect(conn: Connection): void {
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
 		conn.connected = false;
 		conn.resubscribePending = null;
+		// Give-up is a deliberate, client-side teardown: mark the close intentional
+		// so any late onclose on the dead socket is classified terminal, not
+		// reconnected.
+		conn.intentionalClose = true;
 		connections.delete(conn.wsUrl);
 		return;
 	}
@@ -322,6 +355,10 @@ export function __resetConnectionsForTest(): void {
 	for (const conn of connections.values()) {
 		if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 		if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+		// Belt (intentionalClose) and suspenders (detach onclose below): mark this
+		// a deliberate teardown so even a late/racing onclose is classified
+		// terminal and cannot schedule a reconnect that would keep node --test alive.
+		conn.intentionalClose = true;
 		conn.subscriptions.clear();
 		conn.channelTokens.clear();
 		conn.disconnectHandlers.clear();
@@ -398,6 +435,12 @@ function subscribeTo(
 			if (conn.subscriptions.size === 0 && conn.ws) {
 				if (conn.keepAliveTimer) { clearInterval(conn.keepAliveTimer); conn.keepAliveTimer = null; }
 				if (conn.reconnectTimer) { clearTimeout(conn.reconnectTimer); conn.reconnectTimer = null; }
+				// Client-initiated teardown: mark the close intentional so onclose
+				// (were it still attached, or if it races) classifies it terminal
+				// rather than reconnecting. Detaching onclose below is the primary
+				// guard; intentionalClose makes the intent explicit and no longer
+				// relies on the old {1000,1005} close-code check to avoid reconnect.
+				conn.intentionalClose = true;
 				conn.ws.onmessage = null;
 				conn.ws.onerror = null;
 				conn.ws.onclose = null;

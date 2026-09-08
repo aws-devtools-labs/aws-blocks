@@ -492,4 +492,114 @@ describe('AWS (production) middleware: reconnect + resubscribe (PR1)', () => {
 			'established must reject with ConnectionFailedException once the retry cap is exhausted',
 		);
 	});
+
+	// ── Intent-based terminal classification (PR1) ────────────────────────────
+	// The middleware no longer treats close CODE as the terminal signal. A drop
+	// the client did not initiate reconnects on ANY code (clean 1000/1005 and GW
+	// timeouts 1001/1006 alike); only a client-initiated teardown is terminal.
+
+	// A no-status close (1005) used to be classified TERMINAL by close code. It is
+	// now an unexpected drop and MUST reconnect + resubscribe with the replayed token.
+	it('reconnects and resubscribes after an unexpected 1005 (no-status) close', () => {
+		const client = hydrateClient();
+		client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// 1005 was terminal under the old code-based rule; it must now reconnect.
+		first.emitServerClose(1005);
+		mock.timers.tick(60_000);
+
+		const second = FakeWebSocket.instances[1];
+		assert.ok(second, 'a 1005 close must now trigger a reconnect socket');
+		second.emitOpen();
+
+		const resubs = second.framesFor('subscribe');
+		assert.strictEqual(resubs.length, 1, 'exactly one resubscribe frame expected after a 1005 reconnect');
+		assert.strictEqual(resubs[0].channel, CHANNEL);
+		assert.strictEqual(resubs[0].token, CHANNEL_TOKEN, 'the stored channel token must be replayed on a 1005 reconnect');
+	});
+
+	// A normal (1000) close that the client did NOT initiate is also an unexpected
+	// drop under the intent-based rule and must reconnect.
+	it('reconnects after an unexpected 1000 (normal) close the client did not initiate', () => {
+		const client = hydrateClient();
+		client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		first.emitServerClose(1000);
+		mock.timers.tick(60_000);
+
+		assert.ok(
+			FakeWebSocket.instances[1],
+			'a 1000 close with live subscriptions must reconnect (intent-based, not code-based)',
+		);
+	});
+
+	// A 1001 going-away (GW/server timeout) reconnects, and onDisconnect still
+	// reports the code-derived reason 'timeout' independent of the reconnect decision.
+	it('reconnects after a 1001 (going-away timeout) and reports reason "timeout"', () => {
+		const client = hydrateClient();
+		const reasons: string[] = [];
+		const options: SubscribeOptions = {
+			onMessage: () => {},
+			onDisconnect: (reason) => { reasons.push(reason); },
+		};
+		client.subscribe(options);
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		first.emitServerClose(1001);
+		mock.timers.tick(60_000);
+
+		assert.ok(FakeWebSocket.instances[1], 'a 1001 timeout close must reconnect');
+		assert.deepStrictEqual(reasons, ['timeout'], 'onDisconnect reason for 1001 must be "timeout"');
+	});
+
+	// A client unsubscribe is an INTENTIONAL close: it must NOT reconnect. The
+	// teardown detaches onclose and sets intentionalClose before closing.
+	it('a client unsubscribe (intentional close) does not reconnect', () => {
+		const client = hydrateClient();
+		const sub = client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		// Unsubscribing the last channel closes the socket on purpose.
+		sub.unsubscribe();
+		mock.timers.tick(60_000);
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a client-initiated unsubscribe must not open a reconnect socket',
+		);
+	});
+
+	// __resetConnectionsForTest is a deliberate teardown: terminal, no reconnect.
+	it('__resetConnectionsForTest is terminal and does not reconnect', () => {
+		const client = hydrateClient();
+		client.subscribe(() => {});
+
+		const first = FakeWebSocket.instances[0];
+		first.emitOpen();
+		first.emitMessage({ type: 'subscribe_success', channel: CHANNEL });
+
+		__resetConnectionsForTest();
+		mock.timers.tick(60_000);
+
+		assert.strictEqual(
+			FakeWebSocket.instances.length,
+			1,
+			'a deliberate reset must not schedule a reconnect',
+		);
+	});
 });
