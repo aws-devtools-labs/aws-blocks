@@ -80,7 +80,7 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 		ts.ScriptKind.TS,
 	);
 
-	function visitObjectLiteral(obj: ts.ObjectLiteralExpression) {
+	function visitObjectLiteral(obj: ts.ObjectLiteralExpression, namespaceName?: string) {
 		for (const prop of obj.properties) {
 			if (
 				ts.isMethodDeclaration(prop) &&
@@ -88,7 +88,10 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 				ts.isIdentifier(prop.name) &&
 				hasBlocksSkipCodegenTag(prop)
 			) {
-				result.add(prop.name.text);
+				// Qualify by namespace (like extractMethodTypes) so a tag on one
+				// namespace's `create` doesn't cause another namespace's `create` to be
+				// dropped from the spec. Bare key only when the namespace is unknown.
+				result.add(namespaceName ? `${namespaceName}.${prop.name.text}` : prop.name.text);
 			}
 		}
 	}
@@ -98,22 +101,23 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 			const callee = node.expression;
 			if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
 				const handler = node.arguments[node.arguments.length - 1];
+				const nsName = enclosingBindingName(node);
 				if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
 					const body = handler.body;
 					if (ts.isParenthesizedExpression(body) && ts.isObjectLiteralExpression(body.expression)) {
-						visitObjectLiteral(body.expression);
+						visitObjectLiteral(body.expression, nsName);
 					} else if (ts.isObjectLiteralExpression(body)) {
-						visitObjectLiteral(body);
+						visitObjectLiteral(body, nsName);
 					} else if (ts.isBlock(body)) {
 						for (const stmt of body.statements) {
 							if (ts.isReturnStatement(stmt) && stmt.expression) {
 								if (ts.isObjectLiteralExpression(stmt.expression)) {
-									visitObjectLiteral(stmt.expression);
+									visitObjectLiteral(stmt.expression, nsName);
 								} else if (
 									ts.isParenthesizedExpression(stmt.expression) &&
 									ts.isObjectLiteralExpression(stmt.expression.expression)
 								) {
-									visitObjectLiteral(stmt.expression.expression);
+									visitObjectLiteral(stmt.expression.expression, nsName);
 								}
 							}
 						}
@@ -297,6 +301,12 @@ function extractMethodsFromHandler(
  * uses to qualify method names. Returns `undefined` when the namespace is
  * created behind indirection (factory return, etc.), in which case methods key
  * by their bare name.
+ *
+ * Limitation: this is the local binding name, not the export name. An export
+ * rename — `const widgets = new ApiNamespace(...); export { widgets as gadgets }`
+ * — keys `widgets.*` while `generate-spec` looks up `gadgets.*`, so the qualified
+ * lookup misses and falls back to the bare key (schemas resolve if there's no
+ * collision, else `unknown`). Rare; resolving the export alias would remove it.
  */
 function enclosingBindingName(node: ts.Node): string | undefined {
 	let current: ts.Node | undefined = node.parent;

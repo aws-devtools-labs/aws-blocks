@@ -143,9 +143,34 @@ describe('extractSkipCodegenMethods — pure-AST scan', () => {
 		try {
 			const skips = extractSkipCodegenMethods(join(dir, 'index.ts'));
 			assert.strictEqual(skips.size, 1);
-			assert.ok(skips.has('devOnly'));
-			assert.ok(!skips.has('normalMethod'));
-			assert.ok(!skips.has('alsoNormal'));
+			assert.ok(skips.has('api.devOnly'), 'skip set is namespace-qualified');
+			assert.ok(!skips.has('api.normalMethod'));
+			assert.ok(!skips.has('api.alsoNormal'));
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('qualifies skip names by namespace so a tag on one namespace does not drop another (regression: #445)', () => {
+		const dir = createTempProject({
+			'index.ts': `
+				class ApiNamespace { constructor(scope: any, name: any, handler: any) {} }
+
+				export const widgets = new ApiNamespace(null, 'widgets', () => ({
+					/** @blocksSkipCodegen */
+					async create() { return null; },
+				}));
+				// subscriptions.create is NOT tagged and must survive.
+				export const subscriptions = new ApiNamespace(null, 'subscriptions', () => ({
+					async create() { return null; },
+				}));
+			`,
+		});
+		try {
+			const skips = extractSkipCodegenMethods(join(dir, 'index.ts'));
+			assert.ok(skips.has('widgets.create'), 'tagged method is skipped, qualified');
+			assert.ok(!skips.has('subscriptions.create'), 'untagged same-named method must NOT be skipped');
+			assert.ok(!skips.has('create'), 'no bare key that would drop both');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
