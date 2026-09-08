@@ -32,12 +32,22 @@ const stackName = sandboxMode
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
-  // E2E test stacks must be fully deletable regardless of deploy mode, so pass
-  // the sandbox preset (DESTROY + no deletion protection) unconditionally. This
-  // replaces the previous `RemovalPolicies.of(...).destroy()` +
-  // `SandboxDisableDeletionProtection` mixin. A production app would use
-  // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: BlocksPresets.sandbox,
+  // Sandbox mode → the sandbox preset. Production mode → the real production
+  // posture (so the prod e2e exercises production-only behavior such as the
+  // managed CloudFront API front door, `provisionApiFrontDoor: true`), but with
+  // two teardown-hostile fields overridden so CI can still `destroy()` the
+  // stack: `RETAIN` → `DESTROY` and deletion protection off. `allowedOrigins`
+  // keeps the sandbox localhost regex so the Node e2e client's cross-origin
+  // probes (which set an `Origin` header) still pass under the production
+  // posture; it's a test-harness concern, not a front-door one.
+  defaults: sandboxMode
+    ? BlocksPresets.sandbox
+    : {
+        ...BlocksPresets.production,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        deletionProtection: false,
+        allowedOrigins: BlocksPresets.sandbox.allowedOrigins,
+      },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
