@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { ApiError } from '@aws-blocks/core';
+
 /**
  * Standardized error constants for the Database Building Block.
  *
@@ -14,6 +16,28 @@ export const DatabaseErrors = {
   UniqueConstraintViolation: 'UniqueConstraintViolationException',
   SerializationFailure: 'SerializationFailureException',
 } as const;
+
+/**
+ * Build the 409 ApiError for a serialization-failure (SQLSTATE 40001) OCC
+ * conflict. Maps to HTTP 409 (Conflict) so the JSON-RPC serializer emits code
+ * 409 instead of a generic 500, preserves the `SerializationFailure` name so
+ * `isBlocksError(e, DatabaseErrors.SerializationFailure)` keeps matching on both
+ * server and client, keeps the original engine error as `cause` (server-side),
+ * and flags the conflict retriable (the caller can retry the transaction).
+ * Shared by every engine translator (PGlite, pg-client, Data API) so all paths
+ * produce an identically shaped 409.
+ *
+ * The client-visible message is a fixed, stable string (the raw driver text
+ * varies by engine and can be verbose); the original error is retained as
+ * `cause` for server-side diagnostics.
+ */
+export function serializationConflict(cause: Error): ApiError {
+  return new ApiError('The transaction failed due to a serialization conflict', 409, {
+    name: DatabaseErrors.SerializationFailure,
+    cause,
+    retriable: true,
+  });
+}
 
 const knownErrors = new Set<string>(Object.values(DatabaseErrors));
 

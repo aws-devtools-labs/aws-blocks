@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { ApiError } from '@aws-blocks/core';
+
 /**
  * DSQL-specific error constants.
  */
@@ -35,7 +37,19 @@ export const TRANSACTION_ROW_LIMIT = 3000;
 export function translateDsqlError(e: Error): never {
   const code = (e as any).code as string | undefined;
   if (code === PG_SERIALIZATION_FAILURE) {
-    e.name = DistributedDatabaseErrors.SerializationFailure;
+    // An OCC / serialization-failure conflict (SQLSTATE 40001) is a Conflict,
+    // not an InternalServerError: throw an ApiError with status 409 so the
+    // JSON-RPC serializer emits code 409 instead of a generic 500. Preserve the
+    // SerializationFailure name so isBlocksError() keeps matching on both server
+    // and client, keep the original error as `cause` (server-side), and flag it
+    // retriable — the caller can retry the transaction (see `retryOnConflict`).
+    // The client-visible message is a fixed, stable string (the raw driver text
+    // is verbose); the original error is retained as `cause` for diagnostics.
+    throw new ApiError('The transaction failed due to a serialization conflict', 409, {
+      name: DistributedDatabaseErrors.SerializationFailure,
+      cause: e,
+      retriable: true,
+    });
   } else if (code === PG_UNIQUE_VIOLATION) {
     e.name = DistributedDatabaseErrors.UniqueConstraintViolation;
   } else if (code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)) {

@@ -3,7 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import type { api as apiType } from 'aws-blocks';
 
@@ -72,6 +72,24 @@ export function distributedTableTests(getApi: () => typeof apiType) {
           assert.ok(isBlocksError(e, ConditionalCheckFailed));
         }
         assert.strictEqual((await api.tableGet({ pk, sk: 'sk1' }))?.data, 'original');
+        await api.tableDelete({ pk, sk: 'sk1' });
+      });
+
+      // OCC conflicts must serialize to JSON-RPC code 409 (Conflict) over the
+      // wire — reconstructed client-side as an ApiError with status 409 — not a
+      // generic 500. The error name is preserved so isBlocksError still matches.
+      test('ifNotExists conflict returns status 409 over the wire', async () => {
+        const api = getApi();
+        const pk = uid();
+        await api.tablePut({ pk, sk: 'sk1', data: 'original', timestamp: 1000 });
+        try {
+          await api.tablePut({ pk, sk: 'sk1', data: 'dup', timestamp: 1000 }, { ifNotExists: true });
+          assert.fail('Expected a conflict error');
+        } catch (e) {
+          assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+          assert.strictEqual(e.status, 409, 'OCC conflict must be 409, not 500');
+          assert.ok(isBlocksError(e, ConditionalCheckFailed));
+        }
         await api.tableDelete({ pk, sk: 'sk1' });
       });
 
