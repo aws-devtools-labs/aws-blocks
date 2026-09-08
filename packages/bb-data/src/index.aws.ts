@@ -66,13 +66,15 @@ export class Database extends Scope {
       const connStr = typeof conn.connectionString === 'string'
         ? conn.connectionString
         : await conn.connectionString.get();
+      
+      const applicationName = this.buildUserAgentChain().map(([k, v]) => `${k}/${v}`).join(' ');
       // Verify the server's TLS certificate by default (PgClientEngine defaults to
       // rejectUnauthorized: true when ssl is undefined). The `db pull`-generated
       // wiring supplies an ssl config that pins the provider CA; callers using
       // fromExisting() directly can pass `ssl` to pin a CA or opt out. Previously
       // this hardcoded rejectUnauthorized:false, leaving the deployed Lambda's
       // connection to external DBs (Supabase/Neon/etc.) unauthenticated (MITM-exposed).
-      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: conn.ssl }));
+      return new RLSEnabledDatabase(new PgClientEngine({ connectionString: connStr, ssl: conn.ssl, applicationName }));
     }
     return new RLSEnabledDatabase(this.createDataApiEngine(envName, conn));
   }
