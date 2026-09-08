@@ -3,6 +3,8 @@
 "@aws-blocks/bb-distributed-table": minor
 "@aws-blocks/bb-distributed-data": minor
 "@aws-blocks/bb-data": minor
+"@aws-blocks/core": patch
+"@aws-blocks/blocks": patch
 ---
 
 fix(data): map optimistic-concurrency conflicts to JSON-RPC 409 (Conflict) instead of 500
@@ -43,3 +45,7 @@ repo's signal for a change that can alter existing behavior: callers that
 branched on `error.status === 500` for these conflicts (or on the JSON-RPC error
 code) will now see `409`. Code that matches conflicts by name via
 `isBlocksError` — the documented pattern — is unaffected.
+
+`@aws-blocks/core` and `@aws-blocks/blocks` get a `patch` bump for a docs-only
+change: a clarifying sentence was added to the `ApiError.retriable` JSDoc
+(no behavior or API change).
