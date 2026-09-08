@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": patch
+"@aws-blocks/bb-lambda-compute": patch
 "@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/blocks": patch
 ---

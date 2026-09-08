@@ -1,21 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { registerConfig, Scope } from '@aws-blocks/core/cdk';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
-import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
+import { Scope, registerConfig } from '@aws-blocks/core/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
 import type { DashboardOptions } from './types.js';
 import { buildDashboardWidgets, resolveConfig } from './widgets.js';
+import { mountDashboardRoute, BB_DASHBOARD_URL_ENV } from './routes.js';
 
 export { DashboardErrors } from './errors.js';
 export type {
 	DashboardOptions,
-	LoggerBBRef,
+	ResolvedDashboardConfig,
 	MetricConfig,
 	MetricsBBRef,
-	ResolvedDashboardConfig,
+	LoggerBBRef,
 	TracerBBRef,
 } from './types.js';
 
