@@ -79,8 +79,9 @@ export class KVStore<T = string> extends Scope {
 	 * @param value - The value to store.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized value exceeds the 400 KB DynamoDB per-item size limit.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is true and the key already exists.
-	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifValueEquals` is set (alone) and the current value does not match.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If BOTH `ifNotExists` and `ifValueEquals` are set (they compose with OR), only when the key exists AND its current value does not match.
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: string, value: T, options?: import('./index.mock.js').PutOptions<T>): Promise<void> {
@@ -103,13 +104,29 @@ export class KVStore<T = string> extends Scope {
 			Item: item,
 		};
 
-		if (options?.ifNotExists) {
-			command.ConditionExpression = 'attribute_not_exists(#pk)';
-			command.ExpressionAttributeNames = { '#pk': 'pk' };
-		} else if (options && 'ifValueEquals' in options) {
-			command.ConditionExpression = '#value = :expected';
-			command.ExpressionAttributeNames = { '#value': 'value' };
-			command.ExpressionAttributeValues = { ':expected': JSON.stringify(options.ifValueEquals) };
+		// `ifNotExists` and `ifValueEquals` compose with OR: write when the key is
+		// absent OR its current value matches — the optimistic "create it, or update
+		// it only if unchanged" pattern. (AND would be unsatisfiable: a key can't be
+		// both absent and have a matching value.)
+		const conditions: string[] = [];
+		const names: Record<string, string> = {};
+		const values: Record<string, unknown> = {};
+		if (options?.ifNotExists === true) {
+			conditions.push('attribute_not_exists(#pk)');
+			names['#pk'] = 'pk';
+		}
+		// Detect with `!== undefined` (not `in options`) to match the mock: an
+		// explicit `{ ifValueEquals: undefined }` is a no-op on both layers, rather
+		// than emitting `#value = :expected` with an undefined value the SDK rejects.
+		if (options?.ifValueEquals !== undefined) {
+			conditions.push('#value = :expected');
+			names['#value'] = 'value';
+			values[':expected'] = JSON.stringify(options.ifValueEquals);
+		}
+		if (conditions.length > 0) {
+			command.ConditionExpression = conditions.join(' OR ');
+			command.ExpressionAttributeNames = names;
+			if (Object.keys(values).length > 0) command.ExpressionAttributeValues = values;
 		}
 
 		try {

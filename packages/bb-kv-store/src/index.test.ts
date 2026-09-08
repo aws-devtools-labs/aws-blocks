@@ -65,6 +65,45 @@ test('put with ifValueEquals throws when value differs', async () => {
 	);
 });
 
+test('put with ifValueEquals: null is a real condition (null is distinct from undefined)', async () => {
+	// The guard is `!== undefined`, so `null` is a genuine compare-and-swap value
+	// (`JSON.stringify(null) === 'null'`), not a no-op.
+	const store = new KVStore<string | null>({ id: 'root' } as any, 'test');
+	await store.put('key1', null);
+	await store.put('key1', 'set', { ifValueEquals: null }); // matches the stored null
+	assert.strictEqual(await store.get('key1'), 'set');
+
+	await store.put('key2', 'v');
+	await assert.rejects(
+		() => store.put('key2', 'x', { ifValueEquals: null }), // 'v' !== null
+		(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+	);
+});
+
+// ── Conditional put: ifNotExists + ifValueEquals compose with OR ─────────────
+
+test('put with both conditions writes a NEW key (absent branch of OR)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1', { ifNotExists: true, ifValueEquals: 'anything' });
+	assert.strictEqual(await store.get('key1'), 'v1');
+});
+
+test('put with both conditions updates an EXISTING key when the value matches (value branch of OR)', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'v1' });
+	assert.strictEqual(await store.get('key1'), 'v2');
+});
+
+test('put with both conditions throws when the key exists AND the value differs', async () => {
+	const store = new KVStore({ id: 'root' } as any, 'test');
+	await store.put('key1', 'v1');
+	await assert.rejects(
+		() => store.put('key1', 'v2', { ifNotExists: true, ifValueEquals: 'wrong' }),
+		(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+	);
+});
+
 // ── Conditional deletes ─────────────────────────────────────────────────────
 
 test('delete with ifExists succeeds when key exists', async () => {
