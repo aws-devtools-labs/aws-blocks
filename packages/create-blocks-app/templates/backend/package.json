@@ -11,6 +11,7 @@
     "aws-blocks"
   ],
   "scripts": {
+    "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
     "spec": "blocks-generate-spec",
     "prebuild": "blocks-generate-client",
