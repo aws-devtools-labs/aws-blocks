@@ -198,6 +198,27 @@ export function kvStoreTests(getApi: () => typeof apiType) {
           assertConditionalCheckFailed(e);
         }
       });
+
+      // The value-equals (optimistic-lock) path is the one that carries
+      // `retriable: true` — distinct from the existence assertions above, which
+      // are non-retriable. `retriable` rides the wire (serialized by rpc.ts,
+      // reconstructed by decodeRpcResponse), so assert it here to lock the field
+      // against a silent client-side regression.
+      test('put ifValueEquals conflict returns status 409 with retriable:true over the wire', async () => {
+        const api = getApi();
+        const key = `kv-409-cas-${Date.now().toString(36)}`;
+        await api.kvPut(key, 'seed');
+        try {
+          await api.kvPut(key, 'next', { ifValueEquals: 'wrong-expected' });
+          assert.fail('Expected a conflict error');
+        } catch (e) {
+          assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+          assert.strictEqual(e.status, 409, 'OCC conflict must be 409, not 500');
+          assertConditionalCheckFailed(e);
+          assert.strictEqual(e.retriable, true, 'ifValueEquals optimistic-lock conflict must be retriable');
+        }
+        await api.kvDelete(key);
+      });
     });
 
     describe('typed values', () => {

@@ -108,6 +108,8 @@ A generic `ValidationException` is exactly the kind of catch-all bucket worth av
 
 **Rationale:** A value/field-equals conflict is genuinely optimistic-concurrency — a re-read and retry can succeed. An `ifNotExists`/`ifExists` failure is an existence assertion: a blind identical retry fails identically, so flagging it retriable is misleading. DynamoDB collapses every conditional failure under one `ConditionalCheckFailedException` with no sub-reason, so the AWS runtime decides retriability per-operation from the condition the caller set on that specific `put`/`delete`, matching the mock branch-for-branch. `error.name` and status (409) are unchanged.
 
+Note `retriable` marks the conflict *kind* (optimistic-lock `ifFieldEquals` vs existence assertion), **not** a guarantee that a retry will succeed: an `ifFieldEquals` conflict against a **missing** row is still flagged retriable, yet a blind retry fails identically — because DynamoDB collapses missing-vs-stale into one indistinguishable exception, and the mock deliberately matches that for parity.
+
 ### D-DT-10: `readValidation` — `off | coerce | strict`, defaulting to `coerce`
 
 > The **default choice** (`'coerce'` over `'off'`) is recorded as a cross-cutting architectural decision in [`docs/DECISIONS.md` D-015](../../docs/DECISIONS.md#d-015-distributedtable-reads-default-to-readvalidation-coerce-not-off). This section covers the per-BB mechanics.

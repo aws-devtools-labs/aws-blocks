@@ -48,6 +48,11 @@ export class ApiError extends Error {
 	 * when `retriable === true`; non-retriable errors (expired session,
 	 * tampered envelope, too-many-attempts lockouts) require restarting the
 	 * flow. Defaults to `false` when unspecified.
+	 *
+	 * This marks whether the *kind* of failure is retriable in principle, not a
+	 * guarantee that a given retry will succeed — e.g. an optimistic-lock
+	 * conflict against a missing row is flagged retriable, yet a blind retry
+	 * fails identically.
 	 */
 	readonly retriable: boolean;
 
