@@ -98,14 +98,6 @@ export interface BlocksDefaults {
 	 * `ensureApiGatewayAccount` for the full multi-stack teardown caveat.
 	 */
 	accessLogging: boolean;
-
-	/**
-	 * App-wide default minimum log level (delivered to every compute as the
-	 * `LOG_LEVEL` env var). Messages below it are dropped at runtime. A `Logger`
-	 * created with its own `level` overrides this for that logger instance; this
-	 * is the baseline for loggers that don't set one. Default: `'info'`.
-	 */
-	logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
 
 /**
@@ -126,7 +118,6 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
-		logLevel: 'info',
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -141,7 +132,6 @@ export const BlocksPresets = {
 		pointInTimeRecovery: true,
 		logRetention: RetentionDays.ONE_YEAR,
 		throttling: { rateLimit: 1000, burstLimit: 2000 },
-		logLevel: 'info',
 		// Off by default even in production: enabling access logging mutates the
 		// account/region-level API Gateway CloudWatch role (a singleton). Opt in
 		// per stack once you've confirmed a single Blocks stack owns it in the

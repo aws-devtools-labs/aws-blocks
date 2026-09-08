@@ -174,10 +174,6 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	registerConfig(scope, 'BB_RESOURCES_GROUP_URL', resourcesUrl);
 	registerConfig(scope, 'BB_SETTINGS_GROUP_URL', settingsUrl);
 
-	// App-wide default log level, delivered to every compute as LOG_LEVEL. A
-	// `Logger` with its own `level` overrides this per instance at runtime.
-	registerConfig(scope, 'LOG_LEVEL', props.defaults.logLevel);
-
 	registerBuiltinRoutes();
 
 	return { executionRole };

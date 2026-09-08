@@ -23,12 +23,12 @@ two things a Logger *used* to carry now live elsewhere:
   (e.g. `LambdaCompute`'s `logRetention`), falling back to the stack-wide
   `defaults.logRetention`. Set retention where the compute is constructed, not
   on a Logger. (The `retention` option was removed from `LoggingOptions`.)
-- **The app-wide default log level** is `defaults.logLevel`, stamped once by
-  core as the `LOG_LEVEL` runtime config for every compute. A `Logger`'s
-  `level` is per-instance *runtime* behavior (applied by the logger instance
-  itself) that overrides the baseline for that logger only — it is not deploy
-  config, so the CDK layer does not stamp it. This is why multiple Loggers with
-  different levels coexist without fighting over a single shared env var.
+- **Log level** is purely per-instance *runtime* behavior. A `Logger`'s `level`
+  is applied by the logger instance itself; a logger without an explicit `level`
+  defaults to `'info'` (see *Log Level Resolution* below). Blocks does **not**
+  stamp an app-wide default — there is no `defaults.logLevel`, no `LOG_LEVEL`
+  env var, and the CDK layer provisions nothing for level. This is why multiple
+  Loggers with different levels coexist without fighting over shared config.
 
 ## Serialization Format
 
@@ -79,8 +79,7 @@ All logging methods are **synchronous**. This is an intentional deviation from t
 
 Priority order (highest wins):
 1. Constructor `options.level`
-2. Global env var: `LOG_LEVEL`
-3. Default: `'info'`
+2. Default: `'info'`
 
 ## Mock Implementation
 

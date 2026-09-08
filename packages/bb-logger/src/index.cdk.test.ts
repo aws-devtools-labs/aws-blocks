@@ -6,9 +6,10 @@
  *
  * Logger owns **no** deploy-time infrastructure. Logging is always on — every
  * compute captures stdout to its own log group, retention is a compute-level
- * setting (`logRetention` → `defaults.logRetention`), and the app-wide default
- * log level comes from `defaults.logLevel`. A `Logger`'s `level` /
- * `defaultContext` are per-instance *runtime* behavior, not deploy config. So
+ * setting (`logRetention` → `defaults.logRetention`), and the log level is
+ * per-instance runtime behavior (a `Logger`'s `level`, defaulting to `'info'`).
+ * A `Logger`'s `level` / `defaultContext` are per-instance *runtime* behavior,
+ * not deploy config. So
  * the CDK construct is a no-op placeholder that only lets `new Logger(scope, id)`
  * resolve in a CDK app, and any number of Loggers coexist freely. These tests
  * assert exactly that: construction succeeds, provisions nothing, and does not

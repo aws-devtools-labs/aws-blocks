@@ -39,7 +39,7 @@ new Logger(scope: ScopeParent, id: string, options?: LoggingOptions)
 ```
 
 **Options:**
-- `level` — Minimum log level (`'debug' | 'info' | 'warn' | 'error'`). Default: `'info'` (or the app-wide `defaults.logLevel` baseline).
+- `level` — Minimum log level (`'debug' | 'info' | 'warn' | 'error'`). Default: `'info'`.
 - `defaultContext` — Fields included in every log entry.
 
 Log retention is not a Logger option — it is a compute-level setting (see [Retention](#retention-production) below).
@@ -89,12 +89,11 @@ dbLog.warn('Slow query', { table: 'users', durationMs: 500 });
 
 ## Log Level Precedence
 
-1. Constructor `level` option (highest priority)
-2. `LOG_LEVEL` environment variable
-3. Default: `'info'`
+1. Constructor `level` option
+2. Default: `'info'`
 
-This allows ops teams to change log levels without code changes via the
-`LOG_LEVEL` env var (set automatically by the CDK construct).
+Set the level per `Logger` via the `level` option. There is no `LOG_LEVEL` env
+var — log level is a runtime construction-time choice.
 
 ## Error Object Handling
 
@@ -144,7 +143,7 @@ In local dev (`npm run dev`), the Logger BB:
 - Does NOT persist logs to disk
 - Does NOT create any files in `.bb-data/`
 - Retention has no local effect (it is a cloud-only, compute-level setting)
-- `LOG_LEVEL` env var works the same way
+- Log level comes from the `Logger`'s `level` option (default `'info'`)
 
 ## Errors
 
