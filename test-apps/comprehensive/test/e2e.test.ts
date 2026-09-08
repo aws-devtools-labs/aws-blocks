@@ -267,6 +267,32 @@ tracerTests(() => api);
 // Agent BB tests last — uses Realtime internally, may affect WS server state
 agentTests(() => api);
 
+// Managed CloudFront API front door (Track D). Production-only: `provisionApiFrontDoor`
+// is on in the production preset, so the deploy writes the front-door origin into
+// config.json and the client resolves it. Sandbox/local keep hitting the gateway
+// directly (no front door), so this is skipped there. Everything else in this
+// suite runs THROUGH the front door in production mode by virtue of that resolved
+// URL — this test just pins that the switch happened (CloudFront, not execute-api).
+test(
+  'API front door - production client resolves the CloudFront origin, not the gateway',
+  { skip: ENV !== 'production', timeout: 10_000 },
+  async () => {
+    const { readFileSync } = await import('node:fs');
+    const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+    assert.ok(config.apiUrl, 'config.json carries an apiUrl');
+    assert.match(
+      config.apiUrl,
+      /\.cloudfront\.net\//,
+      `client should resolve the CloudFront front-door origin, got: ${config.apiUrl}`,
+    );
+    assert.doesNotMatch(
+      config.apiUrl,
+      /execute-api/,
+      'client must not resolve the raw API Gateway origin when a front door is provisioned',
+    );
+  },
+);
+
 test('Context - access headers', { timeout: 10_000 }, async () => {
   const headers = await api.echoHeaders();
   assert.ok(headers['content-type']);
