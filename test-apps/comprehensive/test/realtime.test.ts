@@ -10,7 +10,7 @@ type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
 
 export function realtimeTests(getApi: () => typeof apiType) {
 
-	describe('Realtime', { timeout: 60_000 }, () => {
+	describe('Realtime', () => {
 
 		describe('Publish & Subscribe', () => {
 			test('server publish reaches subscriber via channel handle', async () => {
@@ -280,7 +280,10 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				);
 			});
 
-			test('reconnect after a forced close resubscribes and still delivers messages', async () => {
+			// Per-TEST timeout (not on the describe): the real-AWS reconnect round-trip
+			// can take tens of seconds; a describe-level timeout would budget the WHOLE
+			// Realtime suite and cancel sibling tests.
+			test('reconnect after a forced close resubscribes and still delivers messages', { timeout: 120_000 }, async () => {
 				const api = getApi();
 				// Dedicated channel so only this subscription's token/resubscribe is exercised.
 				const channelName = `reconnect-e2e-${Date.now()}`;
