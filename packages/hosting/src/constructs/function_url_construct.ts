@@ -13,6 +13,7 @@
  * that requires them).
  */
 import { CfnOutput, Duration } from 'aws-cdk-lib';
+import { AnyPrincipal } from 'aws-cdk-lib/aws-iam';
 import { Code, FunctionUrlAuthType, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
@@ -47,6 +48,15 @@ export class FunctionUrlConstruct extends Construct {
 
     // Public HTTPS endpoint (no auth) — the Function URL IS the front door.
     const fnUrl = assetProxy.addFunctionUrl({ authType: FunctionUrlAuthType.NONE });
+    // `authType: NONE` still requires an explicit resource-based permission that
+    // allows anyone to invoke the URL — without it the Function URL returns 403
+    // ("Forbidden. For troubleshooting Function URL authorization…"). CDK does
+    // not add this automatically, so grant public `lambda:InvokeFunctionUrl`.
+    assetProxy.addPermission('PublicFunctionUrlInvoke', {
+      principal: new AnyPrincipal(),
+      action: 'lambda:InvokeFunctionUrl',
+      functionUrlAuthType: FunctionUrlAuthType.NONE,
+    });
 
     this.url = fnUrl.url;
     new CfnOutput(this, 'FunctionUrl', { value: this.url, description: 'Lambda Function URL front-door URL' });

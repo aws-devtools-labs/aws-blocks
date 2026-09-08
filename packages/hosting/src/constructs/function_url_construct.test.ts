@@ -24,6 +24,13 @@ describe('FunctionUrlConstruct — static/SPA', () => {
   it('creates a public Function URL (authType NONE)', () => {
     t.hasResourceProperties('AWS::Lambda::Url', { AuthType: 'NONE' });
   });
+  it('grants the public invoke permission (else the URL 403s)', () => {
+    t.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunctionUrl',
+      FunctionUrlAuthType: 'NONE',
+      Principal: '*',
+    });
+  });
   it('provisions the asset-proxy Lambda with the build-id key prefix', () => {
     t.hasResourceProperties('AWS::Lambda::Function', {
       Environment: { Variables: { ASSET_KEY_PREFIX: 'builds/testbuild' } },
