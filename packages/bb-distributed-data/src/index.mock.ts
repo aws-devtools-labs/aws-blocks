@@ -51,6 +51,9 @@ export class DistributedDatabase extends Scope {
    *
    * DSQL uses Optimistic Concurrency Control. Commit may fail with
    * SerializationFailureException if another transaction modified the same rows.
+   * That conflict is an `ApiError` with status 409 (Conflict), flagged retriable,
+   * so it serializes to JSON-RPC code 409 (not 500); `isBlocksError(e,
+   * DistributedDatabaseErrors.SerializationFailure)` still matches by name.
    */
   async transaction<T>(fn: (tx: Transaction) => Promise<T>, options?: TransactionOptions): Promise<T> {
     await this.ready();

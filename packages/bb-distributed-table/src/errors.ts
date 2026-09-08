@@ -3,6 +3,7 @@
 
 import { createDefu } from 'defu';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { ApiError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { ReadValidationMode } from './types.js';
 
@@ -98,6 +99,31 @@ export function blocksError(name: string, message: string): Error {
 	const err = new Error(`${name}: ${message}`);
 	err.name = name;
 	return err;
+}
+
+/**
+ * @internal Build the 409 ApiError for a conditional-write conflict. Maps to
+ * HTTP 409 (Conflict) so the JSON-RPC serializer emits code 409 instead of a
+ * generic 500, preserves the `ConditionalCheckFailed` name so `isBlocksError()`
+ * keeps matching on both server and client. Shared by the mock and AWS runtime
+ * so both produce an identically shaped 409; on AWS the caught DynamoDB
+ * `ConditionalCheckFailedException` is passed as `cause` (kept server-side by
+ * ApiError).
+ *
+ * `retriable` is scoped to the assertion kind: `true` only for optimistic-lock
+ * conflicts (`ifFieldEquals`), where a re-read and retry can succeed; `false`
+ * for existence/uniqueness assertions (`ifNotExists` on put, `ifExists` on
+ * delete), where a blind identical retry fails identically. DynamoDB collapses
+ * every conditional failure under one `ConditionalCheckFailedException` with no
+ * sub-reason, so the AWS runtime decides this from the condition the caller set
+ * on that specific put/delete call.
+ */
+export function conditionalCheckFailed(retriable: boolean, cause?: unknown): ApiError {
+	return new ApiError('The conditional request failed', 409, {
+		name: DistributedTableErrors.ConditionalCheckFailed,
+		cause,
+		retriable,
+	});
 }
 
 /**
