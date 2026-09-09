@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-metrics",
   "version": "0.1.6",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "metrics",
+    "cloudwatch",
+    "observability",
+    "monitoring"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

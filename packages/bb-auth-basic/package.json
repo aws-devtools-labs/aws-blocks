@@ -1,6 +1,14 @@
 {
   "name": "@aws-blocks/bb-auth-basic",
   "version": "0.1.8",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "authentication",
+    "jwt",
+    "password-auth"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

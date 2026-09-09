@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-app-setting",
   "version": "0.2.1",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "configuration",
+    "ssm",
+    "parameter-store",
+    "feature-flags"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

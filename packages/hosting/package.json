@@ -1,6 +1,16 @@
 {
   "name": "@aws-blocks/hosting",
   "version": "0.3.0",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "hosting",
+    "cloudfront",
+    "s3",
+    "static-site",
+    "ssr"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

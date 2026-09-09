@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-auth-oidc",
   "version": "0.1.10",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "authentication",
+    "oidc",
+    "oauth2",
+    "sso"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

@@ -1,6 +1,14 @@
 {
   "name": "@aws-blocks/auth-common",
   "version": "0.1.7",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "authentication",
+    "auth-ui",
+    "typescript"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-realtime",
   "version": "0.2.0",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "realtime",
+    "websocket",
+    "pubsub",
+    "api-gateway"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

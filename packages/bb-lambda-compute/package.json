@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-lambda-compute",
   "version": "0.4.0",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "lambda",
+    "serverless",
+    "api-gateway",
+    "compute"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

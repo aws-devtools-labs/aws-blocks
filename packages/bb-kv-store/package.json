@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-kv-store",
   "version": "0.1.8",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "key-value",
+    "dynamodb",
+    "cache",
+    "storage"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

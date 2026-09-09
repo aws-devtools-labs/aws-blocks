@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-cron-job",
   "version": "0.2.0",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "cron",
+    "scheduler",
+    "eventbridge",
+    "lambda"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

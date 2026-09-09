@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-distributed-table",
   "version": "0.1.7",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "dynamodb",
+    "nosql",
+    "database",
+    "table"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

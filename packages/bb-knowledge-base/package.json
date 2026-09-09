@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/bb-knowledge-base",
   "version": "0.2.3",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "knowledge-base",
+    "rag",
+    "bedrock",
+    "semantic-search"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

@@ -1,6 +1,15 @@
 {
   "name": "@aws-blocks/create-blocks-app",
   "version": "0.1.22",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "cli",
+    "scaffolding",
+    "starter",
+    "template"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",

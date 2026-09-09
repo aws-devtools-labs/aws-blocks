@@ -1,6 +1,16 @@
 {
   "name": "@aws-blocks/bb-distributed-data",
   "version": "0.1.8",
+  "keywords": [
+    "aws-blocks",
+    "aws",
+    "cdk",
+    "database",
+    "sql",
+    "dsql",
+    "serverless",
+    "multi-region"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws-devtools-labs/aws-blocks.git",
