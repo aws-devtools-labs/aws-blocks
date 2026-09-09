@@ -123,18 +123,21 @@ option.** Every compute captures its handler's stdout to its own CloudWatch log
 group, which carries the stack-wide default retention (`defaults.logRetention` —
 one week in sandbox, one year in production).
 
-To override retention, set it on the **compute**, not the Logger:
+To change retention, set `logRetention` on the stack-wide `defaults` (it applies
+to every compute's handler log group):
 
 ```typescript
+import { BlocksPresets } from '@aws-blocks/core/cdk';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 
-// LambdaCompute exposes a `logRetention` prop that overrides defaults.logRetention
-// for that compute's handler log group.
-new LambdaCompute(scope, 'api', { logRetention: RetentionDays.ONE_MONTH });
+// In your aws-blocks backend, override the preset's logRetention:
+defaults: { ...BlocksPresets.production, logRetention: RetentionDays.ONE_MONTH };
 ```
 
 A `Logger` no longer reconfigures retention — the compute owns the single,
-framework-owned handler log group.
+framework-owned handler log group. Per-compute retention (a `logRetention` prop
+on the compute) arrives with the public compute-configuration surface; until
+then, `defaults.logRetention` is the retention knob.
 
 ## Local Development
 

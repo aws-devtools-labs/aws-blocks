@@ -223,7 +223,9 @@ export class BlocksBackend extends Construct {
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
-	/** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+	/** The default compute's handler CloudWatch log group. Its retention comes from
+	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
+	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
@@ -320,7 +322,7 @@ export class BlocksBackend extends Construct {
 
 		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
 		// every compute. Runs before the dashboard finalize.
-		finalizeTracing(backend);
+		finalizeTracing(backend, backend.executionRole);
 
 		// Build any deferred Dashboards now that every compute's observability
 		// state is settled — so the dashboard is order-independent.

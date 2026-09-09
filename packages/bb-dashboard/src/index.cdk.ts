@@ -79,6 +79,15 @@ export class Dashboard extends Scope {
 		const showLogs = options?.logs !== false;
 		const showTraces = options?.traces !== false;
 
+		// Create the CloudWatch Dashboard resource eagerly so the URL / redirect
+		// route / config below always point at a resource that exists — never a
+		// dangling link if the finalizer somehow doesn't run. Only the widget
+		// *body* is deferred (added via `addWidgets` at finalize).
+		const dashboard = new CwDashboard(this, 'Resource', {
+			dashboardName: config.dashboardName,
+			start: config.defaultTimeRange,
+		});
+
 		// Build the widget body in a finalizer, not here. The body depends on
 		// which computes are traced (`dashboardSection` gates its traces section on
 		// each compute's tracing flag), and that flag is flipped when the app's
@@ -117,11 +126,10 @@ export class Dashboard extends Scope {
 					tracing: showTraces ? section.tracing : undefined,
 				};
 			});
-			new CwDashboard(this, 'Resource', {
-				dashboardName: config.dashboardName,
-				start: config.defaultTimeRange,
-				widgets: buildDashboardWidgets(computeSections, config, region),
-			});
+			// Each row of widgets is added as its own dashboard row (side-by-side).
+			for (const row of buildDashboardWidgets(computeSections, config, region)) {
+				dashboard.addWidgets(...row);
+			}
 		});
 
 		this.url = Fn.join('', [

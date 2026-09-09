@@ -33,7 +33,8 @@ export type { LogLevel, LoggingOptions, LogEntry, ChildLogger } from './types.js
  *
  * **Scaling:** No throughput limits from the BB itself. CloudWatch Logs
  * ingestion scales with Lambda concurrency. Cost is per GB ingested +
- * per GB stored. Use log level filtering and `retention` to control costs.
+ * per GB stored. Use log level filtering to control costs; retention is a
+ * compute-level setting (`logRetention`), not a Logger option.
  *
  * **⚠️ G4 Exception:** All logging methods (`debug`, `info`, `warn`, `error`)
  * are **synchronous**, not async. Logging writes to stdout/stderr which Lambda

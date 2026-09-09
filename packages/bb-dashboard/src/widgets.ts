@@ -174,8 +174,11 @@ export function buildDashboardWidgets(
 	}
 
 	// App-wide metrics sections — not compute-scoped, so rendered once per
-	// namespace after the compute groups, each from its own metric configs.
+	// namespace after the compute groups, each from its own metric configs. A
+	// source with no configs is skipped entirely (nothing to graph) rather than
+	// rendering a blank placeholder widget with an empty metric name.
 	for (const metrics of config.metrics) {
+		if (metrics.metricConfigs.length === 0) continue;
 		rows.push(sectionHeader(`## 📊 Metrics — ${metrics.namespace}`));
 		rows.push(...buildMetricsWidgets(metrics.namespace, metrics.metricConfigs, region, metrics.defaultDimensions));
 	}

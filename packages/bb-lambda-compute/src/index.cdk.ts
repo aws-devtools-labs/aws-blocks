@@ -123,10 +123,13 @@ export class LambdaCompute extends Compute {
 		if (this.defaults.accessLogging) {
 			apiGatewayAccount = ensureApiGatewayAccount(cdk.Stack.of(this));
 			accessLogGroup = new LogGroup(this, 'ApiAccessLogs', {
-				retention: this.defaults.logRetention,
+				// Same per-compute override / stack-default fallback as the handler log
+				// group, so `logRetention` uniformly governs this compute's log groups.
+				retention: options?.logRetention ?? this.defaults.logRetention,
 				// Access logs are the request audit trail — follow the stack-wide removal
 				// policy (production RETAIN) so they survive a teardown, unlike the
-				// handler's operational stdout log group (always DESTROY).
+				// handler's operational stdout log group (always DESTROY). This removal
+				// asymmetry with the handler group is intentional.
 				removalPolicy: this.defaults.removalPolicy,
 			});
 		}
@@ -195,7 +198,9 @@ export class LambdaCompute extends Compute {
 	}
 
 	protected applyTracing(): void {
-		applyXRayTracing(this.fn, this.executionRole);
+		// Flip this function to X-Ray Active mode; the IAM grant to publish
+		// segments is applied once on the shared role by core's finalizeTracing.
+		applyXRayTracing(this.fn);
 	}
 
 	protected healthWidgets(region: string): IWidget[][] {

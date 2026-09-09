@@ -76,7 +76,7 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 **Rationale:**
 - **When it fits** — Teams that want operational visibility into a deployed application without hand-building CloudWatch dashboards.
 - **When it does not** — Fully custom widget layouts are better served by the CloudWatch console directly; data-inspection admin UIs belong in `AdminSite`, not here. (complements D-DB-3, which covers why we lean on CloudWatch's native dashboard over a custom UI)
-- **Composition guidance** — Health + logs render for every compute automatically; add a `Tracer` anywhere in the app for the traces sections, and pass Metrics source(s) to the dashboard. Use the `logs` / `traces` toggles to hide sections and `computes` to restrict which computes appear; use `title` to distinguish dashboards across multi-stage deployments.
+- **Composition guidance** — Health + logs render for every compute automatically; add a `Tracer` anywhere in the app for the traces sections, and pass Metrics source(s) to the dashboard. Use the `logs` / `traces` toggles to hide sections and `title` to distinguish dashboards across multi-stage deployments. (There is no public `computes` selector yet — the dashboard covers every compute; see D-DB-10.)
 - **Cost model** — CloudWatch Dashboards are free for up to 3 dashboards (50 metrics each); beyond that they cost $3/dashboard/month. There is no runtime cost — dashboards are read-only views over existing CloudWatch data. This is the concrete pricing behind D-DB-3's "zero runtime cost" claim.
 
 ## Multi-Compute Dashboard (Implemented)
@@ -113,10 +113,11 @@ One dashboard, grouped by compute, with metrics as a trailing app-wide section:
 # <app> dashboard
 ## Compute — api (Lambda)
    health   (always)
-   logs     (only if a Logger targets this compute)
-   traces   (only if a Tracer targets this compute)
+   traces   (only when the app contains a Tracer)
+   logs     (always)
 ## Compute — worker (Container)
    health
+   traces
    logs
 ## Metrics (app-wide)
    namespace "orders": OrdersPlaced, Latency p99 …
@@ -168,13 +169,13 @@ finalize pass (see D-DB-11). It does expose `logs` / `traces` display toggles.
 
 ### D-DB-11: Build the widget body at finalize, not in the constructor
 
-**Decision:** The Dashboard does **not** assemble its widgets in its constructor. It registers a deferred body-build (`registerDashboardFinalizer` from core) that resolves the compute list (`options.computes ?? getComputes(this)`), calls `compute.dashboardSection(region)` on each, and creates the `CwDashboard`; that runs via `finalizeDashboards()` at the end of `BlocksStack`/`BlocksBackend.create()`, after the backend module has fully imported. Only the body is deferred; `dashboardName`, `url`, the redirect route, and the config registration stay in the constructor (they need nothing from other blocks).
+**Decision:** The Dashboard does **not** assemble its widgets in its constructor. It creates the `CwDashboard` resource eagerly (so the `url`, redirect route, and config registration never point at a resource that does not exist) and registers a deferred body-build (`registerDashboardFinalizer` from core) that enumerates the app's computes via `getComputes()`, calls `compute.dashboardSection(region)` on each, and adds the widgets via `dashboard.addWidgets(...)`; that runs via `finalizeDashboards()` at the end of `BlocksStack`/`BlocksBackend.create()`, after the backend module has fully imported. Only the widget *body* is deferred; the resource, `dashboardName`, `url`, the redirect route, and the config registration stay in the constructor (they need nothing from other blocks). There is no `options.computes` yet — the finalizer covers every compute in the app (see D-DB-10).
 
 **Rationale:**
 - **Order-independence.** `dashboardSection` gates the traces section on each compute's `tracerEnabled`, which the framework flips at `finalizeTracing()` (when the app contains a `Tracer`) — and the default compute list is `getComputes()`. Building in the Dashboard constructor would miss any compute or Tracer constructed after it, and would run before tracing is finalized. Deferring to finalize means the Dashboard observes the complete app, so `new Dashboard(...)` can appear anywhere in the backend module. (`finalizeTracing` runs before `finalizeDashboards`, so trace flags are set when the dashboard reads them.)
 - **Reuses the house pattern.** `finalizeConfigRegistry` already runs at the same `create()` join point; the compute registry's own doc names "dashboards" as an intended finalize consumer. `registerDashboardFinalizer`/`finalizeDashboards` follows it (core owns the seam; the Dashboard supplies a callback, so core keeps no dependency on `bb-dashboard`). It is deliberately Dashboard-specific — the only deferred-build case today — and can be generalized into a finalizer registry if a second use case appears.
 - **Enables default-to-all.** With the body built at finalize, the no-arg "cover every compute" default enumerates `getComputes()` with no construction-order gap (see D-DB-10).
-- **Cost:** a Dashboard constructed outside `create()` (e.g. directly in a unit test) must call `finalizeDashboards(stack)` before synth — exactly how `config-registry.test.ts` drives `finalizeConfigRegistry`.
+- **Cost:** a Dashboard constructed outside `create()` (e.g. directly in a unit test) must call `finalizeDashboards(stack)` before synth — exactly how `config-registry.test.ts` drives `finalizeConfigRegistry`. A Dashboard constructed *after* `create()` has finalized (without a further `finalizeDashboards`) still gets its resource — created eagerly — so its URL/redirect never dangle; only its widget body is left empty.
 
 ### Layout (as implemented, `widgets.ts`)
 
@@ -317,8 +318,8 @@ explicit BB input (it is app-scoped, not compute-scoped). This keeps the
 dashboard deterministic and decoupled from the observability BB classes:
 
 1. **Predictability** — Health + logs always render per compute; traces render when the app has a `Tracer`. Nothing to wire up.
-2. **Type safety** — TypeScript enforces valid Metrics references and the `computes` selector's `Compute[]` type.
-3. **Flexibility** — `logs` / `traces` toggles and the `computes` selector let one app show different subsets across multiple dashboards.
+2. **Type safety** — TypeScript enforces valid Metrics references.
+3. **Flexibility** — `logs` / `traces` toggles let one app show different section subsets across multiple dashboards.
 4. **Simplicity** — No scope-walking magic for logs/traces; the compute self-reports.
 
 ### BB Integration via Structural Typing
@@ -336,7 +337,7 @@ new Tracer(scope, 'tracer');   // presence-gated → every compute gets a traces
 const metrics = new Metrics(scope, 'metrics');
 
 const dashboard = new Dashboard(scope, 'dashboard', {
-  // computes omitted → every compute in the app; logs/traces default on
+  // covers every compute in the app; logs/traces default on
   metrics: {
     metrics,
     metricConfigs: [{ name: 'OrdersPlaced' }, { name: 'Latency' }, { name: 'ErrorRate' }],
@@ -369,7 +370,7 @@ compute for its self-reported section (applying its `logs` / `traces` toggles).
 
 | Input | Information Extracted | Used For |
 |----|----------------------|----------|
-| **Compute** (per `computes` entry, default all) | `dashboardSection(region)` → `{ label, health, logging?, tracing? }` | The compute's group: header, health widgets, logs widgets (always), plus traces widgets when the compute is traced — subject to the `logs` / `traces` toggles |
+| **Compute** (every compute in the app) | `dashboardSection(region)` → `{ label, health, logging?, tracing? }` | The compute's group: header, health widgets, logs widgets (always), plus traces widgets when the compute is traced — subject to the `logs` / `traces` toggles |
 | **Metrics** (per `MetricsSource`) | `namespace` (resolved CloudWatch namespace), `defaultDimensions` (optional), per-source `metricConfigs` | Querying custom metrics in the namespace with correct dimension filtering |
 
 ### Why Not Auto-Discovery?

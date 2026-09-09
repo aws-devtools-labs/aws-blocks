@@ -167,4 +167,5 @@ describe('Dashboard against a real compute (synth)', () => {
 		const body = dashboardBody(stack);
 		assert.ok(body.includes('🔍 Traces'), 'traces section renders despite Dashboard-before-Tracer order');
 	});
+
 });

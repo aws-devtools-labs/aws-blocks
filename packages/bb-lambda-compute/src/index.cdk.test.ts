@@ -395,7 +395,7 @@ describe('LambdaCompute observability', () => {
 		assert.notStrictEqual(compute.dashboardSection('us-east-1').logging, undefined);
 	});
 
-	test('enableTracing turns on Active tracing and grants X-Ray publish on the shared role', () => {
+	test('enableTracing turns on the function Active tracing mode', () => {
 		const { stack, parent } = setup('LambdaComputeTracing');
 
 		const compute = new LambdaCompute(parent, 'extra');
@@ -405,16 +405,8 @@ describe('LambdaCompute observability', () => {
 		template.hasResourceProperties('AWS::Lambda::Function', {
 			TracingConfig: { Mode: 'Active' },
 		});
-		template.hasResourceProperties('AWS::IAM::Policy', {
-			PolicyDocument: {
-				Statement: Match.arrayWith([
-					Match.objectLike({
-						Action: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
-						Effect: 'Allow',
-					}),
-				]),
-			},
-		});
+		// The X-Ray publish IAM grant is applied once on the shared role by core's
+		// finalizeTracing (not per compute) — asserted in tracing.cdk.test.ts.
 	});
 
 	test('dashboardSection returns the Lambda health widget rows', () => {

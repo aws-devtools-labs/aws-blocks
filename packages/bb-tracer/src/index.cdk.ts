@@ -7,6 +7,16 @@ import type { TracerOptions } from './types.js';
 
 export type { AnnotationValue, Segment, TracerOptions } from './types.js';
 
+/**
+ * CDK construct for Tracer.
+ *
+ * Tracing is **presence-gated and fleet-wide**: constructing a `Tracer` records
+ * that the app wants tracing, and at synth the framework enables X-Ray on every
+ * compute in the owning stack/backend. `enabled: false` only opts *this* Tracer
+ * out of that vote — it is **not** a global off switch: if any other `Tracer`
+ * exists, X-Ray still turns on for every compute. To keep X-Ray off, construct
+ * no `Tracer` at all. (X-Ray is a costed service, so this is deliberately opt-in.)
+ */
 export class Tracer extends Scope {
 	constructor(scope: ScopeParent, id: string, options?: TracerOptions) {
 		super(id, { parent: scope });

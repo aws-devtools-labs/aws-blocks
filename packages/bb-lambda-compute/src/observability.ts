@@ -14,33 +14,25 @@
 import { Duration } from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { ConcreteWidget, GraphWidget, LogQueryWidget, Metric } from 'aws-cdk-lib/aws-cloudwatch';
-import type { IRole } from 'aws-cdk-lib/aws-iam';
-import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import type { CfnFunction, IFunction } from 'aws-cdk-lib/aws-lambda';
 
 // ── Tracing (X-Ray) ───────────────────────────────────────────────────────
 
 /**
- * Turn on active X-Ray tracing for a Lambda compute: flip the function to
- * `Active` tracing mode and grant its execution role permission to publish
- * trace segments. Called from `LambdaCompute.applyTracing()` (which the
- * framework invokes on every compute when the app contains a `Tracer`).
+ * Flip a Lambda compute's function to X-Ray `Active` tracing mode. Called from
+ * `LambdaCompute.applyTracing()` (which the framework invokes on every compute
+ * when the app contains a `Tracer`).
  *
- * X-Ray Active mode traces the function on **every** invocation path — API
- * Gateway requests, SQS-driven async jobs, and EventBridge-scheduled runs alike
- * — so this single call covers all workloads the shared handler serves.
+ * This is per-function only — it does **not** grant IAM. The permission to
+ * publish trace segments is granted once on the shared execution role by core's
+ * `finalizeTracing`, rather than once per compute (they all assume the same
+ * role). X-Ray Active mode traces the function on **every** invocation path —
+ * API Gateway requests, SQS-driven async jobs, EventBridge-scheduled runs alike.
  *
  * @param fn - The Lambda function backing the compute.
- * @param executionRole - The compute's shared execution role to grant X-Ray publish on.
  */
-export function applyXRayTracing(fn: IFunction, executionRole: IRole): void {
+export function applyXRayTracing(fn: IFunction): void {
 	(fn.node.defaultChild as CfnFunction).tracingConfig = { mode: 'Active' };
-	executionRole.addToPrincipalPolicy(
-		new PolicyStatement({
-			actions: ['xray:PutTraceSegments', 'xray:PutTelemetryRecords'],
-			resources: ['*'],
-		}),
-	);
 }
 
 // ── Health widgets ──────────────────────────────────────────────────────────

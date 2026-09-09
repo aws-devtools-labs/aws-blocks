@@ -88,7 +88,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 	get apiUrl(): string {
 		return this.requireDefaultCompute().apiUrl;
 	}
-	/** The default compute's handler CloudWatch log group. `bb-logger` reconfigures its retention. */
+	/** The default compute's handler CloudWatch log group. Its retention comes from
+	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
+	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
@@ -152,7 +154,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack {
 		// Tracing is presence-gated: if the app contains a Tracer, enable X-Ray on
 		// every compute. Runs before the dashboard finalize so tracingEnabled is
 		// set when the dashboard reads it.
-		finalizeTracing(stack);
+		finalizeTracing(stack, stack.executionRole);
 
 		// Build any deferred Dashboards now that every compute's observability
 		// state is settled — so the dashboard is order-independent.
@@ -301,9 +303,9 @@ export class Scope extends Construct {
 	/**
 	 * The shared handler Lambda's CloudWatch log group (the default compute's).
 	 * Resolves the same way as {@link handler} — via the owning
-	 * BlocksStack/BlocksBackend. `bb-logger` uses this to reconfigure retention on
-	 * the single, framework-owned group rather than creating a second one that
-	 * would collide on the log-group name.
+	 * BlocksStack/BlocksBackend. Its retention comes from the compute's
+	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
+	 * CDK construct is a no-op and no longer reconfigures it.
 	 */
 	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
 		return this.root.handlerLogGroup;
