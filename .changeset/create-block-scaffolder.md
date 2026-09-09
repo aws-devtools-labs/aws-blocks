@@ -4,7 +4,7 @@
 
 Add `@aws-blocks/create-block` — a scaffolder for new Building Blocks.
 
-`npm create @aws-blocks/block@latest <ClassName>` (or `npm run new:bb` inside this repo) generates a complete `bb-*` package: the conditional-export layers (`index.mock/aws/cdk/browser.ts` + `types.ts`/`errors.ts`), `README.md`/`DESIGN.md`, `package.json`, `tsconfig.json`, `api-extractor.json`, and passing `node:test` suites (behavior, export parity, and CDK synth). Three block shapes are supported — `primitive` (owns infrastructure), `composite` (composes other blocks), and `client-facing` (browser client plugin) — matching the taxonomy in the building-block architecture design.
+`npm create @aws-blocks/block@latest <ClassName>` (or `npm run new:bb` inside this repo) generates a complete `bb-*` package: the conditional-export layers (`index.mock/aws/cdk/browser.ts` + `types.ts`/`errors.ts`), `README.md`/`DESIGN.md`, `package.json`, `tsconfig.json`, `api-extractor.json`, and passing `node:test` suites (behavior, export parity, and CDK synth). It scaffolds a **primitive** block — a storage-agnostic `Scope` skeleton with an example method and `TODO`s to fill in (composite and client-facing shapes can follow in a later release).
 
 The CLI auto-detects its context:
 
@@ -12,4 +12,4 @@ The CLI auto-detects its context:
 - **Customer mode** (run inside your own npm-workspaces repo): generates `packages/bb-<name>`, registers it in your root `workspaces` (unless an existing glob like `packages/*` already covers it), and `npm install`s so your app can `import` it with no publish step. Does not modify your app's `package.json` or source. The npm scope is derived from your root package name (or `--scope`).
 - **External mode** (run anywhere else): generates a standalone `@<scope>/bb-<name>` package tagged `keywords: ["aws-blocks"]` with a self-contained build, no workspace wiring.
 
-Zero runtime dependencies (Node stdlib only). Flags: `--type`, `--dir`, `--scope`, `--yes`, `--skip-install`, `--skip-verify`, `--dry-run`.
+Zero runtime dependencies (Node stdlib only). Flags: `--dir`, `--scope`, `--yes`, `--skip-install`, `--skip-verify`, `--dry-run`.

@@ -118,9 +118,9 @@ describe('marker insertion', () => {
 
 describe('arg parsing', () => {
 	test('parses positional + flags', () => {
-		const o = parseArgs(['MyBlock', '--type', 'composite', '--yes', '--dir', './x']);
+		const o = parseArgs(['MyBlock', '--scope', 'acme', '--yes', '--dir', './x']);
 		assert.strictEqual(o.className, 'MyBlock');
-		assert.strictEqual(o.type, 'composite');
+		assert.strictEqual(o.scope, 'acme');
 		assert.strictEqual(o.yes, true);
 		assert.strictEqual(o.dir, './x');
 	});
@@ -131,7 +131,6 @@ describe('arg parsing', () => {
 	test('rejects a value flag with no value or a flag as its value', () => {
 		assert.throws(() => parseArgs(['MyBlock', '--dir', '--yes']), /--dir requires a value/);
 		assert.throws(() => parseArgs(['MyBlock', '--scope']), /--scope requires a value/);
-		assert.throws(() => parseArgs(['MyBlock', '--type']), /--type requires a value/);
 	});
 });
 
@@ -238,10 +237,7 @@ describe('run() integration — customer mode', () => {
 		withWorkspace(async (dir) => {
 			// workspaces glob does NOT cover packages/ → the entry must be appended.
 			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['apps/*'] }));
-			const code = await run(
-				['SearchCache', '--type', 'primitive', '--yes', '--skip-install', '--skip-verify'],
-				dir,
-			);
+			const code = await run(['SearchCache', '--yes', '--skip-install', '--skip-verify'], dir);
 			assert.strictEqual(code, 0);
 
 			const pkgDir = join(dir, 'packages', 'bb-search-cache');

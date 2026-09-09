@@ -14,12 +14,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Templates ship next to the built CLI (packages/create-block/templates). */
 const TEMPLATES_DIR = resolve(__dirname, '..', 'templates');
 
-export type BlockType = 'primitive' | 'composite' | 'client-facing';
-export const BLOCK_TYPES: BlockType[] = ['primitive', 'composite', 'client-facing'];
-
 export interface CliOptions {
 	className?: string;
-	type?: BlockType;
 	dir?: string;
 	scope?: string;
 	yes: boolean;
@@ -258,25 +254,14 @@ async function copyDir(
 	}
 }
 
-/**
- * Materialize `templates/<type>/` into `targetDir`. `client-facing` has no
- * standalone copy of the runtime/cdk/mock files — it is the `primitive`
- * skeleton with only its browser entry (and docs) overlaid — so the two never
- * drift out of sync.
- */
+/** Materialize the `primitive` block template into `targetDir`. */
 async function copyTemplate(
-	type: BlockType,
 	targetDir: string,
 	tokens: { className: string; pkgName: string },
 	dryRun: boolean,
 	planned: Map<string, PlannedWrite>,
 ): Promise<void> {
-	if (type === 'client-facing') {
-		await copyDir(join(TEMPLATES_DIR, 'primitive'), targetDir, tokens, dryRun, planned);
-		await copyDir(join(TEMPLATES_DIR, 'client-facing'), targetDir, tokens, dryRun, planned);
-		return;
-	}
-	await copyDir(join(TEMPLATES_DIR, type), targetDir, tokens, dryRun, planned);
+	await copyDir(join(TEMPLATES_DIR, 'primitive'), targetDir, tokens, dryRun, planned);
 }
 
 /**
@@ -672,9 +657,6 @@ export function parseArgs(argv: string[]): CliOptions {
 			case '--dry-run':
 				opts.dryRun = true;
 				break;
-			case '--type':
-				opts.type = takeValue() as BlockType;
-				break;
 			case '--dir':
 				opts.dir = takeValue();
 				break;
@@ -702,7 +684,6 @@ Arguments:
   <ClassName>            PascalCase block class name, no "BB" prefix (e.g. SearchIndex)
 
 Options:
-  --type <type>          primitive | composite | client-facing  (default: primitive)
   --dir <path>           target directory (default: derived from the package name)
   --scope <npm-scope>    npm scope for external mode (default: your-org)
   --yes, -y              accept defaults / skip confirmation
@@ -760,24 +741,6 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	// Resolve the block type.
-	let type = opts.type;
-	if (type && !BLOCK_TYPES.includes(type)) {
-		console.error(`Error: --type must be one of ${BLOCK_TYPES.join(', ')}`);
-		return 1;
-	}
-	if (!type) {
-		if (opts.yes) type = 'primitive';
-		else {
-			const answer = await ask(`Block type — ${BLOCK_TYPES.join(' / ')}? [primitive]:`, 'primitive');
-			if (!BLOCK_TYPES.includes(answer as BlockType)) {
-				console.error(`Error: "${answer}" is not a valid type (${BLOCK_TYPES.join(', ')})`);
-				return 1;
-			}
-			type = answer as BlockType;
-		}
-	}
-
 	// Detect mode: AWS Blocks monorepo (contributor) → customer workspace → standalone.
 	const monorepoRoot = await findMonorepoRoot(cwd);
 	const customer = monorepoRoot ? null : await findCustomerWorkspaceRoot(cwd);
@@ -808,7 +771,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 
 	// Summary + confirm.
 	console.log('');
-	console.log(`  Block:     ${names.className}  (${type})`);
+	console.log(`  Block:     ${names.className}`);
 	console.log(`  Package:   ${names.pkgName}`);
 	const contextRoot =
 		mode === 'contributor' ? monorepoRoot : mode === 'customer' ? (customer as { root: string }).root : null;
@@ -825,7 +788,7 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 
 	// Generate.
 	const planned = new Map<string, PlannedWrite>();
-	await copyTemplate(type, targetDir, { className: names.className, pkgName: names.pkgName }, opts.dryRun, planned);
+	await copyTemplate(targetDir, { className: names.className, pkgName: names.pkgName }, opts.dryRun, planned);
 	// Contributor mode uses the monorepo's shared build (scripts/, tsconfig.base);
 	// customer + external need a self-contained build.
 	if (mode !== 'contributor') await fixupForExternal(targetDir, names.className, opts.dryRun);
@@ -893,11 +856,11 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	printNextSteps(mode, names, type);
+	printNextSteps(mode, names);
 	return 0;
 }
 
-function printNextSteps(mode: Mode, names: DerivedNames, type: BlockType): void {
+function printNextSteps(mode: Mode, names: DerivedNames): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
 		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
@@ -912,9 +875,6 @@ function printNextSteps(mode: Mode, names: DerivedNames, type: BlockType): void 
 	} else {
 		console.log(`  1. cd ${names.folder} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);
-	}
-	if (type === 'client-facing') {
-		console.log('  * See packages/bb-realtime for the canonical Transferable / client-middleware pattern.');
 	}
 }
 

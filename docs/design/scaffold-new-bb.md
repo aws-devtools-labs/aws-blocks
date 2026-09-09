@@ -3,8 +3,9 @@
 > Status: **Implemented** as `@aws-blocks/create-block` (this PR). This doc records
 > the original design rationale — what a Block is, what wiring a new one requires,
 > and why the CLI is shaped the way it is. The §7 open questions are all resolved:
-> one auto-detecting CLI (contributor / customer / external), all three block
-> shapes, published bin + `npm run new:bb`, and HTML-marker umbrella edits.
+> one auto-detecting CLI (contributor / customer / external), a single
+> **primitive** block shape (composite/client-facing deferred to a follow-up),
+> published bin + `npm run new:bb`, and HTML-marker umbrella edits.
 
 ## 1. What we're building
 
@@ -127,9 +128,9 @@ edits (not string templating).
   - **external** — anywhere else → standalone `@<scope>/bb-*`, `keywords: ["aws-blocks"]`,
     no workspace wiring.
 - **Prompts / flags:** block class name (PascalCase, no "BB" prefix) → package name
-  `bb-{kebab}`; `--type primitive|composite` (`--client-facing` = v2 pointer);
-  `--dir`, `--yes`, `--skip-install`, `--dry-run`.
-- **Generates:** the §3 skeleton for the chosen type, with the class name, package name,
+  `bb-{kebab}`; `--dir`, `--scope`, `--yes`, `--skip-install`, `--skip-verify`,
+  `--dry-run`.
+- **Generates:** the §3 primitive skeleton, with the class name, package name,
   and `generate-version.mjs {Class}` arg substituted; a starter method (`get`/`put` for
   primitive) so it builds and tests green out of the box; a `changeset`.
 - **Wires (contributor mode):** all 6 touchpoints programmatically (JSON edits for
@@ -145,7 +146,9 @@ edits (not string templating).
 1. **Audience/scope** — ✅ one CLI that auto-detects: **contributor** (in the
    monorepo, does the 6 touchpoints), **customer** (in a user's own npm-workspaces
    repo, scaffolds + links a subpackage), and **external** (standalone, no wiring).
-2. **Block types** — ✅ all three: primitive, composite, client-facing.
+2. **Block types** — ✅ scoped to **primitive** for the first release (a generic
+   `Scope` skeleton). Composite and client-facing shapes are deferred to a
+   follow-up, keeping the initial surface small.
 3. **Packaging** — ✅ both: a publishable `create-block` bin (`npm create
    @aws-blocks/block`) and the repo `npm run new:bb`.
 4. **Umbrella re-export editing** — ✅ HTML markers in `index.ts` / `index.cdk.ts`
