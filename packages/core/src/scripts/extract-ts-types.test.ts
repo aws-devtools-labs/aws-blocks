@@ -580,3 +580,89 @@ describe('extractMethodTypes — open-shape intersections', () => {
 		}
 	});
 });
+
+describe('extractMethodTypes — namespace returned by a factory, then destructured (regression: #444)', () => {
+	it('keys a destructured factory namespace qualified, with real schemas', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class NamespaceFactory {
+					constructor(private readonly scope: Scope) {}
+					createNamespaces() {
+						return {
+							indirectNamespace: new ApiNamespace(this.scope, 'indirectNamespace', () => ({
+								async getIndirectGreeting(times: number): Promise<string> { return 'hi'; },
+							})),
+						};
+					}
+				}
+
+				const scope = new Scope('repro');
+				export const directNamespace = new ApiNamespace(scope, 'directNamespace', () => ({
+					async getDirectGreeting(name: string): Promise<number> { return name.length; },
+				}));
+				const { indirectNamespace } = new NamespaceFactory(scope).createNamespaces();
+				export { indirectNamespace };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// The factory-returned namespace is now attributed to its binding name,
+			// exactly like the directly-constructed one.
+			const indirect = types.get('indirectNamespace.getIndirectGreeting');
+			assert.ok(indirect, 'indirectNamespace.getIndirectGreeting should be keyed by namespace');
+			assert.strictEqual((indirect.params[0].schema as any).type, 'number');
+			assert.strictEqual((indirect.returnType as any).type, 'string');
+
+			const direct = types.get('directNamespace.getDirectGreeting');
+			assert.ok(direct, 'directNamespace.getDirectGreeting should be present');
+			assert.strictEqual((direct.params[0].schema as any).type, 'string');
+			assert.strictEqual((direct.returnType as any).type, 'number');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('a factory namespace sharing a method name with a direct one does NOT cross-assign', () => {
+		const dir = createTempProject({
+			'tsconfig.json': JSON.stringify({
+				compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'bundler', strict: true },
+			}),
+			'index.ts': `
+				${API_NS_MOCK}
+				class Scope { constructor(id: string) {} }
+
+				class Factory {
+					constructor(private readonly scope: Scope) {}
+					build() {
+						return {
+							subscriptions: new ApiNamespace(this.scope, 'subscriptions', () => ({
+								async create(topicCount: number): Promise<{ subId: number }> { return { subId: 1 }; },
+							})),
+						};
+					}
+				}
+
+				const scope = new Scope('app');
+				export const widgets = new ApiNamespace(scope, 'widgets', () => ({
+					async create(label: string): Promise<{ widgetId: string }> { return { widgetId: 'w' }; },
+				}));
+				const { subscriptions } = new Factory(scope).build();
+				export { subscriptions };
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			// Each namespace keeps its OWN param type under a distinct qualified key.
+			assert.strictEqual((types.get('widgets.create')?.params[0].schema as any)?.type, 'string');
+			assert.strictEqual((types.get('subscriptions.create')?.params[0].schema as any)?.type, 'number');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

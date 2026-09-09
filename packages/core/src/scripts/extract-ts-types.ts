@@ -214,18 +214,46 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 	ts.forEachChild(sourceFile, (node) => {
 		if (!ts.isVariableStatement(node)) return;
 		for (const decl of node.declarationList.declarations) {
-			if (!decl.initializer || !ts.isIdentifier(decl.name)) continue;
-			// Skip if we already extracted methods for this via the AST walk
-			if (ts.isNewExpression(decl.initializer)) {
-				const callee = decl.initializer.expression;
-				if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace') continue;
+			if (!decl.initializer) continue;
+
+			// (a) Simple binding: `const api = auth.createApi()` /
+			//     `export const api = backend.namespace`.
+			if (ts.isIdentifier(decl.name)) {
+				// Skip if we already extracted methods for this via the AST walk
+				if (ts.isNewExpression(decl.initializer)) {
+					const callee = decl.initializer.expression;
+					if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace') continue;
+				}
+				// Use the type checker to get the type of the initializer expression.
+				// For `auth.createApi()`, this resolves through the method's return type
+				// to the `AsyncAPI<T>` type that ApiNamespace returns.
+				const initType = checker.getTypeAtLocation(decl.initializer);
+				extractMethodsFromResolvedType(initType, checker, result, decl.name.text);
+				continue;
 			}
 
-			// Use the type checker to get the type of the initializer expression.
-			// For `auth.createApi()`, this resolves through the method's return type
-			// to the `AsyncAPI<T>` type that ApiNamespace returns.
-			const initType = checker.getTypeAtLocation(decl.initializer);
-			extractMethodsFromResolvedType(initType, checker, result, decl.name.text);
+			// (b) Object binding pattern: `const { indirectNamespace } = factory()`.
+			// Each destructured binding is a separate namespace whose name is the
+			// LOCAL binding name (the name it's exported under). Resolve the property
+			// type off the initializer and extract methods keyed by that name, so a
+			// factory-returned namespace keys qualified (`indirectNamespace.method`)
+			// like a directly-constructed one — instead of landing on a bare key that
+			// collides with same-named methods in other namespaces (#444, #445).
+			if (ts.isObjectBindingPattern(decl.name)) {
+				const initType = checker.getTypeAtLocation(decl.initializer);
+				for (const element of decl.name.elements) {
+					if (!ts.isIdentifier(element.name)) continue;
+					const localName = element.name.text;
+					// `const { foo: bar } = …` binds `bar` but reads property `foo`.
+					const propKey = element.propertyName && ts.isIdentifier(element.propertyName)
+						? element.propertyName.text
+						: localName;
+					const propSymbol = initType.getProperty(propKey);
+					if (!propSymbol) continue;
+					const propType = checker.getTypeOfSymbol(propSymbol);
+					extractMethodsFromResolvedType(propType, checker, result, localName);
+				}
+			}
 		}
 	});
 
